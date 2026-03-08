@@ -95,11 +95,12 @@ class ProcessManager {
       FORCE_COLOR: "0",
     };
 
-    const proc = spawn(command, args, {
+    // On Windows, .cmd files can't be spawned directly without shell: true,
+    // but shell: true + detached: true causes EINVAL. Use cmd.exe /c instead.
+    const proc = spawn("cmd.exe", ["/c", command, ...args], {
       cwd: normalizedPath,
       stdio: ["ignore", "pipe", "pipe"],
       env: cleanEnv as NodeJS.ProcessEnv,
-      detached: true,
     });
 
     info.pid = proc.pid || 0;

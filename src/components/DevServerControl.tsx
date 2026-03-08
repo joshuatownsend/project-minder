@@ -49,7 +49,7 @@ export function DevServerControl({
     try {
       const res = await fetch(`/api/dev-server/${slug}`);
       const data = await res.json();
-      if (data.pid) {
+      if (data.command) {
         setServer(data);
       } else {
         setServer(null);
@@ -91,7 +91,7 @@ export function DevServerControl({
         body: JSON.stringify({ action, projectPath, port: devPort }),
       });
       const data = await res.json();
-      if (data.pid) {
+      if (data.command) {
         setServer(data);
         if (action === "start" || action === "restart") {
           setShowOutput(true);
