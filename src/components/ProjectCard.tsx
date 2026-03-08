@@ -7,6 +7,7 @@ import { TechStackBadges } from "./TechStackBadges";
 import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
 import { TodoCompact } from "./TodoList";
+import { DevServerControl } from "./DevServerControl";
 import { Network, Database } from "lucide-react";
 
 const borderColors = {
@@ -28,18 +29,28 @@ export function ProjectCard({ project }: { project: ProjectData }) {
 
         <TechStackBadges project={project} />
 
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
+        <div className="flex items-center justify-between">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
+            {project.devPort && (
+              <span className="flex items-center gap-1">
+                <Network className="h-3 w-3" />
+                :{project.devPort}
+              </span>
+            )}
+            {project.dbPort && (
+              <span className="flex items-center gap-1">
+                <Database className="h-3 w-3" />
+                :{project.dbPort}
+              </span>
+            )}
+          </div>
           {project.devPort && (
-            <span className="flex items-center gap-1">
-              <Network className="h-3 w-3" />
-              :{project.devPort}
-            </span>
-          )}
-          {project.dbPort && (
-            <span className="flex items-center gap-1">
-              <Database className="h-3 w-3" />
-              :{project.dbPort}
-            </span>
+            <DevServerControl
+              slug={project.slug}
+              projectPath={project.path}
+              devPort={project.devPort}
+              compact
+            />
           )}
         </div>
 

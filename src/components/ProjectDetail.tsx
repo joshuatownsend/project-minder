@@ -9,6 +9,7 @@ import { TechStackBadges } from "./TechStackBadges";
 import { GitStatus } from "./GitStatus";
 import { ClaudeSessionList } from "./ClaudeSessionList";
 import { TodoList } from "./TodoList";
+import { DevServerControl } from "./DevServerControl";
 import {
   ArrowLeft,
   ExternalLink,
@@ -82,6 +83,13 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
+          {/* Dev Server Control */}
+          <DevServerControl
+            slug={project.slug}
+            projectPath={project.path}
+            devPort={project.devPort}
+          />
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Ports */}
             <div className="rounded-lg border p-4 space-y-3">

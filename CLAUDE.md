@@ -24,15 +24,26 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses + hidden project list (`src/lib/config.ts`)
 
+### Process Manager (`src/lib/processManager.ts`)
+- Singleton that tracks spawned dev server child processes
+- Calls project binaries directly (`node_modules/.bin/next.cmd`) with explicit `--port` to avoid inheriting Turbopack IPC state from our server process
+- Uses minimal env (only Windows system vars) to prevent Next.js env leaking
+- Stores last 200 lines of stdout/stderr per process
+- `detached: true` for clean process tree management; `taskkill /F /T` for stop
+
 ### API Routes (`src/app/api/`)
 - `GET /api/projects` — all scanned projects (uses cache)
 - `GET /api/projects/[slug]` — single project
 - `POST /api/scan` — force rescan (invalidates cache)
 - `GET/PUT /api/config` — read/update statuses and hidden list
+- `GET /api/dev-server` — list all managed dev servers
+- `GET /api/dev-server/[slug]` — status + output for one server
+- `POST /api/dev-server/[slug]` — `{action: "start"|"stop"|"restart", projectPath}`
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
-- Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude)
+- Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude) + `DevServerControl`
+- `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton)
 
 ## Known Limitations / Technical Debt
