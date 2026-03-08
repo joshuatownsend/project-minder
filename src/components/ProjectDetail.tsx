@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ProjectData, ProjectStatus } from "@/lib/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Button } from "./ui/button";
@@ -10,6 +11,7 @@ import { GitStatus } from "./GitStatus";
 import { ClaudeSessionList } from "./ClaudeSessionList";
 import { TodoList } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
+import { PortEditor } from "./PortEditor";
 import {
   ArrowLeft,
   ExternalLink,
@@ -27,6 +29,8 @@ interface ProjectDetailProps {
 }
 
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
+  const [devPort, setDevPort] = useState(project.devPort);
+
   const openInVSCode = () => {
     window.open(`vscode://file/${project.path.replace(/\\/g, "/")}`, "_blank");
   };
@@ -87,7 +91,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <DevServerControl
             slug={project.slug}
             projectPath={project.path}
-            devPort={project.devPort}
+            devPort={devPort}
           />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -98,12 +102,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                 Ports
               </h3>
               <div className="space-y-2 text-sm">
-                {project.devPort && (
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Dev Server</span>
-                    <span className="font-mono">{project.devPort}</span>
-                  </div>
-                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-[var(--muted-foreground)]">Dev Server</span>
+                  <PortEditor
+                    slug={project.slug}
+                    currentPort={devPort}
+                    onPortChange={(p) => setDevPort(p ?? undefined)}
+                  />
+                </div>
                 {project.dbPort && (
                   <div className="flex justify-between">
                     <span className="text-[var(--muted-foreground)]">Database</span>

@@ -25,9 +25,10 @@ export async function POST(
 
   try {
     const body = await request.json();
-    const { action, projectPath } = body as {
+    const { action, projectPath, port } = body as {
       action: "start" | "stop" | "restart";
       projectPath: string;
+      port?: number;
     };
 
     switch (action) {
@@ -38,7 +39,7 @@ export async function POST(
             { status: 400 }
           );
         }
-        const info = await processManager.start(slug, projectPath);
+        const info = await processManager.start(slug, projectPath, port);
         return NextResponse.json(info);
       }
       case "stop": {
@@ -52,7 +53,7 @@ export async function POST(
             { status: 400 }
           );
         }
-        const info = await processManager.restart(slug, projectPath);
+        const info = await processManager.restart(slug, projectPath, port);
         return NextResponse.json(info);
       }
       default:

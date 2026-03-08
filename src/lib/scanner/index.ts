@@ -145,10 +145,13 @@ export async function scanAllProjects(): Promise<ScanResult> {
     }
   }
 
-  // Apply saved statuses
+  // Apply saved statuses and port overrides
   for (const project of projects) {
     if (config.statuses[project.slug]) {
       project.status = config.statuses[project.slug];
+    }
+    if (config.portOverrides[project.slug] !== undefined) {
+      project.devPort = config.portOverrides[project.slug];
     }
   }
 

@@ -88,6 +88,7 @@ export interface PortConflict {
 export interface MinderConfig {
   statuses: Record<string, ProjectStatus>;
   hidden: string[]; // directory names to skip during scan
+  portOverrides: Record<string, number>; // slug -> custom dev port
 }
 
 export interface ScanResult {

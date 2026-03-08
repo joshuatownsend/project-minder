@@ -88,7 +88,7 @@ export function DevServerControl({
       const res = await fetch(`/api/dev-server/${slug}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, projectPath }),
+        body: JSON.stringify({ action, projectPath, port: devPort }),
       });
       const data = await res.json();
       if (data.pid) {

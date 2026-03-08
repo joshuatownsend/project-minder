@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ProjectData } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
@@ -8,6 +9,7 @@ import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
 import { TodoCompact } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
+import { PortEditor } from "./PortEditor";
 import { Network, Database } from "lucide-react";
 
 const borderColors = {
@@ -17,10 +19,12 @@ const borderColors = {
 };
 
 export function ProjectCard({ project }: { project: ProjectData }) {
+  const [devPort, setDevPort] = useState(project.devPort);
+
   return (
     <Link href={`/project/${project.slug}`}>
       <div
-        className={`rounded-lg border border-l-4 ${borderColors[project.status]} bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3`}
+        className={`group rounded-lg border border-l-4 ${borderColors[project.status]} bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3`}
       >
         <div className="flex items-start justify-between gap-2">
           <h3 className="font-semibold truncate">{project.name}</h3>
@@ -31,12 +35,15 @@ export function ProjectCard({ project }: { project: ProjectData }) {
 
         <div className="flex items-center justify-between">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
-            {project.devPort && (
-              <span className="flex items-center gap-1">
-                <Network className="h-3 w-3" />
-                :{project.devPort}
-              </span>
-            )}
+            <span className="flex items-center gap-1">
+              <Network className="h-3 w-3" />
+              <PortEditor
+                slug={project.slug}
+                currentPort={devPort}
+                onPortChange={(p) => setDevPort(p ?? undefined)}
+                compact
+              />
+            </span>
             {project.dbPort && (
               <span className="flex items-center gap-1">
                 <Database className="h-3 w-3" />
@@ -44,11 +51,11 @@ export function ProjectCard({ project }: { project: ProjectData }) {
               </span>
             )}
           </div>
-          {project.devPort && (
+          {devPort && (
             <DevServerControl
               slug={project.slug}
               projectPath={project.path}
-              devPort={project.devPort}
+              devPort={devPort}
               compact
             />
           )}

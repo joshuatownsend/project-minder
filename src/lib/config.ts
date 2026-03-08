@@ -7,6 +7,7 @@ const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
 const DEFAULT_CONFIG: MinderConfig = {
   statuses: {},
   hidden: [],
+  portOverrides: {},
 };
 
 export async function readConfig(): Promise<MinderConfig> {

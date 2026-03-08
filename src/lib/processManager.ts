@@ -32,13 +32,25 @@ class ProcessManager {
     return !!entry && (entry.info.status === "running" || entry.info.status === "starting");
   }
 
-  async start(slug: string, projectPath: string): Promise<DevServerInfo> {
+  async start(slug: string, projectPath: string, portOverride?: number): Promise<DevServerInfo> {
     if (this.isRunning(slug)) {
       return this.processes.get(slug)!.info;
     }
 
     const normalizedPath = projectPath.replace(/\//g, "\\");
-    const { command, args, port } = await this.detectDevCommand(normalizedPath);
+    const detected = await this.detectDevCommand(normalizedPath);
+
+    // Apply port override if provided
+    const port = portOverride || detected.port;
+    let { command, args } = detected;
+    if (portOverride && portOverride !== detected.port) {
+      // Replace port in args
+      const portIdx = args.indexOf("--port");
+      if (portIdx !== -1 && portIdx + 1 < args.length) {
+        args = [...args];
+        args[portIdx + 1] = String(portOverride);
+      }
+    }
 
     // Check if port is already in use
     if (port) {
@@ -159,11 +171,11 @@ class ProcessManager {
     return info;
   }
 
-  async restart(slug: string, projectPath: string): Promise<DevServerInfo> {
+  async restart(slug: string, projectPath: string, portOverride?: number): Promise<DevServerInfo> {
     this.stop(slug);
     await new Promise((resolve) => setTimeout(resolve, 2000));
     this.processes.delete(slug);
-    return this.start(slug, projectPath);
+    return this.start(slug, projectPath, portOverride);
   }
 
   private async detectDevCommand(
