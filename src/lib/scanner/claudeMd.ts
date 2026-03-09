@@ -9,8 +9,7 @@ export async function scanClaudeMd(
       path.join(projectPath, "CLAUDE.md"),
       "utf-8"
     );
-    // Return first ~500 chars as summary
-    return content.slice(0, 500).trim();
+    return content.trim();
   } catch {
     return undefined;
   }

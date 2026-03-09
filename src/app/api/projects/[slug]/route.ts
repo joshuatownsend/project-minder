@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { scanGitDirtyStatus } from "@/lib/scanner/git";
 
 export async function GET(
   _request: NextRequest,
@@ -18,6 +19,13 @@ export async function GET(
 
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  // Enrich with live git dirty status (too slow for bulk scan)
+  if (project.git) {
+    const dirty = await scanGitDirtyStatus(project.path);
+    project.git.isDirty = dirty.isDirty;
+    project.git.uncommittedCount = dirty.uncommittedCount;
   }
 
   return NextResponse.json(project);

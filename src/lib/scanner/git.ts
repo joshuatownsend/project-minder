@@ -43,3 +43,16 @@ export async function scanGit(projectPath: string): Promise<GitInfo | undefined>
     uncommittedCount: 0,
   };
 }
+
+/**
+ * Fetch dirty status for a single project (too slow for bulk scan).
+ * Call this only on detail pages.
+ */
+export async function scanGitDirtyStatus(
+  projectPath: string
+): Promise<{ isDirty: boolean; uncommittedCount: number }> {
+  const porcelain = await runGit("git status --porcelain", projectPath);
+  if (!porcelain) return { isDirty: false, uncommittedCount: 0 };
+  const lines = porcelain.split("\n").filter((l) => l.trim());
+  return { isDirty: lines.length > 0, uncommittedCount: lines.length };
+}
