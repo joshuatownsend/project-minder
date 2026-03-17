@@ -9,6 +9,7 @@ import { scanGit } from "./git";
 import { scanClaudeMd } from "./claudeMd";
 import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
+import { scanManualStepsMd } from "./manualStepsMd";
 
 const DEV_ROOT = "C:\\dev";
 
@@ -32,7 +33,7 @@ async function scanProject(dirName: string): Promise<ProjectData | null> {
 
   const slug = toSlug(dirName);
 
-  const [pkgResult, envResult, dockerResult, gitResult, claudeMd, todos, claudeSessions] =
+  const [pkgResult, envResult, dockerResult, gitResult, claudeMd, todos, claudeSessions, manualSteps] =
     await Promise.all([
       scanPackageJson(projectPath),
       scanEnvFiles(projectPath),
@@ -41,6 +42,7 @@ async function scanProject(dirName: string): Promise<ProjectData | null> {
       scanClaudeMd(projectPath),
       scanTodoMd(projectPath),
       scanClaudeSessions(projectPath),
+      scanManualStepsMd(projectPath),
     ]);
 
   // Determine DB port from env or docker
@@ -87,6 +89,7 @@ async function scanProject(dirName: string): Promise<ProjectData | null> {
       claudeMdSummary: claudeMd,
     },
     todos,
+    manualSteps,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

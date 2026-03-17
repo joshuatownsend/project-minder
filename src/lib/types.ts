@@ -32,6 +32,9 @@ export interface ProjectData {
   // TODOs
   todos?: TodoInfo;
 
+  // Manual Steps
+  manualSteps?: ManualStepsInfo;
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
@@ -77,6 +80,27 @@ export interface TodoInfo {
 export interface TodoItem {
   text: string;
   completed: boolean;
+}
+
+export interface ManualStepEntry {
+  date: string;           // "2026-03-17 14:32"
+  featureSlug: string;    // "auth"
+  title: string;          // "Clerk + Vercel Authentication Setup"
+  steps: ManualStep[];
+}
+
+export interface ManualStep {
+  text: string;           // "Install Clerk package"
+  completed: boolean;
+  details: string[];      // indented lines beneath the step
+  lineNumber: number;     // 1-based line number for write-back
+}
+
+export interface ManualStepsInfo {
+  entries: ManualStepEntry[];
+  totalSteps: number;
+  pendingSteps: number;
+  completedSteps: number;
 }
 
 export interface PortConflict {

@@ -8,6 +8,7 @@ import { TechStackBadges } from "./TechStackBadges";
 import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
 import { TodoCompact } from "./TodoList";
+import { ManualStepsCompact } from "./ManualStepsCompact";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import { Network, Database } from "lucide-react";
@@ -64,6 +65,7 @@ export function ProjectCard({ project }: { project: ProjectData }) {
         {project.git && <GitStatusCompact git={project.git} />}
         {project.claude && <ClaudeSessionCompact claude={project.claude} />}
         {project.todos && <TodoCompact todos={project.todos} />}
+        {project.manualSteps && <ManualStepsCompact manualSteps={project.manualSteps} />}
       </div>
     </Link>
   );

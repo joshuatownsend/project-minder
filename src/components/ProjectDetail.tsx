@@ -12,6 +12,7 @@ import { ClaudeSessionList } from "./ClaudeSessionList";
 import { TodoList } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
+import { ManualStepsList } from "./ManualStepsList";
 import {
   ArrowLeft,
   ExternalLink,
@@ -84,6 +85,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <TabsTrigger value="context">Context</TabsTrigger>
           <TabsTrigger value="todos">TODOs</TabsTrigger>
           <TabsTrigger value="claude">Claude</TabsTrigger>
+          {project.manualSteps && (
+            <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -236,6 +240,17 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
             </p>
           )}
         </TabsContent>
+
+        {project.manualSteps && (
+          <TabsContent value="manual-steps">
+            <div className="rounded-lg border p-6">
+              <ManualStepsList
+                slug={project.slug}
+                initialData={project.manualSteps}
+              />
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
