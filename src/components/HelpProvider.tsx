@@ -38,6 +38,9 @@ export function HelpProvider({ children }: { children: ReactNode }) {
     if (!slug && pathname.startsWith("/project/")) {
       slug = helpMapping["/project/[slug]"];
     }
+    if (!slug && pathname.startsWith("/sessions/")) {
+      slug = helpMapping["/sessions/[sessionId]"];
+    }
     setActiveSlug((slug ?? "getting-started") as HelpSlug);
   }, []);
 

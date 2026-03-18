@@ -18,6 +18,8 @@ const slugTitles: Record<HelpSlug, string> = {
   "tech-stack": "Tech Stack Detection",
   "quick-actions": "Quick Actions",
   "manual-steps": "Manual Steps",
+  stats: "Stats Dashboard",
+  sessions: "Sessions Browser",
 };
 
 export function HelpPanel() {

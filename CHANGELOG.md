@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Toast notification system** — Reusable toast provider with auto-dismiss, used by manual steps notifications.
 
 - **Configurable DEV_ROOT** — Set `devRoot` in `.minder.json` to scan a directory other than `C:\dev`. Header displays the configured path.
+- **Stats Dashboard** — Portfolio-wide analytics at `/stats`. Overview cards (projects, sessions, TODOs, costs), tech stack distribution (frameworks, ORMs, styling, services), project health (status, activity recency, TODO completion), and Claude Code usage (tokens, tools, models, errors). Inspired by [Sniffly](https://github.com/chiphuyen/sniffly).
+- **Sessions Browser** — Browse all Claude Code sessions at `/sessions`. Search by prompt, project, or branch. Sort by recency, duration, or tokens. Active session indicators (green pulse). Click into session detail with timeline, tool usage, file operations, and subagent tracking. Inspired by [claude-code-karma](https://github.com/JayantDevkar/claude-code-karma).
 
 ### Changed
 - **Background git dirty status** — Dashboard cards now show real uncommitted change counts (amber `+N`). A background worker checks repos in batches of 3, and the dashboard polls for results. Detail pages still fetch on-demand for instant accuracy.

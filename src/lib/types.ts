@@ -116,6 +116,90 @@ export interface MinderConfig {
   devRoot: string; // root directory to scan for projects
 }
 
+export interface ClaudeUsageStats {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreateTokens: number;
+  cacheReadTokens: number;
+  totalTurns: number;
+  toolUsage: Record<string, number>;
+  errorCount: number;
+  modelsUsed: string[];
+  costEstimate: number; // rough USD estimate
+  conversationCount: number;
+}
+
+export interface StatsData {
+  projectCount: number;
+  hiddenCount: number;
+  frameworks: Record<string, number>;
+  orms: Record<string, number>;
+  styling: Record<string, number>;
+  services: Record<string, number>;
+  databases: Record<string, number>;
+  statuses: Record<string, number>;
+  activity: { today: number; thisWeek: number; thisMonth: number; older: number; none: number };
+  todoHealth: { total: number; completed: number; pending: number };
+  manualStepsHealth: { total: number; completed: number; pending: number };
+  claudeSessions: { total: number; projectsWithSessions: number };
+  claudeUsage?: ClaudeUsageStats;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  projectPath: string;
+  projectSlug: string;
+  projectName: string;
+  startTime?: string;
+  endTime?: string;
+  durationMs?: number;
+  initialPrompt?: string;
+  messageCount: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  costEstimate: number;
+  toolUsage: Record<string, number>;
+  modelsUsed: string[];
+  gitBranch?: string;
+  subagentCount: number;
+  errorCount: number;
+  isActive: boolean;
+}
+
+export interface TimelineEvent {
+  type: "user" | "assistant" | "tool_use" | "thinking" | "error";
+  timestamp?: string;
+  content: string;
+  toolName?: string;
+  tokenCount?: number;
+}
+
+export interface FileOperation {
+  path: string;
+  operation: string;
+  timestamp?: string;
+  toolName: string;
+}
+
+export interface SubagentInfo {
+  agentId: string;
+  type: string;
+  description: string;
+  messageCount: number;
+  toolUsage: Record<string, number>;
+}
+
+export interface SessionDetail extends SessionSummary {
+  timeline: TimelineEvent[];
+  fileOperations: FileOperation[];
+  subagents: SubagentInfo[];
+}
+
 export interface ScanResult {
   projects: ProjectData[];
   portConflicts: PortConflict[];
