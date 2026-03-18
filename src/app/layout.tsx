@@ -32,6 +32,18 @@ export default async function RootLayout({
                   </a>
                   <nav className="flex items-center gap-4">
                     <ManualStepsNavBadge />
+                    <a
+                      href="/sessions"
+                      className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      Sessions
+                    </a>
+                    <a
+                      href="/stats"
+                      className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      Stats
+                    </a>
                   </nav>
                 </div>
                 <div className="flex items-center gap-3">

@@ -58,11 +58,16 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `POST /api/manual-steps/[slug]` — toggle checkbox `{lineNumber}`
 - `GET /api/manual-steps/changes?since=ISO8601` — new-entry change events for notifications
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
+- `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
+- `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
+- `GET /api/sessions/[sessionId]` — full session detail (timeline, file ops, subagents)
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
 - Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude, Manual Steps) + `DevServerControl`
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
+- Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
+- Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton, toast)
 
