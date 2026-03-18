@@ -156,8 +156,9 @@ export function SessionsBrowser() {
           return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
         case "recent":
         default: {
-          const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
-          const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
+          // Sort by endTime so active/long-running sessions appear at top
+          const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
+          const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
           return tb - ta;
         }
       }

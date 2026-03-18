@@ -248,10 +248,10 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
     }
   }
 
-  // Sort by most recent first
+  // Sort by most recent activity (endTime) so active sessions appear first
   sessions.sort((a, b) => {
-    const ta = a.startTime ? new Date(a.startTime).getTime() : 0;
-    const tb = b.startTime ? new Date(b.startTime).getTime() : 0;
+    const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
+    const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
     return tb - ta;
   });
 
@@ -328,6 +328,24 @@ export async function scanSessionDetail(
               content: text,
             });
           }
+        }
+
+        // Process sidechain assistant entries for subagent stats
+        if (entry.type === "assistant" && entry.message && entry.isSidechain) {
+          const msg = entry.message;
+          const parentId = (entry as any).parentToolUseID;
+          if (parentId && subagentMap.has(parentId)) {
+            const agent = subagentMap.get(parentId)!;
+            agent.messageCount++;
+            if (Array.isArray(msg.content)) {
+              for (const block of msg.content) {
+                if (block.type === "tool_use" && block.name) {
+                  agent.toolUsage[block.name] = (agent.toolUsage[block.name] || 0) + 1;
+                }
+              }
+            }
+          }
+          continue;
         }
 
         if (entry.type === "assistant" && entry.message && !entry.isSidechain) {
@@ -545,6 +563,25 @@ export async function scanClaudeConversations(
 
 export async function scanAllClaudeConversations(): Promise<ClaudeUsageStats> {
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  return scanConversationDirs(projectsDir);
+}
+
+/**
+ * Scan Claude conversations scoped to specific project paths only.
+ * Prevents inflating stats with unrelated repos outside devRoot.
+ */
+export async function scanClaudeConversationsForProjects(
+  projectPaths: string[]
+): Promise<ClaudeUsageStats> {
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  const allowedDirs = new Set(projectPaths.map((p) => encodePath(p)));
+  return scanConversationDirs(projectsDir, allowedDirs);
+}
+
+async function scanConversationDirs(
+  projectsDir: string,
+  allowedDirs?: Set<string>
+): Promise<ClaudeUsageStats> {
   const aggregate: ClaudeUsageStats = {
     totalTokens: 0, inputTokens: 0, outputTokens: 0,
     cacheCreateTokens: 0, cacheReadTokens: 0,
@@ -557,6 +594,9 @@ export async function scanAllClaudeConversations(): Promise<ClaudeUsageStats> {
 
   const allModels = new Set<string>();
   for (const dir of dirs) {
+    // If scoped, only process directories matching scanned projects
+    if (allowedDirs && !allowedDirs.has(dir)) continue;
+
     const dirPath = path.join(projectsDir, dir);
     try {
       const stat = await fs.stat(dirPath);

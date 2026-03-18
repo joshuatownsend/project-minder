@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
-import { scanAllClaudeConversations } from "@/lib/scanner/claudeConversations";
+import { scanClaudeConversationsForProjects } from "@/lib/scanner/claudeConversations";
 import { ClaudeUsageStats } from "@/lib/types";
 
 // Cache Claude usage stats separately (expensive to compute)
@@ -17,10 +17,11 @@ export async function GET() {
     setCachedScan(result);
   }
 
-  // Fetch Claude usage stats (cached separately with longer TTL)
+  // Fetch Claude usage stats scoped to scanned projects only
   let claudeUsage = cachedClaudeUsage;
   if (!claudeUsage || Date.now() - claudeUsageCachedAt > CLAUDE_USAGE_TTL) {
-    claudeUsage = await scanAllClaudeConversations();
+    const projectPaths = result.projects.map((p) => p.path);
+    claudeUsage = await scanClaudeConversationsForProjects(projectPaths);
     cachedClaudeUsage = claudeUsage;
     claudeUsageCachedAt = Date.now();
   }
