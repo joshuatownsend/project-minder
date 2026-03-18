@@ -24,6 +24,12 @@ Click any card to open its **detail page** for the full picture.
 
 When Claude Code identifies steps you need to perform manually (database migrations, env var setup, etc.), they appear in the **Manual Steps** nav link in the header. Click it to see all pending steps across every project with interactive checkboxes.
 
+## Hiding Projects
+
+If your `C:\dev` directory has projects you don't want on the dashboard, click the **three-dot menu** (⋮) on a project card and select **Hide project**. Hidden projects are excluded from future scans.
+
+To manage hidden projects, click the **"(N hidden)"** link next to the project count. This opens a modal where you can unhide individual projects or all at once.
+
 ## Rescanning Projects
 
 If you add or remove folders in `C:\dev`, click the **refresh button** (circular arrow icon) at the top of the dashboard. This forces a fresh scan and picks up any changes.

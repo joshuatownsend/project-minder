@@ -4,10 +4,11 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { ProjectData, ProjectStatus, PortConflict } from "@/lib/types";
 import { ProjectCard } from "./ProjectCard";
 import { PortConflictBanner } from "./PortConflictBanner";
+import { ManageHiddenProjects } from "./ManageHiddenProjects";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { Search, RefreshCw, SortAsc } from "lucide-react";
+import { Search, RefreshCw, SortAsc, EyeOff } from "lucide-react";
 import { Skeleton } from "./ui/skeleton";
 
 type SortOption = "activity" | "name" | "claude";
@@ -15,19 +16,24 @@ type SortOption = "activity" | "name" | "claude";
 interface DashboardGridProps {
   projects: ProjectData[];
   portConflicts: PortConflict[];
+  hiddenCount: number;
   loading: boolean;
   onRescan: () => void;
+  onHide: (slug: string, dirName: string) => void;
 }
 
 export function DashboardGrid({
   projects,
   portConflicts,
+  hiddenCount,
   loading,
   onRescan,
+  onHide,
 }: DashboardGridProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
   const [sortBy, setSortBy] = useState<SortOption>("activity");
+  const [showHidden, setShowHidden] = useState(false);
 
   const filtered = useMemo(() => {
     let result = projects;
@@ -152,6 +158,17 @@ export function DashboardGrid({
       <div className="flex items-center justify-between">
         <p className="text-sm text-[var(--muted-foreground)]">
           {filtered.length} project{filtered.length !== 1 ? "s" : ""}
+          {hiddenCount > 0 && (
+            <>
+              {" "}
+              <button
+                onClick={() => setShowHidden(true)}
+                className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2 transition-colors"
+              >
+                ({hiddenCount} hidden)
+              </button>
+            </>
+          )}
         </p>
       </div>
 
@@ -164,7 +181,7 @@ export function DashboardGrid({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filtered.map((project) => (
-            <ProjectCard key={project.slug} project={project} />
+            <ProjectCard key={project.slug} project={project} onHide={onHide} />
           ))}
           {filtered.length === 0 && (
             <p className="col-span-full text-center text-[var(--muted-foreground)] py-12">
@@ -172,6 +189,16 @@ export function DashboardGrid({
             </p>
           )}
         </div>
+      )}
+
+      {showHidden && (
+        <ManageHiddenProjects
+          onClose={() => setShowHidden(false)}
+          onUnhide={() => {
+            setShowHidden(false);
+            onRescan();
+          }}
+        />
       )}
     </div>
   );

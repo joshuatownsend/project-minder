@@ -88,11 +88,28 @@ After completing any feature or fix, before considering the task done:
 5. Copy updated help markdown to `public/help/` (runtime-fetchable copies of `docs/help/`).
 6. Commit doc changes with the feature.
 
-# Manual Steps Logging (add this block to your CLAUDE.md)
+## Changelog Discipline
+
+Update `CHANGELOG.md` for any change that affects:
+
+- UI behavior
+- Application process or logic
+- Validation outcomes
+- API behavior or schema
+- MCP behavior or schema
+- Authentication/session behavior
+- Subscription plans, entitlements, quotas
+- Data migrations affecting interpretation
+
+Use Keep a Changelog categories under `[Unreleased]`.
+
+Pure refactors and test-only changes do not require entries.
+
+## Manual Steps Logging (add this block to your CLAUDE.md)
 
 ---
 
-## Manual Step Logging
+### Manual Step Logging
 
 Whenever you identify a step that I (the developer) must perform manually outside
 of code — including but not limited to:
@@ -108,7 +125,7 @@ of code — including but not limited to:
 
 …you MUST append an entry to `MANUAL_STEPS.md` in the project root.
 
-### Format
+#### Format
 
 Use this exact structure (append, never overwrite):
 
@@ -124,7 +141,7 @@ Use this exact structure (append, never overwrite):
 ---
 ```
 
-### Rules
+#### Rules
 
 1. **Append only** — never modify or delete existing entries in MANUAL_STEPS.md.
 2. **One entry per session or feature** — group related steps under a single header.
@@ -134,7 +151,7 @@ Use this exact structure (append, never overwrite):
 6. After appending, **tell me** that you've logged steps to MANUAL_STEPS.md and
    summarize what was added in one or two sentences.
 
-### Example entry
+#### Example entry
 
 ```
 ## 2026-03-17 14:32 | auth | Clerk + Vercel Authentication Setup

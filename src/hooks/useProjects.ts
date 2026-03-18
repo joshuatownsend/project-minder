@@ -67,7 +67,31 @@ export function useProjects() {
     fetchProjects();
   }, [fetchProjects]);
 
-  return { data, loading, error, rescan, updateStatus };
+  const hideProject = useCallback(
+    async (slug: string, dirName: string) => {
+      try {
+        await fetch("/api/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "hide", dirName }),
+        });
+        // Optimistic update: remove from list, bump hidden count
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            projects: prev.projects.filter((p) => p.slug !== slug),
+            hiddenCount: prev.hiddenCount + 1,
+          };
+        });
+      } catch {
+        // Silently fail
+      }
+    },
+    []
+  );
+
+  return { data, loading, error, rescan, updateStatus, hideProject };
 }
 
 export function useProject(slug: string) {

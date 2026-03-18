@@ -11,7 +11,13 @@ import { TodoCompact } from "./TodoList";
 import { ManualStepsCompact } from "./ManualStepsCompact";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
-import { Network, Database } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "./ui/dropdown-menu";
+import { Network, Database, MoreVertical, EyeOff } from "lucide-react";
 
 const borderColors = {
   active: "border-l-emerald-500",
@@ -19,8 +25,15 @@ const borderColors = {
   archived: "border-l-gray-400",
 };
 
-export function ProjectCard({ project }: { project: ProjectData }) {
+interface ProjectCardProps {
+  project: ProjectData;
+  onHide?: (slug: string, dirName: string) => void;
+}
+
+export function ProjectCard({ project, onHide }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
+
+  const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
   return (
     <Link href={`/project/${project.slug}`}>
@@ -29,7 +42,46 @@ export function ProjectCard({ project }: { project: ProjectData }) {
       >
         <div className="flex items-start justify-between gap-2">
           <h3 className="font-semibold truncate">{project.name}</h3>
-          <StatusBadge status={project.status} />
+          <div className="flex items-center gap-1 shrink-0">
+            <StatusBadge status={project.status} />
+            {onHide && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="p-1 rounded hover:bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Hide "${project.name}" from the dashboard? You can unhide it later.`
+                        )
+                      ) {
+                        onHide(project.slug, dirName);
+                      }
+                    }}
+                  >
+                    <EyeOff className="h-4 w-4 mr-2" />
+                    Hide project
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
 
         <TechStackBadges project={project} />
