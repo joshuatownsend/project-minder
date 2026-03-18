@@ -6,17 +6,19 @@ import { HelpButton } from "@/components/HelpButton";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationListener } from "@/components/NotificationListener";
 import { ManualStepsNavBadge } from "@/components/ManualStepsNavBadge";
+import { readConfig } from "@/lib/config";
 
 export const metadata: Metadata = {
   title: "Project Minder",
   description: "Local dashboard for managing dev projects",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const config = await readConfig();
   return (
     <html lang="en" className="dark">
       <body>
@@ -34,7 +36,7 @@ export default function RootLayout({
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-[var(--muted-foreground)]">
-                    C:\dev
+                    {config.devRoot}
                   </span>
                   <HelpButton />
                 </div>

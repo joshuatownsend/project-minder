@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Help system** — Contextual help panel (`?` shortcut) with docs for each page/tab. Help mapping for all routes.
 - **Toast notification system** — Reusable toast provider with auto-dismiss, used by manual steps notifications.
 
+- **Configurable DEV_ROOT** — Set `devRoot` in `.minder.json` to scan a directory other than `C:\dev`. Header displays the configured path.
+
 ### Changed
 - **Background git dirty status** — Dashboard cards now show real uncommitted change counts (amber `+N`). A background worker checks repos in batches of 3, and the dashboard polls for results. Detail pages still fetch on-demand for instant accuracy.
 - Scanner now runs 8 modules (added `manualStepsMd`).

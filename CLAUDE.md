@@ -22,7 +22,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - 8 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`
 - Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\crew-leader`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
-- User config in `.minder.json`: project statuses + hidden project list (`src/lib/config.ts`)
+- User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
 
 ### Process Manager (`src/lib/processManager.ts`)
 - Singleton that tracks spawned dev server child processes
@@ -68,7 +68,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 ## Known Limitations / Technical Debt
 
-1. **DEV_ROOT hardcoded** — `C:\dev` is hardcoded in `src/lib/scanner/index.ts`.
+(None currently tracked — check TODO.md for open items)
 
 ## Conventions
 

@@ -11,8 +11,6 @@ import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
 
-const DEV_ROOT = "C:\\dev";
-
 function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
@@ -26,8 +24,8 @@ async function isGitRepo(dirPath: string): Promise<boolean> {
   }
 }
 
-async function scanProject(dirName: string): Promise<ProjectData | null> {
-  const projectPath = path.join(DEV_ROOT, dirName);
+async function scanProject(dirName: string, devRoot: string): Promise<ProjectData | null> {
+  const projectPath = path.join(devRoot, dirName);
 
   if (!(await isGitRepo(projectPath))) return null;
 
@@ -124,10 +122,11 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 
 export async function scanAllProjects(): Promise<ScanResult> {
   const config = await readConfig();
+  const devRoot = config.devRoot;
 
   let entries: string[];
   try {
-    const dirents = await fs.readdir(DEV_ROOT, { withFileTypes: true });
+    const dirents = await fs.readdir(devRoot, { withFileTypes: true });
     entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
   } catch {
     return { projects: [], portConflicts: [], hiddenCount: 0, scannedAt: new Date().toISOString() };
@@ -142,7 +141,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const BATCH_SIZE = 10;
   for (let i = 0; i < entries.length; i += BATCH_SIZE) {
     const batch = entries.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map(scanProject));
+    const results = await Promise.all(batch.map((d) => scanProject(d, devRoot)));
     for (const r of results) {
       if (r) projects.push(r);
     }

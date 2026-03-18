@@ -4,10 +4,13 @@ import { MinderConfig, ProjectStatus } from "./types";
 
 const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
 
+const DEFAULT_DEV_ROOT = "C:\\dev";
+
 const DEFAULT_CONFIG: MinderConfig = {
   statuses: {},
   hidden: [],
   portOverrides: {},
+  devRoot: DEFAULT_DEV_ROOT,
 };
 
 export async function readConfig(): Promise<MinderConfig> {

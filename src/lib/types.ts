@@ -113,6 +113,7 @@ export interface MinderConfig {
   statuses: Record<string, ProjectStatus>;
   hidden: string[]; // directory names to skip during scan
   portOverrides: Record<string, number>; // slug -> custom dev port
+  devRoot: string; // root directory to scan for projects
 }
 
 export interface ScanResult {

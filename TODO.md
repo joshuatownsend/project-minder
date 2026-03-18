@@ -3,7 +3,7 @@
 ## Dashboard Features
 
 - [x] **Hide projects UI** — Three-dot menu on cards with "Hide" action, "(N hidden)" link opens manage modal to unhide.
-- [ ] **Configurable DEV_ROOT** — `C:\dev` is hardcoded in `src/lib/scanner/index.ts`. Allow setting it via `.minder.json` or an env var so the tool works on other machines.
+- [x] **Configurable DEV_ROOT** — Set `devRoot` in `.minder.json` (defaults to `C:\dev`).
 
 ## Performance
 

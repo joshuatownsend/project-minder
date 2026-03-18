@@ -3,9 +3,8 @@ import path from "path";
 import { watch, FSWatcher } from "fs";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { invalidateCache } from "./cache";
+import { readConfig } from "./config";
 import { ManualStepsInfo } from "./types";
-
-const DEV_ROOT = "C:\\dev";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
 const CHANGE_RETENTION = 5 * 60_000; // 5 minutes
@@ -42,14 +41,16 @@ class ManualStepsWatcher {
 
   private async scanForFiles() {
     try {
-      const dirents = await fs.readdir(DEV_ROOT, { withFileTypes: true });
+      const config = await readConfig();
+      const devRoot = config.devRoot;
+      const dirents = await fs.readdir(devRoot, { withFileTypes: true });
       const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
 
       for (const dirName of dirs) {
         const slug = dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
         if (this.watched.has(slug)) continue;
 
-        const filePath = path.join(DEV_ROOT, dirName, "MANUAL_STEPS.md");
+        const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
         try {
           await fs.access(filePath);
           await this.watchFile(slug, dirName, filePath);
