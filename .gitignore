@@ -28,3 +28,12 @@ next-env.d.ts
 
 # project minder config (user-specific)
 .minder.json
+MANUAL_STEPS.md
+
+# claude code
+.claude/
+.mcp.json
+CLAUDE_MD_SNIPPET.md
+
+# scratch files
+manual-steps-tracker.html
