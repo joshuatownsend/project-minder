@@ -31,6 +31,12 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Stores last 200 lines of stdout/stderr per process
 - `detached: true` for clean process tree management; `taskkill /F /T` for stop
 
+### Git Status Cache (`src/lib/gitStatusCache.ts`)
+- `globalThis` singleton that runs `git status --porcelain` in background batches of 3
+- Enqueued by `/api/projects` on each dashboard load; results polled by client via `/api/git-status`
+- 5-min TTL matching scan cache; detail page on-demand checks also update this cache
+- Dashboard cards show amber `+N` indicators as results arrive
+
 ### Manual Steps Watcher (`src/lib/manualStepsWatcher.ts`)
 - `globalThis` singleton that watches `MANUAL_STEPS.md` files across all projects
 - `fs.watch` per file with 500ms debounce (Windows fires duplicate events)
@@ -51,6 +57,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `GET /api/manual-steps/[slug]` — manual steps for one project
 - `POST /api/manual-steps/[slug]` — toggle checkbox `{lineNumber}`
 - `GET /api/manual-steps/changes?since=ISO8601` — new-entry change events for notifications
+- `GET /api/git-status` — background git dirty status cache (polled by dashboard)
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
@@ -61,10 +68,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 ## Known Limitations / Technical Debt
 
-1. **Git dirty status disabled** — `git status --porcelain` is too slow on Windows across 61 repos. `isDirty` is hardcoded to `false`. Needs a background/lazy approach.
-2. **No UI for hiding projects** — `config.hidden` is supported server-side but there's no manage/hide UI yet. 44 of 61 projects lack `package.json` and are older non-JS repos.
-3. **DEV_ROOT hardcoded** — `C:\dev` is hardcoded in `src/lib/scanner/index.ts`.
-4. **Unused deps** — `@radix-ui/react-dropdown-menu` and `@radix-ui/react-separator` are installed but not used yet.
+1. **DEV_ROOT hardcoded** — `C:\dev` is hardcoded in `src/lib/scanner/index.ts`.
 
 ## Conventions
 

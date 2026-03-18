@@ -13,7 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Toast notification system** — Reusable toast provider with auto-dismiss, used by manual steps notifications.
 
 ### Changed
+- **Background git dirty status** — Dashboard cards now show real uncommitted change counts (amber `+N`). A background worker checks repos in batches of 3, and the dashboard polls for results. Detail pages still fetch on-demand for instant accuracy.
 - Scanner now runs 8 modules (added `manualStepsMd`).
 - Layout header includes "Manual Steps" nav link with pending count badge.
 - Project detail page has a "Manual Steps" tab when applicable.
 - Project cards show pending manual step count in amber.
+
+### Removed
+- Removed unused `@radix-ui/react-separator` dependency.

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanGitDirtyStatus } from "@/lib/scanner/git";
+import { gitStatusCache } from "@/lib/gitStatusCache";
 
 export async function GET(
   _request: NextRequest,
@@ -26,6 +27,8 @@ export async function GET(
     const dirty = await scanGitDirtyStatus(project.path);
     project.git.isDirty = dirty.isDirty;
     project.git.uncommittedCount = dirty.uncommittedCount;
+    // Update background cache so it doesn't re-check this project
+    gitStatusCache.set(project.slug, dirty.isDirty, dirty.uncommittedCount);
   }
 
   return NextResponse.json(project);

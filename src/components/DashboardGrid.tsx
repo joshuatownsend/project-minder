@@ -13,6 +13,11 @@ import { Skeleton } from "./ui/skeleton";
 
 type SortOption = "activity" | "name" | "claude";
 
+interface DirtyStatusOverride {
+  isDirty: boolean;
+  uncommittedCount: number;
+}
+
 interface DashboardGridProps {
   projects: ProjectData[];
   portConflicts: PortConflict[];
@@ -20,6 +25,7 @@ interface DashboardGridProps {
   loading: boolean;
   onRescan: () => void;
   onHide: (slug: string, dirName: string) => void;
+  gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
 }
 
 export function DashboardGrid({
@@ -29,6 +35,7 @@ export function DashboardGrid({
   loading,
   onRescan,
   onHide,
+  gitDirtyOverrides,
 }: DashboardGridProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
@@ -36,7 +43,16 @@ export function DashboardGrid({
   const [showHidden, setShowHidden] = useState(false);
 
   const filtered = useMemo(() => {
-    let result = projects;
+    // Apply git dirty status overrides from background cache
+    let result = gitDirtyOverrides
+      ? projects.map((p) => {
+          const override = gitDirtyOverrides[p.slug];
+          if (override && p.git) {
+            return { ...p, git: { ...p.git, ...override } };
+          }
+          return p;
+        })
+      : projects;
 
     if (search) {
       const q = search.toLowerCase();
@@ -76,7 +92,7 @@ export function DashboardGrid({
     });
 
     return result;
-  }, [projects, search, statusFilter, sortBy]);
+  }, [projects, search, statusFilter, sortBy, gitDirtyOverrides]);
 
   // Keyboard shortcuts
   const handleKeyDown = useCallback(

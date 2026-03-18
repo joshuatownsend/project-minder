@@ -7,10 +7,10 @@
 
 ## Performance
 
-- [ ] **Background git dirty status** — `git status --porcelain` is too slow on Windows across 61 repos (~2s each). Currently hardcoded to `false`. Needs a lazy/background approach — e.g., run on detail page visit only, or queue checks in batches with a stale indicator.
+- [x] **Background git dirty status** — Background batch worker checks repos 3 at a time, dashboard polls for results and shows amber `+N` indicators as they come in.
 
 ## Housekeeping
 
 - [x] **Create CHANGELOG.md** — Set up with Keep a Changelog format.
 - [x] **Use dropdown menu dep** — `@radix-ui/react-dropdown-menu` now used for project card action menu.
-- [ ] **Remove `@radix-ui/react-separator`** — Still unused. Either find a use or remove it.
+- [x] **Remove `@radix-ui/react-separator`** — Uninstalled.
