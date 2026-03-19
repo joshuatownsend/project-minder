@@ -20,6 +20,7 @@ import {
   GitBranch,
   Bot,
   File,
+  Zap,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -172,6 +173,12 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           <TabsTrigger value="files">
             Files ({data.fileOperations.length})
           </TabsTrigger>
+          {Object.keys(data.skillsUsed).length > 0 && (
+            <TabsTrigger value="skills">
+              <Zap className="h-3 w-3 mr-1" />
+              Skills ({Object.keys(data.skillsUsed).length})
+            </TabsTrigger>
+          )}
           {data.subagents.length > 0 && (
             <TabsTrigger value="subagents">
               <Bot className="h-3 w-3 mr-1" />
@@ -197,6 +204,31 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
             <SessionFileOps operations={data.fileOperations} />
           </div>
         </TabsContent>
+
+        {Object.keys(data.skillsUsed).length > 0 && (
+          <TabsContent value="skills">
+            <div className="rounded-lg border p-4 space-y-3">
+              <div className="space-y-2">
+                {Object.entries(data.skillsUsed)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([skill, count]) => (
+                    <div
+                      key={skill}
+                      className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-[var(--muted)] transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-amber-400" />
+                        <span className="text-sm font-mono">{skill}</span>
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {count}x
+                      </Badge>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </TabsContent>
+        )}
 
         {data.subagents.length > 0 && (
           <TabsContent value="subagents">

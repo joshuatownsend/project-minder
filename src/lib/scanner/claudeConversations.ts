@@ -120,6 +120,7 @@ async function scanSessionFile(
     let cacheReadTokens = 0;
     let cacheCreateTokens = 0;
     const tools: Record<string, number> = {};
+    const skills: Record<string, number> = {};
     const models = new Set<string>();
     let subagentCount = 0;
     let errorCount = 0;
@@ -170,6 +171,10 @@ async function scanSessionFile(
               if (block.type === "tool_use" && block.name) {
                 tools[block.name] = (tools[block.name] || 0) + 1;
                 if (block.name === "Agent") subagentCount++;
+                if (block.name === "Skill" && block.input?.skill) {
+                  const skillName = block.input.skill;
+                  skills[skillName] = (skills[skillName] || 0) + 1;
+                }
               }
             }
           }
@@ -215,6 +220,7 @@ async function scanSessionFile(
       subagentCount,
       errorCount,
       isActive,
+      skillsUsed: skills,
     };
   } catch {
     return null;

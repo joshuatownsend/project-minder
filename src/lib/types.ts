@@ -169,6 +169,7 @@ export interface SessionSummary {
   subagentCount: number;
   errorCount: number;
   isActive: boolean;
+  skillsUsed: Record<string, number>; // skill name → invocation count
 }
 
 export interface TimelineEvent {

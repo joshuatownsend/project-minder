@@ -87,9 +87,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <TabsTrigger value="todos">TODOs</TabsTrigger>
           <TabsTrigger value="claude">Claude</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
-          {project.manualSteps && (
-            <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
-          )}
+          <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -247,16 +245,20 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <ProjectSessions projectPath={project.path} />
         </TabsContent>
 
-        {project.manualSteps && (
-          <TabsContent value="manual-steps">
+        <TabsContent value="manual-steps">
+          {project.manualSteps ? (
             <div className="rounded-lg border p-6">
               <ManualStepsList
                 slug={project.slug}
                 initialData={project.manualSteps}
               />
             </div>
-          </TabsContent>
-        )}
+          ) : (
+            <p className="text-[var(--muted-foreground)] py-8 text-center">
+              No MANUAL_STEPS.md found for this project.
+            </p>
+          )}
+        </TabsContent>
       </Tabs>
     </div>
   );
