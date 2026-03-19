@@ -13,6 +13,7 @@ import { TodoList } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
+import { ProjectSessions } from "./ProjectSessions";
 import {
   ArrowLeft,
   ExternalLink,
@@ -85,6 +86,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <TabsTrigger value="context">Context</TabsTrigger>
           <TabsTrigger value="todos">TODOs</TabsTrigger>
           <TabsTrigger value="claude">Claude</TabsTrigger>
+          <TabsTrigger value="sessions">Sessions</TabsTrigger>
           {project.manualSteps && (
             <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
           )}
@@ -239,6 +241,10 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               No Claude session data found.
             </p>
           )}
+        </TabsContent>
+
+        <TabsContent value="sessions">
+          <ProjectSessions projectPath={project.path} />
         </TabsContent>
 
         {project.manualSteps && (

@@ -17,6 +17,11 @@ import {
   Wrench,
   SortAsc,
   AlertCircle,
+  FolderOpen,
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
+  Layers,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -38,6 +43,12 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function formatCost(n: number): string {
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n >= 0.01) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(4)}`;
+}
+
 function formatDate(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -53,7 +64,15 @@ function formatDate(iso?: string): string {
   return d.toLocaleDateString();
 }
 
-function SessionCard({ session }: { session: SessionSummary }) {
+// ─── Session Card ────────────────────────────────────────────────────
+
+function SessionCard({
+  session,
+  showProject = true,
+}: {
+  session: SessionSummary;
+  showProject?: boolean;
+}) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
 
   return (
@@ -67,9 +86,11 @@ function SessionCard({ session }: { session: SessionSummary }) {
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
               </span>
             )}
-            <span className="text-xs text-[var(--muted-foreground)] font-mono truncate">
-              {session.projectName}
-            </span>
+            {showProject && (
+              <span className="text-xs text-[var(--muted-foreground)] font-mono truncate">
+                {session.projectName}
+              </span>
+            )}
           </div>
           <span className="text-xs text-[var(--muted-foreground)] shrink-0">
             {formatDate(session.startTime)}
@@ -129,10 +150,199 @@ function SessionCard({ session }: { session: SessionSummary }) {
   );
 }
 
+// ─── Project Group ───────────────────────────────────────────────────
+
+interface ProjectGroup {
+  projectPath: string;
+  projectName: string;
+  sessions: SessionSummary[];
+  totalSessions: number;
+  totalTokens: number;
+  totalCost: number;
+  totalDurationMs: number;
+  totalMessages: number;
+  totalErrors: number;
+  totalSubagents: number;
+  activeSessions: number;
+  lastActivity?: string;
+  modelsUsed: string[];
+  topTools: [string, number][];
+}
+
+function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
+  const map = new Map<string, SessionSummary[]>();
+  for (const s of sessions) {
+    const key = s.projectPath;
+    const list = map.get(key) || [];
+    list.push(s);
+    map.set(key, list);
+  }
+
+  const groups: ProjectGroup[] = [];
+  for (const [projectPath, projectSessions] of map) {
+    const models = new Set<string>();
+    const toolAgg: Record<string, number> = {};
+    let totalTokens = 0;
+    let totalCost = 0;
+    let totalDurationMs = 0;
+    let totalMessages = 0;
+    let totalErrors = 0;
+    let totalSubagents = 0;
+    let activeSessions = 0;
+    let lastActivity: string | undefined;
+
+    for (const s of projectSessions) {
+      totalTokens += s.inputTokens + s.outputTokens;
+      totalCost += s.costEstimate;
+      totalDurationMs += s.durationMs || 0;
+      totalMessages += s.messageCount;
+      totalErrors += s.errorCount;
+      totalSubagents += s.subagentCount;
+      if (s.isActive) activeSessions++;
+      for (const m of s.modelsUsed) models.add(m);
+      for (const [tool, count] of Object.entries(s.toolUsage)) {
+        toolAgg[tool] = (toolAgg[tool] || 0) + count;
+      }
+      if (s.endTime && (!lastActivity || s.endTime > lastActivity)) {
+        lastActivity = s.endTime;
+      }
+    }
+
+    const topTools = Object.entries(toolAgg)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    groups.push({
+      projectPath,
+      projectName: projectSessions[0].projectName,
+      sessions: projectSessions,
+      totalSessions: projectSessions.length,
+      totalTokens,
+      totalCost,
+      totalDurationMs,
+      totalMessages,
+      totalErrors,
+      totalSubagents,
+      activeSessions,
+      lastActivity,
+      modelsUsed: Array.from(models),
+      topTools,
+    });
+  }
+
+  // Sort groups by last activity
+  groups.sort((a, b) => {
+    const ta = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+    const tb = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+    return tb - ta;
+  });
+
+  return groups;
+}
+
+function ProjectGroupCard({ group }: { group: ProjectGroup }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      {/* Project summary header */}
+      <button
+        className="w-full text-left p-4 hover:bg-[var(--muted)] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            {expanded ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
+            )}
+            <FolderOpen className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
+            <span className="font-mono text-sm truncate">{group.projectPath}</span>
+            {group.activeSessions > 0 && (
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-[var(--muted-foreground)] shrink-0">
+            {formatDate(group.lastActivity)}
+          </span>
+        </div>
+
+        {/* Aggregated stats */}
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-[var(--muted-foreground)] ml-10">
+          <span className="flex items-center gap-1">
+            <Layers className="h-3 w-3" />
+            {group.totalSessions} session{group.totalSessions !== 1 ? "s" : ""}
+          </span>
+          <span className="flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {formatDuration(group.totalDurationMs)}
+          </span>
+          <span className="flex items-center gap-1">
+            <MessageSquare className="h-3 w-3" />
+            {group.totalMessages} msgs
+          </span>
+          <span className="flex items-center gap-1">
+            <Cpu className="h-3 w-3" />
+            {formatTokens(group.totalTokens)} tokens
+          </span>
+          <span className="flex items-center gap-1">
+            <DollarSign className="h-3 w-3" />
+            {formatCost(group.totalCost)}
+          </span>
+          {group.totalSubagents > 0 && (
+            <span className="flex items-center gap-1">
+              <Bot className="h-3 w-3" />
+              {group.totalSubagents} agents
+            </span>
+          )}
+          {group.totalErrors > 0 && (
+            <span className="flex items-center gap-1 text-red-400">
+              <AlertCircle className="h-3 w-3" />
+              {group.totalErrors} errors
+            </span>
+          )}
+        </div>
+
+        {/* Top tools + models */}
+        <div className="mt-2 flex flex-wrap gap-1 ml-10">
+          {group.topTools.map(([tool, count]) => (
+            <Badge key={tool} variant="outline" className="text-[10px] px-1.5 py-0">
+              {tool} ({count})
+            </Badge>
+          ))}
+          {group.modelsUsed.map((m) => (
+            <Badge key={m} variant="outline" className="text-[10px] px-1.5 py-0 border-violet-500/30 text-violet-400">
+              {m}
+            </Badge>
+          ))}
+        </div>
+      </button>
+
+      {/* Expanded session list */}
+      {expanded && (
+        <div className="border-t p-4 space-y-3 bg-[var(--background)]">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {group.sessions.map((session) => (
+              <SessionCard key={session.sessionId} session={session} showProject={false} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Browser ────────────────────────────────────────────────────
+
 export function SessionsBrowser() {
   const { data, loading } = useAllSessions();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
+  const [groupByProject, setGroupByProject] = useState(false);
 
   const filtered = useMemo(() => {
     let result = data;
@@ -143,6 +353,7 @@ export function SessionsBrowser() {
         (s) =>
           s.initialPrompt?.toLowerCase().includes(q) ||
           s.projectName.toLowerCase().includes(q) ||
+          s.projectPath.toLowerCase().includes(q) ||
           s.sessionId.includes(q) ||
           s.gitBranch?.toLowerCase().includes(q)
       );
@@ -156,7 +367,6 @@ export function SessionsBrowser() {
           return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
         case "recent":
         default: {
-          // Sort by endTime so active/long-running sessions appear at top
           const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
           const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
           return tb - ta;
@@ -164,6 +374,11 @@ export function SessionsBrowser() {
       }
     });
   }, [data, search, sortBy]);
+
+  const projectGroups = useMemo(
+    () => (groupByProject ? buildProjectGroups(filtered) : []),
+    [filtered, groupByProject]
+  );
 
   const activeSessions = data.filter((s) => s.isActive).length;
 
@@ -201,6 +416,14 @@ export function SessionsBrowser() {
           />
         </div>
         <div className="flex gap-1">
+          <Button
+            variant={groupByProject ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setGroupByProject(!groupByProject)}
+          >
+            <FolderOpen className="h-3 w-3 mr-1" />
+            Group by Project
+          </Button>
           {sortOptions.map((opt) => (
             <Button
               key={opt.value}
@@ -226,6 +449,15 @@ export function SessionsBrowser() {
           <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
           <p>No sessions found.</p>
           {search && <p className="text-sm mt-1">Try a different search term.</p>}
+        </div>
+      ) : groupByProject ? (
+        <div className="space-y-3">
+          <p className="text-sm text-[var(--muted-foreground)]">
+            {projectGroups.length} project{projectGroups.length !== 1 ? "s" : ""}
+          </p>
+          {projectGroups.map((group) => (
+            <ProjectGroupCard key={group.projectPath} group={group} />
+          ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -36,9 +36,9 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
   const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
   return (
-    <Link href={`/project/${project.slug}`}>
+    <Link href={`/project/${project.slug}`} className="h-full">
       <div
-        className={`group rounded-lg border border-l-4 ${borderColors[project.status]} bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3`}
+        className={`group rounded-lg border border-l-4 ${borderColors[project.status]} bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3 h-full`}
       >
         <div className="flex items-start justify-between gap-2">
           <h3 className="font-semibold truncate">{project.name}</h3>
