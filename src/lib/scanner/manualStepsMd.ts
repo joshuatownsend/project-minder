@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { ManualStepsInfo, ManualStepEntry, ManualStep } from "../types";
 
-const HEADER_RE = /^##\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*\|\s*([^|]+?)\s*\|\s*(.+)$/;
+const HEADER_RE = /^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s*\|\s*([^|]+?)\s*\|\s*(.+)$/;
 const COMPLETED_RE = /^\s*-\s*\[x\]\s+(.*)/i;
 const PENDING_RE = /^\s*-\s*\[\s\]\s+(.*)/;
 
