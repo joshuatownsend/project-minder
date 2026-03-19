@@ -4,14 +4,14 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 ## Stack
 
-- **Next.js 15** (App Router) + TypeScript + React 19
+- **Next.js 16** (App Router) + TypeScript + React 19
 - **Tailwind CSS v4** + hand-rolled shadcn-style components (no shadcn CLI)
 - **No database** — filesystem is the database; user prefs in `.minder.json`
-- **Dev port: 4100** — must use `--turbopack` flag (webpack dev mode hangs on Windows with this codebase)
+- **Dev port: 4100** — Turbopack is the default bundler in Next.js 16
 
 ## Commands
 
-- `npm run dev` — starts on port 4100 with Turbopack
+- `npm run dev` — starts on port 4100 (Turbopack is default in Next.js 16)
 - `npm run build` — production build (use this to type-check)
 - `npm run start` — production server on port 4100
 

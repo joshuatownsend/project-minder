@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Sessions Browser** — Browse all Claude Code sessions at `/sessions`. Search by prompt, project, or branch. Sort by recency, duration, or tokens. Active session indicators (green pulse). Click into session detail with timeline, tool usage, file operations, and subagent tracking. Inspired by [claude-code-karma](https://github.com/JayantDevkar/claude-code-karma).
 
 ### Changed
+- **Upgraded to Next.js 16.2** — Turbopack is now the default bundler (removed `--turbopack` flag from dev script). Updated React to 19.2. Replaced `next lint` with direct `eslint .` command (`next lint` removed in v16).
 - **Background git dirty status** — Dashboard cards now show real uncommitted change counts (amber `+N`). A background worker checks repos in batches of 3, and the dashboard polls for results. Detail pages still fetch on-demand for instant accuracy.
 - Scanner now runs 8 modules (added `manualStepsMd`).
 - Layout header includes "Manual Steps" nav link with pending count badge.
