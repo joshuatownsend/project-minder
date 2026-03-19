@@ -26,6 +26,9 @@ npm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# persistent cache
+.cache/
+
 # project minder config (user-specific)
 .minder.json
 MANUAL_STEPS.md

@@ -9,6 +9,12 @@ import {
   FileOperation,
   SubagentInfo,
 } from "../types";
+import {
+  readDiskCache,
+  writeDiskCache,
+  isCacheHit,
+  type CachedFileStats,
+} from "../claudeStatsCache";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface ConversationEntry {
@@ -79,6 +85,15 @@ function extractTextContent(content: any[]): string {
     .join("\n")
     .slice(0, 200);
 }
+
+// ─── Session ID index (globalThis singleton) ─────────────────────────
+
+const globalForIndex = globalThis as unknown as {
+  __sessionIndex?: Map<string, { filePath: string; projectDirName: string }>;
+};
+const sessionIndex =
+  globalForIndex.__sessionIndex ||
+  (globalForIndex.__sessionIndex = new Map());
 
 // ─── Lightweight scan for session summaries ───────────────────────────
 
@@ -239,8 +254,17 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
             return scanSessionFile(filePath, dir, fstat.mtime);
           })
         );
-        for (const r of results) {
-          if (r) sessions.push(r);
+        for (let j = 0; j < results.length; j++) {
+          const r = results[j];
+          if (r) {
+            sessions.push(r);
+            // Populate session index for fast detail lookups
+            const fileName = batch[j];
+            sessionIndex.set(
+              r.sessionId,
+              { filePath: path.join(dirPath, fileName), projectDirName: dir }
+            );
+          }
         }
       }
     } catch {
@@ -276,24 +300,31 @@ export async function scanSessionDetail(
 ): Promise<SessionDetail | null> {
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
 
-  // Find the session file across all project directories
+  // Check session index first (populated by scanAllSessions)
   let filePath: string | null = null;
   let projectDirName = "";
-  try {
-    const dirs = await fs.readdir(projectsDir);
-    for (const dir of dirs) {
-      const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-      try {
-        await fs.access(candidate);
-        filePath = candidate;
-        projectDirName = dir;
-        break;
-      } catch {
-        // Not in this directory
+  const indexed = sessionIndex.get(sessionId);
+  if (indexed) {
+    filePath = indexed.filePath;
+    projectDirName = indexed.projectDirName;
+  } else {
+    // Fallback: scan directories to find the session file
+    try {
+      const dirs = await fs.readdir(projectsDir);
+      for (const dir of dirs) {
+        const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+        try {
+          await fs.access(candidate);
+          filePath = candidate;
+          projectDirName = dir;
+          break;
+        } catch {
+          // Not in this directory
+        }
       }
+    } catch {
+      return null;
     }
-  } catch {
-    return null;
   }
 
   if (!filePath) return null;
@@ -592,32 +623,71 @@ async function scanConversationDirs(
   let dirs: string[];
   try { dirs = await fs.readdir(projectsDir); } catch { return aggregate; }
 
+  // Load persistent disk cache for incremental parsing
+  const diskCache = await readDiskCache();
+  const updatedCache = new Map<string, CachedFileStats>();
+  let cacheChanged = false;
+
   const allModels = new Set<string>();
   for (const dir of dirs) {
-    // If scoped, only process directories matching scanned projects
     if (allowedDirs && !allowedDirs.has(dir)) continue;
 
     const dirPath = path.join(projectsDir, dir);
     try {
-      const stat = await fs.stat(dirPath);
-      if (!stat.isDirectory()) continue;
+      const dirStat = await fs.stat(dirPath);
+      if (!dirStat.isDirectory()) continue;
       const entries = await fs.readdir(dirPath);
       const jsonlFiles = entries.filter((e) => e.endsWith(".jsonl"));
       for (const file of jsonlFiles) {
-        const result = await scanConversationFile(path.join(dirPath, file));
-        aggregate.inputTokens += result.inputTokens;
-        aggregate.outputTokens += result.outputTokens;
-        aggregate.cacheCreateTokens += result.cacheCreateTokens;
-        aggregate.cacheReadTokens += result.cacheReadTokens;
-        aggregate.totalTurns += result.turns;
-        aggregate.errorCount += result.errors;
+        const filePath = path.join(dirPath, file);
+        const fstat = await fs.stat(filePath);
+        const cached = diskCache.get(filePath);
+
+        let fileStats: CachedFileStats;
+
+        if (isCacheHit(cached, fstat.mtimeMs, fstat.size)) {
+          // Cache hit — use stored results
+          fileStats = cached!;
+        } else {
+          // Cache miss — parse the file
+          const result = await scanConversationFile(filePath);
+          fileStats = {
+            filePath,
+            mtime: fstat.mtimeMs,
+            size: fstat.size,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            cacheCreateTokens: result.cacheCreateTokens,
+            cacheReadTokens: result.cacheReadTokens,
+            turns: result.turns,
+            tools: result.tools,
+            errors: result.errors,
+            models: Array.from(result.models),
+          };
+          cacheChanged = true;
+        }
+
+        updatedCache.set(filePath, fileStats);
+
+        // Aggregate
+        aggregate.inputTokens += fileStats.inputTokens;
+        aggregate.outputTokens += fileStats.outputTokens;
+        aggregate.cacheCreateTokens += fileStats.cacheCreateTokens;
+        aggregate.cacheReadTokens += fileStats.cacheReadTokens;
+        aggregate.totalTurns += fileStats.turns;
+        aggregate.errorCount += fileStats.errors;
         aggregate.conversationCount++;
-        for (const model of result.models) allModels.add(model);
-        for (const [tool, count] of Object.entries(result.tools)) {
+        for (const model of fileStats.models) allModels.add(model);
+        for (const [tool, count] of Object.entries(fileStats.tools)) {
           aggregate.toolUsage[tool] = (aggregate.toolUsage[tool] || 0) + count;
         }
       }
     } catch { /* skip */ }
+  }
+
+  // Persist updated cache to disk (only if something changed)
+  if (cacheChanged) {
+    await writeDiskCache(updatedCache);
   }
 
   aggregate.totalTokens = aggregate.inputTokens + aggregate.outputTokens;
