@@ -97,12 +97,16 @@ const sessionIndex =
 
 // ─── Lightweight scan for session summaries ───────────────────────────
 
+const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
 async function scanSessionFile(
   filePath: string,
   projectDirName: string,
   mtime: Date
 ): Promise<SessionSummary | null> {
   try {
+    const stat = await fs.stat(filePath);
+    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.split("\n").filter(Boolean);
     if (lines.length === 0) return null;
@@ -304,6 +308,11 @@ const FILE_TOOL_OPERATIONS: Record<string, string> = {
 export async function scanSessionDetail(
   sessionId: string
 ): Promise<SessionDetail | null> {
+  // Validate sessionId to prevent path traversal — UUIDs and hex IDs only
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+    return null;
+  }
+
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
 
   // Check session index first (populated by scanAllSessions)
@@ -336,6 +345,7 @@ export async function scanSessionDetail(
   if (!filePath) return null;
 
   const fstat = await fs.stat(filePath);
+  if (fstat.size > MAX_SESSION_FILE_SIZE) return null;
   const summary = await scanSessionFile(filePath, projectDirName, fstat.mtime);
   if (!summary) return null;
 

@@ -20,7 +20,7 @@ export async function scanDockerCompose(
         path.join(projectPath, file),
         "utf-8"
       );
-      const doc = yaml.load(content) as Record<string, unknown>;
+      const doc = yaml.load(content, { schema: yaml.JSON_SCHEMA }) as Record<string, unknown>;
       if (!doc || typeof doc !== "object") continue;
 
       const services = (doc.services || {}) as Record<string, unknown>;

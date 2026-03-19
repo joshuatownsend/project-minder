@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "path";
 import { processManager } from "@/lib/processManager";
+import { readConfig } from "@/lib/config";
 
 export const runtime = "nodejs";
+
+/** Verify projectPath is a subdirectory of devRoot. */
+async function validateProjectPath(projectPath: string): Promise<string | null> {
+  const config = await readConfig();
+  const normalized = path.resolve(projectPath);
+  const devRoot = path.resolve(config.devRoot);
+  if (!normalized.startsWith(devRoot + path.sep) && normalized !== devRoot) {
+    return `projectPath must be within ${devRoot}`;
+  }
+  return null;
+}
 
 export async function GET(
   _request: NextRequest,
@@ -39,6 +52,10 @@ export async function POST(
             { status: 400 }
           );
         }
+        const pathErr = await validateProjectPath(projectPath);
+        if (pathErr) {
+          return NextResponse.json({ error: pathErr }, { status: 403 });
+        }
         const info = await processManager.start(slug, projectPath, port);
         return NextResponse.json(info);
       }
@@ -52,6 +69,10 @@ export async function POST(
             { error: "projectPath required" },
             { status: 400 }
           );
+        }
+        const pathErr2 = await validateProjectPath(projectPath);
+        if (pathErr2) {
+          return NextResponse.json({ error: pathErr2 }, { status: 403 });
         }
         const info = await processManager.restart(slug, projectPath, port);
         return NextResponse.json(info);

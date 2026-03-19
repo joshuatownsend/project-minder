@@ -61,6 +61,7 @@ export interface GitInfo {
   lastCommitMessage?: string;
   isDirty: boolean;
   uncommittedCount: number;
+  remoteUrl?: string;
 }
 
 export interface ClaudeInfo {

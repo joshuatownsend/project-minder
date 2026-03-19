@@ -21,7 +21,7 @@ export default async function RootLayout({
   const config = await readConfig();
   return (
     <html lang="en" className="dark">
-      <body>
+      <body suppressHydrationWarning>
         <ToastProvider>
           <HelpProvider>
             <header className="border-b border-[var(--border)]">

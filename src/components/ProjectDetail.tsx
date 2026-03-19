@@ -20,6 +20,7 @@ import {
   Terminal,
   Network,
   Database,
+  Github,
   Globe,
   FolderOpen,
 } from "lucide-react";
@@ -76,6 +77,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               <Terminal className="h-4 w-4 mr-1" />
               Terminal
             </Button>
+            {project.git?.remoteUrl && (
+              <a href={project.git.remoteUrl} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm">
+                  <Github className="h-4 w-4 mr-1" />
+                  GitHub
+                </Button>
+              </a>
+            )}
           </div>
         </div>
       </div>
