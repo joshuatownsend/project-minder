@@ -7,7 +7,7 @@ const COMPLETED_RE = /^\s*-\s*\[x\]\s+(.*)/i;
 const PENDING_RE = /^\s*-\s*\[\s\]\s+(.*)/;
 
 export function parseManualStepsMd(content: string): ManualStepsInfo {
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/);
   const entries: ManualStepEntry[] = [];
   let currentEntry: ManualStepEntry | null = null;
   let currentStep: ManualStep | null = null;

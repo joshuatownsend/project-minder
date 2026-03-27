@@ -79,7 +79,9 @@ class ManualStepsWatcher {
     };
 
     try {
-      entry.watcher = watch(filePath, () => {
+      entry.watcher = watch(filePath, (_event, filename) => {
+        // Ignore our atomic-write temp files
+        if (filename && filename.includes(".tmp.")) return;
         // Debounce — Windows fs.watch fires duplicate events
         if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
         entry.debounceTimer = setTimeout(() => this.onFileChanged(entry), DEBOUNCE_MS);
@@ -100,6 +102,11 @@ class ManualStepsWatcher {
   private async onFileChanged(entry: WatchedProject) {
     try {
       const content = await fs.readFile(entry.filePath, "utf-8");
+
+      // Guard: if the file reads as empty/near-empty, skip —
+      // this is likely a partial read during a concurrent write.
+      if (content.trim().length < 10) return;
+
       const info = parseManualStepsMd(content);
       const newEntryCount = info.entries.length;
 

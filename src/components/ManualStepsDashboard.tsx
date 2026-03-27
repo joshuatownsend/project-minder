@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useAllManualSteps } from "@/hooks/useManualSteps";
-import { ManualStepsInfo, ManualStepEntry } from "@/lib/types";
+import { ManualStepsInfo, ManualStepEntry, ManualStep } from "@/lib/types";
 import { useToggleStep } from "@/hooks/useManualSteps";
 import {
   CheckCircle2,
@@ -68,7 +68,34 @@ function ProjectEntrySection({
   onUpdate: (info: ManualStepsInfo) => void;
 }) {
   const { toggle } = useToggleStep(slug);
-  const completed = entry.steps.filter((s) => s.completed).length;
+  const [optimistic, setOptimistic] = useState<Map<number, boolean>>(new Map());
+
+  const handleToggle = useCallback(
+    (step: ManualStep) => {
+      setOptimistic((prev) => {
+        const next = new Map(prev);
+        next.set(step.lineNumber, !step.completed);
+        return next;
+      });
+
+      toggle(step.lineNumber, (updated) => {
+        setOptimistic((prev) => {
+          const next = new Map(prev);
+          next.delete(step.lineNumber);
+          return next;
+        });
+        onUpdate(updated);
+      });
+    },
+    [toggle, onUpdate]
+  );
+
+  const resolvedSteps = entry.steps.map((step) => {
+    const override = optimistic.get(step.lineNumber);
+    return override !== undefined ? { ...step, completed: override } : step;
+  });
+
+  const completed = resolvedSteps.filter((s) => s.completed).length;
 
   return (
     <div className="space-y-1 py-2">
@@ -81,14 +108,14 @@ function ProjectEntrySection({
         </span>
         <span className="text-sm font-medium">{entry.title}</span>
         <span className="text-xs text-[var(--muted-foreground)] ml-auto">
-          {completed}/{entry.steps.length}
+          {completed}/{resolvedSteps.length}
         </span>
       </div>
-      {entry.steps.map((step, i) => (
+      {resolvedSteps.map((step, i) => (
         <div key={i}>
           <button
             className="flex items-start gap-2 text-sm w-full text-left hover:bg-[var(--muted)] rounded px-1 py-0.5 transition-colors"
-            onClick={() => toggle(step.lineNumber, onUpdate)}
+            onClick={() => handleToggle(entry.steps[i])}
           >
             {step.completed ? (
               <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />

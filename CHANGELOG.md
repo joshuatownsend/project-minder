@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Stats Dashboard** — Portfolio-wide analytics at `/stats`. Overview cards (projects, sessions, TODOs, costs), tech stack distribution (frameworks, ORMs, styling, services), project health (status, activity recency, TODO completion), and Claude Code usage (tokens, tools, models, errors). Inspired by [Sniffly](https://github.com/chiphuyen/sniffly).
 - **Sessions Browser** — Browse all Claude Code sessions at `/sessions`. Search by prompt, project, or branch. Sort by recency, duration, or tokens. Active session indicators (green pulse). Click into session detail with timeline, tool usage, file operations, and subagent tracking. Inspired by [claude-code-karma](https://github.com/JayantDevkar/claude-code-karma).
 
+### Fixed
+- **Manual Steps file corruption on rapid toggles** — Added per-file mutex to serialize read-modify-write cycles, atomic writes (write-to-temp-then-rename), and an empty-content guard that refuses to overwrite a file with blank content. Client-side: toggle requests are now queued (one in-flight at a time) with optimistic UI so checkboxes flip instantly on click. Prevents race condition where concurrent checkbox clicks or external editor access could blank the file.
+
 ### Changed
 - **Upgraded to Next.js 16.2** — Turbopack is now the default bundler (removed `--turbopack` flag from dev script). Updated React to 19.2. Replaced `next lint` with direct `eslint .` command (`next lint` removed in v16).
 - **Background git dirty status** — Dashboard cards now show real uncommitted change counts (amber `+N`). A background worker checks repos in batches of 3, and the dashboard polls for results. Detail pages still fetch on-demand for instant accuracy.
