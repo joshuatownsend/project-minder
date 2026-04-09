@@ -33,15 +33,15 @@ export function QuickAddTodosModal({
   const [results, setResults] = useState<ProjectResult[] | null>(null);
   const { showToast } = useToast();
 
-  // Close on Escape
+  // Close on Escape, except while a batch write is in flight
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !submitting) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, submitting]);
 
   // Reset state each time the modal reopens
   useEffect(() => {
@@ -145,7 +145,9 @@ export function QuickAddTodosModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
-      onClick={onClose}
+      onClick={() => {
+        if (!submitting) onClose();
+      }}
     >
       <div
         className="w-full max-w-3xl mt-12 rounded-lg border bg-[var(--card)] shadow-xl"
@@ -177,7 +179,7 @@ export function QuickAddTodosModal({
                   variant="ghost"
                   size="sm"
                   onClick={selectAllVisible}
-                  disabled={visibleProjects.length === 0}
+                  disabled={submitting || visibleProjects.length === 0}
                 >
                   All visible
                 </Button>
@@ -185,7 +187,7 @@ export function QuickAddTodosModal({
                   variant="ghost"
                   size="sm"
                   onClick={clearSelection}
-                  disabled={selectedSlugs.size === 0}
+                  disabled={submitting || selectedSlugs.size === 0}
                 >
                   Clear
                 </Button>
@@ -195,6 +197,7 @@ export function QuickAddTodosModal({
               placeholder="Filter projects..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              disabled={submitting}
             />
             <div className="h-80 overflow-y-auto rounded-md border">
               {visibleProjects.length === 0 ? (
@@ -212,6 +215,7 @@ export function QuickAddTodosModal({
                             type="checkbox"
                             checked={checked}
                             onChange={() => toggleProject(p.slug)}
+                            disabled={submitting}
                             className="shrink-0"
                           />
                           <span className="truncate">{p.name}</span>
@@ -242,7 +246,8 @@ export function QuickAddTodosModal({
               onChange={(e) => setText(e.target.value)}
               placeholder={"Refactor the scanner batching\nAdd keyboard shortcuts to detail page\nInvestigate flaky git subprocess pool"}
               rows={12}
-              className="w-full rounded-md border border-[var(--input)] bg-[var(--background)] px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              disabled={submitting}
+              className="w-full rounded-md border border-[var(--input)] bg-[var(--background)] px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
             />
 
             {results && (

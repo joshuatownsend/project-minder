@@ -79,8 +79,16 @@ export async function appendTodosToFile(
       }
     }
 
-    // Ensure the file ends with exactly one newline before we append.
-    const base = existing.replace(/\s*$/, "") + (existing.length > 0 ? "\n" : "");
+    // Normalize trailing whitespace before appending.
+    // Preserve the conventional blank line after a standalone "# TODO" header
+    // so newly-seeded files read as "# TODO\n\n- [ ] ...".
+    const normalized = existing.replace(/[\r\n]*$/, "");
+    const base =
+      normalized.length === 0
+        ? ""
+        : normalized === "# TODO"
+          ? normalized + "\n\n"
+          : normalized + "\n";
     const appended =
       base + sanitized.map((t) => `- [ ] ${t}`).join("\n") + "\n";
 

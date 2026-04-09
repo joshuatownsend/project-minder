@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Button } from "./ui/button";
@@ -34,6 +34,12 @@ interface ProjectDetailProps {
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
+
+  // Resync local TODO state when the component receives a different project
+  // (e.g. client-side route transitions between /project/[slug] pages).
+  useEffect(() => {
+    setTodos(project.todos);
+  }, [project.slug, project.todos]);
 
   const openInVSCode = () => {
     window.open(`vscode://file/${project.path.replace(/\\/g, "/")}`, "_blank");
@@ -234,7 +240,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
             ) : (
               <div className="space-y-4">
                 <p className="text-[var(--muted-foreground)] text-sm">
-                  No TODO.md found for this project. Add an item below to create one.
+                  No TODO items found for this project. Add an item below to create or seed <code>TODO.md</code>.
                 </p>
                 <AddTodoForm slug={project.slug} onAdded={setTodos} />
               </div>
