@@ -8,8 +8,9 @@ import { ManageHiddenProjects } from "./ManageHiddenProjects";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { Search, RefreshCw, SortAsc, EyeOff } from "lucide-react";
+import { Search, RefreshCw, SortAsc, Lightbulb } from "lucide-react";
 import { Skeleton } from "./ui/skeleton";
+import { QuickAddTodosModal } from "./QuickAddTodosModal";
 
 type SortOption = "activity" | "name" | "claude";
 
@@ -41,6 +42,7 @@ export function DashboardGrid({
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
   const [sortBy, setSortBy] = useState<SortOption>("activity");
   const [showHidden, setShowHidden] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const filtered = useMemo(() => {
     // Apply git dirty status overrides from background cache
@@ -97,12 +99,27 @@ export function DashboardGrid({
   // Keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      const inField =
+        active?.tagName === "INPUT" || active?.tagName === "TEXTAREA";
+
       if (e.key === "/" && !e.ctrlKey && !e.metaKey) {
-        const active = document.activeElement;
-        if (active?.tagName !== "INPUT") {
+        if (!inField) {
           e.preventDefault();
           document.getElementById("search-input")?.focus();
         }
+      }
+      // Shift+T → Quick Add TODOs (don't trigger while typing in a field)
+      if (
+        e.key === "T" &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !inField
+      ) {
+        e.preventDefault();
+        setQuickAddOpen(true);
       }
     },
     []
@@ -164,6 +181,16 @@ export function DashboardGrid({
             ))}
           </div>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setQuickAddOpen(true)}
+            title="Quick Add TODOs (Shift+T)"
+          >
+            <Lightbulb className="h-4 w-4 mr-1" />
+            Quick Add
+          </Button>
+
           <Button variant="outline" size="sm" onClick={onRescan} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
             Rescan
@@ -206,6 +233,12 @@ export function DashboardGrid({
           )}
         </div>
       )}
+
+      <QuickAddTodosModal
+        projects={projects}
+        open={quickAddOpen}
+        onClose={() => setQuickAddOpen(false)}
+      />
 
       {showHidden && (
         <ManageHiddenProjects

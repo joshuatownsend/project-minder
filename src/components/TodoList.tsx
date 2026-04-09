@@ -1,7 +1,19 @@
-import { TodoInfo } from "@/lib/types";
-import { CheckCircle2, Circle } from "lucide-react";
+"use client";
 
-export function TodoList({ todos }: { todos: TodoInfo }) {
+import { useState } from "react";
+import { TodoInfo } from "@/lib/types";
+import { CheckCircle2, Circle, Plus, Loader2 } from "lucide-react";
+import { Input } from "./ui/input";
+import { Button } from "./ui/button";
+import { useToast } from "./ToastProvider";
+
+interface TodoListProps {
+  todos: TodoInfo;
+  slug?: string;
+  onChange?: (updated: TodoInfo) => void;
+}
+
+export function TodoList({ todos, slug, onChange }: TodoListProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -32,7 +44,70 @@ export function TodoList({ todos }: { todos: TodoInfo }) {
           </li>
         ))}
       </ul>
+
+      {slug && <AddTodoForm slug={slug} onAdded={onChange} />}
     </div>
+  );
+}
+
+export function AddTodoForm({
+  slug,
+  onAdded,
+}: {
+  slug: string;
+  onAdded?: (updated: TodoInfo) => void;
+}) {
+  const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const { showToast } = useToast();
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed || submitting) return;
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/todos/${slug}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const body = await res.json();
+      setText("");
+      onAdded?.(body.todos as TodoInfo);
+      showToast("TODO added", trimmed);
+    } catch (err) {
+      showToast(
+        "Failed to add TODO",
+        err instanceof Error ? err.message : "Unknown error"
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="flex gap-2 pt-2">
+      <Input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Add a new TODO..."
+        maxLength={500}
+        disabled={submitting}
+      />
+      <Button type="submit" size="sm" disabled={submitting || !text.trim()}>
+        {submitting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Plus className="h-4 w-4" />
+        )}
+      </Button>
+    </form>
   );
 }
 
