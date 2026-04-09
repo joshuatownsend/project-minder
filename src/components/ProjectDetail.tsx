@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ProjectData, ProjectStatus } from "@/lib/types";
+import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -9,7 +9,7 @@ import { StatusSelector } from "./StatusBadge";
 import { TechStackBadges } from "./TechStackBadges";
 import { GitStatus } from "./GitStatus";
 import { ClaudeSessionList } from "./ClaudeSessionList";
-import { TodoList } from "./TodoList";
+import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
@@ -33,6 +33,7 @@ interface ProjectDetailProps {
 
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [devPort, setDevPort] = useState(project.devPort);
+  const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
 
   const openInVSCode = () => {
     window.open(`vscode://file/${project.path.replace(/\\/g, "/")}`, "_blank");
@@ -227,15 +228,18 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         </TabsContent>
 
         <TabsContent value="todos">
-          {project.todos ? (
-            <div className="rounded-lg border p-6">
-              <TodoList todos={project.todos} />
-            </div>
-          ) : (
-            <p className="text-[var(--muted-foreground)] py-8 text-center">
-              No TODO.md found for this project.
-            </p>
-          )}
+          <div className="rounded-lg border p-6">
+            {todos ? (
+              <TodoList todos={todos} slug={project.slug} onChange={setTodos} />
+            ) : (
+              <div className="space-y-4">
+                <p className="text-[var(--muted-foreground)] text-sm">
+                  No TODO.md found for this project. Add an item below to create one.
+                </p>
+                <AddTodoForm slug={project.slug} onAdded={setTodos} />
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="claude">

@@ -55,6 +55,15 @@ Shows TODO items parsed from the project's `TODO.md` file:
 - Each item listed with a checkmark (done) or open circle (pending)
 - A total count of completed vs. remaining items
 
+### Adding TODOs
+
+Use the **Add a new TODO...** field at the bottom of the tab to append a new
+item to `TODO.md`. The item is written as `- [ ] your text` on a new line at
+the end of the file (the file is created automatically if it doesn't exist).
+
+For dumping ideas into many projects at once, use the **Quick Add** button in
+the dashboard header (shortcut: **Shift+T**). See [Quick Add TODOs](quick-actions.md#quick-add-todos).
+
 ## Claude Tab
 
 Shows your Claude session history for this project:

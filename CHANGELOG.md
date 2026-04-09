@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Add TODOs from the UI** — Append new items to any project's `TODO.md` without opening an editor. Per-project: inline "Add a new TODO..." form on the TODOs tab of the detail page. Cross-project: **Quick Add** button in the dashboard header (shortcut **Shift+T**) opens a modal with a multi-select project picker and one-idea-per-line textarea that fires parallel appends to every selected project. Creates `TODO.md` with a `# TODO` header if the file doesn't exist. Uses per-file mutex + atomic write to prevent clobbering on concurrent submissions. New `POST /api/todos/[slug]` route accepts `{text}` or `{items[]}`.
 - **Hide projects UI** — Three-dot menu on project cards with "Hide project" action. Confirmation dialog before hiding. "(N hidden)" link in dashboard footer opens a manage modal to view and unhide projects. Uses `@radix-ui/react-dropdown-menu`.
 - **Manual Steps Tracker** — Surfaces `MANUAL_STEPS.md` entries across all projects. Interactive checkboxes toggle steps on disk. Cross-project dashboard at `/manual-steps`. File watcher with real-time toast + OS notifications when Claude adds new steps.
 - **Help system** — Contextual help panel (`?` shortcut) with docs for each page/tab. Help mapping for all routes.
