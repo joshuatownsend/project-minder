@@ -6,152 +6,125 @@ import { parseInsightsFromJsonl } from "../src/lib/scanner/insightsMd";
 import { appendInsights } from "../src/lib/insightsWriter";
 
 /**
- * Decode a Claude history directory name back to a project path.
- * Example: "C--dev-project-minder" → "C:\dev\project-minder"
+ * Encode a project path the same way Claude Code does for its project dirs.
+ * C:\dev\project-minder → C--dev-project-minder
  */
-function decodeDirName(dirName: string): string {
-  return dirName.replace(/^([A-Z])-/, "$1:").replace(/-/g, "\\");
+function encodePath(projectPath: string): string {
+  return projectPath.replace(/[:\\/]/g, "-");
 }
 
-/**
- * Derive a project slug from a directory name.
- * Takes the "meaningful" parts (skipping single-letter parts like drive letters)
- * and joins with hyphens, all lowercase.
- */
 function toSlug(dirName: string): string {
-  const parts = dirName.split("-");
-  const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
-  return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 async function main() {
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
 
-  console.log(`Scanning for Claude history in: ${claudeProjectsDir}`);
+  // Read devRoot from .minder.json (same as the app does)
+  let devRoot = "C:\\dev";
+  try {
+    const config = JSON.parse(await fs.readFile(path.join(process.cwd(), ".minder.json"), "utf-8"));
+    if (config.devRoot) devRoot = config.devRoot;
+  } catch {
+    // Use default
+  }
+
+  console.log(`Scanning Claude history: ${claudeProjectsDir}`);
+  console.log(`Dev root: ${devRoot}`);
   console.log("---");
 
-  let totalProjectsProcessed = 0;
-  let totalInsightsImported = 0;
-  const results: Array<{ project: string; slug: string; insights: number }> = [];
-
-  let projectDirs: string[] = [];
+  // Step 1: Build a map of encoded path → actual project path for all real projects
+  const realProjects = new Map<string, string>(); // encoded → actual path
   try {
-    projectDirs = await fs.readdir(claudeProjectsDir);
+    const dirents = await fs.readdir(devRoot, { withFileTypes: true });
+    for (const d of dirents) {
+      if (d.isDirectory()) {
+        const fullPath = path.join(devRoot, d.name);
+        const encoded = encodePath(fullPath);
+        realProjects.set(encoded, fullPath);
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to read devRoot ${devRoot}:`, err);
+    process.exit(1);
+  }
+
+  console.log(`Found ${realProjects.size} projects in ${devRoot}\n`);
+
+  // Step 2: Scan Claude project dirs and match against real projects
+  let claudeDirs: string[];
+  try {
+    claudeDirs = await fs.readdir(claudeProjectsDir);
   } catch (err) {
     console.error(`Failed to read ${claudeProjectsDir}:`, err);
     process.exit(1);
   }
 
-  for (const dirName of projectDirs) {
+  let totalInsights = 0;
+  const results: Array<{ name: string; count: number }> = [];
+
+  for (const dirName of claudeDirs) {
     const dirPath = path.join(claudeProjectsDir, dirName);
-    const stats = await fs.stat(dirPath);
+    const stat = await fs.stat(dirPath);
+    if (!stat.isDirectory()) continue;
 
-    if (!stats.isDirectory()) continue;
-
-    // Decode the directory name to get the project path
-    const projectPath = decodeDirName(dirName);
-    const projectSlug = toSlug(dirName);
-
-    // Verify the project path exists on disk
-    let projectExists = false;
-    try {
-      const projectStats = await fs.stat(projectPath);
-      projectExists = projectStats.isDirectory();
-    } catch {
-      // Project path doesn't exist, skip
-    }
-
-    if (!projectExists) {
-      console.log(`⊘ [${projectSlug}] Project path does not exist: ${projectPath}`);
+    // Match against real project paths
+    const projectPath = realProjects.get(dirName);
+    if (!projectPath) {
+      // Not a project in our devRoot — skip silently
       continue;
     }
 
-    totalProjectsProcessed++;
+    const projectName = path.basename(projectPath);
+    const projectSlug = toSlug(projectName);
 
-    // Read all JSONL files in the project directory
-    let jsonlFiles: string[] = [];
+    // Read all JSONL files
+    let jsonlFiles: string[];
     try {
       const files = await fs.readdir(dirPath);
       jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
-    } catch (err) {
-      console.log(`✗ [${projectSlug}] Failed to read directory: ${err}`);
+    } catch {
       continue;
     }
 
-    if (jsonlFiles.length === 0) {
-      console.log(`○ [${projectSlug}] No JSONL files found`);
-      results.push({ project: projectPath, slug: projectSlug, insights: 0 });
+    if (jsonlFiles.length === 0) continue;
+
+    const allInsights: InsightEntry[] = [];
+
+    for (const file of jsonlFiles) {
+      const filePath = path.join(dirPath, file);
+      const fstat = await fs.stat(filePath);
+      if (fstat.size > 50 * 1024 * 1024) continue;
+
+      const content = await fs.readFile(filePath, "utf-8");
+      const sessionId = path.basename(file, ".jsonl");
+      const insights = parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
+      allInsights.push(...insights);
+    }
+
+    if (allInsights.length === 0) {
+      console.log(`  ${projectName}: no insights found`);
       continue;
     }
 
-    let projectInsights = 0;
-
-    for (const jsonlFile of jsonlFiles) {
-      const jsonlPath = path.join(dirPath, jsonlFile);
-      const sessionId = path.basename(jsonlFile, ".jsonl");
-
-      // Check file size (skip > 50MB)
-      let fileStats: any;
-      try {
-        fileStats = await fs.stat(jsonlPath);
-      } catch {
-        continue;
-      }
-
-      if (fileStats.size > 50 * 1024 * 1024) {
-        console.log(`  ⊗ Skipping ${jsonlFile} (${(fileStats.size / 1024 / 1024).toFixed(1)}MB > 50MB)`);
-        continue;
-      }
-
-      // Read and parse the JSONL file
-      let jsonlContent: string;
-      try {
-        jsonlContent = await fs.readFile(jsonlPath, "utf-8");
-      } catch (err) {
-        console.log(`  ✗ Failed to read ${jsonlFile}: ${err}`);
-        continue;
-      }
-
-      // Extract insights
-      const insights = parseInsightsFromJsonl(jsonlContent, sessionId, projectSlug, projectPath);
-
-      if (insights.length === 0) continue;
-
-      // Append insights to the project
-      try {
-        const count = await appendInsights(projectPath, insights);
-        if (count > 0) {
-          console.log(`  ✓ ${jsonlFile}: imported ${count} new insight(s)`);
-          projectInsights += count;
-          totalInsightsImported += count;
-        }
-      } catch (err) {
-        console.log(`  ✗ Failed to append insights: ${err}`);
-      }
-    }
-
-    results.push({ project: projectPath, slug: projectSlug, insights: projectInsights });
-
-    if (projectInsights === 0) {
-      console.log(`○ [${projectSlug}] No new insights imported`);
+    const appended = await appendInsights(projectPath, allInsights);
+    if (appended > 0) {
+      console.log(`  ${projectName}: ${appended} insights imported`);
+      totalInsights += appended;
+      results.push({ name: projectName, count: appended });
     } else {
-      console.log(`✓ [${projectSlug}] Imported ${projectInsights} insight(s)`);
+      console.log(`  ${projectName}: already up to date (${allInsights.length} existing)`);
     }
   }
 
-  console.log("---");
-  console.log(`Summary: ${totalInsightsImported} total insights imported across ${totalProjectsProcessed} projects`);
-
-  for (const result of results) {
-    if (result.insights > 0) {
-      console.log(`  • ${result.slug}: ${result.insights}`);
-    }
+  console.log(`\n---`);
+  console.log(`Done. ${totalInsights} insights imported across ${results.length} projects.`);
+  for (const r of results) {
+    console.log(`  ${r.name}: ${r.count}`);
   }
-
-  process.exit(0);
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  console.error(err);
   process.exit(1);
 });
