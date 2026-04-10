@@ -307,7 +307,28 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               <ManualStepsList
                 slug={project.slug}
                 initialData={project.manualSteps}
+                worktrees={project.worktrees}
               />
+            </div>
+          ) : project.worktrees?.some((wt) => wt.manualSteps) ? (
+            <div className="rounded-lg border p-6">
+              <p className="text-[var(--muted-foreground)] text-sm mb-4">
+                No MANUAL_STEPS.md on main branch.
+              </p>
+              {project.worktrees.map((wt) =>
+                wt.manualSteps && wt.manualSteps.totalSteps > 0 ? (
+                  <WorktreeSection
+                    key={wt.worktreePath}
+                    branch={wt.branch}
+                    itemCount={wt.manualSteps.totalSteps}
+                    itemLabel={wt.manualSteps.totalSteps === 1 ? "step" : "steps"}
+                  >
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {wt.manualSteps.pendingSteps} pending
+                    </p>
+                  </WorktreeSection>
+                ) : null
+              )}
             </div>
           ) : (
             <p className="text-[var(--muted-foreground)] py-8 text-center">

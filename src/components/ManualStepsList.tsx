@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { ManualStepsInfo, ManualStepEntry, ManualStep } from "@/lib/types";
+import { ManualStepsInfo, ManualStepEntry, ManualStep, WorktreeOverlay } from "@/lib/types";
 import { useToggleStep } from "@/hooks/useManualSteps";
 import { CheckCircle2, Circle, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { WorktreeSection } from "./WorktreeSection";
 
 function renderDetailLine(line: string) {
   // Render backtick-wrapped content as code
@@ -182,9 +183,11 @@ type FilterMode = "all" | "open" | "done";
 export function ManualStepsList({
   slug,
   initialData,
+  worktrees,
 }: {
   slug: string;
   initialData: ManualStepsInfo;
+  worktrees?: WorktreeOverlay[];
 }) {
   const [data, setData] = useState(initialData);
   const [filter, setFilter] = useState<FilterMode>("all");
@@ -244,6 +247,69 @@ export function ManualStepsList({
           ))
         )}
       </div>
+
+      {worktrees?.map((wt) =>
+        wt.manualSteps && wt.manualSteps.totalSteps > 0 ? (
+          <WorktreeSection
+            key={wt.worktreePath}
+            branch={wt.branch}
+            itemCount={wt.manualSteps.totalSteps}
+            itemLabel={wt.manualSteps.totalSteps === 1 ? "step" : "steps"}
+          >
+            <div className="space-y-2">
+              {wt.manualSteps.entries
+                .filter((entry) =>
+                  filter === "all"
+                    ? true
+                    : entry.steps.some((s) =>
+                        filter === "open" ? !s.completed : s.completed
+                      )
+                )
+                .map((entry, i) => (
+                  <div key={i} className="rounded-lg border overflow-hidden">
+                    <div className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-[var(--muted-foreground)] font-mono">
+                          {entry.date}
+                        </span>
+                        <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded font-mono">
+                          {entry.featureSlug}
+                        </span>
+                      </div>
+                      <p className="text-sm font-medium truncate">{entry.title}</p>
+                    </div>
+                    <div className="border-t px-3 py-2 space-y-1">
+                      {entry.steps
+                        .filter((step) => {
+                          if (filter === "open") return !step.completed;
+                          if (filter === "done") return step.completed;
+                          return true;
+                        })
+                        .map((step, j) => (
+                          <div key={j} className="flex items-start gap-2 text-sm px-1 py-0.5">
+                            {step.completed ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                            ) : (
+                              <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+                            )}
+                            <span
+                              className={
+                                step.completed
+                                  ? "line-through text-[var(--muted-foreground)]"
+                                  : ""
+                              }
+                            >
+                              {step.text}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </WorktreeSection>
+        ) : null
+      )}
     </div>
   );
 }
