@@ -38,6 +38,10 @@ Each entry in `MANUAL_STEPS.md` follows this format:
 ---
 ```
 
+## Worktree Steps
+
+When working in a Claude Code worktree, manual steps created there are surfaced on the parent project's Manual Steps tab in a collapsible section labeled with the branch name. Worktree steps are **read-only** — they cannot be toggled from the dashboard. They disappear when the worktree is merged and removed.
+
 ## Filtering & Sorting
 
 On the cross-project dashboard you can:

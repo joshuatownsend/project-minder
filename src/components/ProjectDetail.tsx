@@ -323,9 +323,43 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                     itemCount={wt.manualSteps.totalSteps}
                     itemLabel={wt.manualSteps.totalSteps === 1 ? "step" : "steps"}
                   >
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      {wt.manualSteps.pendingSteps} pending
-                    </p>
+                    <div className="space-y-2">
+                      {wt.manualSteps.entries.map((entry, i) => (
+                        <div key={i} className="rounded-lg border overflow-hidden">
+                          <div className="p-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-[var(--muted-foreground)] font-mono">
+                                {entry.date}
+                              </span>
+                              <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded font-mono">
+                                {entry.featureSlug}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium truncate">{entry.title}</p>
+                          </div>
+                          <div className="border-t px-3 py-2 space-y-1">
+                            {entry.steps.map((step, j) => (
+                              <div key={j} className="flex items-start gap-2 text-sm px-1 py-0.5">
+                                {step.completed ? (
+                                  <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                                ) : (
+                                  <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+                                )}
+                                <span
+                                  className={
+                                    step.completed
+                                      ? "line-through text-[var(--muted-foreground)]"
+                                      : ""
+                                  }
+                                >
+                                  {step.text}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </WorktreeSection>
                 ) : null
               )}

@@ -64,6 +64,16 @@ the end of the file (the file is created automatically if it doesn't exist).
 For dumping ideas into many projects at once, use the **Quick Add** button in
 the dashboard header (shortcut: **Shift+T**). See [Quick Add TODOs](quick-actions.md#quick-add-todos).
 
+## Worktree Overlays
+
+When a project has active Claude Code worktrees (directories named `project--claude-worktrees-branch` in your dev root), the TODOs, Manual Steps, and Insights tabs will show **worktree sections** below the main content.
+
+- Worktree sections are **collapsed by default** — click to expand
+- Each section shows a **branch badge** (e.g., `feature/gitwc`) and item count
+- Worktree items are **read-only** — you can view them but not toggle checkboxes or add items
+- Items automatically disappear when the worktree branch is merged and the directory is removed
+- Dashboard card badges show **aggregated counts** (main + worktree items combined)
+
 ## Claude Tab
 
 Shows your Claude session history for this project:

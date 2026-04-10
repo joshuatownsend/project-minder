@@ -76,10 +76,12 @@ class ManualStepsWatcher {
 
         if (this.watched.has(compositeSlug)) continue;
 
+        // Derive display branch name: replace first hyphen with slash (e.g. feature-gitwc → feature/gitwc)
+        const displayBranch = branchHint.replace("-", "/");
         const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
         try {
           await fs.access(filePath);
-          await this.watchFile(compositeSlug, `${prefix} (${branchHint})`, filePath);
+          await this.watchFile(compositeSlug, `${prefix} (${displayBranch})`, filePath);
           invalidateCache();
         } catch {
           // No MANUAL_STEPS.md in this worktree
