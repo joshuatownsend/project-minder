@@ -45,6 +45,13 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Exposes `getChanges(since)` for notification polling (in-memory, no FS I/O)
 - Writer (`src/lib/manualStepsWriter.ts`): toggles `- [ ]` ↔ `- [x]` by line number
 
+### Worktree Overlay (`src/lib/scanner/worktrees.ts`)
+- Discovers Claude Code worktree directories in devRoot by `--claude-worktrees-` naming convention
+- Reads TODO.md, MANUAL_STEPS.md, INSIGHTS.md from each worktree directory
+- Attaches `WorktreeOverlay[]` to parent project's `ProjectData` — purely read-only
+- Branch name resolved from worktree `.git` file's `gitdir:` → `HEAD` ref, with directory-name fallback
+- ManualStepsWatcher extended to also watch worktree MANUAL_STEPS.md files (composite slug `parentslug:worktree:branchhint`)
+
 ### API Routes (`src/app/api/`)
 - `GET /api/projects` — all scanned projects (uses cache)
 - `GET /api/projects/[slug]` — single project
