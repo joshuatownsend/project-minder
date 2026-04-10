@@ -6,12 +6,15 @@ import { Input } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
 import { Search, Lightbulb, Calendar } from "lucide-react";
 import Link from "next/link";
+import { WorktreeOverlay } from "@/lib/types";
+import { WorktreeSection } from "./WorktreeSection";
 
 interface InsightsTabProps {
   slug: string;
+  worktrees?: WorktreeOverlay[];
 }
 
-export function InsightsTab({ slug }: InsightsTabProps) {
+export function InsightsTab({ slug, worktrees }: InsightsTabProps) {
   const { data, loading } = useProjectInsights(slug);
   const [query, setQuery] = useState("");
 
@@ -89,6 +92,47 @@ export function InsightsTab({ slug }: InsightsTabProps) {
             ? `${data.total} insight${data.total !== 1 ? "s" : ""}`
             : `${filtered.length} of ${data.total} insights`}
         </p>
+      )}
+
+      {worktrees?.map((wt) =>
+        wt.insights && wt.insights.total > 0 ? (
+          <WorktreeSection
+            key={wt.worktreePath}
+            branch={wt.branch}
+            itemCount={wt.insights.total}
+            itemLabel={wt.insights.total === 1 ? "insight" : "insights"}
+          >
+            <ul className="space-y-3">
+              {wt.insights.entries
+                .filter((e) =>
+                  e.content.toLowerCase().includes(query.toLowerCase())
+                )
+                .map((insight) => (
+                  <li
+                    key={insight.id}
+                    className="rounded-lg border p-4 space-y-2"
+                  >
+                    <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {(() => {
+                          const d = new Date(insight.date);
+                          return isFinite(d.getTime())
+                            ? d.toLocaleDateString(undefined, {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })
+                            : "—";
+                        })()}
+                      </span>
+                    </div>
+                    <p className="text-sm leading-relaxed">{insight.content}</p>
+                  </li>
+                ))}
+            </ul>
+          </WorktreeSection>
+        ) : null
       )}
     </div>
   );

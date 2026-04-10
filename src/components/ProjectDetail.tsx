@@ -339,7 +339,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
         <TabsContent value="insights">
           <div className="rounded-lg border p-6">
-            <InsightsTab slug={project.slug} />
+            <InsightsTab slug={project.slug} worktrees={project.worktrees} />
           </div>
         </TabsContent>
       </Tabs>
