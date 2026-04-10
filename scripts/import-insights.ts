@@ -34,13 +34,13 @@ async function main() {
   console.log("---");
 
   // Step 1: Build a map of encoded path → actual project path for all real projects
-  const realProjects = new Map<string, string>(); // encoded → actual path
+  const realProjects = new Map<string, string>(); // lowercase encoded → actual path
   try {
     const dirents = await fs.readdir(devRoot, { withFileTypes: true });
     for (const d of dirents) {
       if (d.isDirectory()) {
         const fullPath = path.join(devRoot, d.name);
-        const encoded = encodePath(fullPath);
+        const encoded = encodePath(fullPath).toLowerCase();
         realProjects.set(encoded, fullPath);
       }
     }
@@ -68,10 +68,13 @@ async function main() {
     const stat = await fs.stat(dirPath);
     if (!stat.isDirectory()) continue;
 
-    // Match against real project paths
-    const projectPath = realProjects.get(dirName);
+    // Match against real project paths (case-insensitive)
+    // Also match worktree dirs: "C--dev-foo--claude-worktrees-bar" → project "C--dev-foo"
+    const lowerDirName = dirName.toLowerCase();
+    const worktreeIdx = lowerDirName.indexOf("--claude-worktrees-");
+    const projectKey = worktreeIdx >= 0 ? lowerDirName.slice(0, worktreeIdx) : lowerDirName;
+    const projectPath = realProjects.get(projectKey);
     if (!projectPath) {
-      // Not a project in our devRoot — skip silently
       continue;
     }
 
