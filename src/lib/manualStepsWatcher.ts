@@ -8,6 +8,7 @@ import { ManualStepsInfo } from "./types";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
 const CHANGE_RETENTION = 5 * 60_000; // 5 minutes
+const WORKTREE_SEP = "--claude-worktrees-";
 
 interface ChangeEvent {
   slug: string;
@@ -58,6 +59,30 @@ class ManualStepsWatcher {
           invalidateCache();
         } catch {
           // No MANUAL_STEPS.md in this project
+        }
+      }
+
+      // Discover MANUAL_STEPS.md in worktree directories
+      for (const dirName of dirs) {
+        if (!dirName.includes(WORKTREE_SEP)) continue;
+
+        const sepIndex = dirName.indexOf(WORKTREE_SEP);
+        const prefix = dirName.slice(0, sepIndex);
+        const branchHint = dirName.slice(sepIndex + WORKTREE_SEP.length);
+
+        // Build composite slug to avoid collision with main project
+        const parentSlug = prefix.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const compositeSlug = `${parentSlug}:worktree:${branchHint}`;
+
+        if (this.watched.has(compositeSlug)) continue;
+
+        const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
+        try {
+          await fs.access(filePath);
+          await this.watchFile(compositeSlug, `${prefix} (${branchHint})`, filePath);
+          invalidateCache();
+        } catch {
+          // No MANUAL_STEPS.md in this worktree
         }
       }
     } catch {
