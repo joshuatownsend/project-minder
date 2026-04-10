@@ -10,7 +10,7 @@ import { InsightEntry, InsightsInfo } from "../types";
  * Returns the first 12 hex characters.
  */
 export function insightId(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 12);
+  return crypto.createHash("sha256").update(content.trim()).digest("hex").slice(0, 12);
 }
 
 // ─── JSONL Extractor ─────────────────────────────────────────────────────────
@@ -21,10 +21,10 @@ export function insightId(content: string): string {
 //   **Insight**
 //   ## Insight
 const OPEN_RE =
-  /(?:`[★✻]\s*Insight`[-\s]*$|💡|^\*\*Insight\*\*|^##\s+Insight)/i;
+  /(?:`[★✻]\s*Insight[─━\-_\s]*`|💡|^\*\*Insight\*\*|^##\s+Insight)/i;
 
-// Matches closing marker: backtick + 10 or more dashes/underscores
-const CLOSE_RE = /^`[-_]{10,}/;
+// Matches closing marker: backtick + 10 or more dashes/underscores (ASCII or unicode box-drawing)
+const CLOSE_RE = /^`[─━\-_]{10,}/;
 
 interface JsonlEntry {
   type?: string;
@@ -240,7 +240,7 @@ export async function scanInsightsMd(
     const { info } = parseInsightsMd(content);
     if (info.entries.length === 0) return undefined;
 
-    const projectSlug = path.basename(projectPath);
+    const projectSlug = path.basename(projectPath).toLowerCase().replace(/[^a-z0-9-]/g, "-");
     const entries = info.entries.map((e) => ({
       ...e,
       project: projectSlug,
