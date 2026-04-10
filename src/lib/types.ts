@@ -35,6 +35,9 @@ export interface ProjectData {
   // Manual Steps
   manualSteps?: ManualStepsInfo;
 
+  // Insights
+  insights?: InsightsInfo;
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
@@ -102,6 +105,20 @@ export interface ManualStepsInfo {
   totalSteps: number;
   pendingSteps: number;
   completedSteps: number;
+}
+
+export interface InsightEntry {
+  id: string;              // hash of content for dedup
+  content: string;         // the insight text (between markers)
+  sessionId: string;       // which conversation it came from
+  date: string;            // ISO timestamp from the JSONL entry
+  project: string;         // project slug
+  projectPath: string;     // full Windows path
+}
+
+export interface InsightsInfo {
+  entries: InsightEntry[];
+  total: number;
 }
 
 export interface PortConflict {
