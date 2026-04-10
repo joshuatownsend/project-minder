@@ -13,7 +13,17 @@ interface TodoListProps {
   onChange?: (updated: TodoInfo) => void;
 }
 
+type FilterMode = "all" | "open" | "done";
+
 export function TodoList({ todos, slug, onChange }: TodoListProps) {
+  const [filter, setFilter] = useState<FilterMode>("all");
+
+  const filtered = todos.items.filter((item) => {
+    if (filter === "open") return !item.completed;
+    if (filter === "done") return item.completed;
+    return true;
+  });
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -30,8 +40,21 @@ export function TodoList({ todos, slug, onChange }: TodoListProps) {
         />
       </div>
 
+      <div className="flex items-center gap-1 text-sm">
+        <span className="text-[var(--muted-foreground)] text-xs">Show:</span>
+        {(["all", "open", "done"] as const).map((f) => (
+          <button
+            key={f}
+            className={`px-2 py-0.5 rounded text-xs ${filter === f ? "bg-[var(--muted)] text-[var(--foreground)]" : "text-[var(--muted-foreground)]"}`}
+            onClick={() => setFilter(f)}
+          >
+            {f === "all" ? "All" : f === "open" ? "Open" : "Done"}
+          </button>
+        ))}
+      </div>
+
       <ul className="space-y-1">
-        {todos.items.map((item, i) => (
+        {filtered.map((item, i) => (
           <li key={i} className="flex items-start gap-2 text-sm">
             {item.completed ? (
               <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
@@ -43,6 +66,11 @@ export function TodoList({ todos, slug, onChange }: TodoListProps) {
             </span>
           </li>
         ))}
+        {filtered.length === 0 && (
+          <li className="text-xs text-[var(--muted-foreground)] py-2">
+            No {filter === "open" ? "open" : "completed"} items.
+          </li>
+        )}
       </ul>
 
       {slug && <AddTodoForm slug={slug} onAdded={onChange} />}
