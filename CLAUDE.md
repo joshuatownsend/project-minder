@@ -19,7 +19,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 ### Scanner (`src/lib/scanner/`)
 - `index.ts` — orchestrator: reads `C:\dev\*` dirs, runs scanner modules in parallel (batches of 10), detects port conflicts
-- 8 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`
+- 9 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`
 - Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\crew-leader`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
@@ -57,6 +57,8 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `GET /api/manual-steps/[slug]` — manual steps for one project
 - `POST /api/manual-steps/[slug]` — toggle checkbox `{lineNumber}`
 - `GET /api/manual-steps/changes?since=ISO8601` — new-entry change events for notifications
+- `GET /api/insights` — all insights cross-project (`?project=slug`, `?q=searchterm`)
+- `GET /api/insights/[slug]` — insights for one project
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
@@ -66,6 +68,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
 - Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude, Manual Steps) + `DevServerControl`
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
+- Insights: `InsightsBrowser` at `/insights`, `InsightsTab` per-project, `InsightsCompact` badge on cards
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
 - Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)

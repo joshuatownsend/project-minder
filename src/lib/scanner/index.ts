@@ -10,6 +10,7 @@ import { scanClaudeMd } from "./claudeMd";
 import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
+import { scanInsightsMd } from "./insightsMd";
 
 function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -31,7 +32,7 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
 
   const slug = toSlug(dirName);
 
-  const [pkgResult, envResult, dockerResult, gitResult, claudeMd, todos, claudeSessions, manualSteps] =
+  const [pkgResult, envResult, dockerResult, gitResult, claudeMd, todos, claudeSessions, manualSteps, insights] =
     await Promise.all([
       scanPackageJson(projectPath),
       scanEnvFiles(projectPath),
@@ -41,6 +42,7 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
       scanTodoMd(projectPath),
       scanClaudeSessions(projectPath),
       scanManualStepsMd(projectPath),
+      scanInsightsMd(projectPath),
     ]);
 
   // Determine DB port from env or docker
@@ -88,6 +90,7 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
     },
     todos,
     manualSteps,
+    insights,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

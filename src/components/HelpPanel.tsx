@@ -20,6 +20,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "manual-steps": "Manual Steps",
   stats: "Stats Dashboard",
   sessions: "Sessions Browser",
+  insights: "Insights",
 };
 
 export function HelpPanel() {

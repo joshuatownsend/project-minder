@@ -13,6 +13,7 @@ import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
+import { InsightsTab } from "./InsightsTab";
 import { ProjectSessions } from "./ProjectSessions";
 import {
   ArrowLeft,
@@ -104,6 +105,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <TabsTrigger value="claude">Claude</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
           <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
+          <TabsTrigger value="insights">Insights</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -277,6 +279,12 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               No MANUAL_STEPS.md found for this project.
             </p>
           )}
+        </TabsContent>
+
+        <TabsContent value="insights">
+          <div className="rounded-lg border p-6">
+            <InsightsTab slug={project.slug} />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

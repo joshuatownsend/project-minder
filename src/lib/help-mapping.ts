@@ -9,6 +9,7 @@ export const helpMapping: Record<string, string> = {
   '/stats': 'stats',
   '/sessions': 'sessions',
   '/sessions/[sessionId]': 'sessions',
+  '/insights': 'insights',
 }
 
 /**
@@ -21,6 +22,7 @@ export const tabHelpMapping: Record<string, string> = {
   todos: 'project-details',
   claude: 'project-details',
   'manual-steps': 'manual-steps',
+  insights: 'insights',
 }
 
 /** All available help doc slugs. */
@@ -36,6 +38,7 @@ export const helpSlugs = [
   'manual-steps',
   'stats',
   'sessions',
+  'insights',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

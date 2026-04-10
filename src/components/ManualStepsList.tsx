@@ -50,10 +50,12 @@ function EntrySection({
   entry,
   slug,
   onUpdate,
+  filter = "all",
 }: {
   entry: ManualStepEntry;
   slug: string;
   onUpdate: (info: ManualStepsInfo) => void;
+  filter?: FilterMode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const { toggle, toggling } = useToggleStep(slug);
@@ -129,7 +131,11 @@ function EntrySection({
             />
           </div>
 
-          {resolvedSteps.map((step, i) => (
+          {resolvedSteps.map((step, i) => {
+            // Apply filter: skip steps that don't match
+            if (filter === "open" && step.completed) return null;
+            if (filter === "done" && !step.completed) return null;
+            return (
             <div key={i}>
               <button
                 className="flex items-start gap-2 text-sm w-full text-left hover:bg-[var(--muted)] rounded px-1 py-0.5 transition-colors"
@@ -163,12 +169,15 @@ function EntrySection({
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
+
+type FilterMode = "all" | "open" | "done";
 
 export function ManualStepsList({
   slug,
@@ -178,6 +187,14 @@ export function ManualStepsList({
   initialData: ManualStepsInfo;
 }) {
   const [data, setData] = useState(initialData);
+  const [filter, setFilter] = useState<FilterMode>("all");
+
+  // Filter entries: hide entries with no matching steps
+  const filteredEntries = filter === "all"
+    ? data.entries
+    : data.entries.filter((entry) =>
+        entry.steps.some((s) => (filter === "open" ? !s.completed : s.completed))
+      );
 
   return (
     <div className="space-y-3">
@@ -197,15 +214,35 @@ export function ManualStepsList({
         />
       </div>
 
-      <div className="space-y-2">
-        {data.entries.map((entry, i) => (
-          <EntrySection
-            key={`${entry.featureSlug}-${i}`}
-            entry={entry}
-            slug={slug}
-            onUpdate={setData}
-          />
+      <div className="flex items-center gap-1 text-sm">
+        <span className="text-[var(--muted-foreground)] text-xs">Show:</span>
+        {(["all", "open", "done"] as const).map((f) => (
+          <button
+            key={f}
+            className={`px-2 py-0.5 rounded text-xs ${filter === f ? "bg-[var(--muted)] text-[var(--foreground)]" : "text-[var(--muted-foreground)]"}`}
+            onClick={() => setFilter(f)}
+          >
+            {f === "all" ? "All" : f === "open" ? "Open" : "Done"}
+          </button>
         ))}
+      </div>
+
+      <div className="space-y-2">
+        {filteredEntries.length === 0 ? (
+          <p className="text-xs text-[var(--muted-foreground)] py-2">
+            No {filter === "all" ? "" : filter === "open" ? "open " : "completed "}steps.
+          </p>
+        ) : (
+          filteredEntries.map((entry, i) => (
+            <EntrySection
+              key={`${entry.featureSlug}-${i}`}
+              entry={entry}
+              slug={slug}
+              onUpdate={setData}
+              filter={filter}
+            />
+          ))
+        )}
       </div>
     </div>
   );

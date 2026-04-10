@@ -9,6 +9,7 @@ import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
 import { TodoCompact } from "./TodoList";
 import { ManualStepsCompact } from "./ManualStepsCompact";
+import { InsightsCompact } from "./InsightsCompact";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import {
@@ -118,6 +119,7 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
         {project.claude && <ClaudeSessionCompact claude={project.claude} />}
         {project.todos && <TodoCompact todos={project.todos} />}
         {project.manualSteps && <ManualStepsCompact manualSteps={project.manualSteps} />}
+        {project.insights && <InsightsCompact insights={project.insights} />}
       </div>
     </Link>
   );
