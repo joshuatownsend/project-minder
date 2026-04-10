@@ -68,7 +68,11 @@ export function TodoList({ todos, slug, onChange }: TodoListProps) {
         ))}
         {filtered.length === 0 && (
           <li className="text-xs text-[var(--muted-foreground)] py-2">
-            No {filter === "open" ? "open" : "completed"} items.
+            {filter === "all"
+              ? "No TODOs yet."
+              : filter === "open"
+                ? "No open items."
+                : "No completed items."}
           </li>
         )}
       </ul>

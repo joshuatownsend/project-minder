@@ -230,7 +230,7 @@ export function ManualStepsList({
       <div className="space-y-2">
         {filteredEntries.length === 0 ? (
           <p className="text-xs text-[var(--muted-foreground)] py-2">
-            No {filter === "open" ? "open" : "completed"} steps.
+            No {filter === "all" ? "" : filter === "open" ? "open " : "completed "}steps.
           </p>
         ) : (
           filteredEntries.map((entry, i) => (

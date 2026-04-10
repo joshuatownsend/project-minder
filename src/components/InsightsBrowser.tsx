@@ -8,8 +8,10 @@ import { Skeleton } from "./ui/skeleton";
 import { Lightbulb, Search } from "lucide-react";
 import Link from "next/link";
 
-function formatDate(iso: string): string {
+function formatDate(iso?: string): string {
+  if (!iso) return "—";
   const d = new Date(iso);
+  if (!isFinite(d.getTime())) return "—";
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
   const diffMins = Math.floor(diffMs / 60_000);

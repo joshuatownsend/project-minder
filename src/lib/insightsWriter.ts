@@ -45,8 +45,13 @@ export async function appendInsights(
   // 3. Parse existing file to get known IDs
   const { knownIds } = parseInsightsMd(existingContent);
 
-  // 4. Filter out entries whose ID is already known
-  const newEntries = entries.filter((e) => !knownIds.has(e.id));
+  // 4. Filter out entries whose ID is already known or duplicated within batch
+  const seen = new Set(knownIds);
+  const newEntries = entries.filter((e) => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
 
   // 5. Early exit if no new entries after dedup
   if (newEntries.length === 0) {
@@ -55,17 +60,17 @@ export async function appendInsights(
 
   // 6. Sort new entries by date descending (latest first)
   newEntries.sort((a, b) => {
-    const dateA = new Date(a.date).getTime();
-    const dateB = new Date(b.date).getTime();
+    const dateA = new Date(a.date).getTime() || 0;
+    const dateB = new Date(b.date).getTime() || 0;
     return dateB - dateA;
   });
 
   // 7. Format each entry as markdown
   const formattedEntries = newEntries.map((e) => {
-    const dateStr =
-      e.date && e.date !== "unknown"
-        ? new Date(e.date).toISOString().slice(0, 19).replace("T", " ")
-        : "unknown";
+    const parsed = e.date ? new Date(e.date) : null;
+    const dateStr = parsed && isFinite(parsed.getTime())
+      ? parsed.toISOString()
+      : "unknown";
 
     return (
       `<!-- insight:${e.id} | session:${e.sessionId} | ${dateStr} -->\n` +
@@ -81,7 +86,7 @@ export async function appendInsights(
   // 8. Build final file: header + new entries + existing body
   // Strip existing "# Insights" header if present
   const existingBody = existingContent
-    .replace(/^#\s+Insights\s*\n+/, "") // Remove "# Insights" header and blank lines
+    .replace(/^#\s+Insights\s*(?:\r?\n)+/, "") // Remove "# Insights" header and blank lines
     .trimStart();
 
   const finalContent =

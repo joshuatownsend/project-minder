@@ -62,11 +62,12 @@ export function InsightsTab({ slug }: InsightsTabProps) {
               <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
                 <span className="flex items-center gap-1">
                   <Calendar className="h-3 w-3" />
-                  {new Date(insight.date).toLocaleDateString(undefined, {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                  })}
+                  {(() => {
+                    const d = new Date(insight.date);
+                    return isFinite(d.getTime())
+                      ? d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+                      : "—";
+                  })()}
                 </span>
                 <Link
                   href={`/sessions/${insight.sessionId}`}

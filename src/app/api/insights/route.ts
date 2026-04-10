@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
 
   // Sort latest-first
   insights.sort((a, b) => {
-    const ta = a.date ? new Date(a.date).getTime() : 0;
-    const tb = b.date ? new Date(b.date).getTime() : 0;
+    const ta = new Date(a.date).getTime() || 0;
+    const tb = new Date(b.date).getTime() || 0;
     return tb - ta;
   });
 
