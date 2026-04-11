@@ -11,6 +11,7 @@ import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
+import { attachWorktreeOverlays } from "./worktrees";
 
 function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -135,6 +136,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
     return { projects: [], portConflicts: [], hiddenCount: 0, scannedAt: new Date().toISOString() };
   }
 
+  // Keep full list for worktree discovery before filtering
+  const allDirNames = [...entries];
+
   // Filter out hidden projects
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
   entries = entries.filter((e) => !hiddenSet.has(e.toLowerCase()));
@@ -149,6 +153,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
       if (r) projects.push(r);
     }
   }
+
+  // Attach worktree overlays (reads TODO.md, MANUAL_STEPS.md, INSIGHTS.md from worktree dirs)
+  await attachWorktreeOverlays(projects, allDirNames, devRoot);
 
   // Apply saved statuses and port overrides
   for (const project of projects) {

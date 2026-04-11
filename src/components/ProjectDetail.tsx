@@ -238,13 +238,19 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         <TabsContent value="todos">
           <div className="rounded-lg border p-6">
             {todos ? (
-              <TodoList todos={todos} slug={project.slug} onChange={setTodos} />
+              <TodoList todos={todos} slug={project.slug} onChange={setTodos} worktrees={project.worktrees} />
             ) : (
               <div className="space-y-4">
                 <p className="text-[var(--muted-foreground)] text-sm">
                   No TODO items found for this project. Add an item below to create or seed <code>TODO.md</code>.
                 </p>
                 <AddTodoForm slug={project.slug} onAdded={setTodos} />
+                {project.worktrees?.some((wt) => wt.todos) && (
+                  <TodoList
+                    todos={{ total: 0, completed: 0, pending: 0, items: [] }}
+                    worktrees={project.worktrees}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -272,6 +278,15 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               <ManualStepsList
                 slug={project.slug}
                 initialData={project.manualSteps}
+                worktrees={project.worktrees}
+              />
+            </div>
+          ) : project.worktrees?.some((wt) => wt.manualSteps) ? (
+            <div className="rounded-lg border p-6">
+              <ManualStepsList
+                slug={project.slug}
+                initialData={{ entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 }}
+                worktrees={project.worktrees}
               />
             </div>
           ) : (
@@ -283,7 +298,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
         <TabsContent value="insights">
           <div className="rounded-lg border p-6">
-            <InsightsTab slug={project.slug} />
+            <InsightsTab slug={project.slug} worktrees={project.worktrees} />
           </div>
         </TabsContent>
       </Tabs>

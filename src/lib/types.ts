@@ -38,6 +38,9 @@ export interface ProjectData {
   // Insights
   insights?: InsightsInfo;
 
+  // Worktree overlays
+  worktrees?: WorktreeOverlay[];
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
@@ -119,6 +122,14 @@ export interface InsightEntry {
 export interface InsightsInfo {
   entries: InsightEntry[];
   total: number;
+}
+
+export interface WorktreeOverlay {
+  branch: string;           // e.g. "feature/gitwc"
+  worktreePath: string;     // full path to worktree directory
+  todos?: TodoInfo;
+  manualSteps?: ManualStepsInfo;
+  insights?: InsightsInfo;
 }
 
 export interface PortConflict {

@@ -36,6 +36,64 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
 
   const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
+  // Aggregate worktree counts into badge data
+  const aggregatedTodos = (() => {
+    if (!project.todos && !project.worktrees?.some((wt) => wt.todos)) return undefined;
+    const mainTodos = project.todos ?? { total: 0, completed: 0, pending: 0, items: [] };
+    const wtTotals = (project.worktrees ?? []).reduce(
+      (acc, wt) => {
+        if (!wt.todos) return acc;
+        return {
+          total: acc.total + wt.todos.total,
+          completed: acc.completed + wt.todos.completed,
+          pending: acc.pending + wt.todos.pending,
+        };
+      },
+      { total: 0, completed: 0, pending: 0 }
+    );
+    return {
+      total: mainTodos.total + wtTotals.total,
+      completed: mainTodos.completed + wtTotals.completed,
+      pending: mainTodos.pending + wtTotals.pending,
+      items: mainTodos.items,
+    };
+  })();
+
+  const aggregatedManualSteps = (() => {
+    if (!project.manualSteps && !project.worktrees?.some((wt) => wt.manualSteps)) return undefined;
+    const main = project.manualSteps ?? { entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 };
+    const wtTotals = (project.worktrees ?? []).reduce(
+      (acc, wt) => {
+        if (!wt.manualSteps) return acc;
+        return {
+          totalSteps: acc.totalSteps + wt.manualSteps.totalSteps,
+          completedSteps: acc.completedSteps + wt.manualSteps.completedSteps,
+          pendingSteps: acc.pendingSteps + wt.manualSteps.pendingSteps,
+        };
+      },
+      { totalSteps: 0, completedSteps: 0, pendingSteps: 0 }
+    );
+    return {
+      entries: main.entries,
+      totalSteps: main.totalSteps + wtTotals.totalSteps,
+      completedSteps: main.completedSteps + wtTotals.completedSteps,
+      pendingSteps: main.pendingSteps + wtTotals.pendingSteps,
+    };
+  })();
+
+  const aggregatedInsights = (() => {
+    if (!project.insights && !project.worktrees?.some((wt) => wt.insights)) return undefined;
+    const main = project.insights ?? { entries: [], total: 0 };
+    const wtTotal = (project.worktrees ?? []).reduce(
+      (acc, wt) => acc + (wt.insights?.total ?? 0),
+      0
+    );
+    return {
+      entries: main.entries,
+      total: main.total + wtTotal,
+    };
+  })();
+
   return (
     <Link href={`/project/${project.slug}`} className="h-full">
       <div
@@ -117,9 +175,9 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
 
         {project.git && <GitStatusCompact git={project.git} />}
         {project.claude && <ClaudeSessionCompact claude={project.claude} />}
-        {project.todos && <TodoCompact todos={project.todos} />}
-        {project.manualSteps && <ManualStepsCompact manualSteps={project.manualSteps} />}
-        {project.insights && <InsightsCompact insights={project.insights} />}
+        {aggregatedTodos && <TodoCompact todos={aggregatedTodos} />}
+        {aggregatedManualSteps && <ManualStepsCompact manualSteps={aggregatedManualSteps} />}
+        {aggregatedInsights && <InsightsCompact insights={aggregatedInsights} />}
       </div>
     </Link>
   );

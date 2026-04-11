@@ -20,7 +20,7 @@ The `/insights` page shows all insights across your portfolio:
 
 ## Per-Project Tab
 
-Each project detail page has an **Insights** tab showing insights for that project only, with local search.
+Each project detail page has an **Insights** tab showing insights for that project only, with local search. If the project has active Claude Code worktrees, insights from those worktrees appear in a collapsible section below the main list (read-only).
 
 ## Bootstrap Import
 

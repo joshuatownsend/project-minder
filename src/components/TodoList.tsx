@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { TodoInfo } from "@/lib/types";
+import { TodoInfo, WorktreeOverlay } from "@/lib/types";
 import { CheckCircle2, Circle, Plus, Loader2 } from "lucide-react";
+import { WorktreeSection } from "./WorktreeSection";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { useToast } from "./ToastProvider";
@@ -11,11 +12,12 @@ interface TodoListProps {
   todos: TodoInfo;
   slug?: string;
   onChange?: (updated: TodoInfo) => void;
+  worktrees?: WorktreeOverlay[];
 }
 
 type FilterMode = "all" | "open" | "done";
 
-export function TodoList({ todos, slug, onChange }: TodoListProps) {
+export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
   const [filter, setFilter] = useState<FilterMode>("all");
 
   const filtered = todos.items.filter((item) => {
@@ -76,6 +78,38 @@ export function TodoList({ todos, slug, onChange }: TodoListProps) {
           </li>
         )}
       </ul>
+
+      {worktrees?.map((wt) =>
+        wt.todos ? (
+          <WorktreeSection
+            key={wt.worktreePath}
+            branch={wt.branch}
+            itemCount={wt.todos.total}
+            itemLabel={wt.todos.total === 1 ? "TODO" : "TODOs"}
+          >
+            <ul className="space-y-1">
+              {wt.todos.items
+                .filter((item) => {
+                  if (filter === "open") return !item.completed;
+                  if (filter === "done") return item.completed;
+                  return true;
+                })
+                .map((item, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    {item.completed ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                    ) : (
+                      <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+                    )}
+                    <span className={item.completed ? "line-through text-[var(--muted-foreground)]" : ""}>
+                      {item.text}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          </WorktreeSection>
+        ) : null
+      )}
 
       {slug && <AddTodoForm slug={slug} onAdded={onChange} />}
     </div>

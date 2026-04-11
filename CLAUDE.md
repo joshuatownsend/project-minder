@@ -14,6 +14,18 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `npm run dev` — starts on port 4100 (Turbopack is default in Next.js 16)
 - `npm run build` — production build (use this to type-check)
 - `npm run start` — production server on port 4100
+- `npm test` — run all tests (vitest)
+- `npm run test:watch` — run tests in watch mode
+
+## Testing
+
+- **Framework:** Vitest with `@/*` path alias support (config in `vitest.config.ts`)
+- **Test location:** `tests/*.test.ts` — flat directory, one file per module
+- **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
+- **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`) and `insightsWriter`
+- **Pre-commit hook:** Tests run automatically before every commit via `.git/hooks/pre-commit`
+- **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `npm run build` + manual browser testing.
+- **When to run tests:** Always run `npm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
 
 ## Architecture
 
@@ -44,6 +56,13 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Detects new entries vs. checkbox toggles by comparing `## ` header count
 - Exposes `getChanges(since)` for notification polling (in-memory, no FS I/O)
 - Writer (`src/lib/manualStepsWriter.ts`): toggles `- [ ]` ↔ `- [x]` by line number
+
+### Worktree Overlay (`src/lib/scanner/worktrees.ts`)
+- Discovers Claude Code worktree directories in devRoot by `--claude-worktrees-` naming convention
+- Reads TODO.md, MANUAL_STEPS.md, INSIGHTS.md from each worktree directory
+- Attaches `WorktreeOverlay[]` to parent project's `ProjectData` — purely read-only
+- Branch name resolved from worktree `.git` file's `gitdir:` → `HEAD` ref, with directory-name fallback
+- ManualStepsWatcher extended to also watch worktree MANUAL_STEPS.md files (composite slug `parentslug:worktree:branchhint`)
 
 ### API Routes (`src/app/api/`)
 - `GET /api/projects` — all scanned projects (uses cache)
