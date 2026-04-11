@@ -14,6 +14,18 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `npm run dev` — starts on port 4100 (Turbopack is default in Next.js 16)
 - `npm run build` — production build (use this to type-check)
 - `npm run start` — production server on port 4100
+- `npm test` — run all tests (vitest)
+- `npm run test:watch` — run tests in watch mode
+
+## Testing
+
+- **Framework:** Vitest with `@/*` path alias support (config in `vitest.config.ts`)
+- **Test location:** `tests/*.test.ts` — flat directory, one file per module
+- **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
+- **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`) and `insightsWriter`
+- **Pre-commit hook:** Tests run automatically before every commit via `.git/hooks/pre-commit`
+- **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `npm run build` + manual browser testing.
+- **When to run tests:** Always run `npm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
 
 ## Architecture
 
