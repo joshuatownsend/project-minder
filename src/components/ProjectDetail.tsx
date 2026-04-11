@@ -24,10 +24,7 @@ import {
   Github,
   Globe,
   FolderOpen,
-  CheckCircle2,
-  Circle,
 } from "lucide-react";
-import { WorktreeSection } from "./WorktreeSection";
 import Link from "next/link";
 
 interface ProjectDetailProps {
@@ -242,44 +239,18 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           <div className="rounded-lg border p-6">
             {todos ? (
               <TodoList todos={todos} slug={project.slug} onChange={setTodos} worktrees={project.worktrees} />
-            ) : project.worktrees?.some((wt) => wt.todos) ? (
-              <div className="space-y-4">
-                <p className="text-[var(--muted-foreground)] text-sm">
-                  No TODO items on main branch.
-                </p>
-                <AddTodoForm slug={project.slug} onAdded={setTodos} />
-                {project.worktrees.map((wt) =>
-                  wt.todos ? (
-                    <WorktreeSection
-                      key={wt.worktreePath}
-                      branch={wt.branch}
-                      itemCount={wt.todos.total}
-                      itemLabel={wt.todos.total === 1 ? "TODO" : "TODOs"}
-                    >
-                      <ul className="space-y-1">
-                        {wt.todos.items.map((item, i) => (
-                          <li key={i} className="flex items-start gap-2 text-sm">
-                            {item.completed ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
-                            ) : (
-                              <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
-                            )}
-                            <span className={item.completed ? "line-through text-[var(--muted-foreground)]" : ""}>
-                              {item.text}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </WorktreeSection>
-                  ) : null
-                )}
-              </div>
             ) : (
               <div className="space-y-4">
                 <p className="text-[var(--muted-foreground)] text-sm">
                   No TODO items found for this project. Add an item below to create or seed <code>TODO.md</code>.
                 </p>
                 <AddTodoForm slug={project.slug} onAdded={setTodos} />
+                {project.worktrees?.some((wt) => wt.todos) && (
+                  <TodoList
+                    todos={{ total: 0, completed: 0, pending: 0, items: [] }}
+                    worktrees={project.worktrees}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -312,57 +283,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
             </div>
           ) : project.worktrees?.some((wt) => wt.manualSteps) ? (
             <div className="rounded-lg border p-6">
-              <p className="text-[var(--muted-foreground)] text-sm mb-4">
-                No MANUAL_STEPS.md on main branch.
-              </p>
-              {project.worktrees.map((wt) =>
-                wt.manualSteps && wt.manualSteps.totalSteps > 0 ? (
-                  <WorktreeSection
-                    key={wt.worktreePath}
-                    branch={wt.branch}
-                    itemCount={wt.manualSteps.totalSteps}
-                    itemLabel={wt.manualSteps.totalSteps === 1 ? "step" : "steps"}
-                  >
-                    <div className="space-y-2">
-                      {wt.manualSteps.entries.map((entry, i) => (
-                        <div key={i} className="rounded-lg border overflow-hidden">
-                          <div className="p-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-[var(--muted-foreground)] font-mono">
-                                {entry.date}
-                              </span>
-                              <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded font-mono">
-                                {entry.featureSlug}
-                              </span>
-                            </div>
-                            <p className="text-sm font-medium truncate">{entry.title}</p>
-                          </div>
-                          <div className="border-t px-3 py-2 space-y-1">
-                            {entry.steps.map((step, j) => (
-                              <div key={j} className="flex items-start gap-2 text-sm px-1 py-0.5">
-                                {step.completed ? (
-                                  <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
-                                ) : (
-                                  <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
-                                )}
-                                <span
-                                  className={
-                                    step.completed
-                                      ? "line-through text-[var(--muted-foreground)]"
-                                      : ""
-                                  }
-                                >
-                                  {step.text}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </WorktreeSection>
-                ) : null
-              )}
+              <ManualStepsList
+                slug={project.slug}
+                initialData={{ entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 }}
+                worktrees={project.worktrees}
+              />
             </div>
           ) : (
             <p className="text-[var(--muted-foreground)] py-8 text-center">

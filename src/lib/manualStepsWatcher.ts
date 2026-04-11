@@ -48,6 +48,9 @@ class ManualStepsWatcher {
       const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
 
       for (const dirName of dirs) {
+        // Skip worktree directories — handled in the dedicated loop below
+        if (dirName.includes(WORKTREE_SEP)) continue;
+
         const slug = dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
         if (this.watched.has(slug)) continue;
 
