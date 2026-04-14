@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateUsageReport } from "@/lib/usage/aggregator";
+import { validatePeriod } from "@/lib/usage/constants";
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const period = params.get("period") || "month";
+  const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
   const format = params.get("format") || "json";
-
-  const validPeriods = ["today", "week", "month", "all"];
-  const safePeriod = validPeriods.includes(period)
-    ? (period as "today" | "week" | "month" | "all")
-    : "month";
 
   const report = await generateUsageReport(safePeriod, project);
 

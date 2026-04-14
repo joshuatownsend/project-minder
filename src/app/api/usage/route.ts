@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateUsageReport } from "@/lib/usage/aggregator";
+import { validatePeriod } from "@/lib/usage/constants";
 import type { UsageReport } from "@/lib/usage/types";
 
-const CACHE_TTL = 2 * 60_000; // 2 minutes
+const CACHE_TTL = 2 * 60_000;
 
 const globalForUsage = globalThis as unknown as {
   __usageCache?: Map<string, { report: UsageReport; cachedAt: number }>;
@@ -14,14 +15,8 @@ if (!globalForUsage.__usageCache) {
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const period = params.get("period") || "month";
+  const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
-
-  // Validate period
-  const validPeriods = ["today", "week", "month", "all"];
-  const safePeriod = validPeriods.includes(period)
-    ? (period as "today" | "week" | "month" | "all")
-    : "month";
 
   const cacheKey = `${safePeriod}:${project || "all"}`;
   const cache = globalForUsage.__usageCache!;

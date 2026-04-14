@@ -130,6 +130,8 @@ async function scanSessionFile(
     const models = new Set<string>();
     let subagentCount = 0;
     let errorCount = 0;
+    // Collect one-shot detection data during the same pass
+    const lightTurns: UsageTurn[] = [];
 
     for (const line of lines) {
       try {
@@ -144,12 +146,10 @@ async function scanSessionFile(
         if (entry.type === "user" && !entry.isMeta) {
           userMessageCount++;
           messageCount++;
-          // Capture first real user message as initial prompt
           if (!initialPrompt && entry.message?.content) {
             const text = extractTextContent(entry.message.content);
             if (text) initialPrompt = text;
           } else if (!initialPrompt && Array.isArray(entry.content)) {
-            // Some user messages have content at top level
             const text = extractTextContent(entry.content);
             if (text) initialPrompt = text;
           }
@@ -185,35 +185,21 @@ async function scanSessionFile(
             }
           }
         }
-      } catch {
-        // Skip invalid lines
-      }
-    }
 
-    if (messageCount === 0) return null;
-
-    // Lightweight one-shot detection: re-scan lines for edit→test→re-edit patterns
-    let oneShotRate: number | undefined;
-    try {
-      const lightTurns: UsageTurn[] = [];
-      for (const line of lines) {
-        try {
-          const e: ConversationEntry = JSON.parse(line);
-          if (!e.timestamp || e.isSidechain || e.isMeta) continue;
-
+        // Build lightweight turn for one-shot detection (same pass, no re-parse)
+        if (entry.timestamp && !entry.isSidechain && !entry.isMeta) {
           const turnToolCalls: UsageToolCall[] = [];
           let toolResultText = "";
 
-          if (e.type === "assistant" && e.message?.content) {
-            for (const block of e.message.content) {
+          if (entry.type === "assistant" && entry.message?.content) {
+            for (const block of entry.message.content) {
               if (block.type === "tool_use" && block.name) {
                 turnToolCalls.push({ name: block.name, arguments: block.input });
               }
             }
           }
-
-          if (e.type === "user") {
-            const content = e.message?.content || e.content || [];
+          if (entry.type === "user") {
+            const content = entry.message?.content || entry.content || [];
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (block.type === "tool_result") {
@@ -229,22 +215,26 @@ async function scanSessionFile(
           }
 
           lightTurns.push({
-            timestamp: e.timestamp,
+            timestamp: entry.timestamp,
             sessionId,
             projectSlug: toSlug(projectDirName),
             projectDirName,
-            model: e.message?.model || "",
-            role: e.type === "assistant" ? "assistant" : "user",
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheCreateTokens: 0,
-            cacheReadTokens: 0,
+            model: entry.message?.model || "",
+            role: entry.type === "assistant" ? "assistant" : "user",
+            inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0,
             toolCalls: turnToolCalls,
             toolResultText: toolResultText.slice(0, 2000),
           });
-        } catch { /* skip bad lines */ }
+        }
+      } catch {
+        // Skip invalid lines
       }
+    }
 
+    if (messageCount === 0) return null;
+
+    let oneShotRate: number | undefined;
+    try {
       const oneShotStats = detectOneShot(lightTurns);
       if (oneShotStats.totalVerifiedTasks > 0) {
         oneShotRate = oneShotStats.rate;
