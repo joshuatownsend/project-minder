@@ -59,9 +59,10 @@ export async function generateUsageReport(
     turns = turns.filter((t) => t.projectSlug === project);
   }
 
-  // Pre-compute cost and category for each turn (single pass)
+  // Classify and cost only assistant turns (user turns have empty model/zero tokens)
+  const assistantTurns = turns.filter((t) => t.role === "assistant");
   const enriched: { turn: UsageTurn; category: CategoryType; cost: number }[] = [];
-  for (const turn of turns) {
+  for (const turn of assistantTurns) {
     enriched.push({
       turn,
       category: classifyTurn(turn),
@@ -77,7 +78,6 @@ export async function generateUsageReport(
   const dailyMap = new Map<string, DailyBucket>();
   const allToolCalls: ToolCall[] = [];
   const bashCommands: string[] = [];
-  const sessionGroups = new Map<string, UsageTurn[]>();
   let totalInput = 0;
   let totalOutput = 0;
   let totalCacheRead = 0;
@@ -136,11 +136,6 @@ export async function generateUsageReport(
       }
     }
 
-    // Session grouping (for one-shot)
-    const sess = sessionGroups.get(turn.sessionId) ?? [];
-    sess.push(turn);
-    sessionGroups.set(turn.sessionId, sess);
-
     // Totals
     totalInput += turn.inputTokens;
     totalOutput += turn.outputTokens;
@@ -165,9 +160,15 @@ export async function generateUsageReport(
     }
   }
 
-  // One-shot aggregate
+  // One-shot aggregate (needs both user+assistant turns for tool result detection)
   let totalVerified = 0;
   let totalOneShot = 0;
+  const sessionGroups = new Map<string, UsageTurn[]>();
+  for (const t of turns) {
+    const arr = sessionGroups.get(t.sessionId) ?? [];
+    arr.push(t);
+    sessionGroups.set(t.sessionId, arr);
+  }
   for (const sessionTurns of sessionGroups.values()) {
     const stats = detectOneShot(sessionTurns);
     totalVerified += stats.totalVerifiedTasks;
@@ -184,7 +185,7 @@ export async function generateUsageReport(
     totalCost,
     totalTokens,
     totalSessions: new Set(turns.map((t) => t.sessionId)).size,
-    totalTurns: turns.length,
+    totalTurns: assistantTurns.length,
     tokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite },
     cacheHitRate,
     oneShot: {

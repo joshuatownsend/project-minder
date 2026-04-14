@@ -3,18 +3,15 @@ import type { ShellStats } from "@/lib/usage/types";
 /**
  * Extracts the binary name from a shell command string.
  *
- * Steps:
- * 1. Trim whitespace
- * 2. If starts with `npx ` or `npx -y `, return the next token (the package name)
- * 3. If starts with `sudo `, strip it and continue
- * 4. Split on pipe `|` — take only the first segment
- * 5. Split on `&&` or `||` — take only the first segment
- * 6. If starts with a quoted path (single or double quotes), extract the path, return basename without extension
- * 7. If starts with `& "` (PowerShell call operator), strip `& ` and handle the quoted path
- * 8. Split on whitespace — first token is the binary
- * 9. If the binary contains path separators (`/` or `\`), return basename without extension
- * 10. Return the binary, lowercased
- * 11. Empty/whitespace-only input returns "unknown"
+ * Steps (in execution order):
+ * 1. Trim whitespace; return "unknown" if empty
+ * 2. Strip `sudo ` prefix if present
+ * 3. Handle `npx`/`npx -y` — return the package name
+ * 4. Take first segment before pipe `|`
+ * 5. Take first segment before `&&` or `||`
+ * 6. Handle quoted paths and PowerShell `& "..."` call operator
+ * 7. Split on whitespace — first token is the binary
+ * 8. Strip path separators, return basename lowercased
  */
 export function extractBinary(command: string): string {
   // Step 1: Trim whitespace

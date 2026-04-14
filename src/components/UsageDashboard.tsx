@@ -10,6 +10,9 @@ export function UsageDashboard() {
   const [period, setPeriod] = useState<string>("month");
   const [project, setProject] = useState<string | undefined>(undefined);
   const { data, loading } = useUsage(period, project);
+  // Fetch unfiltered project list so the dropdown stays visible when scoped
+  const { data: allData } = useUsage(period);
+  const availableProjects = allData?.byProject ?? data?.byProject ?? [];
 
   return (
     <div className="space-y-6">
@@ -56,7 +59,7 @@ export function UsageDashboard() {
         </div>
       </div>
 
-      {data && data.byProject.length > 1 && (
+      {availableProjects.length > 1 && (
         <div className="flex items-center gap-2">
           <span className="text-sm text-[var(--muted-foreground)]">Filter:</span>
           <select
@@ -65,7 +68,7 @@ export function UsageDashboard() {
             className="text-sm rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[var(--foreground)]"
           >
             <option value="">All Projects</option>
-            {data.byProject.map((p) => (
+            {availableProjects.map((p) => (
               <option key={p.projectSlug} value={p.projectSlug}>
                 {p.projectDirName}
               </option>

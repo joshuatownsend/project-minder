@@ -28,7 +28,7 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
 // ── Module-level state ───────────────────────────────────────────────────────
 
 let pricingMap: Map<string, ModelPricing> | null = null;
-let pricingLoaded = false;
+let pricingLoadPromise: Promise<void> | null = null;
 
 // ── Cache paths ──────────────────────────────────────────────────────────────
 
@@ -81,46 +81,42 @@ function useFallback(): void {
  * Load pricing from LiteLLM (with disk cache). Called lazily.
  */
 export async function loadPricing(): Promise<void> {
-  if (pricingLoaded) return;
-  pricingLoaded = true;
+  if (pricingMap) return;
+  if (pricingLoadPromise) return pricingLoadPromise;
 
-  try {
-    // Check disk cache freshness
-    let useDiskCache = false;
+  pricingLoadPromise = (async () => {
     try {
-      const stat = await fs.stat(PRICING_CACHE_FILE);
-      const ageMs = Date.now() - stat.mtimeMs;
-      useDiskCache = ageMs < CACHE_TTL_MS;
-    } catch {
-      // Cache file doesn't exist
-    }
+      let useDiskCache = false;
+      try {
+        const stat = await fs.stat(PRICING_CACHE_FILE);
+        useDiskCache = Date.now() - stat.mtimeMs < CACHE_TTL_MS;
+      } catch {
+        // Cache file doesn't exist
+      }
 
-    if (useDiskCache) {
-      const data = await fs.readFile(PRICING_CACHE_FILE, "utf-8");
-      const raw = JSON.parse(data) as Record<string, unknown>;
+      if (useDiskCache) {
+        const data = await fs.readFile(PRICING_CACHE_FILE, "utf-8");
+        pricingMap = buildPricingMap(JSON.parse(data) as Record<string, unknown>);
+        return;
+      }
+
+      const response = await fetch(LITELLM_URL);
+      if (!response.ok) throw new Error(`LiteLLM fetch failed: ${response.status}`);
+      const raw = (await response.json()) as Record<string, unknown>;
       pricingMap = buildPricingMap(raw);
-      return;
-    }
 
-    // Fetch from LiteLLM
-    const response = await fetch(LITELLM_URL);
-    if (!response.ok) {
-      throw new Error(`LiteLLM fetch failed: ${response.status}`);
-    }
-    const raw = (await response.json()) as Record<string, unknown>;
-    pricingMap = buildPricingMap(raw);
-
-    // Persist to disk cache
-    try {
-      await fs.mkdir(CACHE_DIR, { recursive: true });
-      await fs.writeFile(PRICING_CACHE_FILE, JSON.stringify(raw), "utf-8");
+      try {
+        await fs.mkdir(CACHE_DIR, { recursive: true });
+        await fs.writeFile(PRICING_CACHE_FILE, JSON.stringify(raw), "utf-8");
+      } catch {
+        // Non-critical
+      }
     } catch {
-      // Non-critical
+      useFallback();
     }
-  } catch {
-    // On any failure, fall back to hardcoded pricing silently
-    useFallback();
-  }
+  })();
+
+  return pricingLoadPromise;
 }
 
 /**
@@ -184,7 +180,7 @@ export function getModelPricing(model: string): ModelPricing {
  * Compute cost for a single usage turn.
  */
 export async function computeTurnCost(turn: UsageTurn): Promise<number> {
-  if (!pricingLoaded) {
+  if (!pricingMap) {
     await loadPricing();
   }
   const pricing = getModelPricing(turn.model);
@@ -201,5 +197,5 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
  */
 export function _resetForTesting(): void {
   pricingMap = null;
-  pricingLoaded = false;
+  pricingLoadPromise = null;
 }

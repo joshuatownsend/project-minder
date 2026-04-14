@@ -12,7 +12,7 @@ const ERROR_PATTERNS = [
   /\bSyntaxError\b/,
   /exit code [1-9]/i,
   /\bERROR\b/,
-  /\bfailed\b/i,
+  /(?<!\b0\s)\bfailed\b/i,
 ];
 
 function hasEditOrWrite(turn: UsageTurn): boolean {
