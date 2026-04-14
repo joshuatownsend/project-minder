@@ -201,6 +201,7 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
     let activeSessions = 0;
     let lastActivity: string | undefined;
 
+    const oneShotRates: number[] = [];
     for (const s of projectSessions) {
       totalTokens += s.inputTokens + s.outputTokens;
       totalCost += s.costEstimate;
@@ -216,7 +217,15 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
       if (s.endTime && (!lastActivity || s.endTime > lastActivity)) {
         lastActivity = s.endTime;
       }
+      if (s.oneShotRate !== undefined) {
+        oneShotRates.push(s.oneShotRate);
+      }
     }
+
+    const avgOneShotRate =
+      oneShotRates.length > 0
+        ? oneShotRates.reduce((sum, r) => sum + r, 0) / oneShotRates.length
+        : undefined;
 
     const topTools = Object.entries(toolAgg)
       .sort((a, b) => b[1] - a[1])
@@ -237,6 +246,7 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
       lastActivity,
       modelsUsed: Array.from(models),
       topTools,
+      avgOneShotRate,
     });
   }
 
@@ -315,6 +325,15 @@ function ProjectGroupCard({ group }: { group: ProjectGroup }) {
               {group.totalErrors} errors
             </span>
           )}
+          {group.avgOneShotRate !== undefined && (
+            <span className={`flex items-center gap-1 ${
+              group.avgOneShotRate >= 0.8 ? "text-emerald-400" :
+              group.avgOneShotRate >= 0.5 ? "text-amber-400" :
+              "text-red-400"
+            }`}>
+              {(group.avgOneShotRate * 100).toFixed(0)}% 1-shot
+            </span>
+          )}
         </div>
 
         {/* Top tools + models */}
@@ -375,6 +394,13 @@ export function SessionsBrowser() {
           return (b.durationMs || 0) - (a.durationMs || 0);
         case "tokens":
           return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
+        case "oneshot": {
+          // Sessions without oneShotRate go to the end
+          if (a.oneShotRate === undefined && b.oneShotRate === undefined) return 0;
+          if (a.oneShotRate === undefined) return 1;
+          if (b.oneShotRate === undefined) return -1;
+          return b.oneShotRate - a.oneShotRate;
+        }
         case "recent":
         default: {
           const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
@@ -396,6 +422,7 @@ export function SessionsBrowser() {
     { value: "recent", label: "Recent" },
     { value: "longest", label: "Longest" },
     { value: "tokens", label: "Most Tokens" },
+    { value: "oneshot", label: "Best Success Rate" },
   ];
 
   return (

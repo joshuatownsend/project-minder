@@ -45,6 +45,12 @@ export default async function RootLayout({
                       Sessions
                     </a>
                     <a
+                      href="/usage"
+                      className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      Usage
+                    </a>
+                    <a
                       href="/stats"
                       className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
                     >
