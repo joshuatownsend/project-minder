@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-type SortOption = "recent" | "longest" | "tokens";
+type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
 function formatDuration(ms?: number): string {
   if (!ms) return "—";
@@ -130,6 +130,15 @@ function SessionCard({
               {session.errorCount}
             </span>
           )}
+          {session.oneShotRate !== undefined && (
+            <span className={`text-xs px-1.5 py-0.5 rounded ${
+              session.oneShotRate >= 0.8 ? "bg-emerald-500/20 text-emerald-400" :
+              session.oneShotRate >= 0.5 ? "bg-amber-500/20 text-amber-400" :
+              "bg-red-500/20 text-red-400"
+            }`}>
+              {(session.oneShotRate * 100).toFixed(0)}% 1-shot
+            </span>
+          )}
           {session.gitBranch && (
             <span className="flex items-center gap-1">
               <GitBranch className="h-3 w-3" />
@@ -167,6 +176,7 @@ interface ProjectGroup {
   lastActivity?: string;
   modelsUsed: string[];
   topTools: [string, number][];
+  avgOneShotRate?: number;
 }
 
 function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {

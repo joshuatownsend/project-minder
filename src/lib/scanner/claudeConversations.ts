@@ -9,6 +9,8 @@ import {
   FileOperation,
   SubagentInfo,
 } from "../types";
+import { detectOneShot } from "../usage/oneShotDetector";
+import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import {
   readDiskCache,
   writeDiskCache,
@@ -190,6 +192,65 @@ async function scanSessionFile(
 
     if (messageCount === 0) return null;
 
+    // Lightweight one-shot detection: re-scan lines for edit→test→re-edit patterns
+    let oneShotRate: number | undefined;
+    try {
+      const lightTurns: UsageTurn[] = [];
+      for (const line of lines) {
+        try {
+          const e: ConversationEntry = JSON.parse(line);
+          if (!e.timestamp || e.isSidechain || e.isMeta) continue;
+
+          const turnToolCalls: UsageToolCall[] = [];
+          let toolResultText = "";
+
+          if (e.type === "assistant" && e.message?.content) {
+            for (const block of e.message.content) {
+              if (block.type === "tool_use" && block.name) {
+                turnToolCalls.push({ name: block.name, arguments: block.input });
+              }
+            }
+          }
+
+          if (e.type === "user") {
+            const content = e.message?.content || e.content || [];
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === "tool_result") {
+                  if (typeof block.content === "string") toolResultText += block.content;
+                  else if (Array.isArray(block.content)) {
+                    for (const c of block.content) {
+                      if (c.type === "text" && c.text) toolResultText += c.text;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          lightTurns.push({
+            timestamp: e.timestamp,
+            sessionId,
+            projectSlug: toSlug(projectDirName),
+            projectDirName,
+            model: e.message?.model || "",
+            role: e.type === "assistant" ? "assistant" : "user",
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheCreateTokens: 0,
+            cacheReadTokens: 0,
+            toolCalls: turnToolCalls,
+            toolResultText: toolResultText.slice(0, 2000),
+          });
+        } catch { /* skip bad lines */ }
+      }
+
+      const oneShotStats = detectOneShot(lightTurns);
+      if (oneShotStats.totalVerifiedTasks > 0) {
+        oneShotRate = oneShotStats.rate;
+      }
+    } catch { /* non-critical */ }
+
     const isActive = Date.now() - mtime.getTime() < 2 * 60_000;
     const durationMs =
       startTime && endTime
@@ -225,6 +286,7 @@ async function scanSessionFile(
       errorCount,
       isActive,
       skillsUsed: skills,
+      oneShotRate,
     };
   } catch {
     return null;
