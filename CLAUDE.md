@@ -22,7 +22,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - **Framework:** Vitest with `@/*` path alias support (config in `vitest.config.ts`)
 - **Test location:** `tests/*.test.ts` — flat directory, one file per module
 - **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
-- **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`) and `insightsWriter`
+- **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`), `insightsWriter`, and usage modules (`classifier`, `shellParser`, `mcpParser`, `oneShotDetector`, `costCalculator`)
 - **Pre-commit hook:** Tests run automatically before every commit via `.git/hooks/pre-commit`
 - **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `npm run build` + manual browser testing.
 - **When to run tests:** Always run `npm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
@@ -64,6 +64,16 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Branch name resolved from worktree `.git` file's `gitdir:` → `HEAD` ref, with directory-name fallback
 - ManualStepsWatcher extended to also watch worktree MANUAL_STEPS.md files (composite slug `parentslug:worktree:branchhint`)
 
+### Usage Module (`src/lib/usage/`)
+- `types.ts` — UsageTurn, UsageReport, CategoryType, ModelCost, ShellStats, McpServerStats, OneShotStats
+- `parser.ts` — reads `~/.claude/projects/` JSONL files into `UsageTurn[]` with 2-min globalThis cache
+- `classifier.ts` — 13-category deterministic classification (Git Ops, Build/Deploy, Testing, Debugging, Refactoring, Delegation, Planning, Brainstorming, Exploration, Feature Dev, Coding, Conversation, General)
+- `shellParser.ts` — extracts binary names from Bash/PowerShell commands, groups by frequency
+- `mcpParser.ts` — identifies `mcp__server__tool` convention, groups by server
+- `oneShotDetector.ts` — detects Edit→Bash(test)→re-edit retry cycles, computes success rate
+- `costCalculator.ts` — LiteLLM pricing (24h file cache) with hardcoded Claude fallbacks
+- `aggregator.ts` — orchestrates all modules, filters by period/project, produces UsageReport
+
 ### API Routes (`src/app/api/`)
 - `GET /api/projects` — all scanned projects (uses cache)
 - `GET /api/projects/[slug]` — single project
@@ -80,6 +90,8 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `GET /api/insights/[slug]` — insights for one project
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
+- `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
+- `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
 - `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
 - `GET /api/sessions/[sessionId]` — full session detail (timeline, file ops, subagents)
 
@@ -89,7 +101,8 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
 - Insights: `InsightsBrowser` at `/insights`, `InsightsTab` per-project, `InsightsCompact` badge on cards
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
-- Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
+- Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions with one-shot rate badges. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
+- Usage: `UsageDashboard` at `/usage` — token cost analytics with period filters, per-model/project/category breakdowns, daily cost chart, tool/shell/MCP stats, CSV/JSON export
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton, toast)
 

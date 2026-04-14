@@ -40,3 +40,6 @@ CLAUDE_MD_SNIPPET.md
 
 # scratch files
 manual-steps-tracker.html
+
+# git worktrees
+.worktrees/

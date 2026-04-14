@@ -199,6 +199,7 @@ export interface SessionSummary {
   errorCount: number;
   isActive: boolean;
   skillsUsed: Record<string, number>; // skill name → invocation count
+  oneShotRate?: number;
 }
 
 export interface TimelineEvent {

@@ -9,6 +9,8 @@ import {
   FileOperation,
   SubagentInfo,
 } from "../types";
+import { detectOneShot } from "../usage/oneShotDetector";
+import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import {
   readDiskCache,
   writeDiskCache,
@@ -17,7 +19,7 @@ import {
 } from "../claudeStatsCache";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-interface ConversationEntry {
+export interface ConversationEntry {
   type?: string;
   timestamp?: string;
   sessionId?: string;
@@ -60,16 +62,16 @@ function computeCost(
   );
 }
 
-function encodePath(projectPath: string): string {
+export function encodePath(projectPath: string): string {
   return projectPath.replace(/[:\\/]/g, "-");
 }
 
-function decodeDirName(dirName: string): string {
+export function decodeDirName(dirName: string): string {
   // C--dev-project-minder → C:\dev\project-minder (approximate)
   return dirName.replace(/^([A-Z])-/, "$1:").replace(/-/g, "\\");
 }
 
-function toSlug(dirName: string): string {
+export function toSlug(dirName: string): string {
   // Extract last segment as project name, slugify
   const parts = dirName.split("-");
   // Skip drive letter prefix like "C-"
@@ -128,6 +130,8 @@ async function scanSessionFile(
     const models = new Set<string>();
     let subagentCount = 0;
     let errorCount = 0;
+    // Collect one-shot detection data during the same pass
+    const lightTurns: UsageTurn[] = [];
 
     for (const line of lines) {
       try {
@@ -142,12 +146,10 @@ async function scanSessionFile(
         if (entry.type === "user" && !entry.isMeta) {
           userMessageCount++;
           messageCount++;
-          // Capture first real user message as initial prompt
           if (!initialPrompt && entry.message?.content) {
             const text = extractTextContent(entry.message.content);
             if (text) initialPrompt = text;
           } else if (!initialPrompt && Array.isArray(entry.content)) {
-            // Some user messages have content at top level
             const text = extractTextContent(entry.content);
             if (text) initialPrompt = text;
           }
@@ -183,12 +185,61 @@ async function scanSessionFile(
             }
           }
         }
+
+        // Build lightweight turn for one-shot detection (same pass, no re-parse)
+        if (entry.timestamp && !entry.isSidechain && !entry.isMeta) {
+          const turnToolCalls: UsageToolCall[] = [];
+          let toolResultText = "";
+
+          if (entry.type === "assistant" && entry.message?.content) {
+            for (const block of entry.message.content) {
+              if (block.type === "tool_use" && block.name) {
+                turnToolCalls.push({ name: block.name, arguments: block.input });
+              }
+            }
+          }
+          if (entry.type === "user") {
+            const content = entry.message?.content || entry.content || [];
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === "tool_result") {
+                  if (typeof block.content === "string") toolResultText += block.content;
+                  else if (Array.isArray(block.content)) {
+                    for (const c of block.content) {
+                      if (c.type === "text" && c.text) toolResultText += c.text;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          lightTurns.push({
+            timestamp: entry.timestamp,
+            sessionId,
+            projectSlug: toSlug(projectDirName),
+            projectDirName,
+            model: entry.message?.model || "",
+            role: entry.type === "assistant" ? "assistant" : "user",
+            inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0,
+            toolCalls: turnToolCalls,
+            toolResultText: toolResultText.slice(0, 2000),
+          });
+        }
       } catch {
         // Skip invalid lines
       }
     }
 
     if (messageCount === 0) return null;
+
+    let oneShotRate: number | undefined;
+    try {
+      const oneShotStats = detectOneShot(lightTurns);
+      if (oneShotStats.totalVerifiedTasks > 0) {
+        oneShotRate = oneShotStats.rate;
+      }
+    } catch { /* non-critical */ }
 
     const isActive = Date.now() - mtime.getTime() < 2 * 60_000;
     const durationMs =
@@ -225,6 +276,7 @@ async function scanSessionFile(
       errorCount,
       isActive,
       skillsUsed: skills,
+      oneShotRate,
     };
   } catch {
     return null;
