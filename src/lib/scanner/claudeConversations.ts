@@ -17,7 +17,7 @@ import {
 } from "../claudeStatsCache";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-interface ConversationEntry {
+export interface ConversationEntry {
   type?: string;
   timestamp?: string;
   sessionId?: string;
@@ -60,16 +60,16 @@ function computeCost(
   );
 }
 
-function encodePath(projectPath: string): string {
+export function encodePath(projectPath: string): string {
   return projectPath.replace(/[:\\/]/g, "-");
 }
 
-function decodeDirName(dirName: string): string {
+export function decodeDirName(dirName: string): string {
   // C--dev-project-minder → C:\dev\project-minder (approximate)
   return dirName.replace(/^([A-Z])-/, "$1:").replace(/-/g, "\\");
 }
 
-function toSlug(dirName: string): string {
+export function toSlug(dirName: string): string {
   // Extract last segment as project name, slugify
   const parts = dirName.split("-");
   // Skip drive letter prefix like "C-"
