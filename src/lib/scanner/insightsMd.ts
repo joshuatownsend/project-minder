@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import os from "os";
 import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 
@@ -148,6 +149,72 @@ function extractInsightBlocks(
   return results;
 }
 
+// ─── INSIGHTS.md Writer ───────────────────────────────────────────────────────
+
+/**
+ * Append new insights to INSIGHTS.md in a project directory.
+ * Deduplicates by content hash so re-running on the same sessions is safe.
+ * Returns the number of newly appended entries.
+ */
+export async function appendInsights(
+  projectPath: string,
+  entries: InsightEntry[]
+): Promise<number> {
+  if (entries.length === 0) return 0;
+
+  const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
+
+  let existingContent = "";
+  try {
+    existingContent = await fs.readFile(insightsMdPath, "utf-8");
+  } catch {
+    // File doesn't exist yet
+  }
+
+  const { knownIds } = parseInsightsMd(existingContent);
+
+  const seen = new Set(knownIds);
+  const newEntries = entries.filter((e) => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
+
+  if (newEntries.length === 0) return 0;
+
+  newEntries.sort((a, b) => {
+    const dateA = new Date(a.date).getTime() || 0;
+    const dateB = new Date(b.date).getTime() || 0;
+    return dateB - dateA;
+  });
+
+  const formattedEntries = newEntries.map((e) => {
+    const parsed = e.date ? new Date(e.date) : null;
+    const dateStr = parsed && isFinite(parsed.getTime())
+      ? parsed.toISOString()
+      : "unknown";
+
+    return (
+      `<!-- insight:${e.id} | session:${e.sessionId} | ${dateStr} -->\n` +
+      `## ★ Insight\n` +
+      `${e.content}\n` +
+      `\n` +
+      `---\n`
+    );
+  });
+
+  const newEntriesText = formattedEntries.join("\n");
+  const existingBody = existingContent
+    .replace(/^#\s+Insights\s*(?:\r?\n)+/, "")
+    .trimStart();
+
+  const finalContent =
+    `# Insights\n\n` + newEntriesText + (existingBody ? `\n${existingBody}` : "");
+
+  await fs.writeFile(insightsMdPath, finalContent, "utf-8");
+  return newEntries.length;
+}
+
 // ─── INSIGHTS.md Parser ───────────────────────────────────────────────────────
 
 // Matches: <!-- insight:abc123 | session:xxxxx | 2026-04-08 12:30:00 -->
@@ -220,17 +287,93 @@ export function parseInsightsMd(content: string): {
   };
 }
 
+// ─── JSONL Sync ───────────────────────────────────────────────────────────────
+
+/**
+ * Scan JSONL session files for this project and extract any new insights into
+ * INSIGHTS.md. Uses INSIGHTS.md mtime as a watermark so only files modified
+ * since the last sync are re-read. Dedup by content hash makes this idempotent.
+ */
+async function syncInsightsFromSessions(projectPath: string): Promise<void> {
+  const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
+
+  // Watermark: skip JSONL files not modified since last INSIGHTS.md write
+  const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
+  let watermarkMs = 0;
+  try {
+    const stat = await fs.stat(insightsMdPath);
+    watermarkMs = stat.mtimeMs;
+  } catch {
+    // No INSIGHTS.md yet — scan all JSONL files
+  }
+
+  // Derive the encoded project dir name the same way Claude Code does
+  const encoded = projectPath.replace(/[:\\/]/g, "-").toLowerCase();
+  const projectSlug = path.basename(projectPath).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+
+  let claudeDirs: string[];
+  try {
+    claudeDirs = await fs.readdir(claudeProjectsDir);
+  } catch {
+    return; // Claude history not accessible
+  }
+
+  const allInsights: InsightEntry[] = [];
+
+  for (const dir of claudeDirs) {
+    // Match the project's own dir and any worktree dirs
+    const lowerDir = dir.toLowerCase();
+    if (lowerDir !== encoded && !lowerDir.startsWith(encoded + "--claude-worktrees-")) {
+      continue;
+    }
+
+    const dirPath = path.join(claudeProjectsDir, dir);
+    let files: string[];
+    try {
+      files = (await fs.readdir(dirPath)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      const filePath = path.join(dirPath, file);
+      try {
+        const fstat = await fs.stat(filePath);
+        // Skip files not modified since last sync (watermark optimization)
+        if (fstat.mtimeMs <= watermarkMs) continue;
+        if (fstat.size > 50 * 1024 * 1024) continue;
+
+        const content = await fs.readFile(filePath, "utf-8");
+        const sessionId = path.basename(file, ".jsonl");
+        const insights = parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
+        allInsights.push(...insights);
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  if (allInsights.length > 0) {
+    await appendInsights(projectPath, allInsights);
+  }
+}
+
 // ─── Scanner ──────────────────────────────────────────────────────────────────
 
 /**
- * Read INSIGHTS.md from the project root and return InsightsInfo.
- * Fills in project slug (derived from path.basename(projectPath)) and
- * projectPath for all entries.
- * Returns undefined if the file doesn't exist or has no entries.
+ * Sync new insights from session history, then read INSIGHTS.md and return
+ * InsightsInfo. Returns undefined if no entries exist.
  */
 export async function scanInsightsMd(
   projectPath: string
 ): Promise<InsightsInfo | undefined> {
+  // Sync new insights from JSONL before reading the file
+  try {
+    await syncInsightsFromSessions(projectPath);
+  } catch {
+    // Non-fatal — fall through to read whatever is already in INSIGHTS.md
+  }
+
   try {
     const content = await fs.readFile(
       path.join(projectPath, "INSIGHTS.md"),
