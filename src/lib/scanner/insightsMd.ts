@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
+import { encodePath, toSlug } from "./claudeConversations";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -154,13 +155,14 @@ function extractInsightBlocks(
 /**
  * Append new insights to INSIGHTS.md in a project directory.
  * Deduplicates by content hash so re-running on the same sessions is safe.
- * Returns the number of newly appended entries.
+ * Returns { count, content } — content is the final file string so the caller
+ * can skip a redundant readFile if it needs to parse the result immediately.
  */
 export async function appendInsights(
   projectPath: string,
   entries: InsightEntry[]
-): Promise<number> {
-  if (entries.length === 0) return 0;
+): Promise<{ count: number; content: string | null }> {
+  if (entries.length === 0) return { count: 0, content: null };
 
   const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
 
@@ -180,7 +182,7 @@ export async function appendInsights(
     return true;
   });
 
-  if (newEntries.length === 0) return 0;
+  if (newEntries.length === 0) return { count: 0, content: null };
 
   newEntries.sort((a, b) => {
     const dateA = new Date(a.date).getTime() || 0;
@@ -189,11 +191,8 @@ export async function appendInsights(
   });
 
   const formattedEntries = newEntries.map((e) => {
-    const parsed = e.date ? new Date(e.date) : null;
-    const dateStr = parsed && isFinite(parsed.getTime())
-      ? parsed.toISOString()
-      : "unknown";
-
+    const d = e.date ? new Date(e.date) : null;
+    const dateStr = d && isFinite(d.getTime()) ? d.toISOString() : "unknown";
     return (
       `<!-- insight:${e.id} | session:${e.sessionId} | ${dateStr} -->\n` +
       `## ★ Insight\n` +
@@ -203,16 +202,15 @@ export async function appendInsights(
     );
   });
 
-  const newEntriesText = formattedEntries.join("\n");
   const existingBody = existingContent
     .replace(/^#\s+Insights\s*(?:\r?\n)+/, "")
     .trimStart();
 
   const finalContent =
-    `# Insights\n\n` + newEntriesText + (existingBody ? `\n${existingBody}` : "");
+    `# Insights\n\n` + formattedEntries.join("\n") + (existingBody ? `\n${existingBody}` : "");
 
   await fs.writeFile(insightsMdPath, finalContent, "utf-8");
-  return newEntries.length;
+  return { count: newEntries.length, content: finalContent };
 }
 
 // ─── INSIGHTS.md Parser ───────────────────────────────────────────────────────
@@ -293,8 +291,9 @@ export function parseInsightsMd(content: string): {
  * Scan JSONL session files for this project and extract any new insights into
  * INSIGHTS.md. Uses INSIGHTS.md mtime as a watermark so only files modified
  * since the last sync are re-read. Dedup by content hash makes this idempotent.
+ * Returns the final written content if INSIGHTS.md was updated, null otherwise.
  */
-async function syncInsightsFromSessions(projectPath: string): Promise<void> {
+async function syncInsightsFromSessions(projectPath: string): Promise<string | null> {
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
 
   // Watermark: skip JSONL files not modified since last INSIGHTS.md write
@@ -307,26 +306,24 @@ async function syncInsightsFromSessions(projectPath: string): Promise<void> {
     // No INSIGHTS.md yet — scan all JSONL files
   }
 
-  // Derive the encoded project dir name the same way Claude Code does
-  const encoded = projectPath.replace(/[:\\/]/g, "-").toLowerCase();
-  const projectSlug = path.basename(projectPath).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const encoded = encodePath(projectPath).toLowerCase();
+  const projectSlug = toSlug(path.basename(projectPath));
 
   let claudeDirs: string[];
   try {
     claudeDirs = await fs.readdir(claudeProjectsDir);
   } catch {
-    return; // Claude history not accessible
+    return null; // Claude history not accessible
   }
+
+  const matchingDirs = claudeDirs.filter((dir) => {
+    const lowerDir = dir.toLowerCase();
+    return lowerDir === encoded || lowerDir.startsWith(encoded + "--claude-worktrees-");
+  });
 
   const allInsights: InsightEntry[] = [];
 
-  for (const dir of claudeDirs) {
-    // Match the project's own dir and any worktree dirs
-    const lowerDir = dir.toLowerCase();
-    if (lowerDir !== encoded && !lowerDir.startsWith(encoded + "--claude-worktrees-")) {
-      continue;
-    }
-
+  for (const dir of matchingDirs) {
     const dirPath = path.join(claudeProjectsDir, dir);
     let files: string[];
     try {
@@ -335,27 +332,28 @@ async function syncInsightsFromSessions(projectPath: string): Promise<void> {
       continue;
     }
 
-    for (const file of files) {
-      const filePath = path.join(dirPath, file);
-      try {
-        const fstat = await fs.stat(filePath);
-        // Skip files not modified since last sync (watermark optimization)
-        if (fstat.mtimeMs <= watermarkMs) continue;
-        if (fstat.size > 50 * 1024 * 1024) continue;
+    const fileInsights = await Promise.all(
+      files.map(async (file) => {
+        const filePath = path.join(dirPath, file);
+        try {
+          const fstat = await fs.stat(filePath);
+          if (fstat.mtimeMs <= watermarkMs) return [];
+          if (fstat.size > 50 * 1024 * 1024) return [];
+          const content = await fs.readFile(filePath, "utf-8");
+          const sessionId = path.basename(file, ".jsonl");
+          return parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
+        } catch {
+          return [];
+        }
+      })
+    );
 
-        const content = await fs.readFile(filePath, "utf-8");
-        const sessionId = path.basename(file, ".jsonl");
-        const insights = parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
-        allInsights.push(...insights);
-      } catch {
-        continue;
-      }
-    }
+    allInsights.push(...fileInsights.flat());
   }
 
-  if (allInsights.length > 0) {
-    await appendInsights(projectPath, allInsights);
-  }
+  if (allInsights.length === 0) return null;
+  const { content } = await appendInsights(projectPath, allInsights);
+  return content;
 }
 
 // ─── Scanner ──────────────────────────────────────────────────────────────────
@@ -367,15 +365,16 @@ async function syncInsightsFromSessions(projectPath: string): Promise<void> {
 export async function scanInsightsMd(
   projectPath: string
 ): Promise<InsightsInfo | undefined> {
-  // Sync new insights from JSONL before reading the file
+  let syncedContent: string | null = null;
   try {
-    await syncInsightsFromSessions(projectPath);
+    syncedContent = await syncInsightsFromSessions(projectPath);
   } catch {
     // Non-fatal — fall through to read whatever is already in INSIGHTS.md
   }
 
   try {
-    const content = await fs.readFile(
+    // Re-use the content returned by sync to avoid an extra readFile
+    const content = syncedContent ?? await fs.readFile(
       path.join(projectPath, "INSIGHTS.md"),
       "utf-8"
     );
@@ -383,7 +382,7 @@ export async function scanInsightsMd(
     const { info } = parseInsightsMd(content);
     if (info.entries.length === 0) return undefined;
 
-    const projectSlug = path.basename(projectPath).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const projectSlug = toSlug(path.basename(projectPath));
     const entries = info.entries.map((e) => ({
       ...e,
       project: projectSlug,
