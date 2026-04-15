@@ -18,7 +18,7 @@ interface TodoListProps {
 type FilterMode = "all" | "open" | "done";
 
 export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
-  const [filter, setFilter] = useState<FilterMode>("all");
+  const [filter, setFilter] = useState<FilterMode>("open");
 
   const filtered = todos.items.filter((item) => {
     if (filter === "open") return !item.completed;
@@ -26,59 +26,82 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
     return true;
   });
 
+  const pct = todos.total > 0 ? (todos.completed / todos.total) * 100 : 0;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">TODOs</h3>
-        <span className="text-xs text-[var(--muted-foreground)]">
-          {todos.completed}/{todos.total} completed
-        </span>
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+
+      {/* Header + progress */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {/* Filter buttons */}
+            {(["all", "open", "done"] as const).map((f, i) => {
+              const active = filter === f;
+              const labels = { all: "All", open: "Open", done: "Done" } as const;
+              return (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  style={{
+                    padding: "3px 9px",
+                    fontSize: "0.68rem", fontFamily: "var(--font-body)",
+                    color: active ? "var(--text-primary)" : "var(--text-muted)",
+                    background: active ? "var(--bg-elevated)" : "transparent",
+                    border: "1px solid",
+                    borderColor: active ? "var(--border-default)" : "var(--border-subtle)",
+                    borderRadius: "var(--radius)",
+                    cursor: "pointer", lineHeight: 1,
+                    transition: "color 0.1s, background 0.1s",
+                  }}
+                >
+                  {labels[f]}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--text-muted)" }}>
+            {todos.completed}/{todos.total}
+          </span>
+        </div>
+
+        {/* Progress track */}
+        <div style={{ height: "2px", background: "var(--bg-elevated)", borderRadius: "1px", overflow: "hidden" }}>
+          <div style={{
+            height: "100%", width: `${pct}%`,
+            background: "var(--status-active-text)",
+            borderRadius: "1px",
+            transition: "width 0.3s ease",
+          }} />
+        </div>
       </div>
 
-      <div className="w-full bg-[var(--muted)] rounded-full h-2">
-        <div
-          className="bg-emerald-500 h-2 rounded-full transition-all"
-          style={{ width: `${todos.total > 0 ? (todos.completed / todos.total) * 100 : 0}%` }}
-        />
-      </div>
-
-      <div className="flex items-center gap-1 text-sm">
-        <span className="text-[var(--muted-foreground)] text-xs">Show:</span>
-        {(["all", "open", "done"] as const).map((f) => (
-          <button
-            key={f}
-            className={`px-2 py-0.5 rounded text-xs ${filter === f ? "bg-[var(--muted)] text-[var(--foreground)]" : "text-[var(--muted-foreground)]"}`}
-            onClick={() => setFilter(f)}
-          >
-            {f === "all" ? "All" : f === "open" ? "Open" : "Done"}
-          </button>
-        ))}
-      </div>
-
-      <ul className="space-y-1">
+      {/* Items */}
+      <ul style={{ display: "flex", flexDirection: "column", gap: "2px", padding: 0, margin: 0, listStyle: "none" }}>
         {filtered.map((item, i) => (
-          <li key={i} className="flex items-start gap-2 text-sm">
+          <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0" }}>
             {item.completed ? (
-              <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+              <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
             ) : (
-              <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+              <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
             )}
-            <span className={item.completed ? "line-through text-[var(--muted-foreground)]" : ""}>
+            <span style={{
+              fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
+              textDecoration: item.completed ? "line-through" : "none",
+              lineHeight: 1.55,
+            }}>
               {item.text}
             </span>
           </li>
         ))}
         {filtered.length === 0 && (
-          <li className="text-xs text-[var(--muted-foreground)] py-2">
-            {filter === "all"
-              ? "No TODOs yet."
-              : filter === "open"
-                ? "No open items."
-                : "No completed items."}
+          <li style={{ fontSize: "0.78rem", color: "var(--text-muted)", padding: "8px 0" }}>
+            {filter === "all" ? "No TODOs yet." : filter === "open" ? "No open items." : "No completed items."}
           </li>
         )}
       </ul>
 
+      {/* Worktree sections */}
       {worktrees?.map((wt) =>
         wt.todos ? (
           <WorktreeSection
@@ -87,7 +110,7 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
             itemCount={wt.todos.total}
             itemLabel={wt.todos.total === 1 ? "TODO" : "TODOs"}
           >
-            <ul className="space-y-1">
+            <ul style={{ display: "flex", flexDirection: "column", gap: "2px", padding: 0, margin: 0, listStyle: "none" }}>
               {wt.todos.items
                 .filter((item) => {
                   if (filter === "open") return !item.completed;
@@ -95,13 +118,17 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
                   return true;
                 })
                 .map((item, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm">
+                  <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0" }}>
                     {item.completed ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                      <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
                     ) : (
-                      <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+                      <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
                     )}
-                    <span className={item.completed ? "line-through text-[var(--muted-foreground)]" : ""}>
+                    <span style={{
+                      fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
+                      textDecoration: item.completed ? "line-through" : "none",
+                      lineHeight: 1.55,
+                    }}>
                       {item.text}
                     </span>
                   </li>
@@ -111,6 +138,7 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
         ) : null
       )}
 
+      {/* Add form */}
       {slug && <AddTodoForm slug={slug} onAdded={onChange} />}
     </div>
   );
@@ -158,11 +186,11 @@ export function AddTodoForm({
   };
 
   return (
-    <form onSubmit={submit} className="flex gap-2 pt-2">
+    <form onSubmit={submit} style={{ display: "flex", gap: "8px", paddingTop: "4px" }}>
       <Input
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Add a new TODO..."
+        placeholder="Add a TODO..."
         maxLength={500}
         disabled={submitting}
       />
@@ -179,11 +207,9 @@ export function AddTodoForm({
 
 export function TodoCompact({ todos }: { todos: TodoInfo }) {
   return (
-    <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-      <CheckCircle2 className="h-3 w-3" />
-      <span>
-        {todos.completed}/{todos.total} TODOs
-      </span>
+    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+      <CheckCircle2 style={{ width: "11px", height: "11px" }} />
+      <span>{todos.completed}/{todos.total} TODOs</span>
     </div>
   );
 }

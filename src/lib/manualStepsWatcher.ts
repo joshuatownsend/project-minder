@@ -3,7 +3,7 @@ import path from "path";
 import { watch, FSWatcher } from "fs";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { invalidateCache } from "./cache";
-import { readConfig } from "./config";
+import { readConfig, getDevRoots } from "./config";
 import { ManualStepsInfo } from "./types";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
@@ -41,57 +41,60 @@ class ManualStepsWatcher {
   }
 
   private async scanForFiles() {
-    try {
-      const config = await readConfig();
-      const devRoot = config.devRoot;
-      const dirents = await fs.readdir(devRoot, { withFileTypes: true });
-      const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
+    const config = await readConfig();
+    const devRoots = getDevRoots(config);
 
-      for (const dirName of dirs) {
-        // Skip worktree directories — handled in the dedicated loop below
-        if (dirName.includes(WORKTREE_SEP)) continue;
+    for (const devRoot of devRoots) {
+      try {
+        const dirents = await fs.readdir(devRoot, { withFileTypes: true });
+        const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
 
-        const slug = dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-        if (this.watched.has(slug)) continue;
+        for (const dirName of dirs) {
+          // Skip worktree directories — handled in the dedicated loop below
+          if (dirName.includes(WORKTREE_SEP)) continue;
 
-        const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
-        try {
-          await fs.access(filePath);
-          await this.watchFile(slug, dirName, filePath);
-          // New file discovered — invalidate scan cache so dashboard picks it up
-          invalidateCache();
-        } catch {
-          // No MANUAL_STEPS.md in this project
+          const slug = dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+          if (this.watched.has(slug)) continue;
+
+          const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
+          try {
+            await fs.access(filePath);
+            await this.watchFile(slug, dirName, filePath);
+            // New file discovered — invalidate scan cache so dashboard picks it up
+            invalidateCache();
+          } catch {
+            // No MANUAL_STEPS.md in this project
+          }
         }
-      }
 
-      // Discover MANUAL_STEPS.md in worktree directories
-      for (const dirName of dirs) {
-        if (!dirName.includes(WORKTREE_SEP)) continue;
+        // Discover MANUAL_STEPS.md in worktree directories
+        for (const dirName of dirs) {
+          if (!dirName.includes(WORKTREE_SEP)) continue;
 
-        const sepIndex = dirName.indexOf(WORKTREE_SEP);
-        const prefix = dirName.slice(0, sepIndex);
-        const branchHint = dirName.slice(sepIndex + WORKTREE_SEP.length);
+          const sepIndex = dirName.indexOf(WORKTREE_SEP);
+          const prefix = dirName.slice(0, sepIndex);
+          const branchHint = dirName.slice(sepIndex + WORKTREE_SEP.length);
 
-        // Build composite slug to avoid collision with main project
-        const parentSlug = prefix.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-        const compositeSlug = `${parentSlug}:worktree:${branchHint}`;
+          // Build composite slug to avoid collision with main project
+          const parentSlug = prefix.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+          const compositeSlug = `${parentSlug}:worktree:${branchHint}`;
 
-        if (this.watched.has(compositeSlug)) continue;
+          if (this.watched.has(compositeSlug)) continue;
 
-        // Derive display branch name: replace first hyphen with slash (e.g. feature-gitwc → feature/gitwc)
-        const displayBranch = branchHint.replace("-", "/");
-        const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
-        try {
-          await fs.access(filePath);
-          await this.watchFile(compositeSlug, `${prefix} (${displayBranch})`, filePath);
-          invalidateCache();
-        } catch {
-          // No MANUAL_STEPS.md in this worktree
+          // Derive display branch name: replace first hyphen with slash (e.g. feature-gitwc → feature/gitwc)
+          const displayBranch = branchHint.replace("-", "/");
+          const filePath = path.join(devRoot, dirName, "MANUAL_STEPS.md");
+          try {
+            await fs.access(filePath);
+            await this.watchFile(compositeSlug, `${prefix} (${displayBranch})`, filePath);
+            invalidateCache();
+          } catch {
+            // No MANUAL_STEPS.md in this worktree
+          }
         }
+      } catch {
+        // This root doesn't exist or isn't readable — skip it
       }
-    } catch {
-      // DEV_ROOT doesn't exist or isn't readable
     }
   }
 

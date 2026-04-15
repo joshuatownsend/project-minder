@@ -110,7 +110,7 @@ async function main() {
       continue;
     }
 
-    const appended = await appendInsights(projectPath, allInsights);
+    const { count: appended } = await appendInsights(projectPath, allInsights);
     if (appended > 0) {
       console.log(`  ${projectName}: ${appended} insights imported`);
       totalInsights += appended;

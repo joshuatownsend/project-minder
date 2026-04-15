@@ -11,7 +11,6 @@ export default function Home() {
   return (
     <DashboardGrid
       projects={data?.projects ?? []}
-      portConflicts={data?.portConflicts ?? []}
       hiddenCount={data?.hiddenCount ?? 0}
       loading={loading}
       onRescan={rescan}

@@ -30,8 +30,9 @@ function makeEntry(overrides: Partial<InsightEntry> = {}): InsightEntry {
 
 describe("appendInsights", () => {
   it("returns 0 for empty entries array", async () => {
-    const count = await appendInsights("C:\\dev\\test", []);
-    expect(count).toBe(0);
+    const result = await appendInsights("C:\\dev\\test", []);
+    expect(result.count).toBe(0);
+    expect(result.content).toBeNull();
     expect(mockReadFile).not.toHaveBeenCalled();
   });
 
@@ -39,8 +40,8 @@ describe("appendInsights", () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT")); // No existing file
     mockWriteFile.mockResolvedValue();
 
-    const count = await appendInsights("C:\\dev\\test", [makeEntry()]);
-    expect(count).toBe(1);
+    const result = await appendInsights("C:\\dev\\test", [makeEntry()]);
+    expect(result.count).toBe(1);
     expect(mockWriteFile).toHaveBeenCalledOnce();
 
     const written = mockWriteFile.mock.calls[0][1] as string;
@@ -48,6 +49,7 @@ describe("appendInsights", () => {
     expect(written).toContain("<!-- insight:abc123def456");
     expect(written).toContain("## ★ Insight");
     expect(written).toContain("Test insight content");
+    expect(result.content).toBe(written);
   });
 
   it("deduplicates against existing entries", async () => {
@@ -56,10 +58,11 @@ describe("appendInsights", () => {
     );
     mockWriteFile.mockResolvedValue();
 
-    const count = await appendInsights("C:\\dev\\test", [
+    const result = await appendInsights("C:\\dev\\test", [
       makeEntry({ id: "abc123def456" }),
     ]);
-    expect(count).toBe(0);
+    expect(result.count).toBe(0);
+    expect(result.content).toBeNull();
     expect(mockWriteFile).not.toHaveBeenCalled();
   });
 
@@ -67,11 +70,11 @@ describe("appendInsights", () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT"));
     mockWriteFile.mockResolvedValue();
 
-    const count = await appendInsights("C:\\dev\\test", [
+    const result = await appendInsights("C:\\dev\\test", [
       makeEntry({ id: "aaa111" }),
       makeEntry({ id: "aaa111" }), // duplicate
     ]);
-    expect(count).toBe(1);
+    expect(result.count).toBe(1);
   });
 
   it("sorts new entries by date descending", async () => {

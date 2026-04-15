@@ -6,74 +6,89 @@ import { useToggleStep } from "@/hooks/useManualSteps";
 import { CheckCircle2, Circle, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { WorktreeSection } from "./WorktreeSection";
 
-function renderDetailLine(line: string) {
-  // Render backtick-wrapped content as code
-  const parts = line.split(/(`[^`]+`)/g);
-  const rendered = parts.map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return (
-        <code
-          key={i}
-          className="bg-[var(--muted)] px-1 py-0.5 rounded text-xs font-mono"
-        >
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    // Detect URLs
-    const urlMatch = part.match(/(https?:\/\/\S+)/);
-    if (urlMatch) {
-      const [before, ...rest] = part.split(urlMatch[1]);
-      return (
-        <span key={i}>
-          {before}
-          <a
-            href={urlMatch[1]}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-400 hover:underline inline-flex items-center gap-0.5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {urlMatch[1]}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-          {rest.join(urlMatch[1])}
-        </span>
-      );
-    }
-    return part;
-  });
+type FilterMode = "open" | "all" | "done";
 
-  return <span>{rendered}</span>;
+// ── Detail line renderer ───────────────────────────────────────────────────────
+function renderDetailLine(line: string) {
+  const parts = line.split(/(`[^`]+`)/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (part.startsWith("`") && part.endsWith("`")) {
+          return (
+            <code
+              key={i}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.68rem",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                padding: "1px 4px",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {part.slice(1, -1)}
+            </code>
+          );
+        }
+        const urlMatch = part.match(/(https?:\/\/\S+)/);
+        if (urlMatch) {
+          const [before, ...rest] = part.split(urlMatch[1]);
+          return (
+            <span key={i}>
+              {before}
+              <a
+                href={urlMatch[1]}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: "var(--accent)",
+                  textDecoration: "underline",
+                  textUnderlineOffset: "2px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "2px",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {urlMatch[1]}
+                <ExternalLink style={{ width: "10px", height: "10px" }} />
+              </a>
+              {rest.join(urlMatch[1])}
+            </span>
+          );
+        }
+        return part;
+      })}
+    </span>
+  );
 }
 
+// ── Entry section ──────────────────────────────────────────────────────────────
 function EntrySection({
   entry,
   slug,
+  filter,
   onUpdate,
-  filter = "all",
 }: {
   entry: ManualStepEntry;
   slug: string;
+  filter: FilterMode;
   onUpdate: (info: ManualStepsInfo) => void;
-  filter?: FilterMode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { toggle, toggling } = useToggleStep(slug);
-  // Optimistic overrides: track which lineNumbers have been toggled locally
+  const { toggle } = useToggleStep(slug);
   const [optimistic, setOptimistic] = useState<Map<number, boolean>>(new Map());
 
   const handleToggle = useCallback(
     (step: ManualStep) => {
-      // Optimistic: flip the visual state immediately
       setOptimistic((prev) => {
         const next = new Map(prev);
         next.set(step.lineNumber, !step.completed);
         return next;
       });
-
       toggle(step.lineNumber, (updated) => {
-        // Server confirmed — clear the optimistic override and apply real data
         setOptimistic((prev) => {
           const next = new Map(prev);
           next.delete(step.lineNumber);
@@ -90,86 +105,202 @@ function EntrySection({
     return override !== undefined ? { ...step, completed: override } : step;
   });
 
-  const completed = resolvedSteps.filter((s) => s.completed).length;
-  const total = resolvedSteps.length;
+  const visibleSteps = resolvedSteps.filter((s) => {
+    if (filter === "open") return !s.completed;
+    if (filter === "done") return s.completed;
+    return true;
+  });
+
+  const pendingCount = resolvedSteps.filter((s) => !s.completed).length;
+  const totalCount = resolvedSteps.length;
+
+  if (visibleSteps.length === 0) return null;
 
   return (
-    <div className="rounded-lg border overflow-hidden">
+    <div>
+      {/* Entry header */}
       <button
-        className="w-full flex items-center gap-2 p-3 hover:bg-[var(--muted)] transition-colors text-left"
         onClick={() => setCollapsed(!collapsed)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          width: "100%",
+          textAlign: "left",
+          background: "transparent",
+          border: "none",
+          padding: "4px 0",
+          cursor: "pointer",
+          flexWrap: "wrap",
+        }}
       >
         {collapsed ? (
-          <ChevronRight className="h-4 w-4 shrink-0" />
+          <ChevronRight style={{ width: "11px", height: "11px", color: "var(--text-muted)", flexShrink: 0 }} />
         ) : (
-          <ChevronDown className="h-4 w-4 shrink-0" />
+          <ChevronDown style={{ width: "11px", height: "11px", color: "var(--text-muted)", flexShrink: 0 }} />
         )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--muted-foreground)] font-mono">
-              {entry.date}
-            </span>
-            <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded font-mono">
-              {entry.featureSlug}
-            </span>
-          </div>
-          <p className="text-sm font-medium truncate">{entry.title}</p>
-        </div>
-        <span className={`text-xs shrink-0 ${toggling ? "text-amber-400" : "text-[var(--muted-foreground)]"}`}>
-          {completed}/{total}
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.65rem",
+            color: "var(--text-muted)",
+            flexShrink: 0,
+          }}
+        >
+          {entry.date}
+        </span>
+        {entry.featureSlug && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.65rem",
+              color: "var(--text-secondary)",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "3px",
+              padding: "1px 4px",
+              flexShrink: 0,
+            }}
+          >
+            {entry.featureSlug}
+          </span>
+        )}
+        <span
+          style={{
+            fontSize: "0.75rem",
+            fontWeight: 500,
+            color: "var(--text-primary)",
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {entry.title}
+        </span>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.65rem",
+            color: pendingCount > 0 ? "var(--accent)" : "var(--text-muted)",
+            flexShrink: 0,
+          }}
+        >
+          {totalCount - pendingCount}/{totalCount}
         </span>
       </button>
 
+      {/* Progress bar */}
       {!collapsed && (
-        <div className="border-t px-3 py-2 space-y-1">
-          {/* Progress bar */}
-          <div className="w-full bg-[var(--muted)] rounded-full h-1.5 mb-2">
-            <div
-              className="bg-emerald-500 h-1.5 rounded-full transition-all"
-              style={{
-                width: `${total > 0 ? (completed / total) * 100 : 0}%`,
-              }}
-            />
-          </div>
+        <div
+          style={{
+            margin: "4px 0 6px 19px",
+            height: "2px",
+            background: "var(--border-subtle)",
+            borderRadius: "1px",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              background: "var(--status-active-text)",
+              borderRadius: "1px",
+              width: `${totalCount > 0 ? ((totalCount - pendingCount) / totalCount) * 100 : 0}%`,
+              transition: "width 0.2s ease",
+            }}
+          />
+        </div>
+      )}
 
-          {resolvedSteps.map((step, i) => {
-            // Apply filter: skip steps that don't match
-            if (filter === "open" && step.completed) return null;
-            if (filter === "done" && !step.completed) return null;
+      {/* Steps */}
+      {!collapsed && (
+        <div style={{ paddingLeft: "19px", display: "flex", flexDirection: "column", gap: "1px", paddingBottom: "10px" }}>
+          {visibleSteps.map((step) => {
+            const originalStep = entry.steps.find((s) => s.lineNumber === step.lineNumber)!;
             return (
-            <div key={i}>
-              <button
-                className="flex items-start gap-2 text-sm w-full text-left hover:bg-[var(--muted)] rounded px-1 py-0.5 transition-colors"
-                onClick={() => handleToggle(entry.steps[i])}
-              >
-                {step.completed ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
-                ) : (
-                  <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
-                )}
-                <span
-                  className={
-                    step.completed
-                      ? "line-through text-[var(--muted-foreground)]"
-                      : ""
+              <div key={step.lineNumber}>
+                <button
+                  onClick={() => handleToggle(originalStep)}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "7px",
+                    width: "100%",
+                    textAlign: "left",
+                    background: "transparent",
+                    border: "none",
+                    padding: "3px 5px",
+                    borderRadius: "3px",
+                    cursor: "pointer",
+                    transition: "background 0.1s",
+                  }}
+                  onMouseEnter={(e) =>
+                    ((e.currentTarget as HTMLElement).style.background = "var(--bg-elevated)")
+                  }
+                  onMouseLeave={(e) =>
+                    ((e.currentTarget as HTMLElement).style.background = "transparent")
                   }
                 >
-                  {step.text}
-                </span>
-              </button>
-              {step.details.length > 0 && (
-                <div className="ml-8 space-y-0.5">
-                  {step.details.map((detail, j) => (
-                    <p
-                      key={j}
-                      className="text-xs text-[var(--muted-foreground)]"
-                    >
-                      {renderDetailLine(detail)}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
+                  {step.completed ? (
+                    <CheckCircle2
+                      style={{
+                        width: "13px",
+                        height: "13px",
+                        color: "var(--status-active-text)",
+                        flexShrink: 0,
+                        marginTop: "2px",
+                      }}
+                    />
+                  ) : (
+                    <Circle
+                      style={{
+                        width: "13px",
+                        height: "13px",
+                        color: "var(--text-muted)",
+                        flexShrink: 0,
+                        marginTop: "2px",
+                      }}
+                    />
+                  )}
+                  <span
+                    style={{
+                      fontSize: "0.78rem",
+                      lineHeight: 1.45,
+                      color: step.completed ? "var(--text-muted)" : "var(--text-primary)",
+                      textDecoration: step.completed ? "line-through" : "none",
+                    }}
+                  >
+                    {step.text}
+                  </span>
+                </button>
+                {step.details.length > 0 && (
+                  <div
+                    style={{
+                      paddingLeft: "25px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "2px",
+                      marginBottom: "2px",
+                    }}
+                  >
+                    {step.details.map((detail, j) => (
+                      <p
+                        key={j}
+                        style={{
+                          fontSize: "0.7rem",
+                          color: "var(--text-muted)",
+                          lineHeight: 1.4,
+                          margin: 0,
+                        }}
+                      >
+                        {renderDetailLine(detail)}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -178,8 +309,7 @@ function EntrySection({
   );
 }
 
-type FilterMode = "all" | "open" | "done";
-
+// ── Main per-project list ──────────────────────────────────────────────────────
 export function ManualStepsList({
   slug,
   initialData,
@@ -190,50 +320,104 @@ export function ManualStepsList({
   worktrees?: WorktreeOverlay[];
 }) {
   const [data, setData] = useState(initialData);
-  const [filter, setFilter] = useState<FilterMode>("all");
+  const [filter, setFilter] = useState<FilterMode>("open");
 
-  // Filter entries: hide entries with no matching steps
-  const filteredEntries = filter === "all"
-    ? data.entries
-    : data.entries.filter((entry) =>
-        entry.steps.some((s) => (filter === "open" ? !s.completed : s.completed))
-      );
+  const filteredEntries = data.entries.filter((entry) =>
+    filter === "all"
+      ? true
+      : entry.steps.some((s) => (filter === "open" ? !s.completed : s.completed))
+  );
+
+  const filterOptions: { value: FilterMode; label: string }[] = [
+    { value: "open", label: "Open" },
+    { value: "all", label: "All" },
+    { value: "done", label: "Done" },
+  ];
+
+  const pendingCount = data.pendingSteps;
+  const totalCount = data.totalSteps;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">Manual Steps</h3>
-        <span className="text-xs text-[var(--muted-foreground)]">
-          {data.completedSteps}/{data.totalSteps} completed
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.7rem",
+            color: pendingCount > 0 ? "var(--accent)" : "var(--text-muted)",
+          }}
+        >
+          {totalCount - pendingCount}/{totalCount} complete
         </span>
+
+        <div style={{ flex: 1 }} />
+
+        {/* Filter toggle */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            overflow: "hidden",
+          }}
+        >
+          {filterOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setFilter(opt.value)}
+              style={{
+                padding: "4px 10px",
+                fontSize: "0.68rem",
+                fontWeight: filter === opt.value ? 600 : 400,
+                fontFamily: "var(--font-body)",
+                letterSpacing: "0.03em",
+                color:
+                  filter === opt.value
+                    ? "var(--text-primary)"
+                    : "var(--text-secondary)",
+                background:
+                  filter === opt.value ? "var(--bg-elevated)" : "transparent",
+                border: "none",
+                borderRight: "1px solid var(--border-subtle)",
+                cursor: "pointer",
+                transition: "background 0.1s, color 0.1s",
+                lineHeight: 1,
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="w-full bg-[var(--muted)] rounded-full h-2">
+      {/* Progress bar */}
+      <div
+        style={{
+          height: "2px",
+          background: "var(--border-subtle)",
+          borderRadius: "1px",
+          overflow: "hidden",
+        }}
+      >
         <div
-          className="bg-emerald-500 h-2 rounded-full transition-all"
           style={{
-            width: `${data.totalSteps > 0 ? (data.completedSteps / data.totalSteps) * 100 : 0}%`,
+            height: "100%",
+            background: "var(--status-active-text)",
+            borderRadius: "1px",
+            width: `${totalCount > 0 ? ((totalCount - pendingCount) / totalCount) * 100 : 0}%`,
+            transition: "width 0.2s ease",
           }}
         />
       </div>
 
-      <div className="flex items-center gap-1 text-sm">
-        <span className="text-[var(--muted-foreground)] text-xs">Show:</span>
-        {(["all", "open", "done"] as const).map((f) => (
-          <button
-            key={f}
-            className={`px-2 py-0.5 rounded text-xs ${filter === f ? "bg-[var(--muted)] text-[var(--foreground)]" : "text-[var(--muted-foreground)]"}`}
-            onClick={() => setFilter(f)}
-          >
-            {f === "all" ? "All" : f === "open" ? "Open" : "Done"}
-          </button>
-        ))}
-      </div>
-
-      <div className="space-y-2">
+      {/* Entries */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
         {filteredEntries.length === 0 ? (
-          <p className="text-xs text-[var(--muted-foreground)] py-2">
-            No {filter === "all" ? "" : filter === "open" ? "open " : "completed "}steps.
+          <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", padding: "8px 0" }}>
+            No {filter === "open" ? "open " : filter === "done" ? "completed " : ""}steps.
           </p>
         ) : (
           filteredEntries.map((entry, i) => (
@@ -241,13 +425,14 @@ export function ManualStepsList({
               key={`${entry.featureSlug}-${i}`}
               entry={entry}
               slug={slug}
-              onUpdate={setData}
               filter={filter}
+              onUpdate={setData}
             />
           ))
         )}
       </div>
 
+      {/* Worktree sections */}
       {worktrees?.map((wt) =>
         wt.manualSteps && wt.manualSteps.totalSteps > 0 ? (
           <WorktreeSection
@@ -256,7 +441,7 @@ export function ManualStepsList({
             itemCount={wt.manualSteps.totalSteps}
             itemLabel={wt.manualSteps.totalSteps === 1 ? "step" : "steps"}
           >
-            <div className="space-y-2">
+            <div style={{ display: "flex", flexDirection: "column" }}>
               {wt.manualSteps.entries
                 .filter((entry) =>
                   filter === "all"
@@ -266,38 +451,101 @@ export function ManualStepsList({
                       )
                 )
                 .map((entry, i) => (
-                  <div key={i} className="rounded-lg border overflow-hidden">
-                    <div className="p-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-[var(--muted-foreground)] font-mono">
-                          {entry.date}
-                        </span>
-                        <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded font-mono">
+                  <div key={i} style={{ paddingBottom: "12px" }}>
+                    {/* Entry metadata */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        marginBottom: "6px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "0.65rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        {entry.date}
+                      </span>
+                      {entry.featureSlug && (
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "0.65rem",
+                            color: "var(--text-secondary)",
+                            background: "var(--bg-elevated)",
+                            border: "1px solid var(--border-subtle)",
+                            borderRadius: "3px",
+                            padding: "1px 4px",
+                          }}
+                        >
                           {entry.featureSlug}
                         </span>
-                      </div>
-                      <p className="text-sm font-medium truncate">{entry.title}</p>
+                      )}
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 500,
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        {entry.title}
+                      </span>
                     </div>
-                    <div className="border-t px-3 py-2 space-y-1">
+                    {/* Steps (read-only — worktree steps can't be toggled from parent context) */}
+                    <div style={{ paddingLeft: "4px", display: "flex", flexDirection: "column", gap: "2px" }}>
                       {entry.steps
-                        .filter((step) => {
-                          if (filter === "open") return !step.completed;
-                          if (filter === "done") return step.completed;
+                        .filter((s) => {
+                          if (filter === "open") return !s.completed;
+                          if (filter === "done") return s.completed;
                           return true;
                         })
                         .map((step, j) => (
-                          <div key={j} className="flex items-start gap-2 text-sm px-1 py-0.5">
+                          <div
+                            key={j}
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              gap: "7px",
+                              padding: "2px 5px",
+                            }}
+                          >
                             {step.completed ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                              <CheckCircle2
+                                style={{
+                                  width: "13px",
+                                  height: "13px",
+                                  color: "var(--status-active-text)",
+                                  flexShrink: 0,
+                                  marginTop: "2px",
+                                }}
+                              />
                             ) : (
-                              <Circle className="h-4 w-4 text-[var(--muted-foreground)] mt-0.5 shrink-0" />
+                              <Circle
+                                style={{
+                                  width: "13px",
+                                  height: "13px",
+                                  color: "var(--text-muted)",
+                                  flexShrink: 0,
+                                  marginTop: "2px",
+                                }}
+                              />
                             )}
                             <span
-                              className={
-                                step.completed
-                                  ? "line-through text-[var(--muted-foreground)]"
-                                  : ""
-                              }
+                              style={{
+                                fontSize: "0.78rem",
+                                lineHeight: 1.45,
+                                color: step.completed
+                                  ? "var(--text-muted)"
+                                  : "var(--text-primary)",
+                                textDecoration: step.completed
+                                  ? "line-through"
+                                  : "none",
+                              }}
                             >
                               {step.text}
                             </span>

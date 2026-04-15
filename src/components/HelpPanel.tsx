@@ -2,12 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useHelp } from "./HelpProvider";
-import { Button } from "./ui/button";
-import { X, ExternalLink, ChevronLeft } from "lucide-react";
+import { X, ExternalLink, ChevronLeft, BookOpen } from "lucide-react";
 import { helpSlugs, type HelpSlug } from "@/lib/help-mapping";
-import { cn } from "@/lib/utils";
 
-/** Human-readable titles derived from slugs */
 const slugTitles: Record<HelpSlug, string> = {
   "getting-started": "Getting Started",
   "search-and-filter": "Search, Filter & Sort",
@@ -22,7 +19,49 @@ const slugTitles: Record<HelpSlug, string> = {
   sessions: "Sessions Browser",
   insights: "Insights",
   usage: "Usage Dashboard",
+  config: "Configuration",
 };
+
+const iconBtnBase: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "28px",
+  height: "28px",
+  border: "none",
+  background: "transparent",
+  borderRadius: "var(--radius)",
+  color: "var(--text-muted)",
+  cursor: "pointer",
+  flexShrink: 0,
+};
+
+function IconBtn({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      style={{
+        ...iconBtnBase,
+        color: hovered ? "var(--text-secondary)" : "var(--text-muted)",
+        background: hovered ? "var(--bg-elevated)" : "transparent",
+      }}
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {children}
+    </button>
+  );
+}
 
 export function HelpPanel() {
   const { activeSlug, openHelp, closeHelp } = useHelp();
@@ -31,7 +70,6 @@ export function HelpPanel() {
   const [showToc, setShowToc] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Fetch markdown when slug changes
   useEffect(() => {
     if (!activeSlug) {
       setContent("");
@@ -47,7 +85,6 @@ export function HelpPanel() {
       .finally(() => setLoading(false));
   }, [activeSlug]);
 
-  // Close on Escape
   useEffect(() => {
     if (!activeSlug) return;
     const handler = (e: KeyboardEvent) => {
@@ -57,7 +94,6 @@ export function HelpPanel() {
     return () => window.removeEventListener("keydown", handler);
   }, [activeSlug, closeHelp]);
 
-  // Click outside to close
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
@@ -67,117 +103,240 @@ export function HelpPanel() {
     [closeHelp]
   );
 
-  const popOut = () => {
-    if (activeSlug) {
-      window.open(`/help/${activeSlug}.md`, "_blank");
-    }
-  };
-
   if (!activeSlug) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/40"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 50,
+        background: "oklch(0 0 0 / 0.55)",
+        backdropFilter: "blur(1px)",
+      }}
       onClick={handleBackdropClick}
     >
       <div
         ref={panelRef}
-        className={cn(
-          "fixed top-0 right-0 h-full w-full sm:w-[480px] bg-[var(--background)] border-l border-[var(--border)]",
-          "flex flex-col shadow-2xl",
-          "animate-slide-in-right"
-        )}
+        className="animate-slide-in-right"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          height: "100%",
+          width: "100%",
+          maxWidth: "460px",
+          background: "var(--bg-surface)",
+          borderLeft: "1px solid var(--border-default)",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "-8px 0 40px oklch(0 0 0 / 0.4)",
+        }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2 min-w-0">
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 14px",
+          borderBottom: "1px solid var(--border-subtle)",
+          background: "var(--bg-base)",
+          flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
             {showToc ? (
-              <h2 className="text-sm font-semibold truncate">Help</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <BookOpen style={{ width: "13px", height: "13px", color: "var(--text-muted)" }} />
+                <span style={{
+                  fontSize: "0.65rem",
+                  fontFamily: "var(--font-mono)",
+                  fontWeight: 600,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  color: "var(--text-muted)",
+                }}>
+                  Help Index
+                </span>
+              </div>
             ) : (
               <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-7 p-0 shrink-0"
-                  onClick={() => setShowToc(true)}
-                  title="All help topics"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <h2 className="text-sm font-semibold truncate">
+                <IconBtn onClick={() => setShowToc(true)} title="All help topics">
+                  <ChevronLeft style={{ width: "14px", height: "14px" }} />
+                </IconBtn>
+                <span style={{
+                  fontSize: "0.72rem",
+                  fontFamily: "var(--font-mono)",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  letterSpacing: "0.04em",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
                   {slugTitles[activeSlug]}
-                </h2>
+                </span>
               </>
             )}
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={popOut}
-              title="Open in new tab"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={closeHelp}
-              title="Close (Esc)"
-            >
-              <X className="h-4 w-4" />
-            </Button>
+          <div style={{ display: "flex", alignItems: "center", gap: "2px", flexShrink: 0 }}>
+            <IconBtn onClick={() => window.open(`/help/${activeSlug}.md`, "_blank")} title="Open in new tab">
+              <ExternalLink style={{ width: "12px", height: "12px" }} />
+            </IconBtn>
+            <IconBtn onClick={closeHelp} title="Close (Esc)">
+              <X style={{ width: "14px", height: "14px" }} />
+            </IconBtn>
           </div>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto">
+        <div style={{ flex: 1, overflowY: "auto" }}>
           {showToc ? (
-            <nav className="p-4 space-y-1">
-              {helpSlugs.map((slug) => (
-                <button
-                  key={slug}
-                  onClick={() => {
-                    openHelp(slug);
-                    setShowToc(false);
-                  }}
-                  className={cn(
-                    "w-full text-left px-3 py-2 rounded-md text-sm transition-colors",
-                    slug === activeSlug
-                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
-                      : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]"
-                  )}
-                >
-                  {slugTitles[slug]}
-                </button>
-              ))}
+            <nav style={{ padding: "12px 0" }}>
+              {helpSlugs.map((slug, idx) => {
+                const active = slug === activeSlug;
+                return (
+                  <TocItem
+                    key={slug}
+                    idx={idx}
+                    slug={slug}
+                    active={active}
+                    label={slugTitles[slug]}
+                    onClick={() => {
+                      openHelp(slug);
+                      setShowToc(false);
+                    }}
+                  />
+                );
+              })}
             </nav>
           ) : loading ? (
-            <div className="p-6 space-y-3">
-              <div className="h-6 w-48 bg-[var(--muted)] rounded animate-pulse" />
-              <div className="h-4 w-full bg-[var(--muted)] rounded animate-pulse" />
-              <div className="h-4 w-3/4 bg-[var(--muted)] rounded animate-pulse" />
-              <div className="h-4 w-5/6 bg-[var(--muted)] rounded animate-pulse" />
-            </div>
+            <LoadingSkeleton />
           ) : (
-            <article className="p-6 help-content">
+            <article style={{ padding: "24px 20px" }}>
               <MarkdownRenderer content={content} onNavigate={openHelp} />
             </article>
           )}
         </div>
+
+        {/* Footer */}
+        {!showToc && !loading && (
+          <div style={{
+            padding: "8px 16px",
+            borderTop: "1px solid var(--border-subtle)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexShrink: 0,
+          }}>
+            <span style={{ fontSize: "0.62rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+              <Kbd>Esc</Kbd> to close
+            </span>
+            <span style={{ fontSize: "0.62rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+              <Kbd>?</Kbd> toggles help
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-/**
- * Lightweight markdown-to-React renderer for help docs.
- *
- * Content is fetched exclusively from our own static files in public/help/,
- * never from user input.
- */
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd style={{
+      padding: "1px 5px",
+      background: "var(--bg-elevated)",
+      border: "1px solid var(--border-default)",
+      borderRadius: "3px",
+      fontSize: "0.6rem",
+      color: "var(--text-secondary)",
+      fontFamily: "var(--font-mono)",
+      marginRight: "4px",
+    }}>
+      {children}
+    </kbd>
+  );
+}
+
+function TocItem({
+  idx,
+  slug,
+  active,
+  label,
+  onClick,
+}: {
+  idx: number;
+  slug: string;
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      key={slug}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        width: "100%",
+        padding: "8px 16px",
+        background: active || hovered ? "var(--bg-elevated)" : "transparent",
+        border: "none",
+        cursor: "pointer",
+        textAlign: "left",
+      }}
+    >
+      <span style={{
+        fontSize: "0.6rem",
+        fontFamily: "var(--font-mono)",
+        color: active ? "var(--accent)" : "var(--text-muted)",
+        width: "20px",
+        textAlign: "right",
+        flexShrink: 0,
+      }}>
+        {String(idx + 1).padStart(2, "0")}
+      </span>
+      <span style={{
+        fontSize: "0.78rem",
+        color: active ? "var(--text-primary)" : "var(--text-secondary)",
+        fontWeight: active ? 500 : 400,
+      }}>
+        {label}
+      </span>
+      {active && (
+        <div style={{
+          marginLeft: "auto",
+          width: "5px",
+          height: "5px",
+          borderRadius: "50%",
+          background: "var(--accent)",
+          flexShrink: 0,
+        }} />
+      )}
+    </button>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "10px" }}>
+      {[48, 100, 80, 90, 60].map((w, i) => (
+        <div key={i} style={{
+          height: i === 0 ? "18px" : "12px",
+          width: `${w}%`,
+          background: "var(--bg-elevated)",
+          borderRadius: "3px",
+          opacity: 0.7,
+        }} />
+      ))}
+    </div>
+  );
+}
+
 function MarkdownRenderer({
   content,
   onNavigate,
@@ -191,7 +350,6 @@ function MarkdownRenderer({
     const target = e.target as HTMLElement;
     const anchor = target.closest("a");
     if (!anchor) return;
-
     const href = anchor.getAttribute("data-href") ?? "";
     const mdMatch = href.match(/^([a-z-]+)\.md$/);
     if (mdMatch && helpSlugs.includes(mdMatch[1] as HelpSlug)) {
@@ -200,7 +358,11 @@ function MarkdownRenderer({
     }
   };
 
-  return <div className="help-markdown" onClick={handleClick}>{elements}</div>;
+  return (
+    <div onClick={handleClick} style={{ display: "flex", flexDirection: "column" }}>
+      {elements}
+    </div>
+  );
 }
 
 function parseMarkdown(md: string): React.ReactNode[] {
@@ -212,12 +374,21 @@ function parseMarkdown(md: string): React.ReactNode[] {
   let inList = false;
   let listItems: string[] = [];
   let paragraphLines: string[] = [];
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+  let codeLang = "";
   let key = 0;
 
   const flushParagraph = () => {
     if (paragraphLines.length > 0) {
       elements.push(
-        <p key={key++} className="text-sm leading-relaxed mb-3 text-[var(--foreground)]">
+        <p key={key++} style={{
+          fontSize: "0.82rem",
+          lineHeight: 1.65,
+          color: "var(--text-secondary)",
+          marginBottom: "12px",
+          marginTop: 0,
+        }}>
           {inlineToReact(paragraphLines.join(" "))}
         </p>
       );
@@ -228,9 +399,21 @@ function parseMarkdown(md: string): React.ReactNode[] {
   const flushList = () => {
     if (listItems.length > 0) {
       elements.push(
-        <ul key={key++} className="list-disc list-inside space-y-1 my-2 text-sm">
+        <ul key={key++} style={{
+          listStyle: "none",
+          padding: 0,
+          margin: "0 0 12px 0",
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+        }}>
           {listItems.map((item, i) => (
-            <li key={i}>{inlineToReact(item)}</li>
+            <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+              <span style={{ color: "var(--accent)", fontSize: "0.72rem", flexShrink: 0, marginTop: "3px", fontFamily: "var(--font-mono)" }}>—</span>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.55 }}>
+                {inlineToReact(item)}
+              </span>
+            </li>
           ))}
         </ul>
       );
@@ -242,12 +425,22 @@ function parseMarkdown(md: string): React.ReactNode[] {
   const flushTable = () => {
     if (tableHeaders.length > 0) {
       elements.push(
-        <div key={key++} className="overflow-x-auto my-3">
-          <table className="w-full text-sm">
+        <div key={key++} style={{ overflowX: "auto", marginBottom: "16px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
             <thead>
               <tr>
                 {tableHeaders.map((h, i) => (
-                  <th key={i} className="text-left px-3 py-2 border-b border-[var(--border)] text-[var(--muted-foreground)] font-medium">
+                  <th key={i} style={{
+                    textAlign: "left",
+                    padding: "6px 10px",
+                    borderBottom: "1px solid var(--border-default)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.6rem",
+                    fontWeight: 600,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: "var(--text-muted)",
+                  }}>
                     {inlineToReact(h)}
                   </th>
                 ))}
@@ -257,7 +450,12 @@ function parseMarkdown(md: string): React.ReactNode[] {
               {tableRows.map((row, ri) => (
                 <tr key={ri}>
                   {row.map((cell, ci) => (
-                    <td key={ci} className="px-3 py-2 border-b border-[var(--border)]">
+                    <td key={ci} style={{
+                      padding: "6px 10px",
+                      color: "var(--text-secondary)",
+                      borderBottom: ri < tableRows.length - 1 ? "1px solid var(--border-subtle)" : "none",
+                      verticalAlign: "top",
+                    }}>
                       {inlineToReact(cell)}
                     </td>
                   ))}
@@ -273,8 +471,72 @@ function parseMarkdown(md: string): React.ReactNode[] {
     }
   };
 
+  const flushCode = () => {
+    if (codeLines.length > 0) {
+      elements.push(
+        <div key={key++} style={{ marginBottom: "14px" }}>
+          {codeLang && (
+            <div style={{
+              padding: "4px 10px",
+              background: "var(--bg-base)",
+              border: "1px solid var(--border-subtle)",
+              borderBottom: "none",
+              borderRadius: "var(--radius) var(--radius) 0 0",
+              fontSize: "0.6rem",
+              fontFamily: "var(--font-mono)",
+              color: "var(--text-muted)",
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}>
+              {codeLang}
+            </div>
+          )}
+          <pre style={{
+            padding: "12px 14px",
+            background: "var(--bg-base)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: codeLang ? "0 0 var(--radius) var(--radius)" : "var(--radius)",
+            overflow: "auto",
+            margin: 0,
+          }}>
+            <code style={{
+              fontSize: "0.75rem",
+              fontFamily: "var(--font-mono)",
+              color: "var(--text-secondary)",
+              lineHeight: 1.6,
+            }}>
+              {codeLines.join("\n")}
+            </code>
+          </pre>
+        </div>
+      );
+      codeLines = [];
+      codeLang = "";
+    }
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    // Fenced code block
+    const fenceMatch = line.match(/^```(\w*)$/);
+    if (fenceMatch) {
+      if (!inCodeBlock) {
+        flushParagraph();
+        flushList();
+        flushTable();
+        inCodeBlock = true;
+        codeLang = fenceMatch[1];
+      } else {
+        inCodeBlock = false;
+        flushCode();
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
 
     // Headings
     const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
@@ -283,14 +545,32 @@ function parseMarkdown(md: string): React.ReactNode[] {
       flushList();
       flushTable();
       const level = headingMatch[1].length;
-      const cls =
-        level === 1
-          ? "text-xl font-bold mb-4"
-          : level === 2
-            ? "text-base font-semibold mt-6 mb-3"
-            : "text-sm font-semibold mt-4 mb-2";
       const Tag = `h${level}` as keyof React.JSX.IntrinsicElements;
-      elements.push(<Tag key={key++} className={cls}>{inlineToReact(headingMatch[2])}</Tag>);
+
+      if (level === 2) {
+        elements.push(
+          <div key={key++} style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px", marginTop: "22px" }}>
+            <span style={{
+              fontSize: "0.62rem",
+              fontFamily: "var(--font-mono)",
+              fontWeight: 600,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "var(--text-muted)",
+              whiteSpace: "nowrap",
+            }}>
+              {inlineToReact(headingMatch[2])}
+            </span>
+            <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+          </div>
+        );
+      } else {
+        const headingStyles: React.CSSProperties =
+          level === 1
+            ? { fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px", marginTop: 0, lineHeight: 1.3 }
+            : { fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", marginTop: "16px" };
+        elements.push(<Tag key={key++} style={headingStyles}>{inlineToReact(headingMatch[2])}</Tag>);
+      }
       continue;
     }
 
@@ -324,24 +604,22 @@ function parseMarkdown(md: string): React.ReactNode[] {
       flushList();
     }
 
-    // Empty line
     if (line.trim() === "") {
       flushParagraph();
       continue;
     }
 
-    // Paragraph text
     paragraphLines.push(line);
   }
 
   flushParagraph();
   flushList();
   flushTable();
+  if (inCodeBlock) flushCode();
 
   return elements;
 }
 
-/** Convert inline markdown to React nodes (bold, code, links) */
 function inlineToReact(text: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   const regex = /(\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
@@ -356,26 +634,32 @@ function inlineToReact(text: string): React.ReactNode {
 
     if (match[2]) {
       parts.push(
-        <strong key={partKey++} className="font-semibold text-[var(--foreground)]">
+        <strong key={partKey++} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
           {match[2]}
         </strong>
       );
     } else if (match[3]) {
       parts.push(
-        <code
-          key={partKey++}
-          className="px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--foreground)] text-xs font-mono"
-        >
+        <code key={partKey++} style={{
+          padding: "1px 5px",
+          borderRadius: "3px",
+          background: "var(--bg-elevated)",
+          color: "var(--accent)",
+          fontSize: "0.78em",
+          fontFamily: "var(--font-mono)",
+        }}>
           {match[3]}
         </code>
       );
     } else if (match[4] && match[5]) {
       parts.push(
-        <a
-          key={partKey++}
-          data-href={match[5]}
-          className="text-blue-400 hover:underline cursor-pointer"
-        >
+        <a key={partKey++} data-href={match[5]} style={{
+          color: "var(--accent)",
+          textDecoration: "underline",
+          textDecorationColor: "var(--accent-border)",
+          textUnderlineOffset: "2px",
+          cursor: "pointer",
+        }}>
           {match[4]}
         </a>
       );

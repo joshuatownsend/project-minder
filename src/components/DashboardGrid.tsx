@@ -1,16 +1,12 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { ProjectData, ProjectStatus, PortConflict } from "@/lib/types";
+import { ProjectData, ProjectStatus } from "@/lib/types";
 import { ProjectCard } from "./ProjectCard";
-import { PortConflictBanner } from "./PortConflictBanner";
 import { ManageHiddenProjects } from "./ManageHiddenProjects";
-import { Input } from "./ui/input";
-import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
-import { Search, RefreshCw, SortAsc, Lightbulb } from "lucide-react";
 import { Skeleton } from "./ui/skeleton";
 import { QuickAddTodosModal } from "./QuickAddTodosModal";
+import { Search, RefreshCw, Plus } from "lucide-react";
 
 type SortOption = "activity" | "name" | "claude";
 
@@ -21,7 +17,6 @@ interface DirtyStatusOverride {
 
 interface DashboardGridProps {
   projects: ProjectData[];
-  portConflicts: PortConflict[];
   hiddenCount: number;
   loading: boolean;
   onRescan: () => void;
@@ -31,21 +26,30 @@ interface DashboardGridProps {
 
 export function DashboardGrid({
   projects,
-  portConflicts,
   hiddenCount,
   loading,
   onRescan,
   onHide,
   gitDirtyOverrides,
 }: DashboardGridProps) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch]           = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
-  const [sortBy, setSortBy] = useState<SortOption>("activity");
-  const [showHidden, setShowHidden] = useState(false);
+  const [sortBy, setSortBy]           = useState<SortOption>("activity");
+  const [showHidden, setShowHidden]   = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
+  // Apply dashboard defaults from config on first mount
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg.defaultSort) setSortBy(cfg.defaultSort as SortOption);
+        if (cfg.defaultStatusFilter) setStatusFilter(cfg.defaultStatusFilter as ProjectStatus | "all");
+      })
+      .catch(() => {}); // non-fatal — fallback to built-in defaults
+  }, []);
+
   const filtered = useMemo(() => {
-    // Apply git dirty status overrides from background cache
     let result = gitDirtyOverrides
       ? projects.map((p) => {
           const override = gitDirtyOverrides[p.slug];
@@ -55,6 +59,13 @@ export function DashboardGrid({
           return p;
         })
       : projects;
+
+    // Archived projects are hidden in the default "all" view
+    if (statusFilter === "all") {
+      result = result.filter((p) => p.status !== "archived");
+    } else {
+      result = result.filter((p) => p.status === statusFilter);
+    }
 
     if (search) {
       const q = search.toLowerCase();
@@ -67,21 +78,13 @@ export function DashboardGrid({
       );
     }
 
-    if (statusFilter !== "all") {
-      result = result.filter((p) => p.status === statusFilter);
-    }
-
     result = [...result].sort((a, b) => {
       switch (sortBy) {
         case "name":
           return a.name.localeCompare(b.name);
         case "claude": {
-          const ta = a.claude?.lastSessionDate
-            ? new Date(a.claude.lastSessionDate).getTime()
-            : 0;
-          const tb = b.claude?.lastSessionDate
-            ? new Date(b.claude.lastSessionDate).getTime()
-            : 0;
+          const ta = a.claude?.lastSessionDate ? new Date(a.claude.lastSessionDate).getTime() : 0;
+          const tb = b.claude?.lastSessionDate ? new Date(b.claude.lastSessionDate).getTime() : 0;
           return tb - ta;
         }
         case "activity":
@@ -97,138 +100,316 @@ export function DashboardGrid({
   }, [projects, search, statusFilter, sortBy, gitDirtyOverrides]);
 
   // Keyboard shortcuts
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      const active = document.activeElement;
-      const inField =
-        active?.tagName === "INPUT" || active?.tagName === "TEXTAREA";
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const active = document.activeElement;
+    const inField = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA";
 
-      if (e.key === "/" && !e.ctrlKey && !e.metaKey) {
-        if (!inField) {
-          e.preventDefault();
-          document.getElementById("search-input")?.focus();
-        }
-      }
-      // Shift+T → Quick Add TODOs (don't trigger while typing in a field)
-      if (
-        e.key === "T" &&
-        e.shiftKey &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !inField
-      ) {
-        e.preventDefault();
-        setQuickAddOpen(true);
-      }
-    },
-    []
-  );
+    if (e.key === "/" && !e.ctrlKey && !e.metaKey && !inField) {
+      e.preventDefault();
+      document.getElementById("search-input")?.focus();
+    }
+    if (e.key === "T" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !inField) {
+      e.preventDefault();
+      setQuickAddOpen(true);
+    }
+  }, []);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const sortOptions: { value: SortOption; label: string }[] = [
-    { value: "activity", label: "Last Activity" },
-    { value: "claude", label: "Last Claude Session" },
-    { value: "name", label: "Name" },
+  const statusOptions: { value: ProjectStatus | "all"; label: string }[] = [
+    { value: "all",      label: "All"      },
+    { value: "active",   label: "Active"   },
+    { value: "paused",   label: "Paused"   },
+    { value: "archived", label: "Archived" },
   ];
 
-  return (
-    <div className="space-y-6">
-      <PortConflictBanner conflicts={portConflicts} />
+  const sortOptions: { value: SortOption; label: string }[] = [
+    { value: "activity", label: "Recent"  },
+    { value: "claude",   label: "Claude"  },
+    { value: "name",     label: "A–Z"     },
+  ];
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--muted-foreground)]" />
-          <Input
+  const archivedCount = projects.filter((p) => p.status === "archived").length;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* ── Toolbar ──────────────────────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+        }}
+      >
+        {/* Search */}
+        <div style={{ position: "relative", flex: "1 1 200px", minWidth: "160px" }}>
+          <Search
+            style={{
+              position: "absolute",
+              left: "9px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: "13px",
+              height: "13px",
+              color: "var(--text-muted)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
             id="search-input"
-            placeholder="Search projects... (press /)"
+            type="text"
+            placeholder="Search… (/)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
+            style={{
+              width: "100%",
+              height: "32px",
+              paddingLeft: "30px",
+              paddingRight: "10px",
+              fontSize: "0.78rem",
+              fontFamily: "var(--font-body)",
+              color: "var(--text-primary)",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-default)",
+              borderRadius: "var(--radius)",
+              outline: "none",
+            }}
           />
         </div>
 
-        <div className="flex gap-2">
-          <div className="flex gap-1">
-            {(["all", "active", "paused", "archived"] as const).map((s) => (
-              <Button
-                key={s}
-                variant={statusFilter === s ? "default" : "outline"}
-                size="sm"
-                onClick={() => setStatusFilter(s)}
-              >
-                {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
-              </Button>
-            ))}
-          </div>
+        {/* Divider */}
+        <div style={{ width: "1px", height: "20px", background: "var(--border-subtle)", flexShrink: 0 }} />
 
-          <div className="flex gap-1">
-            {sortOptions.map((opt) => (
-              <Button
-                key={opt.value}
-                variant={sortBy === opt.value ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => setSortBy(opt.value)}
-                title={`Sort by ${opt.label}`}
-              >
-                <SortAsc className="h-3 w-3 mr-1" />
-                {opt.label}
-              </Button>
-            ))}
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setQuickAddOpen(true)}
-            title="Quick Add TODOs (Shift+T)"
-          >
-            <Lightbulb className="h-4 w-4 mr-1" />
-            Quick Add
-          </Button>
-
-          <Button variant="outline" size="sm" onClick={onRescan} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-            Rescan
-          </Button>
+        {/* Status filters */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            overflow: "hidden",
+            flexShrink: 0,
+          }}
+        >
+          {statusOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setStatusFilter(opt.value)}
+              style={{
+                padding: "5px 11px",
+                fontSize: "0.72rem",
+                fontWeight: statusFilter === opt.value ? 600 : 400,
+                fontFamily: "var(--font-body)",
+                letterSpacing: "0.03em",
+                color: statusFilter === opt.value
+                  ? "var(--text-primary)"
+                  : "var(--text-secondary)",
+                background: statusFilter === opt.value
+                  ? "var(--bg-elevated)"
+                  : "transparent",
+                border: "none",
+                borderRight: "1px solid var(--border-subtle)",
+                cursor: "pointer",
+                transition: "background 0.1s, color 0.1s",
+                lineHeight: 1,
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
+
+        {/* Sort */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            overflow: "hidden",
+            flexShrink: 0,
+          }}
+        >
+          {sortOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setSortBy(opt.value)}
+              style={{
+                padding: "5px 11px",
+                fontSize: "0.72rem",
+                fontWeight: sortBy === opt.value ? 600 : 400,
+                fontFamily: "var(--font-body)",
+                letterSpacing: "0.03em",
+                color: sortBy === opt.value
+                  ? "var(--text-primary)"
+                  : "var(--text-secondary)",
+                background: sortBy === opt.value
+                  ? "var(--bg-elevated)"
+                  : "transparent",
+                border: "none",
+                borderRight: "1px solid var(--border-subtle)",
+                cursor: "pointer",
+                transition: "background 0.1s, color 0.1s",
+                lineHeight: 1,
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Quick Add */}
+        <button
+          onClick={() => setQuickAddOpen(true)}
+          title="Quick Add TODOs (Shift+T)"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            padding: "5px 11px",
+            fontSize: "0.72rem",
+            fontFamily: "var(--font-body)",
+            letterSpacing: "0.03em",
+            color: "var(--text-secondary)",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            cursor: "pointer",
+            transition: "color 0.1s, border-color 0.1s",
+            flexShrink: 0,
+          }}
+        >
+          <Plus style={{ width: "11px", height: "11px" }} />
+          Quick Add
+        </button>
+
+        {/* Rescan */}
+        <button
+          onClick={onRescan}
+          disabled={loading}
+          title="Rescan projects"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            padding: "5px 11px",
+            fontSize: "0.72rem",
+            fontFamily: "var(--font-body)",
+            letterSpacing: "0.03em",
+            color: "var(--text-secondary)",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            cursor: loading ? "not-allowed" : "pointer",
+            opacity: loading ? 0.5 : 1,
+            transition: "color 0.1s, border-color 0.1s",
+            flexShrink: 0,
+          }}
+        >
+          <RefreshCw
+            style={{
+              width: "11px",
+              height: "11px",
+              animation: loading ? "spin 1s linear infinite" : "none",
+            }}
+          />
+          Rescan
+        </button>
       </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-[var(--muted-foreground)]">
+      {/* ── Meta row: count + hidden ──────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          fontSize: "0.72rem",
+          color: "var(--text-muted)",
+          marginTop: "-8px",
+        }}
+      >
+        <span style={{ fontFamily: "var(--font-mono)" }}>
           {filtered.length} project{filtered.length !== 1 ? "s" : ""}
-          {hiddenCount > 0 && (
-            <>
-              {" "}
-              <button
-                onClick={() => setShowHidden(true)}
-                className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2 transition-colors"
-              >
-                ({hiddenCount} hidden)
-              </button>
-            </>
-          )}
-        </p>
+        </span>
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setShowHidden(true)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              fontSize: "0.72rem",
+              fontFamily: "var(--font-body)",
+              cursor: "pointer",
+              padding: 0,
+              textDecoration: "underline",
+              textUnderlineOffset: "2px",
+            }}
+          >
+            {hiddenCount} hidden
+          </button>
+        )}
+        {statusFilter === "all" && archivedCount > 0 && (
+          <button
+            onClick={() => setStatusFilter("archived")}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              fontSize: "0.72rem",
+              fontFamily: "var(--font-body)",
+              cursor: "pointer",
+              padding: 0,
+              textDecoration: "underline",
+              textUnderlineOffset: "2px",
+            }}
+          >
+            {archivedCount} archived
+          </button>
+        )}
       </div>
 
+      {/* ── Grid ─────────────────────────────────────────────────────────── */}
       {loading && projects.length === 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-48 rounded-lg" />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: "14px",
+          }}
+        >
+          {Array.from({ length: 12 }).map((_, i) => (
+            <Skeleton key={i} className="h-36 rounded" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: "14px",
+          }}
+        >
           {filtered.map((project) => (
             <ProjectCard key={project.slug} project={project} onHide={onHide} />
           ))}
           {filtered.length === 0 && (
-            <p className="col-span-full text-center text-[var(--muted-foreground)] py-12">
-              No projects found.
+            <p
+              style={{
+                gridColumn: "1 / -1",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                padding: "48px 0",
+                fontSize: "0.8rem",
+              }}
+            >
+              No projects match.
             </p>
           )}
         </div>

@@ -3,10 +3,6 @@
 import { useState, useMemo } from "react";
 import { useAllSessions } from "@/hooks/useSessions";
 import { SessionSummary } from "@/lib/types";
-import { Input } from "./ui/input";
-import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
-import { Skeleton } from "./ui/skeleton";
 import {
   Search,
   Clock,
@@ -15,13 +11,12 @@ import {
   GitBranch,
   Bot,
   Wrench,
-  SortAsc,
   AlertCircle,
-  FolderOpen,
   ChevronDown,
   ChevronRight,
   DollarSign,
-  Layers,
+  Terminal,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -29,12 +24,11 @@ type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
 function formatDuration(ms?: number): string {
   if (!ms) return "—";
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 function formatTokens(n: number): string {
@@ -64,9 +58,115 @@ function formatDate(iso?: string): string {
   return d.toLocaleDateString();
 }
 
-// ─── Session Card ────────────────────────────────────────────────────
+// ── Resume button ─────────────────────────────────────────────────────────────
+function ResumeButton({ sessionId }: { sessionId: string }) {
+  const [copied, setCopied] = useState(false);
 
-function SessionCard({
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(`claude --resume ${sessionId}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={copied ? "Copied!" : `Copy: claude --resume ${sessionId}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        padding: "2px 7px",
+        fontSize: "0.65rem",
+        fontFamily: "var(--font-body)",
+        letterSpacing: "0.03em",
+        color: copied ? "var(--status-active-text)" : "var(--text-muted)",
+        background: copied ? "var(--status-active-bg)" : "transparent",
+        border: `1px solid ${copied ? "var(--status-active-border)" : "var(--border-subtle)"}`,
+        borderRadius: "3px",
+        cursor: "pointer",
+        flexShrink: 0,
+        transition: "color 0.15s, background 0.15s, border-color 0.15s",
+      }}
+    >
+      {copied
+        ? <><Check style={{ width: "9px", height: "9px" }} />Copied</>
+        : <><Terminal style={{ width: "9px", height: "9px" }} />Resume</>}
+    </button>
+  );
+}
+
+// ── One-shot rate badge ───────────────────────────────────────────────────────
+function OneShotBadge({ rate }: { rate: number }) {
+  const color =
+    rate >= 0.8
+      ? "var(--status-active-text)"
+      : rate >= 0.5
+      ? "var(--accent)"
+      : "var(--status-error-text)";
+  const bg =
+    rate >= 0.8
+      ? "var(--status-active-bg)"
+      : rate >= 0.5
+      ? "var(--accent-bg)"
+      : "var(--status-error-bg)";
+  const border =
+    rate >= 0.8
+      ? "var(--status-active-border)"
+      : rate >= 0.5
+      ? "var(--accent-border)"
+      : "var(--status-error-border)";
+
+  return (
+    <span
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.65rem",
+        color,
+        background: bg,
+        border: `1px solid ${border}`,
+        borderRadius: "3px",
+        padding: "1px 5px",
+        flexShrink: 0,
+      }}
+    >
+      {(rate * 100).toFixed(0)}% 1-shot
+    </span>
+  );
+}
+
+// ── Active session pulse dot ──────────────────────────────────────────────────
+function ActiveDot() {
+  return (
+    <span style={{ position: "relative", display: "inline-flex", width: "8px", height: "8px", flexShrink: 0 }}>
+      <span
+        style={{
+          position: "absolute",
+          inset: 0,
+          borderRadius: "50%",
+          background: "var(--status-active-text)",
+          opacity: 0.5,
+          animation: "ping 1s cubic-bezier(0,0,0.2,1) infinite",
+        }}
+      />
+      <span
+        style={{
+          position: "relative",
+          borderRadius: "50%",
+          width: "8px",
+          height: "8px",
+          background: "var(--status-active-text)",
+        }}
+      />
+    </span>
+  );
+}
+
+// ── Session row ───────────────────────────────────────────────────────────────
+function SessionRow({
   session,
   showProject = true,
 }: {
@@ -76,82 +176,155 @@ function SessionCard({
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
 
   return (
-    <Link href={`/sessions/${session.sessionId}`}>
-      <div className="rounded-lg border bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            {session.isActive && (
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              </span>
-            )}
-            {showProject && (
-              <span className="text-xs text-[var(--muted-foreground)] font-mono truncate">
-                {session.projectName}
-              </span>
-            )}
-          </div>
-          <span className="text-xs text-[var(--muted-foreground)] shrink-0">
+    <Link
+      href={`/sessions/${session.sessionId}`}
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div
+        style={{
+          padding: "10px 6px",
+          borderBottom: "1px solid var(--border-subtle)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "5px",
+          transition: "background 0.1s",
+          borderRadius: "3px",
+          cursor: "pointer",
+        }}
+        onMouseEnter={(e) =>
+          ((e.currentTarget as HTMLElement).style.background = "var(--bg-elevated)")
+        }
+        onMouseLeave={(e) =>
+          ((e.currentTarget as HTMLElement).style.background = "transparent")
+        }
+      >
+        {/* Top line: project (if flat) + prompt + date */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+          {showProject && (
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.65rem",
+                color: "var(--text-secondary)",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                padding: "1px 5px",
+                flexShrink: 0,
+                marginTop: "1px",
+              }}
+            >
+              {session.projectName}
+            </span>
+          )}
+          {session.isActive && <ActiveDot />}
+          {session.recaps && session.recaps.length > 0 && (
+            <span style={{
+              fontSize: "0.6rem", fontFamily: "var(--font-mono)",
+              fontWeight: 600, letterSpacing: "0.04em",
+              color: "var(--accent)", background: "var(--accent-bg)",
+              border: "1px solid var(--accent-border)",
+              borderRadius: "3px", padding: "1px 5px",
+              flexShrink: 0,
+            }}>
+              recap
+            </span>
+          )}
+          <span
+            style={{
+              flex: 1,
+              fontSize: "0.8rem",
+              color: "var(--text-primary)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {session.recaps && session.recaps.length > 0
+              ? session.recaps[session.recaps.length - 1].content
+              : session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+                <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
+              )}
+          </span>
+          <ResumeButton sessionId={session.sessionId} />
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.65rem",
+              color: "var(--text-muted)",
+              flexShrink: 0,
+            }}
+          >
             {formatDate(session.startTime)}
           </span>
         </div>
 
-        {session.initialPrompt && (
-          <p className="text-sm line-clamp-2">{session.initialPrompt}</p>
-        )}
-
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--muted-foreground)]">
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
+        {/* Stats line */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            flexWrap: "wrap",
+            paddingLeft: showProject ? "0" : "0",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <Clock style={{ width: "10px", height: "10px" }} />
             {formatDuration(session.durationMs)}
           </span>
-          <span className="flex items-center gap-1">
-            <MessageSquare className="h-3 w-3" />
+          <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <MessageSquare style={{ width: "10px", height: "10px" }} />
             {session.messageCount}
           </span>
-          <span className="flex items-center gap-1">
-            <Cpu className="h-3 w-3" />
+          <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <Cpu style={{ width: "10px", height: "10px" }} />
             {formatTokens(session.inputTokens + session.outputTokens)}
           </span>
-          <span className="flex items-center gap-1">
-            <Wrench className="h-3 w-3" />
+          <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <DollarSign style={{ width: "10px", height: "10px" }} />
+            {formatCost(session.costEstimate)}
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <Wrench style={{ width: "10px", height: "10px" }} />
             {totalTools}
           </span>
           {session.subagentCount > 0 && (
-            <span className="flex items-center gap-1">
-              <Bot className="h-3 w-3" />
+            <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              <Bot style={{ width: "10px", height: "10px" }} />
               {session.subagentCount}
             </span>
           )}
           {session.errorCount > 0 && (
-            <span className="flex items-center gap-1 text-red-400">
-              <AlertCircle className="h-3 w-3" />
+            <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--status-error-text)", fontFamily: "var(--font-mono)" }}>
+              <AlertCircle style={{ width: "10px", height: "10px" }} />
               {session.errorCount}
             </span>
           )}
-          {session.oneShotRate !== undefined && (
-            <span className={`text-xs px-1.5 py-0.5 rounded ${
-              session.oneShotRate >= 0.8 ? "bg-emerald-500/20 text-emerald-400" :
-              session.oneShotRate >= 0.5 ? "bg-amber-500/20 text-amber-400" :
-              "bg-red-500/20 text-red-400"
-            }`}>
-              {(session.oneShotRate * 100).toFixed(0)}% 1-shot
-            </span>
-          )}
           {session.gitBranch && (
-            <span className="flex items-center gap-1">
-              <GitBranch className="h-3 w-3" />
+            <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              <GitBranch style={{ width: "10px", height: "10px" }} />
               {session.gitBranch}
             </span>
           )}
-        </div>
-
-        <div className="flex flex-wrap gap-1">
-          {session.modelsUsed.map((m) => (
-            <Badge key={m} variant="outline" className="text-[10px] px-1.5 py-0">
+          {session.oneShotRate !== undefined && (
+            <OneShotBadge rate={session.oneShotRate} />
+          )}
+          {session.modelsUsed.slice(0, 1).map((m) => (
+            <span
+              key={m}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.62rem",
+                color: "var(--text-muted)",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                padding: "1px 4px",
+              }}
+            >
               {m}
-            </Badge>
+            </span>
           ))}
         </div>
       </div>
@@ -159,223 +332,153 @@ function SessionCard({
   );
 }
 
-// ─── Project Group ───────────────────────────────────────────────────
-
+// ── Project group section ─────────────────────────────────────────────────────
 interface ProjectGroup {
   projectPath: string;
   projectName: string;
   sessions: SessionSummary[];
-  totalSessions: number;
   totalTokens: number;
   totalCost: number;
   totalDurationMs: number;
-  totalMessages: number;
-  totalErrors: number;
-  totalSubagents: number;
   activeSessions: number;
   lastActivity?: string;
-  modelsUsed: string[];
-  topTools: [string, number][];
   avgOneShotRate?: number;
 }
 
 function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
   const map = new Map<string, SessionSummary[]>();
   for (const s of sessions) {
-    const key = s.projectPath;
-    const list = map.get(key) || [];
+    const list = map.get(s.projectPath) ?? [];
     list.push(s);
-    map.set(key, list);
+    map.set(s.projectPath, list);
   }
 
   const groups: ProjectGroup[] = [];
   for (const [projectPath, projectSessions] of map) {
-    const models = new Set<string>();
-    const toolAgg: Record<string, number> = {};
-    let totalTokens = 0;
-    let totalCost = 0;
-    let totalDurationMs = 0;
-    let totalMessages = 0;
-    let totalErrors = 0;
-    let totalSubagents = 0;
-    let activeSessions = 0;
+    let totalTokens = 0, totalCost = 0, totalDurationMs = 0, activeSessions = 0;
     let lastActivity: string | undefined;
-
     const oneShotRates: number[] = [];
+
     for (const s of projectSessions) {
       totalTokens += s.inputTokens + s.outputTokens;
       totalCost += s.costEstimate;
       totalDurationMs += s.durationMs || 0;
-      totalMessages += s.messageCount;
-      totalErrors += s.errorCount;
-      totalSubagents += s.subagentCount;
       if (s.isActive) activeSessions++;
-      for (const m of s.modelsUsed) models.add(m);
-      for (const [tool, count] of Object.entries(s.toolUsage)) {
-        toolAgg[tool] = (toolAgg[tool] || 0) + count;
-      }
-      if (s.endTime && (!lastActivity || s.endTime > lastActivity)) {
-        lastActivity = s.endTime;
-      }
-      if (s.oneShotRate !== undefined) {
-        oneShotRates.push(s.oneShotRate);
-      }
+      if (s.endTime && (!lastActivity || s.endTime > lastActivity)) lastActivity = s.endTime;
+      if (s.oneShotRate !== undefined) oneShotRates.push(s.oneShotRate);
     }
-
-    const avgOneShotRate =
-      oneShotRates.length > 0
-        ? oneShotRates.reduce((sum, r) => sum + r, 0) / oneShotRates.length
-        : undefined;
-
-    const topTools = Object.entries(toolAgg)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
 
     groups.push({
       projectPath,
       projectName: projectSessions[0].projectName,
       sessions: projectSessions,
-      totalSessions: projectSessions.length,
       totalTokens,
       totalCost,
       totalDurationMs,
-      totalMessages,
-      totalErrors,
-      totalSubagents,
       activeSessions,
       lastActivity,
-      modelsUsed: Array.from(models),
-      topTools,
-      avgOneShotRate,
+      avgOneShotRate: oneShotRates.length > 0
+        ? oneShotRates.reduce((a, b) => a + b, 0) / oneShotRates.length
+        : undefined,
     });
   }
 
-  // Sort groups by last activity
-  groups.sort((a, b) => {
+  return groups.sort((a, b) => {
     const ta = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
     const tb = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
     return tb - ta;
   });
-
-  return groups;
 }
 
-function ProjectGroupCard({ group }: { group: ProjectGroup }) {
-  const [expanded, setExpanded] = useState(false);
-
+function ProjectSection({
+  group,
+  collapsed,
+  onToggle,
+}: {
+  group: ProjectGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <div className="rounded-lg border overflow-hidden">
-      {/* Project summary header */}
-      <button
-        className="w-full text-left p-4 hover:bg-[var(--muted)] transition-colors"
-        onClick={() => setExpanded(!expanded)}
+    <div>
+      {/* Section header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          paddingBottom: "10px",
+          marginBottom: collapsed ? 0 : "2px",
+        }}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
-            {expanded ? (
-              <ChevronDown className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
-            ) : (
-              <ChevronRight className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
-            )}
-            <FolderOpen className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
-            <span className="font-mono text-sm truncate">{group.projectPath}</span>
-            {group.activeSessions > 0 && (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-            )}
-          </div>
-          <span className="text-xs text-[var(--muted-foreground)] shrink-0">
-            {formatDate(group.lastActivity)}
-          </span>
-        </div>
+        <button
+          onClick={onToggle}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            width: "16px", height: "16px",
+            background: "transparent", border: "none",
+            color: "var(--text-muted)", cursor: "pointer", padding: 0, flexShrink: 0,
+          }}
+        >
+          {collapsed
+            ? <ChevronRight style={{ width: "12px", height: "12px" }} />
+            : <ChevronDown style={{ width: "12px", height: "12px" }} />}
+        </button>
 
-        {/* Aggregated stats */}
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-[var(--muted-foreground)] ml-10">
-          <span className="flex items-center gap-1">
-            <Layers className="h-3 w-3" />
-            {group.totalSessions} session{group.totalSessions !== 1 ? "s" : ""}
-          </span>
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {formatDuration(group.totalDurationMs)}
-          </span>
-          <span className="flex items-center gap-1">
-            <MessageSquare className="h-3 w-3" />
-            {group.totalMessages} msgs
-          </span>
-          <span className="flex items-center gap-1">
-            <Cpu className="h-3 w-3" />
-            {formatTokens(group.totalTokens)} tokens
-          </span>
-          <span className="flex items-center gap-1">
-            <DollarSign className="h-3 w-3" />
-            {formatCost(group.totalCost)}
-          </span>
-          {group.totalSubagents > 0 && (
-            <span className="flex items-center gap-1">
-              <Bot className="h-3 w-3" />
-              {group.totalSubagents} agents
-            </span>
-          )}
-          {group.totalErrors > 0 && (
-            <span className="flex items-center gap-1 text-red-400">
-              <AlertCircle className="h-3 w-3" />
-              {group.totalErrors} errors
-            </span>
-          )}
-          {group.avgOneShotRate !== undefined && (
-            <span className={`flex items-center gap-1 ${
-              group.avgOneShotRate >= 0.8 ? "text-emerald-400" :
-              group.avgOneShotRate >= 0.5 ? "text-amber-400" :
-              "text-red-400"
-            }`}>
-              {(group.avgOneShotRate * 100).toFixed(0)}% 1-shot
-            </span>
-          )}
-        </div>
+        <Link
+          href={`/project/${group.projectName}`}
+          style={{
+            fontSize: "0.78rem", fontWeight: 600, letterSpacing: "0.02em",
+            textTransform: "uppercase", color: "var(--text-primary)", textDecoration: "none",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {group.projectName}
+        </Link>
 
-        {/* Top tools + models */}
-        <div className="mt-2 flex flex-wrap gap-1 ml-10">
-          {group.topTools.map(([tool, count]) => (
-            <Badge key={tool} variant="outline" className="text-[10px] px-1.5 py-0">
-              {tool} ({count})
-            </Badge>
+        {group.activeSessions > 0 && <ActiveDot />}
+
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+          {group.sessions.length}
+        </span>
+
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+          {formatTokens(group.totalTokens)} · {formatCost(group.totalCost)} · {formatDuration(group.totalDurationMs)}
+        </span>
+
+        {group.avgOneShotRate !== undefined && (
+          <OneShotBadge rate={group.avgOneShotRate} />
+        )}
+
+        <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)", flexShrink: 0 }}>
+          {formatDate(group.lastActivity)}
+        </span>
+      </div>
+
+      {/* Sessions */}
+      {!collapsed && (
+        <div style={{ paddingLeft: "26px", borderTop: "1px solid var(--border-subtle)" }}>
+          {group.sessions.map((s) => (
+            <SessionRow key={s.sessionId} session={s} showProject={false} />
           ))}
-          {group.modelsUsed.map((m) => (
-            <Badge key={m} variant="outline" className="text-[10px] px-1.5 py-0 border-violet-500/30 text-violet-400">
-              {m}
-            </Badge>
-          ))}
-        </div>
-      </button>
-
-      {/* Expanded session list */}
-      {expanded && (
-        <div className="border-t p-4 space-y-3 bg-[var(--background)]">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {group.sessions.map((session) => (
-              <SessionCard key={session.sessionId} session={session} showProject={false} />
-            ))}
-          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ─── Main Browser ────────────────────────────────────────────────────
-
+// ── Main browser ──────────────────────────────────────────────────────────────
 export function SessionsBrowser() {
   const { data, loading } = useAllSessions();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
-  const [groupByProject, setGroupByProject] = useState(false);
+  const [groupByProject, setGroupByProject] = useState(true);
+  const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     let result = data;
-
     if (search) {
       const q = search.toLowerCase();
       result = result.filter(
@@ -387,21 +490,16 @@ export function SessionsBrowser() {
           s.gitBranch?.toLowerCase().includes(q)
       );
     }
-
     return [...result].sort((a, b) => {
       switch (sortBy) {
-        case "longest":
-          return (b.durationMs || 0) - (a.durationMs || 0);
-        case "tokens":
-          return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
+        case "longest": return (b.durationMs || 0) - (a.durationMs || 0);
+        case "tokens":  return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
         case "oneshot": {
-          // Sessions without oneShotRate go to the end
           if (a.oneShotRate === undefined && b.oneShotRate === undefined) return 0;
           if (a.oneShotRate === undefined) return 1;
           if (b.oneShotRate === undefined) return -1;
           return b.oneShotRate - a.oneShotRate;
         }
-        case "recent":
         default: {
           const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
           const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
@@ -412,94 +510,130 @@ export function SessionsBrowser() {
   }, [data, search, sortBy]);
 
   const projectGroups = useMemo(
-    () => (groupByProject ? buildProjectGroups(filtered) : []),
+    () => groupByProject ? buildProjectGroups(filtered) : [],
     [filtered, groupByProject]
   );
 
   const activeSessions = data.filter((s) => s.isActive).length;
 
+  const toggleCollapse = (path: string) => {
+    setCollapsedSlugs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  };
+
+  const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectPath));
+
   const sortOptions: { value: SortOption; label: string }[] = [
-    { value: "recent", label: "Recent" },
+    { value: "recent",  label: "Recent" },
     { value: "longest", label: "Longest" },
-    { value: "tokens", label: "Most Tokens" },
-    { value: "oneshot", label: "Best Success Rate" },
+    { value: "tokens",  label: "Tokens" },
+    { value: "oneshot", label: "Best 1-shot" },
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <MessageSquare className="h-5 w-5" />
-          <h1 className="text-2xl font-bold">Sessions</h1>
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {data.length} total
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <MessageSquare style={{ width: "14px", height: "14px", color: "var(--text-muted)" }} />
+        <h1 style={{ fontSize: "0.72rem", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-secondary)", fontFamily: "var(--font-body)" }}>
+          Sessions
+        </h1>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+          {data.length} total
+        </span>
+        {activeSessions > 0 && (
+          <span style={{ display: "flex", alignItems: "center", gap: "5px", fontFamily: "var(--font-mono)", fontSize: "0.65rem", fontWeight: 500, color: "var(--status-active-text)", background: "var(--status-active-bg)", border: "1px solid var(--status-active-border)", borderRadius: "3px", padding: "2px 6px" }}>
+            <ActiveDot />
+            {activeSessions} active
           </span>
-          {activeSessions > 0 && (
-            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-medium">
-              {activeSessions} active
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--muted-foreground)]" />
-          <Input
-            placeholder="Search sessions..."
+      {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        {/* Search */}
+        <div style={{ position: "relative", flex: "1 1 200px", minWidth: "160px" }}>
+          <Search style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", width: "13px", height: "13px", color: "var(--text-muted)", pointerEvents: "none" }} />
+          <input
+            type="text"
+            placeholder="Search sessions…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
+            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
           />
         </div>
-        <div className="flex gap-1">
-          <Button
-            variant={groupByProject ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setGroupByProject(!groupByProject)}
-          >
-            <FolderOpen className="h-3 w-3 mr-1" />
-            Group by Project
-          </Button>
+
+        {/* Sort */}
+        <div style={{ display: "flex", alignItems: "center", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden", flexShrink: 0 }}>
           {sortOptions.map((opt) => (
-            <Button
+            <button
               key={opt.value}
-              variant={sortBy === opt.value ? "secondary" : "ghost"}
-              size="sm"
               onClick={() => setSortBy(opt.value)}
+              style={{ padding: "5px 11px", fontSize: "0.72rem", fontWeight: sortBy === opt.value ? 600 : 400, fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: sortBy === opt.value ? "var(--text-primary)" : "var(--text-secondary)", background: sortBy === opt.value ? "var(--bg-elevated)" : "transparent", border: "none", borderRight: "1px solid var(--border-subtle)", cursor: "pointer", transition: "background 0.1s, color 0.1s", lineHeight: 1 }}
             >
-              <SortAsc className="h-3 w-3 mr-1" />
               {opt.label}
-            </Button>
+            </button>
           ))}
         </div>
+
+        {/* Group by project toggle */}
+        <button
+          onClick={() => setGroupByProject((v) => !v)}
+          style={{ padding: "5px 11px", fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: groupByProject ? "var(--status-active-text)" : "var(--text-secondary)", background: groupByProject ? "var(--status-active-bg)" : "var(--bg-surface)", border: `1px solid ${groupByProject ? "var(--status-active-border)" : "var(--border-subtle)"}`, borderRadius: "var(--radius)", cursor: "pointer", transition: "background 0.1s, color 0.1s, border-color 0.1s", lineHeight: 1, flexShrink: 0 }}
+        >
+          By project
+        </button>
+
+        {/* Collapse all */}
+        {groupByProject && projectGroups.length > 1 && (
+          <button
+            onClick={() => allCollapsed ? setCollapsedSlugs(new Set()) : setCollapsedSlugs(new Set(projectGroups.map((g) => g.projectPath)))}
+            style={{ padding: "5px 11px", fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: "var(--text-secondary)", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
+          >
+            {allCollapsed ? "Expand all" : "Collapse all"}
+          </button>
+        )}
       </div>
 
+      {/* ── Meta row ─────────────────────────────────────────────────────────── */}
+      {!loading && (
+        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "-8px" }}>
+          {filtered.length} session{filtered.length !== 1 ? "s" : ""}
+          {groupByProject && projectGroups.length > 0 ? `, ${projectGroups.length} projects` : ""}
+        </div>
+      )}
+
+      {/* ── Content ─────────────────────────────────────────────────────────── */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-40 rounded-lg" />
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} style={{ height: "56px", background: "var(--bg-surface)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-12 text-[var(--muted-foreground)]">
-          <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
-          <p>No sessions found.</p>
-          {search && <p className="text-sm mt-1">Try a different search term.</p>}
+        <div style={{ textAlign: "center", padding: "48px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+          <MessageSquare style={{ width: "28px", height: "28px", color: "var(--text-muted)", opacity: 0.4 }} />
+          <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>No sessions found.</p>
+          {search && <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", opacity: 0.6 }}>Try a different search term.</p>}
         </div>
       ) : groupByProject ? (
-        <div className="space-y-3">
-          <p className="text-sm text-[var(--muted-foreground)]">
-            {projectGroups.length} project{projectGroups.length !== 1 ? "s" : ""}
-          </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
           {projectGroups.map((group) => (
-            <ProjectGroupCard key={group.projectPath} group={group} />
+            <ProjectSection
+              key={group.projectPath}
+              group={group}
+              collapsed={collapsedSlugs.has(group.projectPath)}
+              onToggle={() => toggleCollapse(group.projectPath)}
+            />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((session) => (
-            <SessionCard key={session.sessionId} session={session} />
+        <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          {filtered.map((s) => (
+            <SessionRow key={s.sessionId} session={s} showProject />
           ))}
         </div>
       )}

@@ -4,7 +4,7 @@ import { MinderConfig, ProjectStatus } from "./types";
 
 const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
 
-const DEFAULT_DEV_ROOT = "C:\\dev";
+export const DEFAULT_DEV_ROOT = "C:\\dev";
 
 const DEFAULT_CONFIG: MinderConfig = {
   statuses: {},
@@ -12,6 +12,12 @@ const DEFAULT_CONFIG: MinderConfig = {
   portOverrides: {},
   devRoot: DEFAULT_DEV_ROOT,
 };
+
+/** Returns all configured scan roots. Falls back to devRoot for backward compat. */
+export function getDevRoots(config: MinderConfig): string[] {
+  if (config.devRoots && config.devRoots.length > 0) return config.devRoots;
+  return [config.devRoot || DEFAULT_DEV_ROOT];
+}
 
 export async function readConfig(): Promise<MinderConfig> {
   try {

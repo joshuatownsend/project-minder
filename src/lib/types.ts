@@ -142,7 +142,11 @@ export interface MinderConfig {
   statuses: Record<string, ProjectStatus>;
   hidden: string[]; // directory names to skip during scan
   portOverrides: Record<string, number>; // slug -> custom dev port
-  devRoot: string; // root directory to scan for projects
+  devRoot: string; // root directory to scan for projects (kept for backward compat; use getDevRoots())
+  devRoots?: string[]; // multiple scan roots; if set, takes precedence over devRoot
+  scanBatchSize?: number; // projects scanned in parallel per root (default 10)
+  defaultSort?: "activity" | "name" | "claude"; // dashboard default sort
+  defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
 }
 
 export interface ClaudeUsageStats {
@@ -175,6 +179,12 @@ export interface StatsData {
   claudeUsage?: ClaudeUsageStats;
 }
 
+export interface SessionRecap {
+  content: string;
+  timestamp: string;
+  slug?: string; // human-readable session nickname, e.g. "dynamic-giggling-quokka"
+}
+
 export interface SessionSummary {
   sessionId: string;
   projectPath: string;
@@ -184,6 +194,8 @@ export interface SessionSummary {
   endTime?: string;
   durationMs?: number;
   initialPrompt?: string;
+  lastPrompt?: string;
+  recaps?: SessionRecap[];
   messageCount: number;
   userMessageCount: number;
   assistantMessageCount: number;

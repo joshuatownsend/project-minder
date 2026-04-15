@@ -56,17 +56,65 @@ function formatDate(iso?: string): string {
   return d.toLocaleDateString();
 }
 
+/** Picks the best label for a session row using a priority cascade.
+ *  lastRecap → initialPrompt → lastPrompt → branch → "Untitled session"
+ *  Recap wins because it's the AI's summary of what was accomplished —
+ *  more informative than the opening prompt for completed sessions. */
+function sessionLabel(session: SessionSummary): { primary: string; secondary?: string; isRecap: boolean; isPlaceholder: boolean } {
+  const lastRecap = session.recaps?.[session.recaps.length - 1]?.content?.trim();
+  const first = session.initialPrompt?.trim();
+  const last = session.lastPrompt?.trim();
+
+  if (lastRecap) {
+    // Show the opening prompt as secondary context when it adds something different
+    return {
+      primary: lastRecap,
+      secondary: first && first !== lastRecap ? first : undefined,
+      isRecap: true,
+      isPlaceholder: false,
+    };
+  }
+  if (first) {
+    return {
+      primary: first,
+      secondary: last && last !== first ? last : undefined,
+      isRecap: false,
+      isPlaceholder: false,
+    };
+  }
+  if (last) {
+    return { primary: last, isRecap: false, isPlaceholder: false };
+  }
+  if (session.gitBranch) {
+    return { primary: session.gitBranch, isRecap: false, isPlaceholder: true };
+  }
+  return { primary: "Untitled session", isRecap: false, isPlaceholder: true };
+}
+
 export function ProjectSessions({ projectPath }: { projectPath: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  // Respect user's motion preference for the active ping animation
+  const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
-    // Fetch all sessions then filter client-side by projectPath
-    fetch("/api/sessions")
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReducedMotion(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  useEffect(() => {
+    // Match via projectName (raw encoded dir, e.g. "C--dev-project-minder") to avoid
+    // the lossy decodeDirName() path which corrupts hyphenated project names.
+    const encoded = projectPath.replace(/[:\\/]/g, "-");
+    // Pass encoded name as query param to reduce JSON payload — exact client-side
+    // filter below guards against the API's looser substring match.
+    fetch(`/api/sessions?project=${encodeURIComponent(encoded)}`)
       .then((res) => res.json())
       .then((all: SessionSummary[]) => {
-        const filtered = all.filter((s) => s.projectPath === projectPath);
-        setSessions(filtered);
+        setSessions(all.filter((s) => s.projectName === encoded));
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -79,7 +127,6 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
     const totalDuration = sessions.reduce((s, x) => s + (x.durationMs || 0), 0);
     const totalMessages = sessions.reduce((s, x) => s + x.messageCount, 0);
     const totalErrors = sessions.reduce((s, x) => s + x.errorCount, 0);
-    const totalSubagents = sessions.reduce((s, x) => s + x.subagentCount, 0);
     const models = new Set<string>();
     const toolAgg: Record<string, number> = {};
     for (const s of sessions) {
@@ -88,23 +135,14 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
         toolAgg[tool] = (toolAgg[tool] || 0) + count;
       }
     }
-    return {
-      totalTokens,
-      totalCost,
-      totalDuration,
-      totalMessages,
-      totalErrors,
-      totalSubagents,
-      modelsUsed: Array.from(models),
-      toolUsage: toolAgg,
-    };
+    return { totalTokens, totalCost, totalDuration, totalMessages, totalErrors, modelsUsed: Array.from(models), toolUsage: toolAgg };
   }, [sessions]);
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+          {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-20 rounded-lg" />
           ))}
         </div>
@@ -115,60 +153,50 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
 
   if (sessions.length === 0) {
     return (
-      <p className="text-[var(--muted-foreground)] text-center py-8">
-        No Claude Code sessions found for this project.
+      <p style={{ color: "var(--text-muted)", textAlign: "center", padding: "32px 0" }}>
+        No sessions yet. Sessions appear here once Claude Code has been run in this project directory.
       </p>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       {/* Aggregated stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard
-          label="Sessions"
-          value={sessions.length}
-          icon={<Layers className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Total Time"
-          value={formatDuration(stats!.totalDuration)}
-          icon={<Clock className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Messages"
-          value={stats!.totalMessages}
-          icon={<MessageSquare className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Tokens"
-          value={formatTokens(stats!.totalTokens)}
-          icon={<Cpu className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Cost"
-          value={formatCost(stats!.totalCost)}
-          icon={<DollarSign className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Errors"
-          value={stats!.totalErrors}
-          icon={<AlertCircle className="h-4 w-4" />}
-        />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+        <StatCard label="Sessions" value={sessions.length} icon={<Layers className="h-4 w-4" />} />
+        <StatCard label="Total Time" value={formatDuration(stats!.totalDuration)} icon={<Clock className="h-4 w-4" />} />
+        <StatCard label="Messages" value={stats!.totalMessages} icon={<MessageSquare className="h-4 w-4" />} />
+        <StatCard label="Tokens" value={formatTokens(stats!.totalTokens)} icon={<Cpu className="h-4 w-4" />} />
+        <StatCard label="Cost" value={formatCost(stats!.totalCost)} icon={<DollarSign className="h-4 w-4" />} />
+        <StatCard label="Errors" value={stats!.totalErrors} icon={<AlertCircle className="h-4 w-4" />} />
       </div>
 
       {/* Tool usage + models */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="rounded-lg border p-4 space-y-3">
-          <h3 className="text-sm font-medium flex items-center gap-2">
-            <Wrench className="h-4 w-4" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "24px" }}>
+        <div style={{
+          borderRadius: "8px",
+          border: "1px solid var(--border)",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}>
+          <h3 style={{ fontSize: "0.875rem", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", margin: 0 }}>
+            <Wrench aria-hidden="true" style={{ width: "16px", height: "16px" }} />
             Tool Usage
           </h3>
-          <BarChart data={stats!.toolUsage} colorClass="bg-violet-500" />
+          <BarChart data={stats!.toolUsage} color="var(--accent)" />
         </div>
-        <div className="rounded-lg border p-4 space-y-3">
-          <h3 className="text-sm font-medium">Models Used</h3>
-          <div className="flex flex-wrap gap-2">
+        <div style={{
+          borderRadius: "8px",
+          border: "1px solid var(--border)",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}>
+          <h3 style={{ fontSize: "0.875rem", fontWeight: 500, margin: 0 }}>Models Used</h3>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
             {stats!.modelsUsed.map((m) => (
               <Badge key={m} variant="outline">{m}</Badge>
             ))}
@@ -177,61 +205,111 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
       </div>
 
       {/* Session list */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium">All Sessions</h3>
-        <div className="space-y-2">
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <h3 style={{ fontSize: "0.875rem", fontWeight: 500, margin: 0 }}>All Sessions</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {sessions.map((session) => {
             const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+            const label = sessionLabel(session);
             return (
-              <Link key={session.sessionId} href={`/sessions/${session.sessionId}`}>
-                <div className="rounded-lg border p-3 hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+              <Link key={session.sessionId} href={`/sessions/${session.sessionId}`} style={{ textDecoration: "none" }}>
+                <div
+                  style={{
+                    borderRadius: "8px",
+                    border: "1px solid var(--border)",
+                    padding: "12px",
+                    cursor: "pointer",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--muted)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+                >
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "8px" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Primary label */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         {session.isActive && (
-                          <span className="relative flex h-2 w-2 shrink-0">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                          <span aria-label="Active session" style={{ position: "relative", display: "flex", width: "8px", height: "8px", flexShrink: 0 }}>
+                            <span style={{
+                              position: "absolute", inset: 0,
+                              borderRadius: "50%",
+                              background: "var(--status-active-text)",
+                              opacity: 0.6,
+                              animation: reducedMotion ? "none" : "ping 1s cubic-bezier(0,0,0.2,1) infinite",
+                            }} />
+                            <span style={{ position: "relative", width: "8px", height: "8px", borderRadius: "50%", background: "var(--status-active-text)" }} />
                           </span>
                         )}
-                        {session.initialPrompt ? (
-                          <p className="text-sm truncate">{session.initialPrompt}</p>
-                        ) : (
-                          <p className="text-sm text-[var(--muted-foreground)] italic">No prompt</p>
+                        {label.isRecap && (
+                          <span style={{
+                            fontSize: "0.6rem", fontFamily: "var(--font-mono)",
+                            fontWeight: 600, letterSpacing: "0.04em",
+                            color: "var(--accent)", background: "var(--accent-bg)",
+                            border: "1px solid var(--accent-border)",
+                            borderRadius: "3px", padding: "1px 5px",
+                            flexShrink: 0,
+                          }}>
+                            recap
+                          </span>
                         )}
+                        <p style={{
+                          fontSize: "0.875rem",
+                          margin: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          color: label.isPlaceholder ? "var(--text-muted)" : "var(--text-primary)",
+                          fontStyle: label.isPlaceholder ? "italic" : "normal",
+                        }}>
+                          {label.primary}
+                        </p>
                       </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--muted-foreground)] mt-1">
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
+                      {/* Secondary context — opening prompt when recap is the primary label */}
+                      {label.secondary && (
+                        <p style={{
+                          fontSize: "0.75rem",
+                          margin: "2px 0 0 0",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          color: "var(--text-muted)",
+                        }}>
+                          ↳ {label.secondary}
+                        </p>
+                      )}
+                      {/* Meta row */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "4px" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <Clock aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                           {formatDuration(session.durationMs)}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="h-3 w-3" />
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <MessageSquare aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                           {session.messageCount}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Cpu className="h-3 w-3" />
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <Cpu aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                           {formatTokens(session.inputTokens + session.outputTokens)}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Wrench className="h-3 w-3" />
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <Wrench aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                           {totalTools}
                         </span>
                         {session.subagentCount > 0 && (
-                          <span className="flex items-center gap-1">
-                            <Bot className="h-3 w-3" />
+                          <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                            <Bot aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                             {session.subagentCount}
                           </span>
                         )}
                         {session.gitBranch && (
-                          <span className="flex items-center gap-1">
-                            <GitBranch className="h-3 w-3" />
+                          <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                            <GitBranch aria-hidden="true" style={{ width: "12px", height: "12px" }} />
                             {session.gitBranch}
                           </span>
                         )}
                       </div>
                     </div>
-                    <span className="text-xs text-[var(--muted-foreground)] shrink-0">
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", flexShrink: 0 }}>
                       {formatDate(session.endTime)}
                     </span>
                   </div>

@@ -2,9 +2,7 @@
 
 import { useState } from "react";
 import { useProjectInsights } from "@/hooks/useInsights";
-import { Input } from "./ui/input";
-import { Skeleton } from "./ui/skeleton";
-import { Search, Lightbulb, Calendar } from "lucide-react";
+import { Search, Lightbulb, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { WorktreeOverlay } from "@/lib/types";
 import { WorktreeSection } from "./WorktreeSection";
@@ -14,86 +12,186 @@ interface InsightsTabProps {
   worktrees?: WorktreeOverlay[];
 }
 
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function InsightsTab({ slug, worktrees }: InsightsTabProps) {
   const { data, loading } = useProjectInsights(slug);
   const [query, setQuery] = useState("");
 
-  const filtered = data?.entries.filter((e) =>
-    e.content.toLowerCase().includes(query.toLowerCase())
-  ) ?? [];
+  const filtered =
+    data?.entries.filter((e) =>
+      e.content.toLowerCase().includes(query.toLowerCase())
+    ) ?? [];
 
   if (loading) {
     return (
-      <div className="space-y-4">
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         {[...Array(3)].map((_, i) => (
-          <div key={i} className="space-y-2">
-            <Skeleton className="h-4 w-1/4" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-          </div>
+          <div
+            key={i}
+            style={{
+              height: "64px",
+              background: "var(--bg-surface)",
+              borderRadius: "var(--radius)",
+              animation: "pulse 1.5s ease-in-out infinite",
+            }}
+          />
         ))}
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--muted-foreground)]" />
-        <Input
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      {/* Search */}
+      <div style={{ position: "relative" }}>
+        <Search
+          style={{
+            position: "absolute",
+            left: "9px",
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: "13px",
+            height: "13px",
+            color: "var(--text-muted)",
+            pointerEvents: "none",
+          }}
+        />
+        <input
+          type="text"
           placeholder="Filter insights…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="pl-9"
+          style={{
+            width: "100%",
+            height: "32px",
+            paddingLeft: "30px",
+            paddingRight: "10px",
+            fontSize: "0.78rem",
+            fontFamily: "var(--font-body)",
+            color: "var(--text-primary)",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-default)",
+            borderRadius: "var(--radius)",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
         />
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="py-12 text-center text-[var(--muted-foreground)] space-y-2">
-          <Lightbulb className="mx-auto h-8 w-8 opacity-30" />
-          <p className="text-sm">
-            {query ? "No insights match your filter." : "No insights recorded for this project yet."}
-          </p>
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {filtered.map((insight) => (
-            <li
-              key={insight.id}
-              className="rounded-lg border p-4 space-y-2 hover:border-[var(--ring)] transition-colors"
-            >
-              <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
-                <span className="flex items-center gap-1">
-                  <Calendar className="h-3 w-3" />
-                  {(() => {
-                    const d = new Date(insight.date);
-                    return isFinite(d.getTime())
-                      ? d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-                      : "—";
-                  })()}
-                </span>
-                <Link
-                  href={`/sessions/${insight.sessionId}`}
-                  className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
-                >
-                  <Lightbulb className="h-3 w-3" />
-                  View session
-                </Link>
-              </div>
-              <p className="text-sm leading-relaxed">{insight.content}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-
+      {/* Count */}
       {data && data.total > 0 && (
-        <p className="text-xs text-[var(--muted-foreground)] text-right">
+        <div
+          style={{
+            fontSize: "0.72rem",
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+            marginTop: "-6px",
+          }}
+        >
           {filtered.length === data.total
             ? `${data.total} insight${data.total !== 1 ? "s" : ""}`
             : `${filtered.length} of ${data.total} insights`}
-        </p>
+        </div>
       )}
 
+      {/* Feed */}
+      {filtered.length === 0 ? (
+        <div
+          style={{
+            padding: "32px 0",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <Lightbulb
+            style={{ width: "24px", height: "24px", color: "var(--text-muted)", opacity: 0.3 }}
+          />
+          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+            {query
+              ? "No insights match your filter."
+              : "No insights recorded for this project yet."}
+          </p>
+        </div>
+      ) : (
+        <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          {filtered.map((insight) => (
+            <div
+              key={insight.id}
+              style={{
+                padding: "12px 0",
+                borderBottom: "1px solid var(--border-subtle)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "5px",
+              }}
+            >
+              {/* Metadata row */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.65rem",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {formatDate(insight.date)}
+                </span>
+                <div style={{ flex: 1 }} />
+                <Link
+                  href={`/sessions/${insight.sessionId}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.65rem",
+                    color: "var(--text-muted)",
+                    textDecoration: "none",
+                    transition: "color 0.1s",
+                  }}
+                  onMouseEnter={(e) =>
+                    ((e.currentTarget as HTMLElement).style.color =
+                      "var(--text-secondary)")
+                  }
+                  onMouseLeave={(e) =>
+                    ((e.currentTarget as HTMLElement).style.color =
+                      "var(--text-muted)")
+                  }
+                >
+                  session
+                  <ExternalLink style={{ width: "9px", height: "9px" }} />
+                </Link>
+              </div>
+              {/* Content */}
+              <p
+                style={{
+                  fontSize: "0.82rem",
+                  lineHeight: 1.6,
+                  color: "var(--text-primary)",
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {insight.content}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Worktree sections */}
       {worktrees?.map((wt) =>
         wt.insights && wt.insights.total > 0 ? (
           <WorktreeSection
@@ -102,35 +200,45 @@ export function InsightsTab({ slug, worktrees }: InsightsTabProps) {
             itemCount={wt.insights.total}
             itemLabel={wt.insights.total === 1 ? "insight" : "insights"}
           >
-            <ul className="space-y-3">
+            <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
               {wt.insights.entries
                 .filter((e) =>
                   e.content.toLowerCase().includes(query.toLowerCase())
                 )
                 .map((insight) => (
-                  <li
+                  <div
                     key={insight.id}
-                    className="rounded-lg border p-4 space-y-2"
+                    style={{
+                      padding: "12px 0",
+                      borderBottom: "1px solid var(--border-subtle)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "5px",
+                    }}
                   >
-                    <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                      <span className="flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {(() => {
-                          const d = new Date(insight.date);
-                          return isFinite(d.getTime())
-                            ? d.toLocaleDateString(undefined, {
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                              })
-                            : "—";
-                        })()}
-                      </span>
-                    </div>
-                    <p className="text-sm leading-relaxed">{insight.content}</p>
-                  </li>
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.65rem",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {formatDate(insight.date)}
+                    </span>
+                    <p
+                      style={{
+                        fontSize: "0.82rem",
+                        lineHeight: 1.6,
+                        color: "var(--text-primary)",
+                        margin: 0,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {insight.content}
+                    </p>
+                  </div>
                 ))}
-            </ul>
+            </div>
           </WorktreeSection>
         ) : null
       )}

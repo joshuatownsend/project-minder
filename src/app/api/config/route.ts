@@ -1,7 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, writeConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
-import { ProjectStatus } from "@/lib/types";
+import { ProjectStatus, MinderConfig } from "@/lib/types";
+
+// Derived from the MinderConfig union types — update both together if options change
+const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
+const VALID_STATUS_FILTERS: MinderConfig["defaultStatusFilter"][] = ["all", "active", "paused", "archived"];
+
+export async function PATCH(request: NextRequest) {
+  const body = await request.json();
+  const config = await readConfig();
+  let changed = false;
+
+  if (Array.isArray(body.devRoots)) {
+    if (body.devRoots.some((r: unknown) => typeof r !== "string")) {
+      return NextResponse.json({ error: "devRoots elements must be strings" }, { status: 400 });
+    }
+    const roots = (body.devRoots as string[]).map((r) => r.trim()).filter(Boolean);
+    if (roots.length === 0) {
+      return NextResponse.json({ error: "devRoots must not be empty" }, { status: 400 });
+    }
+    config.devRoots = roots;
+    config.devRoot = roots[0]; // keep legacy field in sync
+    changed = true;
+  }
+
+  if (typeof body.scanBatchSize === "number") {
+    const size = Math.round(body.scanBatchSize);
+    if (size < 1 || size > 50) {
+      return NextResponse.json({ error: "scanBatchSize must be 1–50" }, { status: 400 });
+    }
+    config.scanBatchSize = size;
+    changed = true;
+  }
+
+  if (body.defaultSort !== undefined) {
+    if (!VALID_DEFAULT_SORTS.includes(body.defaultSort)) {
+      return NextResponse.json({ error: "Invalid defaultSort" }, { status: 400 });
+    }
+    config.defaultSort = body.defaultSort;
+    changed = true;
+  }
+
+  if (body.defaultStatusFilter !== undefined) {
+    if (!VALID_STATUS_FILTERS.includes(body.defaultStatusFilter)) {
+      return NextResponse.json({ error: "Invalid defaultStatusFilter" }, { status: 400 });
+    }
+    config.defaultStatusFilter = body.defaultStatusFilter;
+    changed = true;
+  }
+
+  if (!changed) {
+    return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+
+  await writeConfig(config);
+  invalidateCache();
+  return NextResponse.json({ ok: true, config });
+}
 
 export async function GET() {
   const config = await readConfig();

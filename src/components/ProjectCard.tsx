@@ -4,12 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { ProjectData } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
-import { TechStackBadges } from "./TechStackBadges";
 import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
-import { TodoCompact } from "./TodoList";
-import { ManualStepsCompact } from "./ManualStepsCompact";
-import { InsightsCompact } from "./InsightsCompact";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import {
@@ -18,13 +14,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Network, Database, MoreVertical, EyeOff } from "lucide-react";
-
-const borderColors = {
-  active: "border-l-emerald-500",
-  paused: "border-l-amber-500",
-  archived: "border-l-gray-400",
-};
+import { Database, MoreVertical, EyeOff, CheckSquare, ClipboardList, Lightbulb } from "lucide-react";
 
 interface ProjectCardProps {
   project: ProjectData;
@@ -36,105 +26,121 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
 
   const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
-  // Aggregate worktree counts into badge data
-  const aggregatedTodos = (() => {
-    if (!project.todos && !project.worktrees?.some((wt) => wt.todos)) return undefined;
-    const mainTodos = project.todos ?? { total: 0, completed: 0, pending: 0, items: [] };
-    const wtTotals = (project.worktrees ?? []).reduce(
-      (acc, wt) => {
-        if (!wt.todos) return acc;
-        return {
-          total: acc.total + wt.todos.total,
-          completed: acc.completed + wt.todos.completed,
-          pending: acc.pending + wt.todos.pending,
-        };
-      },
-      { total: 0, completed: 0, pending: 0 }
+  // ── Aggregate worktree counts ──────────────────────────────────────────
+  const pendingTodos = (() => {
+    const main = project.todos?.pending ?? 0;
+    const wt = (project.worktrees ?? []).reduce(
+      (acc, w) => acc + (w.todos?.pending ?? 0), 0
     );
-    return {
-      total: mainTodos.total + wtTotals.total,
-      completed: mainTodos.completed + wtTotals.completed,
-      pending: mainTodos.pending + wtTotals.pending,
-      items: mainTodos.items,
-    };
+    return main + wt;
   })();
 
-  const aggregatedManualSteps = (() => {
-    if (!project.manualSteps && !project.worktrees?.some((wt) => wt.manualSteps)) return undefined;
-    const main = project.manualSteps ?? { entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 };
-    const wtTotals = (project.worktrees ?? []).reduce(
-      (acc, wt) => {
-        if (!wt.manualSteps) return acc;
-        return {
-          totalSteps: acc.totalSteps + wt.manualSteps.totalSteps,
-          completedSteps: acc.completedSteps + wt.manualSteps.completedSteps,
-          pendingSteps: acc.pendingSteps + wt.manualSteps.pendingSteps,
-        };
-      },
-      { totalSteps: 0, completedSteps: 0, pendingSteps: 0 }
+  const pendingSteps = (() => {
+    const main = project.manualSteps?.pendingSteps ?? 0;
+    const wt = (project.worktrees ?? []).reduce(
+      (acc, w) => acc + (w.manualSteps?.pendingSteps ?? 0), 0
     );
-    return {
-      entries: main.entries,
-      totalSteps: main.totalSteps + wtTotals.totalSteps,
-      completedSteps: main.completedSteps + wtTotals.completedSteps,
-      pendingSteps: main.pendingSteps + wtTotals.pendingSteps,
-    };
+    return main + wt;
   })();
 
-  const aggregatedInsights = (() => {
-    if (!project.insights && !project.worktrees?.some((wt) => wt.insights)) return undefined;
-    const main = project.insights ?? { entries: [], total: 0 };
-    const wtTotal = (project.worktrees ?? []).reduce(
-      (acc, wt) => acc + (wt.insights?.total ?? 0),
-      0
+  const insightsTotal = (() => {
+    const main = project.insights?.total ?? 0;
+    const wt = (project.worktrees ?? []).reduce(
+      (acc, w) => acc + (w.insights?.total ?? 0), 0
     );
-    return {
-      entries: main.entries,
-      total: main.total + wtTotal,
-    };
+    return main + wt;
   })();
+
+  const hasAttention = pendingTodos > 0 || pendingSteps > 0;
+  const isArchived   = project.status === "archived";
+
+  // Tech stack — single compact text line
+  const techParts: string[] = [];
+  if (project.framework) {
+    const v = project.frameworkVersion ? ` ${project.frameworkVersion}` : "";
+    techParts.push(`${project.framework}${v}`);
+  }
+  if (project.orm)          techParts.push(project.orm);
+  if (project.styling)      techParts.push(project.styling);
+  if (project.monorepoType) techParts.push(project.monorepoType);
+  if (project.database)     techParts.push(project.database.type);
+  if (project.dockerPorts.length > 0) techParts.push("Docker");
 
   return (
-    <Link href={`/project/${project.slug}`} className="h-full">
+    <Link href={`/project/${project.slug}`} style={{ display: "block", height: "100%", textDecoration: "none" }}>
       <div
-        className={`group rounded-lg border border-l-4 ${borderColors[project.status]} bg-[var(--card)] p-4 hover:shadow-md transition-shadow cursor-pointer space-y-3 h-full`}
+        className="project-card"
+        style={{
+          position: "relative",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: "14px",
+          padding: "18px 20px",
+          background: "var(--bg-surface)",
+          border: hasAttention
+            ? "1px solid var(--accent-border)"
+            : "1px solid var(--border-subtle)",
+          borderRadius: "var(--radius)",
+          opacity: isArchived ? 0.5 : 1,
+          transition: "background 0.12s, border-color 0.12s",
+          cursor: "pointer",
+        }}
       >
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="font-semibold truncate">{project.name}</h3>
-          <div className="flex items-center gap-1 shrink-0">
+        {/* ── Row 1: name + status + menu ───────────────────────────────── */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+          <h3
+            style={{
+              flex: 1,
+              fontFamily: "var(--font-body)",
+              fontWeight: 500,
+              fontSize: "0.875rem",
+              letterSpacing: "0.01em",
+              color: "var(--text-primary)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              lineHeight: 1.35,
+              minWidth: 0,
+            }}
+          >
+            {project.name}
+          </h3>
+
+          <div
+            style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
+            onClick={(e) => e.preventDefault()}
+          >
             <StatusBadge status={project.status} />
+
             {onHide && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className="p-1 rounded hover:bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: "20px", height: "20px",
+                      borderRadius: "3px", background: "transparent", border: "none",
+                      color: "var(--text-muted)", cursor: "pointer", padding: 0,
                     }}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                   >
-                    <MoreVertical className="h-4 w-4" />
+                    <MoreVertical style={{ width: "12px", height: "12px" }} />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
                   align="end"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
                   <DropdownMenuItem
                     onClick={() => {
-                      if (
-                        window.confirm(
-                          `Hide "${project.name}" from the dashboard? You can unhide it later.`
-                        )
-                      ) {
+                      if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
                         onHide(project.slug, dirName);
                       }
                     }}
                   >
-                    <EyeOff className="h-4 w-4 mr-2" />
+                    <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
                     Hide project
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -143,41 +149,114 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
           </div>
         </div>
 
-        <TechStackBadges project={project} />
-
-        <div className="flex items-center justify-between">
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted-foreground)]">
-            <span className="flex items-center gap-1">
-              <Network className="h-3 w-3" />
-              <PortEditor
-                slug={project.slug}
-                currentPort={devPort}
-                onPortChange={(p) => setDevPort(p ?? undefined)}
-                compact
-              />
-            </span>
-            {project.dbPort && (
-              <span className="flex items-center gap-1">
-                <Database className="h-3 w-3" />
-                :{project.dbPort}
+        {/* ── Row 2 (conditional): attention signals ────────────────────── */}
+        {(hasAttention || insightsTotal > 0) && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            {pendingTodos > 0 && (
+              <span
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.72rem", fontWeight: 500,
+                  color: "var(--accent)",
+                }}
+              >
+                <CheckSquare style={{ width: "11px", height: "11px" }} />
+                {pendingTodos} todo{pendingTodos !== 1 ? "s" : ""}
+              </span>
+            )}
+            {pendingSteps > 0 && (
+              <span
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.72rem", fontWeight: 500,
+                  color: "var(--accent)",
+                }}
+              >
+                <ClipboardList style={{ width: "11px", height: "11px" }} />
+                {pendingSteps} step{pendingSteps !== 1 ? "s" : ""}
+              </span>
+            )}
+            {insightsTotal > 0 && (
+              <span
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.72rem", fontWeight: 500,
+                  color: "var(--text-muted)",
+                }}
+              >
+                <Lightbulb style={{ width: "11px", height: "11px" }} />
+                {insightsTotal} insight{insightsTotal !== 1 ? "s" : ""}
               </span>
             )}
           </div>
-          {devPort && (
+        )}
+
+        {/* ── Row 3: git status ─────────────────────────────────────────── */}
+        {project.git && <GitStatusCompact git={project.git} />}
+
+        {/* ── Row 4: claude session (tertiary) ─────────────────────────── */}
+        {project.claude && <ClaudeSessionCompact claude={project.claude} />}
+
+        {/* ── Footer: pushed to bottom ──────────────────────────────────── */}
+        <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
+
+          {/* Tech stack line */}
+          {techParts.length > 0 && (
+            <div
+              style={{
+                fontSize: "0.7rem",
+                color: "var(--text-muted)",
+                letterSpacing: "0.01em",
+                lineHeight: 1.5,
+              }}
+            >
+              {techParts.join(" · ")}
+            </div>
+          )}
+
+          {/* Port + dev server — always shown */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "8px",
+            }}
+            onClick={(e) => e.preventDefault()}
+          >
+            {/* Port info */}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                <PortEditor
+                  slug={project.slug}
+                  currentPort={devPort}
+                  onPortChange={(p) => setDevPort(p ?? undefined)}
+                  compact
+                />
+              </span>
+              {project.dbPort && (
+                <span
+                  style={{
+                    display: "flex", alignItems: "center", gap: "3px",
+                    fontFamily: "var(--font-mono)", fontSize: "0.68rem",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <Database style={{ width: "10px", height: "10px" }} />
+                  {project.dbPort}
+                </span>
+              )}
+            </div>
+
+            {/* Dev server control — always rendered */}
             <DevServerControl
               slug={project.slug}
               projectPath={project.path}
               devPort={devPort}
               compact
             />
-          )}
+          </div>
         </div>
-
-        {project.git && <GitStatusCompact git={project.git} />}
-        {project.claude && <ClaudeSessionCompact claude={project.claude} />}
-        {aggregatedTodos && <TodoCompact todos={aggregatedTodos} />}
-        {aggregatedManualSteps && <ManualStepsCompact manualSteps={aggregatedManualSteps} />}
-        {aggregatedInsights && <InsightsCompact insights={aggregatedInsights} />}
       </div>
     </Link>
   );

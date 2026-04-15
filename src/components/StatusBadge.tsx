@@ -1,12 +1,29 @@
 "use client";
 
 import { ProjectStatus } from "@/lib/types";
-import { Badge } from "./ui/badge";
 
-const statusConfig: Record<ProjectStatus, { label: string; className: string }> = {
-  active: { label: "Active", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800" },
-  paused: { label: "Paused", className: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800" },
-  archived: { label: "Archived", className: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 border-gray-200 dark:border-gray-700" },
+const statusConfig: Record<
+  ProjectStatus,
+  { label: string; textVar: string; bgVar: string; borderVar: string }
+> = {
+  active: {
+    label: "Active",
+    textVar:   "--status-active-text",
+    bgVar:     "--status-active-bg",
+    borderVar: "--status-active-border",
+  },
+  paused: {
+    label: "Paused",
+    textVar:   "--status-paused-text",
+    bgVar:     "--status-paused-bg",
+    borderVar: "--status-paused-border",
+  },
+  archived: {
+    label: "Archived",
+    textVar:   "--status-archived-text",
+    bgVar:     "--status-archived-bg",
+    borderVar: "--status-archived-border",
+  },
 };
 
 interface StatusBadgeProps {
@@ -15,14 +32,40 @@ interface StatusBadgeProps {
 }
 
 export function StatusBadge({ status, onClick }: StatusBadgeProps) {
-  const config = statusConfig[status];
+  const cfg = statusConfig[status];
   return (
-    <Badge
-      className={`${config.className} ${onClick ? "cursor-pointer hover:opacity-80" : ""}`}
+    <span
       onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "5px",
+        fontFamily: "var(--font-body)",
+        fontSize: "0.65rem",
+        fontWeight: 600,
+        letterSpacing: "0.07em",
+        textTransform: "uppercase",
+        color: `var(${cfg.textVar})`,
+        background: `var(${cfg.bgVar})`,
+        border: `1px solid var(${cfg.borderVar})`,
+        borderRadius: "3px",
+        padding: "2px 6px",
+        cursor: onClick ? "pointer" : "default",
+        userSelect: "none",
+        lineHeight: 1.4,
+      }}
     >
-      {config.label}
-    </Badge>
+      <span
+        style={{
+          width: "5px",
+          height: "5px",
+          borderRadius: "50%",
+          background: `var(${cfg.textVar})`,
+          flexShrink: 0,
+        }}
+      />
+      {cfg.label}
+    </span>
   );
 }
 
@@ -33,9 +76,8 @@ interface StatusSelectorProps {
 
 export function StatusSelector({ status, onSelect }: StatusSelectorProps) {
   const statuses: ProjectStatus[] = ["active", "paused", "archived"];
-
   return (
-    <div className="flex gap-1">
+    <div style={{ display: "flex", gap: "4px" }}>
       {statuses.map((s) => (
         <StatusBadge
           key={s}

@@ -1,6 +1,6 @@
 interface Segment {
   value: number;
-  colorClass: string;
+  color: string; // CSS color value (e.g. "var(--accent)")
   label: string;
 }
 
@@ -12,31 +12,52 @@ export function HealthBar({ segments }: HealthBarProps) {
   const total = segments.reduce((sum, s) => sum + s.value, 0);
   if (total === 0) {
     return (
-      <p className="text-sm text-[var(--muted-foreground)]">No data</p>
+      <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>No data</p>
     );
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex h-4 rounded-full overflow-hidden bg-[var(--muted)]">
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div
+        style={{
+          display: "flex",
+          height: "6px",
+          borderRadius: "3px",
+          overflow: "hidden",
+          background: "var(--bg-elevated)",
+        }}
+      >
         {segments.map(
           (seg) =>
             seg.value > 0 && (
               <div
                 key={seg.label}
-                className={`${seg.colorClass} transition-all`}
-                style={{ width: `${(seg.value / total) * 100}%` }}
+                style={{
+                  width: `${(seg.value / total) * 100}%`,
+                  background: seg.color,
+                  transition: "width 0.3s ease",
+                }}
                 title={`${seg.label}: ${seg.value}`}
               />
             )
         )}
       </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px" }}>
         {segments.map((seg) => (
-          <div key={seg.label} className="flex items-center gap-1.5 text-xs">
-            <div className={`w-2.5 h-2.5 rounded-full ${seg.colorClass}`} />
-            <span className="text-[var(--muted-foreground)]">{seg.label}</span>
-            <span className="font-mono">{seg.value}</span>
+          <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <div
+              style={{
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                background: seg.color,
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{seg.label}</span>
+            <span style={{ fontSize: "0.72rem", fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              {seg.value}
+            </span>
           </div>
         ))}
       </div>
