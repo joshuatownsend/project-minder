@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, writeConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
-import { ProjectStatus } from "@/lib/types";
+import { ProjectStatus, MinderConfig } from "@/lib/types";
+
+// Derived from the MinderConfig union types — update both together if options change
+const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
+const VALID_STATUS_FILTERS: MinderConfig["defaultStatusFilter"][] = ["all", "active", "paused", "archived"];
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
@@ -28,8 +32,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.defaultSort !== undefined) {
-    const valid = ["activity", "name", "claude"];
-    if (!valid.includes(body.defaultSort)) {
+    if (!VALID_DEFAULT_SORTS.includes(body.defaultSort)) {
       return NextResponse.json({ error: "Invalid defaultSort" }, { status: 400 });
     }
     config.defaultSort = body.defaultSort;
@@ -37,8 +40,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   if (body.defaultStatusFilter !== undefined) {
-    const valid = ["all", "active", "paused", "archived"];
-    if (!valid.includes(body.defaultStatusFilter)) {
+    if (!VALID_STATUS_FILTERS.includes(body.defaultStatusFilter)) {
       return NextResponse.json({ error: "Invalid defaultStatusFilter" }, { status: 400 });
     }
     config.defaultStatusFilter = body.defaultStatusFilter;

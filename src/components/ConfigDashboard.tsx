@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { MinderConfig } from "@/lib/types";
-import { Plus, Trash2, GripVertical, Save, RotateCcw, FolderOpen, Loader2, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Save, RotateCcw, FolderOpen, Loader2, ChevronUp, ChevronDown } from "lucide-react";
 import { useToast } from "./ToastProvider";
 import type { ReactNode } from "react";
-
-// ── Shared layout primitives ──────────────────────────────────────────────────
 
 function SectionHeader({ label }: { label: string }) {
   return (
@@ -65,11 +63,7 @@ function ConfigRow({ label, description, children, last }: {
           {label}
         </div>
         {description && (
-          <div style={{
-            fontSize: "0.7rem",
-            color: "var(--text-muted)",
-            lineHeight: 1.5,
-          }}>
+          <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
             {description}
           </div>
         )}
@@ -80,8 +74,6 @@ function ConfigRow({ label, description, children, last }: {
     </div>
   );
 }
-
-// ── Inline input styles ───────────────────────────────────────────────────────
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-elevated)",
@@ -109,7 +101,7 @@ const selectStyle: React.CSSProperties = {
   backgroundPosition: "right 8px center",
 };
 
-const btnStyle = (variant: "primary" | "ghost" | "danger"): React.CSSProperties => ({
+const btnStyle = (variant: "primary" | "ghost" | "danger", disabled?: boolean): React.CSSProperties => ({
   display: "inline-flex",
   alignItems: "center",
   gap: "5px",
@@ -119,8 +111,9 @@ const btnStyle = (variant: "primary" | "ghost" | "danger"): React.CSSProperties 
   fontWeight: 600,
   letterSpacing: "0.04em",
   borderRadius: "var(--radius)",
-  cursor: "pointer",
+  cursor: disabled ? "not-allowed" : "pointer",
   border: "1px solid",
+  opacity: disabled ? 0.5 : 1,
   transition: "background 0.1s, color 0.1s",
   ...(variant === "primary" ? {
     background: "var(--accent-bg)",
@@ -136,8 +129,6 @@ const btnStyle = (variant: "primary" | "ghost" | "danger"): React.CSSProperties 
     borderColor: "var(--border-subtle)",
   }),
 });
-
-// ── Scan Roots section ────────────────────────────────────────────────────────
 
 function ScanRootsEditor({
   roots,
@@ -186,7 +177,6 @@ function ScanRootsEditor({
           borderRadius: "var(--radius)",
           padding: "4px 8px 4px 6px",
         }}>
-          {/* Order controls */}
           <div style={{ display: "flex", flexDirection: "column", gap: "1px", opacity: 0.5 }}>
             <button
               onClick={() => moveUp(i)}
@@ -257,7 +247,6 @@ function ScanRootsEditor({
         </div>
       ))}
 
-      {/* Add new root */}
       <div style={{ display: "flex", gap: "6px" }}>
         <input
           value={newPath}
@@ -269,11 +258,7 @@ function ScanRootsEditor({
         <button
           onClick={addRoot}
           disabled={!newPath.trim()}
-          style={{
-            ...btnStyle("ghost"),
-            flexShrink: 0,
-            opacity: !newPath.trim() ? 0.4 : 1,
-          }}
+          style={{ ...btnStyle("ghost", !newPath.trim()), flexShrink: 0 }}
         >
           <Plus style={{ width: "11px", height: "11px" }} />
           Add
@@ -282,8 +267,6 @@ function ScanRootsEditor({
     </div>
   );
 }
-
-// ── Hidden Projects section ───────────────────────────────────────────────────
 
 function HiddenProjectsList({
   hidden,
@@ -329,7 +312,7 @@ function HiddenProjectsList({
               setUnhiding(null);
             }}
             disabled={unhiding === dirName}
-            style={btnStyle("ghost")}
+            style={btnStyle("ghost", unhiding === dirName)}
           >
             {unhiding === dirName ? (
               <Loader2 style={{ width: "10px", height: "10px", animation: "spin 1s linear infinite" }} />
@@ -343,8 +326,6 @@ function HiddenProjectsList({
     </div>
   );
 }
-
-// ── Main Dashboard ────────────────────────────────────────────────────────────
 
 export function ConfigDashboard() {
   const [config, setConfig] = useState<MinderConfig | null>(null);
@@ -408,7 +389,11 @@ export function ConfigDashboard() {
         body: JSON.stringify({ action: "unhide", dirName }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await loadConfig();
+      // Patch hidden list in both saved and draft state without a full refetch,
+      // so any unsaved draft edits (e.g. root changes) are preserved.
+      const removeHidden = (c: MinderConfig) => ({ ...c, hidden: c.hidden.filter((h) => h !== dirName) });
+      setConfig((prev) => prev ? removeHidden(prev) : prev);
+      setDraft((prev) => prev ? removeHidden(prev) : prev);
       showToast("Project unhidden", dirName);
     } catch (err) {
       showToast("Failed to unhide", err instanceof Error ? err.message : "Unknown error");
@@ -439,7 +424,6 @@ export function ConfigDashboard() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "40px" }}>
 
-      {/* Page title + save bar */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <h1 style={{
@@ -451,11 +435,7 @@ export function ConfigDashboard() {
           }}>
             Configuration
           </h1>
-          <p style={{
-            fontSize: "0.75rem",
-            color: "var(--text-muted)",
-            marginTop: "3px",
-          }}>
+          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "3px" }}>
             Changes to scan roots and behavior take effect on the next rescan.
           </p>
         </div>
@@ -473,11 +453,7 @@ export function ConfigDashboard() {
           <button
             onClick={saveSettings}
             disabled={!isDirty || saving}
-            style={{
-              ...btnStyle("primary"),
-              opacity: (!isDirty || saving) ? 0.5 : 1,
-              cursor: (!isDirty || saving) ? "not-allowed" : "pointer",
-            }}
+            style={btnStyle("primary", !isDirty || saving)}
           >
             {saving ? (
               <Loader2 style={{ width: "11px", height: "11px", animation: "spin 1s linear infinite" }} />
@@ -489,7 +465,6 @@ export function ConfigDashboard() {
         </div>
       </div>
 
-      {/* Scan Roots */}
       <section>
         <SectionHeader label="Scan Roots" />
         <ConfigBlock>
@@ -505,7 +480,6 @@ export function ConfigDashboard() {
         </ConfigBlock>
       </section>
 
-      {/* Scan Behavior */}
       <section>
         <SectionHeader label="Scan Behavior" />
         <ConfigBlock>
@@ -551,7 +525,6 @@ export function ConfigDashboard() {
         </ConfigBlock>
       </section>
 
-      {/* Dashboard Defaults */}
       <section>
         <SectionHeader label="Dashboard Defaults" />
         <ConfigBlock>
@@ -593,7 +566,6 @@ export function ConfigDashboard() {
         </ConfigBlock>
       </section>
 
-      {/* Hidden Projects */}
       <section>
         <SectionHeader label="Hidden Projects" />
         <ConfigBlock>
@@ -602,7 +574,7 @@ export function ConfigDashboard() {
               Projects hidden from the dashboard. These directories are skipped during scanning. Hide individual projects from their card menu; unhide them here.
             </p>
             <HiddenProjectsList
-              hidden={config!.hidden}
+              hidden={draft.hidden}
               onUnhide={unhideProject}
             />
           </div>
