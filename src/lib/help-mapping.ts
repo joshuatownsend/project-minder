@@ -22,7 +22,7 @@ export const tabHelpMapping: Record<string, string> = {
   overview: 'project-details',
   context: 'project-details',
   todos: 'project-details',
-  claude: 'project-details',
+  sessions: 'sessions',
   'manual-steps': 'manual-steps',
   insights: 'insights',
 }

@@ -179,6 +179,12 @@ export interface StatsData {
   claudeUsage?: ClaudeUsageStats;
 }
 
+export interface SessionRecap {
+  content: string;
+  timestamp: string;
+  slug?: string; // human-readable session nickname, e.g. "dynamic-giggling-quokka"
+}
+
 export interface SessionSummary {
   sessionId: string;
   projectPath: string;
@@ -188,6 +194,8 @@ export interface SessionSummary {
   endTime?: string;
   durationMs?: number;
   initialPrompt?: string;
+  lastPrompt?: string;
+  recaps?: SessionRecap[];
   messageCount: number;
   userMessageCount: number;
   assistantMessageCount: number;

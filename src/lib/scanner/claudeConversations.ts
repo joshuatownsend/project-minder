@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import {
   ClaudeUsageStats,
+  SessionRecap,
   SessionSummary,
   SessionDetail,
   TimelineEvent,
@@ -21,12 +22,14 @@ import {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ConversationEntry {
   type?: string;
+  subtype?: string;
   timestamp?: string;
   sessionId?: string;
   gitBranch?: string;
   isSidechain?: boolean;
   isApiErrorMessage?: boolean;
   isMeta?: boolean;
+  slug?: string; // present on away_summary entries
   message?: {
     model?: string;
     role?: string;
@@ -38,8 +41,8 @@ export interface ConversationEntry {
       cache_read_input_tokens?: number;
     };
   };
-  // For tool_result user messages
-  content?: any[];
+  // For tool_result user messages and away_summary system entries
+  content?: any;
 }
 
 // Approximate cost per token (USD)
@@ -88,6 +91,23 @@ function extractTextContent(content: any[]): string {
     .slice(0, 200);
 }
 
+/**
+ * Like extractTextContent but filters out hook/system injection blocks
+ * (content starting with '<', e.g. <user-prompt-submit-hook>, <command-name>, etc.)
+ */
+function extractHumanText(content: any): string {
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.startsWith("<") ? "" : trimmed.slice(0, 200);
+  }
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b: any) => b.type === "text" && b.text && !b.text.trim().startsWith("<"))
+    .map((b: any) => b.text as string)
+    .join("\n")
+    .slice(0, 200);
+}
+
 // ─── Session ID index (globalThis singleton) ─────────────────────────
 
 const globalForIndex = globalThis as unknown as {
@@ -117,7 +137,9 @@ async function scanSessionFile(
     let startTime: string | undefined;
     let endTime: string | undefined;
     let initialPrompt: string | undefined;
+    let lastPrompt: string | undefined;
     let gitBranch: string | undefined;
+    const recaps: SessionRecap[] = [];
     let messageCount = 0;
     let userMessageCount = 0;
     let assistantMessageCount = 0;
@@ -143,15 +165,18 @@ async function scanSessionFile(
         }
         if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
 
+        if (entry.type === "system" && entry.subtype === "away_summary" && typeof entry.content === "string" && entry.timestamp) {
+          recaps.push({ content: entry.content, timestamp: entry.timestamp, slug: entry.slug });
+        }
+
         if (entry.type === "user" && !entry.isMeta) {
           userMessageCount++;
           messageCount++;
-          if (!initialPrompt && entry.message?.content) {
-            const text = extractTextContent(entry.message.content);
-            if (text) initialPrompt = text;
-          } else if (!initialPrompt && Array.isArray(entry.content)) {
-            const text = extractTextContent(entry.content);
-            if (text) initialPrompt = text;
+          const humanContent = entry.message?.content ?? entry.content;
+          const humanText = extractHumanText(humanContent);
+          if (humanText) {
+            if (!initialPrompt) initialPrompt = humanText;
+            lastPrompt = humanText;
           }
         }
 
@@ -249,8 +274,6 @@ async function scanSessionFile(
 
     const projectPath = decodeDirName(projectDirName);
     const projectSlug = toSlug(projectDirName);
-    // Use last path segment as display name
-    const projectName = projectDirName.split("-").slice(-1)[0] || projectDirName;
 
     return {
       sessionId,
@@ -261,6 +284,8 @@ async function scanSessionFile(
       endTime,
       durationMs,
       initialPrompt,
+      lastPrompt: lastPrompt !== initialPrompt ? lastPrompt : undefined,
+      recaps: recaps.length > 0 ? recaps : undefined,
       messageCount,
       userMessageCount,
       assistantMessageCount,

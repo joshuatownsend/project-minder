@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
 import { StatusSelector } from "./StatusBadge";
-import { ClaudeSessionList } from "./ClaudeSessionList";
 import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
@@ -28,7 +27,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "claude" | "sessions" | "manual-steps" | "insights";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -368,7 +367,6 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "overview",    label: "Overview" },
     { key: "context",     label: "Context" },
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
-    { key: "claude",      label: "Claude" },
     { key: "sessions",    label: "Sessions" },
     { key: "manual-steps", label: "Manual Steps" },
     { key: "insights",    label: "Insights" },
@@ -711,19 +709,6 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                     />
                   )}
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* ── CLAUDE ────────────────────────────────────────────────── */}
-          {activeTab === "claude" && (
-            <div>
-              {project.claude ? (
-                <ClaudeSessionList claude={project.claude} />
-              ) : (
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
-                  No Claude session data found.
-                </p>
               )}
             </div>
           )}

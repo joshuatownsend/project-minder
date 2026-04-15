@@ -269,17 +269,71 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           ))}
         </div>
 
-        {/* Initial prompt */}
-        {data.initialPrompt && (
+        {/* Initial prompt — shown only when there's no recap (recap takes priority in the header) */}
+        {data.initialPrompt && !data.recaps?.length && (
           <p style={{
             fontSize: "0.85rem", color: "var(--text-secondary)",
             lineHeight: 1.55, margin: 0,
             fontStyle: "italic",
-            paddingLeft: "12px",
-            borderLeft: "2px solid var(--border-default)",
+            background: "var(--bg-elevated)",
+            borderRadius: "var(--radius)",
+            padding: "8px 12px",
           }}>
             {data.initialPrompt}
           </p>
+        )}
+
+        {/* Recap history — latest shown prominently, older ones collapsed below */}
+        {data.recaps && data.recaps.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {/* Latest recap — primary summary */}
+            <div style={{
+              background: "var(--accent-bg)",
+              border: "1px solid var(--accent-border)",
+              borderRadius: "var(--radius)",
+              padding: "10px 14px",
+              display: "flex", flexDirection: "column", gap: "4px",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{
+                  fontSize: "0.6rem", fontFamily: "var(--font-mono)",
+                  fontWeight: 600, letterSpacing: "0.06em",
+                  color: "var(--accent)", textTransform: "uppercase",
+                }}>
+                  recap
+                </span>
+                <span style={{ fontSize: "0.62rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                  {new Date(data.recaps[data.recaps.length - 1].timestamp).toLocaleString()}
+                </span>
+                {data.recaps.length > 1 && (
+                  <span style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginLeft: "auto" }}>
+                    {data.recaps.length} total
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.55, margin: 0 }}>
+                {data.recaps[data.recaps.length - 1].content}
+              </p>
+            </div>
+            {/* Earlier recaps — show when more than one exists */}
+            {data.recaps.length > 1 && data.recaps.slice(0, -1).reverse().map((recap, i) => (
+              <div key={i} style={{
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius)",
+                padding: "8px 14px",
+                display: "flex", flexDirection: "column", gap: "3px",
+                opacity: 0.75,
+              }}>
+                <span style={{ fontSize: "0.6rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                  {new Date(recap.timestamp).toLocaleString()}
+                </span>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", lineHeight: 1.5, margin: 0 }}>
+                  {recap.content}
+                </p>
+              </div>
+            ))}
+          </div>
         )}
 
         {/* Timestamp line */}

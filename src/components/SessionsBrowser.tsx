@@ -218,18 +218,33 @@ function SessionRow({
             </span>
           )}
           {session.isActive && <ActiveDot />}
+          {session.recaps && session.recaps.length > 0 && (
+            <span style={{
+              fontSize: "0.6rem", fontFamily: "var(--font-mono)",
+              fontWeight: 600, letterSpacing: "0.04em",
+              color: "var(--accent)", background: "var(--accent-bg)",
+              border: "1px solid var(--accent-border)",
+              borderRadius: "3px", padding: "1px 5px",
+              flexShrink: 0,
+            }}>
+              recap
+            </span>
+          )}
           <span
             style={{
               flex: 1,
               fontSize: "0.8rem",
-              color: session.initialPrompt ? "var(--text-primary)" : "var(--text-muted)",
+              color: "var(--text-primary)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              fontStyle: session.initialPrompt ? "normal" : "italic",
             }}
           >
-            {session.initialPrompt ?? "no prompt recorded"}
+            {session.recaps && session.recaps.length > 0
+              ? session.recaps[session.recaps.length - 1].content
+              : session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+                <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
+              )}
           </span>
           <ResumeButton sessionId={session.sessionId} />
           <span
