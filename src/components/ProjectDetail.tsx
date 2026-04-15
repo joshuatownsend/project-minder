@@ -2,12 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
 import { StatusSelector } from "./StatusBadge";
-import { TechStackBadges } from "./TechStackBadges";
-import { GitStatus } from "./GitStatus";
 import { ClaudeSessionList } from "./ClaudeSessionList";
 import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
@@ -15,29 +10,348 @@ import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
 import { ProjectSessions } from "./ProjectSessions";
+import { GitStatusCompact } from "./GitStatus";
 import {
   ArrowLeft,
   ExternalLink,
   Terminal,
-  Network,
-  Database,
   Github,
+  GitBranch,
+  Clock,
+  AlertCircle,
   Globe,
-  FolderOpen,
+  Database,
+  Network,
 } from "lucide-react";
 import Link from "next/link";
+import { formatDistanceToNow } from "date-fns";
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+type TabKey = "overview" | "context" | "todos" | "claude" | "sessions" | "manual-steps" | "insights";
 
 interface ProjectDetailProps {
   project: ProjectData;
   onStatusChange: (status: ProjectStatus) => void;
 }
 
+// ── Markdown renderer ──────────────────────────────────────────────────────
+
+function renderInline(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={i} style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code key={i} style={{
+          fontFamily: "var(--font-mono)", fontSize: "0.85em",
+          color: "var(--accent)", background: "var(--accent-bg)",
+          padding: "1px 5px", borderRadius: "3px",
+        }}>
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part || null;
+  }).filter((p): p is NonNullable<typeof p> => p !== null);
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  const lines = content.split("\n");
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const trimmed = raw.trimEnd();
+    const stripped = trimmed.trimStart();
+    const indent = raw.length - raw.trimStart().length;
+
+    // Fenced code block
+    if (stripped.startsWith("```")) {
+      const lang = stripped.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trimEnd().trimStart().startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      elements.push(
+        <pre key={key++} style={{
+          fontFamily: "var(--font-mono)", fontSize: "0.78rem",
+          color: "var(--text-secondary)",
+          background: "var(--bg-elevated)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "var(--radius)",
+          padding: "12px 14px", overflowX: "auto",
+          lineHeight: 1.65, margin: "10px 0",
+        }}>
+          {lang && (
+            <span style={{
+              display: "block", fontSize: "0.6rem", color: "var(--text-muted)",
+              marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.1em",
+              fontFamily: "var(--font-body)",
+            }}>
+              {lang}
+            </span>
+          )}
+          <code>{codeLines.join("\n")}</code>
+        </pre>
+      );
+      i++; // skip closing ```
+      continue;
+    }
+
+    // H1
+    if (stripped.startsWith("# ")) {
+      elements.push(
+        <h2 key={key++} style={{
+          fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)",
+          fontFamily: "var(--font-body)", letterSpacing: "-0.01em",
+          margin: "24px 0 8px",
+          paddingBottom: "6px",
+          borderBottom: "1px solid var(--border-subtle)",
+        }}>
+          {renderInline(stripped.slice(2))}
+        </h2>
+      );
+      i++;
+      continue;
+    }
+
+    // H2
+    if (stripped.startsWith("## ")) {
+      elements.push(
+        <div key={key++} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "20px 0 6px" }}>
+          <span style={{
+            fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.1em",
+            textTransform: "uppercase", color: "var(--text-muted)",
+            fontFamily: "var(--font-body)", whiteSpace: "nowrap",
+          }}>
+            {renderInline(stripped.slice(3))}
+          </span>
+          <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    // H3
+    if (stripped.startsWith("### ")) {
+      elements.push(
+        <h4 key={key++} style={{
+          fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)",
+          fontFamily: "var(--font-body)", margin: "14px 0 3px",
+        }}>
+          {renderInline(stripped.slice(4))}
+        </h4>
+      );
+      i++;
+      continue;
+    }
+
+    // H4
+    if (stripped.startsWith("#### ")) {
+      elements.push(
+        <h5 key={key++} style={{
+          fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)",
+          fontFamily: "var(--font-body)", margin: "10px 0 2px",
+        }}>
+          {renderInline(stripped.slice(5))}
+        </h5>
+      );
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^-{3,}$/.test(stripped) || /^={3,}$/.test(stripped) || /^\*{3,}$/.test(stripped)) {
+      elements.push(
+        <hr key={key++} style={{
+          border: "none",
+          borderTop: "1px solid var(--border-subtle)",
+          margin: "16px 0",
+        }} />
+      );
+      i++;
+      continue;
+    }
+
+    // Bullet list
+    if (/^[-*] /.test(stripped)) {
+      const items: { text: string; level: number }[] = [];
+      while (i < lines.length) {
+        const l = lines[i];
+        const lTrimmed = l.trimEnd();
+        const lStripped = lTrimmed.trimStart();
+        const lIndent = l.length - l.trimStart().length;
+        if (/^[-*] /.test(lStripped)) {
+          items.push({ text: lStripped.slice(2), level: Math.floor(lIndent / 2) });
+          i++;
+        } else if (lTrimmed === "") {
+          i++;
+          break;
+        } else {
+          break;
+        }
+      }
+      elements.push(
+        <ul key={key++} style={{ margin: "4px 0 6px", padding: 0, listStyle: "none" }}>
+          {items.map((item, j) => (
+            <li key={j} style={{
+              display: "flex", alignItems: "flex-start", gap: "8px",
+              fontSize: "0.82rem", color: "var(--text-secondary)",
+              lineHeight: 1.6, marginBottom: "2px",
+              paddingLeft: `${item.level * 16}px`,
+            }}>
+              <span style={{
+                color: "var(--text-muted)", flexShrink: 0,
+                marginTop: "5px", fontSize: "0.45rem",
+              }}>
+                ◆
+              </span>
+              <span>{renderInline(item.text)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    // Numbered list
+    if (/^\d+\. /.test(stripped)) {
+      const items: { text: string; num: string }[] = [];
+      while (i < lines.length) {
+        const l = lines[i].trimEnd().trimStart();
+        const m = l.match(/^(\d+)\. (.+)/);
+        if (m) {
+          items.push({ num: m[1], text: m[2] });
+          i++;
+        } else if (lines[i].trim() === "") {
+          i++;
+          break;
+        } else {
+          break;
+        }
+      }
+      elements.push(
+        <ol key={key++} style={{ margin: "4px 0 6px", padding: 0, listStyle: "none" }}>
+          {items.map((item, j) => (
+            <li key={j} style={{
+              display: "flex", alignItems: "flex-start", gap: "10px",
+              fontSize: "0.82rem", color: "var(--text-secondary)",
+              lineHeight: 1.6, marginBottom: "3px",
+            }}>
+              <span style={{
+                fontFamily: "var(--font-mono)", fontSize: "0.7rem",
+                color: "var(--text-muted)", flexShrink: 0,
+                minWidth: "18px", textAlign: "right",
+                marginTop: "1px",
+              }}>
+                {item.num}.
+              </span>
+              <span>{renderInline(item.text)}</span>
+            </li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    // Indented continuation lines (part of previous block) — treat as body text
+    if (indent >= 2 && stripped !== "") {
+      elements.push(
+        <p key={key++} style={{
+          fontSize: "0.8rem", color: "var(--text-muted)",
+          lineHeight: 1.6, margin: "0 0 2px",
+          paddingLeft: `${Math.min(indent, 8) * 2}px`,
+          fontFamily: "var(--font-mono)",
+        }}>
+          {renderInline(stripped)}
+        </p>
+      );
+      i++;
+      continue;
+    }
+
+    // Empty line
+    if (trimmed === "") {
+      i++;
+      continue;
+    }
+
+    // Regular paragraph
+    elements.push(
+      <p key={key++} style={{
+        fontSize: "0.82rem", color: "var(--text-secondary)",
+        lineHeight: 1.65, margin: "4px 0",
+      }}>
+        {renderInline(trimmed)}
+      </p>
+    );
+    i++;
+  }
+
+  return (
+    <div style={{ maxWidth: "720px" }}>
+      {elements}
+    </div>
+  );
+}
+
+// ── Section label + rule ───────────────────────────────────────────────────
+
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
+      <span style={{
+        fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.1em",
+        textTransform: "uppercase", color: "var(--text-muted)",
+        fontFamily: "var(--font-body)", whiteSpace: "nowrap",
+      }}>
+        {label}
+      </span>
+      <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+    </div>
+  );
+}
+
+// ── Overview sub-components ────────────────────────────────────────────────
+
+function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+      <span style={{
+        fontSize: "0.72rem", color: "var(--text-muted)",
+        fontFamily: "var(--font-body)", flexShrink: 0,
+      }}>
+        {label}
+      </span>
+      <span style={{
+        fontFamily: "var(--font-mono)", fontSize: "0.72rem",
+        color: "var(--text-secondary)", textAlign: "right",
+      }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────
+
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
 
-  // Resync local TODO state when the component receives a different project
-  // (e.g. client-side route transitions between /project/[slug] pages).
   useEffect(() => {
     setTodos(project.todos);
   }, [project.slug, project.todos]);
@@ -47,261 +361,401 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   };
 
   const openInTerminal = () => {
-    // Windows Terminal
-    window.open(
-      `wt.exe -d "${project.path}"`,
-      "_blank"
+    window.open(`wt.exe -d "${project.path}"`, "_blank");
+  };
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: "overview",    label: "Overview" },
+    { key: "context",     label: "Context" },
+    { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
+    { key: "claude",      label: "Claude" },
+    { key: "sessions",    label: "Sessions" },
+    { key: "manual-steps", label: "Manual Steps" },
+    { key: "insights",    label: "Insights" },
+  ];
+
+  const actionBtn = (label: string, icon: React.ReactNode, onClick: () => void, href?: string) => {
+    const style: React.CSSProperties = {
+      display: "inline-flex", alignItems: "center", gap: "5px",
+      padding: "5px 10px",
+      fontSize: "0.71rem", fontFamily: "var(--font-body)",
+      color: "var(--text-secondary)",
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border-subtle)",
+      borderRadius: "var(--radius)",
+      cursor: "pointer", lineHeight: 1,
+      textDecoration: "none",
+      transition: "color 0.1s, border-color 0.1s",
+    };
+    const hoverIn = (e: React.MouseEvent) => {
+      (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+      (e.currentTarget as HTMLElement).style.borderColor = "var(--border-default)";
+    };
+    const hoverOut = (e: React.MouseEvent) => {
+      (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+      (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
+    };
+    if (href) {
+      return (
+        <a key={label} href={href} target="_blank" rel="noopener noreferrer"
+          style={style} onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+        >
+          {icon} {label}
+        </a>
+      );
+    }
+    return (
+      <button key={label} onClick={onClick}
+        style={style} onMouseEnter={hoverIn} onMouseLeave={hoverOut}
+      >
+        {icon} {label}
+      </button>
     );
   };
 
+  const techChips: string[] = [
+    project.framework ? `${project.framework}${project.frameworkVersion ? ` ${project.frameworkVersion}` : ""}` : null,
+    project.orm ?? null,
+    project.styling ?? null,
+    project.monorepoType ?? null,
+    project.database?.type ?? null,
+    project.dockerPorts.length > 0 ? "Docker" : null,
+  ].filter((t): t is string => t !== null);
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Link href="/">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back
-          </Button>
+    <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+
+      {/* ── Nav row ─────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingBottom: "20px" }}>
+        <Link
+          href="/"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: "4px",
+            fontSize: "0.72rem", color: "var(--text-secondary)", textDecoration: "none",
+          }}
+        >
+          <ArrowLeft style={{ width: "12px", height: "12px" }} />
+          Dashboard
         </Link>
+        <span style={{ fontSize: "0.72rem", color: "var(--border-default)" }}>/</span>
+        <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+          {project.name}
+        </span>
       </div>
 
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <div className="space-y-2">
-          <h1 className="text-2xl font-bold">{project.name}</h1>
-          <p className="text-sm text-[var(--muted-foreground)] font-mono">
-            {project.path}
-          </p>
-          <TechStackBadges project={project} />
-        </div>
-
-        <div className="flex flex-col gap-2 items-end">
-          <StatusSelector status={project.status} onSelect={onStatusChange} />
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={openInVSCode}>
-              <ExternalLink className="h-4 w-4 mr-1" />
-              VS Code
-            </Button>
-            <Button variant="outline" size="sm" onClick={openInTerminal}>
-              <Terminal className="h-4 w-4 mr-1" />
-              Terminal
-            </Button>
-            {project.git?.remoteUrl && (
-              <a href={project.git.remoteUrl} target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm">
-                  <Github className="h-4 w-4 mr-1" />
-                  GitHub
-                </Button>
-              </a>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="context">Context</TabsTrigger>
-          <TabsTrigger value="todos">TODOs</TabsTrigger>
-          <TabsTrigger value="claude">Claude</TabsTrigger>
-          <TabsTrigger value="sessions">Sessions</TabsTrigger>
-          <TabsTrigger value="manual-steps">Manual Steps</TabsTrigger>
-          <TabsTrigger value="insights">Insights</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="overview" className="space-y-6">
-          {/* Dev Server Control */}
-          <DevServerControl
-            slug={project.slug}
-            projectPath={project.path}
-            devPort={devPort}
-          />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Ports */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="font-medium flex items-center gap-2">
-                <Network className="h-4 w-4" />
-                Ports
-              </h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-[var(--muted-foreground)]">Dev Server</span>
-                  <PortEditor
-                    slug={project.slug}
-                    currentPort={devPort}
-                    onPortChange={(p) => setDevPort(p ?? undefined)}
-                  />
-                </div>
-                {project.dbPort && (
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Database</span>
-                    <span className="font-mono">{project.dbPort}</span>
-                  </div>
-                )}
-                {project.dockerPorts.map((dp, i) => (
-                  <div key={i} className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">
-                      Docker: {dp.service}
-                    </span>
-                    <span className="font-mono">
-                      {dp.host}:{dp.container}
-                    </span>
-                  </div>
-                ))}
-                {!project.devPort && !project.dbPort && project.dockerPorts.length === 0 && (
-                  <p className="text-[var(--muted-foreground)]">No ports detected</p>
-                )}
-              </div>
-            </div>
-
-            {/* Database */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="font-medium flex items-center gap-2">
-                <Database className="h-4 w-4" />
-                Database
-              </h3>
-              {project.database ? (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Type</span>
-                    <span>{project.database.type}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Host</span>
-                    <span className="font-mono">{project.database.host}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Port</span>
-                    <span className="font-mono">{project.database.port}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--muted-foreground)]">Name</span>
-                    <span className="font-mono">{project.database.name}</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-[var(--muted-foreground)]">No database detected</p>
+      {/* ── Header block ────────────────────────────────────────────────── */}
+      <div style={{
+        padding: "18px 24px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius) var(--radius) 0 0",
+        borderBottom: "none",
+        display: "flex", flexDirection: "column", gap: "10px",
+      }}>
+        {/* Row 1: name + status + actions */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
+          <h1 style={{
+            fontSize: "1.15rem", fontWeight: 700,
+            color: "var(--text-primary)", fontFamily: "var(--font-body)",
+            letterSpacing: "-0.01em", margin: 0, flex: 1,
+          }}>
+            {project.name}
+          </h1>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, flexWrap: "wrap" }}>
+            <StatusSelector status={project.status} onSelect={onStatusChange} />
+            <div style={{ display: "flex", gap: "4px" }}>
+              {actionBtn("VS Code", <ExternalLink style={{ width: "10px", height: "10px" }} />, openInVSCode)}
+              {actionBtn("Terminal", <Terminal style={{ width: "10px", height: "10px" }} />, openInTerminal)}
+              {project.git?.remoteUrl && actionBtn(
+                "GitHub",
+                <Github style={{ width: "10px", height: "10px" }} />,
+                () => {},
+                project.git.remoteUrl
               )}
             </div>
+          </div>
+        </div>
 
-            {/* External Services */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="font-medium flex items-center gap-2">
-                <Globe className="h-4 w-4" />
-                External Services
-              </h3>
-              {project.externalServices.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {project.externalServices.map((service) => (
-                    <Badge key={service} variant="outline">
-                      {service}
-                    </Badge>
-                  ))}
+        {/* Row 2: path */}
+        <span style={{
+          fontFamily: "var(--font-mono)", fontSize: "0.68rem",
+          color: "var(--text-muted)",
+        }}>
+          {project.path}
+        </span>
+
+        {/* Row 3: tech chips */}
+        {techChips.length > 0 && (
+          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            {techChips.map((chip) => (
+              <span key={chip} style={{
+                fontFamily: "var(--font-mono)", fontSize: "0.65rem",
+                color: "var(--text-muted)",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px", padding: "2px 6px",
+              }}>
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Tab section ─────────────────────────────────────────────────── */}
+      <div style={{
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderTop: "1px solid var(--border-default)",
+        borderRadius: "0 0 var(--radius) var(--radius)",
+        overflow: "hidden",
+      }}>
+        {/* Tab bar */}
+        <div style={{
+          display: "flex", alignItems: "center",
+          padding: "0 4px",
+          borderBottom: "1px solid var(--border-subtle)",
+        }}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              style={{
+                padding: "10px 14px",
+                fontSize: "0.72rem", fontFamily: "var(--font-body)",
+                letterSpacing: "0.03em",
+                fontWeight: activeTab === tab.key ? 600 : 400,
+                color: activeTab === tab.key ? "var(--text-primary)" : "var(--text-secondary)",
+                background: "transparent", border: "none",
+                borderBottom: activeTab === tab.key
+                  ? "2px solid var(--accent)"
+                  : "2px solid transparent",
+                cursor: "pointer", lineHeight: 1,
+                transition: "color 0.1s",
+                marginBottom: "-1px",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div style={{ padding: "20px 24px" }}>
+
+          {/* ── OVERVIEW ──────────────────────────────────────────────── */}
+          {activeTab === "overview" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+              <DevServerControl
+                slug={project.slug}
+                projectPath={project.path}
+                devPort={devPort}
+              />
+
+              {/* Git */}
+              {project.git && (
+                <div>
+                  <SectionHeader label="Git" />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <GitBranch style={{ width: "13px", height: "13px", color: "var(--text-muted)", flexShrink: 0 }} />
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.85rem", color: "var(--text-primary)", fontWeight: 600 }}>
+                        {project.git.branch}
+                      </span>
+                      {project.git.isDirty && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--accent)", fontSize: "0.72rem", fontFamily: "var(--font-mono)" }}>
+                          <AlertCircle style={{ width: "11px", height: "11px" }} />
+                          {project.git.uncommittedCount} uncommitted
+                        </span>
+                      )}
+                      {project.git.remoteUrl && (
+                        <a href={project.git.remoteUrl} target="_blank" rel="noopener noreferrer"
+                          style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "0.68rem", color: "var(--text-muted)", textDecoration: "none" }}
+                          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-secondary)")}
+                          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-muted)")}
+                        >
+                          <Github style={{ width: "11px", height: "11px" }} />
+                          GitHub
+                        </a>
+                      )}
+                    </div>
+                    {project.git.lastCommitMessage && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", paddingLeft: "23px" }}>
+                        <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {project.git.lastCommitMessage}
+                        </span>
+                        {project.git.lastCommitDate && (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "0.68rem", color: "var(--text-muted)", flexShrink: 0 }}>
+                            <Clock style={{ width: "10px", height: "10px" }} />
+                            {formatDistanceToNow(new Date(project.git.lastCommitDate), { addSuffix: true })}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+              )}
+
+              {/* Infrastructure: ports + database + services */}
+              {(devPort || project.dbPort || project.dockerPorts.length > 0 || project.database || project.externalServices.length > 0) && (
+                <div>
+                  <SectionHeader label="Infrastructure" />
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "20px" }}>
+
+                    {/* Ports */}
+                    {(devPort || project.dbPort || project.dockerPorts.length > 0) && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                          <Network style={{ width: "12px", height: "12px", color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.68rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: "var(--font-body)" }}>
+                            Ports
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <InfoRow label="Dev">
+                            <PortEditor
+                              slug={project.slug}
+                              currentPort={devPort}
+                              onPortChange={(p) => setDevPort(p ?? undefined)}
+                            />
+                          </InfoRow>
+                          {project.dbPort && (
+                            <InfoRow label="Database">:{project.dbPort}</InfoRow>
+                          )}
+                          {project.dockerPorts.map((dp, i) => (
+                            <InfoRow key={i} label={`Docker ${dp.service}`}>
+                              :{dp.host}
+                            </InfoRow>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Database */}
+                    {project.database && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                          <Database style={{ width: "12px", height: "12px", color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.68rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: "var(--font-body)" }}>
+                            Database
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <InfoRow label="Type">{project.database.type}</InfoRow>
+                          <InfoRow label="Host">{project.database.host}</InfoRow>
+                          <InfoRow label="Port">{project.database.port}</InfoRow>
+                          <InfoRow label="Name">{project.database.name}</InfoRow>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* External services */}
+                    {project.externalServices.length > 0 && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                          <Globe style={{ width: "12px", height: "12px", color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.68rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontFamily: "var(--font-body)" }}>
+                            Services
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                          {project.externalServices.map((svc) => (
+                            <span key={svc} style={{
+                              fontFamily: "var(--font-mono)", fontSize: "0.68rem",
+                              color: "var(--text-secondary)",
+                              background: "var(--bg-elevated)",
+                              border: "1px solid var(--border-subtle)",
+                              borderRadius: "3px", padding: "2px 6px",
+                            }}>
+                              {svc}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── CONTEXT ───────────────────────────────────────────────── */}
+          {activeTab === "context" && (
+            <div>
+              {project.claude?.claudeMdSummary ? (
+                <MarkdownContent content={project.claude.claudeMdSummary} />
               ) : (
-                <p className="text-sm text-[var(--muted-foreground)]">
-                  No external services detected
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
+                  No CLAUDE.md found for this project.
                 </p>
               )}
             </div>
+          )}
 
-            {/* Git */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="font-medium flex items-center gap-2">
-                <FolderOpen className="h-4 w-4" />
-                Git Status
-              </h3>
-              {project.git ? (
-                <GitStatus git={project.git} />
+          {/* ── TODOS ─────────────────────────────────────────────────── */}
+          {activeTab === "todos" && (
+            <div>
+              {todos ? (
+                <TodoList todos={todos} slug={project.slug} onChange={setTodos} worktrees={project.worktrees} />
               ) : (
-                <p className="text-sm text-[var(--muted-foreground)]">No git info</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: 0 }}>
+                    No TODO items found. Add one below to create <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.85em", color: "var(--accent)", background: "var(--accent-bg)", padding: "1px 4px", borderRadius: "3px" }}>TODO.md</code>.
+                  </p>
+                  <AddTodoForm slug={project.slug} onAdded={setTodos} />
+                  {project.worktrees?.some((wt) => wt.todos) && (
+                    <TodoList
+                      todos={{ total: 0, completed: 0, pending: 0, items: [] }}
+                      worktrees={project.worktrees}
+                    />
+                  )}
+                </div>
               )}
             </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="context">
-          {project.claude?.claudeMdSummary ? (
-            <div className="rounded-lg border p-6">
-              <h3 className="font-medium mb-4">CLAUDE.md</h3>
-              <pre className="whitespace-pre-wrap text-sm font-mono text-[var(--muted-foreground)]">
-                {project.claude.claudeMdSummary}
-              </pre>
-            </div>
-          ) : (
-            <p className="text-[var(--muted-foreground)] py-8 text-center">
-              No CLAUDE.md found for this project.
-            </p>
           )}
-        </TabsContent>
 
-        <TabsContent value="todos">
-          <div className="rounded-lg border p-6">
-            {todos ? (
-              <TodoList todos={todos} slug={project.slug} onChange={setTodos} worktrees={project.worktrees} />
-            ) : (
-              <div className="space-y-4">
-                <p className="text-[var(--muted-foreground)] text-sm">
-                  No TODO items found for this project. Add an item below to create or seed <code>TODO.md</code>.
+          {/* ── CLAUDE ────────────────────────────────────────────────── */}
+          {activeTab === "claude" && (
+            <div>
+              {project.claude ? (
+                <ClaudeSessionList claude={project.claude} />
+              ) : (
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
+                  No Claude session data found.
                 </p>
-                <AddTodoForm slug={project.slug} onAdded={setTodos} />
-                {project.worktrees?.some((wt) => wt.todos) && (
-                  <TodoList
-                    todos={{ total: 0, completed: 0, pending: 0, items: [] }}
-                    worktrees={project.worktrees}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="claude">
-          {project.claude ? (
-            <div className="rounded-lg border p-6">
-              <ClaudeSessionList claude={project.claude} />
+              )}
             </div>
-          ) : (
-            <p className="text-[var(--muted-foreground)] py-8 text-center">
-              No Claude session data found.
-            </p>
           )}
-        </TabsContent>
 
-        <TabsContent value="sessions">
-          <ProjectSessions projectPath={project.path} />
-        </TabsContent>
-
-        <TabsContent value="manual-steps">
-          {project.manualSteps ? (
-            <div className="rounded-lg border p-6">
-              <ManualStepsList
-                slug={project.slug}
-                initialData={project.manualSteps}
-                worktrees={project.worktrees}
-              />
-            </div>
-          ) : project.worktrees?.some((wt) => wt.manualSteps) ? (
-            <div className="rounded-lg border p-6">
-              <ManualStepsList
-                slug={project.slug}
-                initialData={{ entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 }}
-                worktrees={project.worktrees}
-              />
-            </div>
-          ) : (
-            <p className="text-[var(--muted-foreground)] py-8 text-center">
-              No MANUAL_STEPS.md found for this project.
-            </p>
+          {/* ── SESSIONS ──────────────────────────────────────────────── */}
+          {activeTab === "sessions" && (
+            <ProjectSessions projectPath={project.path} />
           )}
-        </TabsContent>
 
-        <TabsContent value="insights">
-          <div className="rounded-lg border p-6">
+          {/* ── MANUAL STEPS ──────────────────────────────────────────── */}
+          {activeTab === "manual-steps" && (
+            <div>
+              {project.manualSteps || project.worktrees?.some((wt) => wt.manualSteps) ? (
+                <ManualStepsList
+                  slug={project.slug}
+                  initialData={project.manualSteps ?? { entries: [], totalSteps: 0, completedSteps: 0, pendingSteps: 0 }}
+                  worktrees={project.worktrees}
+                />
+              ) : (
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
+                  No MANUAL_STEPS.md found for this project.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* ── INSIGHTS ──────────────────────────────────────────────── */}
+          {activeTab === "insights" && (
             <InsightsTab slug={project.slug} worktrees={project.worktrees} />
-          </div>
-        </TabsContent>
-      </Tabs>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,12 +2,14 @@ interface BarChartProps {
   data: Record<string, number>;
   maxItems?: number;
   colorClass?: string;
+  color?: string; // CSS color value, overrides colorClass
 }
 
 export function BarChart({
   data,
   maxItems = 10,
   colorClass = "bg-blue-500",
+  color,
 }: BarChartProps) {
   const sorted = Object.entries(data)
     .sort((a, b) => b[1] - a[1])
@@ -30,8 +32,11 @@ export function BarChart({
           </span>
           <div className="flex-1 bg-[var(--muted)] rounded-full h-4 overflow-hidden">
             <div
-              className={`${colorClass} h-4 rounded-full transition-all`}
-              style={{ width: `${max > 0 ? (count / max) * 100 : 0}%` }}
+              className={color ? undefined : `${colorClass} h-4 rounded-full transition-all`}
+              style={{
+                width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                ...(color ? { height: "100%", background: color, borderRadius: "9999px", transition: "width 0.3s" } : {}),
+              }}
             />
           </div>
           <span className="text-xs font-mono w-8 text-right shrink-0">{count}</span>

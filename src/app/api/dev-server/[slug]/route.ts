@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { processManager } from "@/lib/processManager";
-import { readConfig } from "@/lib/config";
+import { readConfig, getDevRoots } from "@/lib/config";
 
 export const runtime = "nodejs";
 
-/** Verify projectPath is a subdirectory of devRoot. */
+/** Verify projectPath is a subdirectory of one of the configured devRoots. */
 async function validateProjectPath(projectPath: string): Promise<string | null> {
   const config = await readConfig();
   const normalized = path.resolve(projectPath);
-  const devRoot = path.resolve(config.devRoot);
-  if (!normalized.startsWith(devRoot + path.sep) && normalized !== devRoot) {
-    return `projectPath must be within ${devRoot}`;
+  const roots = getDevRoots(config).map((r) => path.resolve(r));
+  const allowed = roots.some(
+    (root) => normalized.startsWith(root + path.sep) || normalized === root
+  );
+  if (!allowed) {
+    return `projectPath must be within one of the configured scan roots`;
   }
   return null;
 }

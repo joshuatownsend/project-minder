@@ -2,25 +2,16 @@
 
 import { useState } from "react";
 import { TimelineEvent } from "@/lib/types";
-import {
-  User,
-  Bot,
-  Wrench,
-  Brain,
-  AlertCircle,
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
+import { User, Bot, Wrench, Brain, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 
-const EVENT_STYLES: Record<
-  TimelineEvent["type"],
-  { icon: typeof User; colorClass: string; bgClass: string }
-> = {
-  user: { icon: User, colorClass: "text-blue-400", bgClass: "bg-blue-500/10" },
-  assistant: { icon: Bot, colorClass: "text-emerald-400", bgClass: "bg-emerald-500/10" },
-  tool_use: { icon: Wrench, colorClass: "text-violet-400", bgClass: "bg-violet-500/10" },
-  thinking: { icon: Brain, colorClass: "text-gray-400", bgClass: "bg-gray-500/10" },
-  error: { icon: AlertCircle, colorClass: "text-red-400", bgClass: "bg-red-500/10" },
+type EventType = TimelineEvent["type"];
+
+const EVENT_CONFIG: Record<EventType, { icon: typeof User; color: string; bg: string }> = {
+  user:      { icon: User,         color: "var(--text-secondary)",    bg: "var(--bg-elevated)" },
+  assistant: { icon: Bot,          color: "var(--status-active-text)", bg: "var(--status-active-bg)" },
+  tool_use:  { icon: Wrench,       color: "var(--accent)",             bg: "var(--accent-bg)" },
+  thinking:  { icon: Brain,        color: "var(--text-muted)",         bg: "transparent" },
+  error:     { icon: AlertCircle,  color: "var(--status-error-text)",  bg: "var(--status-error-bg)" },
 };
 
 function formatOffset(timestamp: string | undefined, sessionStart: string | undefined): string {
@@ -33,49 +24,54 @@ function formatOffset(timestamp: string | undefined, sessionStart: string | unde
   return `+${minutes}m${seconds % 60}s`;
 }
 
-function TimelineItem({
-  event,
-  sessionStart,
-}: {
-  event: TimelineEvent;
-  sessionStart?: string;
-}) {
+function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionStart?: string }) {
   const [expanded, setExpanded] = useState(false);
-  const style = EVENT_STYLES[event.type];
-  const Icon = style.icon;
+  const cfg = EVENT_CONFIG[event.type];
+  const Icon = cfg.icon;
   const isLong = event.content.length > 150;
-  const displayText = isLong && !expanded ? event.content.slice(0, 150) + "..." : event.content;
+  const displayText = isLong && !expanded ? event.content.slice(0, 150) + "…" : event.content;
 
   return (
-    <div className={`flex gap-3 p-2 rounded ${style.bgClass}`}>
-      <div className={`mt-0.5 shrink-0 ${style.colorClass}`}>
-        <Icon className="h-4 w-4" />
+    <div
+      style={{
+        display: "flex",
+        gap: "10px",
+        padding: "7px 8px",
+        borderRadius: "3px",
+        background: cfg.bg,
+        marginBottom: "2px",
+      }}
+    >
+      <div style={{ color: cfg.color, flexShrink: 0, marginTop: "1px" }}>
+        <Icon style={{ width: "13px", height: "13px" }} />
       </div>
-      <div className="flex-1 min-w-0 space-y-0.5">
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-medium ${style.colorClass}`}>
-            {event.type === "tool_use" ? event.toolName || "Tool" : event.type}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "0.68rem", fontWeight: 600, color: cfg.color, fontFamily: "var(--font-body)" }}>
+            {event.type === "tool_use" ? (event.toolName || "Tool") : event.type}
           </span>
-          <span className="text-[10px] text-[var(--muted-foreground)] font-mono">
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--text-muted)" }}>
             {formatOffset(event.timestamp, sessionStart)}
           </span>
           {event.tokenCount && (
-            <span className="text-[10px] text-[var(--muted-foreground)]">
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--text-muted)" }}>
               {event.tokenCount} tokens
             </span>
           )}
         </div>
-        <p className="text-sm whitespace-pre-wrap break-words">{displayText}</p>
+        <p style={{ fontSize: "0.78rem", color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0, lineHeight: 1.5 }}>
+          {displayText}
+        </p>
         {isLong && (
           <button
-            className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] flex items-center gap-0.5"
             onClick={() => setExpanded(!expanded)}
+            style={{ display: "inline-flex", alignItems: "center", gap: "3px", background: "none", border: "none", padding: 0, fontSize: "0.68rem", color: "var(--text-muted)", cursor: "pointer", width: "fit-content", transition: "color 0.1s" }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-secondary)")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-muted)")}
           >
-            {expanded ? (
-              <><ChevronDown className="h-3 w-3" /> Show less</>
-            ) : (
-              <><ChevronRight className="h-3 w-3" /> Show more</>
-            )}
+            {expanded
+              ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> less</>
+              : <><ChevronRight style={{ width: "10px", height: "10px" }} /> more</>}
           </button>
         )}
       </div>
@@ -83,23 +79,12 @@ function TimelineItem({
   );
 }
 
-export function SessionTimeline({
-  timeline,
-  sessionStart,
-}: {
-  timeline: TimelineEvent[];
-  sessionStart?: string;
-}) {
+export function SessionTimeline({ timeline, sessionStart }: { timeline: TimelineEvent[]; sessionStart?: string }) {
   if (timeline.length === 0) {
-    return (
-      <p className="text-sm text-[var(--muted-foreground)] text-center py-8">
-        No timeline events.
-      </p>
-    );
+    return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "32px 0" }}>No timeline events.</p>;
   }
-
   return (
-    <div className="space-y-1">
+    <div>
       {timeline.map((event, i) => (
         <TimelineItem key={i} event={event} sessionStart={sessionStart} />
       ))}

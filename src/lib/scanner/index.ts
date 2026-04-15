@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { ProjectData, PortConflict, ScanResult } from "../types";
-import { readConfig } from "../config";
+import { readConfig, getDevRoots } from "../config";
 import { scanPackageJson } from "./packageJson";
 import { scanEnvFiles } from "./envFile";
 import { scanDockerCompose } from "./dockerCompose";
@@ -126,39 +126,61 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 
 export async function scanAllProjects(): Promise<ScanResult> {
   const config = await readConfig();
-  const devRoot = config.devRoot;
-
-  let entries: string[];
-  try {
-    const dirents = await fs.readdir(devRoot, { withFileTypes: true });
-    entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-  } catch {
-    return { projects: [], portConflicts: [], hiddenCount: 0, scannedAt: new Date().toISOString() };
-  }
-
-  // Keep full list for worktree discovery before filtering
-  const allDirNames = [...entries];
-
-  // Filter out hidden projects
+  const devRoots = getDevRoots(config);
+  const BATCH_SIZE = config.scanBatchSize ?? 10;
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
-  entries = entries.filter((e) => !hiddenSet.has(e.toLowerCase()));
 
-  // Process in batches of 10 to avoid overwhelming the system
-  const projects: ProjectData[] = [];
-  const BATCH_SIZE = 10;
-  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-    const batch = entries.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map((d) => scanProject(d, devRoot)));
-    for (const r of results) {
-      if (r) projects.push(r);
+  const allProjects: ProjectData[] = [];
+  // Track slugs seen so far to handle collisions across roots (first root wins)
+  const seenSlugs = new Set<string>();
+
+  for (const devRoot of devRoots) {
+    let entries: string[];
+    try {
+      const dirents = await fs.readdir(devRoot, { withFileTypes: true });
+      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+      // Root doesn't exist or isn't readable — skip it
+      continue;
     }
-  }
 
-  // Attach worktree overlays (reads TODO.md, MANUAL_STEPS.md, INSIGHTS.md from worktree dirs)
-  await attachWorktreeOverlays(projects, allDirNames, devRoot);
+    // Keep full list for worktree discovery before filtering
+    const allDirNames = [...entries];
+
+    // Filter out hidden projects
+    entries = entries.filter((e) => !hiddenSet.has(e.toLowerCase()));
+
+    // Filter out slugs already claimed by an earlier root
+    entries = entries.filter((e) => {
+      const slug = toSlug(e);
+      if (seenSlugs.has(slug)) {
+        console.warn(`[scanner] Slug collision: "${e}" in ${devRoot} conflicts with a project in an earlier root — skipping.`);
+        return false;
+      }
+      return true;
+    });
+
+    // Process in batches to avoid overwhelming the system
+    const rootProjects: ProjectData[] = [];
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      const batch = entries.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot)));
+      for (const r of results) {
+        if (r) {
+          rootProjects.push(r);
+          seenSlugs.add(r.slug);
+        }
+      }
+    }
+
+    // Attach worktree overlays for this root
+    await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
+
+    allProjects.push(...rootProjects);
+  }
 
   // Apply saved statuses and port overrides
-  for (const project of projects) {
+  for (const project of allProjects) {
     if (config.statuses[project.slug]) {
       project.status = config.statuses[project.slug];
     }
@@ -168,16 +190,16 @@ export async function scanAllProjects(): Promise<ScanResult> {
   }
 
   // Sort by last activity descending
-  projects.sort((a, b) => {
+  allProjects.sort((a, b) => {
     const ta = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
     const tb = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
     return tb - ta;
   });
 
-  const portConflicts = detectPortConflicts(projects);
+  const portConflicts = detectPortConflicts(allProjects);
 
   return {
-    projects,
+    projects: allProjects,
     portConflicts,
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),

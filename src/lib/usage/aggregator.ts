@@ -9,6 +9,7 @@ import type {
   UsageReport,
   ModelCost,
   ProjectBreakdown,
+  ProjectDetail,
   CategoryBreakdown,
   CategoryType,
   DailyBucket,
@@ -78,6 +79,18 @@ export async function generateUsageReport(
   const dailyMap = new Map<string, DailyBucket>();
   const allToolCalls: ToolCall[] = [];
   const bashCommands: string[] = [];
+
+  // Per-project detail maps for by-project breakdown
+  type ProjectDetailAccum = {
+    projectSlug: string;
+    projectDirName: string;
+    cost: number;
+    turns: number;
+    categoryMap: Map<CategoryType, { cost: number; turns: number }>;
+    toolMap: Map<string, number>;
+    mcpMap: Map<string, number>; // server -> call count
+  };
+  const projectDetailAccum = new Map<string, ProjectDetailAccum>();
   let totalInput = 0;
   let totalOutput = 0;
   let totalCacheRead = 0;
@@ -136,6 +149,31 @@ export async function generateUsageReport(
       }
     }
 
+    // Per-project detail (category + tool + MCP breakdown)
+    const detail = projectDetailAccum.get(turn.projectSlug) ?? {
+      projectSlug: turn.projectSlug,
+      projectDirName: turn.projectDirName,
+      cost: 0, turns: 0,
+      categoryMap: new Map(),
+      toolMap: new Map(),
+      mcpMap: new Map(),
+    };
+    detail.cost += cost;
+    detail.turns++;
+    const detailCat = detail.categoryMap.get(category) ?? { cost: 0, turns: 0 };
+    detailCat.cost += cost;
+    detailCat.turns++;
+    detail.categoryMap.set(category, detailCat);
+    for (const tc of turn.toolCalls) {
+      if (tc.name.startsWith("mcp__")) {
+        const server = tc.name.split("__")[1] ?? tc.name;
+        detail.mcpMap.set(server, (detail.mcpMap.get(server) ?? 0) + 1);
+      } else {
+        detail.toolMap.set(tc.name, (detail.toolMap.get(tc.name) ?? 0) + 1);
+      }
+    }
+    projectDetailAccum.set(turn.projectSlug, detail);
+
     // Totals
     totalInput += turn.inputTokens;
     totalOutput += turn.outputTokens;
@@ -180,6 +218,24 @@ export async function generateUsageReport(
   const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
   const totalCost = [...modelMap.values()].reduce((s, m) => s + m.cost, 0);
 
+  // Build projectDetails from accumulators
+  const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
+    .sort((a, b) => b.cost - a.cost)
+    .map((d) => ({
+      projectSlug: d.projectSlug,
+      projectDirName: d.projectDirName,
+      cost: d.cost,
+      turns: d.turns,
+      categoryBreakdown: [...d.categoryMap.entries()]
+        .map(([category, stats]) => ({ category, ...stats }))
+        .sort((a, b) => b.cost - a.cost),
+      topTools: [...d.toolMap.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5),
+      mcpServers: [...d.mcpMap.keys()],
+      mcpCalls: [...d.mcpMap.values()].reduce((s, n) => s + n, 0),
+    }));
+
   return {
     period,
     totalCost,
@@ -200,6 +256,7 @@ export async function generateUsageReport(
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
     shellStats: groupByBinary(bashCommands),
     mcpStats: groupMcpCalls(allToolCalls),
+    projectDetails,
     generatedAt: new Date().toISOString(),
   };
 }

@@ -111,46 +111,74 @@ export function DevServerControl({
   const port = server?.port || devPort;
 
   if (compact) {
-    return (
-      <div className="flex items-center gap-2">
-        {isActive ? (
-          <>
-            <Badge className={statusStyles[server!.status]}>
-              {server!.status === "starting" ? "Starting..." : `Running :${port || "?"}`}
-            </Badge>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                doAction("stop");
-              }}
-              disabled={loading}
-              title="Stop server"
-            >
-              <Square className="h-3 w-3" />
-            </Button>
-          </>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              doAction("start");
+    if (isActive) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.68rem",
+              fontWeight: 500,
+              color: "var(--running-text)",
+              background: "var(--running-bg)",
+              border: "1px solid var(--status-active-border)",
+              borderRadius: "3px",
+              padding: "2px 6px",
+              lineHeight: 1.4,
             }}
-            disabled={loading}
-            title="Start dev server"
           >
-            <Play className="h-3 w-3 mr-1" />
-            Start
-          </Button>
-        )}
-      </div>
+            {server!.status === "starting" ? "starting…" : `●  :${port || "?"}`}
+          </span>
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); doAction("stop"); }}
+            disabled={loading}
+            title="Stop server"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: "22px", height: "22px",
+              background: "transparent",
+              border: "1px solid var(--border-default)",
+              borderRadius: "3px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            <Square style={{ width: "9px", height: "9px" }} />
+          </button>
+        </div>
+      );
+    }
+
+    // Stopped state — always rendered, disabled if no port configured
+    const canStart = !!devPort;
+    return (
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (canStart) doAction("start");
+        }}
+        disabled={loading || !canStart}
+        title={canStart ? "Start dev server" : "No port configured"}
+        style={{
+          display: "flex", alignItems: "center", gap: "4px",
+          padding: "3px 8px",
+          fontSize: "0.7rem",
+          fontFamily: "var(--font-body)",
+          fontWeight: 500,
+          color: canStart ? "var(--text-secondary)" : "var(--text-disabled)",
+          background: "transparent",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "3px",
+          cursor: canStart ? "pointer" : "default",
+          opacity: canStart ? 1 : 0.4,
+          transition: "color 0.12s, border-color 0.12s",
+        }}
+      >
+        <Play style={{ width: "9px", height: "9px" }} />
+        Start
+      </button>
     );
   }
 

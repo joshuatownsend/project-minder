@@ -95,6 +95,17 @@ export interface ModelPricing {
   cacheReadCostPerToken: number;
 }
 
+export interface ProjectDetail {
+  projectSlug: string;
+  projectDirName: string;
+  cost: number;
+  turns: number;
+  categoryBreakdown: Array<{ category: CategoryType; cost: number; turns: number }>;
+  topTools: [string, number][];
+  mcpServers: string[];
+  mcpCalls: number;
+}
+
 export interface UsageReport {
   period: string;
   totalCost: number;
@@ -116,5 +127,6 @@ export interface UsageReport {
   topTools: [string, number][];
   shellStats: ShellStats[];
   mcpStats: McpServerStats[];
+  projectDetails: ProjectDetail[];
   generatedAt: string;
 }

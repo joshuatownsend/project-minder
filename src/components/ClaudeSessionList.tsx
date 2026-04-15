@@ -41,15 +41,31 @@ export function ClaudeSessionCompact({ claude }: { claude: ClaudeInfo }) {
   if (!claude.lastSessionDate) return null;
 
   return (
-    <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-      <MessageSquare className="h-3 w-3" />
-      <span>
-        {formatDistanceToNow(new Date(claude.lastSessionDate), {
-          addSuffix: true,
-        })}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "5px",
+        fontSize: "0.7rem",
+        color: "var(--text-muted)",
+      }}
+    >
+      <MessageSquare style={{ width: "10px", height: "10px", flexShrink: 0 }} />
+      <span style={{ flexShrink: 0 }}>
+        {formatDistanceToNow(new Date(claude.lastSessionDate), { addSuffix: true })}
       </span>
       {claude.lastPromptPreview && (
-        <span className="truncate max-w-[180px]">{claude.lastPromptPreview}</span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: "1 1 0",
+            minWidth: 0,
+          }}
+        >
+          · {claude.lastPromptPreview}
+        </span>
       )}
     </div>
   );
