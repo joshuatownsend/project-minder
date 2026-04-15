@@ -13,6 +13,9 @@ export async function PATCH(request: NextRequest) {
   let changed = false;
 
   if (Array.isArray(body.devRoots)) {
+    if (body.devRoots.some((r: unknown) => typeof r !== "string")) {
+      return NextResponse.json({ error: "devRoots elements must be strings" }, { status: 400 });
+    }
     const roots = (body.devRoots as string[]).map((r) => r.trim()).filter(Boolean);
     if (roots.length === 0) {
       return NextResponse.json({ error: "devRoots must not be empty" }, { status: 400 });

@@ -127,7 +127,7 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 export async function scanAllProjects(): Promise<ScanResult> {
   const config = await readConfig();
   const devRoots = getDevRoots(config);
-  const BATCH_SIZE = config.scanBatchSize ?? 10;
+  const BATCH_SIZE = Math.max(1, Math.round(config.scanBatchSize ?? 10));
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
 
   const allProjects: ProjectData[] = [];

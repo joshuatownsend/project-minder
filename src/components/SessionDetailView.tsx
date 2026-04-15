@@ -40,9 +40,12 @@ function formatCost(n: number): string {
 function ResumeButton({ sessionId }: { sessionId: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
+    if (!navigator.clipboard) return;
     navigator.clipboard.writeText(`claude --resume ${sessionId}`).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {
+      // Clipboard write failed (permissions or insecure context) — ignore silently
     });
   };
   return (

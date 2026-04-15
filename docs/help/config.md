@@ -4,7 +4,7 @@ The Config page (`/config`) lets you customize how Project Minder scans and disp
 
 ## Scan Roots
 
-Add one or more directories for Project Minder to scan. Each directory is recursively checked for git repositories.
+Add one or more directories for Project Minder to scan. For each root, Project Minder checks its immediate child directories for git repositories.
 
 - **Primary root** — the first entry. Used as the base path for dev server security validation and shown in the header.
 - **Ordering** — use the up/down arrows to reorder. Move your most-used root to the top.

@@ -38,6 +38,17 @@ export function DashboardGrid({
   const [showHidden, setShowHidden]   = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
+  // Apply dashboard defaults from config on first mount
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((cfg) => {
+        if (cfg.defaultSort) setSortBy(cfg.defaultSort as SortOption);
+        if (cfg.defaultStatusFilter) setStatusFilter(cfg.defaultStatusFilter as ProjectStatus | "all");
+      })
+      .catch(() => {}); // non-fatal — fallback to built-in defaults
+  }, []);
+
   const filtered = useMemo(() => {
     let result = gitDirtyOverrides
       ? projects.map((p) => {
