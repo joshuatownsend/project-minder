@@ -5,6 +5,7 @@ import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
 import { StatusSelector } from "./StatusBadge";
 import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
+import { WorktreePanel } from "./WorktreePanel";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
@@ -550,6 +551,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                 projectPath={project.path}
                 devPort={devPort}
               />
+
+              {project.worktrees && project.worktrees.length > 0 && (
+                <WorktreePanel
+                  slug={project.slug}
+                  devPort={devPort}
+                  worktrees={project.worktrees}
+                />
+              )}
 
               {/* Git */}
               {project.git && (
