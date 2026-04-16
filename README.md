@@ -11,7 +11,8 @@
 ![Dashboard](docs/images/dashboard.png)
 
 ---
-
+Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatownsend.github.io/project-minder/) for more info and interface screenshots!
+---
 ## Features
 
 ### Dashboard & Scanning
