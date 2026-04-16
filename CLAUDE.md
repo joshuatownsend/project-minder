@@ -32,7 +32,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 ### Scanner (`src/lib/scanner/`)
 - `index.ts` — orchestrator: reads `C:\dev\*` dirs, runs scanner modules in parallel (batches of 10), detects port conflicts
 - 9 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`
-- Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\crew-leader`), parsed once and cached in a Map
+- Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\my-app`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
 
