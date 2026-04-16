@@ -15,7 +15,7 @@
 ## Features
 
 ### Dashboard & Scanning
-- Auto-scans one or more directories (e.g. `C:\dev\*`) and renders every project as a card
+- Auto-scans one or more directories (e.g. `~/dev/*`) and renders every project as a card
 - Background git dirty-status checks — amber `+N` indicators appear as results arrive
 - Search, filter by status, and sort across all projects
 - Per-project status labels (active, paused, archived), hide/unhide, and port overrides
@@ -46,7 +46,7 @@
 
 ## Quick Start
 
-**Prerequisites:** Node.js ≥ 20.19, Windows (uses Windows paths and `taskkill`)
+**Prerequisites:** Node.js ≥ 20.19 — runs on macOS, Linux, and Windows
 
 ```bash
 git clone https://github.com/joshuatownsend/project-minder.git
@@ -58,9 +58,11 @@ Configure your scan root(s) in `.minder.json` in the Project Minder repo root �
 
 ```json
 {
-  "devRoots": ["C:\\dev"]
+  "devRoots": ["/home/you/dev"]
 }
 ```
+
+On Windows use `C:\\dev` (or whatever your dev root is).
 
 Then start the dev server:
 
@@ -89,7 +91,7 @@ All settings live in `.minder.json` at the repo root. The in-app **Config page**
 
 Project Minder is a Next.js app that runs entirely on your local machine — no database, no cloud sync. On each dashboard load it scans your configured directories in parallel batches, running 9 scanner modules per project (package.json, git, Claude sessions, TODOs, manual steps, insights, and more). Results are cached in memory for 5 minutes. A background worker checks git dirty status in rolling batches of 3 repos, and the dashboard polls for results as they arrive.
 
-The process manager spawns dev servers as child processes using project-local binaries, stores the last 200 lines of output per process, and uses `taskkill /F /T` for clean teardown.
+The process manager spawns dev servers as child processes using project-local binaries and stores the last 200 lines of output per process. On Windows it uses `taskkill /F /T` for clean process-tree teardown; on macOS/Linux it sends `SIGTERM` to the process group.
 
 ---
 
