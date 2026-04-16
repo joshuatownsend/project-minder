@@ -19,6 +19,27 @@ type FilterMode = "all" | "open" | "done";
 
 export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
   const [filter, setFilter] = useState<FilterMode>("open");
+  const [toggling, setToggling] = useState<number | null>(null);
+  const { showToast } = useToast();
+
+  const toggleItem = async (lineNumber: number | undefined) => {
+    if (!slug || lineNumber == null || toggling != null) return;
+    setToggling(lineNumber);
+    try {
+      const res = await fetch(`/api/todos/${slug}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineNumber }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      onChange?.(body.todos as TodoInfo);
+    } catch {
+      showToast("Failed to update TODO", "Please try again");
+    } finally {
+      setToggling(null);
+    }
+  };
 
   const filtered = todos.items.filter((item) => {
     if (filter === "open") return !item.completed;
@@ -78,22 +99,34 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
 
       {/* Items */}
       <ul style={{ display: "flex", flexDirection: "column", gap: "2px", padding: 0, margin: 0, listStyle: "none" }}>
-        {filtered.map((item, i) => (
-          <li key={i} style={{ display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0" }}>
-            {item.completed ? (
-              <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
-            ) : (
-              <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
-            )}
-            <span style={{
-              fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
-              textDecoration: item.completed ? "line-through" : "none",
-              lineHeight: 1.55,
-            }}>
-              {item.text}
-            </span>
-          </li>
-        ))}
+        {filtered.map((item, i) => {
+          const isToggling = toggling === item.lineNumber;
+          const canToggle = slug != null && item.lineNumber != null;
+          return (
+            <li
+              key={i}
+              onClick={() => canToggle && toggleItem(item.lineNumber)}
+              style={{
+                display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0",
+                cursor: canToggle ? "pointer" : "default",
+                opacity: isToggling ? 0.5 : 1,
+              }}
+            >
+              {item.completed ? (
+                <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
+              ) : (
+                <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
+              )}
+              <span style={{
+                fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
+                textDecoration: item.completed ? "line-through" : "none",
+                lineHeight: 1.55,
+              }}>
+                {item.text}
+              </span>
+            </li>
+          );
+        })}
         {filtered.length === 0 && (
           <li style={{ fontSize: "0.78rem", color: "var(--text-muted)", padding: "8px 0" }}>
             {filter === "all" ? "No TODOs yet." : filter === "open" ? "No open items." : "No completed items."}

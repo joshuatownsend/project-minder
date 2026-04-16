@@ -14,14 +14,15 @@ export async function scanTodoMd(
     const items: TodoItem[] = [];
     const lines = content.split("\n");
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const completedMatch = line.match(/^\s*-\s*\[x\]\s+(.*)/i);
       const pendingMatch = line.match(/^\s*-\s*\[\s\]\s+(.*)/);
 
       if (completedMatch) {
-        items.push({ text: completedMatch[1].trim(), completed: true });
+        items.push({ text: completedMatch[1].trim(), completed: true, lineNumber: i + 1 });
       } else if (pendingMatch) {
-        items.push({ text: pendingMatch[1].trim(), completed: false });
+        items.push({ text: pendingMatch[1].trim(), completed: false, lineNumber: i + 1 });
       }
     }
 

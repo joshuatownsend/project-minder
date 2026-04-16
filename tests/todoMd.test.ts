@@ -36,9 +36,9 @@ describe("scanTodoMd", () => {
       completed: 1,
       pending: 2,
       items: [
-        { text: "Fix bug", completed: false },
-        { text: "Write tests", completed: true },
-        { text: "Deploy", completed: false },
+        { text: "Fix bug", completed: false, lineNumber: 3 },
+        { text: "Write tests", completed: true, lineNumber: 4 },
+        { text: "Deploy", completed: false, lineNumber: 5 },
       ],
     });
   });
@@ -50,7 +50,7 @@ describe("scanTodoMd", () => {
       total: 1,
       completed: 1,
       pending: 0,
-      items: [{ text: "Done item", completed: true }],
+      items: [{ text: "Done item", completed: true, lineNumber: 1 }],
     });
   });
 
@@ -63,7 +63,7 @@ describe("scanTodoMd", () => {
       total: 1,
       completed: 0,
       pending: 1,
-      items: [{ text: "Real item", completed: false }],
+      items: [{ text: "Real item", completed: false, lineNumber: 5 }],
     });
   });
 });

@@ -107,3 +107,28 @@ export async function appendTodosToFile(
     );
   });
 }
+
+export async function toggleTodoInFile(
+  projectPath: string,
+  lineNumber: number
+): Promise<TodoInfo> {
+  const filePath = path.join(projectPath, "TODO.md");
+  return withFileLock(filePath, async () => {
+    const content = await fs.readFile(filePath, "utf-8");
+    const lines = content.split("\n");
+    const idx = lineNumber - 1;
+
+    if (idx >= 0 && idx < lines.length) {
+      const line = lines[idx];
+      if (line.match(/^\s*-\s*\[\s\]/)) {
+        lines[idx] = line.replace("- [ ]", "- [x]");
+      } else if (line.match(/^\s*-\s*\[x\]/i)) {
+        lines[idx] = line.replace(/- \[x\]/i, "- [ ]");
+      }
+    }
+
+    await atomicWriteFile(filePath, lines.join("\n"));
+    const info = await scanTodoMd(projectPath);
+    return info ?? { total: 0, completed: 0, pending: 0, items: [] };
+  });
+}

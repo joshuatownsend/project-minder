@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Minimal GitHub Actions CI workflow (`.github/workflows/ci.yml`) running lint, tests, and build on every PR and push to `main`.
+- TODO items in the project detail TODO tab are now interactive: click any item to toggle it done/undone. Changes are written back to `TODO.md` immediately.
 
 ### Changed
 - Branch protection: `main` now requires PRs, linear history, force-pushes and deletions blocked. Squash is the only merge style. The `verify` CI status check will be added as a required check once the initial workflow run completes on `main`.

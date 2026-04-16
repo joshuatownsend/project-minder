@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan, invalidateCache } from "@/lib/cache";
-import { appendTodosToFile, TodoWriteError } from "@/lib/todoWriter";
+import { appendTodosToFile, toggleTodoInFile, TodoWriteError } from "@/lib/todoWriter";
 
 async function findProjectPath(slug: string): Promise<string | null> {
   let result = getCachedScan();
@@ -69,5 +69,36 @@ export async function POST(
       { error: "Failed to append TODOs" },
       { status: 500 }
     );
+  }
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await params;
+  const projectPath = await findProjectPath(slug);
+  if (!projectPath) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { lineNumber } = (body ?? {}) as { lineNumber?: unknown };
+  if (typeof lineNumber !== "number" || lineNumber < 1) {
+    return NextResponse.json({ error: "lineNumber required" }, { status: 400 });
+  }
+
+  try {
+    const updated = await toggleTodoInFile(projectPath, lineNumber);
+    invalidateCache();
+    return NextResponse.json({ todos: updated });
+  } catch {
+    return NextResponse.json({ error: "Failed to toggle TODO" }, { status: 500 });
   }
 }
