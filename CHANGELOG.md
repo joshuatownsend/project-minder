@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Minimal GitHub Actions CI workflow (`.github/workflows/ci.yml`) running lint, tests, and build on every PR and push to `main`.
+
+### Changed
+- Branch protection: `main` now requires PRs, linear history, force-pushes and deletions blocked. Squash is the only merge style. The `verify` CI status check will be added as a required check once the initial workflow run completes on `main`.
+
 ## [0.9.2] - 2026-04-16
 
 ### Added

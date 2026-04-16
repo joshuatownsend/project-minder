@@ -20,7 +20,7 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 export interface ConversationEntry {
   type?: string;
   subtype?: string;

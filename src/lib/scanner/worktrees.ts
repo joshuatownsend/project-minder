@@ -67,7 +67,7 @@ export async function attachWorktreeOverlays(
   // Build a lookup: lowercase dir name → project
   const dirNameToProject = new Map<string, ProjectData>();
   for (const p of projects) {
-    const dirName = path.basename(p.path);
+    const dirName = p.path.split(/[/\\]/).filter(Boolean).pop() ?? "";
     dirNameToProject.set(dirName.toLowerCase(), p);
   }
 
