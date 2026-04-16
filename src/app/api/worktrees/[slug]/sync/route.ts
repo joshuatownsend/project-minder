@@ -31,6 +31,9 @@ export async function POST(
   const project = scan.projects.find((p) => p.slug === slug);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+  const wt = project.worktrees?.find((w) => w.worktreePath === body.worktreePath);
+  if (!wt) return NextResponse.json({ error: "Worktree not found" }, { status: 404 });
+
   if (body.file === "todos") {
     const [parentInfo, worktreeInfo] = await Promise.all([
       scanTodoMd(project.path),

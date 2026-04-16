@@ -58,7 +58,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
   const handleStart = async () => {
     setServerAction("starting");
     try {
-      const res = await fetch(`/api/worktrees/${parentSlug}`, {
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(parentSlug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "start-server", worktreePath: wt.worktreePath, parentDevPort }),
@@ -86,7 +86,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
   const handleSync = async (file: SyncFile) => {
     setSyncState((s) => ({ ...s, [file]: { loading: true } }));
     try {
-      const res = await fetch(`/api/worktrees/${parentSlug}/sync`, {
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(parentSlug)}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ worktreePath: wt.worktreePath, file }),
@@ -106,7 +106,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
     setRemoving(true);
     setRemoveError(null);
     try {
-      const res = await fetch(`/api/worktrees/${parentSlug}`, {
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(parentSlug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove", worktreePath: wt.worktreePath }),
@@ -268,7 +268,7 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/worktrees/${slug}`);
+      const res = await fetch(`/api/worktrees/${encodeURIComponent(slug)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setStatuses(await res.json());
     } catch (e) {
@@ -311,16 +311,20 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
               </button>
             </div>
           )}
-          {statuses && worktrees.map((wt, i) => (
-            <WorktreeRow
-              key={wt.worktreePath}
-              wt={wt}
-              status={statuses[i]}
-              parentSlug={slug}
-              parentDevPort={devPort}
-              onRemoved={fetchStatuses}
-            />
-          ))}
+          {statuses && worktrees.map((wt) => {
+            const status = statuses.find((s) => s.worktreePath === wt.worktreePath);
+            if (!status) return null;
+            return (
+              <WorktreeRow
+                key={wt.worktreePath}
+                wt={wt}
+                status={status}
+                parentSlug={slug}
+                parentDevPort={devPort}
+                onRemoved={fetchStatuses}
+              />
+            );
+          })}
         </div>
       )}
     </div>
