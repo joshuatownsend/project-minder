@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-04-16
+
+### Added
+- **GitHub Pages landing site** — Public-facing site at `joshuatownsend.github.io/project-minder` with hero, four feature-group sections, quick-start instructions, and 12 Playwright-captured screenshots. Plain HTML/CSS, dark theme matching the app's own aesthetic.
+- **Screenshot capture script** — `scripts/capture-screenshots.mjs` navigates the running app at 1440×900 and saves all 12 screenshots to `site/screenshots/` in one command.
+
 ### Added
 - **Setup Guide — Apply to project** — The `/setup` page now includes an "Apply to a Project" panel. Pick any managed project from a dropdown, choose which steps to apply (CLAUDE.md instructions and/or Claude Code hooks), and Project Minder writes the files directly. Idempotent: blocks already present are skipped; existing files are backed up to `.minder-bak` before any modification. New `POST /api/setup/[slug]` endpoint with `action: "claude-md" | "hooks" | "both"`.
 - **Setup Guide** — New `/setup` page (nav link: Setup) with copy-paste instructions for configuring projects to work with Project Minder. Structured as two sequential steps: Step 1 (CLAUDE.md instruction blocks, required) tells Claude when and how to write these files; Step 2 (Claude Code `PreToolUse` hooks, optional) adds format enforcement on top. Includes a format reference for both files and a reusable `CodeBlock` component with copy-to-clipboard.
