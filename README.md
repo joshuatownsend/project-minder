@@ -98,6 +98,7 @@ The process manager spawns dev servers as child processes using project-local bi
 - [CodeBurn](https://github.com/AgentSeal/codeburn) — token cost analytics design
 - [Sniffly](https://github.com/chiphuyen/sniffly) — stats dashboard concept
 - [claude-code-karma](https://github.com/JayantDevkar/claude-code-karma) — sessions browser concept
+- [raphi011's insights gist](https://gist.github.com/raphi011/dc96edf80b0db8584527fefc6a3b4bd0) — insights extraction concept
 
 ---
 
