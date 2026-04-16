@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { getCachedScan } from "@/lib/cache";
-import { checkWorktreeStatus } from "@/lib/worktreeChecker";
+import { checkWorktreeStatus, checkAllWorktreeStatuses } from "@/lib/worktreeChecker";
+import { worktreeSlug } from "@/lib/worktreeUtils";
 import { processManager, findFreePort } from "@/lib/processManager";
 
 const execFileAsync = promisify(execFile);
@@ -18,12 +19,7 @@ export async function GET(
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   if (!project.worktrees || project.worktrees.length === 0) return NextResponse.json([]);
 
-  const worktreeSlugFor = (branch: string) => `${slug}:wt:${branch.replace(/\//g, "-")}`;
-  const statuses = await Promise.all(
-    project.worktrees.map((wt) =>
-      checkWorktreeStatus(project.path, wt.worktreePath, wt.branch, worktreeSlugFor(wt.branch))
-    )
-  );
+  const statuses = await checkAllWorktreeStatuses(project.path, project.worktrees);
   return NextResponse.json(statuses);
 }
 
@@ -45,18 +41,18 @@ export async function POST(
   const wt = project.worktrees?.find((w) => w.worktreePath === body.worktreePath);
   if (!wt) return NextResponse.json({ error: "Worktree not found" }, { status: 404 });
 
-  const worktreeSlug = `${slug}:wt:${wt.branch.replace(/\//g, "-")}`;
+  const wtSlug = worktreeSlug(slug, wt.branch);
 
   if (body.action === "start-server") {
     const startPort = (body.parentDevPort ?? project.devPort ?? 3000) + 1;
     const port = await findFreePort(startPort);
     if (!port) return NextResponse.json({ error: `No free port from ${startPort}` }, { status: 409 });
-    const info = await processManager.start(worktreeSlug, body.worktreePath, port);
+    const info = await processManager.start(wtSlug, body.worktreePath, port);
     return NextResponse.json({ ...info, resolvedPort: port });
   }
 
   if (body.action === "remove") {
-    const status = await checkWorktreeStatus(project.path, body.worktreePath, wt.branch, worktreeSlug);
+    const status = await checkWorktreeStatus(project.path, body.worktreePath, wt.branch);
     if (!status.isStale) {
       return NextResponse.json({ error: "Worktree is not stale — cannot remove automatically" }, { status: 400 });
     }

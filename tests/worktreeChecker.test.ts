@@ -5,6 +5,7 @@ vi.mock("@/lib/processManager", () => ({ processManager: { get: vi.fn().mockRetu
 
 import { execFile } from "child_process";
 import { checkWorktreeStatus } from "@/lib/worktreeChecker";
+import { worktreeSlug } from "@/lib/worktreeUtils";
 
 const execFileMock = vi.mocked(execFile);
 
@@ -17,12 +18,22 @@ function stubOutputs(outputs: string[]) {
   });
 }
 
+describe("worktreeSlug", () => {
+  it("replaces slashes with dashes in branch name", () => {
+    expect(worktreeSlug("my-app", "feature/foo-bar")).toBe("my-app:wt:feature-foo-bar");
+  });
+
+  it("handles branch with no slashes", () => {
+    expect(worktreeSlug("my-app", "main")).toBe("my-app:wt:main");
+  });
+});
+
 describe("checkWorktreeStatus", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("marks stale when merged locally and remote deleted", async () => {
     stubOutputs(["  main\n  feature/foo", "", "", "2026-04-01T10:00:00Z"]);
-    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo", "p:wt:feature-foo");
+    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo");
     expect(s.isMergedLocally).toBe(true);
     expect(s.isRemoteBranchDeleted).toBe(true);
     expect(s.isStale).toBe(true);
@@ -31,13 +42,13 @@ describe("checkWorktreeStatus", () => {
 
   it("not stale when remote branch still exists", async () => {
     stubOutputs(["  main", "abc123\trefs/heads/feature/foo", "", ""]);
-    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo", "p:wt:feature-foo");
+    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo");
     expect(s.isStale).toBe(false);
   });
 
   it("reports dirty worktree", async () => {
     stubOutputs(["  main", "", " M src/foo.ts\nA  src/bar.ts", ""]);
-    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo", "p:wt:feature-foo");
+    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo");
     expect(s.isDirty).toBe(true);
     expect(s.uncommittedCount).toBe(2);
   });
@@ -47,7 +58,7 @@ describe("checkWorktreeStatus", () => {
       (callback as (err: Error) => void)(new Error("network unreachable"));
       return {} as ReturnType<typeof execFile>;
     });
-    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo", "p:wt:feature-foo");
+    const s = await checkWorktreeStatus("C:/dev/p", "C:/dev/p--wt", "feature/foo");
     expect(s.isStale).toBe(false);
   });
 });

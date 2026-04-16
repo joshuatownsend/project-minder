@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
 import { WorktreeOverlay, WorktreeStatus } from "@/lib/types";
+import { worktreeSlug } from "@/lib/worktreeUtils";
 
 interface WorktreePanelProps {
   slug: string;
@@ -21,12 +22,8 @@ interface WorktreeRowProps {
   onRemoved: () => void;
 }
 
-function worktreeSlugFor(parentSlug: string, branch: string) {
-  return `${parentSlug}:wt:${branch.replace(/\//g, "-")}`;
-}
-
 function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: WorktreeRowProps) {
-  const wtSlug = worktreeSlugFor(parentSlug, wt.branch);
+  const wtSlug = worktreeSlug(parentSlug, wt.branch);
   const [devServer, setDevServer] = useState<DevServerState>({ running: false, loading: false });
   const [serverAction, setServerAction] = useState<"starting" | "stopping" | null>(null);
   const [syncState, setSyncState] = useState<Record<SyncFile, SyncState>>({
