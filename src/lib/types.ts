@@ -132,6 +132,17 @@ export interface WorktreeOverlay {
   insights?: InsightsInfo;
 }
 
+export interface WorktreeStatus {
+  worktreePath: string;
+  branch: string;
+  isDirty: boolean;
+  uncommittedCount: number;
+  isMergedLocally: boolean;       // git branch --merged main
+  isRemoteBranchDeleted: boolean; // git ls-remote --heads origin <branch> returned empty
+  isStale: boolean;               // isMergedLocally && isRemoteBranchDeleted
+  lastCommitDate?: string;        // from git log -1 --format=%aI
+}
+
 export interface PortConflict {
   port: number;
   projects: string[];

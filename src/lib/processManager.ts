@@ -251,6 +251,22 @@ function isPortInUse(port: number): Promise<boolean> {
   });
 }
 
+/**
+ * Find the next free port starting at startPort.
+ * The checker parameter is injectable for testability.
+ */
+export async function findFreePort(
+  startPort: number,
+  maxAttempts = 10,
+  checker: (port: number) => Promise<boolean> = isPortInUse
+): Promise<number | null> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (!(await checker(port))) return port;
+  }
+  return null;
+}
+
 // Singleton — persist across hot reloads in dev
 const globalForPM = globalThis as unknown as { __processManager?: ProcessManager };
 export const processManager =
