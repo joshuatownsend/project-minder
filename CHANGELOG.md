@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Cross-platform support (macOS + Linux)** — Project Minder now runs on macOS and Linux in addition to Windows. A new `src/lib/platform.ts` module centralizes all platform-specific logic: process spawning (`cmd.exe /c` on Windows, direct binary with process group on Unix), process tree termination (`taskkill` on Windows, negative-PID SIGTERM on Unix), `node_modules/.bin` binary paths (`.cmd` extension on Windows, extensionless on Unix), clean spawn environment variables (platform-appropriate sets), and default dev root (`C:\dev` on Windows, `~/dev` on Unix). Claude Code path encoding/decoding updated to handle both Windows (`C--dev-foo`) and Unix (`-home-user-dev-foo`) directory name formats.
+
 ## [0.9.1] - 2026-04-16
 
 ### Added

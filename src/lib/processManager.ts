@@ -1,7 +1,13 @@
-import { ChildProcess, spawn } from "child_process";
+import { ChildProcess } from "child_process";
 import path from "path";
 import { promises as fs } from "fs";
 import net from "net";
+import {
+  getCleanSpawnEnv,
+  spawnDevServer,
+  killProcessTree,
+  getBinPath,
+} from "./platform";
 
 export interface DevServerInfo {
   slug: string;
@@ -37,8 +43,7 @@ class ProcessManager {
       return this.processes.get(slug)!.info;
     }
 
-    const normalizedPath = projectPath.replace(/\//g, "\\");
-    const detected = await this.detectDevCommand(normalizedPath);
+    const detected = await this.detectDevCommand(projectPath);
 
     // Apply port override if provided
     const port = portOverride || detected.port;
@@ -80,28 +85,10 @@ class ProcessManager {
       output: [],
     };
 
-    // Use npx to call the tool directly (not npm run which inherits Node IPC).
+    // Use the binary directly (not npm run which inherits Node IPC).
     // Minimal env to avoid leaking Next.js/Turbopack runtime state.
-    const cleanEnv: Record<string, string> = {
-      SystemRoot: process.env.SystemRoot || "C:\\Windows",
-      PATH: process.env.PATH || "",
-      USERPROFILE: process.env.USERPROFILE || "",
-      HOME: process.env.HOME || process.env.USERPROFILE || "",
-      APPDATA: process.env.APPDATA || "",
-      LOCALAPPDATA: process.env.LOCALAPPDATA || "",
-      TEMP: process.env.TEMP || "",
-      TMP: process.env.TMP || "",
-      NODE_ENV: "development",
-      FORCE_COLOR: "0",
-    };
-
-    // On Windows, .cmd files can't be spawned directly without shell: true,
-    // but shell: true + detached: true causes EINVAL. Use cmd.exe /c instead.
-    const proc = spawn("cmd.exe", ["/c", command, ...args], {
-      cwd: normalizedPath,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: cleanEnv as NodeJS.ProcessEnv,
-    });
+    const cleanEnv = getCleanSpawnEnv();
+    const proc = spawnDevServer(command, args, projectPath, cleanEnv);
 
     info.pid = proc.pid || 0;
 
@@ -157,14 +144,8 @@ class ProcessManager {
 
     const { proc, info } = entry;
 
-    if (proc.exitCode === null) {
-      try {
-        spawn("taskkill", ["/F", "/T", "/PID", String(proc.pid)], {
-          stdio: "ignore",
-        });
-      } catch {
-        proc.kill("SIGTERM");
-      }
+    if (proc.exitCode === null && proc.pid) {
+      killProcessTree(proc.pid);
     }
 
     info.status = "stopped";
@@ -202,13 +183,10 @@ class ProcessManager {
       // Detect the tool and build a direct command with explicit port.
       // We call the binary directly (not npm run) to avoid inheriting
       // Node.js IPC channels from the parent Turbopack server.
-      const normalizedPath = projectPath.replace(/\//g, "\\");
-
       if (devScript.includes("next")) {
         if (!port) port = 3000;
-        const binPath = path.join(normalizedPath, "node_modules", ".bin", "next.cmd");
         return {
-          command: binPath,
+          command: getBinPath(projectPath, "next"),
           args: ["dev", "--port", String(port)],
           port,
         };
@@ -216,9 +194,8 @@ class ProcessManager {
 
       if (devScript.includes("vite")) {
         if (!port) port = 5173;
-        const binPath = path.join(normalizedPath, "node_modules", ".bin", "vite.cmd");
         return {
-          command: binPath,
+          command: getBinPath(projectPath, "vite"),
           args: ["--port", String(port)],
           port,
         };

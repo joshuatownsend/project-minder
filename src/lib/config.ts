@@ -1,10 +1,11 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { MinderConfig, ProjectStatus } from "./types";
+import { getDefaultDevRoot } from "./platform";
 
 const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
 
-export const DEFAULT_DEV_ROOT = "C:\\dev";
+export const DEFAULT_DEV_ROOT = getDefaultDevRoot();
 
 const DEFAULT_CONFIG: MinderConfig = {
   statuses: {},

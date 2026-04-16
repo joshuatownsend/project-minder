@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { normalizePath } from "../platform";
 
 interface ClaudeSessionResult {
   lastSessionDate?: string;
@@ -36,7 +37,7 @@ async function getHistoryByProject(): Promise<Map<string, HistoryEntry[]>> {
       try {
         const entry = JSON.parse(line) as HistoryEntry;
         if (entry.project) {
-          const key = entry.project.replace(/\//g, "\\");
+          const key = normalizePath(entry.project);
           const list = map.get(key) || [];
           list.push(entry);
           map.set(key, list);
@@ -58,7 +59,7 @@ export async function scanClaudeSessions(
   projectPath: string
 ): Promise<ClaudeSessionResult> {
   const result: ClaudeSessionResult = { sessionCount: 0 };
-  const normalizedPath = projectPath.replace(/\//g, "\\");
+  const normalizedPath = normalizePath(projectPath);
 
   const historyMap = await getHistoryByProject();
   const projectEntries = historyMap.get(normalizedPath) || [];

@@ -252,7 +252,7 @@ function ScanRootsEditor({
           value={newPath}
           onChange={(e) => setNewPath(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") addRoot(); }}
-          placeholder="C:\\path\\to\\directory"
+          placeholder={roots.some((r) => r.includes(":\\")) ? "C:\\path\\to\\directory" : "/path/to/directory"}
           style={{ ...inputStyle, flex: 1 }}
         />
         <button
