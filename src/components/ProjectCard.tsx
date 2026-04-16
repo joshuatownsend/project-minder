@@ -51,6 +51,7 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
     return main + wt;
   })();
 
+  const worktreeCount = (project.worktrees ?? []).length;
   const hasAttention = pendingTodos > 0 || pendingSteps > 0;
   const isArchived   = project.status === "archived";
 
@@ -244,6 +245,20 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
                 >
                   <Database style={{ width: "10px", height: "10px" }} />
                   {project.dbPort}
+                </span>
+              )}
+              {worktreeCount > 0 && (
+                <span
+                  style={{
+                    fontSize: "0.68rem",
+                    fontFamily: "var(--font-mono)",
+                    color: "#60a5fa",
+                    background: "rgba(96,165,250,0.12)",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                  }}
+                >
+                  wt {worktreeCount}
                 </span>
               )}
             </div>
