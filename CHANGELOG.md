@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-04-16
+
 ### Added
 - Minimal GitHub Actions CI workflow (`.github/workflows/ci.yml`) running lint, tests, and build on every PR and push to `main`.
 - TODO items in the project detail TODO tab are now interactive: click any item to toggle it done/undone. Changes are written back to `TODO.md` immediately.
