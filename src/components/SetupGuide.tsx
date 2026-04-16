@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { CodeBlock } from "@/components/ui/code-block";
 import {
@@ -399,8 +399,11 @@ function ApplyPanel() {
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Set initial selection once projects load
-  if (!selectedSlug && projects.length > 0) setSelectedSlug(projects[0].slug);
+  // Set initial selection once projects load (via effect to avoid render-time state update)
+  useEffect(() => {
+    if (selectedSlug || projects.length === 0) return;
+    setSelectedSlug(projects[0].slug);
+  }, [selectedSlug, projects.length]);
 
   async function handleApply() {
     if (!selectedSlug) return;
@@ -440,6 +443,7 @@ function ApplyPanel() {
     >
       <div style={{ marginBottom: "16px" }}>
         <label
+          htmlFor="apply-project-select"
           style={{
             display: "block",
             fontSize: "0.72rem",
@@ -454,6 +458,7 @@ function ApplyPanel() {
         </label>
         <div style={{ position: "relative", display: "inline-block" }}>
           <select
+            id="apply-project-select"
             value={selectedSlug}
             onChange={(e) => { setSelectedSlug(e.target.value); setResult(null); setError(null); }}
             style={{

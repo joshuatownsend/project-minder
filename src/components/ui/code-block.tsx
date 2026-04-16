@@ -13,6 +13,7 @@ export function CodeBlock({ code, language, filename }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
   function handleCopy() {
+    if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") return;
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);

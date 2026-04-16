@@ -33,8 +33,8 @@ export interface ApplyResult {
   hooks?: HooksResult;
 }
 
-const TODO_SENTINEL = "## TODO";
-const MANUAL_STEPS_SENTINEL = "## Manual Step Logging";
+const TODO_SENTINEL = /^## TODO\s*$/m;
+const MANUAL_STEPS_SENTINEL = /^## Manual Step Logging\s*$/m;
 
 const HOOK_COMMANDS = [
   "validate-todo-format.mjs",
@@ -92,8 +92,8 @@ async function applyClaudeMd(projectPath: string): Promise<ClaudeMdResult> {
     // File doesn't exist — will be created
   }
 
-  const todoPresent = existing.includes(TODO_SENTINEL);
-  const manualStepsPresent = existing.includes(MANUAL_STEPS_SENTINEL);
+  const todoPresent = TODO_SENTINEL.test(existing);
+  const manualStepsPresent = MANUAL_STEPS_SENTINEL.test(existing);
 
   const blocksToAdd: string[] = [];
   if (!todoPresent) blocksToAdd.push(CLAUDE_MD_TODO_BLOCK);
@@ -139,8 +139,10 @@ async function writeScriptIdempotent(filePath: string, content: string): Promise
   try {
     const existing = await fs.readFile(filePath, "utf-8");
     if (existing.trim() === content.trim()) return "already-present";
-  } catch {
-    // File doesn't exist — write it
+    await backupFile(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    // File doesn't exist — write it fresh
   }
   await fs.writeFile(filePath, content, "utf-8");
   return "applied";
@@ -152,22 +154,43 @@ async function mergeSettingsJson(settingsPath: string): Promise<ApplyStatus> {
   let settings: SettingsShape = {};
   try {
     const raw = await fs.readFile(settingsPath, "utf-8");
-    settings = JSON.parse(raw) as SettingsShape;
-  } catch {
-    // File doesn't exist or isn't valid JSON — start fresh
+    try {
+      settings = JSON.parse(raw) as SettingsShape;
+    } catch {
+      throw new Error(`${settingsPath} contains invalid JSON — fix it manually or delete it before retrying.`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    // File doesn't exist — start fresh
   }
 
-  const existingEntries: PreToolUseEntry[] = settings.hooks?.PreToolUse ?? [];
-  const existingCommands = existingEntries.flatMap((e) => e.hooks.map((h) => h.command));
-  const allPresent = HOOK_COMMANDS.every((sig) => existingCommands.some((cmd) => cmd.includes(sig)));
+  const existingEntries = Array.isArray(settings.hooks?.PreToolUse)
+    ? (settings.hooks.PreToolUse as unknown[]).filter(
+        (e): e is PreToolUseEntry =>
+          e != null && typeof e === "object" && Array.isArray((e as PreToolUseEntry).hooks)
+      )
+    : [];
+  const existingCommands = existingEntries.flatMap((e) =>
+    e.hooks
+      .filter((h): h is HookCommand => h != null && typeof h === "object" && typeof h.command === "string")
+      .map((h) => h.command)
+  );
 
-  if (allPresent) return "already-present";
+  const missingCommands = HOOK_COMMANDS.filter(
+    (sig) => !existingCommands.some((cmd) => cmd.includes(sig))
+  );
+  if (missingCommands.length === 0) return "already-present";
 
   await backupFile(settingsPath);
 
+  // Only push hooks that aren't already present — avoids duplicate validators
+  const missingHooks = DESIRED_HOOK_ENTRY.hooks.filter((h) =>
+    missingCommands.some((sig) => h.command.includes(sig))
+  );
+
   if (!settings.hooks) settings.hooks = {};
   if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = [];
-  settings.hooks.PreToolUse.push(DESIRED_HOOK_ENTRY);
+  settings.hooks.PreToolUse.push({ ...DESIRED_HOOK_ENTRY, hooks: missingHooks });
 
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
   return "applied";

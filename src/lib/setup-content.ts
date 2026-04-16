@@ -92,7 +92,7 @@ export const HOOKS_VALIDATE_TODO = `#!/usr/bin/env node
  * PreToolUse hook: validates that TODO.md only uses - [ ] / - [x] checkboxes,
  * never bare "- " list items. Fires on Write and Edit targeting TODO.md.
  */
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const toolName = input.tool_name;
@@ -100,7 +100,8 @@ const toolInput = input.tool_input;
 
 // Only care about TODO.md
 const filePath = toolInput?.file_path ?? '';
-if (!filePath.replace(/\\\\/g, '/').endsWith('/TODO.md')) {
+const normalizedPath = filePath.replace(/\\\\/g, '/');
+if (!normalizedPath.endsWith('/TODO.md') && normalizedPath !== 'TODO.md') {
   process.stdout.write(JSON.stringify({ decision: 'approve' }));
   process.exit(0);
 }
@@ -110,7 +111,18 @@ let content = '';
 if (toolName === 'Write') {
   content = toolInput.content ?? '';
 } else if (toolName === 'Edit') {
-  content = toolInput.new_string ?? '';
+  try {
+    const currentContent = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+    const oldStr = toolInput.old_string ?? '';
+    const newStr = toolInput.new_string ?? '';
+    if (oldStr && currentContent.includes(oldStr)) {
+      content = currentContent.replace(oldStr, newStr);
+    } else {
+      content = newStr;
+    }
+  } catch {
+    content = toolInput.new_string ?? '';
+  }
 } else {
   process.stdout.write(JSON.stringify({ decision: 'approve' }));
   process.exit(0);
@@ -154,7 +166,8 @@ const toolInput = input.tool_input;
 
 // Only care about MANUAL_STEPS.md
 const filePath = toolInput?.file_path ?? '';
-if (!filePath.replace(/\\\\/g, '/').endsWith('/MANUAL_STEPS.md')) {
+const normalizedPath = filePath.replace(/\\\\/g, '/');
+if (!normalizedPath.endsWith('/MANUAL_STEPS.md') && normalizedPath !== 'MANUAL_STEPS.md') {
   process.stdout.write(JSON.stringify({ decision: 'approve' }));
   process.exit(0);
 }
