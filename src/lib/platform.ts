@@ -85,7 +85,16 @@ export function spawnDevServer(
  */
 export function killProcessTree(pid: number): void {
   if (isWindows) {
-    spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+    const taskkill = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+    });
+    taskkill.on("error", () => {
+      try {
+        process.kill(pid);
+      } catch {
+        // Process may have already exited
+      }
+    });
     return;
   }
   try {
@@ -127,6 +136,10 @@ export function decodeDirName(dirName: string): string {
     // Windows format: restore drive colon and convert dashes to backslashes
     return dirName.replace(/^([A-Z])-/, "$1:").replace(/-/g, "\\");
   }
-  // Unix format: leading dash represents the root slash, rest are path separators
-  return dirName.replace(/-/g, "/");
+  if (dirName.startsWith("-")) {
+    // Unix format: leading dash represents the root slash, rest are path separators
+    return dirName.replace(/-/g, "/");
+  }
+  // Unrecognized format — return unchanged rather than silently corrupting
+  return dirName;
 }

@@ -1,8 +1,20 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import type { ChildProcess } from "child_process";
+
+// Mock child_process.spawn at module level so it's hoisted before any imports.
+// spawnDevServer and killProcessTree tests use this to verify platform-correct arguments.
+vi.mock("child_process", () => ({
+  spawn: vi.fn(() => ({
+    on: vi.fn(),
+    stdout: null,
+    stderr: null,
+    pid: 999,
+  })),
+}));
 
 // We test the pure functions by importing them after mocking process.platform.
-// Functions that call spawn/process.kill are excluded from unit tests — they
-// require integration testing on the target platform.
+// spawnDevServer and killProcessTree are tested by mocking child_process.spawn
+// and process.kill to verify the correct platform branch is taken.
 
 describe("normalizePath", () => {
   it("converts backslashes to forward slashes", async () => {
@@ -175,5 +187,78 @@ describe("getDefaultDevRoot (platform-branched)", () => {
     const result = getDefaultDevRoot();
     expect(result).toContain("dev");
     expect(result).not.toBe("C:\\dev");
+  });
+});
+
+describe("spawnDevServer (platform-branched)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("wraps command in cmd.exe /c on Windows", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.resetModules();
+    const spawnMock = vi.mocked((await import("child_process")).spawn);
+    spawnMock.mockClear();
+
+    const { spawnDevServer } = await import("@/lib/platform");
+    spawnDevServer("next", ["dev", "--port", "3000"], "C:\\dev\\myapp", { NODE_ENV: "development" });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const [cmd, args] = spawnMock.mock.calls[0];
+    expect(cmd).toBe("cmd.exe");
+    expect(args).toEqual(["/c", "next", "dev", "--port", "3000"]);
+  });
+
+  it("spawns command directly with detached:true on Unix", async () => {
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
+    vi.resetModules();
+    const spawnMock = vi.mocked((await import("child_process")).spawn);
+    spawnMock.mockClear();
+
+    const { spawnDevServer } = await import("@/lib/platform");
+    spawnDevServer("next", ["dev", "--port", "3000"], "/home/user/dev/myapp", { NODE_ENV: "development" });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const [cmd, args, opts] = spawnMock.mock.calls[0];
+    expect(cmd).toBe("next");
+    expect(args).toEqual(["dev", "--port", "3000"]);
+    expect((opts as Record<string, unknown>)?.detached).toBe(true);
+  });
+});
+
+describe("killProcessTree (platform-branched)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("calls taskkill /F /T /PID on Windows", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32", kill: vi.fn() });
+    vi.resetModules();
+    const spawnMock = vi.mocked((await import("child_process")).spawn);
+    spawnMock.mockClear();
+
+    const { killProcessTree } = await import("@/lib/platform");
+    killProcessTree(1234);
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const [cmd, args] = spawnMock.mock.calls[0];
+    expect(cmd).toBe("taskkill");
+    expect(args).toContain("/F");
+    expect(args).toContain("/T");
+    expect(args).toContain("1234");
+  });
+
+  it("sends SIGTERM to negative PID (process group) on Unix", async () => {
+    const killMock = vi.fn();
+    vi.stubGlobal("process", { ...process, platform: "darwin", kill: killMock });
+    vi.resetModules();
+
+    const { killProcessTree } = await import("@/lib/platform");
+    killProcessTree(5678);
+
+    expect(killMock).toHaveBeenCalledWith(-5678, "SIGTERM");
   });
 });
