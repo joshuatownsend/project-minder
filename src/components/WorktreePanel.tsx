@@ -19,7 +19,7 @@ interface WorktreeRowProps {
   status: WorktreeStatus;
   parentSlug: string;
   parentDevPort?: number;
-  onRemoved: () => void;
+  onRemoved: (worktreePath: string) => void;
 }
 
 function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: WorktreeRowProps) {
@@ -109,7 +109,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
         body: JSON.stringify({ action: "remove", worktreePath: wt.worktreePath }),
       });
       if (res.ok) {
-        onRemoved();
+        onRemoved(wt.worktreePath);
       } else {
         const data = await res.json();
         setRemoveError(data.error ?? "Remove failed");
@@ -125,6 +125,8 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
     ? new Date(status.lastCommitDate).toLocaleDateString()
     : null;
 
+  // Show sync controls for any file type the worktree has content for.
+  // We don't assert "out of sync" before syncing — the sync result tells us how many were new.
   const syncItems: { file: SyncFile; label: string; has: boolean }[] = [
     { file: "todos", label: "TODOs", has: (wt.todos?.total ?? 0) > 0 },
     { file: "manual-steps", label: "Manual Steps", has: (wt.manualSteps?.totalSteps ?? 0) > 0 },
@@ -182,7 +184,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
         )}
       </div>
 
-      {/* Sync badges */}
+      {/* Sync controls — button always shown for worktrees with content; result shown after sync */}
       {syncItems.some((s) => s.has) && (
         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
           {syncItems.map(({ file, label, has }) => {
@@ -191,20 +193,20 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
             const done = s.result !== undefined;
             return (
               <div key={file} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                <span style={{
-                  fontSize: "0.68rem", padding: "1px 5px", borderRadius: "3px",
-                  background: done ? "rgba(74,222,128,0.12)" : "rgba(245,158,11,0.12)",
-                  color: done ? "#4ade80" : "var(--accent)",
-                }}>
-                  {done ? (s.result === 0 ? `${label} in sync` : `${label} +${s.result}`) : `${label} out of sync`}
-                </span>
-                {!done && (
+                {done ? (
+                  <span style={{
+                    fontSize: "0.68rem", padding: "1px 5px", borderRadius: "3px",
+                    background: "rgba(74,222,128,0.12)", color: "#4ade80",
+                  }}>
+                    {s.result === 0 ? `${label} in sync` : `${label} +${s.result} synced`}
+                  </span>
+                ) : (
                   <button
                     onClick={() => handleSync(file)}
                     disabled={s.loading}
                     style={{ fontSize: "0.68rem", padding: "1px 6px", borderRadius: "3px", border: "1px solid var(--border-subtle)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer" }}
                   >
-                    {s.loading ? "…" : "Sync to parent"}
+                    {s.loading ? "…" : `Sync ${label}`}
                   </button>
                 )}
                 {s.error && <span style={{ fontSize: "0.68rem", color: "var(--destructive)" }}>{s.error}</span>}
@@ -260,6 +262,7 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
   const [statuses, setStatuses] = useState<WorktreeStatus[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [removedPaths, setRemovedPaths] = useState<Set<string>>(new Set());
 
   const fetchStatuses = useCallback(async () => {
     setLoading(true);
@@ -308,20 +311,22 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
               </button>
             </div>
           )}
-          {statuses && worktrees.map((wt) => {
-            const status = statuses.find((s) => s.worktreePath === wt.worktreePath);
-            if (!status) return null;
-            return (
-              <WorktreeRow
-                key={wt.worktreePath}
-                wt={wt}
-                status={status}
-                parentSlug={slug}
-                parentDevPort={devPort}
-                onRemoved={fetchStatuses}
-              />
-            );
-          })}
+          {statuses && worktrees
+            .filter((wt) => !removedPaths.has(wt.worktreePath))
+            .map((wt) => {
+              const status = statuses.find((s) => s.worktreePath === wt.worktreePath);
+              if (!status) return null;
+              return (
+                <WorktreeRow
+                  key={wt.worktreePath}
+                  wt={wt}
+                  status={status}
+                  parentSlug={slug}
+                  parentDevPort={devPort}
+                  onRemoved={(path) => setRemovedPaths((prev) => new Set([...prev, path]))}
+                />
+              );
+            })}
         </div>
       )}
     </div>

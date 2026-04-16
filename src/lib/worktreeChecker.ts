@@ -19,10 +19,18 @@ function runGitNullable(args: string[], cwd: string): Promise<string | null> {
   });
 }
 
+/** Resolves the repo's default branch via origin/HEAD; falls back to "main". */
+async function getDefaultBranch(cwd: string): Promise<string> {
+  const ref = await runGit(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd);
+  const match = ref.match(/^refs\/remotes\/origin\/(.+)$/);
+  return match ? match[1] : "main";
+}
+
 function parseMergedBranches(mergedOutput: string): string[] {
   return mergedOutput
     .split("\n")
-    .map((l) => l.trim().replace(/^\*\s*/, ""))
+    // Strip both "* " (current branch) and "+ " (checked-out-in-worktree) markers
+    .map((l) => l.trim().replace(/^[*+]\s*/, ""))
     .filter(Boolean);
 }
 
@@ -55,8 +63,9 @@ export async function checkWorktreeStatus(
   worktreePath: string,
   branch: string
 ): Promise<WorktreeStatus> {
+  const defaultBranch = await getDefaultBranch(parentPath);
   const [mergedOutput, remoteOutput, porcelain, lastCommit] = await Promise.all([
-    runGit(["branch", "--merged", "main"], parentPath),
+    runGit(["branch", "--merged", defaultBranch], parentPath),
     runGitNullable(["ls-remote", "--heads", "origin", branch], parentPath),
     runGit(["status", "--porcelain"], worktreePath),
     runGit(["log", "-1", "--format=%aI"], worktreePath),
@@ -71,12 +80,13 @@ export async function checkWorktreeStatus(
   );
 }
 
-/** Efficient multi-worktree variant: runs `git branch --merged main` once for all worktrees. */
+/** Efficient multi-worktree variant: resolves default branch and runs git branch --merged once for all worktrees. */
 export async function checkAllWorktreeStatuses(
   parentPath: string,
   worktrees: Array<{ worktreePath: string; branch: string }>
 ): Promise<WorktreeStatus[]> {
-  const mergedOutput = await runGit(["branch", "--merged", "main"], parentPath);
+  const defaultBranch = await getDefaultBranch(parentPath);
+  const mergedOutput = await runGit(["branch", "--merged", defaultBranch], parentPath);
   const mergedBranches = parseMergedBranches(mergedOutput);
 
   return Promise.all(

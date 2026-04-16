@@ -44,7 +44,11 @@ export async function POST(
   const wtSlug = worktreeSlug(slug, wt.branch);
 
   if (body.action === "start-server") {
-    const startPort = (body.parentDevPort ?? project.devPort ?? 3000) + 1;
+    const rawPort = body.parentDevPort ?? project.devPort ?? 3000;
+    if (!Number.isInteger(rawPort) || rawPort < 1 || rawPort > 65534) {
+      return NextResponse.json({ error: "Invalid parentDevPort" }, { status: 400 });
+    }
+    const startPort = rawPort + 1;
     const port = await findFreePort(startPort);
     if (!port) return NextResponse.json({ error: `No free port from ${startPort}` }, { status: 409 });
     const info = await processManager.start(wtSlug, body.worktreePath, port);
@@ -63,7 +67,13 @@ export async function POST(
       );
       return NextResponse.json({ removed: true, output: stdout || stderr });
     } catch (err: unknown) {
-      return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      // execFileAsync error objects carry stdout/stderr — prefer that for actionable git messages
+      const gitMsg =
+        err && typeof err === "object" && "stderr" in err
+          ? String((err as { stderr: string }).stderr).trim()
+          : "";
+      const fallback = err instanceof Error ? err.message : String(err);
+      return NextResponse.json({ error: gitMsg || fallback }, { status: 409 });
     }
   }
 
