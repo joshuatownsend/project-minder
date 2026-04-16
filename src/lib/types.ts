@@ -87,6 +87,7 @@ export interface TodoInfo {
 export interface TodoItem {
   text: string;
   completed: boolean;
+  lineNumber?: number;
 }
 
 export interface ManualStepEntry {

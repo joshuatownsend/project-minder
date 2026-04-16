@@ -20,7 +20,6 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 
- 
 export interface ConversationEntry {
   type?: string;
   subtype?: string;

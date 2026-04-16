@@ -7,8 +7,6 @@ import {
 } from "@/lib/scanner/claudeConversations";
 import type { UsageTurn } from "./types";
 
- 
-
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
