@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Minder — Local Dev Dashboard for Claude Code Users</title>
+  <meta name="description" content="A local-only dev dashboard that auto-scans your projects and surfaces the context you need — git status, Claude Code sessions, TODOs, costs, and more.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Hero ─────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <h1>Project Minder</h1>
+        <p class="tagline">A local-only dev dashboard that auto-scans your projects and surfaces the context you need — without leaving your browser.</p>
+        <div class="badges">
+          <img src="https://img.shields.io/badge/node-%3E%3D20.19-brightgreen" alt="Node ≥20.19">
+          <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
+          <img src="https://img.shields.io/badge/stack-Next.js%2016%20%2B%20TypeScript-black" alt="Next.js 16 + TypeScript">
+        </div>
+        <div class="ctas">
+          <a href="https://github.com/joshuatownsend/project-minder" class="btn btn-primary">View on GitHub</a>
+          <a href="#quick-start" class="btn btn-ghost">Quick Start ↓</a>
+        </div>
+      </div>
+      <div class="hero-shot">
+        <img src="screenshots/dashboard.png" alt="Project Minder dashboard showing projects with git status, sessions, and todo counts" class="hero-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Feature Groups ────────────────────────────────────── -->
+  <section class="features">
+    <div class="container">
+
+      <!-- Dashboard & Scanning -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <h2>Dashboard &amp; Scanning</h2>
+          <p>Auto-scans your dev directories in parallel and renders every project as a card — git branch, dirty-file count, tech stack, and status at a glance. Background git checks populate amber <code>+N</code> indicators as results arrive. Search, filter by status, and sort across all projects in seconds.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/card-detail.png" alt="Project card detail showing git dirty indicator and badges">
+            <img src="screenshots/project-detail.png" alt="Project detail overview with dev server control">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/dashboard.png" alt="Dashboard view" class="shot">
+        </div>
+      </div>
+
+      <!-- Claude Code Integration -->
+      <div class="feature-row feature-row--flip">
+        <div class="feature-text">
+          <h2>Claude Code Integration</h2>
+          <p>Browse every Claude Code session with search, duration, token counts, and live-session indicators. Drill into a session for the full timeline, tool usage, file operations, and subagent tracking. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories with CSV/JSON export.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/session-detail.png" alt="Session detail with timeline and tool usage">
+            <img src="screenshots/insights-browser.png" alt="Cross-project insights browser">
+            <img src="screenshots/usage-dashboard.png" alt="Token usage analytics dashboard">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/sessions-browser.png" alt="Sessions browser" class="shot">
+        </div>
+      </div>
+
+      <!-- Project Management -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <h2>Project Management</h2>
+          <p>TODO tracking reads each project's <code>TODO.md</code> — add items inline or via a cross-project Quick Add modal (<kbd>Shift+T</kbd>). The Manual Steps tracker surfaces <code>MANUAL_STEPS.md</code> entries across all projects with interactive checkboxes that toggle on disk. A file watcher fires toast and OS notifications when Claude adds new steps mid-session. Worktree overlay surfaces TODOs, Manual Steps, and Insights from active Claude Code worktrees.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/worktrees.png" alt="Worktree overlay showing active branch items">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/manual-steps.png" alt="Manual steps dashboard" class="shot">
+        </div>
+      </div>
+
+      <!-- Observability & Setup -->
+      <div class="feature-row feature-row--flip">
+        <div class="feature-text">
+          <h2>Observability &amp; Setup</h2>
+          <p>The Stats dashboard gives a portfolio-wide overview: tech stack distribution, project health, and Claude Code usage across all sessions. Dev server control lets you start, stop, and restart managed servers from the UI with live stdout/stderr output. The Setup guide provides copy-paste CLAUDE.md instruction blocks and Claude Code hooks — apply them to any managed project with one click.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/setup.png" alt="Setup guide page">
+            <img src="screenshots/config.png" alt="Config page with multiple scan roots">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/stats-dashboard.png" alt="Stats dashboard" class="shot">
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Quick Start ────────────────────────────────────────── -->
+  <section class="quick-start" id="quick-start">
+    <div class="container">
+      <h2>Quick Start</h2>
+      <pre class="code-block"><code>git clone https://github.com/joshuatownsend/project-minder.git
+cd project-minder
+npm install
+<span class="cmt"># create .minder.json in the repo root:</span>
+<span class="cmt"># { "devRoots": ["C:\\dev"] }</span>
+npm run dev   <span class="cmt"># open http://localhost:4100</span></code></pre>
+      <p class="prereqs"><strong>Prerequisites:</strong> Node.js ≥ 20.19 &nbsp;·&nbsp; Windows (uses Windows paths and <code>taskkill</code>)</p>
+    </div>
+  </section>
+
+  <!-- ── Inspired By ────────────────────────────────────────── -->
+  <section class="inspired">
+    <div class="container">
+      <h3 class="inspired-heading">Inspired By</h3>
+      <ul class="inspired-list">
+        <li><a href="https://github.com/AgentSeal/codeburn" target="_blank" rel="noopener">CodeBurn</a> — token cost analytics design</li>
+        <li><a href="https://github.com/chiphuyen/sniffly" target="_blank" rel="noopener">Sniffly</a> — stats dashboard concept</li>
+        <li><a href="https://github.com/JayantDevkar/claude-code-karma" target="_blank" rel="noopener">claude-code-karma</a> — sessions browser concept</li>
+        <li><a href="https://gist.github.com/raphi011/dc96edf80b0db8584527fefc6a3b4bd0" target="_blank" rel="noopener">raphi011's insights gist</a> — insights extraction concept</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── Footer ─────────────────────────────────────────────── -->
+  <footer>
+    <div class="container footer-inner">
+      <span>MIT © Josh Townsend</span>
+      <a href="https://github.com/joshuatownsend/project-minder" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </footer>
+
+</body>
+</html>
