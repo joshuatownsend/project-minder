@@ -118,16 +118,22 @@ export async function toggleTodoInFile(
     const lines = content.split("\n");
     const idx = lineNumber - 1;
 
+    let changed = false;
+
     if (idx >= 0 && idx < lines.length) {
       const line = lines[idx];
       if (line.match(/^\s*-\s*\[\s\]/)) {
-        lines[idx] = line.replace("- [ ]", "- [x]");
+        lines[idx] = line.replace(/^(\s*-\s*)\[\s\]/, "$1[x]");
+        changed = true;
       } else if (line.match(/^\s*-\s*\[x\]/i)) {
-        lines[idx] = line.replace(/- \[x\]/i, "- [ ]");
+        lines[idx] = line.replace(/^(\s*-\s*)\[x\]/i, "$1[ ]");
+        changed = true;
       }
     }
 
-    await atomicWriteFile(filePath, lines.join("\n"));
+    if (changed) {
+      await atomicWriteFile(filePath, lines.join("\n"));
+    }
     const info = await scanTodoMd(projectPath);
     return info ?? { total: 0, completed: 0, pending: 0, items: [] };
   });

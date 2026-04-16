@@ -90,12 +90,13 @@ export async function PATCH(
   }
 
   const { lineNumber } = (body ?? {}) as { lineNumber?: unknown };
-  if (typeof lineNumber !== "number" || lineNumber < 1) {
+  if (!Number.isFinite(lineNumber) || !Number.isInteger(lineNumber) || (lineNumber as number) < 1) {
     return NextResponse.json({ error: "lineNumber required" }, { status: 400 });
   }
+  const safeLineNumber = lineNumber as number;
 
   try {
-    const updated = await toggleTodoInFile(projectPath, lineNumber);
+    const updated = await toggleTodoInFile(projectPath, safeLineNumber);
     invalidateCache();
     return NextResponse.json({ todos: updated });
   } catch {

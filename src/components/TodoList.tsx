@@ -99,31 +99,36 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
 
       {/* Items */}
       <ul style={{ display: "flex", flexDirection: "column", gap: "2px", padding: 0, margin: 0, listStyle: "none" }}>
-        {filtered.map((item, i) => {
+        {filtered.map((item) => {
           const isToggling = toggling === item.lineNumber;
           const canToggle = slug != null && item.lineNumber != null;
+          const itemKey = item.lineNumber != null ? `line-${item.lineNumber}` : `todo-${item.text}`;
           return (
-            <li
-              key={i}
-              onClick={() => canToggle && toggleItem(item.lineNumber)}
-              style={{
-                display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0",
-                cursor: canToggle ? "pointer" : "default",
-                opacity: isToggling ? 0.5 : 1,
-              }}
-            >
-              {item.completed ? (
-                <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
-              ) : (
-                <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
-              )}
-              <span style={{
-                fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
-                textDecoration: item.completed ? "line-through" : "none",
-                lineHeight: 1.55,
-              }}>
-                {item.text}
-              </span>
+            <li key={itemKey}>
+              <button
+                type="button"
+                onClick={() => canToggle && toggleItem(item.lineNumber)}
+                disabled={!canToggle || isToggling}
+                style={{
+                  display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0",
+                  width: "100%", border: "none", background: "none", textAlign: "left",
+                  cursor: canToggle && !isToggling ? "pointer" : "default",
+                  opacity: isToggling ? 0.5 : 1,
+                }}
+              >
+                {item.completed ? (
+                  <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--status-active-text)", flexShrink: 0, marginTop: "1px" }} />
+                ) : (
+                  <Circle style={{ width: "14px", height: "14px", color: "var(--text-muted)", flexShrink: 0, marginTop: "1px" }} />
+                )}
+                <span style={{
+                  fontSize: "0.82rem", color: item.completed ? "var(--text-muted)" : "var(--text-secondary)",
+                  textDecoration: item.completed ? "line-through" : "none",
+                  lineHeight: 1.55,
+                }}>
+                  {item.text}
+                </span>
+              </button>
             </li>
           );
         })}
