@@ -14,7 +14,7 @@ A public-facing single-page site that showcases Project Minder's features and co
 
 ## Tech Approach
 
-Plain HTML + CSS. No build step, no framework, no CDN dependencies. One `index.html`, one `style.css`. Screenshots committed directly to the branch.
+Plain HTML + CSS. No build step, no JS/CSS framework, no CDN-hosted stylesheets or scripts. One `index.html`, one `style.css`. Badge images are fetched from `img.shields.io` (external image host, not a framework CDN). Screenshots committed directly alongside the HTML in `site/screenshots/`.
 
 **Visual style:** Dark background (`#0a0a0a`), amber accent (`#f59e0b`), card-style screenshot frames with subtle border + shadow. Mirrors Project Minder's own dark UI so screenshots feel native to the page.
 
@@ -75,7 +75,7 @@ Small credit row with four linked items matching the README's Inspired By sectio
 
 ## Screenshots (12 total)
 
-Captured by `scripts/capture-screenshots.mjs` at **1440×900** viewport, saved to `docs/images/screenshots/`.
+Captured by `scripts/capture-screenshots.mjs` at **1440×900** viewport, saved to `site/screenshots/`.
 
 | File | Route | Notes |
 |---|---|---|
@@ -102,8 +102,8 @@ Captured by `scripts/capture-screenshots.mjs` at **1440×900** viewport, saved t
 1. Launches headed Chromium at `http://localhost:4100` (user runs `npm run dev` first)
 2. Navigates to each route, waits for `networkidle` + 500ms settle
 3. For detail pages, uses known slugs: project = `project-minder`, session = first item from `/api/sessions`
-4. For the card detail shot: queries `[data-slug="project-minder"]` and calls `element.screenshot()`
-5. Outputs all files to `docs/images/screenshots/`
+4. For the card detail shot: queries `a[href="/project/project-minder"]` and calls `element.screenshot()`
+5. Outputs all files to `site/screenshots/`
 6. Logs each captured file path on completion
 
 **Dependencies:** Uses `playwright` package. Added as a dev dependency.
@@ -137,7 +137,7 @@ screenshots/
 ## Deployment Workflow (Manual)
 
 1. Run `npm run dev` in the project-minder repo
-2. Run `node scripts/capture-screenshots.mjs` — outputs to `docs/images/screenshots/`
+2. Run `node scripts/capture-screenshots.mjs` — outputs to `site/screenshots/`
 3. Switch to `gh-pages` branch
 4. Copy updated `screenshots/` + any `index.html`/`style.css` changes
 5. Commit and push — GitHub Pages serves automatically

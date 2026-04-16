@@ -4,9 +4,9 @@
 
 **Goal:** Build a public-facing GitHub Pages site at `joshuatownsend.github.io/project-minder` — plain HTML/CSS with 12 Playwright-captured screenshots — that showcases Project Minder's features and converts visitors into users.
 
-**Architecture:** A `scripts/capture-screenshots.mjs` script (on `main`) navigates the running local app at `localhost:4100` and saves 12 screenshots to `docs/images/screenshots/`. A `site/` directory (also on `main`) contains `index.html` + `style.css`. Deploying means creating/updating the orphan `gh-pages` branch with the contents of `site/` plus the screenshots folder.
+**Architecture:** A `scripts/capture-screenshots.mjs` script (on `main`) navigates the running local app at `localhost:4100` and saves 12 screenshots to `site/screenshots/`, co-located with the HTML. A `site/` directory (also on `main`) contains `index.html`, `style.css`, and `screenshots/`. Deploying means creating/updating the orphan `gh-pages` branch with the contents of `site/`.
 
-**Tech Stack:** Playwright (headless Chromium), plain HTML5, plain CSS3 (no preprocessor, no framework, no CDN). Node.js ESM script (`*.mjs`).
+**Tech Stack:** Playwright (Chromium, `headless: false` so you can watch progress), plain HTML5, plain CSS3 (no preprocessor, no JS/CSS framework CDN). Badge images are fetched from `img.shields.io`. Node.js ESM script (`*.mjs`).
 
 ---
 
@@ -17,11 +17,11 @@
 | `scripts/capture-screenshots.mjs` | `main` | Create |
 | `site/index.html` | `main` | Create |
 | `site/style.css` | `main` | Create |
-| `docs/images/screenshots/*.png` | `main` | Created by capture script |
+| `site/screenshots/*.png` | `main` | Created by capture script |
 | `package.json` | `main` | Modify — add `playwright` devDependency |
 | `index.html` | `gh-pages` | Copied from `site/index.html` |
 | `style.css` | `gh-pages` | Copied from `site/style.css` |
-| `screenshots/*.png` | `gh-pages` | Copied from `docs/images/screenshots/` |
+| `screenshots/*.png` | `gh-pages` | Copied from `site/screenshots/` |
 
 ---
 
@@ -82,7 +82,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = 'http://localhost:4100';
-const OUT  = join(__dirname, '..', 'docs', 'images', 'screenshots');
+const OUT  = join(__dirname, '..', 'site', 'screenshots');
 
 mkdirSync(OUT, { recursive: true });
 
@@ -188,7 +188,7 @@ git commit -m "feat: add Playwright screenshot capture script"
 ## Task 3: Run the Capture Script
 
 **Files:**
-- Creates: `docs/images/screenshots/*.png` (up to 12 files)
+- Creates: `site/screenshots/*.png` (up to 12 files)
 
 Prerequisite: `npm run dev` must be running in a separate terminal on port 4100.
 
@@ -226,13 +226,13 @@ Capturing screenshots...
   ✓  card-detail.png
 
 All screenshots saved to:
-  C:\dev\project-minder\docs\images\screenshots
+  C:\dev\project-minder\site\screenshots
 ```
 
 - [ ] **Step 3: Verify output**
 
 ```bash
-ls docs/images/screenshots/
+ls site/screenshots/
 ```
 
 Expected: 12 `.png` files (11 if no sessions exist — `session-detail.png` is skipped with a warning).
@@ -242,7 +242,7 @@ Open a few PNGs in an image viewer and confirm they show real UI, not blank page
 - [ ] **Step 4: Commit screenshots**
 
 ```bash
-git add docs/images/screenshots/
+git add site/screenshots/
 git commit -m "chore: add captured screenshots for GitHub Pages site"
 ```
 
@@ -722,13 +722,9 @@ git commit -m "feat: add GitHub Pages stylesheet"
 
 Verify the site looks correct before deploying. No code changes — just inspection.
 
-- [ ] **Step 1: Copy screenshots into `site/` for local file:// preview**
+- [ ] **Step 1: Open `site/index.html` in a browser**
 
-```bash
-cp -r docs/images/screenshots site/screenshots
-```
-
-- [ ] **Step 2: Open `site/index.html` in a browser**
+Screenshots are already co-located at `site/screenshots/` — no copy step needed.
 
 ```bash
 start site/index.html
@@ -741,22 +737,17 @@ Check visually:
 - Inspired By credits row
 - Footer with GitHub link
 
-- [ ] **Step 3: If anything looks wrong, fix `site/index.html` or `site/style.css` and re-open**
+- [ ] **Step 2: If anything looks wrong, fix `site/index.html` or `site/style.css` and re-open**
 
 Common issues to look for:
-- Screenshots not loading (check that `site/screenshots/` was copied in Step 1)
+- Screenshots not loading (verify `site/screenshots/*.png` files exist)
 - Layout breaking at the default browser window width (resize to ~1440px)
 - `feature-row--flip` not alternating direction (check `direction: rtl` in CSS)
 
-- [ ] **Step 4: Clean up the temporary copy**
+- [ ] **Step 3: (no cleanup needed — screenshots live in `site/screenshots/` permanently)**
 
 ```bash
-rm -rf site/screenshots
-```
-
-Do NOT commit `site/screenshots/` — screenshots are stored in `docs/images/screenshots/` on `main` and in the `gh-pages` branch root.
-
-- [ ] **Step 5: Commit any fixes from Step 3 (if needed)**
+- [ ] **Step 4: Commit any fixes from Step 2 (if needed)**
 
 ```bash
 git add site/
@@ -781,13 +772,13 @@ The working directory is now empty. You are on the `gh-pages` branch with no his
 
 - [ ] **Step 2: Copy the site files into the working tree root**
 
-Use absolute paths — the working directory may have shifted when you switched branches:
+Use absolute paths — the working directory may have shifted when you switched branches.
+Screenshots are co-located in `site/screenshots/`, so a single copy covers everything:
 
 ```bash
 cp C:/dev/project-minder/site/index.html .
 cp C:/dev/project-minder/site/style.css .
-mkdir screenshots
-cp C:/dev/project-minder/docs/images/screenshots/*.png screenshots/
+cp -r C:/dev/project-minder/site/screenshots screenshots
 ```
 
 - [ ] **Step 3: Verify the files are present**
@@ -869,9 +860,9 @@ When you want to refresh screenshots after UI changes:
 
 1. `npm run dev` (in one terminal)
 2. `node scripts/capture-screenshots.mjs`
-3. Review the new PNGs in `docs/images/screenshots/`
+3. Review the new PNGs in `site/screenshots/`
 4. `git checkout gh-pages`
-5. `cp C:/dev/project-minder/docs/images/screenshots/*.png screenshots/`
+5. `cp C:/dev/project-minder/site/screenshots/*.png screenshots/`
 6. `git add screenshots/ && git commit -m "chore: refresh screenshots"`
 7. `git push origin gh-pages`
 8. `git checkout main`
