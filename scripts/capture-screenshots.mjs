@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = 'http://localhost:4100';
-const OUT  = join(__dirname, '..', 'docs', 'images', 'screenshots');
+const OUT  = join(__dirname, '..', 'site', 'screenshots');
 
 mkdirSync(OUT, { recursive: true });
 
@@ -31,11 +31,18 @@ async function go(page, route, settle = 600) {
   const page    = await ctx.newPage();
 
   console.log('Fetching first session ID...');
+  let firstSessionId = null;
   const resp = await page.goto(`${BASE}/api/sessions`);
-  const sessions = await resp.json();
-  const firstSessionId = sessions[0]?.sessionId ?? null;
-  if (!firstSessionId) {
-    console.warn('  ⚠  No sessions found — session-detail screenshot will be skipped');
+  if (!resp) {
+    console.warn('  ⚠  Sessions endpoint did not respond — session-detail screenshot will be skipped');
+  } else if (!resp.ok()) {
+    console.warn(`  ⚠  Sessions endpoint returned ${resp.status()} — session-detail screenshot will be skipped`);
+  } else {
+    const sessions = await resp.json();
+    firstSessionId = sessions[0]?.sessionId ?? null;
+    if (!firstSessionId) {
+      console.warn('  ⚠  No sessions found — session-detail screenshot will be skipped');
+    }
   }
 
   console.log('\nCapturing screenshots...');
