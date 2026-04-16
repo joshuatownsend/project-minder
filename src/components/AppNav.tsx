@@ -11,6 +11,7 @@ const navItems = [
   { href: "/usage",        label: "Usage"                  },
   { href: "/stats",        label: "Stats"                  },
   { href: "/config",       label: "Config"                 },
+  { href: "/setup",        label: "Setup"                  },
 ];
 
 export function AppNav() {
