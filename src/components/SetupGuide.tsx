@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { CodeBlock } from "@/components/ui/code-block";
 import {
@@ -10,7 +10,8 @@ import {
   HOOKS_VALIDATE_TODO,
   HOOKS_VALIDATE_MANUAL_STEPS,
 } from "@/lib/setup-content";
-import type { ApplyResult, ApplyStatus } from "@/lib/setupApply";
+import type { ApplyAction, ApplyResult, ApplyStatus } from "@/lib/setupApply";
+import { useProjects } from "@/hooks/useProjects";
 
 function SectionHeader({ label }: { label: string }) {
   return (
@@ -360,49 +361,50 @@ export function SetupGuide() {
 
 // ─── Apply Panel ─────────────────────────────────────────────────────────────
 
-interface ProjectOption {
-  slug: string;
-  name: string;
-}
+const checkboxStyle = {
+  width: "14px",
+  height: "14px",
+  accentColor: "var(--accent)",
+  cursor: "pointer",
+  flexShrink: 0 as const,
+};
+const checkboxLabelStyle = {
+  fontSize: "0.78rem",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+};
+const resultRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  fontSize: "0.76rem",
+} as const;
 
 function statusIcon(status: ApplyStatus) {
-  if (status === "applied") {
-    return (
-      <span style={{ color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600 }}>
-        ✓ applied
-      </span>
-    );
-  }
-  return (
-    <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
-      already present
-    </span>
+  return status === "applied" ? (
+    <span style={{ color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600 }}>✓ applied</span>
+  ) : (
+    <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>already present</span>
   );
 }
 
 function ApplyPanel() {
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [selectedSlug, setSelectedSlug] = useState("");
+  const { data } = useProjects();
+  const projects = data?.projects ?? [];
+
+  const [selectedSlug, setSelectedSlug] = useState(() => data?.projects?.[0]?.slug ?? "");
   const [applyStep1, setApplyStep1] = useState(true);
   const [applyStep2, setApplyStep2] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/projects")
-      .then((r) => r.json())
-      .then((data: { projects?: ProjectOption[] }) => {
-        const list = data.projects ?? [];
-        setProjects(list);
-        if (list.length > 0) setSelectedSlug(list[0].slug);
-      })
-      .catch(() => {});
-  }, []);
+  // Set initial selection once projects load
+  if (!selectedSlug && projects.length > 0) setSelectedSlug(projects[0].slug);
 
   async function handleApply() {
     if (!selectedSlug) return;
-    const action = applyStep1 && applyStep2 ? "both" : applyStep1 ? "claude-md" : "hooks";
+    const action: ApplyAction = applyStep1 && applyStep2 ? "both" : applyStep1 ? "claude-md" : "hooks";
     setApplying(true);
     setResult(null);
     setError(null);
@@ -412,11 +414,11 @@ function ApplyPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
-      const data = await res.json() as ApplyResult & { error?: string };
+      const json = await res.json() as ApplyResult & { error?: string };
       if (!res.ok) {
-        setError(data.error ?? "Unknown error");
+        setError(json.error ?? "Unknown error");
       } else {
-        setResult(data);
+        setResult(json);
       }
     } catch {
       setError("Request failed");
@@ -426,18 +428,6 @@ function ApplyPanel() {
   }
 
   const canApply = selectedSlug && (applyStep1 || applyStep2) && !applying;
-  const checkboxStyle = {
-    width: "14px",
-    height: "14px",
-    accentColor: "var(--accent)",
-    cursor: "pointer",
-    flexShrink: 0 as const,
-  };
-  const labelStyle = {
-    fontSize: "0.78rem",
-    color: "var(--text-secondary)",
-    cursor: "pointer",
-  };
 
   return (
     <div
@@ -448,7 +438,6 @@ function ApplyPanel() {
         padding: "18px 20px",
       }}
     >
-      {/* Project picker */}
       <div style={{ marginBottom: "16px" }}>
         <label
           style={{
@@ -499,29 +488,17 @@ function ApplyPanel() {
         </div>
       </div>
 
-      {/* Step checkboxes */}
       <div style={{ marginBottom: "16px", display: "flex", flexDirection: "column", gap: "8px" }}>
         <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <input
-            type="checkbox"
-            checked={applyStep1}
-            onChange={(e) => setApplyStep1(e.target.checked)}
-            style={checkboxStyle}
-          />
-          <span style={labelStyle}>Step 1 — CLAUDE.md instructions</span>
+          <input type="checkbox" checked={applyStep1} onChange={(e) => setApplyStep1(e.target.checked)} style={checkboxStyle} />
+          <span style={checkboxLabelStyle}>Step 1 — CLAUDE.md instructions</span>
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <input
-            type="checkbox"
-            checked={applyStep2}
-            onChange={(e) => setApplyStep2(e.target.checked)}
-            style={checkboxStyle}
-          />
-          <span style={labelStyle}>Step 2 — Claude Code hooks</span>
+          <input type="checkbox" checked={applyStep2} onChange={(e) => setApplyStep2(e.target.checked)} style={checkboxStyle} />
+          <span style={checkboxLabelStyle}>Step 2 — Claude Code hooks</span>
         </label>
       </div>
 
-      {/* Apply button */}
       <button
         onClick={handleApply}
         disabled={!canApply}
@@ -541,24 +518,19 @@ function ApplyPanel() {
           transition: "background 0.12s",
         }}
       >
-        {applying ? (
-          <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
-        ) : (
-          <Check size={12} />
-        )}
+        {applying ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={12} />}
         {applying ? "Applying…" : "Apply"}
       </button>
 
-      {/* Result */}
       {result && (
         <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
           {result.claudeMd && (
             <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+              <div style={resultRowStyle}>
                 <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>CLAUDE.md — TODO block</span>
                 {statusIcon(result.claudeMd.todo)}
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+              <div style={resultRowStyle}>
                 <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>CLAUDE.md — Manual Steps block</span>
                 {statusIcon(result.claudeMd.manualSteps)}
               </div>
@@ -566,15 +538,15 @@ function ApplyPanel() {
           )}
           {result.hooks && (
             <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+              <div style={resultRowStyle}>
                 <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>.claude/settings.local.json</span>
                 {statusIcon(result.hooks.settingsJson)}
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+              <div style={resultRowStyle}>
                 <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>validate-todo-format.mjs</span>
                 {statusIcon(result.hooks.validateTodo)}
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+              <div style={resultRowStyle}>
                 <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>validate-manual-steps.mjs</span>
                 {statusIcon(result.hooks.validateManualSteps)}
               </div>

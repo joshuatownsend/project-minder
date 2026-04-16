@@ -19,8 +19,6 @@ export function CodeBlock({ code, language, filename }: CodeBlockProps) {
     }).catch(() => {});
   }
 
-  const label = filename ?? language ?? null;
-
   return (
     <div style={{ marginBottom: "14px" }}>
       <div
@@ -44,7 +42,7 @@ export function CodeBlock({ code, language, filename }: CodeBlockProps) {
             textTransform: "uppercase",
           }}
         >
-          {label ?? "\u00a0"}
+          {filename ?? language ?? "\u00a0"}
         </span>
         <button
           onClick={handleCopy}

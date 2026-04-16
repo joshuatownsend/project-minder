@@ -33,34 +33,43 @@ export interface ApplyResult {
   hooks?: HooksResult;
 }
 
-// Sentinel strings that identify each block in an existing CLAUDE.md
 const TODO_SENTINEL = "## TODO";
 const MANUAL_STEPS_SENTINEL = "## Manual Step Logging";
 
-// Command strings used to detect already-present hook entries
 const HOOK_COMMANDS = [
-  `validate-todo-format.mjs`,
-  `validate-manual-steps.mjs`,
+  "validate-todo-format.mjs",
+  "validate-manual-steps.mjs",
 ] as const;
+
+// Parse once at module load — HOOKS_SETTINGS_SNIPPET never changes
+interface HookCommand {
+  type: string;
+  command: string;
+}
+interface PreToolUseEntry {
+  matcher: string;
+  hooks: HookCommand[];
+}
+interface SettingsShape {
+  hooks?: {
+    PreToolUse?: PreToolUseEntry[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+const DESIRED_HOOK_ENTRY = (JSON.parse(HOOKS_SETTINGS_SNIPPET) as SettingsShape).hooks
+  ?.PreToolUse?.[0];
 
 export async function applySetup(
   projectPath: string,
   action: ApplyAction
 ): Promise<ApplyResult> {
   const result: ApplyResult = {};
-
-  if (action === "claude-md" || action === "both") {
-    result.claudeMd = await applyClaudeMd(projectPath);
-  }
-
-  if (action === "hooks" || action === "both") {
-    result.hooks = await applyHooks(projectPath);
-  }
-
+  if (action === "claude-md" || action === "both") result.claudeMd = await applyClaudeMd(projectPath);
+  if (action === "hooks" || action === "both") result.hooks = await applyHooks(projectPath);
   return result;
 }
 
-/** Copies a file to <filePath>.minder-bak if the source exists. */
 async function backupFile(filePath: string): Promise<void> {
   try {
     await fs.copyFile(filePath, `${filePath}.minder-bak`);
@@ -126,10 +135,7 @@ async function applyHooks(projectPath: string): Promise<HooksResult> {
   return { settingsJson, validateTodo, validateManualSteps };
 }
 
-async function writeScriptIdempotent(
-  filePath: string,
-  content: string
-): Promise<ApplyStatus> {
+async function writeScriptIdempotent(filePath: string, content: string): Promise<ApplyStatus> {
   try {
     const existing = await fs.readFile(filePath, "utf-8");
     if (existing.trim() === content.trim()) return "already-present";
@@ -140,57 +146,28 @@ async function writeScriptIdempotent(
   return "applied";
 }
 
-interface HookCommand {
-  type: string;
-  command: string;
-}
-
-interface PreToolUseEntry {
-  matcher: string;
-  hooks: HookCommand[];
-}
-
-interface SettingsJson {
-  hooks?: {
-    PreToolUse?: PreToolUseEntry[];
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
 async function mergeSettingsJson(settingsPath: string): Promise<ApplyStatus> {
-  // Parse the desired hook entry from the snippet constant
-  const snippetParsed = JSON.parse(HOOKS_SETTINGS_SNIPPET) as SettingsJson;
-  const desiredEntry = snippetParsed.hooks?.PreToolUse?.[0];
-  if (!desiredEntry) return "already-present"; // shouldn't happen
+  if (!DESIRED_HOOK_ENTRY) return "already-present";
 
-  // Read existing settings (or start fresh)
-  let settings: SettingsJson = {};
+  let settings: SettingsShape = {};
   try {
     const raw = await fs.readFile(settingsPath, "utf-8");
-    settings = JSON.parse(raw) as SettingsJson;
+    settings = JSON.parse(raw) as SettingsShape;
   } catch {
     // File doesn't exist or isn't valid JSON — start fresh
   }
 
-  // Check if our hook commands are already present anywhere in PreToolUse
   const existingEntries: PreToolUseEntry[] = settings.hooks?.PreToolUse ?? [];
-  const existingCommands = new Set(
-    existingEntries.flatMap((e) => e.hooks.map((h) => h.command))
-  );
-  const allPresent = HOOK_COMMANDS.every((sig) =>
-    [...existingCommands].some((cmd) => cmd.includes(sig))
-  );
+  const existingCommands = existingEntries.flatMap((e) => e.hooks.map((h) => h.command));
+  const allPresent = HOOK_COMMANDS.every((sig) => existingCommands.some((cmd) => cmd.includes(sig)));
 
   if (allPresent) return "already-present";
 
-  // Back up before modifying
   await backupFile(settingsPath);
 
-  // Append our entry
   if (!settings.hooks) settings.hooks = {};
   if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = [];
-  settings.hooks.PreToolUse.push(desiredEntry);
+  settings.hooks.PreToolUse.push(DESIRED_HOOK_ENTRY);
 
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
   return "applied";
