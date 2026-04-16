@@ -82,7 +82,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = 'http://localhost:4100';
-const OUT  = join(__dirname, '..', 'docs', 'images', 'screenshots');
+const OUT  = join(__dirname, '..', 'site', 'screenshots');
 
 mkdirSync(OUT, { recursive: true });
 
@@ -226,7 +226,7 @@ Capturing screenshots...
   ✓  card-detail.png
 
 All screenshots saved to:
-  C:\dev\project-minder\docs\images\screenshots
+  C:\dev\project-minder\site\screenshots
 ```
 
 - [ ] **Step 3: Verify output**
