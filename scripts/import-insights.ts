@@ -4,14 +4,8 @@ import os from "os";
 import { InsightEntry } from "../src/lib/types";
 import { parseInsightsFromJsonl } from "../src/lib/scanner/insightsMd";
 import { appendInsights } from "../src/lib/insightsWriter";
-
-/**
- * Encode a project path the same way Claude Code does for its project dirs.
- * C:\dev\project-minder → C--dev-project-minder
- */
-function encodePath(projectPath: string): string {
-  return projectPath.replace(/[:\\/]/g, "-");
-}
+import { getDefaultDevRoot } from "../src/lib/platform";
+import { encodePath } from "../src/lib/scanner/claudeConversations";
 
 function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -21,7 +15,7 @@ async function main() {
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
 
   // Read devRoot from .minder.json (same as the app does)
-  let devRoot = "C:\\dev";
+  let devRoot = getDefaultDevRoot();
   try {
     const config = JSON.parse(await fs.readFile(path.join(process.cwd(), ".minder.json"), "utf-8"));
     if (config.devRoot) devRoot = config.devRoot;

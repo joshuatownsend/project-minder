@@ -17,6 +17,10 @@
 
 - [ ] **Unit tests for `setupApply.ts`** — Cover idempotent apply logic with temp-dir fixtures: initial apply, re-apply (already-present), malformed `settings.local.json`, and partial hook presence/merge behavior.
 
+## Cross-Platform
+
+- [ ] **Cross-platform testing** — Verify on macOS and Linux: `getDefaultDevRoot()` returns `~/dev`, dev server spawn works with direct binary execution, Claude session history matching works with forward-slash paths.
+
 ## Housekeeping
 
 - [x] **Create CHANGELOG.md** — Set up with Keep a Changelog format.

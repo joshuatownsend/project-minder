@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { decodeDirName } from "../platform";
 import {
   ClaudeUsageStats,
   SessionRecap,
@@ -69,10 +70,7 @@ export function encodePath(projectPath: string): string {
   return projectPath.replace(/[:\\/]/g, "-");
 }
 
-export function decodeDirName(dirName: string): string {
-  // C--dev-project-minder → C:\dev\project-minder (approximate)
-  return dirName.replace(/^([A-Z])-/, "$1:").replace(/-/g, "\\");
-}
+export { decodeDirName };
 
 export function toSlug(dirName: string): string {
   // Extract last segment as project name, slugify
