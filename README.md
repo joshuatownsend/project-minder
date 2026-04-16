@@ -54,7 +54,7 @@ cd project-minder
 npm install
 ```
 
-Configure your scan root(s) in `.minder.json` at the project root (create it if it doesn't exist):
+Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `npm run dev` (create it if it doesn't exist):
 
 ```json
 {
@@ -79,9 +79,9 @@ All settings live in `.minder.json` at the repo root. The in-app **Config page**
 |-----|------|-------------|
 | `devRoots` | `string[]` | Directories to scan. First entry is the primary root. |
 | `devRoot` | `string` | Legacy single-root fallback. Kept in sync automatically. |
-| `statuses` | `Record<slug, status>` | Per-project status labels (`active`, `paused`, `archived`). |
+| `statuses` | `Record<string, "active" \| "paused" \| "archived">` | Per-project status labels. |
 | `hidden` | `string[]` | Project slugs hidden from the dashboard. |
-| `portOverrides` | `Record<slug, number>` | Override the detected dev port for a project. |
+| `portOverrides` | `Record<string, number>` | Override the detected dev port for a project. |
 
 ---
 
