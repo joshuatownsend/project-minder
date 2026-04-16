@@ -1,0 +1,291 @@
+/* ── Reset ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Design Tokens ─────────────────────────────────────── */
+:root {
+  --bg:         #0a0a0a;
+  --bg-card:    #111111;
+  --bg-code:    #0d0d0d;
+  --border:     #1e1e1e;
+  --border-mid: #2a2a2a;
+  --text:       #e5e5e5;
+  --muted:      #888888;
+  --amber:      #f59e0b;
+  --amber-dim:  rgba(245, 158, 11, 0.12);
+  --amber-glow: rgba(245, 158, 11, 0.25);
+  --r:          10px;
+  --mono:       'Menlo', 'Consolas', 'Liberation Mono', monospace;
+  --max:        1100px;
+}
+
+/* ── Base ───────────────────────────────────────────────── */
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+img { display: block; max-width: 100%; height: auto; }
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, kbd { font-family: var(--mono); font-size: 0.85em; }
+
+code {
+  background: var(--amber-dim);
+  color: var(--amber);
+  padding: 0.1em 0.38em;
+  border-radius: 3px;
+}
+
+kbd {
+  background: var(--bg-card);
+  border: 1px solid var(--border-mid);
+  padding: 0.1em 0.38em;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.container {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── Hero ───────────────────────────────────────────────── */
+.hero {
+  padding: 72px 0 48px;
+  text-align: center;
+}
+
+.hero .container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+}
+
+.hero-content { max-width: 640px; }
+
+.hero h1 {
+  font-size: clamp(2.25rem, 6vw, 3.75rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: #fff;
+  line-height: 1.1;
+}
+
+.tagline {
+  margin-top: 16px;
+  font-size: 1.125rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+.badges img { height: 20px; display: inline; }
+
+.ctas {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 28px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 22px;
+  border-radius: 6px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  transition: opacity 0.15s, border-color 0.15s, color 0.15s;
+  cursor: pointer;
+}
+.btn:hover { text-decoration: none; }
+
+.btn-primary { background: var(--amber); color: #000; }
+.btn-primary:hover { opacity: 0.88; }
+
+.btn-ghost { color: var(--text); border: 1px solid var(--border-mid); }
+.btn-ghost:hover { border-color: var(--amber); color: var(--amber); }
+
+.hero-shot { width: 100%; }
+
+.hero-img {
+  width: 100%;
+  border-radius: var(--r);
+  border: 1px solid var(--amber-glow);
+  box-shadow:
+    0 0 0 1px var(--amber-dim),
+    0 0 48px var(--amber-dim),
+    0 24px 64px rgba(0, 0, 0, 0.85);
+}
+
+/* ── Feature Groups ─────────────────────────────────────── */
+.features { padding: 32px 0 96px; }
+
+.features .container {
+  display: flex;
+  flex-direction: column;
+  gap: 80px;
+}
+
+.feature-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: start;
+}
+
+/* Flip layout: text right, screenshot left */
+.feature-row--flip { direction: rtl; }
+.feature-row--flip > * { direction: ltr; }
+
+.feature-text h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.015em;
+  margin-bottom: 12px;
+}
+
+.feature-text p {
+  font-size: 0.9375rem;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.secondary-shots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.secondary-shots img {
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  opacity: 0.65;
+  transition: opacity 0.2s, border-color 0.2s;
+}
+.secondary-shots img:hover { opacity: 1; border-color: var(--border-mid); }
+
+/* Sticky primary screenshot — scrolls away at viewport top */
+.feature-shot {
+  position: sticky;
+  top: 24px;
+}
+
+.shot {
+  width: 100%;
+  border-radius: var(--r);
+  border: 1px solid var(--border-mid);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.shot:hover {
+  border-color: var(--amber-glow);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 20px var(--amber-dim);
+}
+
+/* ── Quick Start ────────────────────────────────────────── */
+.quick-start {
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 64px 0;
+}
+
+.quick-start h2 {
+  font-size: 1.625rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.015em;
+  margin-bottom: 24px;
+}
+
+.code-block {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 20px 24px;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  line-height: 1.8;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+.cmt { color: var(--muted); }
+
+.prereqs {
+  margin-top: 16px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* ── Inspired By ────────────────────────────────────────── */
+.inspired {
+  padding: 48px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspired-heading {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.inspired-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 28px;
+  row-gap: 6px;
+}
+
+.inspired-list li { font-size: 0.875rem; color: var(--muted); }
+.inspired-list a { color: var(--muted); }
+.inspired-list a:hover { color: var(--amber); text-decoration: none; }
+
+/* ── Footer ─────────────────────────────────────────────── */
+footer { padding: 24px 0; }
+
+.footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .feature-row,
+  .feature-row--flip {
+    grid-template-columns: 1fr;
+    direction: ltr;
+    gap: 28px;
+  }
+  .feature-row--flip .feature-shot { order: -1; }
+  .feature-shot { position: static; }
+  .hero { padding: 48px 0 32px; }
+}
