@@ -10,6 +10,13 @@ Project Minder looks for three files in each project root:
 - **MANUAL_STEPS.md** — developer steps Claude can't perform (tracked cross-project in the Steps dashboard)
 - **INSIGHTS.md** — auto-generated from Claude session logs (no setup needed)
 
+## Apply to a Project
+
+At the bottom of the Setup page, the **Apply to a Project** panel lets you apply either or both steps directly to any project managed by Project Minder — no manual copy-paste needed. Pick a project, choose which steps to apply, and click Apply.
+
+- Already-present blocks are detected and skipped (idempotent).
+- Existing files (`CLAUDE.md`, `settings.local.json`) are backed up to `.minder-bak` before modification.
+
 ## Step 1: CLAUDE.md Instructions (required)
 
 Add two instruction blocks to your project's `CLAUDE.md` — one for TODO.md and one for MANUAL_STEPS.md. Claude reads this file at the start of each session. These instructions tell Claude **when** to write to these files and **what format** to use.

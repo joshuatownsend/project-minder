@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { CodeBlock } from "@/components/ui/code-block";
 import {
   CLAUDE_MD_TODO_BLOCK,
@@ -8,6 +10,7 @@ import {
   HOOKS_VALIDATE_TODO,
   HOOKS_VALIDATE_MANUAL_STEPS,
 } from "@/lib/setup-content";
+import type { ApplyResult, ApplyStatus } from "@/lib/setupApply";
 
 function SectionHeader({ label }: { label: string }) {
   return (
@@ -345,6 +348,249 @@ export function SetupGuide() {
           </div>
         </div>
       </div>
+
+      {/* Apply to a project */}
+      <div style={{ marginBottom: "36px" }}>
+        <SectionHeader label="Apply to a Project" />
+        <ApplyPanel />
+      </div>
+    </div>
+  );
+}
+
+// ─── Apply Panel ─────────────────────────────────────────────────────────────
+
+interface ProjectOption {
+  slug: string;
+  name: string;
+}
+
+function statusIcon(status: ApplyStatus) {
+  if (status === "applied") {
+    return (
+      <span style={{ color: "var(--accent)", fontSize: "0.72rem", fontWeight: 600 }}>
+        ✓ applied
+      </span>
+    );
+  }
+  return (
+    <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
+      already present
+    </span>
+  );
+}
+
+function ApplyPanel() {
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [selectedSlug, setSelectedSlug] = useState("");
+  const [applyStep1, setApplyStep1] = useState(true);
+  const [applyStep2, setApplyStep2] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<ApplyResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((data: { projects?: ProjectOption[] }) => {
+        const list = data.projects ?? [];
+        setProjects(list);
+        if (list.length > 0) setSelectedSlug(list[0].slug);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function handleApply() {
+    if (!selectedSlug) return;
+    const action = applyStep1 && applyStep2 ? "both" : applyStep1 ? "claude-md" : "hooks";
+    setApplying(true);
+    setResult(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/setup/${selectedSlug}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json() as ApplyResult & { error?: string };
+      if (!res.ok) {
+        setError(data.error ?? "Unknown error");
+      } else {
+        setResult(data);
+      }
+    } catch {
+      setError("Request failed");
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const canApply = selectedSlug && (applyStep1 || applyStep2) && !applying;
+  const checkboxStyle = {
+    width: "14px",
+    height: "14px",
+    accentColor: "var(--accent)",
+    cursor: "pointer",
+    flexShrink: 0 as const,
+  };
+  const labelStyle = {
+    fontSize: "0.78rem",
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+  };
+
+  return (
+    <div
+      style={{
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+        padding: "18px 20px",
+      }}
+    >
+      {/* Project picker */}
+      <div style={{ marginBottom: "16px" }}>
+        <label
+          style={{
+            display: "block",
+            fontSize: "0.72rem",
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-muted)",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            marginBottom: "6px",
+          }}
+        >
+          Project
+        </label>
+        <div style={{ position: "relative", display: "inline-block" }}>
+          <select
+            value={selectedSlug}
+            onChange={(e) => { setSelectedSlug(e.target.value); setResult(null); setError(null); }}
+            style={{
+              appearance: "none",
+              background: "var(--bg-base)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius)",
+              color: "var(--text-primary)",
+              fontSize: "0.8rem",
+              fontFamily: "var(--font-body)",
+              padding: "6px 32px 6px 10px",
+              cursor: "pointer",
+              outline: "none",
+              minWidth: "220px",
+            }}
+          >
+            {projects.map((p) => (
+              <option key={p.slug} value={p.slug}>{p.name}</option>
+            ))}
+          </select>
+          <ChevronDown
+            size={12}
+            style={{
+              position: "absolute",
+              right: "10px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--text-muted)",
+              pointerEvents: "none",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Step checkboxes */}
+      <div style={{ marginBottom: "16px", display: "flex", flexDirection: "column", gap: "8px" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <input
+            type="checkbox"
+            checked={applyStep1}
+            onChange={(e) => setApplyStep1(e.target.checked)}
+            style={checkboxStyle}
+          />
+          <span style={labelStyle}>Step 1 — CLAUDE.md instructions</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <input
+            type="checkbox"
+            checked={applyStep2}
+            onChange={(e) => setApplyStep2(e.target.checked)}
+            style={checkboxStyle}
+          />
+          <span style={labelStyle}>Step 2 — Claude Code hooks</span>
+        </label>
+      </div>
+
+      {/* Apply button */}
+      <button
+        onClick={handleApply}
+        disabled={!canApply}
+        style={{
+          padding: "6px 16px",
+          background: canApply ? "var(--accent-bg)" : "var(--bg-base)",
+          border: "1px solid var(--accent-border)",
+          borderRadius: "var(--radius)",
+          color: canApply ? "var(--accent)" : "var(--text-muted)",
+          fontSize: "0.78rem",
+          fontWeight: 600,
+          fontFamily: "var(--font-body)",
+          cursor: canApply ? "pointer" : "not-allowed",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          transition: "background 0.12s",
+        }}
+      >
+        {applying ? (
+          <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
+        ) : (
+          <Check size={12} />
+        )}
+        {applying ? "Applying…" : "Apply"}
+      </button>
+
+      {/* Result */}
+      {result && (
+        <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          {result.claudeMd && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>CLAUDE.md — TODO block</span>
+                {statusIcon(result.claudeMd.todo)}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>CLAUDE.md — Manual Steps block</span>
+                {statusIcon(result.claudeMd.manualSteps)}
+              </div>
+            </>
+          )}
+          {result.hooks && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>.claude/settings.local.json</span>
+                {statusIcon(result.hooks.settingsJson)}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>validate-todo-format.mjs</span>
+                {statusIcon(result.hooks.validateTodo)}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.76rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>validate-manual-steps.mjs</span>
+                {statusIcon(result.hooks.validateManualSteps)}
+              </div>
+            </>
+          )}
+          <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "4px" }}>
+            Originals backed up as <code style={{ fontFamily: "var(--font-mono)" }}>.minder-bak</code> where applicable.
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <p style={{ marginTop: "12px", fontSize: "0.76rem", color: "var(--destructive, #f87171)" }}>
+          Error: {error}
+        </p>
+      )}
     </div>
   );
 }
