@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:30ab4fef8e43 | session:661056b7-befa-4f76-81c0-03159b90270a | 2026-04-16T19:52:15.694Z -->
+## ★ Insight
+The toggle uses **optimistic opacity** (`opacity: 0.5` while in-flight) rather than optimistic state because the server returns the authoritative post-write `TodoInfo` — simpler and avoids a stale-state bug if the write fails.
+
+---
+
+<!-- insight:89dca674735f | session:661056b7-befa-4f76-81c0-03159b90270a | 2026-04-16T19:49:44.171Z -->
+## ★ Insight
+The ManualSteps toggle works because `parseManualStepsMd` stores line numbers per item. `scanTodoMd` discards line numbers entirely — so even if we had a toggle API, we'd have no way to know which line to mutate. The fix threads line numbers through all 5 layers: type → scanner → writer → API route → UI.
+
+---
+
+<!-- insight:bcab28f3eca7 | session:661056b7-befa-4f76-81c0-03159b90270a | 2026-04-16T19:49:12.063Z -->
+## ★ Insight
+The `Circle` and `CheckCircle2` icons in `TodoList.tsx` have no `onClick` handler — they're purely decorative. The `ManualStepsList` component (for Manual Steps) has toggle support, but that pattern was never wired up for TODOs.
+
+---
+
 <!-- insight:edcacf1e497f | session:177aee6d-5c58-4038-9422-d242d4bf0a9c | 2026-04-16T16:50:09.861Z -->
 ## ★ Insight
 The `vi.mock("child_process")` call must be at the **top of the file** because Vitest hoists it before any imports during transformation — if you put it inside a `describe` block or `beforeEach`, the mock won't be in place when the real module is first imported. The `vi.mocked()` wrapper then lets you configure return values inside individual tests after the mock factory has already run.
