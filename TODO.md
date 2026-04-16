@@ -9,6 +9,10 @@
 
 - [x] **Background git dirty status** — Background batch worker checks repos 3 at a time, dashboard polls for results and shows amber `+N` indicators as they come in.
 
+## Setup Guide
+
+- [ ] **Phase 2: Auto-apply setup to managed projects** — Add buttons on the Setup page (or Config/project cards) to apply Option 1 (append CLAUDE.md rules) or Option 2 (write hook scripts) directly to projects managed by Project Minder. Uses `POST /api/config` or a new `/api/setup/[slug]` route.
+
 ## Housekeeping
 
 - [x] **Create CHANGELOG.md** — Set up with Keep a Changelog format.

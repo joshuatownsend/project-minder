@@ -20,6 +20,7 @@ const slugTitles: Record<HelpSlug, string> = {
   insights: "Insights",
   usage: "Usage Dashboard",
   config: "Configuration",
+  setup: "Setup Guide",
 };
 
 const iconBtnBase: React.CSSProperties = {
