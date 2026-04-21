@@ -50,21 +50,22 @@ function extractToolResults(content: any[]): string {
 // Any '--' after that initial prefix represents '\.' — a dot-prefixed component.
 // Worktree dirs are always dot-prefixed (.worktrees, .claude-worktrees, etc.),
 // so strip the worktree suffix to group their sessions with the parent project.
-// We scan ALL '--' occurrences (not just the first) to handle paths where an
-// earlier dot-prefixed dir appears before the worktree container.
+// We scan '--' occurrences left-to-right and stop at the FIRST worktree marker.
+// Earlier dot-prefixed dirs (e.g. '--cache') don't match the pattern, so the
+// loop naturally skips them. Stopping at the first match also ensures a branch
+// name that happens to contain '--worktrees-' is never treated as a second marker.
 export function canonicalizeDirName(dirName: string): string {
   const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
-  let lastWorktreeIdx = -1;
   let pos = searchFrom;
   while (pos < dirName.length) {
     const idx = dirName.indexOf("--", pos);
     if (idx === -1) break;
     if (/^(?:[a-z]+-)?worktrees-/.test(dirName.slice(idx + 2))) {
-      lastWorktreeIdx = idx;
+      return dirName.slice(0, idx);
     }
     pos = idx + 2;
   }
-  return lastWorktreeIdx === -1 ? dirName : dirName.slice(0, lastWorktreeIdx);
+  return dirName;
 }
 
 // ── Single-file parser ────────────────────────────────────────────────────────

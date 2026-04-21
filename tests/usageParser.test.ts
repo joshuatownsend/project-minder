@@ -36,10 +36,17 @@ describe("canonicalizeDirName", () => {
     ).toBe("C--dev-project--cache");
   });
 
-  it("strips the rightmost worktree segment (leaves intermediate dot dirs intact)", () => {
+  it("strips at the first worktree marker (leaves intermediate dot dirs intact)", () => {
     expect(
       canonicalizeDirName("C--dev-project--cache--claude-worktrees-feature")
     ).toBe("C--dev-project--cache");
+  });
+
+  it("stops at first worktree marker even if branch name contains '--worktrees-'", () => {
+    // Branch name 'feat--worktrees-fix' is a valid git ref; must not be treated as a second marker
+    expect(
+      canonicalizeDirName("C--dev-proj--claude-worktrees-feat--worktrees-fix")
+    ).toBe("C--dev-proj");
   });
 
   it("handles Unix-style paths with .worktrees", () => {
