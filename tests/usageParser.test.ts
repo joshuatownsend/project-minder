@@ -29,6 +29,19 @@ describe("canonicalizeDirName", () => {
     expect(canonicalizeDirName("C--dev-worktrees-manager")).toBe("C--dev-worktrees-manager");
   });
 
+  it("strips worktree suffix when an earlier dot-prefixed dir is in the path", () => {
+    // Path: C:\dev\project\.cache\.worktrees\branch — two dot-prefixed components
+    expect(
+      canonicalizeDirName("C--dev-project--cache--worktrees-branch")
+    ).toBe("C--dev-project--cache");
+  });
+
+  it("strips the rightmost worktree segment (leaves intermediate dot dirs intact)", () => {
+    expect(
+      canonicalizeDirName("C--dev-project--cache--claude-worktrees-feature")
+    ).toBe("C--dev-project--cache");
+  });
+
   it("handles Unix-style paths with .worktrees", () => {
     expect(canonicalizeDirName("-home-user-project--worktrees-branch")).toBe(
       "-home-user-project"
