@@ -43,6 +43,31 @@ function extractToolResults(content: any[]): string {
     .slice(0, 2000);
 }
 
+// ── Dir name canonicalization ─────────────────────────────────────────────────
+
+// In the encoded dir name, ':', '\', and '.' all become '-'.
+// Windows paths start with '{Drive}--' (drive colon + first backslash).
+// Any '--' after that initial prefix represents '\.' — a dot-prefixed component.
+// Worktree dirs are always dot-prefixed (.worktrees, .claude-worktrees, etc.),
+// so strip the worktree suffix to group their sessions with the parent project.
+// We scan '--' occurrences left-to-right and stop at the FIRST worktree marker.
+// Earlier dot-prefixed dirs (e.g. '--cache') don't match the pattern, so the
+// loop naturally skips them. Stopping at the first match also ensures a branch
+// name that happens to contain '--worktrees-' is never treated as a second marker.
+export function canonicalizeDirName(dirName: string): string {
+  const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
+  let pos = searchFrom;
+  while (pos < dirName.length) {
+    const idx = dirName.indexOf("--", pos);
+    if (idx === -1) break;
+    if (/^(?:[a-z]+-)?worktrees-/.test(dirName.slice(idx + 2))) {
+      return dirName.slice(0, idx);
+    }
+    pos = idx + 2;
+  }
+  return dirName;
+}
+
 // ── Single-file parser ────────────────────────────────────────────────────────
 
 export async function parseSessionTurns(
@@ -50,7 +75,8 @@ export async function parseSessionTurns(
   projectDirName: string
 ): Promise<UsageTurn[]> {
   const sessionId = path.basename(filePath, ".jsonl");
-  const projectSlug = toSlug(projectDirName);
+  const canonicalDir = canonicalizeDirName(projectDirName);
+  const projectSlug = toSlug(canonicalDir);
 
   let raw: string;
   try {
@@ -99,7 +125,7 @@ export async function parseSessionTurns(
         timestamp,
         sessionId,
         projectSlug,
-        projectDirName,
+        projectDirName: canonicalDir,
         model,
         role: "assistant",
         inputTokens,
@@ -123,7 +149,7 @@ export async function parseSessionTurns(
         timestamp,
         sessionId,
         projectSlug,
-        projectDirName,
+        projectDirName: canonicalDir,
         model: "",
         role: "user",
         inputTokens: 0,
