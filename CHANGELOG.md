@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Cost estimates are now consistent across `/sessions`, `/usage`, and `/stats`. Previously, session scanning used hardcoded Sonnet-3.5-era pricing constants while `/usage` used LiteLLM-backed per-model pricing, causing divergent numbers. All cost calculations now route through `costCalculator.ts` with per-model token attribution.
+- **Usage "By Project" deduplication** — worktree sessions (e.g., `.worktrees/my-branch` or `.claude-worktrees/feature`) were appearing as separate projects in the By Project breakdown. They are now correctly merged into their parent project.
 
 ## [0.9.3] - 2026-04-16
 

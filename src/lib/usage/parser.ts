@@ -43,6 +43,24 @@ function extractToolResults(content: any[]): string {
     .slice(0, 2000);
 }
 
+// ── Dir name canonicalization ─────────────────────────────────────────────────
+
+// In the encoded dir name, ':', '\', and '.' all become '-'.
+// Windows paths start with '{Drive}--' (drive colon + first backslash).
+// Any '--' after that initial prefix represents '\.' — a dot-prefixed component.
+// Worktree dirs are always dot-prefixed (.worktrees, .claude-worktrees, etc.),
+// so strip the worktree suffix to group their sessions with the parent project.
+export function canonicalizeDirName(dirName: string): string {
+  const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
+  const ddIdx = dirName.indexOf("--", searchFrom);
+  if (ddIdx === -1) return dirName;
+  const after = dirName.slice(ddIdx + 2);
+  if (/^(?:[a-z]+-)?worktrees-/.test(after)) {
+    return dirName.slice(0, ddIdx);
+  }
+  return dirName;
+}
+
 // ── Single-file parser ────────────────────────────────────────────────────────
 
 export async function parseSessionTurns(
@@ -50,7 +68,8 @@ export async function parseSessionTurns(
   projectDirName: string
 ): Promise<UsageTurn[]> {
   const sessionId = path.basename(filePath, ".jsonl");
-  const projectSlug = toSlug(projectDirName);
+  const canonicalDir = canonicalizeDirName(projectDirName);
+  const projectSlug = toSlug(canonicalDir);
 
   let raw: string;
   try {
@@ -99,7 +118,7 @@ export async function parseSessionTurns(
         timestamp,
         sessionId,
         projectSlug,
-        projectDirName,
+        projectDirName: canonicalDir,
         model,
         role: "assistant",
         inputTokens,
@@ -123,7 +142,7 @@ export async function parseSessionTurns(
         timestamp,
         sessionId,
         projectSlug,
-        projectDirName,
+        projectDirName: canonicalDir,
         model: "",
         role: "user",
         inputTokens: 0,
