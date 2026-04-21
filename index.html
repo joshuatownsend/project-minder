@@ -54,7 +54,7 @@
       <div class="feature-row feature-row--flip">
         <div class="feature-text">
           <h2>Claude Code Integration</h2>
-          <p>Browse every Claude Code session with search, duration, token counts, and live-session indicators. Drill into a session for the full timeline, tool usage, file operations, and subagent tracking. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories with CSV/JSON export.</p>
+          <p>Dashboard cards show a live <strong>green "coding"</strong> or <strong>amber "waiting on you"</strong> badge when a Claude session is active — inferred from the JSONL tail and refreshed automatically every 15 seconds. The Sessions browser supports <em>full-text content search</em> across message bodies (not just prompts), auto-refreshes without a manual reload, and highlights matched snippets inline. Session timelines render fenced code blocks and inline <code>code</code> spans. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories — worktree sessions are merged into their parent project — with CSV/JSON export.</p>
           <div class="secondary-shots">
             <img src="screenshots/session-detail.png" alt="Session detail with timeline and tool usage">
             <img src="screenshots/insights-browser.png" alt="Cross-project insights browser">
@@ -120,6 +120,7 @@ npm run dev   <span class="cmt"># open http://localhost:4100</span></code></pre>
         <li><a href="https://github.com/AgentSeal/codeburn" target="_blank" rel="noopener">CodeBurn</a> — token cost analytics design</li>
         <li><a href="https://github.com/chiphuyen/sniffly" target="_blank" rel="noopener">Sniffly</a> — stats dashboard concept</li>
         <li><a href="https://github.com/JayantDevkar/claude-code-karma" target="_blank" rel="noopener">claude-code-karma</a> — sessions browser concept</li>
+        <li><a href="https://github.com/minchenlee/c9watch" target="_blank" rel="noopener">c9watch</a> — live session status monitoring concept</li>
         <li><a href="https://gist.github.com/raphi011/dc96edf80b0db8584527fefc6a3b4bd0" target="_blank" rel="noopener">raphi011's insights gist</a> — insights extraction concept</li>
       </ul>
     </div>
