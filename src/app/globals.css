@@ -165,6 +165,14 @@ button:hover[data-toolbar] {
   to { transform: rotate(360deg); }
 }
 
+@keyframes ping {
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [style*="animation: ping"] { animation: none; }
+}
+
 @keyframes slide-in-from-right {
   from { transform: translateX(100%); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }

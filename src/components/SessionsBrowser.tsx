@@ -19,6 +19,7 @@ import {
   Check,
 } from "lucide-react";
 import Link from "next/link";
+import { StatusDot } from "./ui/StatusDot";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -138,29 +139,25 @@ function OneShotBadge({ rate }: { rate: number }) {
   );
 }
 
-// ── Active session pulse dot ──────────────────────────────────────────────────
+// ActiveDot used for project group headers (always green — the group has at least one active session).
 function ActiveDot() {
+  return <StatusDot status="working" size={8} />;
+}
+
+// Highlight a matched query within a text snippet.
+function MatchSnippet({ text, query }: { text: string; query: string }) {
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>{text.slice(0, 80)}</span>;
+  const start = Math.max(0, idx - 30);
+  const end   = Math.min(text.length, idx + query.length + 50);
+  const before = text.slice(start, idx);
+  const match  = text.slice(idx, idx + query.length);
+  const after  = text.slice(idx + query.length, end);
   return (
-    <span style={{ position: "relative", display: "inline-flex", width: "8px", height: "8px", flexShrink: 0 }}>
-      <span
-        style={{
-          position: "absolute",
-          inset: 0,
-          borderRadius: "50%",
-          background: "var(--status-active-text)",
-          opacity: 0.5,
-          animation: "ping 1s cubic-bezier(0,0,0.2,1) infinite",
-        }}
-      />
-      <span
-        style={{
-          position: "relative",
-          borderRadius: "50%",
-          width: "8px",
-          height: "8px",
-          background: "var(--status-active-text)",
-        }}
-      />
+    <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+      {start > 0 && "…"}{before}
+      <mark style={{ background: "var(--accent-bg)", color: "var(--accent)", borderRadius: "2px", padding: "0 1px" }}>{match}</mark>
+      {after}{end < text.length && "…"}
     </span>
   );
 }
@@ -169,11 +166,21 @@ function ActiveDot() {
 function SessionRow({
   session,
   showProject = true,
+  search = "",
 }: {
   session: SessionSummary;
   showProject?: boolean;
+  search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+  const searchLower = search.toLowerCase();
+  const isContentMatch = search
+    ? !!(session.searchableText?.toLowerCase().includes(searchLower))
+      && !session.initialPrompt?.toLowerCase().includes(searchLower)
+      && !session.lastPrompt?.toLowerCase().includes(searchLower)
+      && !session.projectName.toLowerCase().includes(searchLower)
+      && !session.gitBranch?.toLowerCase().includes(searchLower)
+    : false;
 
   return (
     <Link
@@ -217,7 +224,7 @@ function SessionRow({
               {session.projectName}
             </span>
           )}
-          {session.isActive && <ActiveDot />}
+          <StatusDot status={session.status} size={8} />
           {session.recaps && session.recaps.length > 0 && (
             <span style={{
               fontSize: "0.6rem", fontFamily: "var(--font-mono)",
@@ -240,7 +247,9 @@ function SessionRow({
               whiteSpace: "nowrap",
             }}
           >
-            {session.recaps && session.recaps.length > 0
+            {isContentMatch && session.searchableText
+              ? <MatchSnippet text={session.searchableText} query={search} />
+              : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
               : session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
@@ -394,10 +403,12 @@ function ProjectSection({
   group,
   collapsed,
   onToggle,
+  search = "",
 }: {
   group: ProjectGroup;
   collapsed: boolean;
   onToggle: () => void;
+  search?: string;
 }) {
   return (
     <div>
@@ -461,7 +472,7 @@ function ProjectSection({
       {!collapsed && (
         <div style={{ paddingLeft: "26px", borderTop: "1px solid var(--border-subtle)" }}>
           {group.sessions.map((s) => (
-            <SessionRow key={s.sessionId} session={s} showProject={false} />
+            <SessionRow key={s.sessionId} session={s} showProject={false} search={search} />
           ))}
         </div>
       )}
@@ -484,10 +495,12 @@ export function SessionsBrowser() {
       result = result.filter(
         (s) =>
           s.initialPrompt?.toLowerCase().includes(q) ||
+          s.lastPrompt?.toLowerCase().includes(q) ||
           s.projectName.toLowerCase().includes(q) ||
           s.projectPath.toLowerCase().includes(q) ||
           s.sessionId.includes(q) ||
-          s.gitBranch?.toLowerCase().includes(q)
+          s.gitBranch?.toLowerCase().includes(q) ||
+          s.searchableText?.toLowerCase().includes(q)
       );
     }
     return [...result].sort((a, b) => {
@@ -514,7 +527,7 @@ export function SessionsBrowser() {
     [filtered, groupByProject]
   );
 
-  const activeSessions = data.filter((s) => s.isActive).length;
+  const activeSessions = data.filter((s) => s.status === "working" || s.status === "needs_attention").length;
 
   const toggleCollapse = (path: string) => {
     setCollapsedSlugs((prev) => {
@@ -627,13 +640,14 @@ export function SessionsBrowser() {
               group={group}
               collapsed={collapsedSlugs.has(group.projectPath)}
               onToggle={() => toggleCollapse(group.projectPath)}
+              search={search}
             />
           ))}
         </div>
       ) : (
         <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
           {filtered.map((s) => (
-            <SessionRow key={s.sessionId} session={s} showProject />
+            <SessionRow key={s.sessionId} session={s} showProject search={search} />
           ))}
         </div>
       )}

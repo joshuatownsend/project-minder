@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { scanAllSessions } from "@/lib/scanner/claudeConversations";
 import { SessionSummary } from "@/lib/types";
 
-const CACHE_TTL = 2 * 60_000; // 2 minutes
+const CACHE_TTL = 30_000; // 30s — kept short so live status badges on the dashboard are timely
 
 // globalThis singleton — survives Next.js module reloads
 const globalForSessions = globalThis as unknown as {

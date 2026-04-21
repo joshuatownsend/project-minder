@@ -18,6 +18,12 @@ export function useAllSessions() {
 
   useEffect(() => {
     refresh();
+    const id = setInterval(() => {
+      if (document.visibilityState !== "hidden") {
+        refresh();
+      }
+    }, 15_000);
+    return () => clearInterval(id);
   }, [refresh]);
 
   return { data, loading, refresh };

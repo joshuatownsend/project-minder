@@ -88,6 +88,8 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
       lastPromptPreview: claudeSessions.lastPromptPreview,
       sessionCount: claudeSessions.sessionCount,
       claudeMdSummary: claudeMd,
+      mostRecentSessionStatus: claudeSessions.mostRecentSessionStatus,
+      mostRecentSessionId: claudeSessions.mostRecentSessionId,
     },
     todos,
     manualSteps,

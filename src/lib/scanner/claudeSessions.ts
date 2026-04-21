@@ -2,11 +2,16 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { normalizePath } from "../platform";
+import { encodePath, type ConversationEntry } from "./claudeConversations";
+import { inferSessionStatus } from "./sessionStatus";
+import type { SessionStatus } from "../types";
 
 interface ClaudeSessionResult {
   lastSessionDate?: string;
   lastPromptPreview?: string;
   sessionCount: number;
+  mostRecentSessionStatus?: SessionStatus;
+  mostRecentSessionId?: string;
 }
 
 interface HistoryEntry {
@@ -55,6 +60,26 @@ async function getHistoryByProject(): Promise<Map<string, HistoryEntry[]>> {
   return map;
 }
 
+// Read the tail of a JSONL file and infer session status from it.
+async function inferStatusFromJSONL(
+  filePath: string,
+): Promise<SessionStatus | undefined> {
+  try {
+    const fstat = await fs.stat(filePath);
+    const raw = await fs.readFile(filePath, "utf-8");
+    const lines = raw.split("\n").filter(Boolean);
+    // Tail-only parse: last 200 lines cover the relevant assistant turn and trailing entries.
+    const tailLines = lines.slice(-200);
+    const entries: ConversationEntry[] = [];
+    for (const line of tailLines) {
+      try { entries.push(JSON.parse(line)); } catch { /* skip */ }
+    }
+    return inferSessionStatus(entries, fstat.mtime);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function scanClaudeSessions(
   projectPath: string
 ): Promise<ClaudeSessionResult> {
@@ -67,7 +92,6 @@ export async function scanClaudeSessions(
   result.sessionCount = projectEntries.length;
 
   if (projectEntries.length > 0) {
-    // Sort by timestamp descending
     projectEntries.sort((a, b) => {
       const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -79,6 +103,16 @@ export async function scanClaudeSessions(
     result.lastPromptPreview = latest.display
       ? latest.display.slice(0, 120)
       : undefined;
+
+    // Infer live status from the most-recent session JSONL.
+    if (latest.sessionId) {
+      result.mostRecentSessionId = latest.sessionId;
+      const encoded = encodePath(projectPath);
+      const jsonlPath = path.join(
+        os.homedir(), ".claude", "projects", encoded, `${latest.sessionId}.jsonl`
+      );
+      result.mostRecentSessionStatus = await inferStatusFromJSONL(jsonlPath);
+    }
   }
 
   return result;

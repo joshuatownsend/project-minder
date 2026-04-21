@@ -1,12 +1,24 @@
 # Sessions Browser
 
-The Sessions page shows all Claude Code sessions across your projects, parsed from `~/.claude/projects/` conversation logs.
+The Sessions page shows all Claude Code sessions across your projects, parsed from `~/.claude/projects/` conversation logs. The page polls every 15 seconds; session data is refreshed server-side every 30 seconds, so status changes appear within about 45 seconds.
+
+## Session Status
+
+Each session has a live status derived from the tail of its JSONL file:
+
+| Status | Indicator | Meaning |
+|---|---|---|
+| **Working** | Green pulse dot | Claude is actively executing a tool call (file modified < 90s ago) |
+| **Needs Attention** | Amber pulse dot | Claude sent a tool call and is waiting for a result (90s–10min old) |
+| **Idle** | None | Session completed or abandoned |
+
+The **Needs Attention** state is the key signal — it means Claude is at the keyboard waiting for you. Dashboard project cards show the most recent session's status badge when it is Working or Needs Attention.
 
 ## Session List
 
 Each session card shows:
-- **Project name** and initial prompt preview
-- **Active indicator** — green pulse dot for sessions modified in the last 2 minutes
+- **Status dot** — live Working / Needs Attention indicator (see above)
+- **Project name** and prompt preview (or matched content snippet when searching)
 - **Duration** — how long the session lasted
 - **Messages** — total message count
 - **Tokens** — combined input/output token count
@@ -18,15 +30,15 @@ Each session card shows:
 
 ## Search & Sort
 
-- **Search** — filter by prompt text, project name, session ID, or git branch
-- **Sort** — by most recent, longest duration, or most tokens
+- **Search** — filter by prompt text, **message body content**, project name, session ID, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row.
+- **Sort** — by most recent, longest duration, most tokens, or best one-shot rate
 
 ## Session Detail
 
 Click a session to see the full detail view with tabs:
 
 ### Timeline
-Chronological list of all events: user prompts, assistant responses, tool calls, thinking blocks, and errors. Each event shows a time offset from the session start.
+Chronological list of all events: user prompts, assistant responses, tool calls, thinking blocks, and errors. Each event shows a time offset from the session start. Assistant and user messages render **markdown formatting** — fenced code blocks appear in a monospace code box, and inline `code` spans are styled distinctly.
 
 ### Tools
 Bar chart showing which tools were used and how many times.

@@ -13,12 +13,14 @@ import {
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
+import { loadPricing, getModelPricing } from "../usage/costCalculator";
 import {
   readDiskCache,
   writeDiskCache,
   isCacheHit,
   type CachedFileStats,
 } from "../claudeStatsCache";
+import { inferSessionStatus } from "./sessionStatus";
 
 export interface ConversationEntry {
   type?: string;
@@ -32,6 +34,7 @@ export interface ConversationEntry {
   slug?: string; // present on away_summary entries
   message?: {
     model?: string;
+    stop_reason?: string;
     role?: string;
     content?: any[];
     usage?: {
@@ -43,26 +46,6 @@ export interface ConversationEntry {
   };
   // For tool_result user messages and away_summary system entries
   content?: any;
-}
-
-// Approximate cost per token (USD)
-const INPUT_COST_PER_TOKEN = 0.000015;
-const OUTPUT_COST_PER_TOKEN = 0.000075;
-const CACHE_WRITE_COST_PER_TOKEN = 0.00001875;
-const CACHE_READ_COST_PER_TOKEN = 0.0000015;
-
-function computeCost(
-  inputTokens: number,
-  outputTokens: number,
-  cacheCreate: number,
-  cacheRead: number
-): number {
-  return (
-    inputTokens * INPUT_COST_PER_TOKEN +
-    outputTokens * OUTPUT_COST_PER_TOKEN +
-    cacheCreate * CACHE_WRITE_COST_PER_TOKEN +
-    cacheRead * CACHE_READ_COST_PER_TOKEN
-  );
 }
 
 export function encodePath(projectPath: string): string {
@@ -149,12 +132,18 @@ async function scanSessionFile(
     const models = new Set<string>();
     let subagentCount = 0;
     let errorCount = 0;
+    // Per-model token accumulation for accurate cost (via LiteLLM pricing)
+    const perModelTokens = new Map<string, { i: number; o: number; cc: number; cr: number }>();
+    const allEntries: ConversationEntry[] = [];
+    const searchParts: string[] = [];
+    let searchLen = 0;
     // Collect one-shot detection data during the same pass
     const lightTurns: UsageTurn[] = [];
 
     for (const line of lines) {
       try {
         const entry: ConversationEntry = JSON.parse(line);
+        allEntries.push(entry);
 
         if (entry.timestamp) {
           if (!startTime) startTime = entry.timestamp;
@@ -174,6 +163,7 @@ async function scanSessionFile(
           if (humanText) {
             if (!initialPrompt) initialPrompt = humanText;
             lastPrompt = humanText;
+            if (searchLen < 4000) { searchParts.push(humanText); searchLen += humanText.length; }
           }
         }
 
@@ -186,10 +176,15 @@ async function scanSessionFile(
 
           const usage = msg.usage;
           if (usage) {
-            inputTokens += usage.input_tokens || 0;
-            outputTokens += usage.output_tokens || 0;
-            cacheCreateTokens += usage.cache_creation_input_tokens || 0;
-            cacheReadTokens += usage.cache_read_input_tokens || 0;
+            const inp = usage.input_tokens || 0;
+            const out = usage.output_tokens || 0;
+            const cc  = usage.cache_creation_input_tokens || 0;
+            const cr  = usage.cache_read_input_tokens || 0;
+            inputTokens += inp;
+            outputTokens += out;
+            cacheCreateTokens += cc;
+            cacheReadTokens += cr;
+            accumulateTokens(perModelTokens, model, inp, out, cc, cr);
           }
 
           if (entry.isApiErrorMessage) errorCount++;
@@ -202,6 +197,12 @@ async function scanSessionFile(
                 if (block.name === "Skill" && block.input?.skill) {
                   const skillName = block.input.skill;
                   skills[skillName] = (skills[skillName] || 0) + 1;
+                }
+              } else if (block.type === "text" && block.text && !entry.isSidechain) {
+                if (searchLen < 4000) {
+                  const t = String(block.text).slice(0, 500);
+                  searchParts.push(t);
+                  searchLen += t.length;
                 }
               }
             }
@@ -263,6 +264,21 @@ async function scanSessionFile(
       }
     } catch { /* non-critical */ }
 
+    // Per-model cost calculation using LiteLLM pricing (unified with /usage)
+    await loadPricing();
+    let costEstimate = 0;
+    for (const [model, toks] of perModelTokens) {
+      const p = getModelPricing(model === "unknown" ? "" : model);
+      costEstimate += toks.i * p.inputCostPerToken
+                   + toks.o * p.outputCostPerToken
+                   + toks.cc * p.cacheWriteCostPerToken
+                   + toks.cr * p.cacheReadCostPerToken;
+    }
+
+    const status = inferSessionStatus(
+      allEntries.length > 500 ? allEntries.slice(-500) : allEntries,
+      mtime,
+    );
     const isActive = Date.now() - mtime.getTime() < 2 * 60_000;
     const durationMs =
       startTime && endTime
@@ -290,15 +306,17 @@ async function scanSessionFile(
       outputTokens,
       cacheReadTokens,
       cacheCreateTokens,
-      costEstimate: computeCost(inputTokens, outputTokens, cacheCreateTokens, cacheReadTokens),
+      costEstimate,
       toolUsage: tools,
       modelsUsed: Array.from(models),
       gitBranch,
       subagentCount,
       errorCount,
       isActive,
+      status,
       skillsUsed: skills,
       oneShotRate,
+      searchableText: searchParts.join(" ").slice(0, 4000),
     };
   } catch {
     return null;
@@ -572,6 +590,19 @@ export async function scanSessionDetail(
 
 // ─── Aggregate stats (existing, used by stats page) ─────────────────
 
+type PerModelTokens = Map<string, { i: number; o: number; cc: number; cr: number }>;
+
+function accumulateTokens(
+  map: PerModelTokens,
+  model: string | undefined,
+  inp: number, out: number, cc: number, cr: number,
+): void {
+  const key = model && model !== "<synthetic>" ? model : "unknown";
+  const ex = map.get(key) ?? { i: 0, o: 0, cc: 0, cr: 0 };
+  ex.i += inp; ex.o += out; ex.cc += cc; ex.cr += cr;
+  map.set(key, ex);
+}
+
 async function scanConversationFile(filePath: string): Promise<{
   inputTokens: number;
   outputTokens: number;
@@ -581,6 +612,7 @@ async function scanConversationFile(filePath: string): Promise<{
   tools: Record<string, number>;
   errors: number;
   models: Set<string>;
+  perModelTokens: PerModelTokens;
 }> {
   const result = {
     inputTokens: 0,
@@ -591,6 +623,7 @@ async function scanConversationFile(filePath: string): Promise<{
     tools: {} as Record<string, number>,
     errors: 0,
     models: new Set<string>(),
+    perModelTokens: new Map() as PerModelTokens,
   };
 
   try {
@@ -608,10 +641,15 @@ async function scanConversationFile(filePath: string): Promise<{
           if (model && model !== "<synthetic>") result.models.add(model);
           const usage = msg.usage;
           if (usage) {
-            result.inputTokens += usage.input_tokens || 0;
-            result.outputTokens += usage.output_tokens || 0;
-            result.cacheCreateTokens += usage.cache_creation_input_tokens || 0;
-            result.cacheReadTokens += usage.cache_read_input_tokens || 0;
+            const inp = usage.input_tokens || 0;
+            const out = usage.output_tokens || 0;
+            const cc  = usage.cache_creation_input_tokens || 0;
+            const cr  = usage.cache_read_input_tokens || 0;
+            result.inputTokens += inp;
+            result.outputTokens += out;
+            result.cacheCreateTokens += cc;
+            result.cacheReadTokens += cr;
+            accumulateTokens(result.perModelTokens, model, inp, out, cc, cr);
           }
           if (entry.isApiErrorMessage) result.errors++;
           if (Array.isArray(msg.content)) {
@@ -631,6 +669,18 @@ async function scanConversationFile(filePath: string): Promise<{
   }
 
   return result;
+}
+
+function computeCostFromPerModel(perModelTokens: PerModelTokens): number {
+  let cost = 0;
+  for (const [model, toks] of perModelTokens) {
+    const p = getModelPricing(model === "unknown" ? "" : model);
+    cost += toks.i * p.inputCostPerToken
+          + toks.o * p.outputCostPerToken
+          + toks.cc * p.cacheWriteCostPerToken
+          + toks.cr * p.cacheReadCostPerToken;
+  }
+  return cost;
 }
 
 export async function scanClaudeConversations(
@@ -657,6 +707,7 @@ export async function scanClaudeConversations(
   };
 
   const allModels = new Set<string>();
+  const perModel: PerModelTokens = new Map();
   for (let i = 0; i < jsonlFiles.length; i += 5) {
     const batch = jsonlFiles.slice(i, i + 5);
     const results = await Promise.all(
@@ -673,12 +724,16 @@ export async function scanClaudeConversations(
       for (const [tool, count] of Object.entries(r.tools)) {
         stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count;
       }
+      for (const [model, toks] of r.perModelTokens) {
+        accumulateTokens(perModel, model, toks.i, toks.o, toks.cc, toks.cr);
+      }
     }
   }
 
+  await loadPricing();
   stats.totalTokens = stats.inputTokens + stats.outputTokens;
   stats.modelsUsed = Array.from(allModels);
-  stats.costEstimate = computeCost(stats.inputTokens, stats.outputTokens, stats.cacheCreateTokens, stats.cacheReadTokens);
+  stats.costEstimate = computeCostFromPerModel(perModel);
   return stats;
 }
 
@@ -719,6 +774,10 @@ async function scanConversationDirs(
   let cacheChanged = false;
 
   const allModels = new Set<string>();
+  // Accumulate per-model tokens for accurate cost calculation.
+  // Cache hits lack per-model breakdown → bucketed as "unknown" (sonnet fallback).
+  const aggregatePerModel: PerModelTokens = new Map();
+
   for (const dir of dirs) {
     if (allowedDirs && !allowedDirs.has(dir)) continue;
 
@@ -734,12 +793,13 @@ async function scanConversationDirs(
         const cached = diskCache.get(filePath);
 
         let fileStats: CachedFileStats;
+        let fileCostPerModel: PerModelTokens | null = null;
 
         if (isCacheHit(cached, fstat.mtimeMs, fstat.size)) {
-          // Cache hit — use stored results
           fileStats = cached!;
+          // No per-model breakdown in cache → treat as unknown (sonnet fallback pricing)
+          fileCostPerModel = null;
         } else {
-          // Cache miss — parse the file
           const result = await scanConversationFile(filePath);
           fileStats = {
             filePath,
@@ -754,12 +814,13 @@ async function scanConversationDirs(
             errors: result.errors,
             models: Array.from(result.models),
           };
+          fileCostPerModel = result.perModelTokens;
           cacheChanged = true;
         }
 
         updatedCache.set(filePath, fileStats);
 
-        // Aggregate
+        // Aggregate token counts for display
         aggregate.inputTokens += fileStats.inputTokens;
         aggregate.outputTokens += fileStats.outputTokens;
         aggregate.cacheCreateTokens += fileStats.cacheCreateTokens;
@@ -771,17 +832,29 @@ async function scanConversationDirs(
         for (const [tool, count] of Object.entries(fileStats.tools)) {
           aggregate.toolUsage[tool] = (aggregate.toolUsage[tool] || 0) + count;
         }
+
+        if (fileCostPerModel && fileCostPerModel.size > 0) {
+          for (const [model, toks] of fileCostPerModel) {
+            accumulateTokens(aggregatePerModel, model, toks.i, toks.o, toks.cc, toks.cr);
+          }
+        } else {
+          // Cache hit — no per-model breakdown; attribute to "unknown" (sonnet fallback pricing).
+          accumulateTokens(aggregatePerModel, "unknown",
+            fileStats.inputTokens, fileStats.outputTokens,
+            fileStats.cacheCreateTokens, fileStats.cacheReadTokens,
+          );
+        }
       }
     } catch { /* skip */ }
   }
 
-  // Persist updated cache to disk (only if something changed)
   if (cacheChanged) {
     await writeDiskCache(updatedCache);
   }
 
+  await loadPricing();
   aggregate.totalTokens = aggregate.inputTokens + aggregate.outputTokens;
   aggregate.modelsUsed = Array.from(allModels);
-  aggregate.costEstimate = computeCost(aggregate.inputTokens, aggregate.outputTokens, aggregate.cacheCreateTokens, aggregate.cacheReadTokens);
+  aggregate.costEstimate = computeCostFromPerModel(aggregatePerModel);
   return aggregate;
 }
