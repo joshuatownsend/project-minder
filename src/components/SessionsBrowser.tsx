@@ -173,12 +173,13 @@ function SessionRow({
   search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
-  // Determine if the search match is in body content (not metadata).
+  const searchLower = search.toLowerCase();
   const isContentMatch = search
-    ? !!(session.searchableText?.toLowerCase().includes(search.toLowerCase()))
-      && !session.initialPrompt?.toLowerCase().includes(search.toLowerCase())
-      && !session.projectName.toLowerCase().includes(search.toLowerCase())
-      && !session.gitBranch?.toLowerCase().includes(search.toLowerCase())
+    ? !!(session.searchableText?.toLowerCase().includes(searchLower))
+      && !session.initialPrompt?.toLowerCase().includes(searchLower)
+      && !session.lastPrompt?.toLowerCase().includes(searchLower)
+      && !session.projectName.toLowerCase().includes(searchLower)
+      && !session.gitBranch?.toLowerCase().includes(searchLower)
     : false;
 
   return (
@@ -499,7 +500,7 @@ export function SessionsBrowser() {
           s.projectPath.toLowerCase().includes(q) ||
           s.sessionId.includes(q) ||
           s.gitBranch?.toLowerCase().includes(q) ||
-          s.searchableText?.includes(q)
+          s.searchableText?.toLowerCase().includes(q)
       );
     }
     return [...result].sort((a, b) => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ProjectData } from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
@@ -24,6 +25,7 @@ interface ProjectCardProps {
 
 export function ProjectCard({ project, onHide }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
+  const router = useRouter();
 
   const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
@@ -122,21 +124,21 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
             onClick={(e) => e.preventDefault()}
           >
             {sessionBadge && (
-              <a
-                href={sessionId ? `/sessions/${sessionId}` : "/sessions"}
-                onClick={(e) => e.stopPropagation()}
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
                 title={sessionBadge.title}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: "4px",
                   fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
                   color: sessionBadge.color, background: sessionBadge.bg,
                   border: `1px solid ${sessionBadge.border}`,
-                  borderRadius: "3px", padding: "2px 6px", textDecoration: "none",
+                  borderRadius: "3px", padding: "2px 6px",
+                  cursor: "pointer",
                 }}
               >
                 <StatusDot status={sessionStatus} size={6} />
                 {sessionBadge.label}
-              </a>
+              </button>
             )}
             <StatusBadge status={project.status} />
 

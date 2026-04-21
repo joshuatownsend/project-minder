@@ -1,6 +1,6 @@
 # Sessions Browser
 
-The Sessions page shows all Claude Code sessions across your projects, parsed from `~/.claude/projects/` conversation logs. The list refreshes automatically every 15 seconds.
+The Sessions page shows all Claude Code sessions across your projects, parsed from `~/.claude/projects/` conversation logs. The page polls every 15 seconds; session data is refreshed server-side every 30 seconds, so status changes appear within about 45 seconds.
 
 ## Session Status
 

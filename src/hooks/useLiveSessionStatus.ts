@@ -25,15 +25,19 @@ export function useLiveSessionStatus(): Map<string, LiveSessionStatus> {
       if (!res.ok) return;
       const sessions: SessionSummary[] = await res.json();
 
+      // Key by the encoded path so it matches project.path lookups from the scanner,
+      // which avoids a mismatch when project names contain hyphens (decodeDirName is lossy).
+      const encodeKey = (p: string) => p.replace(/[:\\/]/g, "-");
       const map = new Map<string, LiveSessionStatus>();
       for (const s of sessions) {
-        if (!map.has(s.projectPath) && s.status !== "idle") {
-          map.set(s.projectPath, { status: s.status, sessionId: s.sessionId });
+        const key = encodeKey(s.projectPath);
+        if (!map.has(key) && s.status !== "idle") {
+          map.set(key, { status: s.status, sessionId: s.sessionId });
         }
       }
 
       // Skip state update (and downstream re-renders) when nothing changed.
-      const key = [...map.entries()].map(([p, v]) => `${p}:${v.status}:${v.sessionId}`).join("|");
+      const key = [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([p, v]) => `${p}:${v.status}:${v.sessionId}`).join("|");
       if (key === prevKey.current) return;
       prevKey.current = key;
       setStatusMap(map);

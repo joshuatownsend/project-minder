@@ -399,7 +399,8 @@ export function DashboardGrid({
           }}
         >
           {filtered.map((project) => {
-            const live = liveStatus.get(project.path);
+            const liveKey = project.path.replace(/[:\\/]/g, "-");
+            const live = liveStatus.get(liveKey);
             const overlaid = live && project.claude
               ? { ...project, claude: { ...project.claude, mostRecentSessionStatus: live.status, mostRecentSessionId: live.sessionId } }
               : project;

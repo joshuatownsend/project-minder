@@ -316,7 +316,7 @@ async function scanSessionFile(
       status,
       skillsUsed: skills,
       oneShotRate,
-      searchableText: searchParts.join(" ").slice(0, 4000).toLowerCase(),
+      searchableText: searchParts.join(" ").slice(0, 4000),
     };
   } catch {
     return null;
