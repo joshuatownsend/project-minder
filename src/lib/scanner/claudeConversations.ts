@@ -134,9 +134,9 @@ async function scanSessionFile(
     let errorCount = 0;
     // Per-model token accumulation for accurate cost (via LiteLLM pricing)
     const perModelTokens = new Map<string, { i: number; o: number; cc: number; cr: number }>();
-    // All parsed entries (for status inference) and searchable text accumulation
     const allEntries: ConversationEntry[] = [];
     const searchParts: string[] = [];
+    let searchLen = 0;
     // Collect one-shot detection data during the same pass
     const lightTurns: UsageTurn[] = [];
 
@@ -163,7 +163,7 @@ async function scanSessionFile(
           if (humanText) {
             if (!initialPrompt) initialPrompt = humanText;
             lastPrompt = humanText;
-            if (searchParts.join("").length < 4000) searchParts.push(humanText);
+            if (searchLen < 4000) { searchParts.push(humanText); searchLen += humanText.length; }
           }
         }
 
@@ -184,17 +184,7 @@ async function scanSessionFile(
             outputTokens += out;
             cacheCreateTokens += cc;
             cacheReadTokens += cr;
-            // Attribute tokens to the model that generated them
-            if (model && model !== "<synthetic>") {
-              const existing = perModelTokens.get(model) ?? { i: 0, o: 0, cc: 0, cr: 0 };
-              existing.i += inp; existing.o += out; existing.cc += cc; existing.cr += cr;
-              perModelTokens.set(model, existing);
-            } else {
-              // Fallback bucket for synthetic/unknown model entries
-              const existing = perModelTokens.get("unknown") ?? { i: 0, o: 0, cc: 0, cr: 0 };
-              existing.i += inp; existing.o += out; existing.cc += cc; existing.cr += cr;
-              perModelTokens.set("unknown", existing);
-            }
+            accumulateTokens(perModelTokens, model, inp, out, cc, cr);
           }
 
           if (entry.isApiErrorMessage) errorCount++;
@@ -209,8 +199,10 @@ async function scanSessionFile(
                   skills[skillName] = (skills[skillName] || 0) + 1;
                 }
               } else if (block.type === "text" && block.text && !entry.isSidechain) {
-                if (searchParts.join("").length < 4000) {
-                  searchParts.push(String(block.text).slice(0, 500));
+                if (searchLen < 4000) {
+                  const t = String(block.text).slice(0, 500);
+                  searchParts.push(t);
+                  searchLen += t.length;
                 }
               }
             }
@@ -283,7 +275,10 @@ async function scanSessionFile(
                    + toks.cr * p.cacheReadCostPerToken;
     }
 
-    const status = inferSessionStatus(allEntries, mtime);
+    const status = inferSessionStatus(
+      allEntries.length > 500 ? allEntries.slice(-500) : allEntries,
+      mtime,
+    );
     const isActive = Date.now() - mtime.getTime() < 2 * 60_000;
     const durationMs =
       startTime && endTime
@@ -597,6 +592,17 @@ export async function scanSessionDetail(
 
 type PerModelTokens = Map<string, { i: number; o: number; cc: number; cr: number }>;
 
+function accumulateTokens(
+  map: PerModelTokens,
+  model: string | undefined,
+  inp: number, out: number, cc: number, cr: number,
+): void {
+  const key = model && model !== "<synthetic>" ? model : "unknown";
+  const ex = map.get(key) ?? { i: 0, o: 0, cc: 0, cr: 0 };
+  ex.i += inp; ex.o += out; ex.cc += cc; ex.cr += cr;
+  map.set(key, ex);
+}
+
 async function scanConversationFile(filePath: string): Promise<{
   inputTokens: number;
   outputTokens: number;
@@ -643,10 +649,7 @@ async function scanConversationFile(filePath: string): Promise<{
             result.outputTokens += out;
             result.cacheCreateTokens += cc;
             result.cacheReadTokens += cr;
-            const key = (model && model !== "<synthetic>") ? model : "unknown";
-            const existing = result.perModelTokens.get(key) ?? { i: 0, o: 0, cc: 0, cr: 0 };
-            existing.i += inp; existing.o += out; existing.cc += cc; existing.cr += cr;
-            result.perModelTokens.set(key, existing);
+            accumulateTokens(result.perModelTokens, model, inp, out, cc, cr);
           }
           if (entry.isApiErrorMessage) result.errors++;
           if (Array.isArray(msg.content)) {
@@ -722,9 +725,7 @@ export async function scanClaudeConversations(
         stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count;
       }
       for (const [model, toks] of r.perModelTokens) {
-        const ex = perModel.get(model) ?? { i: 0, o: 0, cc: 0, cr: 0 };
-        ex.i += toks.i; ex.o += toks.o; ex.cc += toks.cc; ex.cr += toks.cr;
-        perModel.set(model, ex);
+        accumulateTokens(perModel, model, toks.i, toks.o, toks.cc, toks.cr);
       }
     }
   }
@@ -832,21 +833,16 @@ async function scanConversationDirs(
           aggregate.toolUsage[tool] = (aggregate.toolUsage[tool] || 0) + count;
         }
 
-        // Accumulate per-model tokens for cost
         if (fileCostPerModel && fileCostPerModel.size > 0) {
           for (const [model, toks] of fileCostPerModel) {
-            const ex = aggregatePerModel.get(model) ?? { i: 0, o: 0, cc: 0, cr: 0 };
-            ex.i += toks.i; ex.o += toks.o; ex.cc += toks.cc; ex.cr += toks.cr;
-            aggregatePerModel.set(model, ex);
+            accumulateTokens(aggregatePerModel, model, toks.i, toks.o, toks.cc, toks.cr);
           }
         } else {
-          // Cache hit — attribute to "unknown" for sonnet-fallback pricing
-          const ex = aggregatePerModel.get("unknown") ?? { i: 0, o: 0, cc: 0, cr: 0 };
-          ex.i += fileStats.inputTokens;
-          ex.o += fileStats.outputTokens;
-          ex.cc += fileStats.cacheCreateTokens;
-          ex.cr += fileStats.cacheReadTokens;
-          aggregatePerModel.set("unknown", ex);
+          // Cache hit — no per-model breakdown; attribute to "unknown" (sonnet fallback pricing).
+          accumulateTokens(aggregatePerModel, "unknown",
+            fileStats.inputTokens, fileStats.outputTokens,
+            fileStats.cacheCreateTokens, fileStats.cacheReadTokens,
+          );
         }
       }
     } catch { /* skip */ }

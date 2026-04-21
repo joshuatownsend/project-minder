@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { ProjectData, ProjectStatus } from "@/lib/types";
+import { useLiveSessionStatus } from "@/hooks/useLiveSessionStatus";
 import { ProjectCard } from "./ProjectCard";
 import { ManageHiddenProjects } from "./ManageHiddenProjects";
 import { Skeleton } from "./ui/skeleton";
@@ -37,6 +38,7 @@ export function DashboardGrid({
   const [sortBy, setSortBy]           = useState<SortOption>("activity");
   const [showHidden, setShowHidden]   = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const liveStatus = useLiveSessionStatus();
 
   // Apply dashboard defaults from config on first mount
   useEffect(() => {
@@ -396,9 +398,13 @@ export function DashboardGrid({
             gap: "14px",
           }}
         >
-          {filtered.map((project) => (
-            <ProjectCard key={project.slug} project={project} onHide={onHide} />
-          ))}
+          {filtered.map((project) => {
+            const live = liveStatus.get(project.path);
+            const overlaid = live && project.claude
+              ? { ...project, claude: { ...project.claude, mostRecentSessionStatus: live.status, mostRecentSessionId: live.sessionId } }
+              : project;
+            return <ProjectCard key={project.slug} project={overlaid} onHide={onHide} />;
+          })}
           {filtered.length === 0 && (
             <p
               style={{

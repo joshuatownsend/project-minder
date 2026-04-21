@@ -34,8 +34,9 @@ export function inferSessionStatus(
   if (lastAssistantIdx === -1) return "idle";
 
   const entry = entries[lastAssistantIdx];
-  const content = entry.message!.content as any[];
-  const stopReason = (entry.message as any)?.stop_reason as string | undefined;
+  const msg = entry.message!;
+  const content = msg.content as any[];
+  const stopReason = msg.stop_reason;
 
   // Collect tool_use IDs from the last assistant turn.
   const pendingIds = new Set<string>();

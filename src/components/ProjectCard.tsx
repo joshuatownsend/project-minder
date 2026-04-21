@@ -55,6 +55,11 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
   const worktreeCount = (project.worktrees ?? []).length;
   const sessionStatus = project.claude?.mostRecentSessionStatus;
   const sessionId = project.claude?.mostRecentSessionId;
+  const sessionBadge = sessionStatus && sessionStatus !== "idle"
+    ? sessionStatus === "working"
+      ? { color: "var(--status-active-text)", bg: "var(--status-active-bg)", border: "var(--status-active-border)", label: "coding",  title: "Claude is coding"           }
+      : { color: "var(--accent)",             bg: "var(--accent-bg)",         border: "var(--accent-border)",         label: "waiting", title: "Claude is waiting for you" }
+    : null;
   const hasAttention = pendingTodos > 0 || pendingSteps > 0;
   const isArchived   = project.status === "archived";
 
@@ -116,23 +121,21 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
-            {sessionStatus && sessionStatus !== "idle" && (
+            {sessionBadge && (
               <a
                 href={sessionId ? `/sessions/${sessionId}` : "/sessions"}
                 onClick={(e) => e.stopPropagation()}
-                title={sessionStatus === "working" ? "Claude is coding" : "Claude is waiting for you"}
+                title={sessionBadge.title}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: "4px",
                   fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  color: sessionStatus === "working" ? "var(--status-active-text)" : "var(--accent)",
-                  background: sessionStatus === "working" ? "var(--status-active-bg)" : "var(--accent-bg)",
-                  border: `1px solid ${sessionStatus === "working" ? "var(--status-active-border)" : "var(--accent-border)"}`,
-                  borderRadius: "3px", padding: "2px 6px",
-                  textDecoration: "none",
+                  color: sessionBadge.color, background: sessionBadge.bg,
+                  border: `1px solid ${sessionBadge.border}`,
+                  borderRadius: "3px", padding: "2px 6px", textDecoration: "none",
                 }}
               >
                 <StatusDot status={sessionStatus} size={6} />
-                {sessionStatus === "working" ? "coding" : "waiting"}
+                {sessionBadge.label}
               </a>
             )}
             <StatusBadge status={project.status} />
