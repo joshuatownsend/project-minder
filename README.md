@@ -23,11 +23,12 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 - 5-minute in-memory scan cache; force-rescan anytime from the UI
 
 ### Claude Code Integration
-- **Sessions browser** — browse every Claude Code session with search, duration, token counts, and active-session indicators
-- **Session detail** — full timeline, tool usage, file operations, and subagent tracking per session
+- **Live session status** — dashboard cards show a green "coding" or amber "waiting on you" badge when a Claude session is active; status is inferred from the JSONL tail (tool_use/tool_result pairing + file mtime) and refreshes automatically every 15 seconds
+- **Sessions browser** — browse every Claude Code session with full-text content search (matches message body, not just metadata), duration, token counts, and highlighted match snippets; auto-refreshes without a manual reload
+- **Session detail** — full timeline with fenced code block and inline `code` rendering, tool usage, file operations, and subagent tracking per session
 - **Session recaps** — surfaces `/recap` summaries as the primary session label with an amber badge
 - **Insights extraction** — scrapes `★ Insight` blocks from conversation history into per-project `INSIGHTS.md` files; cross-project browser with full-text search
-- **Token cost analytics** — `/usage` page with time-period filters, per-model/project/category breakdowns, daily cost trend chart, and CSV/JSON export
+- **Token cost analytics** — `/usage` page with time-period filters, per-model/project/category breakdowns, daily cost trend chart, and CSV/JSON export; worktree sessions are merged into their parent project in the By Project chart
 
 ### Project Management
 - **TODO tracking** — reads each project's `TODO.md`; add items inline or via a cross-project Quick Add modal (Shift+T)
@@ -101,6 +102,7 @@ The process manager spawns dev servers as child processes using project-local bi
 - [CodeBurn](https://github.com/AgentSeal/codeburn) — token cost analytics design
 - [Sniffly](https://github.com/chiphuyen/sniffly) — stats dashboard concept
 - [claude-code-karma](https://github.com/JayantDevkar/claude-code-karma) — sessions browser concept
+- [c9watch](https://github.com/minchenlee/c9watch) — live session status monitoring concept
 - [raphi011's insights gist](https://gist.github.com/raphi011/dc96edf80b0db8584527fefc6a3b4bd0) — insights extraction concept
 
 ---
