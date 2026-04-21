@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Session status inference** — each session now has a `status` field (`working` / `needs_attention` / `idle`) derived from the JSONL tail: last assistant turn's `stop_reason` and tool_use/tool_result pairing, classified by file mtime age (< 90s = working, 90s–10min = needs attention, > 10min = stale/idle).
+- **Dashboard "needs attention" badge** — ProjectCard shows a live session status badge (green "coding" or amber "waiting on you") next to the project status when the most-recent Claude session is active. Clicking the badge links directly to the session detail page.
+- **Auto-refresh polling** — `/sessions` page polls every 15 seconds and skips polling when the browser tab is hidden (visibility API gate).
+- **Deep content search** — SessionsBrowser search now matches against full message body text (first 4,000 chars per session, lowercased) in addition to prompt text and metadata. Matched body content shows a highlighted snippet in place of the initial prompt.
+- **Markdown rendering in SessionTimeline** — assistant and user timeline items render fenced code blocks (`pre`/`code`) and inline `` `code` `` spans. Truncation threshold raised from 150 to 400 chars for code-heavy content (auto-detected by presence of triple-backtick fences).
+
+### Fixed
+- Cost estimates are now consistent across `/sessions`, `/usage`, and `/stats`. Previously, session scanning used hardcoded Sonnet-3.5-era pricing constants while `/usage` used LiteLLM-backed per-model pricing, causing divergent numbers. All cost calculations now route through `costCalculator.ts` with per-model token attribution.
+
 ## [0.9.3] - 2026-04-16
 
 ### Added

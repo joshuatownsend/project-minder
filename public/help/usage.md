@@ -14,10 +14,14 @@ Use the period toggle at the top to filter data:
 - **This Month** — activity from the 1st of the current month
 - **All Time** — all recorded session data
 
+## Cost Accuracy
+
+All cost estimates use per-model LiteLLM pricing (fetched from the LiteLLM pricing registry, cached for 24 hours) with built-in fallbacks for Opus, Sonnet, and Haiku. Cost numbers on the Usage page, Sessions list, and Stats page are computed from the same source and should match to within floating-point rounding.
+
 ## Summary Cards
 
 Four key metrics displayed at the top:
-- **Total Cost** — estimated spend for the selected period
+- **Total Cost** — estimated spend for the selected period (per-model pricing)
 - **Total Tokens** — combined input and output tokens
 - **Cache Hit Rate** — percentage of input tokens served from cache (higher is better, reduces cost)
 - **One-Shot Rate** — percentage of code changes that passed verification on the first attempt (Edit → test → pass without re-editing)

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { TimelineEvent } from "@/lib/types";
 import { User, Bot, Wrench, Brain, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { parseMarkdown, hasCodeFence } from "@/lib/markdown";
 
 type EventType = TimelineEvent["type"];
 
@@ -24,12 +25,65 @@ function formatOffset(timestamp: string | undefined, sessionStart: string | unde
   return `+${minutes}m${seconds % 60}s`;
 }
 
+function RenderedContent({ text }: { text: string }) {
+  const segments = parseMarkdown(text);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === "code_block") {
+          return (
+            <pre
+              key={i}
+              style={{
+                margin: "4px 0",
+                padding: "8px 10px",
+                background: "var(--bg-base)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.72rem",
+                color: "var(--text-primary)",
+                overflowX: "auto",
+                whiteSpace: "pre",
+                lineHeight: 1.5,
+              }}
+            >
+              <code>{seg.content}</code>
+            </pre>
+          );
+        }
+        if (seg.kind === "code_inline") {
+          return (
+            <code
+              key={i}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.75em",
+                background: "var(--bg-base)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "2px",
+                padding: "0 3px",
+                color: "var(--accent)",
+              }}
+            >
+              {seg.content}
+            </code>
+          );
+        }
+        return <span key={i} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{seg.content}</span>;
+      })}
+    </>
+  );
+}
+
 function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionStart?: string }) {
   const [expanded, setExpanded] = useState(false);
   const cfg = EVENT_CONFIG[event.type];
   const Icon = cfg.icon;
-  const isLong = event.content.length > 150;
-  const displayText = isLong && !expanded ? event.content.slice(0, 150) + "…" : event.content;
+  // Expand threshold: code-heavy content warrants more space before truncation.
+  const threshold = hasCodeFence(event.content) ? 400 : 150;
+  const isLong = event.content.length > threshold;
+  const displayText = isLong && !expanded ? event.content.slice(0, threshold) + "…" : event.content;
 
   return (
     <div
@@ -59,9 +113,9 @@ function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionSt
             </span>
           )}
         </div>
-        <p style={{ fontSize: "0.78rem", color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0, lineHeight: 1.5 }}>
-          {displayText}
-        </p>
+        <div style={{ fontSize: "0.78rem", color: "var(--text-primary)", lineHeight: 1.5 }}>
+          <RenderedContent text={displayText} />
+        </div>
         {isLong && (
           <button
             onClick={() => setExpanded(!expanded)}

@@ -48,6 +48,8 @@ export interface ProjectData {
 
 export type ProjectStatus = "active" | "paused" | "archived";
 
+export type SessionStatus = "working" | "needs_attention" | "idle";
+
 export interface PortMapping {
   service: string;
   host: number;
@@ -75,6 +77,8 @@ export interface ClaudeInfo {
   lastPromptPreview?: string;
   sessionCount: number;
   claudeMdSummary?: string;
+  mostRecentSessionStatus?: SessionStatus;
+  mostRecentSessionId?: string;
 }
 
 export interface TodoInfo {
@@ -222,8 +226,10 @@ export interface SessionSummary {
   subagentCount: number;
   errorCount: number;
   isActive: boolean;
+  status: SessionStatus;
   skillsUsed: Record<string, number>; // skill name → invocation count
   oneShotRate?: number;
+  searchableText?: string;
 }
 
 export interface TimelineEvent {

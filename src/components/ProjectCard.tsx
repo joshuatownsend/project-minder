@@ -15,6 +15,7 @@ import {
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
 import { Database, MoreVertical, EyeOff, CheckSquare, ClipboardList, Lightbulb } from "lucide-react";
+import { StatusDot } from "./ui/StatusDot";
 
 interface ProjectCardProps {
   project: ProjectData;
@@ -52,6 +53,8 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
   })();
 
   const worktreeCount = (project.worktrees ?? []).length;
+  const sessionStatus = project.claude?.mostRecentSessionStatus;
+  const sessionId = project.claude?.mostRecentSessionId;
   const hasAttention = pendingTodos > 0 || pendingSteps > 0;
   const isArchived   = project.status === "archived";
 
@@ -113,6 +116,25 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
+            {sessionStatus && sessionStatus !== "idle" && (
+              <a
+                href={sessionId ? `/sessions/${sessionId}` : "/sessions"}
+                onClick={(e) => e.stopPropagation()}
+                title={sessionStatus === "working" ? "Claude is coding" : "Claude is waiting for you"}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: sessionStatus === "working" ? "var(--status-active-text)" : "var(--accent)",
+                  background: sessionStatus === "working" ? "var(--status-active-bg)" : "var(--accent-bg)",
+                  border: `1px solid ${sessionStatus === "working" ? "var(--status-active-border)" : "var(--accent-border)"}`,
+                  borderRadius: "3px", padding: "2px 6px",
+                  textDecoration: "none",
+                }}
+              >
+                <StatusDot status={sessionStatus} size={6} />
+                {sessionStatus === "working" ? "coding" : "waiting"}
+              </a>
+            )}
             <StatusBadge status={project.status} />
 
             {onHide && (
