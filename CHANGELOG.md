@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **System Status page (`/status`)** — live cross-project view of all Claude Code sessions grouped into four buckets: Needs Approval, Working, Waiting for You, and Other/Stale. Polls every 3 seconds. Worktree sessions appear labeled by branch. The nav "Status" item shows an approval-bucket count badge (updates every 10s). Classification uses a 4-state heuristic: stalled mtime on write-type tools (Edit/Write/MultiEdit/NotebookEdit) → Approval; active tools → Working; clean `end_turn` with no pending tools → Waiting; stale > 10min → Other.
+- **Memory tab on project detail pages** — browse Claude Code's auto-memory files for each project (`~/.claude/projects/<encoded>/memory/`). MEMORY.md rendered as an index overview pane; other `.md` files listed in a two-panel browser with YAML-frontmatter type badges (user/feedback/project/reference) and on-demand content rendering.
+- **`GET /api/status`** — new route returning live session classifications across all projects and worktrees (3s server-side cache with cross-poll mtime tracking for approval detection).
+- **`GET /api/memory/[slug]`** — returns memory file metadata + MEMORY.md content. `?file=<name>` serves individual file content on demand with path-traversal guard.
 - **Session status inference** — each session now has a `status` field (`working` / `needs_attention` / `idle`) derived from the JSONL tail: last assistant turn's `stop_reason` and tool_use/tool_result pairing, classified by file mtime age (< 90s = working, 90s–10min = needs attention, > 10min = stale/idle).
 - **Dashboard "needs attention" badge** — ProjectCard shows a live session status badge (green "coding" or amber "waiting on you") next to the project status when the most-recent Claude session is active. Clicking the badge links directly to the session detail page.
 - **Auto-refresh polling** — `/sessions` page polls every 15 seconds and skips polling when the browser tab is hidden (visibility API gate).

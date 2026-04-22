@@ -19,6 +19,8 @@ const slugTitles: Record<HelpSlug, string> = {
   sessions: "Sessions Browser",
   insights: "Insights",
   usage: "Usage Dashboard",
+  status: "System Status",
+  memory: "Memory Browser",
   config: "Configuration",
   setup: "Setup Guide",
 };

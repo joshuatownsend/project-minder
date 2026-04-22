@@ -50,6 +50,33 @@ export type ProjectStatus = "active" | "paused" | "archived";
 
 export type SessionStatus = "working" | "needs_attention" | "idle";
 
+export type LiveSessionStatus = "working" | "approval" | "waiting" | "other";
+
+export interface LiveSession {
+  sessionId: string;
+  projectSlug: string;
+  projectName: string;
+  worktreeLabel?: string;
+  status: LiveSessionStatus;
+  mtime: string;
+  lastToolName?: string;
+}
+
+export type MemoryType = "user" | "feedback" | "project" | "reference";
+
+export interface MemoryFile {
+  name: string;
+  type?: MemoryType;
+  description?: string;
+  mtime: string;
+  size: number;
+}
+
+export interface MemoryData {
+  indexMd?: string;
+  files: MemoryFile[];
+}
+
 export interface PortMapping {
   service: string;
   host: number;

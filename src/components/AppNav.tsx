@@ -3,20 +3,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import type { LiveSession } from "@/lib/types";
 
 const navItems = [
-  { href: "/manual-steps", label: "Steps",    badge: true  },
-  { href: "/insights",     label: "Insights"               },
-  { href: "/sessions",     label: "Sessions"               },
-  { href: "/usage",        label: "Usage"                  },
-  { href: "/stats",        label: "Stats"                  },
-  { href: "/config",       label: "Config"                 },
-  { href: "/setup",        label: "Setup"                  },
+  { href: "/manual-steps", label: "Steps",    badge: "steps"    },
+  { href: "/insights",     label: "Insights"                    },
+  { href: "/sessions",     label: "Sessions"                    },
+  { href: "/status",       label: "Status",   badge: "approval" },
+  { href: "/usage",        label: "Usage"                       },
+  { href: "/stats",        label: "Stats"                       },
+  { href: "/config",       label: "Config"                      },
+  { href: "/setup",        label: "Setup"                       },
 ];
 
 export function AppNav() {
   const pathname = usePathname();
   const [stepsPending, setStepsPending] = useState(0);
+  const [statusApproval, setStatusApproval] = useState(0);
 
   useEffect(() => {
     async function fetchPending() {
@@ -39,12 +42,31 @@ export function AppNav() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    async function fetchApproval() {
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) return;
+        const data = await res.json() as { sessions: LiveSession[] };
+        const count = data.sessions?.filter((s) => s.status === "approval").length ?? 0;
+        setStatusApproval(count);
+      } catch {
+        // ignore
+      }
+    }
+    fetchApproval();
+    const id = setInterval(fetchApproval, 10_000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <nav style={{ display: "flex", alignItems: "center", gap: "2px" }}>
       {navItems.map((item) => {
         const isActive =
           pathname === item.href || pathname.startsWith(item.href + "/");
-        const showBadge = item.badge && stepsPending > 0;
+        const badgeCounts: Record<string, number> = { steps: stepsPending, approval: statusApproval };
+        const badgeCount = item.badge ? (badgeCounts[item.badge] ?? 0) : 0;
+        const showBadge = badgeCount > 0;
 
         return (
           <Link
@@ -84,7 +106,7 @@ export function AppNav() {
                   lineHeight: "1.4",
                 }}
               >
-                {stepsPending}
+                {badgeCount}
               </span>
             )}
           </Link>

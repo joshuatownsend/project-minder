@@ -5,7 +5,7 @@ import { scanTodoMd } from "./todoMd";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
 
-const WORKTREE_SEP = "--claude-worktrees-";
+export const WORKTREE_SEP = "--claude-worktrees-";
 
 /**
  * Parse the branch name from a worktree's `.git` file.
