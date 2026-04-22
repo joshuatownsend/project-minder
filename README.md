@@ -23,6 +23,8 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 - 5-minute in-memory scan cache; force-rescan anytime from the UI
 
 ### Claude Code Integration
+- **System Status page** — `/status` shows a live cross-project view of every recent Claude Code session in four buckets: Needs Approval, Working, Waiting for You, and Other/Stale. Polls every 3 seconds. Worktree sessions appear labeled by branch. The nav badge shows the pending-approval count. Classification uses a 4-state heuristic: stalled mtime on write-type tools → Approval; active tools → Working; clean `end_turn` → Waiting for You; stale >10 min → Other/Stale.
+- **Memory tab** — each project detail page has a Memory tab that browses Claude Code's auto-memory files (`~/.claude/projects/<encoded>/memory/`). `MEMORY.md` renders as a top-level overview; other files are listed in a two-panel browser with YAML frontmatter type badges (user / feedback / project / reference) and on-demand content rendering.
 - **Live session status** — dashboard cards show a green "coding" or amber "waiting on you" badge when a Claude session is active; status is inferred from the JSONL tail (tool_use/tool_result pairing + file mtime) and refreshes automatically every 15 seconds
 - **Sessions browser** — browse every Claude Code session with full-text content search (matches message body, not just metadata), duration, token counts, and highlighted match snippets; auto-refreshes without a manual reload
 - **Session detail** — full timeline with fenced code block and inline `code` rendering, tool usage, file operations, and subagent tracking per session
