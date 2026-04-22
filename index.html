@@ -39,7 +39,7 @@
       <div class="feature-row">
         <div class="feature-text">
           <h2>Dashboard &amp; Scanning</h2>
-          <p>Auto-scans your dev directories in parallel and renders every project as a card — git branch, dirty-file count, tech stack, and status at a glance. Background git checks populate amber <code>+N</code> indicators as results arrive. Search, filter by status, and sort across all projects in seconds.</p>
+          <p>Auto-scans one or more dev directories in parallel and renders every project as a card — git branch, dirty-file count, tech stack, and status at a glance. Background git checks populate amber <code>+N</code> indicators as results arrive. Search, filter by status, and sort across all projects in seconds. Hide noisy projects via the three-dot menu and restore them from the dashboard footer. Multiple scan roots let you monitor projects across different drives or locations from a single dashboard.</p>
           <div class="secondary-shots">
             <img src="screenshots/card-detail.png" alt="Project card detail showing git dirty indicator and badges">
             <img src="screenshots/project-detail.png" alt="Project detail overview with dev server control">
@@ -54,7 +54,7 @@
       <div class="feature-row feature-row--flip">
         <div class="feature-text">
           <h2>Claude Code Integration</h2>
-          <p>Dashboard cards show a live <strong>green "coding"</strong> or <strong>amber "waiting on you"</strong> badge when a Claude session is active — inferred from the JSONL tail and refreshed automatically every 15 seconds. The Sessions browser supports <em>full-text content search</em> across message bodies (not just prompts), auto-refreshes without a manual reload, and highlights matched snippets inline. Session timelines render fenced code blocks and inline <code>code</code> spans. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories — worktree sessions are merged into their parent project — with CSV/JSON export.</p>
+          <p>Dashboard cards show a live <strong>green "coding"</strong> or <strong>amber "waiting on you"</strong> badge when a Claude session is active — inferred from the JSONL tail and refreshed automatically every 15 seconds. The Sessions browser supports <em>full-text content search</em> across message bodies (not just prompts), auto-refreshes without a manual reload, and highlights matched snippets inline. <em>Session recaps</em> — written by Claude Code's <code>/recap</code> command — surface as the primary session label with an amber badge, with full recap history on the detail page. Session timelines render fenced code blocks and inline <code>code</code> spans. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories — worktree sessions are merged into their parent project — with CSV/JSON export.</p>
           <div class="secondary-shots">
             <img src="screenshots/session-detail.png" alt="Session detail with timeline and tool usage">
             <img src="screenshots/insights-browser.png" alt="Cross-project insights browser">
@@ -66,11 +66,26 @@
         </div>
       </div>
 
+      <!-- Live Session Monitoring & Memory -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <h2>Live Session Monitoring &amp; Memory</h2>
+          <p>The <strong>System Status page</strong> gives you a real-time cross-project view of every active Claude Code session — bucketed into <em>Needs Approval</em>, <em>Working</em>, <em>Waiting for You</em>, and <em>Other/Stale</em>. Status is inferred from the JSONL tail every 3 seconds using a cross-poll mtime heuristic: stalled write-type tools signal a pending permission prompt; a clean <code>end_turn</code> means Claude is waiting for your reply. Worktree sessions appear labeled by branch. The nav badge counts how many sessions need your attention right now.</p>
+          <p>The <strong>Memory tab</strong> on each project detail page surfaces Claude Code's auto-memory files — <code>MEMORY.md</code> rendered as a structured overview, with individual memory files listed by type (<em>user</em>, <em>feedback</em>, <em>project</em>, <em>reference</em>) and full on-demand content rendering.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/memory.png" alt="Memory tab showing MEMORY.md overview with project context and architecture decisions">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/status.png" alt="System Status page showing live sessions bucketed by state" class="shot">
+        </div>
+      </div>
+
       <!-- Project Management -->
       <div class="feature-row">
         <div class="feature-text">
           <h2>Project Management</h2>
-          <p>TODO tracking reads each project's <code>TODO.md</code> — add items inline or via a cross-project Quick Add modal (<kbd>Shift+T</kbd>). The Manual Steps tracker surfaces <code>MANUAL_STEPS.md</code> entries across all projects with interactive checkboxes that toggle on disk. A file watcher fires toast and OS notifications when Claude adds new steps mid-session. Worktree overlay surfaces TODOs, Manual Steps, and Insights from active Claude Code worktrees.</p>
+          <p>TODO tracking reads each project's <code>TODO.md</code> — click any item to check it off directly in the UI, add new ones inline, or use the cross-project Quick Add modal (<kbd>Shift+T</kbd>) to append ideas to multiple projects at once. The Manual Steps tracker surfaces <code>MANUAL_STEPS.md</code> entries across all projects with interactive checkboxes that toggle on disk. A file watcher fires toast and OS notifications when Claude adds new steps mid-session. Worktree overlay surfaces TODOs, Manual Steps, and Insights from active Claude Code worktrees in collapsible sections on project detail pages.</p>
           <div class="secondary-shots">
             <img src="screenshots/worktrees.png" alt="Worktree overlay showing active branch items">
           </div>
