@@ -30,8 +30,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Type-check (tsgo)
+        run: npm run typecheck
+
       - name: Test
         run: npm test
 
-      - name: Build (also type-checks)
+      - name: Build
         run: npm run build
