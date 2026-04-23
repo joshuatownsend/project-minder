@@ -24,7 +24,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - **Test location:** `tests/*.test.ts` — flat directory, one file per module
 - **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
 - **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`), `insightsWriter`, and usage modules (`classifier`, `shellParser`, `mcpParser`, `oneShotDetector`, `costCalculator`)
-- **Pre-commit hook:** Type-check and tests run automatically before every commit via `.git/hooks/pre-commit` (`npm run typecheck && npm test`)
+- **Pre-commit hook:** Local setup only (not version-controlled) — `.git/hooks/pre-commit` runs `npm run typecheck && npm test` before each commit. New clones must set this up manually.
 - **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `npm run build` + manual browser testing.
 - **When to run tests:** Always run `npm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
 
