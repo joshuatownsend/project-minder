@@ -30,7 +30,11 @@ function makeSkillEntry(
   const name = typeof rawName === "string" && rawName ? rawName : slug;
 
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
-  const id = `${source}:${prefix}:${slug}`;
+  // Prefix bundled IDs so a bundled "foo/SKILL.md" and standalone "foo.md"
+  // in the same root don't collide on slug "foo".
+  const id = layout === "bundled"
+    ? `${source}:${prefix}:bundled:${slug}`
+    : `${source}:${prefix}:${slug}`;
 
   const userInvocable =
     fm["user-invocable"] === true ||

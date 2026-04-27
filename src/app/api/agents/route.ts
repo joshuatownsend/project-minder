@@ -36,6 +36,10 @@ function setRouteCache(key: string, data: AgentRow[]) {
   globalForAgents.__agentsRouteCache.set(key, { data, cachedAt: Date.now() });
 }
 
+export function invalidateAgentsRouteCache() {
+  globalForAgents.__agentsRouteCache = new Map();
+}
+
 export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("source");
   const projectSlug = request.nextUrl.searchParams.get("project");
@@ -50,7 +54,6 @@ export async function GET(request: NextRequest) {
     parseAllSessions(),
   ]);
 
-  // Flatten all turns
   const allTurns = Array.from(sessionMap.values()).flat();
   const statsArr = groupAgentCalls(allTurns);
 
@@ -58,7 +61,6 @@ export async function GET(request: NextRequest) {
   const rows: AgentRow[] = [];
   const matchedNames = new Set<string>();
 
-  // Emit catalog entries, attach usage if available
   for (const entry of catalog.agents) {
     const usage = statsArr.find(
       (s) => aliasMap.get(s.name.toLowerCase()) === entry
@@ -67,25 +69,22 @@ export async function GET(request: NextRequest) {
     rows.push({ entry, usage });
   }
 
-  // Orphan stats: invoked names not matched to any catalog entry
   for (const stat of statsArr) {
     if (!matchedNames.has(stat.name)) {
       rows.push({ usage: stat, catalogMissing: true });
     }
   }
 
-  // Apply filters
   let result = rows;
 
   if (source) {
-    result = result.filter((r) => r.entry?.source === source || r.catalogMissing);
+    // catalogMissing rows are orphan invocations — treat as plugin-origin only
+    result = result.filter(
+      (r) => r.entry?.source === source || (source === "plugin" && r.catalogMissing)
+    );
   }
 
   if (projectSlug) {
-    // The usage module stores project keys in the encoded path format
-    // (e.g. "c--dev-project-minder") while the scanner uses the short
-    // directory-basename form ("project-minder"). Look up the project path
-    // and compute the matching usage slug so "Invoked here" works correctly.
     const scan = getCachedScan();
     const projectPath = scan?.projects?.find((p) => p.slug === projectSlug)?.path;
     const usageSlug = projectPath ? pathToUsageSlug(projectPath) : projectSlug;
@@ -96,6 +95,17 @@ export async function GET(request: NextRequest) {
         (r.usage?.projects[usageSlug] ?? 0) > 0 ||
         (r.usage?.projects[projectSlug] ?? 0) > 0
     );
+
+    // Normalize: expose the count under the scanner slug so components don't
+    // need to know about the usage slug format.
+    if (usageSlug !== projectSlug) {
+      result = result.map((r) => {
+        if (!r.usage) return r;
+        const count = r.usage.projects[usageSlug] ?? 0;
+        if (count === 0 || r.usage.projects[projectSlug]) return r;
+        return { ...r, usage: { ...r.usage, projects: { ...r.usage.projects, [projectSlug]: count } } };
+      });
+    }
   }
 
   if (query) {

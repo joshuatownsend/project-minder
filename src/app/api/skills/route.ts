@@ -36,6 +36,10 @@ function setRouteCache(key: string, data: SkillRow[]) {
   globalForSkills.__skillsRouteCache.set(key, { data, cachedAt: Date.now() });
 }
 
+export function invalidateSkillsRouteCache() {
+  globalForSkills.__skillsRouteCache = new Map();
+}
+
 export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("source");
   const projectSlug = request.nextUrl.searchParams.get("project");
@@ -74,7 +78,10 @@ export async function GET(request: NextRequest) {
   let result = rows;
 
   if (source) {
-    result = result.filter((r) => r.entry?.source === source || r.catalogMissing);
+    // catalogMissing rows are orphan invocations — treat as plugin-origin only
+    result = result.filter(
+      (r) => r.entry?.source === source || (source === "plugin" && r.catalogMissing)
+    );
   }
 
   if (projectSlug) {
@@ -88,6 +95,17 @@ export async function GET(request: NextRequest) {
         (r.usage?.projects[usageSlug] ?? 0) > 0 ||
         (r.usage?.projects[projectSlug] ?? 0) > 0
     );
+
+    // Normalize: expose the count under the scanner slug so components don't
+    // need to know about the usage slug format.
+    if (usageSlug !== projectSlug) {
+      result = result.map((r) => {
+        if (!r.usage) return r;
+        const count = r.usage.projects[usageSlug] ?? 0;
+        if (count === 0 || r.usage.projects[projectSlug]) return r;
+        return { ...r, usage: { ...r.usage, projects: { ...r.usage.projects, [projectSlug]: count } } };
+      });
+    }
   }
 
   if (query) {

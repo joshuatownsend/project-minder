@@ -6,7 +6,8 @@ export interface ParsedFrontmatter {
 }
 
 export function parseFrontmatter(text: string): ParsedFrontmatter {
-  if (!text.startsWith("---")) {
+  // Require "---\n" so a bare horizontal rule isn't treated as frontmatter
+  if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) {
     return { fm: {}, body: text };
   }
 

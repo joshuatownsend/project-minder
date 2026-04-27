@@ -33,8 +33,10 @@ export async function loadInstalledPlugins(): Promise<InstalledPlugin[]> {
     for (const [key, installs] of Object.entries(pluginMap)) {
       if (!Array.isArray(installs) || installs.length === 0) continue;
 
-      // key format: "pluginname@marketplace" — take the part before @
-      const pluginName = key.includes("@") ? key.split("@")[0] : key;
+      // key format: "pluginname@marketplace" or "@scope/name@marketplace"
+      // Strip only the trailing @suffix so scoped names (e.g. @scope/name) are preserved.
+      const lastAt = key.lastIndexOf("@");
+      const pluginName = lastAt > 0 ? key.slice(0, lastAt) : key;
 
       // Use first install entry
       const install = installs[0];

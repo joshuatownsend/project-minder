@@ -3,9 +3,9 @@ import type { AgentEntry, CatalogEntry, SkillEntry } from "./types";
 export type CatalogMap = Map<string, CatalogEntry>;
 
 function addKey(map: CatalogMap, key: string, entry: CatalogEntry) {
-  if (key && !map.has(key.toLowerCase())) {
-    map.set(key.toLowerCase(), entry);
-  }
+  // Last-write wins: catalog is built user → plugin → project, so project-local
+  // entries naturally override global ones with the same name.
+  if (key) map.set(key.toLowerCase(), entry);
 }
 
 export function buildAgentAliasMap(agents: AgentEntry[]): CatalogMap {
