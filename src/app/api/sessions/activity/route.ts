@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { scanAllSessions } from "@/lib/scanner/claudeConversations";
+import { scanAllSessions, encodePath } from "@/lib/scanner/claudeConversations";
+import { readConfig, getDevRoots } from "@/lib/config";
 import { SessionSummary } from "@/lib/types";
 
 const CACHE_TTL = 30_000;
@@ -17,6 +18,13 @@ export async function GET() {
     globalForSessions.__sessionsCache = cache;
   }
 
+  const config = await readConfig();
+  const roots = getDevRoots(config);
+  // Re-encoding devRoots gives Claude directory prefixes. decodeDirName is lossy
+  // for hyphenated project names, so we re-encode session.projectPath to recover
+  // the original Claude directory name, then strip the devRoot prefix.
+  const encodedPrefixes = roots.map((r) => encodePath(r) + "-");
+
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   const days = Array.from({ length: 14 }, (_, i) => {
@@ -28,7 +36,11 @@ export async function GET() {
   const result: Record<string, number[]> = {};
 
   for (const session of cache.sessions) {
-    const slug = session.projectSlug;
+    const reEncoded = encodePath(session.projectPath);
+    const prefix = encodedPrefixes.find((p) => reEncoded.startsWith(p));
+    if (!prefix) continue;
+    const slug = reEncoded.slice(prefix.length).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+
     if (!result[slug]) result[slug] = new Array(14).fill(0);
 
     const ts = session.startTime ? new Date(session.startTime).getTime() : null;
