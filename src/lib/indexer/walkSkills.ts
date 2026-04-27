@@ -2,8 +2,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { parseFrontmatter } from "./parseFrontmatter";
-import { loadInstalledPlugins } from "./walkPlugins";
-import type { SkillEntry, CatalogSource } from "./types";
+import { resolveProvenance } from "./provenance";
+import type { SkillEntry, CatalogSource, ProvenanceContext } from "./types";
 
 function makeSkillEntry(
   filePath: string,
@@ -16,11 +16,13 @@ function makeSkillEntry(
     category?: string;
     mtime: Date;
     ctime: Date;
+    isSymlink?: boolean;
+    realPath?: string;
+    ctx: ProvenanceContext;
   }
 ): SkillEntry {
   const { fm, body } = parseFrontmatter(text);
 
-  // For bundled skills, slug is the directory name; for standalone, the file basename
   const slug =
     layout === "bundled"
       ? path.basename(path.dirname(filePath))
@@ -30,16 +32,26 @@ function makeSkillEntry(
   const name = typeof rawName === "string" && rawName ? rawName : slug;
 
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
-  // Prefix bundled IDs so a bundled "foo/SKILL.md" and standalone "foo.md"
-  // in the same root don't collide on slug "foo".
-  const id = layout === "bundled"
-    ? `${source}:${prefix}:bundled:${slug}`
-    : `${source}:${prefix}:${slug}`;
+  const id =
+    layout === "bundled"
+      ? `skill:${source}:${prefix}:bundled:${slug}`
+      : `skill:${source}:${prefix}:${slug}`;
 
   const userInvocable =
     fm["user-invocable"] === true ||
     fm["user-invocable"] === "true" ||
     fm.userInvocable === true;
+
+  const provenance = resolveProvenance({
+    source,
+    entryKind: "skill",
+    slug,
+    isSymlink: opts.isSymlink,
+    realPath: opts.realPath,
+    pluginName: opts.pluginName,
+    projectSlug: opts.projectSlug,
+    ctx: opts.ctx,
+  });
 
   return {
     id,
@@ -59,14 +71,18 @@ function makeSkillEntry(
     layout,
     version: typeof fm.version === "string" ? fm.version : undefined,
     userInvocable,
-    argumentHint: typeof fm["argument-hint"] === "string" ? fm["argument-hint"] : undefined,
+    argumentHint:
+      typeof fm["argument-hint"] === "string" ? fm["argument-hint"] : undefined,
+    provenance,
+    isSymlink: opts.isSymlink,
+    realPath: opts.realPath,
   };
 }
 
 async function walkSkillsRoot(
   root: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string }
+  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext }
 ): Promise<SkillEntry[]> {
   let entries;
   try {
@@ -83,22 +99,52 @@ async function walkSkillsRoot(
 
       const fullPath = path.join(root, entry.name);
 
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        // Check for SKILL.md inside — bundled layout
+      if (entry.isDirectory()) {
+        // Regular (non-symlink) directory — check for bundled SKILL.md
         const skillMdPath = path.join(fullPath, "SKILL.md");
         try {
           const [text, stat] = await Promise.all([
             fs.readFile(skillMdPath, "utf-8"),
             fs.stat(skillMdPath),
           ]);
-          const skill = makeSkillEntry(skillMdPath, text, source, "bundled", {
-            ...opts,
-            mtime: stat.mtime,
-            ctime: stat.ctime,
-          });
-          results.push(skill);
+          results.push(
+            makeSkillEntry(skillMdPath, text, source, "bundled", {
+              ...opts,
+              mtime: stat.mtime,
+              ctime: stat.ctime,
+            })
+          );
         } catch {
-          // No SKILL.md — skip this directory
+          // No SKILL.md — skip
+        }
+      } else if (entry.isSymbolicLink()) {
+        // Symlink — resolve and check if it points to a directory with SKILL.md
+        let realDir: string | undefined;
+        try {
+          realDir = await fs.realpath(fullPath);
+          const st = await fs.stat(realDir);
+          if (!st.isDirectory()) return;
+        } catch {
+          return;
+        }
+        const skillMdPath = path.join(fullPath, "SKILL.md");
+        try {
+          const [text, stat] = await Promise.all([
+            fs.readFile(skillMdPath, "utf-8"),
+            fs.stat(skillMdPath),
+          ]);
+          const realPath = path.join(realDir, "SKILL.md");
+          results.push(
+            makeSkillEntry(skillMdPath, text, source, "bundled", {
+              ...opts,
+              mtime: stat.mtime,
+              ctime: stat.ctime,
+              isSymlink: true,
+              realPath,
+            })
+          );
+        } catch {
+          // No SKILL.md — skip
         }
       } else if (
         entry.isFile() &&
@@ -111,12 +157,13 @@ async function walkSkillsRoot(
             fs.readFile(fullPath, "utf-8"),
             fs.stat(fullPath),
           ]);
-          const skill = makeSkillEntry(fullPath, text, source, "standalone", {
-            ...opts,
-            mtime: stat.mtime,
-            ctime: stat.ctime,
-          });
-          results.push(skill);
+          results.push(
+            makeSkillEntry(fullPath, text, source, "standalone", {
+              ...opts,
+              mtime: stat.mtime,
+              ctime: stat.ctime,
+            })
+          );
         } catch {
           // skip
         }
@@ -127,24 +174,23 @@ async function walkSkillsRoot(
   return results;
 }
 
-export async function walkUserSkills(): Promise<SkillEntry[]> {
+export async function walkUserSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {
   const root = path.join(os.homedir(), ".claude", "skills");
-  return walkSkillsRoot(root, "user", {});
+  return walkSkillsRoot(root, "user", { ctx });
 }
 
-export async function walkPluginSkills(): Promise<SkillEntry[]> {
-  const plugins = await loadInstalledPlugins();
+export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {
   const all: SkillEntry[] = [];
 
   await Promise.all(
-    plugins.map(async ({ pluginName, installPath }) => {
+    ctx.installedPlugins.map(async ({ pluginName, installPath }) => {
       const skillsDir = path.join(installPath, "skills");
       try {
         await fs.access(skillsDir);
       } catch {
         return;
       }
-      const entries = await walkSkillsRoot(skillsDir, "plugin", { pluginName });
+      const entries = await walkSkillsRoot(skillsDir, "plugin", { pluginName, ctx });
       all.push(...entries);
     })
   );
@@ -154,7 +200,8 @@ export async function walkPluginSkills(): Promise<SkillEntry[]> {
 
 export async function walkProjectSkills(
   projectPath: string,
-  projectSlug: string
+  projectSlug: string,
+  ctx: ProvenanceContext
 ): Promise<SkillEntry[]> {
   const skillsDir = path.join(projectPath, ".claude", "skills");
   try {
@@ -162,5 +209,5 @@ export async function walkProjectSkills(
   } catch {
     return [];
   }
-  return walkSkillsRoot(skillsDir, "project", { projectSlug });
+  return walkSkillsRoot(skillsDir, "project", { projectSlug, ctx });
 }

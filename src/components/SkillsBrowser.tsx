@@ -2,58 +2,15 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useSkills, type SkillRow } from "@/hooks/useSkills";
+import { useUpdateStatuses } from "@/hooks/useUpdateStatuses";
 import { Wrench, Search, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import Link from "next/link";
+import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
+import { CatalogActionStrip } from "@/components/CatalogActionStrip";
+import { formatRelativeTime } from "@/lib/utils";
+import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (!isFinite(d.getTime())) return "—";
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString();
-}
-
-function SourceBadge({ row }: { row: SkillRow }) {
-  const source = row.entry?.source ?? "plugin";
-  const label = row.catalogMissing
-    ? `plugin (${row.usage?.name?.split(":")[0] ?? "?"})`
-    : source === "plugin"
-    ? `plugin: ${row.entry?.pluginName ?? ""}`
-    : source;
-  const color =
-    source === "user"
-      ? "var(--text-secondary)"
-      : source === "plugin"
-      ? "var(--accent)"
-      : "var(--success, #4ade80)";
-
-  return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.6rem",
-        color,
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "3px",
-        padding: "1px 5px",
-        flexShrink: 0,
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
-function SkillRow({ row }: { row: SkillRow }) {
+function SkillRow({ row, updateStatus }: { row: SkillRow; updateStatus?: SkillUpdateStatus }) {
   const [expanded, setExpanded] = useState(false);
   const [bodyFull, setBodyFull] = useState<string | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
@@ -111,7 +68,13 @@ function SkillRow({ row }: { row: SkillRow }) {
             >
               {name}
             </span>
-            <SourceBadge row={row} />
+            {row.catalogMissing ? (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "var(--text-muted)", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "3px", padding: "1px 5px" }}>
+                plugin
+              </span>
+            ) : (
+              <ProvenanceBadge provenance={row.entry?.provenance} hasUpdate={updateStatus?.hasUpdate} />
+            )}
             {row.entry?.userInvocable && (
               <span
                 style={{
@@ -195,7 +158,7 @@ function SkillRow({ row }: { row: SkillRow }) {
                 color: "var(--text-muted)",
               }}
             >
-              {formatDate(row.usage.lastUsed)}
+              {formatRelativeTime(row.usage.lastUsed)}
             </span>
           )}
         </div>
@@ -211,6 +174,14 @@ function SkillRow({ row }: { row: SkillRow }) {
             gap: "8px",
           }}
         >
+          {row.entry?.provenance && (
+            <ProvenanceDetails provenance={row.entry.provenance} />
+          )}
+
+          {row.entry && (
+            <CatalogActionStrip entry={row.entry} updateStatus={updateStatus} />
+          )}
+
           {row.entry?.bodyExcerpt && (
             <pre
               style={{
@@ -302,6 +273,7 @@ export function SkillsBrowser() {
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortBy, setSortBy] = useState<SortKey>("invocations");
+  const [hasUpdateOnly, setHasUpdateOnly] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 300);
@@ -309,6 +281,7 @@ export function SkillsBrowser() {
   }, [rawQuery]);
 
   const { data, loading } = useSkills();
+  const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
     let rows = data;
@@ -318,6 +291,10 @@ export function SkillsBrowser() {
         if (r.catalogMissing) return sourceFilter === "plugin";
         return r.entry?.source === sourceFilter;
       });
+    }
+
+    if (hasUpdateOnly) {
+      rows = rows.filter((r) => r.entry && statuses[r.entry.id]?.hasUpdate);
     }
 
     if (query) {
@@ -351,7 +328,7 @@ export function SkillsBrowser() {
     });
 
     return rows;
-  }, [data, sourceFilter, query, sortBy]);
+  }, [data, sourceFilter, query, sortBy, hasUpdateOnly, statuses]);
 
   const total = data.length;
   const invoked = data.filter((r) => (r.usage?.invocations ?? 0) > 0).length;
@@ -439,6 +416,32 @@ export function SkillsBrowser() {
           ))}
         </div>
 
+        <button
+          onClick={() => setHasUpdateOnly((v) => !v)}
+          style={{
+            ...segmentStyle(hasUpdateOnly),
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "4px",
+          }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              width: "5px",
+              height: "5px",
+              borderRadius: "50%",
+              background: "var(--warning, #f59e0b)",
+            }}
+          />
+          updates
+          {pending > 0 && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", opacity: 0.6 }}>
+              …
+            </span>
+          )}
+        </button>
+
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortKey)}
@@ -499,7 +502,11 @@ export function SkillsBrowser() {
             {filtered.length} skill{filtered.length !== 1 ? "s" : ""}
           </div>
           {filtered.map((row, i) => (
-            <SkillRow key={row.entry?.id ?? row.usage?.name ?? i} row={row} />
+            <SkillRow
+              key={row.entry?.id ?? row.usage?.name ?? i}
+              row={row}
+              updateStatus={row.entry ? statuses[row.entry.id] : undefined}
+            />
           ))}
         </div>
       )}

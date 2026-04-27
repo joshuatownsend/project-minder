@@ -3,6 +3,7 @@
 import { Bot, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { useAgents, type AgentRow } from "@/hooks/useAgents";
+import { ProvenanceBadge } from "@/components/ProvenanceBadge";
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";
@@ -43,6 +44,7 @@ function CompactRow({ row, projectSlug }: { row: AgentRow; projectSlug: string }
       >
         {name}
       </span>
+      <ProvenanceBadge provenance={row.entry?.provenance} />
       {row.entry?.model && (
         <span
           style={{

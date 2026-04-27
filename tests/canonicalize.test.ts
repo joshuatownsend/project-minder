@@ -14,6 +14,7 @@ function makeAgent(overrides: Partial<AgentEntry> = {}): AgentEntry {
     mtime: "",
     ctime: "",
     kind: "agent",
+    provenance: { kind: "user-local" },
     ...overrides,
   };
 }
@@ -31,6 +32,7 @@ function makeSkill(overrides: Partial<SkillEntry> = {}): SkillEntry {
     ctime: "",
     kind: "skill",
     layout: "bundled",
+    provenance: { kind: "user-local" },
     ...overrides,
   };
 }
