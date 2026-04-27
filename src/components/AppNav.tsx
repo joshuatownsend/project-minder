@@ -86,8 +86,8 @@ export function AppNav() {
               textTransform: "uppercase",
               fontFamily: "var(--font-body)",
               textDecoration: "none",
-              color: isActive ? "var(--accent)" : "var(--text-secondary)",
-              background: isActive ? "var(--accent-bg)" : "transparent",
+              color: isActive ? "var(--info)" : "var(--text-secondary)",
+              background: isActive ? "var(--info-bg)" : "transparent",
               transition: "color 0.12s, background 0.12s",
             }}
           >

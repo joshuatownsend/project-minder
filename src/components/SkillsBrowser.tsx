@@ -144,7 +144,7 @@ function SkillRow({ row, updateStatus }: { row: SkillRow; updateStatus?: SkillUp
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.65rem",
                 fontWeight: 600,
-                color: "var(--accent)",
+                color: "var(--info)",
               }}
             >
               {row.usage.invocations}×
@@ -216,7 +216,7 @@ function SkillRow({ row, updateStatus }: { row: SkillRow; updateStatus?: SkillUp
                 border: "none",
                 padding: 0,
                 fontSize: "0.65rem",
-                color: "var(--accent)",
+                color: "var(--info)",
                 cursor: "pointer",
                 fontFamily: "var(--font-body)",
               }}
@@ -338,8 +338,8 @@ export function SkillsBrowser() {
     fontSize: "0.65rem",
     fontFamily: "var(--font-body)",
     fontWeight: active ? 600 : 400,
-    color: active ? "var(--accent)" : "var(--text-muted)",
-    background: active ? "var(--accent-bg)" : "transparent",
+    color: active ? "var(--info)" : "var(--text-muted)",
+    background: active ? "var(--info-bg)" : "transparent",
     border: "1px solid var(--border-subtle)",
     borderRadius: "var(--radius)",
     cursor: "pointer",

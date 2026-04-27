@@ -32,7 +32,7 @@ export function ProvenanceBadge({ provenance, hasUpdate }: Props) {
     const label = truncateMiddle(p.marketplace || p.pluginName, 28);
     const version = p.pluginVersion ? ` · v${p.pluginVersion}` : "";
     return (
-      <span style={badgeStyle("var(--accent)")}>
+      <span style={badgeStyle("var(--info)")}>
         {label}{version}
         {hasUpdate && (
           <span
@@ -42,7 +42,7 @@ export function ProvenanceBadge({ provenance, hasUpdate }: Props) {
               width: "5px",
               height: "5px",
               borderRadius: "50%",
-              background: "var(--warning, #f59e0b)",
+              background: "var(--accent)",
               marginLeft: "4px",
               verticalAlign: "middle",
             }}
@@ -56,7 +56,7 @@ export function ProvenanceBadge({ provenance, hasUpdate }: Props) {
     const repo = githubRepoFromUrl(p.sourceUrl);
     const label = repo ? truncateMiddle(repo, 28) : truncateMiddle(p.source, 28);
     return (
-      <span style={badgeStyle("var(--accent)")}>
+      <span style={badgeStyle("var(--info)")}>
         {label}
         {hasUpdate && (
           <span
@@ -66,7 +66,7 @@ export function ProvenanceBadge({ provenance, hasUpdate }: Props) {
               width: "5px",
               height: "5px",
               borderRadius: "50%",
-              background: "var(--warning, #f59e0b)",
+              background: "var(--accent)",
               marginLeft: "4px",
               verticalAlign: "middle",
             }}
@@ -137,7 +137,7 @@ export function ProvenanceDetails({ provenance }: { provenance?: Provenance }) {
                 gap: "3px",
                 fontSize: "0.6rem",
                 fontFamily: "var(--font-mono)",
-                color: "var(--accent)",
+                color: "var(--info)",
                 textDecoration: "none",
               }}
             >
@@ -181,7 +181,7 @@ export function ProvenanceDetails({ provenance }: { provenance?: Provenance }) {
                 gap: "3px",
                 fontSize: "0.6rem",
                 fontFamily: "var(--font-mono)",
-                color: "var(--accent)",
+                color: "var(--info)",
                 textDecoration: "none",
               }}
             >

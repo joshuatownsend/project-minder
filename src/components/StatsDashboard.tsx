@@ -218,7 +218,7 @@ export function StatsDashboard() {
             {/* Tools + Models */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
               <ChartBlock title="Top Tools">
-                <BarChart data={cu.toolUsage} color="var(--accent)" maxItems={8} />
+                <BarChart data={cu.toolUsage} color="var(--info)" maxItems={8} />
               </ChartBlock>
               <ChartBlock title="Models Used">
                 {cu.modelsUsed.length > 0 ? (
@@ -263,7 +263,7 @@ export function StatsDashboard() {
             <BarChart data={data.frameworks} color="var(--status-active-text)" />
           </ChartBlock>
           <ChartBlock title="ORMs">
-            <BarChart data={data.orms} color="var(--accent)" />
+            <BarChart data={data.orms} color="var(--info)" />
           </ChartBlock>
           <ChartBlock title="Styling">
             <BarChart data={data.styling} color="var(--status-error-text)" />
@@ -291,7 +291,7 @@ export function StatsDashboard() {
             <HealthBar
               segments={[
                 { value: data.activity.today, color: "var(--status-active-text)", label: "Today" },
-                { value: data.activity.thisWeek, color: "var(--accent)", label: "This Week" },
+                { value: data.activity.thisWeek, color: "var(--info)", label: "This Week" },
                 { value: data.activity.thisMonth, color: "var(--status-error-text)", label: "This Month" },
                 { value: data.activity.older, color: "var(--text-muted)", label: "Older" },
                 { value: data.activity.none, color: "var(--border-default)", label: "No Activity" },

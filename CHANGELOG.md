@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Secondary `--info` color** — introduced a muted steel-teal token group (`--info`, `--info-strong`, `--info-bg`, `--info-border`) to split amber's dual role. Navigation state (active nav item, active filter chips), usage stats (invocation counts, "View full body" link), chart colors (Top Tools bar, ORMs bar, This Week activity segment), provenance source labels, and decorative icons now use `--info` (~225° teal). Amber (`--accent`) is now reserved exclusively for action-required signals: approval-needed sessions, pending manual steps, pending TODOs, paused projects, and update-available dots.
+
 ## [0.9.4] - 2026-04-27
 
 ### Added
