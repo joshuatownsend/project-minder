@@ -182,6 +182,16 @@ export async function walkUserAgents(ctx: ProvenanceContext): Promise<AgentEntry
   return walkDir(root, root, "user", { ctx });
 }
 
+export async function walkInstalledAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
+  const root = path.join(os.homedir(), ".agents", "agents");
+  try {
+    await fs.access(root);
+  } catch {
+    return [];
+  }
+  return walkDir(root, root, "user", { ctx });
+}
+
 export async function walkPluginAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
   const all: AgentEntry[] = [];
 
