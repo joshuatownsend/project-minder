@@ -21,9 +21,10 @@ import { StatusDot } from "./ui/StatusDot";
 interface ProjectCardProps {
   project: ProjectData;
   onHide?: (slug: string, dirName: string) => void;
+  compact?: boolean;
 }
 
-export function ProjectCard({ project, onHide }: ProjectCardProps) {
+export function ProjectCard({ project, onHide, compact = false }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const router = useRouter();
 
@@ -76,6 +77,64 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
   if (project.monorepoType) techParts.push(project.monorepoType);
   if (project.database)     techParts.push(project.database.type);
   if (project.dockerPorts.length > 0) techParts.push("Docker");
+
+  if (compact) {
+    return (
+      <Link href={`/project/${project.slug}`} style={{ display: "block", textDecoration: "none" }}>
+        <div
+          className="project-card"
+          style={{
+            display: "flex", alignItems: "center", gap: "8px",
+            padding: "8px 12px",
+            background: "var(--bg-surface)",
+            border: hasAttention ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            opacity: isArchived ? 0.5 : 1,
+            transition: "background 0.12s, border-color 0.12s",
+            cursor: "pointer",
+            minHeight: "44px",
+          }}
+        >
+          <span
+            style={{
+              flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              fontFamily: "var(--font-body)", fontWeight: 500, fontSize: "0.875rem",
+              color: "var(--text-primary)",
+            }}
+          >
+            {project.name}
+          </span>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
+            {sessionBadge && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
+                title={sessionBadge.title}
+                aria-label="View active session"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: sessionBadge.color, background: sessionBadge.bg,
+                  border: `1px solid ${sessionBadge.border}`,
+                  borderRadius: "3px", padding: "2px 6px", cursor: "pointer",
+                }}
+              >
+                <StatusDot status={sessionStatus} size={6} />
+                {sessionBadge.label}
+              </button>
+            )}
+            {hasAttention && (
+              <span style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
+                {pendingTodos + pendingSteps}▲
+              </span>
+            )}
+            <StatusBadge status={project.status} />
+            <DevServerControl slug={project.slug} projectPath={project.path} devPort={devPort} compact />
+          </div>
+        </div>
+      </Link>
+    );
+  }
 
   return (
     <Link href={`/project/${project.slug}`} style={{ display: "block", height: "100%", textDecoration: "none" }}>

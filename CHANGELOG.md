@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Dashboard view modes** — three-way toggle (full cards / compact cards / sparkline list) with `v` keyboard shortcut to cycle. Compact mode renders a single-row card per project — name, live-session badge, attention count, status badge, and dev-server control — for a distraction-free dense grid. Sparkline list renders a sortable table with 14-day session-activity sparkline bars per row (sortable by name, activity, last session, branch, or todos), fetched from the new `GET /api/sessions/activity` endpoint. Active view persists to `.minder.json`. The three view-toggle icons use `--info` teal to match the existing filter/sort chip style.
+- **`GET /api/sessions/activity`** — returns `Record<projectSlug, number[]>` — 14 daily session counts (UTC, oldest→newest) — reusing the existing `__sessionsCache` globalThis singleton so no extra I/O is incurred.
+- **`ActivitySparkline` component** — inline SVG sparkline (14 bars, 3px each, `--info` teal with opacity variation). Hover on any bar shows a tooltip with the exact date and session count.
+
 ### Changed
 - **Secondary `--info` color** — introduced a muted steel-teal token group (`--info`, `--info-strong`, `--info-bg`, `--info-border`) to split amber's dual role. Navigation state (active nav item, active filter chips), usage stats (invocation counts, "View full body" link), chart colors (Top Tools bar, ORMs bar, This Week activity segment), provenance source labels, and decorative icons now use `--info` (~225° teal). Amber (`--accent`) is now reserved exclusively for action-required signals: approval-needed sessions, pending manual steps, pending TODOs, paused projects, and update-available dots.
 
