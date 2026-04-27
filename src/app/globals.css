@@ -171,8 +171,8 @@ body {
   border-color: var(--accent-strong) !important;
 }
 
-/* Reveal pin button on card hover */
-.project-card:hover .pin-card-btn {
+/* Reveal unpinned pin button on card hover; pinned stays at full opacity */
+.project-card:hover .pin-card-btn:not([data-pinned]) {
   opacity: 0.55 !important;
 }
 .project-card:hover .pin-card-btn:hover {

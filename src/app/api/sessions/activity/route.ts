@@ -23,7 +23,11 @@ export async function GET() {
   // Re-encoding devRoots gives Claude directory prefixes. decodeDirName is lossy
   // for hyphenated project names, so we re-encode session.projectPath to recover
   // the original Claude directory name, then strip the devRoot prefix.
-  const encodedPrefixes = roots.map((r) => encodePath(r) + "-");
+  // Normalize trailing slashes before encoding; sort longest-first so a more-specific
+  // root (e.g. /dev/projects) can't be shadowed by a shorter one (/dev)
+  const encodedPrefixes = roots
+    .map((r) => encodePath(r.replace(/[\\/]+$/, "")) + "-")
+    .sort((a, b) => b.length - a.length);
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);

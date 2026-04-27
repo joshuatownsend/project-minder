@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { ProjectData } from "@/lib/types";
 import { ActivitySparkline } from "./ActivitySparkline";
@@ -34,65 +34,79 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
     }
   };
 
-  const sorted = [...projects].sort((a, b) => {
-    let cmp = 0;
-    switch (sortKey) {
-      case "name":
-        cmp = a.name.localeCompare(b.name);
-        break;
-      case "activity": {
-        const aSum = (activityData[a.slug] ?? new Array(14).fill(0)).reduce((s: number, n: number) => s + n, 0);
-        const bSum = (activityData[b.slug] ?? new Array(14).fill(0)).reduce((s: number, n: number) => s + n, 0);
-        cmp = aSum - bSum;
-        break;
-      }
-      case "lastSession": {
-        const aT = a.claude?.lastSessionDate ?? "";
-        const bT = b.claude?.lastSessionDate ?? "";
-        cmp = aT.localeCompare(bT);
-        break;
-      }
-      case "todos": {
-        const aTodos = (a.todos?.pending ?? 0) + (a.worktrees ?? []).reduce((s, w) => s + (w.todos?.pending ?? 0), 0);
-        const bTodos = (b.todos?.pending ?? 0) + (b.worktrees ?? []).reduce((s, w) => s + (w.todos?.pending ?? 0), 0);
-        cmp = aTodos - bTodos;
-        break;
-      }
-      case "branch":
-        cmp = (a.git?.branch ?? "").localeCompare(b.git?.branch ?? "");
-        break;
+  // Precompute sort keys once to avoid repeated reduce/allocation inside comparator
+  const sortKeys = useMemo(() => {
+    const m = new Map<string, { activity: number; lastSession: string; todos: number; branch: string }>();
+    for (const p of projects) {
+      m.set(p.slug, {
+        activity: (activityData[p.slug] ?? []).reduce((s: number, n: number) => s + n, 0),
+        lastSession: p.claude?.lastSessionDate ?? "",
+        todos: (p.todos?.pending ?? 0) + (p.worktrees ?? []).reduce((s, w) => s + (w.todos?.pending ?? 0), 0),
+        branch: p.git?.branch ?? "",
+      });
     }
-    return sortDir === "asc" ? cmp : -cmp;
-  });
+    return m;
+  }, [projects, activityData]);
+
+  const sorted = useMemo(() => {
+    const pinnedSet = new Set(pinnedSlugs);
+    const result = [...projects].sort((a, b) => {
+      // Pinned projects always float to top
+      const pinCmp = Number(pinnedSet.has(b.slug)) - Number(pinnedSet.has(a.slug));
+      if (pinCmp !== 0) return pinCmp;
+
+      const ak = sortKeys.get(a.slug)!;
+      const bk = sortKeys.get(b.slug)!;
+      let cmp = 0;
+      switch (sortKey) {
+        case "name":       cmp = a.name.localeCompare(b.name); break;
+        case "activity":   cmp = ak.activity - bk.activity; break;
+        case "lastSession": cmp = ak.lastSession.localeCompare(bk.lastSession); break;
+        case "todos":      cmp = ak.todos - bk.todos; break;
+        case "branch":     cmp = ak.branch.localeCompare(bk.branch); break;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return result;
+  }, [projects, sortKey, sortDir, pinnedSlugs, sortKeys]);
 
   const ColHeader = ({ label, k }: { label: string; k: SortKey }) => {
     const active = sortKey === k;
     return (
       <th
         scope="col"
-        onClick={() => toggleSort(k)}
+        aria-sort={active ? (sortDir === "desc" ? "descending" : "ascending") : "none"}
         style={{
-          padding: "6px 10px",
+          padding: 0,
           textAlign: "left",
-          fontSize: "0.65rem",
-          fontFamily: "var(--font-mono)",
-          fontWeight: active ? 600 : 500,
-          color: active ? "var(--info)" : "var(--text-muted)",
-          letterSpacing: "0.04em",
-          textTransform: "uppercase",
-          cursor: "pointer",
-          userSelect: "none",
-          whiteSpace: "nowrap",
           borderBottom: "1px solid var(--border-subtle)",
           background: "var(--bg-base)",
         }}
       >
-        {label}
-        {active && (
-          <span style={{ marginLeft: "3px", opacity: 0.7 }}>
-            {sortDir === "desc" ? "↓" : "↑"}
-          </span>
-        )}
+        <button
+          onClick={() => toggleSort(k)}
+          style={{
+            display: "block", width: "100%", textAlign: "left",
+            padding: "6px 10px",
+            fontSize: "0.65rem",
+            fontFamily: "var(--font-mono)",
+            fontWeight: active ? 600 : 500,
+            color: active ? "var(--info)" : "var(--text-muted)",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            cursor: "pointer",
+            userSelect: "none",
+            whiteSpace: "nowrap",
+            background: "none", border: "none",
+          }}
+        >
+          {label}
+          {active && (
+            <span style={{ marginLeft: "3px", opacity: 0.7 }}>
+              {sortDir === "desc" ? "↓" : "↑"}
+            </span>
+          )}
+        </button>
       </th>
     );
   };
@@ -173,6 +187,10 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
               <tr
                 key={project.slug}
                 onClick={() => router.push(`/project/${project.slug}`)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/project/${project.slug}`); } }}
+                tabIndex={0}
+                role="link"
+                aria-label={`Open ${project.name}`}
                 style={{
                   cursor: "pointer",
                   borderBottom: "1px solid var(--border-subtle)",

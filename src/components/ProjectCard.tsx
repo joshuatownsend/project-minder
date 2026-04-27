@@ -248,6 +248,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 title={pinned ? "Unpin" : "Pin to top"}
                 aria-label={pinned ? `Unpin ${project.name}` : `Pin ${project.name} to top`}
                 className="pin-card-btn"
+                data-pinned={pinned ? "" : undefined}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: "20px", height: "20px", padding: 0,

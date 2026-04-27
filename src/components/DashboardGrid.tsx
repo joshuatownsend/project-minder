@@ -69,9 +69,10 @@ export function DashboardGrid({
     if (viewMode !== "list") return;
     if (activityFetched.current && Object.keys(activityData).length > 0) return;
     activityFetched.current = true;
+    setActivityError(false);
     fetch("/api/sessions/activity")
       .then((r) => r.json())
-      .then((data) => setActivityData(data))
+      .then((data) => { setActivityData(data); setActivityError(false); })
       .catch(() => setActivityError(true));
   }, [viewMode]);
 
@@ -84,8 +85,7 @@ export function DashboardGrid({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pinnedSlugs: next }),
       }).catch(() => setPinnedSlugs((cur) =>
-        // Undo just this operation on current state, not the captured snapshot
-        added ? cur.filter((s) => s !== slug) : [...cur, slug]
+        added ? cur.filter((s) => s !== slug) : cur.includes(slug) ? cur : [...cur, slug]
       ));
       return next;
     });
