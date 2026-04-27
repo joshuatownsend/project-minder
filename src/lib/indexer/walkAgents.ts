@@ -13,6 +13,7 @@ function makeAgentEntry(
     pluginName?: string;
     projectSlug?: string;
     category?: string;
+    relPath?: string;
     mtime: Date;
     ctime: Date;
   }
@@ -32,7 +33,9 @@ function makeAgentEntry(
   }
 
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
-  const id = `${source}:${prefix}:${slug}`;
+  // Use relative path from the walk root so files with the same basename in
+  // different subdirectories (e.g. category/README.md vs README.md) get unique IDs.
+  const id = `${source}:${prefix}:${opts.relPath ?? slug}`;
 
   return {
     id,
@@ -59,7 +62,7 @@ function makeAgentEntry(
 async function readAgent(
   filePath: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string; category?: string }
+  opts: { pluginName?: string; projectSlug?: string; category?: string; relPath?: string }
 ): Promise<AgentEntry | null> {
   try {
     const [text, stat] = await Promise.all([
@@ -78,6 +81,7 @@ async function readAgent(
 
 async function walkDir(
   dir: string,
+  root: string,
   source: CatalogSource,
   opts: { pluginName?: string; projectSlug?: string },
   depth = 0
@@ -101,10 +105,11 @@ async function walkDir(
       const fullPath = path.join(dir, entry.name);
 
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        const sub = await walkDir(fullPath, source, opts, depth + 1);
+        const sub = await walkDir(fullPath, root, source, opts, depth + 1);
         results.push(...sub);
       } else if (entry.isFile() && entry.name.endsWith(".md") && !entry.name.endsWith(".tmpl")) {
-        const agent = await readAgent(fullPath, source, { ...opts, category });
+        const relPath = path.relative(root, fullPath).replace(/\.md$/, "").replace(/\\/g, "/");
+        const agent = await readAgent(fullPath, source, { ...opts, category, relPath });
         if (agent) results.push(agent);
       }
     })
@@ -115,7 +120,7 @@ async function walkDir(
 
 export async function walkUserAgents(): Promise<AgentEntry[]> {
   const root = path.join(os.homedir(), ".claude", "agents");
-  return walkDir(root, "user", {});
+  return walkDir(root, root, "user", {});
 }
 
 export async function walkPluginAgents(): Promise<AgentEntry[]> {
@@ -130,7 +135,7 @@ export async function walkPluginAgents(): Promise<AgentEntry[]> {
       } catch {
         return;
       }
-      const entries = await walkDir(agentsDir, "plugin", { pluginName });
+      const entries = await walkDir(agentsDir, agentsDir, "plugin", { pluginName });
       all.push(...entries);
     })
   );
@@ -148,5 +153,5 @@ export async function walkProjectAgents(
   } catch {
     return [];
   }
-  return walkDir(agentsDir, "project", { projectSlug });
+  return walkDir(agentsDir, agentsDir, "project", { projectSlug });
 }
