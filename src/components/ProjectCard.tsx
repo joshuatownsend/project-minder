@@ -253,7 +253,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                   width: "20px", height: "20px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
-                  opacity: pinned ? 1 : 0,
+                  opacity: pinned ? 1 : 0.25,
                   transition: "opacity 0.1s, color 0.1s",
                 }}
               >

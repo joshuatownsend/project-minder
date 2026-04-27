@@ -8,7 +8,9 @@ import { SparklineList } from "./SparklineList";
 import { ManageHiddenProjects } from "./ManageHiddenProjects";
 import { Skeleton } from "./ui/skeleton";
 import { QuickAddTodosModal } from "./QuickAddTodosModal";
-import { Search, RefreshCw, Plus, LayoutGrid, Rows3, LayoutDashboard } from "lucide-react";
+import { Search, RefreshCw, Plus, LayoutGrid, Rows3, LayoutDashboard, CircleHelp } from "lucide-react";
+import { useHelp } from "./HelpProvider";
+import { usePathname } from "next/navigation";
 
 type SortOption = "activity" | "name" | "claude";
 type ViewMode = "full" | "compact" | "list";
@@ -45,6 +47,8 @@ export function DashboardGrid({
   const [activityError, setActivityError] = useState(false);
   const [pinnedSlugs, setPinnedSlugs] = useState<string[]>([]);
   const activityFetched = useRef(false);
+  const { openHelpForRoute } = useHelp();
+  const pathname = usePathname();
   const liveStatus = useLiveSessionStatus();
 
   // Apply dashboard defaults from config on first mount
@@ -196,10 +200,10 @@ export function DashboardGrid({
     { value: "name",     label: "A–Z"     },
   ];
 
-  const viewOptions: { value: ViewMode; icon: React.ReactNode; title: string }[] = [
-    { value: "full",    icon: <LayoutGrid    style={{ width: "12px", height: "12px" }} />, title: "Full cards"    },
-    { value: "compact", icon: <LayoutDashboard style={{ width: "12px", height: "12px" }} />, title: "Compact cards" },
-    { value: "list",    icon: <Rows3         style={{ width: "12px", height: "12px" }} />, title: "Sparkline list" },
+  const viewOptions: { value: ViewMode; icon: React.ReactNode; title: string; label: string }[] = [
+    { value: "full",    icon: <LayoutGrid      style={{ width: "11px", height: "11px" }} />, title: "Full cards",     label: "Full"    },
+    { value: "compact", icon: <LayoutDashboard style={{ width: "11px", height: "11px" }} />, title: "Compact cards",  label: "Compact" },
+    { value: "list",    icon: <Rows3           style={{ width: "11px", height: "11px" }} />, title: "Sparkline list", label: "List"    },
   ];
 
   const archivedCount = projects.filter((p) => p.status === "archived").length;
@@ -315,8 +319,8 @@ export function DashboardGrid({
               title={opt.title}
               aria-label={opt.title}
               style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                padding: "5px 9px",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                gap: "2px", padding: "5px 10px",
                 color: viewMode === opt.value ? "var(--info)" : "var(--text-muted)",
                 background: viewMode === opt.value ? "var(--info-bg)" : "transparent",
                 border: "none", borderRight: "1px solid var(--border-subtle)",
@@ -324,6 +328,9 @@ export function DashboardGrid({
               }}
             >
               {opt.icon}
+              <span style={{ fontSize: "0.52rem", fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1 }}>
+                {opt.label}
+              </span>
             </button>
           ))}
         </div>
@@ -369,6 +376,23 @@ export function DashboardGrid({
         >
           <RefreshCw style={{ width: "11px", height: "11px", animation: loading ? "spin 1s linear infinite" : "none" }} />
           Rescan
+        </button>
+
+        {/* Help */}
+        <button
+          onClick={() => openHelpForRoute(pathname)}
+          title="Help & shortcuts (?)"
+          aria-label="Open help panel"
+          className="toolbar-btn"
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            width: "32px", height: "32px", padding: 0,
+            color: "var(--text-muted)", background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)",
+            cursor: "pointer", transition: "color 0.1s, border-color 0.1s", flexShrink: 0,
+          }}
+        >
+          <CircleHelp style={{ width: "13px", height: "13px" }} />
         </button>
       </div>
 
