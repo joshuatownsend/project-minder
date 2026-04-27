@@ -99,12 +99,14 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
         >
           <span
             style={{
-              flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              flex: 1, minWidth: 0,
+              display: "flex", alignItems: "center", gap: "5px",
               fontFamily: "var(--font-body)", fontWeight: 500, fontSize: "0.875rem",
               color: "var(--text-primary)",
             }}
           >
-            {project.name}
+            {pinned && <Pin style={{ width: "9px", height: "9px", flexShrink: 0, color: "var(--info)", opacity: 0.8 }} />}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.name}</span>
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
@@ -191,6 +193,18 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               minWidth: 0,
             }}
           >
+            {pinned && (
+              <Pin
+                style={{
+                  width: "9px", height: "9px",
+                  color: "var(--info)", opacity: 0.8,
+                  marginRight: "5px",
+                  display: "inline",
+                  verticalAlign: "middle",
+                  position: "relative", top: "-1px",
+                }}
+              />
+            )}
             {project.name}
           </h3>
 
