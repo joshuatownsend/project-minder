@@ -2,7 +2,7 @@ import { Badge } from "./ui/badge";
 import { ProjectData } from "@/lib/types";
 
 const frameworkColors: Record<string, string> = {
-  "Next.js": "bg-black text-white dark:bg-white dark:text-black",
+  "Next.js": "bg-[var(--bg-surface)] text-[var(--text-primary)] border border-[var(--border-default)]",
   Vite: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
   Express: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   Remix: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",

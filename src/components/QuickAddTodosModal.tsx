@@ -144,7 +144,7 @@ export function QuickAddTodosModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--bg-base)]/60 backdrop-blur-sm p-4 overflow-y-auto"
       onClick={() => {
         if (!submitting) onClose();
       }}

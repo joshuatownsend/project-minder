@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useToast } from "@/components/ToastProvider";
 
 interface DirtyStatus {
   isDirty: boolean;
@@ -15,11 +16,14 @@ interface GitStatusResponse {
 }
 
 const POLL_INTERVAL = 5000;
+const ERROR_TOAST_COOLDOWN = 60_000;
 
 export function useGitDirtyStatus() {
   const [statuses, setStatuses] = useState<Record<string, DirtyStatus>>({});
   const [pending, setPending] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastToastAt = useRef(0);
+  const { showToast } = useToast();
 
   useEffect(() => {
     let stopped = false;
@@ -27,7 +31,8 @@ export function useGitDirtyStatus() {
     async function poll() {
       try {
         const res = await fetch("/api/git-status");
-        if (!res.ok || stopped) return;
+        if (stopped) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: GitStatusResponse = await res.json();
         setStatuses(data.statuses);
         setPending(data.pending);
@@ -38,7 +43,13 @@ export function useGitDirtyStatus() {
           intervalRef.current = null;
         }
       } catch {
-        // Network error, will retry
+        if (!stopped) {
+          const now = Date.now();
+          if (now - lastToastAt.current > ERROR_TOAST_COOLDOWN) {
+            lastToastAt.current = now;
+            showToast("Git status unavailable");
+          }
+        }
       }
     }
 
@@ -52,7 +63,7 @@ export function useGitDirtyStatus() {
       stopped = true;
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, []);
+  }, [showToast]);
 
   return { statuses, pending };
 }

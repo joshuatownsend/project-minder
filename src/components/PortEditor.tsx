@@ -60,6 +60,7 @@ export function PortEditor({
           compact ? "text-xs" : "text-sm"
         }`}
         title="Edit port"
+        aria-label="Edit port"
       >
         <span className="font-mono">{currentPort ? `:${currentPort}` : "No port"}</span>
         <Pencil className={compact ? "h-2.5 w-2.5 opacity-0 group-hover:opacity-50" : "h-3 w-3 opacity-50"} />
@@ -93,6 +94,8 @@ export function PortEditor({
         variant="ghost"
         size="sm"
         className={compact ? "h-6 w-6 p-0" : "h-8 w-8 p-0"}
+        title="Save port"
+        aria-label="Save port"
         onClick={save}
       >
         <Check className={compact ? "h-3 w-3" : "h-4 w-4"} />
@@ -101,6 +104,8 @@ export function PortEditor({
         variant="ghost"
         size="sm"
         className={compact ? "h-6 w-6 p-0" : "h-8 w-8 p-0"}
+        title="Cancel"
+        aria-label="Cancel"
         onClick={cancel}
       >
         <X className={compact ? "h-3 w-3" : "h-4 w-4"} />

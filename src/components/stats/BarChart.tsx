@@ -34,8 +34,10 @@ export function BarChart({
             <div
               className={color ? undefined : `${colorClass} h-4 rounded-full transition-all`}
               style={{
-                width: `${max > 0 ? (count / max) * 100 : 0}%`,
-                ...(color ? { height: "100%", background: color, borderRadius: "9999px", transition: "width 0.3s" } : {}),
+                width: "100%",
+                transform: `scaleX(${max > 0 ? (count / max) : 0})`,
+                transformOrigin: "left",
+                ...(color ? { height: "100%", background: color, borderRadius: "9999px", transition: "transform 0.3s" } : {}),
               }}
             />
           </div>

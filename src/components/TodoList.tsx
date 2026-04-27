@@ -89,10 +89,12 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
         {/* Progress track */}
         <div style={{ height: "2px", background: "var(--bg-elevated)", borderRadius: "1px", overflow: "hidden" }}>
           <div style={{
-            height: "100%", width: `${pct}%`,
+            height: "100%", width: "100%",
+            transform: `scaleX(${pct / 100})`,
+            transformOrigin: "left",
             background: "var(--status-active-text)",
             borderRadius: "1px",
-            transition: "width 0.3s ease",
+            transition: "transform 0.3s ease",
           }} />
         </div>
       </div>

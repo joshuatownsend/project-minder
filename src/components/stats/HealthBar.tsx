@@ -33,9 +33,11 @@ export function HealthBar({ segments }: HealthBarProps) {
               <div
                 key={seg.label}
                 style={{
-                  width: `${(seg.value / total) * 100}%`,
+                  width: "100%",
+                  transform: `scaleX(${seg.value / total})`,
+                  transformOrigin: "left",
                   background: seg.color,
-                  transition: "width 0.3s ease",
+                  transition: "transform 0.3s ease",
                 }}
                 title={`${seg.label}: ${seg.value}`}
               />

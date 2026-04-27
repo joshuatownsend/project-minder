@@ -207,8 +207,10 @@ function EntrySection({
               height: "100%",
               background: "var(--status-active-text)",
               borderRadius: "1px",
-              width: `${totalCount > 0 ? ((totalCount - pendingCount) / totalCount) * 100 : 0}%`,
-              transition: "width 0.2s ease",
+              width: "100%",
+              transform: `scaleX(${totalCount > 0 ? (totalCount - pendingCount) / totalCount : 0})`,
+              transformOrigin: "left",
+              transition: "transform 0.2s ease",
             }}
           />
         </div>
@@ -407,8 +409,10 @@ export function ManualStepsList({
             height: "100%",
             background: "var(--status-active-text)",
             borderRadius: "1px",
-            width: `${totalCount > 0 ? ((totalCount - pendingCount) / totalCount) * 100 : 0}%`,
-            transition: "width 0.2s ease",
+            width: "100%",
+            transform: `scaleX(${totalCount > 0 ? (totalCount - pendingCount) / totalCount : 0})`,
+            transformOrigin: "left",
+            transition: "transform 0.2s ease",
           }}
         />
       </div>

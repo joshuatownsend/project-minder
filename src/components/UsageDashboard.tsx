@@ -143,9 +143,11 @@ function CostRow({ label, cost, maxCost, color, detail }: {
         borderRadius: "2px", height: "12px", overflow: "hidden",
       }}>
         <div style={{
-          width: `${maxCost > 0 ? (cost / maxCost) * 100 : 0}%`,
+          width: "100%",
+          transform: `scaleX(${maxCost > 0 ? cost / maxCost : 0})`,
+          transformOrigin: "left",
           height: "100%", background: color, borderRadius: "2px",
-          transition: "width 0.3s ease",
+          transition: "transform 0.3s ease",
         }} />
       </div>
       <span style={{
@@ -185,9 +187,11 @@ function CountRow({ label, count, maxCount, color }: {
         borderRadius: "2px", height: "12px", overflow: "hidden",
       }}>
         <div style={{
-          width: `${maxCount > 0 ? (count / maxCount) * 100 : 0}%`,
+          width: "100%",
+          transform: `scaleX(${maxCount > 0 ? count / maxCount : 0})`,
+          transformOrigin: "left",
           height: "100%", background: color, borderRadius: "2px",
-          transition: "width 0.3s ease",
+          transition: "transform 0.3s ease",
         }} />
       </div>
       <span style={{
@@ -356,10 +360,12 @@ function ProjectBreakdownView({
                 {focusCategory ? (
                   // Single-category highlight bar
                   <div style={{
-                    width: `${barMax > 0 ? ((focusCost ?? 0) / barMax) * 100 : 0}%`,
+                    width: "100%",
+                    transform: `scaleX(${barMax > 0 ? (focusCost ?? 0) / barMax : 0})`,
+                    transformOrigin: "left",
                     height: "100%",
                     background: categoryColor(focusCategory),
-                    transition: "width 0.3s ease",
+                    transition: "transform 0.3s ease",
                   }} />
                 ) : (
                   // Stacked bar — proportional segments for each category

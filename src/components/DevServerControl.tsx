@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Play, Square, RotateCw, Terminal, ExternalLink } from "lucide-react";
+import { useToast } from "./ToastProvider";
 
 interface DevServerInfo {
   slug: string;
@@ -44,6 +45,7 @@ export function DevServerControl({
   const [showOutput, setShowOutput] = useState(false);
   const outputRef = useRef<HTMLPreElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { showToast } = useToast();
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -90,6 +92,7 @@ export function DevServerControl({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, projectPath, port: devPort }),
       });
+      if (!res.ok) throw new Error(`Server responded ${res.status}`);
       const data = await res.json();
       if (data.command) {
         setServer(data);
@@ -100,7 +103,7 @@ export function DevServerControl({
         setServer(null);
       }
     } catch {
-      // ignore
+      showToast(`Failed to ${action} dev server`);
     } finally {
       setLoading(false);
     }

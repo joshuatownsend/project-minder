@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ScanResult, ProjectData, ProjectStatus } from "@/lib/types";
+import { useToast } from "@/components/ToastProvider";
 
 export function useProjects() {
   const [data, setData] = useState<ScanResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { showToast } = useToast();
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -33,10 +35,11 @@ export function useProjects() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
+      showToast("Scan failed", "Check the console for details");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   const updateStatus = useCallback(
     async (slug: string, status: ProjectStatus) => {

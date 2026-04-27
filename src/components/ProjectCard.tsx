@@ -127,6 +127,7 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
                 title={sessionBadge.title}
+                aria-label="View active session"
                 style={{
                   display: "inline-flex", alignItems: "center", gap: "4px",
                   fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
@@ -146,6 +147,8 @@ export function ProjectCard({ project, onHide }: ProjectCardProps) {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
+                    title="More options"
+                    aria-label="More options"
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
                       width: "20px", height: "20px",
