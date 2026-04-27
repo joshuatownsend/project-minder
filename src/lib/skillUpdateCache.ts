@@ -137,9 +137,10 @@ class SkillUpdateCache {
     if (!m) return base;
     const [, ownerRepo] = m;
 
-    const dirPath = skillPath.replace(/\/SKILL\.md$/, "").split("/").join("/");
+    const dirPath = skillPath.replace(/\/SKILL\.md$/, "");
+    const encodedPath = dirPath.split("/").map(encodeURIComponent).join("/");
 
-    const apiUrl = `https://api.github.com/repos/${ownerRepo}/git/trees/HEAD:${encodeURIComponent(dirPath)}`;
+    const apiUrl = `https://api.github.com/repos/${ownerRepo}/commits?path=${encodedPath}&sha=HEAD&per_page=1`;
     const headers: Record<string, string> = {
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "project-minder",
@@ -151,8 +152,8 @@ class SkillUpdateCache {
     const res = await fetch(apiUrl, { headers });
     if (!res.ok) return null; // don't cache on HTTP errors (rate-limit, 404)
 
-    const data = (await res.json()) as { sha?: string };
-    const upstreamHash = data.sha;
+    const data = (await res.json()) as Array<{ sha?: string }>;
+    const upstreamHash = data[0]?.sha;
     if (!upstreamHash) return base;
 
     const hasUpdate = upstreamHash !== skillFolderHash;

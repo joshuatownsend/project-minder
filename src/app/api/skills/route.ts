@@ -42,6 +42,20 @@ export function invalidateSkillsRouteCache() {
   globalForSkills.__skillsRouteCache = new Map();
 }
 
+function buildUpdateItems(rows: SkillRow[]): QueueItem[] {
+  const items: QueueItem[] = [];
+  for (const row of rows) {
+    if (!row.entry?.provenance) continue;
+    const p = row.entry.provenance;
+    if (p.kind === "marketplace-plugin" && p.marketplaceRepo && p.gitCommitSha) {
+      items.push({ id: row.entry.id, kind: "marketplace-plugin", marketplace: p.marketplace, marketplaceRepo: p.marketplaceRepo, gitCommitSha: p.gitCommitSha });
+    } else if (p.kind === "lockfile" && p.sourceUrl && p.skillPath && p.skillFolderHash) {
+      items.push({ id: row.entry.id, kind: "lockfile", sourceUrl: p.sourceUrl, skillPath: p.skillPath, skillFolderHash: p.skillFolderHash });
+    }
+  }
+  return items;
+}
+
 export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("source");
   const projectSlug = request.nextUrl.searchParams.get("project");
@@ -49,7 +63,10 @@ export async function GET(request: NextRequest) {
 
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${query ?? ""}`;
   const cached = getRouteCache(cacheKey);
-  if (cached) return NextResponse.json(cached);
+  if (cached) {
+    skillUpdateCache.enqueue(buildUpdateItems(cached));
+    return NextResponse.json(cached);
+  }
 
   const [catalog, sessionMap] = await Promise.all([
     loadCatalog({ includeProjects: true }),
@@ -126,19 +143,7 @@ export async function GET(request: NextRequest) {
   }
 
   setRouteCache(cacheKey, result);
-
-  // Warm update cache — fire-and-forget
-  const updateItems: QueueItem[] = [];
-  for (const entry of catalog.skills) {
-    const p = entry.provenance;
-    if (!p) continue;
-    if (p.kind === "marketplace-plugin" && p.marketplaceRepo && p.gitCommitSha) {
-      updateItems.push({ id: entry.id, kind: "marketplace-plugin", marketplace: p.marketplace, marketplaceRepo: p.marketplaceRepo, gitCommitSha: p.gitCommitSha });
-    } else if (p.kind === "lockfile" && p.sourceUrl && p.skillPath && p.skillFolderHash) {
-      updateItems.push({ id: entry.id, kind: "lockfile", sourceUrl: p.sourceUrl, skillPath: p.skillPath, skillFolderHash: p.skillFolderHash });
-    }
-  }
-  skillUpdateCache.enqueue(updateItems);
+  skillUpdateCache.enqueue(buildUpdateItems(result));
 
   return NextResponse.json(result);
 }

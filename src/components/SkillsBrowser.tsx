@@ -68,7 +68,13 @@ function SkillRow({ row, updateStatus }: { row: SkillRow; updateStatus?: SkillUp
             >
               {name}
             </span>
-            <ProvenanceBadge provenance={row.entry?.provenance} hasUpdate={updateStatus?.hasUpdate} />
+            {row.catalogMissing ? (
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "var(--text-muted)", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "3px", padding: "1px 5px" }}>
+                plugin
+              </span>
+            ) : (
+              <ProvenanceBadge provenance={row.entry?.provenance} hasUpdate={updateStatus?.hasUpdate} />
+            )}
             {row.entry?.userInvocable && (
               <span
                 style={{

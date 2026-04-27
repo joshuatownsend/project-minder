@@ -39,7 +39,7 @@ function makeAgentEntry(
   }
 
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
-  const id = `${source}:${prefix}:${opts.relPath ?? slug}`;
+  const id = `agent:${source}:${prefix}:${opts.relPath ?? slug}`;
 
   const provenance = resolveProvenance({
     source,

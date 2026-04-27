@@ -34,8 +34,8 @@ function makeSkillEntry(
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
   const id =
     layout === "bundled"
-      ? `${source}:${prefix}:bundled:${slug}`
-      : `${source}:${prefix}:${slug}`;
+      ? `skill:${source}:${prefix}:bundled:${slug}`
+      : `skill:${source}:${prefix}:${slug}`;
 
   const userInvocable =
     fm["user-invocable"] === true ||

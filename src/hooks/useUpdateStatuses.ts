@@ -30,6 +30,8 @@ export function useUpdateStatuses() {
         if (data.pending === 0 && intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
+        } else if (data.pending > 0 && !intervalRef.current) {
+          intervalRef.current = setInterval(poll, POLL_INTERVAL);
         }
       } catch {
         // Network error, will retry
