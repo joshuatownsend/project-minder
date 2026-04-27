@@ -95,6 +95,10 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
 - `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
 - `GET /api/sessions/[sessionId]` — full session detail (timeline, file ops, subagents)
+- `GET /api/agents` — catalog of all agents (user/plugin/project sources) joined with usage stats; `?source=user|plugin|project`, `?project=slug`, `?q=search`
+- `GET /api/agents/[id]` — single agent entry with full body text + usage stats
+- `GET /api/skills` — catalog of all skills with usage stats; same query params
+- `GET /api/skills/[id]` — single skill entry with full body text + usage stats
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
@@ -104,6 +108,8 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
 - Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions with one-shot rate badges. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - Usage: `UsageDashboard` at `/usage` — token cost analytics with period filters, per-model/project/category breakdowns, daily cost chart, tool/shell/MCP stats, CSV/JSON export
+- Agents: `AgentsBrowser` at `/agents` — cross-project catalog with search/filter/sort and inline expansion. `ProjectAgentsTab` per-project. Indexer at `src/lib/indexer/` (walks root, plugins, project-level agents).
+- Skills: `SkillsBrowser` at `/skills` — same shape for skills. `ProjectSkillsTab` per-project. Supports bundled (`SKILL.md`-in-dir) and standalone `.md` layouts.
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton, toast)
 
