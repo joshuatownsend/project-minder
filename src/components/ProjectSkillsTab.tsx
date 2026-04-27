@@ -3,6 +3,7 @@
 import { Wrench, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { useSkills, type SkillRow } from "@/hooks/useSkills";
+import { ProvenanceBadge } from "@/components/ProvenanceBadge";
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";
@@ -43,6 +44,7 @@ function CompactRow({ row, projectSlug }: { row: SkillRow; projectSlug: string }
       >
         {name}
       </span>
+      <ProvenanceBadge provenance={row.entry?.provenance} />
       {row.entry?.version && (
         <span
           style={{

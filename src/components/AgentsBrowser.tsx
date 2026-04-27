@@ -1,63 +1,17 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { useAgents, type AgentRow } from "@/hooks/useAgents";
+import { useAgents } from "@/hooks/useAgents";
+import type { AgentRow } from "@/hooks/useAgents";
+import { useUpdateStatuses } from "@/hooks/useUpdateStatuses";
 import { Bot, Search, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import Link from "next/link";
+import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
+import { CatalogActionStrip } from "@/components/CatalogActionStrip";
+import { formatRelativeTime } from "@/lib/utils";
+import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (!isFinite(d.getTime())) return "—";
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString();
-}
-
-// ── Source badge ──────────────────────────────────────────────────────────────
-
-function SourceBadge({ row }: { row: AgentRow }) {
-  const source = row.entry?.source ?? "plugin";
-  const label = row.catalogMissing
-    ? `plugin (${row.usage?.name?.split(":")[0] ?? "?"})`
-    : source === "plugin"
-    ? `plugin: ${row.entry?.pluginName ?? ""}`
-    : source;
-  const color =
-    source === "user"
-      ? "var(--text-secondary)"
-      : source === "plugin"
-      ? "var(--accent)"
-      : "var(--success, #4ade80)";
-
-  return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.6rem",
-        color,
-        background: "var(--bg-surface)",
-        border: `1px solid var(--border-subtle)`,
-        borderRadius: "3px",
-        padding: "1px 5px",
-        flexShrink: 0,
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
-// ── Single row ────────────────────────────────────────────────────────────────
-
-function AgentRow({ row }: { row: AgentRow }) {
+function AgentRow({ row, updateStatus }: { row: AgentRow; updateStatus?: SkillUpdateStatus }) {
   const [expanded, setExpanded] = useState(false);
   const [bodyFull, setBodyFull] = useState<string | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
@@ -82,29 +36,12 @@ function AgentRow({ row }: { row: AgentRow }) {
   }
 
   return (
-    <div
-      style={{
-        padding: "10px 0",
-        borderBottom: "1px solid var(--border-subtle)",
-      }}
-    >
-      {/* Main row */}
+    <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
       <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "8px",
-          cursor: "pointer",
-        }}
+        style={{ display: "flex", alignItems: "flex-start", gap: "8px", cursor: "pointer" }}
         onClick={() => setExpanded((v) => !v)}
       >
-        <span
-          style={{
-            marginTop: "2px",
-            color: "var(--text-muted)",
-            flexShrink: 0,
-          }}
-        >
+        <span style={{ marginTop: "2px", color: "var(--text-muted)", flexShrink: 0 }}>
           {expanded ? (
             <ChevronDown style={{ width: "12px", height: "12px" }} />
           ) : (
@@ -132,7 +69,7 @@ function AgentRow({ row }: { row: AgentRow }) {
             >
               {name}
             </span>
-            <SourceBadge row={row} />
+            <ProvenanceBadge provenance={row.entry?.provenance} hasUpdate={updateStatus?.hasUpdate} />
             {row.entry?.category && (
               <span
                 style={{
@@ -175,7 +112,6 @@ function AgentRow({ row }: { row: AgentRow }) {
           )}
         </div>
 
-        {/* Stats */}
         <div
           style={{
             display: "flex",
@@ -205,13 +141,12 @@ function AgentRow({ row }: { row: AgentRow }) {
                 color: "var(--text-muted)",
               }}
             >
-              {formatDate(row.usage.lastUsed)}
+              {formatRelativeTime(row.usage.lastUsed)}
             </span>
           )}
         </div>
       </div>
 
-      {/* Expanded content */}
       {expanded && (
         <div
           style={{
@@ -232,6 +167,14 @@ function AgentRow({ row }: { row: AgentRow }) {
             >
               tools: {row.entry.tools.join(", ")}
             </div>
+          )}
+
+          {row.entry?.provenance && (
+            <ProvenanceDetails provenance={row.entry.provenance} />
+          )}
+
+          {row.entry && (
+            <CatalogActionStrip entry={row.entry} updateStatus={updateStatus} />
           )}
 
           {row.entry?.bodyExcerpt && (
@@ -317,8 +260,6 @@ function AgentRow({ row }: { row: AgentRow }) {
   );
 }
 
-// ── Main browser ──────────────────────────────────────────────────────────────
-
 type SortKey = "name" | "invocations" | "lastUsed";
 type SourceFilter = "all" | "user" | "plugin" | "project";
 
@@ -327,14 +268,15 @@ export function AgentsBrowser() {
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortBy, setSortBy] = useState<SortKey>("invocations");
+  const [hasUpdateOnly, setHasUpdateOnly] = useState(false);
 
-  // 300ms debounce on search
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 300);
     return () => clearTimeout(t);
   }, [rawQuery]);
 
   const { data, loading } = useAgents();
+  const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
     let rows = data;
@@ -344,6 +286,10 @@ export function AgentsBrowser() {
         if (r.catalogMissing) return sourceFilter === "plugin";
         return r.entry?.source === sourceFilter;
       });
+    }
+
+    if (hasUpdateOnly) {
+      rows = rows.filter((r) => r.entry && statuses[r.entry.id]?.hasUpdate);
     }
 
     if (query) {
@@ -372,14 +318,13 @@ export function AgentsBrowser() {
       if (sortBy === "invocations") {
         return (b.usage?.invocations ?? 0) - (a.usage?.invocations ?? 0);
       }
-      // lastUsed
       const at = a.usage?.lastUsed ?? "";
       const bt = b.usage?.lastUsed ?? "";
       return bt.localeCompare(at);
     });
 
     return rows;
-  }, [data, sourceFilter, query, sortBy]);
+  }, [data, sourceFilter, query, sortBy, hasUpdateOnly, statuses]);
 
   const total = data.length;
   const invoked = data.filter((r) => (r.usage?.invocations ?? 0) > 0).length;
@@ -398,7 +343,6 @@ export function AgentsBrowser() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
         <Bot style={{ width: "14px", height: "14px", color: "var(--text-muted)" }} />
         <h1
@@ -426,9 +370,7 @@ export function AgentsBrowser() {
         )}
       </div>
 
-      {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-        {/* Search */}
         <div style={{ position: "relative", flex: "1 1 200px", minWidth: "160px" }}>
           <Search
             style={{
@@ -462,7 +404,6 @@ export function AgentsBrowser() {
           />
         </div>
 
-        {/* Source filter */}
         <div style={{ display: "flex", gap: "3px" }}>
           {(["all", "user", "plugin", "project"] as SourceFilter[]).map((s) => (
             <button key={s} onClick={() => setSourceFilter(s)} style={segmentStyle(sourceFilter === s)}>
@@ -471,7 +412,32 @@ export function AgentsBrowser() {
           ))}
         </div>
 
-        {/* Sort */}
+        <button
+          onClick={() => setHasUpdateOnly((v) => !v)}
+          style={{
+            ...segmentStyle(hasUpdateOnly),
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "4px",
+          }}
+        >
+          <span
+            style={{
+              display: "inline-block",
+              width: "5px",
+              height: "5px",
+              borderRadius: "50%",
+              background: "var(--warning, #f59e0b)",
+            }}
+          />
+          updates
+          {pending > 0 && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.55rem", opacity: 0.6 }}>
+              …
+            </span>
+          )}
+        </button>
+
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortKey)}
@@ -492,7 +458,6 @@ export function AgentsBrowser() {
         </select>
       </div>
 
-      {/* List */}
       {loading ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {[...Array(6)].map((_, i) => (
@@ -533,7 +498,11 @@ export function AgentsBrowser() {
             {filtered.length} agent{filtered.length !== 1 ? "s" : ""}
           </div>
           {filtered.map((row, i) => (
-            <AgentRow key={row.entry?.id ?? row.usage?.name ?? i} row={row} />
+            <AgentRow
+              key={row.entry?.id ?? row.usage?.name ?? i}
+              row={row}
+              updateStatus={row.entry ? statuses[row.entry.id] : undefined}
+            />
           ))}
         </div>
       )}

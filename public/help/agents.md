@@ -1,6 +1,6 @@
 # Agents
 
-The Agents page shows every Claude Code agent available to you — from your personal `~/.claude/agents/` folder, installed plugins, and any project-specific agents — alongside how often each has been invoked.
+The Agents page shows every Claude Code agent available to you — from your personal `~/.claude/agents/` folder, installed plugins, and any project-specific agents — alongside how often each has been invoked, provenance details, and update status.
 
 ## What Is an Agent?
 
@@ -12,12 +12,37 @@ An agent is a named persona defined in a Markdown file with YAML frontmatter. It
 - **Plugin** — agents shipped with installed plugins (e.g., `feature-dev:code-reviewer`)
 - **Project** — agents in `<project>/.claude/agents/` scoped to a specific project
 
+## Provenance Badges
+
+Each row shows a badge indicating the agent's origin:
+
+- **Marketplace badge** (e.g. `claude-plugins-official`) — agent is part of a plugin from that marketplace
+- **GitHub repo badge** (e.g. `owner/repo`) — agent installed via the lockfile mechanism
+- **"local"** — user-authored with no upstream
+- **"project: slug"** — defined inside a project's `.claude/agents/` folder
+
+An **amber dot** on the badge means an update is available upstream.
+
+## Update Detection
+
+Project Minder runs background update checks (24-hour TTL) for marketplace plugin agents and lockfile agents. See the [Skills help page](/help/skills) for full details on how checks work.
+
 ## Cross-Project Browser (`/agents`)
 
 - **Search** — filters by name, description, category, and plugin name
 - **Source filter** — narrow to user / plugin / project agents
+- **Updates filter** — show only agents with detected updates
 - **Sort** — by most invoked, recently used, or name A–Z
-- **Expand row** — shows tools, body excerpt, recent session links, and a "View full body" toggle
+- **Expand row** — shows tools, provenance details, action buttons, body excerpt, and recent session links
+
+## Per-Row Actions (Expanded View)
+
+Click any row to expand it and reveal:
+
+- **Open source ↗** — opens the agent's GitHub repository in a new browser tab
+- **Show in folder** — opens Explorer/Finder at the agent's install directory
+- **Copy url / sha / path** — clipboard shortcuts
+- **Re-check** — clears the update cache and re-queues a fresh check for all entries
 
 ## Per-Project Agents Tab
 

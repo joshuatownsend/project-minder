@@ -5,6 +5,8 @@ import { parseAllSessions } from "@/lib/usage/parser";
 import { groupAgentCalls } from "@/lib/usage/agentParser";
 import { getCachedScan } from "@/lib/cache";
 import { pathToUsageSlug } from "@/lib/usage/slug";
+import { skillUpdateCache } from "@/lib/skillUpdateCache";
+import type { QueueItem } from "@/lib/skillUpdateCache";
 import type { AgentStats } from "@/lib/usage/types";
 import type { AgentEntry } from "@/lib/indexer/types";
 
@@ -125,5 +127,19 @@ export async function GET(request: NextRequest) {
   }
 
   setRouteCache(cacheKey, result);
+
+  // Warm update cache — fire-and-forget
+  const updateItems: QueueItem[] = [];
+  for (const entry of catalog.agents) {
+    const p = entry.provenance;
+    if (!p) continue;
+    if (p.kind === "marketplace-plugin" && p.marketplaceRepo && p.gitCommitSha) {
+      updateItems.push({ id: entry.id, kind: "marketplace-plugin", marketplace: p.marketplace, marketplaceRepo: p.marketplaceRepo, gitCommitSha: p.gitCommitSha });
+    } else if (p.kind === "lockfile" && p.sourceUrl && p.skillPath && p.skillFolderHash) {
+      updateItems.push({ id: entry.id, kind: "lockfile", sourceUrl: p.sourceUrl, skillPath: p.skillPath, skillFolderHash: p.skillFolderHash });
+    }
+  }
+  skillUpdateCache.enqueue(updateItems);
+
   return NextResponse.json(result);
 }

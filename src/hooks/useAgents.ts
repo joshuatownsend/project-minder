@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import type { Provenance } from "@/lib/indexer/types";
 
 export interface AgentRow {
   entry?: {
@@ -21,6 +22,9 @@ export interface AgentRow {
     tools?: string[];
     color?: string;
     emoji?: string;
+    provenance: Provenance;
+    isSymlink?: boolean;
+    realPath?: string;
   };
   usage?: {
     name: string;

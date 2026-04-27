@@ -1,5 +1,6 @@
 import { walkUserAgents, walkPluginAgents, walkProjectAgents } from "./walkAgents";
 import { walkUserSkills, walkPluginSkills, walkProjectSkills } from "./walkSkills";
+import { loadProvenanceContext } from "./provenance";
 import { getCachedScan } from "@/lib/cache";
 import type { AgentEntry, CatalogResult, SkillEntry } from "./types";
 
@@ -45,11 +46,14 @@ export async function loadCatalog(
   const cached = getCache(includeProjects);
   if (cached) return cached;
 
+  // Load provenance context once — shared across all walks
+  const ctx = await loadProvenanceContext();
+
   const [userAgents, pluginAgents, userSkills, pluginSkills] = await Promise.all([
-    walkUserAgents(),
-    walkPluginAgents(),
-    walkUserSkills(),
-    walkPluginSkills(),
+    walkUserAgents(ctx),
+    walkPluginAgents(ctx),
+    walkUserSkills(ctx),
+    walkPluginSkills(ctx),
   ]);
 
   const agents: AgentEntry[] = [...userAgents, ...pluginAgents];
@@ -64,8 +68,8 @@ export async function loadCatalog(
     await Promise.all(
       projects.map(async (project) => {
         const [pAgents, pSkills] = await Promise.all([
-          walkProjectAgents(project.path, project.slug),
-          walkProjectSkills(project.path, project.slug),
+          walkProjectAgents(project.path, project.slug, ctx),
+          walkProjectSkills(project.path, project.slug, ctx),
         ]);
         agents.push(...pAgents);
         skills.push(...pSkills);
@@ -74,8 +78,6 @@ export async function loadCatalog(
   }
 
   const result: CatalogResult = { agents, skills };
-  // Don't cache the withProjects slot if the scan cache was empty — let the
-  // next request retry once the scan has run.
   if (!includeProjects || hadProjectScan) {
     setCache(includeProjects, result);
   }

@@ -1,6 +1,6 @@
 # Skills
 
-The Skills page catalogs all Claude Code skills available to you — from your personal `~/.claude/skills/` directory, installed plugins, and per-project skill definitions — alongside invocation statistics.
+The Skills page catalogs all Claude Code skills available to you — from your personal `~/.claude/skills/` directory, installed plugins, and per-project skill definitions — alongside invocation statistics and origin provenance.
 
 ## What Is a Skill?
 
@@ -15,17 +15,48 @@ Two layouts are supported:
 
 ## Sources
 
-- **User** — skills in `~/.claude/skills/`
-- **Plugin** — skills from installed plugins (e.g., `vercel:nextjs`, `clerk-setup`)
+- **User** — skills in `~/.claude/skills/` (including symlinks to `~/.agents/skills/`)
+- **Plugin** — skills from installed marketplace plugins (e.g., `vercel:nextjs`)
 - **Project** — skills in `<project>/.claude/skills/`
+
+## Provenance Badges
+
+Each row shows a colored badge indicating where the skill came from:
+
+- **Marketplace badge** (e.g. `claude-plugins-official`) — skill is part of an installed plugin from that marketplace. Shows plugin version and commit SHA in the expanded view.
+- **GitHub repo badge** (e.g. `owner/repo`) — skill was installed via `npx claude-skills install` and is tracked in `~/.agents/.skill-lock.json`. Shows install date and folder hash.
+- **"local"** — user-authored skill with no upstream.
+- **"project: slug"** — skill defined in a project's `.claude/skills/` directory.
+
+## Update Detection
+
+Project Minder checks each skill for available updates in the background:
+
+- **Marketplace plugins** — compares the installed commit SHA against the latest `HEAD` of the marketplace repository via `git ls-remote`. One network call per marketplace (shared across all plugins from that marketplace).
+- **Lockfile skills** — compares the installed `skillFolderHash` against the current tree SHA for that directory on GitHub (via the GitHub API). Set `GITHUB_TOKEN` in your environment for higher rate limits (unauthenticated is 60 req/h, sufficient at the 24-hour cache TTL).
+- **User-local / project-local** — never checked (no upstream to compare against).
+
+An **amber dot** on the provenance badge indicates an update is available. The expanded row shows `update: <currentRef> → <upstreamRef>` with short 7-character hashes.
 
 ## Cross-Project Browser (`/skills`)
 
 - **Search** — filters by name, description, and plugin name
 - **Source filter** — narrow to user / plugin / project skills
+- **Updates filter** — show only skills with detected updates; `…` appears while the background check is still running
 - **Sort** — by most invoked, recently used, or name A–Z
 - **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator
-- **Expand row** — shows body excerpt, recent sessions, and a "View full body" toggle
+- **Expand row** — shows provenance details, action buttons, body excerpt, and recent sessions
+
+## Per-Row Actions (Expanded View)
+
+Click any row to expand it and reveal:
+
+- **Open source ↗** — opens the skill's GitHub repository in a new browser tab
+- **Show in folder** — opens Explorer/Finder at the skill's install directory
+- **Copy url** — copies the source URL to the clipboard
+- **Copy sha** — copies the commit SHA or folder hash to the clipboard
+- **Copy path** — copies the install path to the clipboard
+- **Re-check** — clears the update cache and re-queues all skills for a fresh check
 
 ## Per-Project Skills Tab
 
