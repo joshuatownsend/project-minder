@@ -128,7 +128,10 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               </button>
             )}
             {hasAttention && (
-              <span style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
+              <span
+                title={`${pendingTodos} todo${pendingTodos !== 1 ? "s" : ""}${pendingSteps > 0 ? ` + ${pendingSteps} manual step${pendingSteps !== 1 ? "s" : ""}` : ""} pending`}
+                style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)", cursor: "default" }}
+              >
                 {pendingTodos + pendingSteps}▲
               </span>
             )}
@@ -137,11 +140,15 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(project.slug); }}
                 title={pinned ? "Unpin" : "Pin to top"}
+                aria-label={pinned ? `Unpin ${project.name}` : `Pin ${project.name} to top`}
+                className="compact-pin-btn"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: "18px", height: "18px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
+                  opacity: pinned ? 1 : 0.55,
+                  transition: "opacity 0.1s, color 0.1s",
                 }}
               >
                 {pinned ? <PinOff style={{ width: "10px", height: "10px" }} /> : <Pin style={{ width: "10px", height: "10px" }} />}
@@ -165,9 +172,11 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
           flexDirection: "column",
           gap: "14px",
           padding: "18px 20px",
-          background: "var(--bg-surface)",
+          background: pinned ? "var(--info-bg)" : "var(--bg-surface)",
           border: hasAttention
             ? "1px solid var(--accent-border)"
+            : pinned
+            ? "1px solid var(--info-border)"
             : "1px solid var(--border-subtle)",
           borderRadius: "var(--radius)",
           opacity: isArchived ? 0.5 : 1,
@@ -231,6 +240,25 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               </button>
             )}
             <StatusBadge status={project.status} />
+
+            {onTogglePin && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(project.slug); }}
+                title={pinned ? "Unpin" : "Pin to top"}
+                aria-label={pinned ? `Unpin ${project.name}` : `Pin ${project.name} to top`}
+                className="pin-card-btn"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: "20px", height: "20px", padding: 0,
+                  background: "none", border: "none", cursor: "pointer",
+                  color: pinned ? "var(--info)" : "var(--text-muted)",
+                  opacity: pinned ? 1 : 0,
+                  transition: "opacity 0.1s, color 0.1s",
+                }}
+              >
+                {pinned ? <PinOff style={{ width: "10px", height: "10px" }} /> : <Pin style={{ width: "10px", height: "10px" }} />}
+              </button>
+            )}
 
             {(onHide || onTogglePin) && (
               <DropdownMenu>
@@ -378,11 +406,12 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               )}
               {worktreeCount > 0 && (
                 <span
+                  title={`${worktreeCount} worktree${worktreeCount !== 1 ? "s" : ""}`}
                   style={{
                     fontSize: "0.68rem",
                     fontFamily: "var(--font-mono)",
-                    color: "#60a5fa",
-                    background: "rgba(96,165,250,0.12)",
+                    color: "var(--info)",
+                    background: "var(--info-bg)",
                     padding: "1px 5px",
                     borderRadius: "3px",
                   }}

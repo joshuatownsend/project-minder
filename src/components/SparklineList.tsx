@@ -68,13 +68,14 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
     const active = sortKey === k;
     return (
       <th
+        scope="col"
         onClick={() => toggleSort(k)}
         style={{
           padding: "6px 10px",
           textAlign: "left",
           fontSize: "0.65rem",
           fontFamily: "var(--font-mono)",
-          fontWeight: 500,
+          fontWeight: active ? 600 : 500,
           color: active ? "var(--info)" : "var(--text-muted)",
           letterSpacing: "0.04em",
           textTransform: "uppercase",
@@ -100,13 +101,14 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ width: "28px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }} />
+            <th scope="col" style={{ width: "28px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)", padding: "6px 4px 6px 10px", fontSize: "0.65rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Pin</th>
             <ColHeader label="Project" k="name" />
             <ColHeader label="14-day activity" k="activity" />
             <ColHeader label="Last session" k="lastSession" />
             <ColHeader label="Branch" k="branch" />
             <ColHeader label="Todos" k="todos" />
             <th
+              scope="col"
               style={{
                 padding: "6px 10px",
                 textAlign: "left",
@@ -121,7 +123,7 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
             >
               Status
             </th>
-            <th style={{ borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }} />
+            <th scope="col" style={{ borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }} />
           </tr>
         </thead>
         <tbody>
@@ -175,6 +177,7 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                   borderBottom: "1px solid var(--border-subtle)",
                   opacity: project.status === "archived" ? 0.5 : 1,
                   transition: "background 0.1s",
+                  background: isPinned ? "var(--info-bg)" : undefined,
                 }}
                 className="sparkline-row"
               >
@@ -185,12 +188,13 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                 >
                   <button
                     title={isPinned ? "Unpin" : "Pin to top"}
+                    aria-label={isPinned ? `Unpin ${project.name}` : `Pin ${project.name} to top`}
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
                       width: "20px", height: "20px", padding: 0,
                       background: "none", border: "none", cursor: "pointer",
                       color: isPinned ? "var(--info)" : "var(--text-muted)",
-                      opacity: isPinned ? 1 : 0.4,
+                      opacity: isPinned ? 1 : 0.55,
                       transition: "opacity 0.1s, color 0.1s",
                     }}
                     className="pin-btn"
@@ -217,9 +221,10 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                       <button
                         onClick={(e) => { e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
                         title={sessionBadge.title}
+                        aria-label={`${sessionBadge.title} — view session`}
                         style={{
                           display: "inline-flex", alignItems: "center", gap: "3px",
-                          fontSize: "0.58rem", fontFamily: "var(--font-mono)",
+                          fontSize: "0.65rem", fontFamily: "var(--font-mono)",
                           color: sessionBadge.color, background: sessionBadge.bg,
                           border: `1px solid ${sessionBadge.border}`,
                           borderRadius: "3px", padding: "1px 5px", cursor: "pointer",
@@ -230,7 +235,10 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                       </button>
                     )}
                     {hasAttention && (
-                      <span style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
+                      <span
+                        title={`${pendingTodos} todo${pendingTodos !== 1 ? "s" : ""}${pendingSteps > 0 ? ` + ${pendingSteps} manual step${pendingSteps !== 1 ? "s" : ""}` : ""} pending`}
+                        style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)", cursor: "default" }}
+                      >
                         {pendingTodos + pendingSteps}▲
                       </span>
                     )}

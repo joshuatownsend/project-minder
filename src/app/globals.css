@@ -161,10 +161,31 @@ body {
   border-color: var(--accent-strong) !important;
 }
 
+/* Reveal pin button on card hover */
+.project-card:hover .pin-card-btn {
+  opacity: 0.55 !important;
+}
+.project-card:hover .pin-card-btn:hover {
+  opacity: 1 !important;
+}
+
+/* Compact card pin button hover */
+.compact-pin-btn:hover {
+  opacity: 1 !important;
+  color: var(--info) !important;
+}
+
 /* Toolbar button hover states */
-button:hover[data-toolbar] {
+.toolbar-btn:hover {
   color: var(--text-primary) !important;
   border-color: var(--border-default) !important;
+}
+
+/* Focus-visible ring for keyboard nav */
+:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 @keyframes spin {

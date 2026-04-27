@@ -42,7 +42,9 @@ export function DashboardGrid({
   const [showHidden, setShowHidden]     = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [activityData, setActivityData] = useState<Record<string, number[]>>({});
+  const [activityError, setActivityError] = useState(false);
   const [pinnedSlugs, setPinnedSlugs] = useState<string[]>([]);
+  const [rescanError, setRescanError] = useState(false);
   const activityFetched = useRef(false);
   const liveStatus = useLiveSessionStatus();
 
@@ -66,8 +68,8 @@ export function DashboardGrid({
     activityFetched.current = true;
     fetch("/api/sessions/activity")
       .then((r) => r.json())
-      .then((data) => setActivityData(data))
-      .catch(() => {});
+      .then((data) => { setActivityData(data); setActivityError(false); })
+      .catch(() => setActivityError(true));
   }, [viewMode, activityData]);
 
   const onTogglePin = useCallback((slug: string) => {
@@ -77,7 +79,7 @@ export function DashboardGrid({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pinnedSlugs: next }),
-      }).catch(() => {});
+      }).catch(() => setPinnedSlugs(prev)); // revert on failure
       return next;
     });
   }, []);
@@ -213,6 +215,9 @@ export function DashboardGrid({
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
         {/* Search */}
         <div style={{ position: "relative", flex: "1 1 200px", minWidth: "160px" }}>
+          <label htmlFor="search-input" style={{ position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}>
+            Search projects
+          </label>
           <Search
             style={{
               position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)",
@@ -249,6 +254,7 @@ export function DashboardGrid({
             <button
               key={opt.value}
               onClick={() => setStatusFilter(opt.value)}
+              className="toolbar-btn"
               style={{
                 padding: "5px 11px", fontSize: "0.72rem",
                 fontWeight: statusFilter === opt.value ? 600 : 400,
@@ -276,6 +282,7 @@ export function DashboardGrid({
             <button
               key={opt.value}
               onClick={() => setSortBy(opt.value)}
+              className="toolbar-btn"
               style={{
                 padding: "5px 11px", fontSize: "0.72rem",
                 fontWeight: sortBy === opt.value ? 600 : 400,
@@ -320,10 +327,14 @@ export function DashboardGrid({
           ))}
         </div>
 
+        {/* Spacer — pushes Quick Add + Rescan to the right */}
+        <div style={{ flex: 1, minWidth: "8px" }} />
+
         {/* Quick Add */}
         <button
           onClick={() => setQuickAddOpen(true)}
           title="Quick Add TODOs (Shift+T)"
+          className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
             padding: "5px 11px", fontSize: "0.72rem",
@@ -339,15 +350,18 @@ export function DashboardGrid({
 
         {/* Rescan */}
         <button
-          onClick={onRescan}
+          onClick={() => { setRescanError(false); onRescan(); }}
           disabled={loading}
-          title="Rescan projects"
+          title={rescanError ? "Rescan failed — click to retry" : "Rescan projects"}
+          className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
             padding: "5px 11px", fontSize: "0.72rem",
             fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-            color: "var(--text-secondary)", background: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)",
+            color: rescanError ? "var(--status-error-text)" : "var(--text-secondary)",
+            background: "var(--bg-surface)",
+            border: rescanError ? "1px solid var(--status-error-border)" : "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
             cursor: loading ? "not-allowed" : "pointer",
             opacity: loading ? 0.5 : 1,
             transition: "color 0.1s, border-color 0.1s", flexShrink: 0,
@@ -404,12 +418,19 @@ export function DashboardGrid({
           ))}
         </div>
       ) : viewMode === "list" ? (
-        <SparklineList
-          projects={overlaidProjects}
-          activityData={activityData}
-          pinnedSlugs={pinnedSlugs}
-          onTogglePin={onTogglePin}
-        />
+        <>
+          {activityError && (
+            <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginBottom: "-8px" }}>
+              Activity data unavailable — sparklines may be empty
+            </p>
+          )}
+          <SparklineList
+            projects={overlaidProjects}
+            activityData={activityData}
+            pinnedSlugs={pinnedSlugs}
+            onTogglePin={onTogglePin}
+          />
+        </>
       ) : (
         <div
           style={{
