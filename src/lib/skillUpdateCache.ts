@@ -140,7 +140,6 @@ class SkillUpdateCache {
     const dirPath = skillPath.replace(/\/SKILL\.md$/, "");
     const encodedPath = dirPath.split("/").map(encodeURIComponent).join("/");
 
-    const apiUrl = `https://api.github.com/repos/${ownerRepo}/commits?path=${encodedPath}&sha=HEAD&per_page=1`;
     const headers: Record<string, string> = {
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "project-minder",
@@ -149,19 +148,41 @@ class SkillUpdateCache {
       headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
     }
 
-    const res = await fetch(apiUrl, { headers });
-    if (!res.ok) return null; // don't cache on HTTP errors (rate-limit, 404)
+    // Step 1: fetch the latest commit for this path to get the root tree SHA.
+    // skillFolderHash is a git tree SHA, so we must traverse the tree — not compare
+    // against a commit SHA, which is a different object type.
+    const commitRes = await fetch(
+      `https://api.github.com/repos/${ownerRepo}/commits?path=${encodedPath}&per_page=1`,
+      { headers }
+    );
+    if (!commitRes.ok) return null;
 
-    const data = (await res.json()) as Array<{ sha?: string }>;
-    const upstreamHash = data[0]?.sha;
-    if (!upstreamHash) return base;
+    const commits = (await commitRes.json()) as Array<{
+      commit?: { tree?: { sha?: string } };
+    }>;
+    const rootTreeSha = commits[0]?.commit?.tree?.sha;
+    if (!rootTreeSha) return base;
 
-    const hasUpdate = upstreamHash !== skillFolderHash;
+    // Step 2: walk the recursive tree to find the directory entry's tree SHA.
+    const treeRes = await fetch(
+      `https://api.github.com/repos/${ownerRepo}/git/trees/${rootTreeSha}?recursive=1`,
+      { headers }
+    );
+    if (!treeRes.ok) return null;
+
+    const treeData = (await treeRes.json()) as {
+      tree?: Array<{ path?: string; type?: string; sha?: string }>;
+    };
+    const dirEntry = treeData.tree?.find((e) => e.path === dirPath && e.type === "tree");
+    if (!dirEntry?.sha) return base; // path not found (may have moved upstream)
+
+    const upstreamTreeSha = dirEntry.sha;
+    const hasUpdate = upstreamTreeSha !== skillFolderHash;
     return {
       ...base,
       hasUpdate,
       reason: hasUpdate ? "hash-mismatch" : undefined,
-      upstreamRef: upstreamHash.slice(0, 7),
+      upstreamRef: upstreamTreeSha.slice(0, 7),
       currentRef: skillFolderHash.slice(0, 7),
     };
   }

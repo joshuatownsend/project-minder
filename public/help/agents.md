@@ -17,15 +17,14 @@ An agent is a named persona defined in a Markdown file with YAML frontmatter. It
 Each row shows a badge indicating the agent's origin:
 
 - **Marketplace badge** (e.g. `claude-plugins-official`) — agent is part of a plugin from that marketplace
-- **GitHub repo badge** (e.g. `owner/repo`) — agent installed via the lockfile mechanism
 - **"local"** — user-authored with no upstream
 - **"project: slug"** — defined inside a project's `.claude/agents/` folder
 
-An **amber dot** on the badge means an update is available upstream.
+An **amber dot** on the badge means an update is available upstream (currently supported for marketplace plugin agents only).
 
 ## Update Detection
 
-Project Minder runs background update checks (24-hour TTL) for marketplace plugin agents and lockfile agents. See the [Skills help page](/help/skills) for full details on how checks work.
+Project Minder runs background update checks (24-hour TTL) for marketplace plugin agents. See the [Skills help page](/help/skills) for full details on how checks work.
 
 ## Cross-Project Browser (`/agents`)
 

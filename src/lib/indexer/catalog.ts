@@ -63,7 +63,7 @@ export async function loadCatalog(
   const seenPaths = new Set<string>(claudeAgents.map((e) => e.realPath ?? e.filePath));
   const mergedUserAgents = [
     ...claudeAgents,
-    ...installedAgents.filter((e) => !seenPaths.has(e.filePath)),
+    ...installedAgents.filter((e) => !seenPaths.has(e.realPath ?? e.filePath)),
   ];
 
   const agents: AgentEntry[] = [...mergedUserAgents, ...pluginAgents];
