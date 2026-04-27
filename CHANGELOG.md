@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-04-27
+
 ### Added
 - **Skill & agent provenance** — every skill and agent now carries a `Provenance` record surfaced in the UI: marketplace name, plugin version, commit SHA, install date, and GitHub source URL for marketplace plugins; owner/repo, folder hash, and install/update dates for lockfile-installed skills. Badges appear inline in `/skills`, `/agents`, and both per-project tabs.
 - **Symlink-installed skill discovery** — skills installed via `npx claude-skills install` live under `~/.agents/skills/` as symlinks from `~/.claude/skills/`. The indexer now follows those symlinks, reads provenance from `~/.agents/.skill-lock.json`, and surfaces the correct GitHub repo and hash instead of treating them as orphans.
