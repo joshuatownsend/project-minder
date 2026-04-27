@@ -32,6 +32,15 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 - **Insights extraction** — scrapes `★ Insight` blocks from conversation history into per-project `INSIGHTS.md` files; cross-project browser with full-text search
 - **Token cost analytics** — `/usage` page with time-period filters, per-model/project/category breakdowns, daily cost trend chart, and CSV/JSON export; worktree sessions are merged into their parent project in the By Project chart
 
+### Agents, Skills & Plugins
+- **Agents catalog** — `/agents` indexes every Claude Code agent persona from `~/.claude/agents/`, `~/.agents/agents/`, installed plugins, and per-project `.claude/agents/`; shows usage counts, last-invoked timestamps, and source provenance
+- **Skills catalog** — `/skills` indexes all slash-command skills from the same source tree; handles both bundled (`SKILL.md`-in-dir) and standalone (`.md`) layouts
+- **Provenance badges** — each row carries a marketplace badge (name · version · commit SHA) or a `local` / `project:<slug>` tag showing exactly where the item came from
+- **Update detection** — an amber dot appears when an upstream update is available; checks run in the background via `git ls-remote` (marketplace plugins) and the GitHub tree API (lockfile-installed skills) on a 24-hour TTL
+- **Per-row actions** — expand any row to see tools, model, body excerpt, recent sessions, and actions: open source ↗, show in folder, copy URL / SHA / path, re-check
+- **Per-project tabs** — each project detail page has Agents and Skills tabs split into *Available* (installed) and *Invoked here* (used in that repo's sessions)
+- **Search, filter & sort** — search by name/description/plugin; filter by source (user / plugin / project) or updates-only; sort by most invoked, recently used, or name
+
 ### Project Management
 - **TODO tracking** — reads each project's `TODO.md`; add items inline or via a cross-project Quick Add modal (Shift+T)
 - **Manual Steps tracker** — surfaces `MANUAL_STEPS.md` entries across all projects; interactive checkboxes toggle steps on disk; file watcher fires toast + OS notifications when Claude adds new steps mid-session
