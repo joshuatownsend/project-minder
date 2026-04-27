@@ -8,6 +8,8 @@ import type { LiveSession } from "@/lib/types";
 const navItems = [
   { href: "/manual-steps", label: "Steps",    badge: "steps"    },
   { href: "/insights",     label: "Insights"                    },
+  { href: "/agents",       label: "Agents"                      },
+  { href: "/skills",       label: "Skills"                      },
   { href: "/sessions",     label: "Sessions"                    },
   { href: "/status",       label: "Status",   badge: "approval" },
   { href: "/usage",        label: "Usage"                       },

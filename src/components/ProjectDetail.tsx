@@ -13,6 +13,8 @@ import { ProjectSessions } from "./ProjectSessions";
 import { GitStatusCompact } from "./GitStatus";
 import { MarkdownContent } from "./MarkdownContent";
 import { MemoryTab } from "./MemoryTab";
+import { ProjectAgentsTab } from "./ProjectAgentsTab";
+import { ProjectSkillsTab } from "./ProjectSkillsTab";
 import {
   ArrowLeft,
   ExternalLink,
@@ -30,7 +32,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -102,6 +104,8 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "manual-steps", label: "Manual Steps" },
     { key: "insights",    label: "Insights" },
     { key: "memory",      label: "Memory" },
+    { key: "agents",      label: "Agents" },
+    { key: "skills",      label: "Skills" },
   ];
 
   const actionBtn = (label: string, icon: React.ReactNode, onClick: () => void, href?: string) => {
@@ -483,6 +487,16 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── MEMORY ────────────────────────────────────────────────── */}
           {activeTab === "memory" && (
             <MemoryTab slug={project.slug} />
+          )}
+
+          {/* ── AGENTS ───────────────────────────────────────────────── */}
+          {activeTab === "agents" && (
+            <ProjectAgentsTab slug={project.slug} />
+          )}
+
+          {/* ── SKILLS ───────────────────────────────────────────────── */}
+          {activeTab === "skills" && (
+            <ProjectSkillsTab slug={project.slug} />
           )}
         </div>
       </div>

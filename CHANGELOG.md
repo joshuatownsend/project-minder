@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Agents page (`/agents`)** — cross-project catalog of all available Claude Code agents (root `~/.claude/agents/`, installed plugins, and per-project `.claude/agents/`) with invocation counts, last-used timestamps, source/category badges, and inline body expansion. Search, source filter (user/plugin/project), and sort by name/invocations/last-used.
+- **Skills page (`/skills`)** — same catalog pattern for Claude Code skills (root `~/.claude/skills/`, plugins, and per-project `.claude/skills/`). Supports both bundled `SKILL.md`-in-dir and standalone `.md` layouts. Shows version, user-invocable, and argument-hint chips where available.
+- **Agents and Skills tabs on project detail pages** — each project's detail view now has "Agents" and "Skills" tabs showing (a) project-local definitions and (b) agents/skills invoked in that project's sessions, with per-project invocation counts.
+- **`GET /api/agents`** and **`GET /api/agents/[id]`** — catalog + usage stats for agents. Supports `?source`, `?project`, `?q` filters.
+- **`GET /api/skills`** and **`GET /api/skills/[id]`** — catalog + usage stats for skills. Same filters.
 - **System Status page (`/status`)** — live cross-project view of all Claude Code sessions grouped into four buckets: Needs Approval, Working, Waiting for You, and Other/Stale. Polls every 3 seconds. Worktree sessions appear labeled by branch. The nav "Status" item shows an approval-bucket count badge (updates every 10s). Classification uses a 4-state heuristic: stalled mtime on write-type tools (Edit/Write/MultiEdit/NotebookEdit) → Approval; active tools → Working; clean `end_turn` with no pending tools → Waiting; stale > 10min → Other.
 - **Memory tab on project detail pages** — browse Claude Code's auto-memory files for each project (`~/.claude/projects/<encoded>/memory/`). MEMORY.md rendered as an index overview pane; other `.md` files listed in a two-panel browser with YAML-frontmatter type badges (user/feedback/project/reference) and on-demand content rendering.
 - **`GET /api/status`** — new route returning live session classifications across all projects and worktrees (3s server-side cache with cross-poll mtime tracking for approval detection).
@@ -20,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Cost estimates are now consistent across `/sessions`, `/usage`, and `/stats`. Previously, session scanning used hardcoded Sonnet-3.5-era pricing constants while `/usage` used LiteLLM-backed per-model pricing, causing divergent numbers. All cost calculations now route through `costCalculator.ts` with per-model token attribution.
 - **Usage "By Project" deduplication** — worktree sessions (e.g., `.worktrees/my-branch` or `.claude-worktrees/feature`) were appearing as separate projects in the By Project breakdown. They are now correctly merged into their parent project.
+- **Agents/Skills "Invoked here" now works** — the project filter in `/api/agents` and `/api/skills` was comparing scanner slugs (e.g. `project-minder`) against usage slugs (e.g. `dev-project-minder`), so "Invoked here" always showed zero results. Both routes now translate the project path to the correct usage-format slug via `pathToUsageSlug`.
+- **Project agents/skills now appear after first scan** — `loadCatalog({ includeProjects: true })` could cache an empty project list if called before the first scan completed; subsequent requests would see no project-local entries for the full 5-minute TTL. The catalog now skips caching the `withProjects` slot when the scan cache is empty, and the scan route explicitly invalidates the catalog cache so project entries appear immediately after a scan.
 
 ## [0.9.3] - 2026-04-16
 

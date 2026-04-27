@@ -10,6 +10,8 @@ export const helpMapping: Record<string, string> = {
   '/sessions': 'sessions',
   '/sessions/[sessionId]': 'sessions',
   '/insights': 'insights',
+  '/agents': 'agents',
+  '/skills': 'skills',
   '/usage': 'usage',
   '/status': 'status',
   '/config': 'config',
@@ -27,6 +29,8 @@ export const tabHelpMapping: Record<string, string> = {
   sessions: 'sessions',
   'manual-steps': 'manual-steps',
   insights: 'insights',
+  agents: 'agents',
+  skills: 'skills',
   memory: 'memory',
 }
 
@@ -44,6 +48,8 @@ export const helpSlugs = [
   'stats',
   'sessions',
   'insights',
+  'agents',
+  'skills',
   'usage',
   'status',
   'memory',

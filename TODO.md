@@ -23,6 +23,14 @@
 - [x] **Use dropdown menu dep** — `@radix-ui/react-dropdown-menu` now used for project card action menu.
 - [x] **Remove `@radix-ui/react-separator`** — Uninstalled.
 
+## Agents & Skills Pages (Phase 2)
+
+- [ ] **Per-agent cost attribution** — re-include sidechain entries in `parser.ts` behind an `includeSidechains` flag. Build `attachAgentCost()` that groups sidechain turns by `parentToolUseID` and sums token costs. Verify `/usage` totals don't shift.
+- [ ] **ProjectCard agent/skill badges** — show a small count of project-local agents/skills in the attention signals row (`src/components/ProjectCard.tsx:181-219`).
+- [ ] **Frontmatter linting** — skill/agent rows flagged with a lint chip when `name` or `description` is missing/truncated. Inspiration from skillfile spec.
+- [ ] **Slash commands indexing** — extend catalog to index `commands/*.md` files (with `allowed-tools` frontmatter) as a third catalog kind, alongside agents and skills.
+- [ ] **Per-item detail pages** — dedicated `/agents/[id]` and `/skills/[id]` routes when usage-history graphs / time-series views become valuable.
+
 ## Public Repo Hardening (follow-ups to branch protection)
 
 - [ ] **Community files** — Add `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant), `SECURITY.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `.github/ISSUE_TEMPLATE/` issue forms. Add `CODEOWNERS` listing yourself so GitHub auto-requests your review on external PRs.

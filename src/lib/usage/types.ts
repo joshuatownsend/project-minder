@@ -104,6 +104,24 @@ export interface ProjectDetail {
   mcpCalls: number;
 }
 
+export interface AgentStats {
+  name: string;
+  invocations: number;
+  firstUsed?: string;
+  lastUsed?: string;
+  projects: Record<string, number>;
+  sessions: string[];
+}
+
+export interface SkillStats {
+  name: string;
+  invocations: number;
+  firstUsed?: string;
+  lastUsed?: string;
+  projects: Record<string, number>;
+  sessions: string[];
+}
+
 export interface UsageReport {
   period: string;
   totalCost: number;
