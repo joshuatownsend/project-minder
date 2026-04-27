@@ -15,16 +15,18 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Database, MoreVertical, EyeOff, CheckSquare, ClipboardList, Lightbulb } from "lucide-react";
+import { Database, MoreVertical, EyeOff, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff } from "lucide-react";
 import { StatusDot } from "./ui/StatusDot";
 
 interface ProjectCardProps {
   project: ProjectData;
   onHide?: (slug: string, dirName: string) => void;
   compact?: boolean;
+  pinned?: boolean;
+  onTogglePin?: (slug: string) => void;
 }
 
-export function ProjectCard({ project, onHide, compact = false }: ProjectCardProps) {
+export function ProjectCard({ project, onHide, compact = false, pinned = false, onTogglePin }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const router = useRouter();
 
@@ -129,6 +131,20 @@ export function ProjectCard({ project, onHide, compact = false }: ProjectCardPro
               </span>
             )}
             <StatusBadge status={project.status} />
+            {onTogglePin && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(project.slug); }}
+                title={pinned ? "Unpin" : "Pin to top"}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: "18px", height: "18px", padding: 0,
+                  background: "none", border: "none", cursor: "pointer",
+                  color: pinned ? "var(--info)" : "var(--text-muted)",
+                }}
+              >
+                {pinned ? <PinOff style={{ width: "10px", height: "10px" }} /> : <Pin style={{ width: "10px", height: "10px" }} />}
+              </button>
+            )}
             <DevServerControl slug={project.slug} projectPath={project.path} devPort={devPort} compact />
           </div>
         </div>
@@ -202,7 +218,7 @@ export function ProjectCard({ project, onHide, compact = false }: ProjectCardPro
             )}
             <StatusBadge status={project.status} />
 
-            {onHide && (
+            {(onHide || onTogglePin) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -223,16 +239,26 @@ export function ProjectCard({ project, onHide, compact = false }: ProjectCardPro
                   align="end"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
-                  <DropdownMenuItem
-                    onClick={() => {
-                      if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
-                        onHide(project.slug, dirName);
+                  {onTogglePin && (
+                    <DropdownMenuItem onClick={() => onTogglePin(project.slug)}>
+                      {pinned
+                        ? <><PinOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />Unpin</>
+                        : <><Pin style={{ width: "12px", height: "12px", marginRight: "6px" }} />Pin to top</>
                       }
-                    }}
-                  >
-                    <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
-                    Hide project
-                  </DropdownMenuItem>
+                    </DropdownMenuItem>
+                  )}
+                  {onHide && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
+                          onHide(project.slug, dirName);
+                        }
+                      }}
+                    >
+                      <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                      Hide project
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

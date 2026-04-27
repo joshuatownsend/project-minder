@@ -42,6 +42,7 @@ export function DashboardGrid({
   const [showHidden, setShowHidden]     = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [activityData, setActivityData] = useState<Record<string, number[]>>({});
+  const [pinnedSlugs, setPinnedSlugs] = useState<string[]>([]);
   const activityFetched = useRef(false);
   const liveStatus = useLiveSessionStatus();
 
@@ -53,6 +54,7 @@ export function DashboardGrid({
         if (cfg.defaultSort)        setSortBy(cfg.defaultSort as SortOption);
         if (cfg.defaultStatusFilter) setStatusFilter(cfg.defaultStatusFilter as ProjectStatus | "all");
         if (cfg.viewMode)            setViewMode(cfg.viewMode as ViewMode);
+        if (Array.isArray(cfg.pinnedSlugs)) setPinnedSlugs(cfg.pinnedSlugs);
       })
       .catch(() => {});
   }, []);
@@ -67,6 +69,18 @@ export function DashboardGrid({
       .then((data) => setActivityData(data))
       .catch(() => {});
   }, [viewMode, activityData]);
+
+  const onTogglePin = useCallback((slug: string) => {
+    setPinnedSlugs((prev) => {
+      const next = prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug];
+      fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinnedSlugs: next }),
+      }).catch(() => {});
+      return next;
+    });
+  }, []);
 
   const persistViewMode = useCallback((mode: ViewMode) => {
     fetch("/api/config", {
@@ -133,8 +147,12 @@ export function DashboardGrid({
       }
     });
 
+    // Stable pin pass: pinned projects float to top, order within each group preserved
+    const pinnedSet = new Set(pinnedSlugs);
+    result.sort((a, b) => Number(pinnedSet.has(b.slug)) - Number(pinnedSet.has(a.slug)));
+
     return result;
-  }, [projects, search, statusFilter, sortBy, gitDirtyOverrides]);
+  }, [projects, search, statusFilter, sortBy, gitDirtyOverrides, pinnedSlugs]);
 
   // Keyboard shortcuts
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -389,6 +407,8 @@ export function DashboardGrid({
         <SparklineList
           projects={overlaidProjects}
           activityData={activityData}
+          pinnedSlugs={pinnedSlugs}
+          onTogglePin={onTogglePin}
         />
       ) : (
         <div
@@ -406,6 +426,8 @@ export function DashboardGrid({
               project={project}
               onHide={onHide}
               compact={viewMode === "compact"}
+              pinned={pinnedSlugs.includes(project.slug)}
+              onTogglePin={onTogglePin}
             />
           ))}
           {filtered.length === 0 && (

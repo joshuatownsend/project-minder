@@ -7,6 +7,7 @@ import { ActivitySparkline } from "./ActivitySparkline";
 import { StatusBadge } from "./StatusBadge";
 import { StatusDot } from "./ui/StatusDot";
 import { DevServerControl } from "./DevServerControl";
+import { Pin, PinOff } from "lucide-react";
 
 type SortKey = "name" | "activity" | "lastSession" | "todos" | "branch";
 type SortDir = "asc" | "desc";
@@ -14,9 +15,11 @@ type SortDir = "asc" | "desc";
 interface SparklineListProps {
   projects: ProjectData[];
   activityData: Record<string, number[]>;
+  pinnedSlugs: string[];
+  onTogglePin: (slug: string) => void;
 }
 
-export function SparklineList({ projects, activityData }: SparklineListProps) {
+export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin }: SparklineListProps) {
   const [sortKey, setSortKey] = useState<SortKey>("activity");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const router = useRouter();
@@ -97,6 +100,7 @@ export function SparklineList({ projects, activityData }: SparklineListProps) {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
+            <th style={{ width: "28px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }} />
             <ColHeader label="Project" k="name" />
             <ColHeader label="14-day activity" k="activity" />
             <ColHeader label="Last session" k="lastSession" />
@@ -124,7 +128,7 @@ export function SparklineList({ projects, activityData }: SparklineListProps) {
           {sorted.length === 0 && (
             <tr>
               <td
-                colSpan={7}
+                colSpan={8}
                 style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.8rem" }}
               >
                 No projects match.
@@ -132,6 +136,7 @@ export function SparklineList({ projects, activityData }: SparklineListProps) {
             </tr>
           )}
           {sorted.map((project) => {
+            const isPinned = pinnedSlugs.includes(project.slug);
             const sparkData = activityData[project.slug] ?? new Array(14).fill(0);
             const pendingTodos =
               (project.todos?.pending ?? 0) +
@@ -173,6 +178,30 @@ export function SparklineList({ projects, activityData }: SparklineListProps) {
                 }}
                 className="sparkline-row"
               >
+                {/* Pin */}
+                <td
+                  style={{ padding: "4px 4px 4px 10px", verticalAlign: "middle" }}
+                  onClick={(e) => { e.stopPropagation(); onTogglePin(project.slug); }}
+                >
+                  <button
+                    title={isPinned ? "Unpin" : "Pin to top"}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: "20px", height: "20px", padding: 0,
+                      background: "none", border: "none", cursor: "pointer",
+                      color: isPinned ? "var(--info)" : "var(--text-muted)",
+                      opacity: isPinned ? 1 : 0.4,
+                      transition: "opacity 0.1s, color 0.1s",
+                    }}
+                    className="pin-btn"
+                  >
+                    {isPinned
+                      ? <PinOff style={{ width: "11px", height: "11px" }} />
+                      : <Pin style={{ width: "11px", height: "11px" }} />
+                    }
+                  </button>
+                </td>
+
                 {/* Name */}
                 <td style={{ padding: "8px 10px", verticalAlign: "middle" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -284,6 +313,7 @@ export function SparklineList({ projects, activityData }: SparklineListProps) {
 
       <style>{`
         .sparkline-row:hover { background: var(--muted); }
+        .sparkline-row:hover .pin-btn { opacity: 1 !important; }
       `}</style>
     </div>
   );

@@ -5,6 +5,7 @@
 - [x] **Hide projects UI** — Three-dot menu on cards with "Hide" action, "(N hidden)" link opens manage modal to unhide.
 - [x] **Configurable DEV_ROOT** — Set `devRoot` in `.minder.json` (defaults to `C:\dev`).
 - [x] **Dashboard view modes** — Three-way toggle (full cards / compact cards / sparkline list) with `v` shortcut to cycle. Compact cards = distraction-free mode. Sparkline list = dense sortable table with 14-day session activity sparklines per row. View persists to `.minder.json`. See design brief in this conversation.
+- [x] **Project pinning** — Pin/unpin projects from the three-dot menu (full/compact cards) or inline pin icon (sparkline list). Pinned projects float to top across all view modes. State persists to `.minder.json` as `pinnedSlugs[]`.
 - [ ] **Keyboard shortcut customization** — Allow remapping shortcuts like `v` (cycle views), `/` (focus search), `Shift+T` (quick-add todos) via `.minder.json`. Future follow-on to the view-modes feature.
 
 ## Performance

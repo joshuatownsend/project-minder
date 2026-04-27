@@ -191,6 +191,7 @@ export interface MinderConfig {
   defaultSort?: "activity" | "name" | "claude"; // dashboard default sort
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
   viewMode?: "full" | "compact" | "list"; // dashboard card layout
+  pinnedSlugs?: string[]; // slugs pinned to top of all dashboard views
 }
 
 export interface ClaudeUsageStats {

@@ -59,6 +59,14 @@ export async function PATCH(request: NextRequest) {
     changed = true;
   }
 
+  if (body.pinnedSlugs !== undefined) {
+    if (!Array.isArray(body.pinnedSlugs) || body.pinnedSlugs.some((s: unknown) => typeof s !== "string")) {
+      return NextResponse.json({ error: "pinnedSlugs must be an array of strings" }, { status: 400 });
+    }
+    config.pinnedSlugs = body.pinnedSlugs as string[];
+    changed = true;
+  }
+
   if (!changed) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
