@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ProjectData } from "@/lib/types";
+import { pluralize } from "@/lib/utils";
 import { StatusBadge } from "./StatusBadge";
 import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
@@ -129,7 +130,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
             )}
             {hasAttention && (
               <span
-                title={`${pendingTodos} todo${pendingTodos !== 1 ? "s" : ""}${pendingSteps > 0 ? ` + ${pendingSteps} manual step${pendingSteps !== 1 ? "s" : ""}` : ""} pending`}
+                title={`${pluralize(pendingTodos, "todo")}${pendingSteps > 0 ? ` + ${pluralize(pendingSteps, "manual step")}` : ""} pending`}
                 style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)", cursor: "default" }}
               >
                 {pendingTodos + pendingSteps}▲
@@ -260,7 +261,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               </button>
             )}
 
-            {(onHide || onTogglePin) && (
+            {onHide && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -281,26 +282,16 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                   align="end"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
-                  {onTogglePin && (
-                    <DropdownMenuItem onClick={() => onTogglePin(project.slug)}>
-                      {pinned
-                        ? <><PinOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />Unpin</>
-                        : <><Pin style={{ width: "12px", height: "12px", marginRight: "6px" }} />Pin to top</>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
+                        onHide(project.slug, dirName);
                       }
-                    </DropdownMenuItem>
-                  )}
-                  {onHide && (
-                    <DropdownMenuItem
-                      onClick={() => {
-                        if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
-                          onHide(project.slug, dirName);
-                        }
-                      }}
-                    >
-                      <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
-                      Hide project
-                    </DropdownMenuItem>
-                  )}
+                    }}
+                  >
+                    <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                    Hide project
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -406,7 +397,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               )}
               {worktreeCount > 0 && (
                 <span
-                  title={`${worktreeCount} worktree${worktreeCount !== 1 ? "s" : ""}`}
+                  title={pluralize(worktreeCount, "worktree")}
                   style={{
                     fontSize: "0.68rem",
                     fontFamily: "var(--font-mono)",

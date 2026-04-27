@@ -8,6 +8,7 @@ import { StatusBadge } from "./StatusBadge";
 import { StatusDot } from "./ui/StatusDot";
 import { DevServerControl } from "./DevServerControl";
 import { Pin, PinOff } from "lucide-react";
+import { pluralize } from "@/lib/utils";
 
 type SortKey = "name" | "activity" | "lastSession" | "todos" | "branch";
 type SortDir = "asc" | "desc";
@@ -236,7 +237,7 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                     )}
                     {hasAttention && (
                       <span
-                        title={`${pendingTodos} todo${pendingTodos !== 1 ? "s" : ""}${pendingSteps > 0 ? ` + ${pendingSteps} manual step${pendingSteps !== 1 ? "s" : ""}` : ""} pending`}
+                        title={`${pluralize(pendingTodos, "todo")}${pendingSteps > 0 ? ` + ${pluralize(pendingSteps, "manual step")}` : ""} pending`}
                         style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)", cursor: "default" }}
                       >
                         {pendingTodos + pendingSteps}▲

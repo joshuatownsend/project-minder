@@ -44,7 +44,6 @@ export function DashboardGrid({
   const [activityData, setActivityData] = useState<Record<string, number[]>>({});
   const [activityError, setActivityError] = useState(false);
   const [pinnedSlugs, setPinnedSlugs] = useState<string[]>([]);
-  const [rescanError, setRescanError] = useState(false);
   const activityFetched = useRef(false);
   const liveStatus = useLiveSessionStatus();
 
@@ -68,18 +67,22 @@ export function DashboardGrid({
     activityFetched.current = true;
     fetch("/api/sessions/activity")
       .then((r) => r.json())
-      .then((data) => { setActivityData(data); setActivityError(false); })
+      .then((data) => setActivityData(data))
       .catch(() => setActivityError(true));
-  }, [viewMode, activityData]);
+  }, [viewMode]);
 
   const onTogglePin = useCallback((slug: string) => {
     setPinnedSlugs((prev) => {
-      const next = prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug];
+      const added = !prev.includes(slug);
+      const next = added ? [...prev, slug] : prev.filter((s) => s !== slug);
       fetch("/api/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pinnedSlugs: next }),
-      }).catch(() => setPinnedSlugs(prev)); // revert on failure
+      }).catch(() => setPinnedSlugs((cur) =>
+        // Undo just this operation on current state, not the captured snapshot
+        added ? cur.filter((s) => s !== slug) : [...cur, slug]
+      ));
       return next;
     });
   }, []);
@@ -215,9 +218,7 @@ export function DashboardGrid({
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
         {/* Search */}
         <div style={{ position: "relative", flex: "1 1 200px", minWidth: "160px" }}>
-          <label htmlFor="search-input" style={{ position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}>
-            Search projects
-          </label>
+          <label htmlFor="search-input" className="sr-only">Search projects</label>
           <Search
             style={{
               position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)",
@@ -327,7 +328,6 @@ export function DashboardGrid({
           ))}
         </div>
 
-        {/* Spacer — pushes Quick Add + Rescan to the right */}
         <div style={{ flex: 1, minWidth: "8px" }} />
 
         {/* Quick Add */}
@@ -350,17 +350,17 @@ export function DashboardGrid({
 
         {/* Rescan */}
         <button
-          onClick={() => { setRescanError(false); onRescan(); }}
+          onClick={onRescan}
           disabled={loading}
-          title={rescanError ? "Rescan failed — click to retry" : "Rescan projects"}
+          title="Rescan projects"
           className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
             padding: "5px 11px", fontSize: "0.72rem",
             fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-            color: rescanError ? "var(--status-error-text)" : "var(--text-secondary)",
+            color: "var(--text-secondary)",
             background: "var(--bg-surface)",
-            border: rescanError ? "1px solid var(--status-error-border)" : "1px solid var(--border-subtle)",
+            border: "1px solid var(--border-subtle)",
             borderRadius: "var(--radius)",
             cursor: loading ? "not-allowed" : "pointer",
             opacity: loading ? 0.5 : 1,

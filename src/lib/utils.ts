@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function pluralize(count: number, word: string): string {
+  return `${count} ${word}${count !== 1 ? "s" : ""}`;
+}
+
 export function formatRelativeTime(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
