@@ -190,6 +190,8 @@ export interface MinderConfig {
   scanBatchSize?: number; // projects scanned in parallel per root (default 10)
   defaultSort?: "activity" | "name" | "claude"; // dashboard default sort
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
+  viewMode?: "full" | "compact" | "list"; // dashboard card layout
+  pinnedSlugs?: string[]; // slugs pinned to top of all dashboard views
 }
 
 export interface ClaudeUsageStats {

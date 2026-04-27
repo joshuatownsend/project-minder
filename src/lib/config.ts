@@ -12,6 +12,7 @@ const DEFAULT_CONFIG: MinderConfig = {
   hidden: [],
   portOverrides: {},
   devRoot: DEFAULT_DEV_ROOT,
+  pinnedSlugs: [],
 };
 
 /** Returns all configured scan roots. Falls back to devRoot for backward compat. */

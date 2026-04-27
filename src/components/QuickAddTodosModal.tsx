@@ -155,7 +155,7 @@ export function QuickAddTodosModal({
       >
         <div className="flex items-center justify-between border-b p-4">
           <div className="flex items-center gap-2">
-            <Lightbulb className="h-5 w-5 text-amber-400" />
+            <Lightbulb className="h-5 w-5" style={{ color: "var(--info)" }} />
             <h2 className="text-lg font-semibold">Quick Add TODOs</h2>
           </div>
           <button

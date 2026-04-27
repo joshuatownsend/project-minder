@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Dashboard accessibility pass** — visually-hidden `<label>` for search input; `scope="col"` on all table header cells in the sparkline list; `aria-label` on pin buttons and session badge buttons; descriptive `title` attributes on `▲` attention indicators; `:focus-visible` ring (2px `--info` teal) applied globally via CSS.
+- **Pinned card visual treatment** — pinned cards in full and compact view now show a subtle `--info-bg` background tint and `--info-border` border, matching the sparkline row treatment. A direct pin button is now present on the full card face (hidden until hover, always visible when pinned) — no longer requires opening the three-dot dropdown.
+- **Pin failure recovery** — `onTogglePin` now reverts the optimistic local state if the config PATCH fails, preventing pin state drift.
+
+### Changed
+- **Rescan button error state** — shows `--status-error-text` / `--status-error-border` coloring and an updated `title` when a rescan has failed; resets on the next click.
+- **Activity fetch error** — entering sparkline list view when the `/api/sessions/activity` fetch fails now shows a brief "Activity data unavailable" note above the table rather than silently showing all-zero bars.
+- **Toolbar visual hierarchy** — a flex spacer now separates filter/sort/view controls (left-aligned) from Quick Add and Rescan (right-aligned), reducing the perception of a flat undifferentiated button row.
+- **Toolbar hover styles** — fixed dead `button:hover[data-toolbar]` selector (no buttons carried that attribute); replaced with `.toolbar-btn` class applied to all toolbar buttons.
+- **Sparkline list refinements** — active sort column header now `fontWeight: 600`; session badge font raised from 0.58rem to 0.65rem; unpinned pin icon opacity raised from 0.4 to 0.55; "Pin" column header added; pinned rows show `--info-bg` background tint.
+- **Worktree badge tokens** — replaced hardcoded `#60a5fa` / `rgba(96,165,250,0.12)` with `--info` / `--info-bg` design tokens; added `title="N worktrees"` tooltip.
+- **Project pinning** — projects can be pinned to the top of all dashboard views (full, compact, and sparkline list). In full/compact card views, pin via the three-dot dropdown menu; in sparkline list view, click the pin icon at the start of each row (hidden until hover, always visible when pinned). Pinned state persists to `.minder.json` via fire-and-forget PATCH. Pinned projects float above active sort order; relative order within each group is preserved.
+- **Dashboard view modes** — three-way toggle (full cards / compact cards / sparkline list) with `v` keyboard shortcut to cycle. Compact mode renders a single-row card per project — name, live-session badge, attention count, status badge, and dev-server control — for a distraction-free dense grid. Sparkline list renders a sortable table with 14-day session-activity sparkline bars per row (sortable by name, activity, last session, branch, or todos), fetched from the new `GET /api/sessions/activity` endpoint. Active view persists to `.minder.json`. The three view-toggle icons use `--info` teal to match the existing filter/sort chip style.
+- **`GET /api/sessions/activity`** — returns `Record<projectSlug, number[]>` — 14 daily session counts (UTC, oldest→newest) — reusing the existing `__sessionsCache` globalThis singleton so no extra I/O is incurred.
+- **`ActivitySparkline` component** — inline SVG sparkline (14 bars, 3px each, `--info` teal with opacity variation). Hover on any bar shows a tooltip with the exact date and session count.
+
+### Changed
+- **Secondary `--info` color** — introduced a muted steel-teal token group (`--info`, `--info-strong`, `--info-bg`, `--info-border`) to split amber's dual role. Navigation state (active nav item, active filter chips), usage stats (invocation counts, "View full body" link), chart colors (Top Tools bar, ORMs bar, This Week activity segment), provenance source labels, and decorative icons now use `--info` (~225° teal). Amber (`--accent`) is now reserved exclusively for action-required signals: approval-needed sessions, pending manual steps, pending TODOs, paused projects, and update-available dots.
+
 ## [0.9.4] - 2026-04-27
 
 ### Added

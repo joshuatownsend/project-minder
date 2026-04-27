@@ -22,11 +22,17 @@
   --text-muted:     oklch(0.42 0.004 250);
   --text-disabled:  oklch(0.30 0.003 250);
 
-  /* Accent — muted amber, operational signal color */
+  /* Accent — muted amber, operational signal color (action-required / attention) */
   --accent:           oklch(0.74 0.13 80);
   --accent-strong:    oklch(0.82 0.15 80);
   --accent-bg:        oklch(0.16 0.04 80);
   --accent-border:    oklch(0.28 0.07 80);
+
+  /* Info — muted steel-teal, navigational / informational context */
+  --info:             oklch(0.62 0.07 225);
+  --info-strong:      oklch(0.72 0.09 225);
+  --info-bg:          oklch(0.15 0.025 225);
+  --info-border:      oklch(0.27 0.05 225);
 
   /* Status — active/green */
   --status-active-text:   oklch(0.70 0.13 145);
@@ -144,6 +150,16 @@ body {
 
 /* ─── Animations ─────────────────────────────────────────────────────────── */
 
+/* Screen-reader only — visually hidden but accessible */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 /* ─── Component styles ───────────────────────────────────────────────────── */
 
 .project-card:hover {
@@ -155,10 +171,31 @@ body {
   border-color: var(--accent-strong) !important;
 }
 
+/* Reveal unpinned pin button on card hover; pinned stays at full opacity */
+.project-card:hover .pin-card-btn:not([data-pinned]) {
+  opacity: 0.55 !important;
+}
+.project-card:hover .pin-card-btn:hover {
+  opacity: 1 !important;
+}
+
+/* Compact card pin button hover */
+.compact-pin-btn:hover {
+  opacity: 1 !important;
+  color: var(--info) !important;
+}
+
 /* Toolbar button hover states */
-button:hover[data-toolbar] {
+.toolbar-btn:hover {
   color: var(--text-primary) !important;
   border-color: var(--border-default) !important;
+}
+
+/* Focus-visible ring for keyboard nav */
+:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 @keyframes spin {

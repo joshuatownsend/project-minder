@@ -6,6 +6,7 @@ import { ProjectStatus, MinderConfig } from "@/lib/types";
 // Derived from the MinderConfig union types — update both together if options change
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
 const VALID_STATUS_FILTERS: MinderConfig["defaultStatusFilter"][] = ["all", "active", "paused", "archived"];
+const VALID_VIEW_MODES: MinderConfig["viewMode"][] = ["full", "compact", "list"];
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
@@ -47,6 +48,22 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Invalid defaultStatusFilter" }, { status: 400 });
     }
     config.defaultStatusFilter = body.defaultStatusFilter;
+    changed = true;
+  }
+
+  if (body.viewMode !== undefined) {
+    if (!VALID_VIEW_MODES.includes(body.viewMode)) {
+      return NextResponse.json({ error: "Invalid viewMode" }, { status: 400 });
+    }
+    config.viewMode = body.viewMode;
+    changed = true;
+  }
+
+  if (body.pinnedSlugs !== undefined) {
+    if (!Array.isArray(body.pinnedSlugs) || body.pinnedSlugs.some((s: unknown) => typeof s !== "string")) {
+      return NextResponse.json({ error: "pinnedSlugs must be an array of strings" }, { status: 400 });
+    }
+    config.pinnedSlugs = body.pinnedSlugs as string[];
     changed = true;
   }
 
