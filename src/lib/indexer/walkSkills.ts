@@ -44,6 +44,7 @@ function makeSkillEntry(
 
   const provenance = resolveProvenance({
     source,
+    entryKind: "skill",
     slug,
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,

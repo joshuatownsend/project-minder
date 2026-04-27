@@ -43,6 +43,7 @@ function makeAgentEntry(
 
   const provenance = resolveProvenance({
     source,
+    entryKind: "agent",
     slug,
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,

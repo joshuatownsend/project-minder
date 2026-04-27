@@ -38,6 +38,7 @@ describe("resolveProvenance", () => {
     it("returns project-local when source is project", () => {
       const result = resolveProvenance({
         source: "project",
+        entryKind: "skill",
         slug: "my-skill",
         projectSlug: "my-project",
         ctx: EMPTY_CTX,
@@ -62,6 +63,7 @@ describe("resolveProvenance", () => {
 
       const result = resolveProvenance({
         source: "plugin",
+        entryKind: "skill",
         slug: "nextjs",
         pluginName: "nextjs",
         ctx,
@@ -83,6 +85,7 @@ describe("resolveProvenance", () => {
 
       const result = resolveProvenance({
         source: "plugin",
+        entryKind: "agent",
         slug: "nextjs",
         pluginName: "nextjs",
         ctx,
@@ -97,6 +100,7 @@ describe("resolveProvenance", () => {
     it("falls back to user-local when pluginName is not in ctx.installedPlugins", () => {
       const result = resolveProvenance({
         source: "plugin",
+        entryKind: "agent",
         slug: "unknown-plugin",
         pluginName: "unknown-plugin",
         ctx: EMPTY_CTX,
@@ -113,7 +117,7 @@ describe("resolveProvenance", () => {
         lockfile: new Map([["clerk", lockEntry]]),
       };
 
-      const result = resolveProvenance({ source: "user", slug: "clerk", ctx });
+      const result = resolveProvenance({ source: "user", entryKind: "skill", slug: "clerk", ctx });
 
       expect(result.kind).toBe("lockfile");
       if (result.kind === "lockfile") {
@@ -121,6 +125,18 @@ describe("resolveProvenance", () => {
         expect(result.skillFolderHash).toBe("def456");
         expect(result.symlinkTarget).toBeUndefined();
       }
+    });
+
+    it("does not match lockfile for agents (entryKind=agent)", () => {
+      const lockEntry = makeLockEntry();
+      const ctx: ProvenanceContext = {
+        ...EMPTY_CTX,
+        lockfile: new Map([["clerk", lockEntry]]),
+      };
+
+      const result = resolveProvenance({ source: "user", entryKind: "agent", slug: "clerk", ctx });
+
+      expect(result.kind).toBe("user-local");
     });
 
     it("includes symlinkTarget when entry is a symlink", () => {
@@ -132,6 +148,7 @@ describe("resolveProvenance", () => {
 
       const result = resolveProvenance({
         source: "user",
+        entryKind: "skill",
         slug: "clerk",
         isSymlink: true,
         realPath: "/home/user/.agents/skills/clerk/SKILL.md",
@@ -148,13 +165,13 @@ describe("resolveProvenance", () => {
       const lockEntry = makeLockEntry();
       const ctx: ProvenanceContext = {
         ...EMPTY_CTX,
-        // lockfile key is "clerk" but the symlink's realPath parent dirname is also "clerk"
         lockfile: new Map([["clerk", lockEntry]]),
       };
 
       const result = resolveProvenance({
         source: "user",
-        slug: "clerk-alias",      // slug doesn't match
+        entryKind: "skill",
+        slug: "clerk-alias",
         isSymlink: true,
         realPath: "/home/user/.agents/skills/clerk/SKILL.md",
         ctx,
@@ -168,6 +185,7 @@ describe("resolveProvenance", () => {
     it("returns user-local when source is user and no lockfile entry exists", () => {
       const result = resolveProvenance({
         source: "user",
+        entryKind: "skill",
         slug: "my-custom-skill",
         ctx: EMPTY_CTX,
       });
@@ -177,6 +195,7 @@ describe("resolveProvenance", () => {
     it("returns user-local for plugin source without pluginName", () => {
       const result = resolveProvenance({
         source: "plugin",
+        entryKind: "skill",
         slug: "orphan",
         ctx: EMPTY_CTX,
       });

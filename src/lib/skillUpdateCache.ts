@@ -35,14 +35,17 @@ const BATCH_DELAY = 1200;
 
 class SkillUpdateCache {
   private cache = new Map<string, SkillUpdateStatus>();
+  private known = new Map<string, QueueItem>();
   private marketplaceHeads = new Map<string, string>();
   private queue: QueueItem[] = [];
+  private activeBatch = 0;
   private running = false;
   private seen = new Set<string>();
   private gen = 0;
 
   enqueue(items: QueueItem[]) {
     for (const item of items) {
+      this.known.set(item.id, item);
       const cached = this.cache.get(item.id);
       if (cached && Date.now() - cached.checkedAt < CACHE_TTL) continue;
       if (this.seen.has(item.id)) continue;
@@ -58,12 +61,14 @@ class SkillUpdateCache {
   private async processQueue(myGen: number) {
     while (this.queue.length > 0 && this.gen === myGen) {
       const batch = this.queue.splice(0, BATCH_SIZE);
+      this.activeBatch = batch.length;
 
       await Promise.all(
         batch.map(async (item) => {
           const status = await this.checkItem(item);
-          if (status && this.gen === myGen) {
-            this.cache.set(item.id, status);
+          if (this.gen === myGen) {
+            if (status) this.cache.set(item.id, status);
+            this.activeBatch--;
           }
         })
       );
@@ -73,6 +78,7 @@ class SkillUpdateCache {
       }
     }
     if (this.gen === myGen) {
+      this.activeBatch = 0;
       this.running = false;
       this.seen.clear();
       this.marketplaceHeads.clear();
@@ -177,6 +183,7 @@ class SkillUpdateCache {
 
   refresh(ids?: string[]) {
     this.gen++;
+    this.activeBatch = 0;
     if (ids) {
       for (const id of ids) this.cache.delete(id);
     } else {
@@ -186,10 +193,11 @@ class SkillUpdateCache {
     this.queue = [];
     this.running = false;
     this.marketplaceHeads.clear();
+    this.enqueue(Array.from(this.known.values()));
   }
 
   get pending(): number {
-    return this.queue.length;
+    return this.queue.length + this.activeBatch;
   }
 
   get total(): number {

@@ -6,6 +6,7 @@ import { loadKnownMarketplaces } from "./marketplaces";
 
 export function resolveProvenance(opts: {
   source: "user" | "plugin" | "project";
+  entryKind: "skill" | "agent";
   slug: string;
   isSymlink?: boolean;
   realPath?: string;
@@ -13,7 +14,7 @@ export function resolveProvenance(opts: {
   projectSlug?: string;
   ctx: ProvenanceContext;
 }): Provenance {
-  const { source, slug, isSymlink, realPath, pluginName, projectSlug, ctx } = opts;
+  const { source, entryKind, slug, isSymlink, realPath, pluginName, projectSlug, ctx } = opts;
 
   if (source === "project" && projectSlug) {
     return { kind: "project-local", projectSlug };
@@ -37,7 +38,7 @@ export function resolveProvenance(opts: {
     }
   }
 
-  if (source === "user") {
+  if (source === "user" && entryKind === "skill") {
     let lockEntry = ctx.lockfile.get(slug);
 
     // For bundled symlinks: the lockfile key is the parent dir name of the realPath
