@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useHelp } from "./HelpProvider";
 import { usePathname } from "next/navigation";
+import { formatRelativeTime } from "@/lib/utils";
 
 type SortOption = "activity" | "name" | "claude";
 type ViewMode = "full" | "compact" | "list";
@@ -35,15 +36,26 @@ interface DashboardGridProps {
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
 }
 
-function timeAgo(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };
+
+const statusOptions = [
+  { value: "all" as const,      label: "All",      icon: <Layers      style={{ width: "11px", height: "11px" }} /> },
+  { value: "active" as const,   label: "Active",   icon: <CircleDot   style={{ width: "11px", height: "11px" }} /> },
+  { value: "paused" as const,   label: "Paused",   icon: <CirclePause style={{ width: "11px", height: "11px" }} /> },
+  { value: "archived" as const, label: "Archived", icon: <Archive     style={{ width: "11px", height: "11px" }} /> },
+];
+
+const sortOptions = [
+  { value: "activity" as const, label: "Recent",       title: "Sort by most recent file activity",  icon: <Clock     style={{ width: "11px", height: "11px" }} /> },
+  { value: "claude" as const,   label: "Last Session", title: "Sort by most recent Claude session", icon: <Bot       style={{ width: "11px", height: "11px" }} /> },
+  { value: "name" as const,     label: "A–Z",          title: "Sort alphabetically",                icon: <ArrowUpAZ style={{ width: "11px", height: "11px" }} /> },
+];
+
+const viewOptions = [
+  { value: "full" as const,    icon: <LayoutGrid      style={{ width: "11px", height: "11px" }} />, title: "Full cards",     label: "Full"    },
+  { value: "compact" as const, icon: <LayoutDashboard style={{ width: "11px", height: "11px" }} />, title: "Compact cards",  label: "Compact" },
+  { value: "list" as const,    icon: <Rows3           style={{ width: "11px", height: "11px" }} />, title: "Sparkline list", label: "List"    },
+];
 
 export function DashboardGrid({
   projects,
@@ -119,7 +131,7 @@ export function DashboardGrid({
 
   const cycleViewMode = useCallback(() => {
     setViewMode((prev) => {
-      const next: ViewMode = prev === "full" ? "compact" : prev === "compact" ? "list" : "full";
+      const next = NEXT_VIEW[prev];
       persistViewMode(next);
       return next;
     });
@@ -224,32 +236,13 @@ export function DashboardGrid({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const statusOptions: { value: ProjectStatus | "all"; label: string; icon: React.ReactNode }[] = [
-    { value: "all",      label: "All",      icon: <Layers      style={{ width: "11px", height: "11px" }} /> },
-    { value: "active",   label: "Active",   icon: <CircleDot   style={{ width: "11px", height: "11px" }} /> },
-    { value: "paused",   label: "Paused",   icon: <CirclePause style={{ width: "11px", height: "11px" }} /> },
-    { value: "archived", label: "Archived", icon: <Archive     style={{ width: "11px", height: "11px" }} /> },
-  ];
-
-  const sortOptions: { value: SortOption; label: string; title: string; icon: React.ReactNode }[] = [
-    { value: "activity", label: "Recent",       title: "Sort by most recent file activity",  icon: <Clock     style={{ width: "11px", height: "11px" }} /> },
-    { value: "claude",   label: "Last Session", title: "Sort by most recent Claude session", icon: <Bot       style={{ width: "11px", height: "11px" }} /> },
-    { value: "name",     label: "A–Z",          title: "Sort alphabetically",                icon: <ArrowUpAZ style={{ width: "11px", height: "11px" }} /> },
-  ];
-
-  const viewOptions: { value: ViewMode; icon: React.ReactNode; title: string; label: string }[] = [
-    { value: "full",    icon: <LayoutGrid      style={{ width: "11px", height: "11px" }} />, title: "Full cards",     label: "Full"    },
-    { value: "compact", icon: <LayoutDashboard style={{ width: "11px", height: "11px" }} />, title: "Compact cards",  label: "Compact" },
-    { value: "list",    icon: <Rows3           style={{ width: "11px", height: "11px" }} />, title: "Sparkline list", label: "List"    },
-  ];
-
-  const overlaidProjects = filtered.map((project) => {
+  const overlaidProjects = useMemo(() => filtered.map((project) => {
     const liveKey = project.path.replace(/[:\\/]/g, "-");
     const live = liveStatus.get(liveKey);
     return live && project.claude
       ? { ...project, claude: { ...project.claude, mostRecentSessionStatus: live.status, mostRecentSessionId: live.sessionId } }
       : project;
-  });
+  }), [filtered, liveStatus]);
 
   const showArchivedSection = statusFilter === "all" && archivedProjects.length > 0;
 
@@ -453,7 +446,7 @@ export function DashboardGrid({
           <>
             <span aria-hidden="true" style={{ color: "var(--border-default)" }}>·</span>
             <span style={{ fontFamily: "var(--font-mono)" }}>
-              Scanned {timeAgo(scannedAt)}
+              Scanned {formatRelativeTime(scannedAt)}
             </span>
             <button
               onClick={onRescan}

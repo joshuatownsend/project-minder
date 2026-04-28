@@ -2,11 +2,16 @@
 
 import { X } from "lucide-react";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastMessage {
   id: string;
   title: string;
   description?: string;
-  action?: { label: string; onClick: () => void };
+  action?: ToastAction;
 }
 
 export function ToastContainer({
@@ -37,7 +42,7 @@ export function ToastContainer({
             <div className="flex items-center gap-2 shrink-0">
               {msg.action && (
                 <button
-                  onClick={() => { msg.action!.onClick(); onDismiss(msg.id); }}
+                  onClick={() => { msg.action?.onClick(); onDismiss(msg.id); }}
                   className="text-xs font-medium text-[var(--info)] hover:underline"
                 >
                   {msg.action.label}

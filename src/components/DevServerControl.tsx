@@ -22,15 +22,15 @@ interface DevServerControlProps {
   compact?: boolean;
 }
 
-const statusTokens: Record<string, { color: string; bg: string; border: string }> = {
+const statusTokens: Record<DevServerInfo["status"], { color: string; bg: string; border: string }> = {
   starting: { color: "var(--info)",                bg: "var(--info-bg)",               border: "var(--info-border)"               },
   running:  { color: "var(--status-active-text)",  bg: "var(--status-active-bg)",       border: "var(--status-active-border)"      },
   stopped:  { color: "var(--status-archived-text)",bg: "var(--status-archived-bg)",     border: "var(--status-archived-border)"    },
   errored:  { color: "var(--status-error-text)",   bg: "var(--status-error-bg)",        border: "var(--status-error-border)"       },
 };
 
-function StatusPill({ status }: { status: string }) {
-  const t = statusTokens[status] ?? statusTokens.stopped;
+function StatusPill({ status }: { status: DevServerInfo["status"] }) {
+  const t = statusTokens[status];
   return (
     <span style={{
       display: "inline-flex", alignItems: "center",
@@ -67,7 +67,7 @@ export function DevServerControl({
         setServer(null);
       }
     } catch {
-      // ignore
+      // network errors are expected during dev server restarts
     }
   }, [slug]);
 
@@ -122,9 +122,9 @@ export function DevServerControl({
 
   const isActive = server?.status === "running" || server?.status === "starting";
   const port = server?.port || devPort;
+  const startLabel = loading ? "Starting…" : server?.status === "errored" ? "Retry" : "Start";
 
   if (compact) {
-    // Errored state: show red pill + retry
     if (server?.status === "errored") {
       return (
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -204,7 +204,6 @@ export function DevServerControl({
       );
     }
 
-    // Stopped state
     const canStart = !!devPort;
     return (
       <button
@@ -264,7 +263,7 @@ export function DevServerControl({
         {!isActive ? (
           <Button variant="default" size="sm" onClick={() => doAction("start")} disabled={loading}>
             <Play className="h-4 w-4 mr-1" />
-            {loading ? "Starting…" : server?.status === "errored" ? "Retry" : "Start"}
+            {startLabel}
           </Button>
         ) : (
           <>

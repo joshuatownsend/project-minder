@@ -8,12 +8,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { ToastContainer, type ToastMessage } from "./ui/toast";
-
-interface ToastAction {
-  label: string;
-  onClick: () => void;
-}
+import { ToastContainer, type ToastMessage, type ToastAction } from "./ui/toast";
 
 interface ToastContextValue {
   showToast: (title: string, description?: string, action?: ToastAction) => void;

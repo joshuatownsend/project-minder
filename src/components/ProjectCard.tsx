@@ -31,7 +31,6 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
   const [devPort, setDevPort] = useState(project.devPort);
   const router = useRouter();
 
-
   // ── Aggregate worktree counts ──────────────────────────────────────────
   const pendingTodos = (() => {
     const main = project.todos?.pending ?? 0;
