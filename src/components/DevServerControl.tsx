@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
 import { Play, Square, RotateCw, Terminal, ExternalLink } from "lucide-react";
 import { useToast } from "./ToastProvider";
 
@@ -23,16 +22,27 @@ interface DevServerControlProps {
   compact?: boolean;
 }
 
-const statusStyles: Record<string, string> = {
-  starting:
-    "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800",
-  running:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800",
-  stopped:
-    "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 border-gray-200 dark:border-gray-700",
-  errored:
-    "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 border-red-200 dark:border-red-800",
+const statusTokens: Record<string, { color: string; bg: string; border: string }> = {
+  starting: { color: "var(--info)",                bg: "var(--info-bg)",               border: "var(--info-border)"               },
+  running:  { color: "var(--status-active-text)",  bg: "var(--status-active-bg)",       border: "var(--status-active-border)"      },
+  stopped:  { color: "var(--status-archived-text)",bg: "var(--status-archived-bg)",     border: "var(--status-archived-border)"    },
+  errored:  { color: "var(--status-error-text)",   bg: "var(--status-error-bg)",        border: "var(--status-error-border)"       },
 };
+
+function StatusPill({ status }: { status: string }) {
+  const t = statusTokens[status] ?? statusTokens.stopped;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      fontFamily: "var(--font-mono)", fontSize: "0.65rem", fontWeight: 600,
+      letterSpacing: "0.06em", textTransform: "uppercase",
+      color: t.color, background: t.bg, border: `1px solid ${t.border}`,
+      borderRadius: "3px", padding: "2px 8px", lineHeight: 1.4,
+    }}>
+      {status}
+    </span>
+  );
+}
 
 export function DevServerControl({
   slug,
@@ -67,13 +77,13 @@ export function DevServerControl({
   }, [fetchStatus]);
 
   useEffect(() => {
-    const isActive =
-      server?.status === "running" || server?.status === "starting";
-    if (isActive) {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    const shouldPoll = server?.status === "running" || server?.status === "starting";
+    if (shouldPoll) {
       pollRef.current = setInterval(fetchStatus, 2000);
     }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
   }, [server?.status, fetchStatus]);
 
@@ -135,10 +145,11 @@ export function DevServerControl({
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); doAction("stop"); }}
             disabled={loading}
-            title="Stop server"
+            title="Stop dev server"
+            aria-label="Stop dev server"
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
-              width: "22px", height: "22px",
+              width: "28px", height: "28px",
               background: "transparent",
               border: "1px solid var(--border-default)",
               borderRadius: "3px",
@@ -186,59 +197,47 @@ export function DevServerControl({
   }
 
   return (
-    <div className="rounded-lg border p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="font-medium flex items-center gap-2">
-          <Terminal className="h-4 w-4" />
+    <div style={{
+      borderRadius: "var(--radius)",
+      border: "1px solid var(--border-subtle)",
+      padding: "16px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "12px",
+      background: "var(--bg-surface)",
+    }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <h3 style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          fontFamily: "var(--font-body)", fontWeight: 500, fontSize: "0.875rem",
+          color: "var(--text-primary)", margin: 0,
+        }}>
+          <Terminal style={{ width: "14px", height: "14px", color: "var(--text-muted)" }} />
           Dev Server
         </h3>
-        {server && (
-          <Badge className={statusStyles[server.status]}>{server.status}</Badge>
-        )}
-        {!server && (
-          <Badge className={statusStyles.stopped}>stopped</Badge>
-        )}
+        <StatusPill status={server?.status ?? "stopped"} />
       </div>
 
-      <div className="flex items-center gap-2">
+      {/* Actions */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
         {!isActive ? (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => doAction("start")}
-            disabled={loading}
-          >
+          <Button variant="default" size="sm" onClick={() => doAction("start")} disabled={loading}>
             <Play className="h-4 w-4 mr-1" />
-            {loading ? "Starting..." : "Start"}
+            {loading ? "Starting…" : "Start"}
           </Button>
         ) : (
           <>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => doAction("stop")}
-              disabled={loading}
-            >
+            <Button variant="destructive" size="sm" onClick={() => doAction("stop")} disabled={loading}>
               <Square className="h-4 w-4 mr-1" />
               Stop
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => doAction("restart")}
-              disabled={loading}
-            >
+            <Button variant="outline" size="sm" onClick={() => doAction("restart")} disabled={loading}>
               <RotateCw className="h-4 w-4 mr-1" />
               Restart
             </Button>
             {port && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  window.open(`http://localhost:${port}`, "_blank")
-                }
-              >
+              <Button variant="outline" size="sm" onClick={() => window.open(`http://localhost:${port}`, "_blank")}>
                 <ExternalLink className="h-4 w-4 mr-1" />
                 localhost:{port}
               </Button>
@@ -246,28 +245,48 @@ export function DevServerControl({
           </>
         )}
         {server?.output && server.output.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowOutput(!showOutput)}
-          >
+          <Button variant="ghost" size="sm" onClick={() => setShowOutput(!showOutput)}>
             {showOutput ? "Hide Output" : "Show Output"}
           </Button>
         )}
       </div>
 
+      {/* Meta */}
       {server && (
-        <div className="text-xs text-[var(--muted-foreground)] space-y-1">
-          {server.pid > 0 && <p>PID: {server.pid}</p>}
-          {port && <p>Port: {port}</p>}
-          <p>Command: {server.command}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+          {server.pid > 0 && (
+            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+              PID: {server.pid}
+            </p>
+          )}
+          {port && (
+            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+              Port: {port}
+            </p>
+          )}
+          <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            {server.command}
+          </p>
         </div>
       )}
 
+      {/* Output */}
       {showOutput && server?.output && server.output.length > 0 && (
         <pre
           ref={outputRef}
-          className="bg-[var(--secondary)] rounded-md p-3 text-xs font-mono max-h-64 overflow-auto whitespace-pre-wrap"
+          style={{
+            background: "var(--bg-elevated)",
+            borderRadius: "var(--radius)",
+            border: "1px solid var(--border-subtle)",
+            padding: "12px",
+            fontSize: "0.72rem",
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-secondary)",
+            maxHeight: "256px",
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            margin: 0,
+          }}
         >
           {server.output.join("\n")}
         </pre>

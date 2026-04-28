@@ -445,7 +445,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: 0 }}>
                     No TODO items found. Add one below to create <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.85em", color: "var(--accent)", background: "var(--accent-bg)", padding: "1px 4px", borderRadius: "3px" }}>TODO.md</code>.
                   </p>
-                  <AddTodoForm slug={project.slug} onAdded={setTodos} />
+                  <AddTodoForm slug={project.slug} onAddedAction={setTodos} />
                   {project.worktrees?.some((wt) => wt.todos) && (
                     <TodoList
                       todos={{ total: 0, completed: 0, pending: 0, items: [] }}

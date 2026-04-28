@@ -4,15 +4,15 @@ import { cn } from "@/lib/utils";
 import { type VariantProps, cva } from "class-variance-authority";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info)] disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
         default: "bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90",
         destructive: "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:opacity-90",
-        outline: "border border-[var(--input)] bg-[var(--background)] hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]",
+        outline: "border border-[var(--input)] bg-[var(--background)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
         secondary: "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:opacity-80",
-        ghost: "hover:bg-[var(--accent)] hover:text-[var(--accent-foreground)]",
+        ghost: "hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
         link: "text-[var(--primary)] underline-offset-4 hover:underline",
       },
       size: {

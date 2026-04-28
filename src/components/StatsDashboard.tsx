@@ -4,7 +4,7 @@ import { useStats } from "@/hooks/useStats";
 import { BarChart } from "./stats/BarChart";
 import { HealthBar } from "./stats/HealthBar";
 import { Skeleton } from "./ui/skeleton";
-import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu, Wrench } from "lucide-react";
+import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu } from "lucide-react";
 import type { ReactNode } from "react";
 
 function formatTokens(n: number): string {

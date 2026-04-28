@@ -5,6 +5,7 @@ import { useProject } from "@/hooks/useProjects";
 import { ProjectDetail } from "@/components/ProjectDetail";
 import { ProjectStatus } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function ProjectPage({
   params,
@@ -13,6 +14,8 @@ export default function ProjectPage({
 }) {
   const { slug } = use(params);
   const { project, loading } = useProject(slug);
+
+  useDocumentTitle(project?.name ?? slug);
 
   const handleStatusChange = async (status: ProjectStatus) => {
     await fetch("/api/config", {

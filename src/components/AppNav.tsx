@@ -24,10 +24,13 @@ export function AppNav() {
   const [statusApproval, setStatusApproval] = useState(0);
 
   useEffect(() => {
+    let errors = 0;
+    let id: ReturnType<typeof setInterval>;
     async function fetchPending() {
       try {
         const res = await fetch("/api/manual-steps?pending=true");
-        if (!res.ok) return;
+        if (!res.ok) { errors++; if (errors >= 5) clearInterval(id); return; }
+        errors = 0;
         const data = await res.json();
         const total = data.reduce(
           (sum: number, p: { manualSteps: { pendingSteps: number } }) =>
@@ -36,33 +39,38 @@ export function AppNav() {
         );
         setStepsPending(total);
       } catch {
-        // ignore
+        errors++;
+        if (errors >= 5) clearInterval(id);
       }
     }
     fetchPending();
-    const id = setInterval(fetchPending, 30_000);
+    id = setInterval(fetchPending, 30_000);
     return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
+    let errors = 0;
+    let id: ReturnType<typeof setInterval>;
     async function fetchApproval() {
       try {
         const res = await fetch("/api/status");
-        if (!res.ok) return;
+        if (!res.ok) { errors++; if (errors >= 5) clearInterval(id); return; }
+        errors = 0;
         const data = await res.json() as { sessions: LiveSession[] };
         const count = data.sessions?.filter((s) => s.status === "approval").length ?? 0;
         setStatusApproval(count);
       } catch {
-        // ignore
+        errors++;
+        if (errors >= 5) clearInterval(id);
       }
     }
     fetchApproval();
-    const id = setInterval(fetchApproval, 10_000);
+    id = setInterval(fetchApproval, 10_000);
     return () => clearInterval(id);
   }, []);
 
   return (
-    <nav style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+    <nav style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
       {navItems.map((item) => {
         const isActive =
           pathname === item.href || pathname.startsWith(item.href + "/");

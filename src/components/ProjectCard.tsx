@@ -133,7 +133,8 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 title={`${pluralize(pendingTodos, "todo")}${pendingSteps > 0 ? ` + ${pluralize(pendingSteps, "manual step")}` : ""} pending`}
                 style={{ fontSize: "0.6rem", color: "var(--accent)", fontFamily: "var(--font-mono)", cursor: "default" }}
               >
-                {pendingTodos + pendingSteps}▲
+                {pendingTodos + pendingSteps}<span aria-hidden="true">▲</span>
+                <span className="sr-only"> pending items</span>
               </span>
             )}
             <StatusBadge status={project.status} />
@@ -145,7 +146,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 className="compact-pin-btn"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: "18px", height: "18px", padding: 0,
+                  width: "28px", height: "28px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
                   opacity: pinned ? 1 : 0.55,
@@ -251,7 +252,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 data-pinned={pinned ? "" : undefined}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: "20px", height: "20px", padding: 0,
+                  width: "28px", height: "28px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
                   opacity: pinned ? 1 : 0.25,
@@ -270,7 +271,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                     aria-label="More options"
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      width: "20px", height: "20px",
+                      width: "28px", height: "28px",
                       borderRadius: "3px", background: "transparent", border: "none",
                       color: "var(--text-muted)", cursor: "pointer", padding: 0,
                     }}
