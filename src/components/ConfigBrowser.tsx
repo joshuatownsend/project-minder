@@ -7,6 +7,7 @@ import { useConfig, type HookRow, type McpRow, type CicdRow } from "@/hooks/useC
 import type { ConfigType, PluginEntry, Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
 import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
+import { ApplyUnitButton } from "./ApplyUnitButton";
 
 type TabKey = ConfigType | "settings";
 
@@ -193,6 +194,14 @@ function HooksList({ rows }: { rows: HookRow[] }) {
               {commandPreview(h.commands[0]?.command, h.commands.length)}
             </span>
           </span>
+          {h.projectSlug && (
+            <ApplyUnitButton
+              unit={{ kind: "hook", key: h.unitKey }}
+              source={{ kind: "project", slug: h.projectSlug }}
+              excludeTargetSlugs={[h.projectSlug]}
+              compact
+            />
+          )}
           <SourceBadge projectSlug={h.projectSlug} projectName={h.projectName} />
         </div>
       ))}
@@ -266,6 +275,14 @@ function McpList({ rows }: { rows: McpRow[] }) {
             <span style={mutedMono} title={`env: ${m.envKeys.join(", ")}`}>
               env {m.envKeys.length}
             </span>
+          )}
+          {m.projectSlug && (
+            <ApplyUnitButton
+              unit={{ kind: "mcp", key: m.name }}
+              source={{ kind: "project", slug: m.projectSlug }}
+              excludeTargetSlugs={[m.projectSlug]}
+              compact
+            />
           )}
           <SourceBadge projectSlug={m.projectSlug} projectName={m.projectName} />
         </div>

@@ -57,6 +57,7 @@ Click any row to expand it and reveal:
 - **Copy sha** — copies the commit SHA or folder hash to the clipboard
 - **Copy path** — copies the install path to the clipboard
 - **Re-check** — clears the update cache and re-queues all skills for a fresh check
+- **↗ copy to project** — Template Mode action: copies this skill into another project's `.claude/skills/` folder. Bundled skills copy as a directory tree (preserving companion files); standalone skills copy as a single `.md`. Pick a target, choose a conflict policy (`skip` / `overwrite` / `rename`), preview the diff, and apply. Plugin-source skills don't show this action. See the [Config help page](/help/config) for full Template Mode behavior.
 
 ## Per-Project Skills Tab
 

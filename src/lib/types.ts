@@ -435,3 +435,69 @@ export interface ScanResult {
   hiddenCount: number;
   scannedAt: string;
 }
+
+// ─── Template Mode ──────────────────────────────────────────────────────────
+// V1: single-unit copy across projects. V2 will add TemplateManifest +
+// whole-template apply + new-project bootstrap.
+
+export type UnitKind = "agent" | "skill" | "command" | "hook" | "mcp";
+
+export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
+
+export type ApplySource =
+  | { kind: "project"; slug: string }
+  | { kind: "user" };
+
+export type ApplyTarget =
+  | { kind: "existing"; slug: string };
+
+export interface UnitRef {
+  kind: UnitKind;
+  key: string;
+}
+
+export interface ApplyRequest {
+  unit: UnitRef;
+  source: ApplySource;
+  target: ApplyTarget;
+  conflict: ConflictPolicy;
+  dryRun?: boolean;
+}
+
+export type ApplyStatus =
+  | "applied"
+  | "skipped"
+  | "merged"
+  | "would-apply"
+  | "error";
+
+export interface ApplyResult {
+  ok: boolean;
+  status: ApplyStatus;
+  changedFiles: string[];
+  diffPreview?: string;
+  warnings?: string[];
+  error?: { code: string; message: string };
+}
+
+/** Slash command discovered under .claude/commands/. Mirrors AgentEntry shape, minus tools/model. */
+export interface CommandEntry {
+  id: string;                    // command:<source>:<prefix>:<relPath>
+  slug: string;                  // basename without .md
+  name: string;                  // frontmatter.name or slug
+  description?: string;
+  source: "user" | "plugin" | "project";
+  pluginName?: string;
+  projectSlug?: string;
+  category?: string;
+  filePath: string;
+  bodyExcerpt: string;
+  frontmatter: Record<string, unknown>;
+  mtime: string;
+  ctime: string;
+  /** Comma-separated `allowed-tools` frontmatter parsed into an array. */
+  allowedTools?: string[];
+  argumentHint?: string;
+  isSymlink?: boolean;
+  realPath?: string;
+}

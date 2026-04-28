@@ -31,7 +31,7 @@
 - [ ] **Per-agent cost attribution** — re-include sidechain entries in `parser.ts` behind an `includeSidechains` flag. Build `attachAgentCost()` that groups sidechain turns by `parentToolUseID` and sums token costs. Verify `/usage` totals don't shift.
 - [ ] **ProjectCard agent/skill badges** — show a small count of project-local agents/skills in the attention signals row (`src/components/ProjectCard.tsx:181-219`).
 - [ ] **Frontmatter linting** — skill/agent rows flagged with a lint chip when `name` or `description` is missing/truncated. Inspiration from skillfile spec.
-- [ ] **Slash commands indexing** — extend catalog to index `commands/*.md` files (with `allowed-tools` frontmatter) as a third catalog kind, alongside agents and skills.
+- [x] **Slash commands indexing** — `walkProjectCommands` / `walkUserCommands` / `walkPluginCommands` ship in `src/lib/indexer/walkCommands.ts`. Apply layer uses them; cross-project browser UI deferred to a future `/commands` page.
 - [ ] **Per-item detail pages** — dedicated `/agents/[id]` and `/skills/[id]` routes when usage-history graphs / time-series views become valuable.
 
 ## Public Repo Hardening (follow-ups to branch protection)
@@ -44,7 +44,17 @@
 
 ## Config Surfacing — Follow-ups
 
-- [ ] **Template-builder MVP** — cross-project dedupe of hook tuples / MCP server entries / workflow jobs; "copy this unit to project X" action on `/config` rows. Each scanner already retains `sourcePath` + per-unit identifiers, so this is mostly UI + a `POST /api/claude-config/apply` route.
+- [x] **Template Mode V1 (was: Template-builder MVP)** — single-unit copy across projects via `POST /api/claude-config/apply`. `↗ copy to project` action lands on `/config` (hooks, MCP), `/agents`, `/skills` rows. Hooks identity is `event + matcher + sha256(invocation)` for idempotent re-apply; MCP env values are never copied. V2 (template projects, new-project bootstrap) tracked separately.
+
+## Template Mode — V2 / V3 follow-ups
+
+- [ ] **Template Mode V2 — template projects** — `<devRoot>/.minder/templates/<slug>/` bundles with hybrid `kind: "live" | "snapshot"` manifests. New `/templates` page (browser + detail + apply modal). "Mark as template…" promotion from the project card three-dot menu. `POST /api/templates/[slug]/apply` orchestrates per-unit conflict overrides + diff preview.
+- [ ] **Template Mode V2 — new-project bootstrap** — apply with `target.kind: "new"` accepts a not-yet-existing relative path under devRoot, `mkdir`s, optionally runs `git init`, then iterates units. Triggers a post-apply scan so the dashboard picks up the new project immediately.
+- [ ] **Template Mode V2 — settings-key + plugin-enable apply** — extend the apply layer with `applySettings` (deep-merge with `permissions.allow` concat-and-dedupe semantics) and `applyPlugin` (writes enable-list with "requires install" warning when plugin missing from `~/.claude/plugins/installed_plugins.json`).
+- [ ] **Template Mode V2 — bundled-skill UI surface** — bundled skills already work in the V1 apply layer. UI button is on `/skills` rows. Visual confirmation that bundled vs standalone is clearly distinguished in the diff preview.
+- [ ] **Template Mode V3 — CI/CD workflow per-job copy** — add `applyWorkflow` that file-replaces `.github/workflows/<name>.yml` (no JSON merge — workflows are file-replace only). UI button on the CI/CD `/config` rows.
+- [ ] **Slash-commands `/commands` browser page** — surface `walkProjectCommands` output cross-project, mirroring `/agents` and `/skills`. The Template Mode `↗ copy to project` action ports over with no API changes.
+- [ ] **User-scope hook + MCP source support** — V1 only supports project-source for hooks and MCP. Extending the dispatch layer to read from `~/.claude/settings.json` would let users seed a project's settings from their personal config.
 - [ ] **CI badge → /config deep link** — clicking the dashboard `CI` chip should navigate to `/config?type=cicd&project=<slug>` (currently the page ignores URL params; add `useSearchParams` wiring).
 - [ ] **`local` ProvenanceBadge variant** — surface `.claude/settings.local.json`-sourced hooks distinctly from `.claude/settings.json`-sourced ones in the cross-project hooks list (currently both show as "project: slug").
 - [ ] **Plugin-bundled hooks/MCP** — plugins can ship their own `hooks/hooks.json` and `.mcp.json` under `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. Surfacing these would require iterating `loadInstalledPlugins()` and parsing each plugin's bundled config files; deferred because the signal is weaker than user-level + project-local config.
