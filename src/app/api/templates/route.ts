@@ -9,7 +9,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { listTemplates } from "@/lib/template/registry";
 import { createLiveTemplate } from "@/lib/template/promote";
-import { emptyInventory, isValidSlug } from "@/lib/template/manifest";
+import { emptyInventory, inventoryKeyFor, isValidSlug } from "@/lib/template/manifest";
 
 const VALID_UNIT_KINDS: readonly UnitKind[] = [
   "agent",
@@ -92,18 +92,7 @@ function validateCreate(body: unknown):
   const out: TemplateUnitInventory = emptyInventory();
 
   for (const kind of VALID_UNIT_KINDS) {
-    const key =
-      kind === "mcp"
-        ? "mcp"
-        : kind === "command"
-          ? "commands"
-          : kind === "plugin"
-            ? "plugins"
-            : kind === "workflow"
-              ? "workflows"
-              : kind === "settingsKey"
-                ? "settings"
-                : `${kind}s`;
+    const key = inventoryKeyFor(kind);
     const list = inv[key];
     if (list === undefined) continue;
     if (!Array.isArray(list)) {
@@ -146,14 +135,10 @@ function validateCreate(body: unknown):
         description: typeof rr.description === "string" ? rr.description : undefined,
       });
     }
-    if (kind === "agent") out.agents = refs;
-    else if (kind === "skill") out.skills = refs;
-    else if (kind === "command") out.commands = refs;
-    else if (kind === "hook") out.hooks = refs;
-    else if (kind === "mcp") out.mcp = refs;
-    else if (kind === "plugin") out.plugins = refs;
-    else if (kind === "workflow") out.workflows = refs;
-    else if (kind === "settingsKey") out.settings = refs;
+    // Single source of truth: inventoryKeyFor maps UnitKind to inventory
+    // property. Cast is safe because TemplateUnitInventory's value type is
+    // TemplateUnitRef[] for every key.
+    (out as unknown as Record<string, TemplateUnitRef[]>)[key] = refs;
   }
 
   return {

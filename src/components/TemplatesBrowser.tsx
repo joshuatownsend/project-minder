@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Layers } from "lucide-react";
 import type { TemplateManifest } from "@/lib/types";
+import { inventoryCount } from "@/lib/template/inventoryUtils";
 
 interface ListResponse {
   manifests: TemplateManifest[];
@@ -91,15 +92,7 @@ export function TemplatesBrowser() {
 
 function TemplateRow({ manifest }: { manifest: TemplateManifest }) {
   const inv = manifest.units;
-  const totalUnits =
-    inv.agents.length +
-    inv.skills.length +
-    inv.commands.length +
-    inv.hooks.length +
-    inv.mcp.length +
-    inv.plugins.length +
-    inv.workflows.length +
-    inv.settings.length;
+  const totalUnits = inventoryCount(inv);
 
   return (
     <Link

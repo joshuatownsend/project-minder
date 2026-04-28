@@ -10,6 +10,7 @@ import type {
   TemplateUnitRef,
   UnitKind,
 } from "@/lib/types";
+import { inventoryCount } from "@/lib/template/inventoryUtils";
 
 interface Props {
   slug: string;
@@ -173,7 +174,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
           Apply <code style={inlineCode}>{manifest.name}</code>
         </h2>
         <p style={{ marginTop: "4px", fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-          {manifest.kind} · {flatCount(manifest)} unit{flatCount(manifest) === 1 ? "" : "s"}
+          {manifest.kind} · {inventoryCount(manifest.units)} unit{inventoryCount(manifest.units) === 1 ? "" : "s"}
         </p>
 
         <fieldset style={{ marginTop: "12px", border: "none", padding: 0 }}>
@@ -492,18 +493,6 @@ function summarize(s: ApplyTemplateResult["summary"], mode: "preview" | "apply")
   return parts.length === 0 ? "no changes" : parts.join(", ");
 }
 
-function flatCount(m: TemplateManifest): number {
-  return (
-    m.units.agents.length +
-    m.units.skills.length +
-    m.units.commands.length +
-    m.units.hooks.length +
-    m.units.mcp.length +
-    m.units.plugins.length +
-    m.units.workflows.length +
-    m.units.settings.length
-  );
-}
 
 const inlineCode: React.CSSProperties = {
   fontFamily: "var(--font-mono)",

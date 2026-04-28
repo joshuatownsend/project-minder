@@ -36,16 +36,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
   }
 
   const settingsPath = path.join(project.path, ".claude", "settings.json");
-  try {
-    await fs.access(settingsPath);
-  } catch {
-    return NextResponse.json({ entries: [] });
-  }
   let doc: unknown;
   try {
     const raw = await fs.readFile(settingsPath, "utf-8");
     doc = tryParseJsonc<unknown>(raw);
   } catch {
+    // Missing file or unreadable → treat as empty inventory.
     return NextResponse.json({ entries: [] });
   }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {

@@ -5,7 +5,6 @@ import { tryParseJsonc } from "../scanner/util/jsonc";
 import {
   atomicWriteFile,
   ensureDir,
-  fileExists,
   withFileLock,
 } from "./atomicFs";
 import {
@@ -83,28 +82,34 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
     // Read target settings (or {} if missing).
     let targetDoc: Record<string, unknown> = {};
     let targetHadKey = false;
-    if (await fileExists(targetSettings)) {
-      try {
-        const raw = await fs.readFile(targetSettings, "utf-8");
-        if (raw.trim().length > 0) {
-          const parsed = tryParseJsonc<Record<string, unknown>>(raw);
-          if (parsed === null) {
-            return errorResult(
-              "MALFORMED_TARGET",
-              `Target ${targetSettings} is not valid JSON. Refusing to overwrite.`
-            );
-          }
-          targetDoc = parsed ?? {};
+    // Read target settings. We don't pre-check existence with fs.access:
+    // (a) it's a TOCTOU pattern, (b) it doubles the syscalls. Just try to read
+    // and treat ENOENT as "no doc yet."
+    try {
+      const raw = await fs.readFile(targetSettings, "utf-8");
+      if (raw.trim().length > 0) {
+        const parsed = tryParseJsonc<Record<string, unknown>>(raw);
+        if (parsed === null) {
+          return errorResult(
+            "MALFORMED_TARGET",
+            `Target ${targetSettings} is not valid JSON. Refusing to overwrite.`
+          );
         }
-      } catch (e) {
+        targetDoc = parsed ?? {};
+      }
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
         return errorResult(
           "TARGET_READ_FAILED",
           `Could not read ${targetSettings}: ${(e as Error).message}`
         );
       }
-      const peek = getJsonPath(targetDoc, keyPath);
-      targetHadKey = peek.found;
+      // ENOENT → leave targetDoc as {}.
     }
+    const targetPeek = getJsonPath(targetDoc, keyPath);
+    targetHadKey = targetPeek.found;
+    const targetCurr = targetPeek.found ? targetPeek.value : undefined;
 
     // Skip if target has the key and policy is skip.
     if (targetHadKey && conflict === "skip") {
@@ -121,14 +126,10 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
       newValue = sourceValue.value;
       action = "[overwrite]";
     } else {
-      // merge
-      const targetPeek = getJsonPath(targetDoc, keyPath);
-      const targetCurr = targetPeek.found ? targetPeek.value : undefined;
+      // merge — mergeValues returns the source verbatim when there's nothing
+      // to merge (scalar replace, type mismatch). Detect a true no-op when
+      // the recursive merge result is deep-equal to what was already there.
       newValue = mergeValues(targetCurr, sourceValue.value, keyPath);
-      // mergeValues returns the source verbatim when there's nothing to merge
-      // (scalar replace, type mismatch). Detect a true no-op — when the
-      // recursive merge ends up byte-identical to what was already there —
-      // and short-circuit so dryRun + real apply both report cleanly.
       if (deepEqual(targetCurr, newValue)) {
         return { ok: true, status: "skipped", changedFiles: [] };
       }
@@ -157,7 +158,7 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
         `${action} ${keyPath}\n` +
         `  source: ${truncate(JSON.stringify(sourceValue.value), 240)}\n` +
         (targetHadKey
-          ? `  target: ${truncate(JSON.stringify(getJsonPath(targetDoc, keyPath).found ? (getJsonPath(targetDoc, keyPath) as { found: true; value: unknown }).value : null), 240)}\n`
+          ? `  target: ${truncate(JSON.stringify(targetCurr), 240)}\n`
           : "  target: (absent)\n") +
         `  new:    ${truncate(JSON.stringify(newValue), 240)}\n`;
       return {
@@ -186,22 +187,13 @@ async function readKey(
 ): Promise<
   { found: true; value: unknown } | { found: false } | { error: ApplyResult }
 > {
-  if (!(await fileExists(filePath))) {
-    return { found: false };
-  }
+  let raw: string;
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = tryParseJsonc<unknown>(raw);
-    if (parsed === null) {
-      return {
-        error: errorResult(
-          "MALFORMED_SOURCE",
-          `Source ${filePath} is not valid JSON.`
-        ),
-      };
-    }
-    return getJsonPath(parsed, keyPath);
+    raw = await fs.readFile(filePath, "utf-8");
   } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      return { found: false };
+    }
     return {
       error: errorResult(
         "SOURCE_READ_FAILED",
@@ -209,6 +201,13 @@ async function readKey(
       ),
     };
   }
+  const parsed = tryParseJsonc<unknown>(raw);
+  if (parsed === null) {
+    return {
+      error: errorResult("MALFORMED_SOURCE", `Source ${filePath} is not valid JSON.`),
+    };
+  }
+  return getJsonPath(parsed, keyPath);
 }
 
 /**
@@ -218,6 +217,9 @@ async function readKey(
  *     of elements.
  *   - both arrays elsewhere: source replaces target.
  *   - type mismatch / scalar / null: source replaces target.
+ *
+ * @internal Exported for vitest; production callers should go through
+ * `applySettings`. Importers outside the apply layer + tests are a smell.
  */
 export function mergeValues(target: unknown, source: unknown, keyPath: string): unknown {
   if (target === undefined) return source;

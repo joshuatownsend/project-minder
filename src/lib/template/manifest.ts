@@ -49,32 +49,16 @@ export function isValidSlug(slug: string): boolean {
   return SLUG_RE.test(slug) && slug.length <= 64;
 }
 
-export function emptyInventory(): TemplateUnitInventory {
-  return {
-    agents: [],
-    skills: [],
-    commands: [],
-    hooks: [],
-    mcp: [],
-    plugins: [],
-    workflows: [],
-    settings: [],
-  };
-}
-
-/** Total number of units across all kinds. Useful for UI summaries. */
-export function inventoryCount(inv: TemplateUnitInventory): number {
-  return (
-    inv.agents.length +
-    inv.skills.length +
-    inv.commands.length +
-    inv.hooks.length +
-    inv.mcp.length +
-    inv.plugins.length +
-    inv.workflows.length +
-    inv.settings.length
-  );
-}
+// Pure inventory helpers live in `inventoryUtils.ts` so client components can
+// import them without dragging the rest of this module's server-side
+// dependency graph (atomicFs → fs, config → platform → child_process) into
+// the browser bundle. Re-exported here for back-compat with server callers.
+import {
+  emptyInventory,
+  inventoryCount,
+  inventoryKeyFor,
+} from "./inventoryUtils";
+export { emptyInventory, inventoryCount, inventoryKeyFor };
 
 export interface ManifestValidationError {
   field: string;
@@ -128,34 +112,6 @@ export function validateManifest(
 
   if (errors.length > 0) return { errors };
   return { manifest: raw as TemplateManifest };
-}
-
-/** Map a UnitKind to the plural property name used inside `units`. */
-export function inventoryKeyFor(kind: UnitKind): keyof TemplateUnitInventory {
-  switch (kind) {
-    case "agent":
-      return "agents";
-    case "skill":
-      return "skills";
-    case "command":
-      return "commands";
-    case "hook":
-      return "hooks";
-    case "mcp":
-      return "mcp";
-    case "plugin":
-      return "plugins";
-    case "workflow":
-      return "workflows";
-    case "settingsKey":
-      return "settings";
-    default: {
-      // Compile-time exhaustiveness — adding a new UnitKind without updating
-      // this switch will surface as a TS error here.
-      const _exhaustive: never = kind;
-      throw new Error(`Unhandled UnitKind: ${String(_exhaustive)}`);
-    }
-  }
 }
 
 function validateInventory(raw: unknown): ManifestValidationError[] {
