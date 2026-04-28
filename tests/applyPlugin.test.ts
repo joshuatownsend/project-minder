@@ -111,6 +111,68 @@ describe("applyPlugin — conflict policies", () => {
       conflict: "skip",
     });
     expect(result.status).toBe("skipped");
+    expect(result.changedFiles).toEqual([]);
+  });
+
+  it.each(["merge" as const, "overwrite" as const])(
+    "is idempotent when already enabled — conflict=%s returns skipped + no changedFiles + no mtime bump",
+    async (policy) => {
+      // Regression for PR #28 review: previously, only conflict=skip
+      // short-circuited; merge/overwrite would re-write the file with
+      // identical content, bumping mtime and reporting changedFiles.
+      await fs.mkdir(path.join(target, ".claude"), { recursive: true });
+      const settingsPath = path.join(target, ".claude", "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({ enabledPlugins: { "p@m": true } }),
+        "utf-8"
+      );
+      const beforeMtime = (await fs.stat(settingsPath)).mtimeMs;
+
+      vi.doMock("@/lib/indexer/walkPlugins", () => ({
+        loadInstalledPlugins: async () => [
+          { pluginName: "p", marketplace: "m", installPath: "/x" },
+        ],
+      }));
+      const { applyPlugin: fn } = await import("@/lib/template/applyPlugin");
+      // Wait a tick so mtime granularity (ms-level on most FSes) doesn't
+      // accidentally hide a write.
+      await new Promise((r) => setTimeout(r, 10));
+      const result = await fn({
+        pluginKey: "p@m",
+        targetProjectPath: target,
+        conflict: policy,
+      });
+
+      expect(result.status).toBe("skipped");
+      expect(result.changedFiles).toEqual([]);
+      const afterMtime = (await fs.stat(settingsPath)).mtimeMs;
+      expect(afterMtime).toBe(beforeMtime);
+    }
+  );
+
+  it("dryRun preview for an already-enabled plugin reports [no change] + empty changedFiles", async () => {
+    await fs.mkdir(path.join(target, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(target, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "p@m": true } }),
+      "utf-8"
+    );
+    vi.doMock("@/lib/indexer/walkPlugins", () => ({
+      loadInstalledPlugins: async () => [
+        { pluginName: "p", marketplace: "m", installPath: "/x" },
+      ],
+    }));
+    const { applyPlugin: fn } = await import("@/lib/template/applyPlugin");
+    const result = await fn({
+      pluginKey: "p@m",
+      targetProjectPath: target,
+      conflict: "merge",
+      dryRun: true,
+    });
+    expect(result.status).toBe("would-apply");
+    expect(result.changedFiles).toEqual([]);
+    expect(result.diffPreview).toContain("[no change");
   });
 
   it("rejects rename for plugin units", async () => {

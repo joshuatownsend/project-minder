@@ -48,11 +48,17 @@ export function ensureInsideDevRoots(target: string, config: MinderConfig): stri
  * True when `child` is `parent` itself or a descendant of it. Uses
  * `path.relative` so trailing-separator and case-sensitivity quirks on
  * Windows don't produce false positives.
+ *
+ * Subtlety: a raw `rel.startsWith("..")` rejects valid descendants whose
+ * first segment happens to begin with `..` (e.g. `<root>/..minderly`
+ * yields rel = `"..minderly"`). The escape signal is specifically `..` as
+ * its own segment — i.e. the entire rel OR the first segment terminated
+ * by a path separator. Match that exactly.
  */
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   if (rel === "") return true;
-  if (rel.startsWith("..")) return false;
+  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
   if (path.isAbsolute(rel)) return false;
   return true;
 }

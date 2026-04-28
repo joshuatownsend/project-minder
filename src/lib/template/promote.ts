@@ -229,6 +229,12 @@ export async function saveAsSnapshot(
   // Workflows — file-replace copies into bundle/.github/workflows/<key>.
   if (inv.workflows.length > 0) {
     for (const u of inv.workflows) {
+      // Mirror applyWorkflow's traversal guard. A crafted manifest could supply
+      // `..` or an absolute path; without this check, `path.join` would
+      // silently let a snapshot read from / write to anywhere on disk during
+      // the snapshot copy. Skip the offender rather than throwing — the
+      // remaining valid units still get bundled.
+      if (u.key.includes("..") || path.isAbsolute(u.key)) continue;
       const from = path.join(sourceProject.path, ".github", "workflows", u.key);
       if (!(await fileExists(from))) continue;
       const to = path.join(bundleDir, ".github", "workflows", u.key);

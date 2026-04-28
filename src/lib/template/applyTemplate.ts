@@ -54,10 +54,16 @@ export async function applyTemplate(req: ApplyTemplateRequest): Promise<ApplyTem
   let bootstrap: ApplyTemplateResult["bootstrap"] | undefined;
 
   if (req.target.kind === "new") {
+    // Dry-run must NOT mkdir or git init. Without `dryRun: true` here, hitting
+    // "preview" creates the directory; the next real apply then fails with
+    // TARGET_EXISTS because the preview already created it. Bootstrap
+    // validates either way, so dry-run still surfaces every error code the
+    // real apply would.
     const r = await bootstrapNewProject(config, {
       name: req.target.name,
       relPath: req.target.relPath,
       gitInit: req.target.gitInit,
+      dryRun: req.dryRun,
     });
     if (!r.ok) return errorAggregate(r.error.code, r.error.message);
     resolvedTarget = { kind: "path", path: r.createdPath };

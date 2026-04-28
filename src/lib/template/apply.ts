@@ -16,6 +16,7 @@ import { scanClaudeHooks } from "../scanner/claudeHooks";
 import { scanMcpServers } from "../scanner/mcpServers";
 import { invalidateCatalogCache } from "../indexer/catalog";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { invalidateCommandsRouteCache } from "@/app/api/commands/route";
 import { walkProjectCommands, walkUserCommands } from "../indexer/walkCommands";
 import { walkProjectAgents, walkUserAgents } from "../indexer/walkAgents";
 import { walkProjectSkills, walkUserSkills } from "../indexer/walkSkills";
@@ -140,11 +141,15 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
     result = errorResult("APPLY_THREW", (e as Error).message);
   }
 
-  // Invalidate caches on a successful, non-dryRun apply.
+  // Invalidate caches on a successful, non-dryRun apply. We invalidate every
+  // catalog/route cache that could have served stale data for the unit kind
+  // we just wrote, regardless of which kind it was — figuring out per-kind
+  // which caches are affected is more error-prone than just clearing all four.
   if (result.ok && !request.dryRun && result.status !== "skipped") {
     invalidateScanCache();
     invalidateCatalogCache();
     invalidateClaudeConfigRouteCache();
+    invalidateCommandsRouteCache();
   }
 
   return result;

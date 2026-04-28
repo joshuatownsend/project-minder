@@ -188,8 +188,10 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
 
     for (const c of scriptCopies) {
       await ensureDir(path.dirname(c.to));
-      const scriptContent = await fs.readFile(c.from, "utf-8");
-      await atomicWriteFile(c.to, scriptContent);
+      // fs.copyFile preserves the source's mode bits. readFile + atomicWriteFile
+      // would silently strip the executable bit on `.sh` scripts, breaking any
+      // command like `bash ./.claude/hooks/foo.sh` at the target.
+      await fs.copyFile(c.from, c.to);
     }
 
     const status = existed && conflict === "merge" ? "merged" : "applied";

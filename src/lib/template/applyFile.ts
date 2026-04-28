@@ -86,6 +86,11 @@ export async function applyDirectory(args: {
   let { targetDir } = args;
 
   const exists = await fileExists(targetDir);
+
+  // Validate the conflict policy + figure out the final target dir + whether
+  // we'd need to remove the existing one — *without* mutating the filesystem.
+  // Mutations come after the dryRun check.
+  let willRemoveExisting = false;
   if (exists) {
     if (conflict === "skip") {
       return { ok: true, status: "skipped", changedFiles: [] };
@@ -93,7 +98,7 @@ export async function applyDirectory(args: {
     if (conflict === "rename") {
       targetDir = await pickRenameDir(targetDir);
     } else if (conflict === "overwrite") {
-      await fs.rm(targetDir, { recursive: true, force: true });
+      willRemoveExisting = true;
     } else {
       return errorResult(
         "INVALID_CONFLICT_POLICY",
@@ -106,8 +111,11 @@ export async function applyDirectory(args: {
     const files = await listDirFiles(sourceDir);
     const shown = files.slice(0, 12);
     const more = files.length - shown.length;
+    const action = willRemoveExisting
+      ? `[overwrite directory] ${path.basename(sourceDir)}/`
+      : `[copy directory] ${path.basename(sourceDir)}/`;
     const preview =
-      `[copy directory] ${path.basename(sourceDir)}/\n` +
+      `${action}\n` +
       `  → ${targetDir}\n` +
       `  ${files.length} file${files.length === 1 ? "" : "s"}:\n` +
       shown.map((f) => `    - ${f}`).join("\n") +
@@ -120,6 +128,10 @@ export async function applyDirectory(args: {
     };
   }
 
+  // Real apply path: only here do we touch the filesystem.
+  if (willRemoveExisting) {
+    await fs.rm(targetDir, { recursive: true, force: true });
+  }
   const written = await copyDirRecursive(sourceDir, targetDir);
   return { ok: true, status: "applied", changedFiles: written };
 }

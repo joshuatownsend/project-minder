@@ -13,12 +13,19 @@ export interface BootstrapArgs {
   relPath: string;
   /** Run `git init` after mkdir. Defaults to true. */
   gitInit?: boolean;
+  /** When true: validate everything (path safety, no-collision, dev-root
+   *  membership) but do NOT mkdir or run `git init`. Used by the apply-template
+   *  dry-run path so previewing a "new" target never leaves a stub directory
+   *  on disk. */
+  dryRun?: boolean;
 }
 
 export interface BootstrapSuccess {
   ok: true;
   createdPath: string;
   gitInitialized: boolean;
+  /** True when this was a dry-run — caller can surface "would create" in UI. */
+  wouldCreate?: boolean;
 }
 
 export interface BootstrapFailure {
@@ -75,6 +82,18 @@ export async function bootstrapNewProject(
     };
   }
 
+  // Dry-run stops here: every validation that could fail has already run
+  // (path safety, dev-root membership, .minder/ guard, TARGET_EXISTS). Mkdir
+  // and git init are explicit mutations the caller hasn't authorized yet.
+  if (args.dryRun) {
+    return {
+      ok: true,
+      createdPath: safePath,
+      gitInitialized: false,
+      wouldCreate: true,
+    };
+  }
+
   await fs.mkdir(safePath, { recursive: true });
 
   let gitInitialized = false;
@@ -82,7 +101,7 @@ export async function bootstrapNewProject(
     try {
       await runGitInit(safePath);
       gitInitialized = true;
-    } catch (e) {
+    } catch {
       // Non-fatal — directory still exists, user can `git init` themselves.
       // Return success with a flag rather than rolling back the mkdir, which
       // would surprise the user (their typed name would silently disappear).

@@ -53,6 +53,51 @@ describe("bootstrapNewProject — happy path", () => {
   });
 });
 
+describe("bootstrapNewProject — dryRun", () => {
+  it("validates everything but does not mkdir or git init", async () => {
+    // Regression for PR #28 #1: previously, the apply-template dryRun path
+    // still ran bootstrap, which mkdir'd. The next real apply then failed
+    // with TARGET_EXISTS because the preview had created the dir.
+    const r = await bootstrapNewProject(config, {
+      name: "preview",
+      relPath: "preview",
+      gitInit: true,
+      dryRun: true,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.createdPath).toBe(path.join(tmp, "preview"));
+      expect(r.gitInitialized).toBe(false);
+      expect(r.wouldCreate).toBe(true);
+      // No directory should have been created.
+      await expect(fs.access(r.createdPath)).rejects.toThrow();
+    }
+  });
+
+  it("dryRun still surfaces TARGET_EXISTS so the preview matches a real apply", async () => {
+    await fs.mkdir(path.join(tmp, "taken"), { recursive: true });
+    const r = await bootstrapNewProject(config, {
+      name: "taken",
+      relPath: "taken",
+      gitInit: false,
+      dryRun: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("TARGET_EXISTS");
+  });
+
+  it("dryRun still rejects path-traversal", async () => {
+    const r = await bootstrapNewProject(config, {
+      name: "escape",
+      relPath: "../escape",
+      gitInit: false,
+      dryRun: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("PATH_OUTSIDE_DEV_ROOTS");
+  });
+});
+
 describe("bootstrapNewProject — refusals", () => {
   it("refuses when target already exists", async () => {
     await fs.mkdir(path.join(tmp, "taken"), { recursive: true });

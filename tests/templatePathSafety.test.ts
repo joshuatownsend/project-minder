@@ -75,6 +75,16 @@ describe("ensureInsideDevRoots", () => {
     expect(ok).toBe(path.join(root, ".minderly"));
   });
 
+  it("does not confuse `<parent>/..minderly` with a `..` escape", () => {
+    // Regression for the isInside startsWith("..") false-negative: a sibling
+    // directory whose name happens to begin with `..` (rel = "..minderly")
+    // is NOT an escape — the escape signal is `..` as its own segment.
+    const customRoot = path.resolve("/customroot");
+    const cfg = configWithRoots(customRoot);
+    const child = path.join(customRoot, "..minderly");
+    expect(ensureInsideDevRoots(child, cfg)).toBe(child);
+  });
+
   it("error code is set on rejection", () => {
     try {
       ensureInsideDevRoots(path.resolve("/elsewhere"), config);

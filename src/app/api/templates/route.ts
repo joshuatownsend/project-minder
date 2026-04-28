@@ -119,6 +119,17 @@ function validateCreate(body: unknown):
       if (typeof rr.key !== "string" || rr.key.length === 0) {
         return err("INVALID_UNIT_REF", `units.${key}[${i}].key must be non-empty.`);
       }
+      // Workflow keys are joined into filesystem paths during snapshot/apply.
+      // Reject `..` and absolute paths up front so a crafted manifest can't
+      // land on disk and later escape `.github/workflows/`.
+      if (kind === "workflow") {
+        if (rr.key.includes("..") || /^([\\/]|[a-zA-Z]:)/.test(rr.key)) {
+          return err(
+            "INVALID_UNIT_REF",
+            `units.${key}[${i}].key must be a relative path inside .github/workflows/.`
+          );
+        }
+      }
       if (rr.name !== undefined && typeof rr.name !== "string") {
         return err("INVALID_UNIT_REF", `units.${key}[${i}].name must be a string when present.`);
       }

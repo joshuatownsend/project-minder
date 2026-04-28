@@ -74,14 +74,29 @@ export async function applyPlugin(args: ApplyPluginArgs): Promise<ApplyResult> {
     const existed = pluginKey in enabled;
     const wasTrue = enabled[pluginKey] === true;
 
-    if (existed && wasTrue && conflict === "skip") {
-      return { ok: true, status: "skipped" as const, changedFiles: [], warnings };
-    }
     if (conflict === "rename") {
       return errorResult(
         "RENAME_NOT_SUPPORTED_FOR_PLUGIN",
         "Plugin enable flags cannot be renamed; use skip, overwrite, or merge."
       );
+    }
+
+    // Idempotent short-circuit: when the plugin is already enabled, every
+    // policy is a no-op. Don't touch settings.json (would bump mtime), don't
+    // claim a write in the dryRun preview either.
+    if (existed && wasTrue) {
+      if (dryRun) {
+        return {
+          ok: true,
+          status: "would-apply" as const,
+          changedFiles: [],
+          diffPreview:
+            `[no change — already enabled] enabledPlugins.${pluginKey}\n` +
+            (displayName && displayName !== pluginKey ? `display: ${displayName}\n` : ""),
+          warnings,
+        };
+      }
+      return { ok: true, status: "skipped" as const, changedFiles: [], warnings };
     }
 
     // overwrite / merge / first-write all write `true` at the key. The target
@@ -94,7 +109,7 @@ export async function applyPlugin(args: ApplyPluginArgs): Promise<ApplyResult> {
     const serialized = JSON.stringify(newDoc, null, 2) + "\n";
 
     if (dryRun) {
-      const action = existed && wasTrue ? "[no change — already enabled]" : existed ? "[enable]" : "[add + enable]";
+      const action = existed ? "[enable]" : "[add + enable]";
       const preview =
         `${action} enabledPlugins.${pluginKey}\n` +
         `target: ${targetSettingsPath}\n` +
@@ -111,7 +126,7 @@ export async function applyPlugin(args: ApplyPluginArgs): Promise<ApplyResult> {
     await ensureDir(path.dirname(targetSettingsPath));
     await atomicWriteFile(targetSettingsPath, serialized);
 
-    const status = existed && wasTrue ? "skipped" : existed && conflict === "merge" ? "merged" : "applied";
+    const status = existed && conflict === "merge" ? "merged" : "applied";
     return { ok: true, status, changedFiles: [targetSettingsPath], warnings };
   });
 }

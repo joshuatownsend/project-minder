@@ -232,6 +232,31 @@ describe("applyDirectory", () => {
     await expect(fs.access(dst)).rejects.toThrow();
   });
 
+  it("dryRun never touches the target dir even when conflict=overwrite", async () => {
+    // Regression for "dryRun does fs.rm when conflict=overwrite" (PR #28
+    // review). Preview should be informational; only a real apply mutates.
+    const src = path.join(tmp, "src");
+    const dst = path.join(tmp, "dst");
+    await fs.mkdir(src, { recursive: true });
+    await fs.mkdir(dst, { recursive: true });
+    await fs.writeFile(path.join(src, "SKILL.md"), "new", "utf-8");
+    await fs.writeFile(path.join(dst, "SKILL.md"), "existing", "utf-8");
+    await fs.writeFile(path.join(dst, "obsolete.md"), "stale", "utf-8");
+
+    const result = await applyDirectory({
+      sourceDir: src,
+      targetDir: dst,
+      conflict: "overwrite",
+      dryRun: true,
+    });
+
+    expect(result.status).toBe("would-apply");
+    expect(result.diffPreview).toContain("[overwrite directory]");
+    // Target dir + every existing file are still there.
+    expect(await fs.readFile(path.join(dst, "SKILL.md"), "utf-8")).toBe("existing");
+    expect(await fs.readFile(path.join(dst, "obsolete.md"), "utf-8")).toBe("stale");
+  });
+
   it("dryRun preview truncates long file lists with `… (+N more)`", async () => {
     const src = path.join(tmp, "src");
     const dst = path.join(tmp, "dst");
