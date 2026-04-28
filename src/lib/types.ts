@@ -199,6 +199,12 @@ export interface MinderConfig {
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
   viewMode?: "full" | "compact" | "list"; // dashboard card layout
   pinnedSlugs?: string[]; // slugs pinned to top of all dashboard views
+  templates?: {
+    /** Default conflict policy for the apply-template modal. */
+    defaultConflictPolicy?: ConflictPolicy;
+    /** Most recently applied template slug — used to seed the modal. */
+    lastUsedSlug?: string;
+  };
 }
 
 export interface ClaudeUsageStats {
@@ -434,4 +440,174 @@ export interface ScanResult {
   portConflicts: PortConflict[];
   hiddenCount: number;
   scannedAt: string;
+}
+
+// ─── Template Mode ──────────────────────────────────────────────────────────
+// V1: single-unit copy across projects. V2 will add TemplateManifest +
+// whole-template apply + new-project bootstrap.
+
+export type UnitKind =
+  | "agent"
+  | "skill"
+  | "command"
+  | "hook"
+  | "mcp"
+  | "plugin"
+  | "workflow";
+
+export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
+
+export type ApplySource =
+  | { kind: "project"; slug: string }
+  | { kind: "user" }
+  /** Internal-only: direct path to a "virtual project root" — used by the
+   *  template apply layer. Never accepted by the public API validator
+   *  (would be a path-safety hole). */
+  | { kind: "path"; path: string };
+
+export type ApplyTarget =
+  | { kind: "existing"; slug: string }
+  | {
+      kind: "new";
+      /** Display name for logs / future scan results. */
+      name: string;
+      /** Path relative to the first configured devRoot. Validated against getDevRoots(). */
+      relPath: string;
+      /** Run `git init` after mkdir. Default true. */
+      gitInit?: boolean;
+    }
+  /** Internal-only: direct path target — used by applyTemplate after it has
+   *  bootstrapped a "new" target into a real directory. Never accepted by the
+   *  public API validator. */
+  | { kind: "path"; path: string };
+
+export interface UnitRef {
+  kind: UnitKind;
+  key: string;
+}
+
+export interface ApplyRequest {
+  unit: UnitRef;
+  source: ApplySource;
+  target: ApplyTarget;
+  conflict: ConflictPolicy;
+  dryRun?: boolean;
+}
+
+export type ApplyStatus =
+  | "applied"
+  | "skipped"
+  | "merged"
+  | "would-apply"
+  | "error";
+
+export interface ApplyResult {
+  ok: boolean;
+  status: ApplyStatus;
+  changedFiles: string[];
+  diffPreview?: string;
+  warnings?: string[];
+  error?: { code: string; message: string };
+}
+
+// ─── Template Mode V2 — manifests + registry ─────────────────────────────────
+
+/** A single unit selected into a template. The source content lives either in
+ *  the live source project (for kind:"live" manifests) or in
+ *  `<devRoot>/.minder/templates/<slug>/bundle/` (for kind:"snapshot" manifests).
+ *  In either case the `key` is the same as Template Mode's per-kind unit key
+ *  (see `unitKey.ts`). */
+export interface TemplateUnitRef {
+  kind: UnitKind;
+  key: string;
+  /** Display label, captured at promotion time. May drift in live mode. */
+  name?: string;
+  description?: string;
+}
+
+export interface TemplateUnitInventory {
+  agents: TemplateUnitRef[];
+  skills: TemplateUnitRef[];
+  commands: TemplateUnitRef[];
+  hooks: TemplateUnitRef[];
+  mcp: TemplateUnitRef[];
+  /** Plugin enable list. Keys are `<pluginName>@<marketplace>` (or just
+   *  `<pluginName>` when there's no marketplace). Applying a plugin unit
+   *  flips the target's `.claude/settings.json` enabledPlugins to true. */
+  plugins: TemplateUnitRef[];
+  /** GitHub Actions workflows. Keys are relative paths under
+   *  `.github/workflows/` (e.g., "ci.yml"). Apply is file-replace only —
+   *  workflows have no internal merge semantics. */
+  workflows: TemplateUnitRef[];
+}
+
+export type TemplateKind = "live" | "snapshot";
+
+export interface TemplateManifest {
+  schemaVersion: 1;
+  slug: string;
+  name: string;
+  description?: string;
+  kind: TemplateKind;
+  /** When kind === "live": project slug whose .claude/ + .mcp.json this template tracks. */
+  liveSourceSlug?: string;
+  createdAt: string;
+  updatedAt: string;
+  units: TemplateUnitInventory;
+}
+
+/** A request to apply an entire template. */
+export interface ApplyTemplateRequest {
+  templateSlug: string;
+  target: ApplyTarget;
+  /** Default conflict policy applied to every unit unless `perUnitConflict` overrides. */
+  conflictDefault: ConflictPolicy;
+  /** Override the policy for specific units. Key shape: `<kind>:<unit-key>`. */
+  perUnitConflict?: Record<string, ConflictPolicy>;
+  dryRun?: boolean;
+}
+
+export interface ApplyTemplateResult {
+  ok: boolean;
+  /** Per-unit outcomes in inventory order. */
+  results: Array<{
+    unit: TemplateUnitRef;
+    result: ApplyResult;
+  }>;
+  /** Aggregate counters useful for the apply-modal summary. */
+  summary: {
+    applied: number;
+    merged: number;
+    skipped: number;
+    errors: number;
+    wouldApply: number;
+  };
+  /** Bootstrap details when `target.kind === "new"`. */
+  bootstrap?: {
+    createdPath: string;
+    gitInitialized: boolean;
+  };
+  error?: { code: string; message: string };
+}
+
+/** Slash command discovered under .claude/commands/. Mirrors AgentEntry shape, minus tools/model. */
+export interface CommandEntry {
+  id: string;                    // command:<source>:<prefix>:<relPath>
+  slug: string;                  // basename without .md
+  name: string;                  // frontmatter.name or slug
+  description?: string;
+  source: "user" | "plugin" | "project";
+  pluginName?: string;
+  projectSlug?: string;
+  category?: string;
+  filePath: string;
+  bodyExcerpt: string;
+  frontmatter: Record<string, unknown>;
+  mtime: string;
+  ctime: string;
+  /** Comma-separated `allowed-tools` frontmatter parsed into an array. */
+  allowedTools?: string[];
+  argumentHint?: string;
+  isSymlink?: boolean;
+  realPath?: string;
 }

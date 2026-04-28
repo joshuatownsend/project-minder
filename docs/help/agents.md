@@ -42,6 +42,7 @@ Click any row to expand it and reveal:
 - **Show in folder** — opens Explorer/Finder at the agent's install directory
 - **Copy url / sha / path** — clipboard shortcuts
 - **Re-check** — clears the update cache and re-queues a fresh check for all entries
+- **↗ copy to project** — Template Mode action: copies this agent's `.md` file into another project's `.claude/agents/` folder. Pick a target, choose a conflict policy (`skip` / `overwrite` / `rename`), preview the diff, and apply. Plugin-source agents don't show this action (plugins manage themselves). See the [Config help page](/help/config) for full Template Mode behavior.
 
 ## Per-Project Agents Tab
 

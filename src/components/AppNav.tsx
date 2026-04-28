@@ -10,10 +10,12 @@ const navItems = [
   { href: "/insights",     label: "Insights"                    },
   { href: "/agents",       label: "Agents"                      },
   { href: "/skills",       label: "Skills"                      },
+  { href: "/commands",     label: "Commands"                    },
   { href: "/sessions",     label: "Sessions"                    },
   { href: "/status",       label: "Status",   badge: "approval" },
   { href: "/usage",        label: "Usage"                       },
   { href: "/stats",        label: "Stats"                       },
+  { href: "/templates",    label: "Templates", admin: true      },
   { href: "/config",       label: "Config",   admin: true       },
   { href: "/setup",        label: "Setup",    admin: true       },
 ];

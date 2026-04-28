@@ -35,11 +35,23 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 ### Agents, Skills & Plugins
 - **Agents catalog** — `/agents` indexes every Claude Code agent persona from `~/.claude/agents/`, `~/.agents/agents/`, installed plugins, and per-project `.claude/agents/`; shows usage counts, last-invoked timestamps, and source provenance
 - **Skills catalog** — `/skills` indexes all slash-command skills from the same source tree; handles both bundled (`SKILL.md`-in-dir) and standalone (`.md`) layouts
+- **Commands catalog** — `/commands` indexes every Claude Code slash command from user, plugin, and project scopes; expand any row to see `allowed-tools`, `argument-hint`, body excerpt, and a one-click action to copy the command into another project
 - **Provenance badges** — each row carries a marketplace badge (name · version · commit SHA) or a `local` / `project:<slug>` tag showing exactly where the item came from
 - **Update detection** — an amber dot appears when an upstream update is available; checks run in the background via `git ls-remote` (marketplace plugins) and the GitHub tree API (lockfile-installed skills) on a 24-hour TTL
 - **Per-row actions** — expand any row to see tools, model, body excerpt, recent sessions, and actions: open source ↗, show in folder, copy URL / SHA / path, re-check
 - **Per-project tabs** — each project detail page has Agents and Skills tabs split into *Available* (installed) and *Invoked here* (used in that repo's sessions)
 - **Search, filter & sort** — search by name/description/plugin; filter by source (user / plugin / project) or updates-only; sort by most invoked, recently used, or name
+
+### Template Mode
+- **One-click cross-project copy** — every project-scoped row in `/agents`, `/skills`, `/commands`, and `/config` (Hooks · MCP) carries a `↗ copy to project` action. Pick a target project, choose a conflict policy (`skip` / `overwrite` / `merge` / `rename`), preview the diff via dry-run, then apply atomically with cache invalidation
+- **Idempotent hook copy** — hook identity is `event + matcher + sha256(invocation)` so re-applying never produces duplicates. Referenced scripts at `.claude/hooks/<file>` come along automatically; absolute paths into the source project are rejected
+- **Local→project promotion** — hooks sourced from `.claude/settings.local.json` write to project-shared `settings.json` at the target with a warning so the change is transparent
+- **MCP env-keys-only** — env *values* are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key with a warning listing what to fill in
+- **Template projects** — bundle a curated set of agents, skills, commands, hooks, MCP servers, plugin enables, and GitHub Actions workflows into a manifest at `<devRoot>/.minder/templates/<slug>/`. Two flavors: **live** (manifest points at a source project — edits flow through) or **snapshot** (frozen copy at promotion time)
+- **Authoring** — the project card three-dot menu has a **Mark as template…** entry that opens a unit picker (with installed/not-installed badges for plugins). Save a live template as a snapshot from its detail page when ready
+- **Apply Template modal** — target = existing project or a not-yet-existing path under devRoot (Project Minder runs `mkdir` + `git init`, no language scaffolding). Default conflict policy plus expandable per-unit overrides; aggregate dry-run preview with per-unit diffs and warnings before commit
+- **Plugin "requires install" UX** — applying a plugin enable when the plugin isn't installed at `~/.claude/plugins/` writes the flag anyway and surfaces a copy-pastable `/plugin install <name>@<marketplace>` hint; the flag activates automatically once the plugin lands
+- **Path safety** — every target is `path.resolve`d into one of the configured dev roots; `<root>/.minder/` is reserved; path-traversal in workflow keys is rejected
 
 ### Project Management
 - **TODO tracking** — reads each project's `TODO.md`; add items inline or via a cross-project Quick Add modal (Shift+T)

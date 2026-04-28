@@ -10,9 +10,24 @@ The Config page (`/config`) is the single entry point for portfolio-wide configu
 | **MCP** | Every MCP server configured in any project's `.mcp.json` plus user-level servers from `~/.claude/settings.json` |
 | **CI / CD** | Every project that has a `.github/workflows/*.yml`, Vercel/Railway/Fly/Render/Netlify/Heroku/Docker hosting config, or Dependabot updates |
 
-The CI/CD tab parses workflows down to the **per-job** level: triggers, schedule crons, runs-on, and the deduped list of action `uses:` references for each job. It deliberately does **not** parse step `run:` scripts — those tend to be project-specific noise. Each row retains its source file path so a future template-builder feature can copy units verbatim across projects.
+The CI/CD tab parses workflows down to the **per-job** level: triggers, schedule crons, runs-on, and the deduped list of action `uses:` references for each job. It deliberately does **not** parse step `run:` scripts — those tend to be project-specific noise. Each row retains its source file path, which Template Mode uses to copy units verbatim across projects.
 
 User-level data (plugins, user-level hooks/MCP) lives only on `/config`. Per-project pages show only project-local config — see the [Project Config tab](#project-config-tab) below.
+
+## Template Mode — copy a unit to another project
+
+Each project-scoped row on the **Hooks** and **MCP** tabs has a `↗ copy to project` action. Clicking it opens a small popover that:
+
+- Lets you pick a target project from your scanned dev roots (the source project is excluded).
+- Shows conflict-policy radios — `skip`, `overwrite`, `merge`, or `rename` (varies by unit type).
+- Renders an inline diff via **Preview** before you commit.
+- Writes atomically when you click **Apply**, with cache invalidation so the dashboard reflects the change immediately.
+
+Behavior worth knowing:
+
+- **Hooks** — identity is `event + matcher + sha256(invocation)`, so re-applying the same hook is idempotent (no duplicates). Local-scope hooks (`settings.local.json`) are auto-promoted to project-shared (`settings.json`) at the target with a warning. Referenced scripts under `.claude/hooks/<file>` are copied alongside; absolute paths into the source project are rejected.
+- **MCP servers** — env *values* are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key, with a warning listing what you need to fill in.
+- **Agents and skills** — the same `↗ copy to project` action lives on rows in `/agents` and `/skills`. Bundled skills (directory + companion files) copy as a tree; standalone `.md` skills and agents copy as single files.
 
 ## Project Config tab
 

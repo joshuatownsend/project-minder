@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { getUserConfig } from "@/lib/userConfigCache";
+import { makeHookKey } from "@/lib/template/unitKey";
 import {
   CONFIG_TYPES,
   CiCdInfo,
@@ -17,6 +18,8 @@ const CACHE_TTL_MS = 2 * 60 * 1000;
 interface HookRow extends HookEntry {
   projectSlug?: string;
   projectName?: string;
+  /** Stable key for the first command — used by Template Mode "↗ copy to project". */
+  unitKey: string;
 }
 
 interface McpRow extends McpServer {
@@ -111,7 +114,15 @@ export async function GET(request: NextRequest) {
   if (type === "hooks" || type === "all") {
     payload.hooks = collectHooks(projects);
     if (includeUserScope) {
-      payload.hooks.push(...userConfig.hooks.entries.map((e) => ({ ...e })));
+      for (const e of userConfig.hooks.entries) {
+        for (const inv of e.commands) {
+          payload.hooks.push({
+            ...e,
+            commands: [inv],
+            unitKey: makeHookKey(e.event, e.matcher, inv.command),
+          });
+        }
+      }
     }
   }
 
@@ -139,12 +150,24 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(payload);
 }
 
+/** Expands each multi-invocation HookEntry into one row per invocation so
+ *  Template Mode's `↗ copy to project` button has a unique addressable unit
+ *  for every command. Without this, only the first invocation of a tuple
+ *  would be copyable. */
 function collectHooks(projects: ProjectData[]): HookRow[] {
   const rows: HookRow[] = [];
   for (const p of projects) {
     if (!p.hooks) continue;
     for (const e of p.hooks.entries) {
-      rows.push({ ...e, projectSlug: p.slug, projectName: p.name });
+      for (const inv of e.commands) {
+        rows.push({
+          ...e,
+          commands: [inv],
+          projectSlug: p.slug,
+          projectName: p.name,
+          unitKey: makeHookKey(e.event, e.matcher, inv.command),
+        });
+      }
     }
   }
   return rows;

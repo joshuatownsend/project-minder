@@ -14,6 +14,8 @@ export type { ConfigType };
 export interface HookRow extends HookEntry {
   projectSlug?: string;
   projectName?: string;
+  /** Stable key (event|matcher|sha256(command)) for the first command. */
+  unitKey: string;
 }
 
 export interface McpRow extends McpServer {

@@ -2,11 +2,19 @@
 
 import type { Provenance } from "@/lib/indexer/types";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
+import { ApplyUnitButton } from "@/components/ApplyUnitButton";
+import type { ApplySource, UnitRef } from "@/lib/types";
 
 interface CatalogEntryLike {
   provenance: Provenance;
   realPath?: string;
   filePath: string;
+  /** Optional fields used to surface the "↗ copy to project" action. */
+  kind?: "agent" | "skill";
+  source?: "user" | "plugin" | "project";
+  projectSlug?: string;
+  slug?: string;
+  layout?: "bundled" | "standalone";
 }
 
 export function CatalogActionStrip({
@@ -117,6 +125,33 @@ export function CatalogActionStrip({
       >
         re-check
       </button>
+      <ApplySlot entry={entry} />
     </div>
   );
+}
+
+/** Renders the "↗ copy to project" action when the entry has enough metadata
+ *  to address itself as a unit (kind + source + slug). Hidden for plugin-source
+ *  entries — V1 doesn't support plugins as a copy source.
+ */
+function ApplySlot({ entry }: { entry: CatalogEntryLike }) {
+  if (!entry.kind || !entry.source || !entry.slug) return null;
+  if (entry.source === "plugin") return null;
+
+  const source: ApplySource =
+    entry.source === "user"
+      ? { kind: "user" }
+      : entry.projectSlug
+        ? { kind: "project", slug: entry.projectSlug }
+        : { kind: "user" };
+
+  const unit: UnitRef =
+    entry.kind === "skill" && entry.layout
+      ? { kind: "skill", key: `${entry.slug}:${entry.layout}` }
+      : { kind: entry.kind, key: entry.slug };
+
+  const exclude =
+    entry.source === "project" && entry.projectSlug ? [entry.projectSlug] : [];
+
+  return <ApplyUnitButton unit={unit} source={source} excludeTargetSlugs={exclude} />;
 }

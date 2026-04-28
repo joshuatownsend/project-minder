@@ -16,7 +16,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff } from "lucide-react";
+import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers } from "lucide-react";
+import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { StatusDot } from "./ui/StatusDot";
 
 interface ProjectCardProps {
@@ -29,6 +30,7 @@ interface ProjectCardProps {
 
 export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const router = useRouter();
 
   // ── Aggregate worktree counts ──────────────────────────────────────────
@@ -283,12 +285,22 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   align="end"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
+                  <DropdownMenuItem onClick={() => setShowTemplateModal(true)}>
+                    <Layers style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                    Mark as template…
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onArchive(project.slug)}>
                     <Archive style={{ width: "12px", height: "12px", marginRight: "6px" }} />
                     Archive
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            )}
+            {showTemplateModal && (
+              <MarkAsTemplateModal
+                project={project}
+                onClose={() => setShowTemplateModal(false)}
+              />
             )}
           </div>
         </div>
@@ -406,8 +418,10 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 </span>
               )}
               {workflowCount > 0 && (
-                <span
-                  title={pluralize(workflowCount, "workflow")}
+                <Link
+                  href={`/config?type=cicd&project=${encodeURIComponent(project.slug)}`}
+                  title={`${pluralize(workflowCount, "workflow")} — open in /config`}
+                  onClick={(e) => e.stopPropagation()}
                   style={{
                     fontSize: "0.6rem",
                     fontFamily: "var(--font-mono)",
@@ -417,10 +431,11 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                     padding: "1px 5px",
                     borderRadius: "3px",
                     letterSpacing: "0.04em",
+                    textDecoration: "none",
                   }}
                 >
                   CI
-                </span>
+                </Link>
               )}
             </div>
 
