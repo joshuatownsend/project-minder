@@ -15,6 +15,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { MemoryTab } from "./MemoryTab";
 import { ProjectAgentsTab } from "./ProjectAgentsTab";
 import { ProjectSkillsTab } from "./ProjectSkillsTab";
+import { ProjectConfigTab } from "./ProjectConfigTab";
 import {
   ArrowLeft,
   ExternalLink,
@@ -32,7 +33,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "config";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -102,6 +103,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
+  const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
@@ -113,6 +115,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "memory",      label: "Memory" },
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
+    ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
   ];
 
   const actionBtn = (label: string, icon: React.ReactNode, onClick: () => void, href?: string) => {
@@ -504,6 +507,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── SKILLS ───────────────────────────────────────────────── */}
           {activeTab === "skills" && (
             <ProjectSkillsTab slug={project.slug} />
+          )}
+
+          {/* ── CONFIG ───────────────────────────────────────────────── */}
+          {activeTab === "config" && (
+            <ProjectConfigTab project={project} />
           )}
         </div>
       </div>

@@ -11,6 +11,9 @@ import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
+import { scanClaudeHooks } from "./claudeHooks";
+import { scanMcpServers } from "./mcpServers";
+import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
 
 function toSlug(dirName: string): string {
@@ -33,18 +36,33 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
 
   const slug = toSlug(dirName);
 
-  const [pkgResult, envResult, dockerResult, gitResult, claudeMd, todos, claudeSessions, manualSteps, insights] =
-    await Promise.all([
-      scanPackageJson(projectPath),
-      scanEnvFiles(projectPath),
-      scanDockerCompose(projectPath),
-      scanGit(projectPath),
-      scanClaudeMd(projectPath),
-      scanTodoMd(projectPath),
-      scanClaudeSessions(projectPath),
-      scanManualStepsMd(projectPath),
-      scanInsightsMd(projectPath),
-    ]);
+  const [
+    pkgResult,
+    envResult,
+    dockerResult,
+    gitResult,
+    claudeMd,
+    todos,
+    claudeSessions,
+    manualSteps,
+    insights,
+    hooks,
+    mcpServers,
+    cicd,
+  ] = await Promise.all([
+    scanPackageJson(projectPath),
+    scanEnvFiles(projectPath),
+    scanDockerCompose(projectPath),
+    scanGit(projectPath),
+    scanClaudeMd(projectPath),
+    scanTodoMd(projectPath),
+    scanClaudeSessions(projectPath),
+    scanManualStepsMd(projectPath),
+    scanInsightsMd(projectPath),
+    scanClaudeHooks(projectPath),
+    scanMcpServers(projectPath),
+    scanCiCd(projectPath),
+  ]);
 
   // Determine DB port from env or docker
   let dbPort: number | undefined;
@@ -94,6 +112,9 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
     todos,
     manualSteps,
     insights,
+    hooks,
+    mcpServers,
+    cicd,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

@@ -1,6 +1,29 @@
 # Configuration
 
-The Config page (`/config`) lets you customize how Project Minder scans and displays your projects.
+The Config page (`/config`) is the single entry point for portfolio-wide configuration. It has five tabs:
+
+| Tab | What it shows |
+|-----|---------------|
+| **Settings** | Project Minder's own settings (scan roots, batch size, dashboard defaults, hidden projects) |
+| **Hooks** | Every Claude Code hook configured in `.claude/settings.json` / `.claude/settings.local.json` across all projects, plus user-level hooks |
+| **Plugins** | All Claude Code plugins installed via `~/.claude/plugins/installed_plugins.json` with their enabled / disabled / blocked status |
+| **MCP** | Every MCP server configured in any project's `.mcp.json` plus user-level servers from `~/.claude/settings.json` |
+| **CI / CD** | Every project that has a `.github/workflows/*.yml`, Vercel/Railway/Fly/Render/Netlify/Heroku/Docker hosting config, or Dependabot updates |
+
+The CI/CD tab parses workflows down to the **per-job** level: triggers, schedule crons, runs-on, and the deduped list of action `uses:` references for each job. It deliberately does **not** parse step `run:` scripts — those tend to be project-specific noise. Each row retains its source file path so a future template-builder feature can copy units verbatim across projects.
+
+User-level data (plugins, user-level hooks/MCP) lives only on `/config`. Per-project pages show only project-local config — see the [Project Config tab](#project-config-tab) below.
+
+## Project Config tab
+
+When a project has any project-local hooks (`.claude/settings.json`), MCP servers (`.mcp.json`), or CI/CD configuration, a **Config** tab appears on its detail page. The tab has four sections:
+
+- **Hooks** — events (PreToolUse / PostToolUse / etc.), matchers, and command previews; the `settings` / `settings.local` source is shown on the right.
+- **MCP Servers** — name, transport (stdio / http / sse), command + args (or URL), and the count of configured env keys (key names only — never values).
+- **GitHub Workflows** — file name, top-level workflow name, normalized triggers, cron schedules, and per-job rows with each job's `uses:` action references.
+- **Hosting & Automation** — host platform pills (Vercel, Railway, etc.), Vercel cron entries, Dependabot updates with their schedule interval.
+
+A small `CI` badge appears on the dashboard card whenever the project has at least one workflow file.
 
 ## Scan Roots
 

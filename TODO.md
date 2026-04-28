@@ -40,3 +40,12 @@
 - [ ] **Signed commits** — Set up GPG or SSH commit signing on every machine you develop from, then enable "Require signed commits" in the `main-protection` ruleset.
 - [ ] **CodeQL scanning** — Add `.github/workflows/codeql.yml` using `github/codeql-action`. Once it's run once, enable "Require code scanning results" in the ruleset.
 - [ ] **Release automation** — Tag-based GitHub Release workflow: on `v*` tag push, run CI, then create a release with auto-generated notes from squashed PR titles.
+- [ ] Support running the /insights command in Claude, then display the generated output file (~/.claude/usage-data/report.html) for the user to review. Let the user schedule running /insights to update the report.
+- [ ] Support running the /insights command in Claude, then display the generated output file (~/.claude/usage-data/report.html) for the user to review. Let the user schedule running /insights to update the report.
+
+## Config Surfacing — Follow-ups
+
+- [ ] **Template-builder MVP** — cross-project dedupe of hook tuples / MCP server entries / workflow jobs; "copy this unit to project X" action on `/config` rows. Each scanner already retains `sourcePath` + per-unit identifiers, so this is mostly UI + a `POST /api/claude-config/apply` route.
+- [ ] **CI badge → /config deep link** — clicking the dashboard `CI` chip should navigate to `/config?type=cicd&project=<slug>` (currently the page ignores URL params; add `useSearchParams` wiring).
+- [ ] **`local` ProvenanceBadge variant** — surface `.claude/settings.local.json`-sourced hooks distinctly from `.claude/settings.json`-sourced ones in the cross-project hooks list (currently both show as "project: slug").
+- [ ] **Plugin-bundled hooks/MCP** — plugins can ship their own `hooks/hooks.json` and `.mcp.json` under `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. Surfacing these would require iterating `loadInstalledPlugins()` and parsing each plugin's bundled config files; deferred because the signal is weaker than user-level + project-local config.
