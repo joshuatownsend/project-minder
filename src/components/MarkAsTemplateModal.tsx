@@ -14,11 +14,21 @@ import type {
   TemplateUnitInventory,
   TemplateUnitRef,
   UnitKind,
+  Workflow,
 } from "@/lib/types";
 
 interface Props {
   project: ProjectData;
   onClose: () => void;
+}
+
+interface PluginEnableRow {
+  key: string;
+  name: string;
+  marketplace: string;
+  enabled: boolean;
+  source: "project" | "local";
+  installed: boolean;
 }
 
 interface AvailableUnits {
@@ -27,6 +37,8 @@ interface AvailableUnits {
   commands: CommandEntry[];
   hooks: HookEntry[];
   mcp: McpServer[];
+  plugins: PluginEnableRow[];
+  workflows: Workflow[];
 }
 
 export function MarkAsTemplateModal({ project, onClose }: Props) {
@@ -50,15 +62,19 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
         // commands listing via the new walker — but commands aren't yet on
         // their own API, so we read the project's CommandEntries from the
         // project detail endpoint when available.
-        const [agentsRes, skillsRes, configRes] = await Promise.all([
+        const [agentsRes, skillsRes, configRes, pluginsRes, commandsRes] = await Promise.all([
           fetch(`/api/agents?source=project&project=${encodeURIComponent(project.slug)}`),
           fetch(`/api/skills?source=project&project=${encodeURIComponent(project.slug)}`),
           fetch(`/api/claude-config?type=all&project=${encodeURIComponent(project.slug)}`),
+          fetch(`/api/projects/${encodeURIComponent(project.slug)}/plugins`),
+          fetch(`/api/commands?source=project&project=${encodeURIComponent(project.slug)}`),
         ]);
-        const [agentsData, skillsData, configData] = await Promise.all([
+        const [agentsData, skillsData, configData, pluginsData, commandsData] = await Promise.all([
           agentsRes.json(),
           skillsRes.json(),
           configRes.json(),
+          pluginsRes.json().catch(() => ({ enables: [] })),
+          commandsRes.json().catch(() => []),
         ]);
 
         // The agents/skills routes return rows in a `{ entry, usage }` shape;
@@ -76,16 +92,34 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
         const mcp: McpServer[] = (configData?.mcp ?? []).filter(
           (m: { projectSlug?: string }) => m.projectSlug === project.slug
         );
+        // CI/CD payload is grouped per project — flatten the workflows for the
+        // requested slug.
+        const workflows: Workflow[] = ((configData?.cicd ?? []) as Array<{
+          projectSlug?: string;
+          cicd?: { workflows?: Workflow[] };
+        }>)
+          .filter((c) => c.projectSlug === project.slug)
+          .flatMap((c) => c.cicd?.workflows ?? []);
+
+        const plugins: PluginEnableRow[] = Array.isArray(pluginsData?.enables)
+          ? (pluginsData.enables as PluginEnableRow[]).filter((p) => p.enabled)
+          : [];
+
+        const commandEntries: CommandEntry[] = Array.isArray(commandsData)
+          ? (commandsData as { entry?: CommandEntry }[])
+              .map((r) => r.entry)
+              .filter(Boolean) as CommandEntry[]
+          : [];
 
         if (cancelled) return;
         setAvailable({
           agents: agentEntries,
           skills: skillEntries,
-          // Slash commands aren't yet exposed via API; users can still create a
-          // template without them. A future /api/commands route will plug in here.
-          commands: [],
+          commands: commandEntries,
           hooks,
           mcp,
+          plugins,
+          workflows,
         });
       } catch (e) {
         if (!cancelled) setLoadError((e as Error).message);
@@ -226,6 +260,28 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
               })).filter((e) => e.key)
             )} selected={selected} onToggle={toggle} />
             <UnitGroup title="mcp servers" entries={available.mcp.map((m) => ({ kind: "mcp" as UnitKind, key: m.name, label: m.name, sub: `${m.transport}${m.command ? " · " + m.command : ""}${m.url ? " · " + m.url : ""}` }))} selected={selected} onToggle={toggle} />
+            <UnitGroup
+              title="plugins"
+              entries={available.plugins.map((p) => ({
+                kind: "plugin" as UnitKind,
+                key: p.key,
+                label: p.name,
+                sub: `${p.marketplace || "no marketplace"} · ${p.installed ? "installed" : "NOT installed at ~/.claude/plugins"}${p.source === "local" ? " · local-scope" : ""}`,
+              }))}
+              selected={selected}
+              onToggle={toggle}
+            />
+            <UnitGroup
+              title="workflows (.github/workflows)"
+              entries={available.workflows.map((w) => ({
+                kind: "workflow" as UnitKind,
+                key: workflowKey(w.file),
+                label: w.name ?? workflowKey(w.file),
+                sub: `${w.triggers.join(", ") || "no triggers"}${w.cron.length > 0 ? ` · cron: ${w.cron.join(", ")}` : ""}`,
+              }))}
+              selected={selected}
+              onToggle={toggle}
+            />
           </div>
         )}
 
@@ -328,11 +384,30 @@ function collectAllKeys(available: AvailableUnits | null): string[] {
     if (k) keys.push(`hook:${k}`);
   });
   available.mcp.forEach((m) => keys.push(`mcp:${m.name}`));
+  available.plugins.forEach((p) => keys.push(`plugin:${p.key}`));
+  available.workflows.forEach((w) => keys.push(`workflow:${workflowKey(w.file)}`));
   return keys;
 }
 
+/** Convert an absolute workflow file path to the relative key under
+ *  `.github/workflows/` (e.g. "ci.yml") that the apply layer expects. */
+function workflowKey(absoluteFilePath: string): string {
+  const norm = absoluteFilePath.replace(/\\/g, "/");
+  const idx = norm.lastIndexOf(".github/workflows/");
+  if (idx === -1) return norm.split("/").pop() ?? norm;
+  return norm.slice(idx + ".github/workflows/".length);
+}
+
 function buildInventory(available: AvailableUnits, selected: Set<string>): TemplateUnitInventory {
-  const inv: TemplateUnitInventory = { agents: [], skills: [], commands: [], hooks: [], mcp: [] };
+  const inv: TemplateUnitInventory = {
+    agents: [],
+    skills: [],
+    commands: [],
+    hooks: [],
+    mcp: [],
+    plugins: [],
+    workflows: [],
+  };
   for (const a of available.agents) {
     if (selected.has(`agent:${a.slug}`)) {
       inv.agents.push(unitRef("agent", a.slug, a.name, a.description));
@@ -357,6 +432,21 @@ function buildInventory(available: AvailableUnits, selected: Set<string>): Templ
   for (const m of available.mcp) {
     if (selected.has(`mcp:${m.name}`)) {
       inv.mcp.push(unitRef("mcp", m.name, m.name, `${m.transport}${m.command ? " · " + m.command : ""}`));
+    }
+  }
+  for (const p of available.plugins) {
+    if (selected.has(`plugin:${p.key}`)) {
+      inv.plugins.push(
+        unitRef("plugin", p.key, p.name, `${p.marketplace || "no marketplace"}${p.installed ? "" : " · not installed at user scope"}`)
+      );
+    }
+  }
+  for (const w of available.workflows) {
+    const k = workflowKey(w.file);
+    if (selected.has(`workflow:${k}`)) {
+      inv.workflows.push(
+        unitRef("workflow", k, w.name ?? k, w.triggers.join(", ") || undefined)
+      );
     }
   }
   return inv;

@@ -151,6 +151,8 @@ export function TemplateDetail({ slug }: Props) {
       <UnitList title="commands" refs={inv.commands} />
       <UnitList title="hooks" refs={inv.hooks} />
       <UnitList title="mcp servers" refs={inv.mcp} />
+      <UnitList title="plugins (enable flag)" refs={inv.plugins} />
+      <UnitList title="workflows (.github/workflows)" refs={inv.workflows} />
 
       {showApply && (
         <ApplyTemplateModal

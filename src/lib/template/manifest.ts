@@ -8,6 +8,7 @@ import {
   TemplateUnitRef,
   UnitKind,
 } from "../types";
+export type { TemplateUnitInventory };
 import { getDevRoots } from "../config";
 import { atomicWriteFile, ensureDir, fileExists, withFileLock } from "./atomicFs";
 
@@ -31,7 +32,15 @@ export function bundleDirForSlug(config: MinderConfig, slug: string): string {
 }
 
 const VALID_KINDS: readonly TemplateKind[] = ["live", "snapshot"];
-const VALID_UNIT_KINDS: readonly UnitKind[] = ["agent", "skill", "command", "hook", "mcp"];
+const VALID_UNIT_KINDS: readonly UnitKind[] = [
+  "agent",
+  "skill",
+  "command",
+  "hook",
+  "mcp",
+  "plugin",
+  "workflow",
+];
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -40,12 +49,28 @@ export function isValidSlug(slug: string): boolean {
 }
 
 export function emptyInventory(): TemplateUnitInventory {
-  return { agents: [], skills: [], commands: [], hooks: [], mcp: [] };
+  return {
+    agents: [],
+    skills: [],
+    commands: [],
+    hooks: [],
+    mcp: [],
+    plugins: [],
+    workflows: [],
+  };
 }
 
 /** Total number of units across all kinds. Useful for UI summaries. */
 export function inventoryCount(inv: TemplateUnitInventory): number {
-  return inv.agents.length + inv.skills.length + inv.commands.length + inv.hooks.length + inv.mcp.length;
+  return (
+    inv.agents.length +
+    inv.skills.length +
+    inv.commands.length +
+    inv.hooks.length +
+    inv.mcp.length +
+    inv.plugins.length +
+    inv.workflows.length
+  );
 }
 
 export interface ManifestValidationError {
@@ -102,6 +127,32 @@ export function validateManifest(
   return { manifest: raw as TemplateManifest };
 }
 
+/** Map a UnitKind to the plural property name used inside `units`. */
+export function inventoryKeyFor(kind: UnitKind): keyof TemplateUnitInventory {
+  switch (kind) {
+    case "agent":
+      return "agents";
+    case "skill":
+      return "skills";
+    case "command":
+      return "commands";
+    case "hook":
+      return "hooks";
+    case "mcp":
+      return "mcp";
+    case "plugin":
+      return "plugins";
+    case "workflow":
+      return "workflows";
+    default: {
+      // Compile-time exhaustiveness — adding a new UnitKind without updating
+      // this switch will surface as a TS error here.
+      const _exhaustive: never = kind;
+      throw new Error(`Unhandled UnitKind: ${String(_exhaustive)}`);
+    }
+  }
+}
+
 function validateInventory(raw: unknown): ManifestValidationError[] {
   const errors: ManifestValidationError[] = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -109,7 +160,7 @@ function validateInventory(raw: unknown): ManifestValidationError[] {
   }
   const u = raw as Record<string, unknown>;
   for (const kind of VALID_UNIT_KINDS) {
-    const key = kind === "mcp" ? "mcp" : kind === "command" ? "commands" : `${kind}s`;
+    const key = inventoryKeyFor(kind);
     const list = u[key];
     if (list === undefined) continue; // Allowed to be missing — treated as [].
     if (!Array.isArray(list)) {

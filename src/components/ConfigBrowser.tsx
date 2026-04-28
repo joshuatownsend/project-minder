@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useConfig, type HookRow, type McpRow, type CicdRow } from "@/hooks/useConfig";
-import type { ConfigType, PluginEntry, Workflow } from "@/lib/types";
+import { CONFIG_TYPES, type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
 import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
@@ -20,7 +21,20 @@ const TABS: { key: TabKey; label: string; icon: typeof Webhook }[] = [
 ];
 
 export function ConfigBrowser() {
-  const [activeTab, setActiveTab] = useState<TabKey>("settings");
+  const searchParams = useSearchParams();
+
+  // Initial tab from ?type= URL param. Falls back to "settings" when missing
+  // or invalid. Project filter from ?project= scopes the rollup so a deep
+  // link from a dashboard card lands directly on its rows.
+  const initialTab: TabKey = (() => {
+    const t = searchParams?.get("type");
+    if (!t) return "settings";
+    if ((CONFIG_TYPES as readonly string[]).includes(t)) return t as TabKey;
+    return "settings";
+  })();
+  const projectFilter = searchParams?.get("project") || undefined;
+
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [rawQuery, setRawQuery] = useState("");
   const [query, setQuery] = useState("");
 
@@ -31,7 +45,7 @@ export function ConfigBrowser() {
 
   const catalogType: ConfigType | undefined =
     activeTab === "settings" ? undefined : activeTab;
-  const { data, loading } = useConfig(catalogType, undefined, query || undefined);
+  const { data, loading } = useConfig(catalogType, projectFilter, query || undefined);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -194,6 +208,7 @@ function HooksList({ rows }: { rows: HookRow[] }) {
               {commandPreview(h.commands[0]?.command, h.commands.length)}
             </span>
           </span>
+          {h.source === "local" && <LocalScopeBadge />}
           {h.projectSlug && (
             <ApplyUnitButton
               unit={{ kind: "hook", key: h.unitKey }}
@@ -206,6 +221,29 @@ function HooksList({ rows }: { rows: HookRow[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** Small chip on a hook row indicating the source was `.claude/settings.local.json`
+ *  (per-machine config) rather than `.claude/settings.json` (project-shared).
+ *  Templates that copy a `local` hook auto-promote it to project-shared at the
+ *  target — surfacing this on the source row makes that decision transparent. */
+function LocalScopeBadge() {
+  return (
+    <span
+      title=".claude/settings.local.json — per-machine; copying via Template Mode auto-promotes to settings.json (project-shared)"
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.6rem",
+        color: "var(--warning, #f59e0b)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "3px",
+        padding: "1px 5px",
+        letterSpacing: "0.04em",
+      }}
+    >
+      local
+    </span>
   );
 }
 

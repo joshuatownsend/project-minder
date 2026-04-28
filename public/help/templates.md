@@ -1,6 +1,6 @@
 # Templates
 
-Templates package a curated set of Claude Code config — agents, skills, slash commands, hooks, and MCP servers — so you can apply that bundle to other projects (or new projects) with a single click.
+Templates package a curated set of Claude Code config — agents, skills, slash commands, hooks, MCP servers, plugin enables, and GitHub Actions workflows — so you can apply that bundle to other projects (or new projects) with a single click.
 
 ## Two flavors
 
@@ -20,9 +20,11 @@ You can convert a live template to a snapshot from the template detail page; the
       skills/<slug>.md       # standalone
       skills/<slug>/SKILL.md # bundled
       commands/<slug>.md
-      settings.json          # contains only the selected hooks
+      settings.json          # contains only the selected hooks + enabledPlugins
       hooks/<file>           # referenced shell scripts
     .mcp.json                # contains only the selected MCP servers
+    .github/
+      workflows/<file>.yml   # selected workflows
 ```
 
 Snapshot bundles mirror a real project's `.claude/` layout — the apply layer treats either flavor as a "virtual project root" and reuses the same scanners (`scanClaudeHooks`, `walkProjectAgents`, etc.). One code path, one set of invariants, two sources of truth.
@@ -57,6 +59,8 @@ Every safety property of the single-unit apply layer applies to template apply t
 - **`local`-scope promotion** — hooks sourced from `settings.local.json` write to project-shared `settings.json` at the target with a warning.
 - **MCP env-keys-only** — env values are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key.
 - **Hook script copy** — referenced scripts at `.claude/hooks/<file>` come along automatically; absolute paths into the source project are rejected.
+- **Plugin "requires install" warning** — applying a plugin enable when the plugin isn't installed at `~/.claude/plugins/` writes the enable flag anyway and surfaces a warning with the exact `/plugin install <name>@<marketplace>` command to run. The flag activates automatically once the plugin lands.
+- **Workflow apply is file-replace only** — workflows have no internal merge semantics. Conflict policies for workflow units are limited to `skip` / `overwrite` / `rename`. Path-traversal and absolute paths in the workflow key are rejected.
 
 ## API reference
 

@@ -446,7 +446,14 @@ export interface ScanResult {
 // V1: single-unit copy across projects. V2 will add TemplateManifest +
 // whole-template apply + new-project bootstrap.
 
-export type UnitKind = "agent" | "skill" | "command" | "hook" | "mcp";
+export type UnitKind =
+  | "agent"
+  | "skill"
+  | "command"
+  | "hook"
+  | "mcp"
+  | "plugin"
+  | "workflow";
 
 export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
 
@@ -524,6 +531,14 @@ export interface TemplateUnitInventory {
   commands: TemplateUnitRef[];
   hooks: TemplateUnitRef[];
   mcp: TemplateUnitRef[];
+  /** Plugin enable list. Keys are `<pluginName>@<marketplace>` (or just
+   *  `<pluginName>` when there's no marketplace). Applying a plugin unit
+   *  flips the target's `.claude/settings.json` enabledPlugins to true. */
+  plugins: TemplateUnitRef[];
+  /** GitHub Actions workflows. Keys are relative paths under
+   *  `.github/workflows/` (e.g., "ci.yml"). Apply is file-replace only —
+   *  workflows have no internal merge semantics. */
+  workflows: TemplateUnitRef[];
 }
 
 export type TemplateKind = "live" | "snapshot";

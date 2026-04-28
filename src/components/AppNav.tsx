@@ -10,6 +10,7 @@ const navItems = [
   { href: "/insights",     label: "Insights"                    },
   { href: "/agents",       label: "Agents"                      },
   { href: "/skills",       label: "Skills"                      },
+  { href: "/commands",     label: "Commands"                    },
   { href: "/sessions",     label: "Sessions"                    },
   { href: "/status",       label: "Status",   badge: "approval" },
   { href: "/usage",        label: "Usage"                       },

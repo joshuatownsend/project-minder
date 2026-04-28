@@ -418,8 +418,10 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 </span>
               )}
               {workflowCount > 0 && (
-                <span
-                  title={pluralize(workflowCount, "workflow")}
+                <Link
+                  href={`/config?type=cicd&project=${encodeURIComponent(project.slug)}`}
+                  title={`${pluralize(workflowCount, "workflow")} — open in /config`}
+                  onClick={(e) => e.stopPropagation()}
                   style={{
                     fontSize: "0.6rem",
                     fontFamily: "var(--font-mono)",
@@ -429,10 +431,11 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                     padding: "1px 5px",
                     borderRadius: "3px",
                     letterSpacing: "0.04em",
+                    textDecoration: "none",
                   }}
                 >
                   CI
-                </span>
+                </Link>
               )}
             </div>
 

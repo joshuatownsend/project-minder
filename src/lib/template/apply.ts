@@ -24,8 +24,11 @@ import type { AgentEntry, SkillEntry } from "../indexer/types";
 import { applySingleFile, applyDirectory } from "./applyFile";
 import { applyHook } from "./applyHook";
 import { applyMcp } from "./applyMcp";
+import { applyPlugin } from "./applyPlugin";
+import { applyWorkflow } from "./applyWorkflow";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
+import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 
 /** Resolved source location: either a virtual-project root path (with a slug
  *  used only by walkers for entry-id construction) or a user-scope flag. */
@@ -123,6 +126,12 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
         break;
       case "mcp":
         result = await dispatchMcp(request, sourceResolved, safeTargetPath);
+        break;
+      case "plugin":
+        result = await dispatchPlugin(request, sourceResolved, safeTargetPath);
+        break;
+      case "workflow":
+        result = await dispatchWorkflow(request, sourceResolved, safeTargetPath);
         break;
       default:
         result = errorResult("UNKNOWN_UNIT_KIND", `Unsupported unit kind "${request.unit.kind}".`);
@@ -250,6 +259,62 @@ async function dispatchMcp(
     targetProjectPath,
     conflict: request.conflict,
     sourceSlug: source.slug,
+    dryRun: request.dryRun,
+  });
+}
+
+async function dispatchWorkflow(
+  request: ApplyRequest,
+  source: ResolvedSource,
+  targetProjectPath: string
+): Promise<ApplyResult> {
+  if (source.kind !== "project") {
+    return errorResult(
+      "UNSUPPORTED_SOURCE",
+      "Workflow source must be a project (user-scope workflows don't exist)."
+    );
+  }
+  return applyWorkflow({
+    sourceProjectPath: source.path,
+    workflowKey: request.unit.key,
+    targetProjectPath,
+    conflict: request.conflict,
+    dryRun: request.dryRun,
+  });
+}
+
+async function dispatchPlugin(
+  request: ApplyRequest,
+  source: ResolvedSource,
+  targetProjectPath: string
+): Promise<ApplyResult> {
+  if (source.kind !== "project") {
+    return errorResult(
+      "UNSUPPORTED_SOURCE",
+      "Plugin source must be a project (user-scope plugin enables not supported in V3)."
+    );
+  }
+  // Verify the plugin is actually enabled in the source — refuse to template
+  // a disabled or unknown enable. The applyPlugin primitive itself doesn't
+  // re-read the source; that's the dispatch layer's job.
+  const enables = await scanProjectPluginEnables(source.path);
+  const found = enables.find((e) => e.key === request.unit.key);
+  if (!found) {
+    return errorResult(
+      "UNIT_NOT_FOUND",
+      `Plugin "${request.unit.key}" is not present in the source project's enabledPlugins.`
+    );
+  }
+  if (!found.enabled) {
+    return errorResult(
+      "PLUGIN_NOT_ENABLED",
+      `Plugin "${request.unit.key}" is set to false in the source project — refusing to template a disabled enable.`
+    );
+  }
+  return applyPlugin({
+    pluginKey: request.unit.key,
+    targetProjectPath,
+    conflict: request.conflict,
     dryRun: request.dryRun,
   });
 }

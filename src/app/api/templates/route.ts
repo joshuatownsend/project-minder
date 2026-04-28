@@ -11,7 +11,15 @@ import { listTemplates } from "@/lib/template/registry";
 import { createLiveTemplate } from "@/lib/template/promote";
 import { emptyInventory, isValidSlug } from "@/lib/template/manifest";
 
-const VALID_UNIT_KINDS: readonly UnitKind[] = ["agent", "skill", "command", "hook", "mcp"];
+const VALID_UNIT_KINDS: readonly UnitKind[] = [
+  "agent",
+  "skill",
+  "command",
+  "hook",
+  "mcp",
+  "plugin",
+  "workflow",
+];
 
 export async function GET() {
   const config = await readConfig();
@@ -83,7 +91,16 @@ function validateCreate(body: unknown):
   const out: TemplateUnitInventory = emptyInventory();
 
   for (const kind of VALID_UNIT_KINDS) {
-    const key = kind === "mcp" ? "mcp" : kind === "command" ? "commands" : `${kind}s`;
+    const key =
+      kind === "mcp"
+        ? "mcp"
+        : kind === "command"
+          ? "commands"
+          : kind === "plugin"
+            ? "plugins"
+            : kind === "workflow"
+              ? "workflows"
+              : `${kind}s`;
     const list = inv[key];
     if (list === undefined) continue;
     if (!Array.isArray(list)) {
@@ -119,7 +136,9 @@ function validateCreate(body: unknown):
     else if (kind === "skill") out.skills = refs;
     else if (kind === "command") out.commands = refs;
     else if (kind === "hook") out.hooks = refs;
-    else out.mcp = refs;
+    else if (kind === "mcp") out.mcp = refs;
+    else if (kind === "plugin") out.plugins = refs;
+    else if (kind === "workflow") out.workflows = refs;
   }
 
   return {

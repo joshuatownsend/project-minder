@@ -9,6 +9,7 @@ import {
 } from "../types";
 import { scanClaudeHooks } from "../scanner/claudeHooks";
 import { scanMcpServers } from "../scanner/mcpServers";
+import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 import { walkProjectAgents } from "../indexer/walkAgents";
 import { walkProjectSkills } from "../indexer/walkSkills";
 import { walkProjectCommands } from "../indexer/walkCommands";
@@ -162,7 +163,10 @@ export async function saveAsSnapshot(
     }
   }
 
-  // Hooks — build a fresh settings.json containing only the selected invocations.
+  // Hooks + plugin enables both land in bundle/.claude/settings.json. Build a
+  // single object so the second writer doesn't clobber the first.
+  const bundleSettings: Record<string, unknown> = {};
+
   if (inv.hooks.length > 0) {
     const hooksInfo = await scanClaudeHooks(sourceProject.path);
     const allEntries = (hooksInfo?.entries ?? []).flatMap(explodeHookCommands);
@@ -174,7 +178,6 @@ export async function saveAsSnapshot(
       const entry = findHookByKey(allEntries, u.key);
       if (!entry) continue;
       const inv0 = entry.commands[0];
-      // Track scripts so we can copy them alongside.
       for (const ref of extractHookScriptRefs(inv0.command)) referencedScripts.add(ref);
 
       const eventArr = built[entry.event] ?? [];
@@ -191,16 +194,44 @@ export async function saveAsSnapshot(
       group.hooks.push(invocationObj);
       built[entry.event] = eventArr;
     }
-
-    const settingsFile = path.join(bundleDir, ".claude", "settings.json");
-    await ensureDir(path.dirname(settingsFile));
-    await atomicWriteFile(settingsFile, JSON.stringify({ hooks: built }, null, 2) + "\n");
+    bundleSettings.hooks = built;
 
     // Copy each referenced script.
     for (const scriptName of referencedScripts) {
       const from = path.join(sourceProject.path, ".claude", "hooks", scriptName);
       if (!(await fileExists(from))) continue;
       const to = path.join(bundleDir, ".claude", "hooks", scriptName);
+      await ensureDir(path.dirname(to));
+      await fs.copyFile(from, to);
+    }
+  }
+
+  // Plugin enables — write into the same settings.json under enabledPlugins.
+  if (inv.plugins.length > 0) {
+    const enables = await scanProjectPluginEnables(sourceProject.path);
+    const enabledMap: Record<string, true> = {};
+    for (const u of inv.plugins) {
+      const e = enables.find((x) => x.key === u.key && x.enabled);
+      if (!e) continue;
+      enabledMap[u.key] = true;
+    }
+    if (Object.keys(enabledMap).length > 0) {
+      bundleSettings.enabledPlugins = enabledMap;
+    }
+  }
+
+  if (Object.keys(bundleSettings).length > 0) {
+    const settingsFile = path.join(bundleDir, ".claude", "settings.json");
+    await ensureDir(path.dirname(settingsFile));
+    await atomicWriteFile(settingsFile, JSON.stringify(bundleSettings, null, 2) + "\n");
+  }
+
+  // Workflows — file-replace copies into bundle/.github/workflows/<key>.
+  if (inv.workflows.length > 0) {
+    for (const u of inv.workflows) {
+      const from = path.join(sourceProject.path, ".github", "workflows", u.key);
+      if (!(await fileExists(from))) continue;
+      const to = path.join(bundleDir, ".github", "workflows", u.key);
       await ensureDir(path.dirname(to));
       await fs.copyFile(from, to);
     }
@@ -252,5 +283,13 @@ export { makeHookKey };
 /** Build a flat array of unit refs across kinds (used by UI for total count
  *  + iteration shortcuts). */
 export function flattenInventory(inv: TemplateUnitInventory): TemplateUnitRef[] {
-  return [...inv.agents, ...inv.skills, ...inv.commands, ...inv.hooks, ...inv.mcp];
+  return [
+    ...inv.agents,
+    ...inv.skills,
+    ...inv.commands,
+    ...inv.hooks,
+    ...inv.mcp,
+    ...inv.plugins,
+    ...inv.workflows,
+  ];
 }

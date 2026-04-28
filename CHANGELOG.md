@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Template Mode V3 — polish + two new unit kinds.** Two new `UnitKind` values land:
+  - **`plugin`** — applying flips the target's `.claude/settings.json` `enabledPlugins[<name>@<marketplace>] = true`. If the plugin isn't installed at `~/.claude/plugins/`, the apply still writes the enable flag and surfaces a warning with a copy-pastable `/plugin install …` hint.
+  - **`workflow`** — file-replace copies a `.github/workflows/<file>.yml` from source to target. Path-traversal and absolute keys rejected; `merge` is rejected since workflows have no internal merge semantics.
+- **`/commands` browser page** — cross-project slash-commands catalog mirroring `/agents` and `/skills`. Search, source filter (user/plugin/project), expandable rows with `allowed-tools`, body excerpt, and a `↗ copy to project` action. Backed by `GET /api/commands`. AppNav gains the `/commands` entry.
+- **Project plugin enables endpoint** — `GET /api/projects/[slug]/plugins` returns the project's `enabledPlugins` decorated with whether each is installed at user scope. Powers MarkAsTemplateModal's plugin picker.
+- **Per-unit conflict overrides in Apply Template modal** — expandable section lists every unit with its allowed conflict policies as a per-unit dropdown (default falls back to the modal-wide policy). Override count surfaces in the legend.
+- **`local` ProvenanceBadge variant** — hooks sourced from `.claude/settings.local.json` now show a small amber `local` chip on `/config` rows. Tooltip explains that copying the hook via Template Mode auto-promotes it to project-shared.
+- **CI badge → /config deep link** — the dashboard `CI` chip is now a `<Link>` to `/config?type=cicd&project=<slug>`. `ConfigBrowser` reads `useSearchParams()` and seeds the active tab + project filter from the URL.
+- **MarkAsTemplateModal** picks up four new sections — slash commands, plugin enables (with installed/not-installed badge), workflows, and the existing agents/skills/hooks/MCP — fetched in parallel.
+- **TemplatesBrowser + TemplateDetail** show plugin and workflow unit counts in the inventory display.
 - **Template Mode V2 — template projects + new-project bootstrap.** Curated bundles of agents, skills, slash commands, hooks, and MCP servers can be authored from any project, then applied to other projects (existing or freshly bootstrapped). Two flavors:
   - **Live templates** — manifest-only; the source project's `.claude/` is referenced at apply time. Edits flow through.
   - **Snapshot templates** — a frozen copy of the selected units lives at `<devRoot>/.minder/templates/<slug>/bundle/`, mirroring a real project's `.claude/` + `.mcp.json`. Promote a live template via the detail page's "save as snapshot" button.

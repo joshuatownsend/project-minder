@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   ApplyTemplateRequest,
   ApplyTemplateResult,
   ConflictPolicy,
   ProjectData,
   TemplateManifest,
+  TemplateUnitRef,
+  UnitKind,
 } from "@/lib/types";
 
 interface Props {
@@ -17,6 +19,20 @@ interface Props {
 
 const POLICIES: ConflictPolicy[] = ["skip", "overwrite", "merge", "rename"];
 
+/** Per-kind allowed policies. Mirrors the apply-primitives accept-lists.
+ *  When a kind doesn't accept a policy it's surfaced as an error in the
+ *  per-unit result row — but blocking the override at selection time is
+ *  better UX than letting the user pick something that will fail. */
+const POLICIES_BY_KIND: Record<UnitKind, ConflictPolicy[]> = {
+  hook: ["skip", "overwrite", "merge"],
+  mcp: ["skip", "overwrite", "merge", "rename"],
+  agent: ["skip", "overwrite", "rename"],
+  skill: ["skip", "overwrite", "rename"],
+  command: ["skip", "overwrite", "rename"],
+  plugin: ["skip", "overwrite", "merge"],
+  workflow: ["skip", "overwrite", "rename"],
+};
+
 export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
   const [targetMode, setTargetMode] = useState<"existing" | "new">("existing");
@@ -25,9 +41,24 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
   const [newRelPath, setNewRelPath] = useState("");
   const [gitInit, setGitInit] = useState(true);
   const [conflict, setConflict] = useState<ConflictPolicy>("merge");
+  const [perUnitConflict, setPerUnitConflict] = useState<Record<string, ConflictPolicy>>({});
+  const [showOverrides, setShowOverrides] = useState(false);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<ApplyTemplateResult | null>(null);
   const [result, setResult] = useState<ApplyTemplateResult | null>(null);
+
+  const allUnits = useMemo<TemplateUnitRef[]>(
+    () => [
+      ...manifest.units.agents,
+      ...manifest.units.skills,
+      ...manifest.units.commands,
+      ...manifest.units.hooks,
+      ...manifest.units.mcp,
+      ...manifest.units.plugins,
+      ...manifest.units.workflows,
+    ],
+    [manifest]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -57,12 +88,14 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
   }, [newName, newRelPath, targetMode]);
 
   function buildRequest(dryRun: boolean): ApplyTemplateRequest | null {
+    const overrides = Object.keys(perUnitConflict).length > 0 ? perUnitConflict : undefined;
     if (targetMode === "existing") {
       if (!existingSlug) return null;
       return {
         templateSlug: slug,
         target: { kind: "existing", slug: existingSlug },
         conflictDefault: conflict,
+        perUnitConflict: overrides,
         dryRun,
       };
     }
@@ -71,6 +104,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
       templateSlug: slug,
       target: { kind: "new", name: newName.trim(), relPath: newRelPath.trim(), gitInit },
       conflictDefault: conflict,
+      perUnitConflict: overrides,
       dryRun,
     };
   }
@@ -224,10 +258,100 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
             ))}
           </div>
           <p style={{ marginTop: "4px", fontSize: "0.65rem", color: "var(--text-muted)" }}>
-            applied to all units. some unit kinds reject some policies (e.g., hooks can&apos;t rename) and will surface as
-            errors in the per-unit result list.
+            applied to all units. some unit kinds reject some policies (e.g., hooks can&apos;t rename) — those are hidden
+            from the per-unit override below.
           </p>
         </fieldset>
+
+        {allUnits.length > 0 && (
+          <fieldset style={{ marginTop: "12px", border: "none", padding: 0 }}>
+            <legend
+              style={{
+                ...legend,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+              onClick={() => setShowOverrides((v) => !v)}
+            >
+              <span aria-hidden="true">{showOverrides ? "▾" : "▸"}</span>
+              per-unit overrides {Object.keys(perUnitConflict).length > 0 && `(${Object.keys(perUnitConflict).length})`}
+            </legend>
+            {showOverrides && (
+              <div
+                style={{
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  maxHeight: "180px",
+                  overflowY: "auto",
+                  marginTop: "4px",
+                }}
+              >
+                {allUnits.map((u) => {
+                  const id = `${u.kind}:${u.key}`;
+                  const allowed = POLICIES_BY_KIND[u.kind];
+                  const current = perUnitConflict[id];
+                  return (
+                    <div
+                      key={id}
+                      style={{
+                        display: "flex",
+                        gap: "8px",
+                        alignItems: "center",
+                        padding: "4px 8px",
+                        borderBottom: "1px solid var(--border-subtle)",
+                        fontSize: "0.7rem",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "0.6rem",
+                          color: "var(--text-muted)",
+                          minWidth: "55px",
+                        }}
+                      >
+                        {u.kind}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {u.name ?? u.key}
+                      </span>
+                      <select
+                        value={current ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPerUnitConflict((prev) => {
+                            const next = { ...prev };
+                            if (v === "") delete next[id];
+                            else next[id] = v as ConflictPolicy;
+                            return next;
+                          });
+                        }}
+                        style={{
+                          padding: "2px 6px",
+                          fontSize: "0.65rem",
+                          fontFamily: "var(--font-body)",
+                          background: "var(--bg-surface)",
+                          color: "var(--text-primary)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "var(--radius)",
+                        }}
+                      >
+                        <option value="">(default)</option>
+                        {allowed.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+        )}
 
         <div style={{ marginTop: "16px", display: "flex", gap: "8px", justifyContent: "flex-end" }}>
           <button onClick={onClose} disabled={busy} style={secondaryButton(busy)}>
