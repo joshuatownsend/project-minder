@@ -41,6 +41,13 @@ export interface ProjectData {
   // Worktree overlays
   worktrees?: WorktreeOverlay[];
 
+  // Claude config (project-local)
+  hooks?: HooksInfo;
+  mcpServers?: McpServersInfo;
+
+  // CI/CD
+  cicd?: CiCdInfo;
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
@@ -289,6 +296,138 @@ export interface SessionDetail extends SessionSummary {
   fileOperations: FileOperation[];
   subagents: SubagentInfo[];
 }
+
+// ─── Claude config: hooks, MCP servers, plugins ──────────────────────────────
+
+export type HookSource = "project" | "local" | "user";
+
+export interface HookCommand {
+  type: "command";
+  command: string;
+  timeout?: number;
+}
+
+export interface HookEntry {
+  /** PreToolUse | PostToolUse | SessionStart | UserPromptSubmit | Stop | etc. */
+  event: string;
+  /** Tool/event matcher (e.g. "Edit|Write", "Bash"). Optional. */
+  matcher?: string;
+  commands: HookCommand[];
+  source: HookSource;
+  /** Absolute file path the entry came from — used for the future template-builder. */
+  sourcePath: string;
+}
+
+export interface HooksInfo {
+  entries: HookEntry[];
+}
+
+export type McpTransport = "stdio" | "http" | "sse" | "unknown";
+export type McpSource = "project" | "user";
+
+export interface McpServer {
+  name: string;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** Env variable KEY NAMES only — never values (avoid leaking secrets). */
+  envKeys?: string[];
+  source: McpSource;
+  sourcePath: string;
+}
+
+export interface McpServersInfo {
+  servers: McpServer[];
+}
+
+export interface PluginEntry {
+  name: string;
+  marketplace: string;
+  enabled: boolean;
+  blocked: boolean;
+  version?: string;
+  installedAt?: string;
+  lastUpdated?: string;
+  installPath?: string;
+  gitCommitSha?: string;
+  pluginRepoUrl?: string;
+}
+
+export interface PluginsInfo {
+  plugins: PluginEntry[];
+}
+
+// ─── CI/CD ───────────────────────────────────────────────────────────────────
+
+export interface WorkflowJob {
+  id: string;
+  name?: string;
+  runsOn?: string;
+  /** Reusable-workflow reference (`jobs.<id>.uses`). */
+  uses?: string;
+  /** Deduped `uses:` references from steps (e.g. "actions/checkout@v4"). */
+  actionUses: string[];
+}
+
+export interface Workflow {
+  /** Absolute path to the workflow file. */
+  file: string;
+  name?: string;
+  /** Normalized triggers: push | pull_request | schedule | workflow_dispatch | ... */
+  triggers: string[];
+  /** Cron expressions from `on.schedule[].cron`. */
+  cron: string[];
+  jobs: WorkflowJob[];
+  /** False if YAML parsing failed; the entry still surfaces by file name. */
+  parseOk: boolean;
+}
+
+export type HostingPlatform =
+  | "vercel"
+  | "railway"
+  | "fly"
+  | "render"
+  | "netlify"
+  | "heroku"
+  | "docker";
+
+export interface HostingTarget {
+  platform: HostingPlatform;
+  sourcePath: string;
+  detail?: Record<string, string | number | boolean | string[]>;
+}
+
+export interface VercelCron {
+  path: string;
+  schedule: string;
+  sourcePath: string;
+}
+
+export interface DependabotUpdate {
+  ecosystem: string;
+  directory?: string;
+  schedule?: string;
+  sourcePath: string;
+}
+
+export interface CiCdInfo {
+  workflows: Workflow[];
+  hosting: HostingTarget[];
+  vercelCrons: VercelCron[];
+  dependabot: DependabotUpdate[];
+}
+
+export interface UserConfig {
+  plugins: PluginsInfo;
+  hooks: HooksInfo;
+  mcpServers: McpServersInfo;
+}
+
+/** Catalog kinds surfaced by `/api/claude-config`. "all" returns every section. */
+export type ConfigType = "hooks" | "plugins" | "mcp" | "cicd" | "all";
+
+export const CONFIG_TYPES: readonly ConfigType[] = ["hooks", "plugins", "mcp", "cicd", "all"];
 
 export interface ScanResult {
   projects: ProjectData[];

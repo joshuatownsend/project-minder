@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, writeConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
+import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { ProjectStatus, MinderConfig } from "@/lib/types";
 
 // Derived from the MinderConfig union types — update both together if options change
@@ -73,6 +74,7 @@ export async function PATCH(request: NextRequest) {
 
   await writeConfig(config);
   invalidateCache();
+  invalidateClaudeConfigRouteCache();
   return NextResponse.json({ ok: true, config });
 }
 
@@ -90,6 +92,7 @@ export async function PUT(request: NextRequest) {
     config.statuses[body.slug] = body.status as ProjectStatus;
     await writeConfig(config);
     invalidateCache();
+  invalidateClaudeConfigRouteCache();
     return NextResponse.json({ ok: true });
   }
 
@@ -100,6 +103,7 @@ export async function PUT(request: NextRequest) {
     }
     await writeConfig(config);
     invalidateCache();
+  invalidateClaudeConfigRouteCache();
     return NextResponse.json({ ok: true });
   }
 
@@ -108,6 +112,7 @@ export async function PUT(request: NextRequest) {
     config.hidden = config.hidden.filter((h) => h !== body.dirName);
     await writeConfig(config);
     invalidateCache();
+  invalidateClaudeConfigRouteCache();
     return NextResponse.json({ ok: true });
   }
 
@@ -123,6 +128,7 @@ export async function PUT(request: NextRequest) {
     }
     await writeConfig(config);
     invalidateCache();
+  invalidateClaudeConfigRouteCache();
     return NextResponse.json({ ok: true });
   }
 
@@ -131,6 +137,7 @@ export async function PUT(request: NextRequest) {
     config.hidden = body.hidden;
     await writeConfig(config);
     invalidateCache();
+  invalidateClaudeConfigRouteCache();
     return NextResponse.json({ ok: true });
   }
 

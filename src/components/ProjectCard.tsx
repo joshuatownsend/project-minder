@@ -57,6 +57,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
   })();
 
   const worktreeCount = (project.worktrees ?? []).length;
+  const workflowCount = project.cicd?.workflows.length ?? 0;
   const sessionStatus = project.claude?.mostRecentSessionStatus;
   const sessionId = project.claude?.mostRecentSessionId;
   const sessionBadge = sessionStatus && sessionStatus !== "idle"
@@ -402,6 +403,23 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   }}
                 >
                   wt {worktreeCount}
+                </span>
+              )}
+              {workflowCount > 0 && (
+                <span
+                  title={pluralize(workflowCount, "workflow")}
+                  style={{
+                    fontSize: "0.6rem",
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--info)",
+                    border: "1px solid var(--border-subtle)",
+                    background: "var(--bg-elevated)",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  CI
                 </span>
               )}
             </div>

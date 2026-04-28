@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Project config surfacing (hooks · plugins · MCP · CI/CD)** — three new scanner modules (`claudeHooks`, `mcpServers`, `cicd`) attach project-local config to `ProjectData`. CI/CD parsing is per-unit semantic: workflows expose normalized `on:` triggers, schedule crons, jobs (id, name, runs-on), and deduped action `uses:` references; vercel.json crons are extracted; dependabot updates are emitted per-ecosystem; multi-host detection covers Vercel, Railway, Fly, Render, Netlify, Heroku, and Docker. A new `userConfigCache` singleton (5-min TTL, modeled on `gitStatusCache`) reads `~/.claude/settings.json` and `installed_plugins.json` once per process for plugin and user-level hook/MCP data.
+- **`/config` page rebuilt as 5-tab shell** — Settings (existing MinderConfig editor) plus four cross-project catalog tabs: Hooks, Plugins, MCP, CI/CD. Each surfaces unit-level rows with project-source badges. Designed to feed a future template-builder feature that mines existing projects for reusable units.
+- **Project Config tab** — appears on a project detail page when project-local hooks, `.mcp.json`, or CI/CD config is present. Shows project-only data (no user-level repetition); user-level hooks/plugins/MCP live on `/config`.
+- **CI badge on dashboard cards** — small monospaced `CI` chip (next to the worktree badge) when `.github/workflows/*` is present; tooltip shows workflow count.
+- **`GET /api/claude-config?type=hooks|plugins|mcp|cicd|all&project=&q=`** — cross-project rollup for the `/config` page. 2-min global cache like `/api/agents`.
+- **`GET /api/claude-config/user`** — user-level config singleton (plugins + user-level hooks + user-level MCP).
 - **Dev server error state** — compact card badge now shows a red "error" pill with last-output tooltip and a Retry button when the server exits non-zero; full-panel Start button relabels to "Retry" in error state.
 - **Dev server error details** — `doAction` extracts `error` field from non-ok API responses and shows it as the toast description ("Failed to start dev server", "EADDRINUSE: port in use") instead of the generic fallback.
 - **Archive consolidation** — "Hidden" UX path removed from the dashboard entirely. The card three-dot dropdown now says "Archive" (no confirmation required; archive is reversible). Archiving shows a toast with a 5-second "Undo" action. Scanner exclusion (`hidden[]`) remains a Setup-only power feature.

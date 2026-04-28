@@ -1,9 +1,9 @@
 "use client";
 
-import { ConfigDashboard } from "@/components/ConfigDashboard";
+import { ConfigBrowser } from "@/components/ConfigBrowser";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function ConfigPage() {
   useDocumentTitle("Config");
-  return <ConfigDashboard />;
+  return <ConfigBrowser />;
 }
