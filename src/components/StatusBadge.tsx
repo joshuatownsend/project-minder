@@ -31,39 +31,53 @@ interface StatusBadgeProps {
   onClick?: () => void;
 }
 
+const statusBadgeStyle = (cfg: { textVar: string; bgVar: string; borderVar: string }, clickable: boolean) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "5px",
+  fontFamily: "var(--font-body)",
+  fontSize: "0.65rem",
+  fontWeight: 600,
+  letterSpacing: "0.07em",
+  textTransform: "uppercase" as const,
+  color: `var(${cfg.textVar})`,
+  background: `var(${cfg.bgVar})`,
+  border: `1px solid var(${cfg.borderVar})`,
+  borderRadius: "3px",
+  padding: "2px 6px",
+  cursor: clickable ? "pointer" : "default",
+  userSelect: "none" as const,
+  lineHeight: 1.4,
+});
+
+const dot = (textVar: string) => ({
+  width: "5px",
+  height: "5px",
+  borderRadius: "50%",
+  background: `var(${textVar})`,
+  flexShrink: 0,
+});
+
 export function StatusBadge({ status, onClick }: StatusBadgeProps) {
   const cfg = statusConfig[status];
+  const shared = statusBadgeStyle(cfg, !!onClick);
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        style={{ ...shared, appearance: "none" }}
+      >
+        <span style={dot(cfg.textVar)} />
+        {cfg.label}
+      </button>
+    );
+  }
+
   return (
-    <span
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "5px",
-        fontFamily: "var(--font-body)",
-        fontSize: "0.65rem",
-        fontWeight: 600,
-        letterSpacing: "0.07em",
-        textTransform: "uppercase",
-        color: `var(${cfg.textVar})`,
-        background: `var(${cfg.bgVar})`,
-        border: `1px solid var(${cfg.borderVar})`,
-        borderRadius: "3px",
-        padding: "2px 6px",
-        cursor: onClick ? "pointer" : "default",
-        userSelect: "none",
-        lineHeight: 1.4,
-      }}
-    >
-      <span
-        style={{
-          width: "5px",
-          height: "5px",
-          borderRadius: "50%",
-          background: `var(${cfg.textVar})`,
-          flexShrink: 0,
-        }}
-      />
+    <span style={shared}>
+      <span style={dot(cfg.textVar)} />
       {cfg.label}
     </span>
   );

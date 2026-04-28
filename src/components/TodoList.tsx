@@ -57,7 +57,7 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {/* Filter buttons */}
-            {(["all", "open", "done"] as const).map((f, i) => {
+            {(["all", "open", "done"] as const).map((f) => {
               const active = filter === f;
               const labels = { all: "All", open: "Open", done: "Done" } as const;
               return (
@@ -179,23 +179,23 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
       )}
 
       {/* Add form */}
-      {slug && <AddTodoForm slug={slug} onAdded={onChange} />}
+      {slug && <AddTodoForm slug={slug} onAddedAction={onChange} />}
     </div>
   );
 }
 
 export function AddTodoForm({
   slug,
-  onAdded,
+  onAddedAction,
 }: {
   slug: string;
-  onAdded?: (updated: TodoInfo) => void;
+  onAddedAction?: (updated: TodoInfo) => void;
 }) {
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { showToast } = useToast();
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || submitting) return;
@@ -213,7 +213,7 @@ export function AddTodoForm({
       }
       const body = await res.json();
       setText("");
-      onAdded?.(body.todos as TodoInfo);
+      onAddedAction?.(body.todos as TodoInfo);
       showToast("TODO added", trimmed);
     } catch (err) {
       showToast(

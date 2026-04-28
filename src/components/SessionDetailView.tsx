@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useSessionDetail } from "@/hooks/useSessions";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
@@ -162,6 +163,7 @@ function TabBar({
 export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   if (loading) {
     return (

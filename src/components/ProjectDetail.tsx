@@ -96,13 +96,20 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     window.open(`wt.exe -d "${project.path}"`, "_blank");
   };
 
+  const hasManualSteps = !!(project.manualSteps || project.worktrees?.some((wt) => wt.manualSteps));
+  const hasInsights = !!(
+    (project.insights?.total ?? 0) > 0 ||
+    project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
+  );
+  const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
     { key: "context",     label: "Context" },
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
-    { key: "sessions",    label: "Sessions" },
-    { key: "manual-steps", label: "Manual Steps" },
-    { key: "insights",    label: "Insights" },
+    ...(hasSessions     ? [{ key: "sessions"     as TabKey, label: "Sessions"     }] : []),
+    ...(hasManualSteps  ? [{ key: "manual-steps" as TabKey, label: "Manual Steps" }] : []),
+    ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
     { key: "memory",      label: "Memory" },
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
@@ -445,7 +452,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: 0 }}>
                     No TODO items found. Add one below to create <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.85em", color: "var(--accent)", background: "var(--accent-bg)", padding: "1px 4px", borderRadius: "3px" }}>TODO.md</code>.
                   </p>
-                  <AddTodoForm slug={project.slug} onAdded={setTodos} />
+                  <AddTodoForm slug={project.slug} onAddedAction={setTodos} />
                   {project.worktrees?.some((wt) => wt.todos) && (
                     <TodoList
                       todos={{ total: 0, completed: 0, pending: 0, items: [] }}
