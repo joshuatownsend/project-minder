@@ -22,15 +22,21 @@ export function tryParseJsonc<T = unknown>(raw: string): T | null {
  * preserving the position of each character inside string literals so that
  * `//` or `/*` inside a quoted value is not mistaken for a comment.
  *
- * Also removes a single trailing comma before `}` / `]`.
+ * Also removes structural trailing commas before `}` / `]`. Commas appearing
+ * inside string literals (e.g. `",}"`) are never touched.
  */
 export function stripJsonComments(raw: string): string {
-  let out = "";
+  const buf: string[] = [];
   let i = 0;
   let inString = false;
   let stringQuote = "";
   let inLineComment = false;
   let inBlockComment = false;
+  // Index in `buf` of the most recently emitted structural comma — i.e. a
+  // comma that was outside any string/comment. -1 when no such comma is
+  // pending. Used to retroactively drop the comma if the next non-whitespace
+  // structural token turns out to be `}` or `]`.
+  let pendingCommaIdx = -1;
 
   while (i < raw.length) {
     const ch = raw[i];
@@ -39,7 +45,7 @@ export function stripJsonComments(raw: string): string {
     if (inLineComment) {
       if (ch === "\n") {
         inLineComment = false;
-        out += ch;
+        buf.push(ch);
       }
       i++;
       continue;
@@ -57,14 +63,12 @@ export function stripJsonComments(raw: string): string {
 
     if (inString) {
       if (ch === "\\" && i + 1 < raw.length) {
-        out += ch + next;
+        buf.push(ch, next);
         i += 2;
         continue;
       }
-      if (ch === stringQuote) {
-        inString = false;
-      }
-      out += ch;
+      if (ch === stringQuote) inString = false;
+      buf.push(ch);
       i++;
       continue;
     }
@@ -72,7 +76,8 @@ export function stripJsonComments(raw: string): string {
     if (ch === '"' || ch === "'") {
       inString = true;
       stringQuote = ch;
-      out += ch;
+      pendingCommaIdx = -1;
+      buf.push(ch);
       i++;
       continue;
     }
@@ -88,9 +93,30 @@ export function stripJsonComments(raw: string): string {
       continue;
     }
 
-    out += ch;
+    if (ch === ",") {
+      pendingCommaIdx = buf.length;
+      buf.push(ch);
+      i++;
+      continue;
+    }
+
+    if (ch === "}" || ch === "]") {
+      if (pendingCommaIdx !== -1) {
+        buf[pendingCommaIdx] = "";
+        pendingCommaIdx = -1;
+      }
+      buf.push(ch);
+      i++;
+      continue;
+    }
+
+    if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") {
+      pendingCommaIdx = -1;
+    }
+
+    buf.push(ch);
     i++;
   }
 
-  return out.replace(/,(\s*[}\]])/g, "$1");
+  return buf.join("");
 }

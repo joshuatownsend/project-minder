@@ -41,7 +41,6 @@
 - [ ] **CodeQL scanning** — Add `.github/workflows/codeql.yml` using `github/codeql-action`. Once it's run once, enable "Require code scanning results" in the ruleset.
 - [ ] **Release automation** — Tag-based GitHub Release workflow: on `v*` tag push, run CI, then create a release with auto-generated notes from squashed PR titles.
 - [ ] Support running the /insights command in Claude, then display the generated output file (~/.claude/usage-data/report.html) for the user to review. Let the user schedule running /insights to update the report.
-- [ ] Support running the /insights command in Claude, then display the generated output file (~/.claude/usage-data/report.html) for the user to review. Let the user schedule running /insights to update the report.
 
 ## Config Surfacing — Follow-ups
 

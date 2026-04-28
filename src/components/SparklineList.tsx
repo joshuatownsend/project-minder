@@ -13,6 +13,59 @@ import { pluralize } from "@/lib/utils";
 type SortKey = "name" | "activity" | "lastSession" | "todos" | "branch";
 type SortDir = "asc" | "desc";
 
+function ColHeader({
+  label,
+  k,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  label: string;
+  k: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (k: SortKey) => void;
+}) {
+  const active = sortKey === k;
+  return (
+    <th
+      scope="col"
+      aria-sort={active ? (sortDir === "desc" ? "descending" : "ascending") : "none"}
+      style={{
+        padding: 0,
+        textAlign: "left",
+        borderBottom: "1px solid var(--border-subtle)",
+        background: "var(--bg-base)",
+      }}
+    >
+      <button
+        onClick={() => onSort(k)}
+        style={{
+          display: "block", width: "100%", textAlign: "left",
+          padding: "6px 10px",
+          fontSize: "0.65rem",
+          fontFamily: "var(--font-mono)",
+          fontWeight: active ? 600 : 500,
+          color: active ? "var(--info)" : "var(--text-muted)",
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+          cursor: "pointer",
+          userSelect: "none",
+          whiteSpace: "nowrap",
+          background: "none", border: "none",
+        }}
+      >
+        {label}
+        {active && (
+          <span style={{ marginLeft: "3px", opacity: 0.7 }}>
+            {sortDir === "desc" ? "↓" : "↑"}
+          </span>
+        )}
+      </button>
+    </th>
+  );
+}
+
 interface SparklineListProps {
   projects: ProjectData[];
   activityData: Record<string, number[]>;
@@ -70,58 +123,17 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
     return result;
   }, [projects, sortKey, sortDir, pinnedSlugs, sortKeys]);
 
-  const ColHeader = ({ label, k }: { label: string; k: SortKey }) => {
-    const active = sortKey === k;
-    return (
-      <th
-        scope="col"
-        aria-sort={active ? (sortDir === "desc" ? "descending" : "ascending") : "none"}
-        style={{
-          padding: 0,
-          textAlign: "left",
-          borderBottom: "1px solid var(--border-subtle)",
-          background: "var(--bg-base)",
-        }}
-      >
-        <button
-          onClick={() => toggleSort(k)}
-          style={{
-            display: "block", width: "100%", textAlign: "left",
-            padding: "6px 10px",
-            fontSize: "0.65rem",
-            fontFamily: "var(--font-mono)",
-            fontWeight: active ? 600 : 500,
-            color: active ? "var(--info)" : "var(--text-muted)",
-            letterSpacing: "0.04em",
-            textTransform: "uppercase",
-            cursor: "pointer",
-            userSelect: "none",
-            whiteSpace: "nowrap",
-            background: "none", border: "none",
-          }}
-        >
-          {label}
-          {active && (
-            <span style={{ marginLeft: "3px", opacity: 0.7 }}>
-              {sortDir === "desc" ? "↓" : "↑"}
-            </span>
-          )}
-        </button>
-      </th>
-    );
-  };
-
   return (
     <div style={{ width: "100%", overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
             <th scope="col" style={{ width: "28px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)", padding: "6px 4px 6px 10px", fontSize: "0.65rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Pin</th>
-            <ColHeader label="Project" k="name" />
-            <ColHeader label="14-day activity" k="activity" />
-            <ColHeader label="Last session" k="lastSession" />
-            <ColHeader label="Branch" k="branch" />
-            <ColHeader label="Todos" k="todos" />
+            <ColHeader label="Project"          k="name"        sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="14-day activity"  k="activity"    sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Last session"     k="lastSession" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Branch"           k="branch"      sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Todos"            k="todos"       sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <th
               scope="col"
               style={{
