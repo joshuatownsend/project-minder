@@ -14,8 +14,8 @@ const navItems = [
   { href: "/status",       label: "Status",   badge: "approval" },
   { href: "/usage",        label: "Usage"                       },
   { href: "/stats",        label: "Stats"                       },
-  { href: "/config",       label: "Config"                      },
-  { href: "/setup",        label: "Setup"                       },
+  { href: "/config",       label: "Config",   admin: true       },
+  { href: "/setup",        label: "Setup",    admin: true       },
 ];
 
 export function AppNav() {
@@ -71,55 +71,70 @@ export function AppNav() {
 
   return (
     <nav style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
-      {navItems.map((item) => {
+      {navItems.map((item, idx) => {
         const isActive =
           pathname === item.href || pathname.startsWith(item.href + "/");
         const badgeCounts: Record<string, number> = { steps: stepsPending, approval: statusApproval };
         const badgeCount = item.badge ? (badgeCounts[item.badge] ?? 0) : 0;
         const showBadge = badgeCount > 0;
+        const isAdmin = "admin" in item && item.admin === true;
+        const prevIsAdmin = idx > 0 && "admin" in navItems[idx - 1] && navItems[idx - 1].admin === true;
+        const showSeparator = isAdmin && !prevIsAdmin;
 
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-              padding: "4px 10px",
-              borderRadius: "var(--radius)",
-              fontSize: "0.7rem",
-              fontWeight: 500,
-              letterSpacing: "0.04em",
-              textTransform: "uppercase",
-              fontFamily: "var(--font-body)",
-              textDecoration: "none",
-              color: isActive ? "var(--info)" : "var(--text-secondary)",
-              background: isActive ? "var(--info-bg)" : "transparent",
-              transition: "color 0.12s, background 0.12s",
-            }}
-          >
-            {item.label}
-            {showBadge && (
+          <span key={item.href} style={{ display: "contents" }}>
+            {showSeparator && (
               <span
+                aria-hidden="true"
                 style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "0.65rem",
-                  fontWeight: 600,
-                  letterSpacing: 0,
-                  textTransform: "none",
-                  background: "var(--accent-bg)",
-                  color: "var(--accent)",
-                  border: "1px solid var(--accent-border)",
-                  borderRadius: "3px",
-                  padding: "0 4px",
-                  lineHeight: "1.4",
+                  width: "1px", height: "14px", flexShrink: 0,
+                  background: "var(--border-default)",
+                  margin: "0 4px",
+                  alignSelf: "center",
                 }}
-              >
-                {badgeCount}
-              </span>
+              />
             )}
-          </Link>
+            <Link
+              href={item.href}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "4px 10px",
+                borderRadius: "var(--radius)",
+                fontSize: "0.7rem",
+                fontWeight: isAdmin ? 400 : 500,
+                letterSpacing: isAdmin ? "0.02em" : "0.04em",
+                textTransform: isAdmin ? "none" : "uppercase",
+                fontFamily: "var(--font-body)",
+                textDecoration: "none",
+                color: isActive ? "var(--info)" : isAdmin ? "var(--text-muted)" : "var(--text-secondary)",
+                background: isActive ? "var(--info-bg)" : "transparent",
+                transition: "color 0.12s, background 0.12s",
+              }}
+            >
+              {item.label}
+              {showBadge && (
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    letterSpacing: 0,
+                    textTransform: "none",
+                    background: "var(--accent-bg)",
+                    color: "var(--accent)",
+                    border: "1px solid var(--accent-border)",
+                    borderRadius: "3px",
+                    padding: "0 4px",
+                    lineHeight: "1.4",
+                  }}
+                >
+                  {badgeCount}
+                </span>
+              )}
+            </Link>
+          </span>
         );
       })}
     </nav>

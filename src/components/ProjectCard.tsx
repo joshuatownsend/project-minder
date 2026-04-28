@@ -146,7 +146,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 className="compact-pin-btn"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: "28px", height: "28px", padding: 0,
+                  width: "32px", height: "32px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
                   opacity: pinned ? 1 : 0.55,
@@ -252,7 +252,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                 data-pinned={pinned ? "" : undefined}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: "28px", height: "28px", padding: 0,
+                  width: "32px", height: "32px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
                   opacity: pinned ? 1 : 0.25,
@@ -271,7 +271,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                     aria-label="More options"
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      width: "28px", height: "28px",
+                      width: "32px", height: "32px",
                       borderRadius: "3px", background: "transparent", border: "none",
                       color: "var(--text-muted)", cursor: "pointer", padding: 0,
                     }}

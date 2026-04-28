@@ -364,7 +364,7 @@ function MarkdownRenderer({
   };
 
   return (
-    <div onClick={handleClick} style={{ display: "flex", flexDirection: "column" }}>
+    <div role="presentation" onClick={handleClick} style={{ display: "flex", flexDirection: "column" }}>
       {elements}
     </div>
   );

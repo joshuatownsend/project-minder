@@ -149,7 +149,7 @@ export function DevServerControl({
             aria-label="Stop dev server"
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
-              width: "28px", height: "28px",
+              width: "32px", height: "32px",
               background: "transparent",
               border: "1px solid var(--border-default)",
               borderRadius: "3px",
@@ -255,16 +255,16 @@ export function DevServerControl({
       {server && (
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
           {server.pid > 0 && (
-            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
               PID: {server.pid}
             </p>
           )}
           {port && (
-            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
               Port: {port}
             </p>
           )}
-          <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+          <p style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
             {server.command}
           </p>
         </div>
