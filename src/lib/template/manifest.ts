@@ -40,6 +40,7 @@ const VALID_UNIT_KINDS: readonly UnitKind[] = [
   "mcp",
   "plugin",
   "workflow",
+  "settingsKey",
 ];
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -57,6 +58,7 @@ export function emptyInventory(): TemplateUnitInventory {
     mcp: [],
     plugins: [],
     workflows: [],
+    settings: [],
   };
 }
 
@@ -69,7 +71,8 @@ export function inventoryCount(inv: TemplateUnitInventory): number {
     inv.hooks.length +
     inv.mcp.length +
     inv.plugins.length +
-    inv.workflows.length
+    inv.workflows.length +
+    inv.settings.length
   );
 }
 
@@ -144,6 +147,8 @@ export function inventoryKeyFor(kind: UnitKind): keyof TemplateUnitInventory {
       return "plugins";
     case "workflow":
       return "workflows";
+    case "settingsKey":
+      return "settings";
     default: {
       // Compile-time exhaustiveness — adding a new UnitKind without updating
       // this switch will surface as a TS error here.

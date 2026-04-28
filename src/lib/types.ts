@@ -453,7 +453,8 @@ export type UnitKind =
   | "hook"
   | "mcp"
   | "plugin"
-  | "workflow";
+  | "workflow"
+  | "settingsKey";
 
 export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
 
@@ -539,6 +540,14 @@ export interface TemplateUnitInventory {
    *  `.github/workflows/` (e.g., "ci.yml"). Apply is file-replace only —
    *  workflows have no internal merge semantics. */
   workflows: TemplateUnitRef[];
+  /** Generic `.claude/settings.json` keys. Keys are dotted JSON paths
+   *  (e.g. "permissions.allow", "env.MY_VAR", "statusLine"). Apply uses a
+   *  deep-merge with conflict-policy semantics; certain arrays
+   *  (`permissions.allow` / `permissions.ask` / `permissions.deny`) use
+   *  concat-and-dedupe. Hooks / MCP / plugin enables have dedicated unit
+   *  kinds — picking those keys here would shadow the specialized paths,
+   *  so the UI excludes them from the settingsKey picker. */
+  settings: TemplateUnitRef[];
 }
 
 export type TemplateKind = "live" | "snapshot";

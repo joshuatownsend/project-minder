@@ -19,6 +19,7 @@ const VALID_UNIT_KINDS: readonly UnitKind[] = [
   "mcp",
   "plugin",
   "workflow",
+  "settingsKey",
 ];
 
 export async function GET() {
@@ -100,7 +101,9 @@ function validateCreate(body: unknown):
             ? "plugins"
             : kind === "workflow"
               ? "workflows"
-              : `${kind}s`;
+              : kind === "settingsKey"
+                ? "settings"
+                : `${kind}s`;
     const list = inv[key];
     if (list === undefined) continue;
     if (!Array.isArray(list)) {
@@ -150,6 +153,7 @@ function validateCreate(body: unknown):
     else if (kind === "mcp") out.mcp = refs;
     else if (kind === "plugin") out.plugins = refs;
     else if (kind === "workflow") out.workflows = refs;
+    else if (kind === "settingsKey") out.settings = refs;
   }
 
   return {

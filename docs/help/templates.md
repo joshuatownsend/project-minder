@@ -1,6 +1,6 @@
 # Templates
 
-Templates package a curated set of Claude Code config — agents, skills, slash commands, hooks, MCP servers, plugin enables, and GitHub Actions workflows — so you can apply that bundle to other projects (or new projects) with a single click.
+Templates package a curated set of Claude Code config — agents, skills, slash commands, hooks, MCP servers, plugin enables, GitHub Actions workflows, and arbitrary `.claude/settings.json` keys — so you can apply that bundle to other projects (or new projects) with a single click.
 
 ## Two flavors
 
@@ -61,6 +61,7 @@ Every safety property of the single-unit apply layer applies to template apply t
 - **Hook script copy** — referenced scripts at `.claude/hooks/<file>` come along automatically; absolute paths into the source project are rejected.
 - **Plugin "requires install" warning** — applying a plugin enable when the plugin isn't installed at `~/.claude/plugins/` writes the enable flag anyway and surfaces a warning with the exact `/plugin install <name>@<marketplace>` command to run. The flag activates automatically once the plugin lands.
 - **Workflow apply is file-replace only** — workflows have no internal merge semantics. Conflict policies for workflow units are limited to `skip` / `overwrite` / `rename`. Path-traversal and absolute paths in the workflow key are rejected.
+- **Settings keys** — copy individual `.claude/settings.json` keys (e.g. `permissions.allow`, `env`, `statusLine`) by dotted path. Apply uses a deep-merge on `merge`: scalars and arrays replace by default; **`permissions.allow` / `permissions.ask` / `permissions.deny` concat-and-dedupe** so the target keeps its existing patterns plus the source's; nested objects deep-merge. Reserved keys handled by dedicated unit kinds (`hooks`, `mcpServers`, `enabledPlugins`) are excluded from the picker so you can't accidentally shadow the specialized paths. Env values are redacted in the picker preview (only env keys are shown).
 
 ## API reference
 

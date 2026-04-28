@@ -27,6 +27,7 @@ import { applyHook } from "./applyHook";
 import { applyMcp } from "./applyMcp";
 import { applyPlugin } from "./applyPlugin";
 import { applyWorkflow } from "./applyWorkflow";
+import { applySettings } from "./applySettings";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
@@ -133,6 +134,9 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
         break;
       case "workflow":
         result = await dispatchWorkflow(request, sourceResolved, safeTargetPath);
+        break;
+      case "settingsKey":
+        result = await dispatchSettings(request, sourceResolved, safeTargetPath);
         break;
       default:
         result = errorResult("UNKNOWN_UNIT_KIND", `Unsupported unit kind "${request.unit.kind}".`);
@@ -282,6 +286,26 @@ async function dispatchWorkflow(
   return applyWorkflow({
     sourceProjectPath: source.path,
     workflowKey: request.unit.key,
+    targetProjectPath,
+    conflict: request.conflict,
+    dryRun: request.dryRun,
+  });
+}
+
+async function dispatchSettings(
+  request: ApplyRequest,
+  source: ResolvedSource,
+  targetProjectPath: string
+): Promise<ApplyResult> {
+  if (source.kind !== "project") {
+    return errorResult(
+      "UNSUPPORTED_SOURCE",
+      "Settings source must be a project (user-scope settings copy not supported in V4)."
+    );
+  }
+  return applySettings({
+    settingsPath: request.unit.key,
+    sourceProjectPath: source.path,
     targetProjectPath,
     conflict: request.conflict,
     dryRun: request.dryRun,

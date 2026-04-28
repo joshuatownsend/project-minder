@@ -10,6 +10,8 @@ import {
 import { scanClaudeHooks } from "../scanner/claudeHooks";
 import { scanMcpServers } from "../scanner/mcpServers";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
+import { tryParseJsonc } from "../scanner/util/jsonc";
+import { getJsonPath, setJsonPath } from "./jsonPath";
 import { walkProjectAgents } from "../indexer/walkAgents";
 import { walkProjectSkills } from "../indexer/walkSkills";
 import { walkProjectCommands } from "../indexer/walkCommands";
@@ -220,6 +222,37 @@ export async function saveAsSnapshot(
     }
   }
 
+  // Settings keys — read each path from source's settings.json and write
+  // into bundleSettings before serializing. Done last so it shares the
+  // settings.json write with hooks + plugin enables.
+  if (inv.settings.length > 0) {
+    const sourceSettingsPath = path.join(sourceProject.path, ".claude", "settings.json");
+    let sourceDoc: unknown = {};
+    if (await fileExists(sourceSettingsPath)) {
+      try {
+        const raw = await fs.readFile(sourceSettingsPath, "utf-8");
+        sourceDoc = tryParseJsonc<unknown>(raw) ?? {};
+      } catch {
+        sourceDoc = {};
+      }
+    }
+    let acc: unknown = bundleSettings;
+    for (const u of inv.settings) {
+      if (u.key.length === 0) continue;
+      const peek = getJsonPath(sourceDoc, u.key);
+      if (!peek.found) continue;
+      try {
+        acc = setJsonPath(acc, u.key, peek.value);
+      } catch {
+        // PATH_NON_OBJECT_INTERMEDIATE etc. — skip the offending key rather
+        // than abort the entire snapshot. Other valid units still bundle.
+      }
+    }
+    if (acc && typeof acc === "object" && !Array.isArray(acc)) {
+      Object.assign(bundleSettings, acc as Record<string, unknown>);
+    }
+  }
+
   if (Object.keys(bundleSettings).length > 0) {
     const settingsFile = path.join(bundleDir, ".claude", "settings.json");
     await ensureDir(path.dirname(settingsFile));
@@ -297,5 +330,6 @@ export function flattenInventory(inv: TemplateUnitInventory): TemplateUnitRef[] 
     ...inv.mcp,
     ...inv.plugins,
     ...inv.workflows,
+    ...inv.settings,
   ];
 }

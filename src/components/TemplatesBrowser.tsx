@@ -98,7 +98,8 @@ function TemplateRow({ manifest }: { manifest: TemplateManifest }) {
     inv.hooks.length +
     inv.mcp.length +
     inv.plugins.length +
-    inv.workflows.length;
+    inv.workflows.length +
+    inv.settings.length;
 
   return (
     <Link
@@ -152,6 +153,7 @@ function TemplateRow({ manifest }: { manifest: TemplateManifest }) {
           {inv.mcp.length > 0 && <span>· {inv.mcp.length} mcp</span>}
           {inv.plugins.length > 0 && <span>· {inv.plugins.length} plugin{inv.plugins.length === 1 ? "" : "s"}</span>}
           {inv.workflows.length > 0 && <span>· {inv.workflows.length} workflow{inv.workflows.length === 1 ? "" : "s"}</span>}
+          {inv.settings.length > 0 && <span>· {inv.settings.length} setting{inv.settings.length === 1 ? "" : "s"}</span>}
           {manifest.kind === "live" && manifest.liveSourceSlug && (
             <span>· tracks <strong>{manifest.liveSourceSlug}</strong></span>
           )}

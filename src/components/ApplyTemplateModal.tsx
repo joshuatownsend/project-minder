@@ -31,6 +31,7 @@ const POLICIES_BY_KIND: Record<UnitKind, ConflictPolicy[]> = {
   command: ["skip", "overwrite", "rename"],
   plugin: ["skip", "overwrite", "merge"],
   workflow: ["skip", "overwrite", "rename"],
+  settingsKey: ["skip", "overwrite", "merge"],
 };
 
 export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
@@ -56,6 +57,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
       ...manifest.units.mcp,
       ...manifest.units.plugins,
       ...manifest.units.workflows,
+      ...manifest.units.settings,
     ],
     [manifest]
   );
@@ -491,7 +493,16 @@ function summarize(s: ApplyTemplateResult["summary"], mode: "preview" | "apply")
 }
 
 function flatCount(m: TemplateManifest): number {
-  return m.units.agents.length + m.units.skills.length + m.units.commands.length + m.units.hooks.length + m.units.mcp.length;
+  return (
+    m.units.agents.length +
+    m.units.skills.length +
+    m.units.commands.length +
+    m.units.hooks.length +
+    m.units.mcp.length +
+    m.units.plugins.length +
+    m.units.workflows.length +
+    m.units.settings.length
+  );
 }
 
 const inlineCode: React.CSSProperties = {
