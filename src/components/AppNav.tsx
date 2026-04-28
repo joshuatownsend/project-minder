@@ -14,6 +14,7 @@ const navItems = [
   { href: "/status",       label: "Status",   badge: "approval" },
   { href: "/usage",        label: "Usage"                       },
   { href: "/stats",        label: "Stats"                       },
+  { href: "/templates",    label: "Templates", admin: true      },
   { href: "/config",       label: "Config",   admin: true       },
   { href: "/setup",        label: "Setup",    admin: true       },
 ];

@@ -48,8 +48,8 @@
 
 ## Template Mode — V2 / V3 follow-ups
 
-- [ ] **Template Mode V2 — template projects** — `<devRoot>/.minder/templates/<slug>/` bundles with hybrid `kind: "live" | "snapshot"` manifests. New `/templates` page (browser + detail + apply modal). "Mark as template…" promotion from the project card three-dot menu. `POST /api/templates/[slug]/apply` orchestrates per-unit conflict overrides + diff preview.
-- [ ] **Template Mode V2 — new-project bootstrap** — apply with `target.kind: "new"` accepts a not-yet-existing relative path under devRoot, `mkdir`s, optionally runs `git init`, then iterates units. Triggers a post-apply scan so the dashboard picks up the new project immediately.
+- [x] **Template Mode V2 — template projects** — hybrid `kind: "live" | "snapshot"` manifests at `<devRoot>/.minder/templates/<slug>/`. `/templates` page (browser + detail + apply modal), "Mark as template…" on the project card menu, `POST /api/templates/[slug]/apply` orchestrates per-unit dispatch with `dryRun` + aggregate summary. Snapshot bundles mirror a real project's `.claude/` + `.mcp.json` so the apply layer reads either flavor uniformly.
+- [x] **Template Mode V2 — new-project bootstrap** — apply with `target.kind: "new"` accepts a not-yet-existing relative path under devRoot, `mkdir`s, optionally runs `git init`, iterates units, then triggers a post-apply scan so the dashboard picks up the new project.
 - [ ] **Template Mode V2 — settings-key + plugin-enable apply** — extend the apply layer with `applySettings` (deep-merge with `permissions.allow` concat-and-dedupe semantics) and `applyPlugin` (writes enable-list with "requires install" warning when plugin missing from `~/.claude/plugins/installed_plugins.json`).
 - [ ] **Template Mode V2 — bundled-skill UI surface** — bundled skills already work in the V1 apply layer. UI button is on `/skills` rows. Visual confirmation that bundled vs standalone is clearly distinguished in the diff preview.
 - [ ] **Template Mode V3 — CI/CD workflow per-job copy** — add `applyWorkflow` that file-replaces `.github/workflows/<name>.yml` (no JSON merge — workflows are file-replace only). UI button on the CI/CD `/config` rows.

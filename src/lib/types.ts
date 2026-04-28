@@ -199,6 +199,12 @@ export interface MinderConfig {
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
   viewMode?: "full" | "compact" | "list"; // dashboard card layout
   pinnedSlugs?: string[]; // slugs pinned to top of all dashboard views
+  templates?: {
+    /** Default conflict policy for the apply-template modal. */
+    defaultConflictPolicy?: ConflictPolicy;
+    /** Most recently applied template slug — used to seed the modal. */
+    lastUsedSlug?: string;
+  };
 }
 
 export interface ClaudeUsageStats {
@@ -446,10 +452,27 @@ export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
 
 export type ApplySource =
   | { kind: "project"; slug: string }
-  | { kind: "user" };
+  | { kind: "user" }
+  /** Internal-only: direct path to a "virtual project root" — used by the
+   *  template apply layer. Never accepted by the public API validator
+   *  (would be a path-safety hole). */
+  | { kind: "path"; path: string };
 
 export type ApplyTarget =
-  | { kind: "existing"; slug: string };
+  | { kind: "existing"; slug: string }
+  | {
+      kind: "new";
+      /** Display name for logs / future scan results. */
+      name: string;
+      /** Path relative to the first configured devRoot. Validated against getDevRoots(). */
+      relPath: string;
+      /** Run `git init` after mkdir. Default true. */
+      gitInit?: boolean;
+    }
+  /** Internal-only: direct path target — used by applyTemplate after it has
+   *  bootstrapped a "new" target into a real directory. Never accepted by the
+   *  public API validator. */
+  | { kind: "path"; path: string };
 
 export interface UnitRef {
   kind: UnitKind;
@@ -477,6 +500,78 @@ export interface ApplyResult {
   changedFiles: string[];
   diffPreview?: string;
   warnings?: string[];
+  error?: { code: string; message: string };
+}
+
+// ─── Template Mode V2 — manifests + registry ─────────────────────────────────
+
+/** A single unit selected into a template. The source content lives either in
+ *  the live source project (for kind:"live" manifests) or in
+ *  `<devRoot>/.minder/templates/<slug>/bundle/` (for kind:"snapshot" manifests).
+ *  In either case the `key` is the same as Template Mode's per-kind unit key
+ *  (see `unitKey.ts`). */
+export interface TemplateUnitRef {
+  kind: UnitKind;
+  key: string;
+  /** Display label, captured at promotion time. May drift in live mode. */
+  name?: string;
+  description?: string;
+}
+
+export interface TemplateUnitInventory {
+  agents: TemplateUnitRef[];
+  skills: TemplateUnitRef[];
+  commands: TemplateUnitRef[];
+  hooks: TemplateUnitRef[];
+  mcp: TemplateUnitRef[];
+}
+
+export type TemplateKind = "live" | "snapshot";
+
+export interface TemplateManifest {
+  schemaVersion: 1;
+  slug: string;
+  name: string;
+  description?: string;
+  kind: TemplateKind;
+  /** When kind === "live": project slug whose .claude/ + .mcp.json this template tracks. */
+  liveSourceSlug?: string;
+  createdAt: string;
+  updatedAt: string;
+  units: TemplateUnitInventory;
+}
+
+/** A request to apply an entire template. */
+export interface ApplyTemplateRequest {
+  templateSlug: string;
+  target: ApplyTarget;
+  /** Default conflict policy applied to every unit unless `perUnitConflict` overrides. */
+  conflictDefault: ConflictPolicy;
+  /** Override the policy for specific units. Key shape: `<kind>:<unit-key>`. */
+  perUnitConflict?: Record<string, ConflictPolicy>;
+  dryRun?: boolean;
+}
+
+export interface ApplyTemplateResult {
+  ok: boolean;
+  /** Per-unit outcomes in inventory order. */
+  results: Array<{
+    unit: TemplateUnitRef;
+    result: ApplyResult;
+  }>;
+  /** Aggregate counters useful for the apply-modal summary. */
+  summary: {
+    applied: number;
+    merged: number;
+    skipped: number;
+    errors: number;
+    wouldApply: number;
+  };
+  /** Bootstrap details when `target.kind === "new"`. */
+  bootstrap?: {
+    createdPath: string;
+    gitInitialized: boolean;
+  };
   error?: { code: string; message: string };
 }
 

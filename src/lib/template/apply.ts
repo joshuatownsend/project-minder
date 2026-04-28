@@ -2,10 +2,11 @@ import path from "path";
 import {
   ApplyRequest,
   ApplyResult,
+  ApplySource,
+  ApplyTarget,
   HookEntry,
   McpServer,
   MinderConfig,
-  ProjectData,
   ScanResult,
 } from "../types";
 import { readConfig } from "../config";
@@ -26,6 +27,55 @@ import { applyMcp } from "./applyMcp";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 
+/** Resolved source location: either a virtual-project root path (with a slug
+ *  used only by walkers for entry-id construction) or a user-scope flag. */
+type ResolvedSource =
+  | { kind: "project"; path: string; slug: string }
+  | { kind: "user" };
+
+function resolveSource(source: ApplySource, scan: ScanResult): ResolvedSource | { error: { code: string; message: string } } {
+  switch (source.kind) {
+    case "user":
+      return { kind: "user" };
+    case "project": {
+      const proj = scan.projects.find((p) => p.slug === source.slug);
+      if (!proj) {
+        return { error: { code: "UNKNOWN_SOURCE_PROJECT", message: `No project with slug "${source.slug}".` } };
+      }
+      return { kind: "project", path: proj.path, slug: proj.slug };
+    }
+    case "path":
+      // Internal-only — used by the template apply layer with snapshot bundles
+      // and live-source projects. Slug is a synthetic placeholder used only by
+      // walkers when they construct entry ids.
+      return { kind: "project", path: source.path, slug: "template" };
+  }
+}
+
+function resolveTarget(target: ApplyTarget, scan: ScanResult): { path: string } | { error: { code: string; message: string } } {
+  switch (target.kind) {
+    case "existing": {
+      const proj = scan.projects.find((p) => p.slug === target.slug);
+      if (!proj) {
+        return { error: { code: "UNKNOWN_TARGET_PROJECT", message: `No project with slug "${target.slug}".` } };
+      }
+      return { path: proj.path };
+    }
+    case "new":
+      // applyUnit doesn't bootstrap directories — the template apply layer
+      // handles "new" by creating the directory first, then dispatching with
+      // target.kind === "path". Reject here so a misuse is loud.
+      return {
+        error: {
+          code: "UNSUPPORTED_TARGET",
+          message: `applyUnit doesn't accept target.kind="new"; route via applyTemplate instead.`,
+        },
+      };
+    case "path":
+      return { path: target.path };
+  }
+}
+
 /**
  * Top-level orchestrator. Resolves source + target paths, dispatches to the
  * right primitive, and (on a successful non-dryRun) invalidates the caches
@@ -35,21 +85,14 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   const config = await readConfig();
   const scan = await getOrLoadScan();
 
-  // Resolve target project path.
-  if (request.target.kind !== "existing") {
-    return errorResult(
-      "UNSUPPORTED_TARGET",
-      `V1 only supports target.kind="existing"; got "${request.target.kind}".`
-    );
-  }
-  const targetProject = scan.projects.find((p) => p.slug === request.target.slug);
-  if (!targetProject) {
-    return errorResult("UNKNOWN_TARGET_PROJECT", `No project with slug "${request.target.slug}".`);
+  const targetResolved = resolveTarget(request.target, scan);
+  if ("error" in targetResolved) {
+    return errorResult(targetResolved.error.code, targetResolved.error.message);
   }
 
   let safeTargetPath: string;
   try {
-    safeTargetPath = ensureInsideDevRoots(targetProject.path, config);
+    safeTargetPath = ensureInsideDevRoots(targetResolved.path, config);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return errorResult(e.code, e.message);
@@ -57,24 +100,29 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
     throw e;
   }
 
+  const sourceResolved = resolveSource(request.source, scan);
+  if ("error" in sourceResolved) {
+    return errorResult(sourceResolved.error.code, sourceResolved.error.message);
+  }
+
   // Dispatch by unit kind.
   let result: ApplyResult;
   try {
     switch (request.unit.kind) {
       case "agent":
-        result = await dispatchAgent(request, safeTargetPath, scan);
+        result = await dispatchAgent(request, sourceResolved, safeTargetPath);
         break;
       case "skill":
-        result = await dispatchSkill(request, safeTargetPath, scan);
+        result = await dispatchSkill(request, sourceResolved, safeTargetPath);
         break;
       case "command":
-        result = await dispatchCommand(request, safeTargetPath, scan);
+        result = await dispatchCommand(request, sourceResolved, safeTargetPath);
         break;
       case "hook":
-        result = await dispatchHook(request, targetProject, scan);
+        result = await dispatchHook(request, sourceResolved, safeTargetPath);
         break;
       case "mcp":
-        result = await dispatchMcp(request, targetProject, scan);
+        result = await dispatchMcp(request, sourceResolved, safeTargetPath);
         break;
       default:
         result = errorResult("UNKNOWN_UNIT_KIND", `Unsupported unit kind "${request.unit.kind}".`);
@@ -95,10 +143,10 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
 
 async function dispatchAgent(
   request: ApplyRequest,
-  targetProjectPath: string,
-  scan: ScanResult
+  source: ResolvedSource,
+  targetProjectPath: string
 ): Promise<ApplyResult> {
-  const entry = await findAgent(request, scan);
+  const entry = await findAgent(request.unit.key, source);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Agent "${request.unit.key}" not found in source.`);
 
   const sourceFile = entry.realPath ?? entry.filePath;
@@ -113,14 +161,13 @@ async function dispatchAgent(
 
 async function dispatchSkill(
   request: ApplyRequest,
-  targetProjectPath: string,
-  scan: ScanResult
+  source: ResolvedSource,
+  targetProjectPath: string
 ): Promise<ApplyResult> {
-  const entry = await findSkill(request, scan);
+  const entry = await findSkill(request.unit.key, source);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Skill "${request.unit.key}" not found in source.`);
 
   if (entry.layout === "bundled") {
-    // Bundled skills live as a directory containing SKILL.md.
     const sourceDir = path.dirname(entry.realPath ?? entry.filePath);
     const targetDir = path.join(targetProjectPath, ".claude", "skills", entry.slug);
     return applyDirectory({
@@ -142,29 +189,13 @@ async function dispatchSkill(
 
 async function dispatchCommand(
   request: ApplyRequest,
-  targetProjectPath: string,
-  scan: ScanResult
+  source: ResolvedSource,
+  targetProjectPath: string
 ): Promise<ApplyResult> {
-  const source = request.source;
-  if (source.kind === "user") {
-    const entries = await walkUserCommands();
-    const entry = entries.find((e) => e.slug === request.unit.key);
-    if (!entry) return errorResult("UNIT_NOT_FOUND", `User command "${request.unit.key}" not found.`);
-    const sourceFile = entry.realPath ?? entry.filePath;
-    const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
-    return applySingleFile({
-      sourcePath: sourceFile,
-      targetPath: targetFile,
-      conflict: request.conflict,
-      dryRun: request.dryRun,
-    });
-  }
-  // source.kind === "project"
-  const sourceProject = scan.projects.find((p) => p.slug === source.slug);
-  if (!sourceProject) {
-    return errorResult("UNKNOWN_SOURCE_PROJECT", `No project with slug "${source.slug}".`);
-  }
-  const entries = await walkProjectCommands(sourceProject.path, sourceProject.slug);
+  const entries =
+    source.kind === "user"
+      ? await walkUserCommands()
+      : await walkProjectCommands(source.path, source.slug);
   const entry = entries.find((e) => e.slug === request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Command "${request.unit.key}" not found in source.`);
 
@@ -180,29 +211,22 @@ async function dispatchCommand(
 
 async function dispatchHook(
   request: ApplyRequest,
-  targetProject: ProjectData,
-  scan: ScanResult
+  source: ResolvedSource,
+  targetProjectPath: string
 ): Promise<ApplyResult> {
-  const source = request.source;
   if (source.kind !== "project") {
-    return errorResult("UNSUPPORTED_SOURCE", "Hook source must be a project (user-scope hooks not supported in V1).");
+    return errorResult("UNSUPPORTED_SOURCE", "Hook source must be a project (user-scope hooks not supported in V1/V2).");
   }
-  const sourceProject = scan.projects.find((p) => p.slug === source.slug);
-  if (!sourceProject) {
-    return errorResult("UNKNOWN_SOURCE_PROJECT", `No project with slug "${source.slug}".`);
-  }
-
-  const hooksInfo = await scanClaudeHooks(sourceProject.path);
+  const hooksInfo = await scanClaudeHooks(source.path);
   const allEntries: HookEntry[] = hooksInfo?.entries ?? [];
-  // Expand multi-command entries into single-command entries so key lookup matches.
   const exploded = allEntries.flatMap(explodeHookCommands);
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
   return applyHook({
     entry,
-    sourceProjectPath: sourceProject.path,
-    targetProjectPath: targetProject.path,
+    sourceProjectPath: source.path,
+    targetProjectPath,
     conflict: request.conflict,
     dryRun: request.dryRun,
   });
@@ -210,64 +234,52 @@ async function dispatchHook(
 
 async function dispatchMcp(
   request: ApplyRequest,
-  targetProject: ProjectData,
-  scan: ScanResult
+  source: ResolvedSource,
+  targetProjectPath: string
 ): Promise<ApplyResult> {
-  const source = request.source;
   if (source.kind !== "project") {
-    return errorResult("UNSUPPORTED_SOURCE", "MCP source must be a project in V1.");
+    return errorResult("UNSUPPORTED_SOURCE", "MCP source must be a project (user-scope MCP not supported in V1/V2).");
   }
-  const sourceProject = scan.projects.find((p) => p.slug === source.slug);
-  if (!sourceProject) {
-    return errorResult("UNKNOWN_SOURCE_PROJECT", `No project with slug "${source.slug}".`);
-  }
-
-  const mcpInfo = await scanMcpServers(sourceProject.path);
+  const mcpInfo = await scanMcpServers(source.path);
   const all: McpServer[] = mcpInfo?.servers ?? [];
   const server = findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
   return applyMcp({
     server,
-    targetProjectPath: targetProject.path,
+    targetProjectPath,
     conflict: request.conflict,
-    sourceSlug: sourceProject.slug,
+    sourceSlug: source.slug,
     dryRun: request.dryRun,
   });
 }
 
 async function findAgent(
-  request: ApplyRequest,
-  scan: ScanResult
+  unitKey: string,
+  source: ResolvedSource
 ): Promise<AgentEntry | undefined> {
   const ctx = await loadProvenanceContext();
-  const source = request.source;
   if (source.kind === "user") {
     const all = await walkUserAgents(ctx);
-    return all.find((a) => a.slug === request.unit.key);
+    return all.find((a) => a.slug === unitKey);
   }
-  const sourceProject = scan.projects.find((p) => p.slug === source.slug);
-  if (!sourceProject) return undefined;
-  const all = await walkProjectAgents(sourceProject.path, sourceProject.slug, ctx);
-  return all.find((a) => a.slug === request.unit.key);
+  const all = await walkProjectAgents(source.path, source.slug, ctx);
+  return all.find((a) => a.slug === unitKey);
 }
 
 async function findSkill(
-  request: ApplyRequest,
-  scan: ScanResult
+  unitKey: string,
+  source: ResolvedSource
 ): Promise<SkillEntry | undefined> {
   const ctx = await loadProvenanceContext();
   // Skill keys are "<slug>:<layout>"
-  const [slug, layout] = request.unit.key.split(":");
+  const [slug, layout] = unitKey.split(":");
   const layoutMatch = (e: SkillEntry) => e.slug === slug && e.layout === layout;
-  const source = request.source;
   if (source.kind === "user") {
     const all = await walkUserSkills(ctx);
     return all.find(layoutMatch);
   }
-  const sourceProject = scan.projects.find((p) => p.slug === source.slug);
-  if (!sourceProject) return undefined;
-  const all = await walkProjectSkills(sourceProject.path, sourceProject.slug, ctx);
+  const all = await walkProjectSkills(source.path, source.slug, ctx);
   return all.find(layoutMatch);
 }
 
