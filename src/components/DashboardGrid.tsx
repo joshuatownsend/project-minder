@@ -31,7 +31,7 @@ interface DashboardGridProps {
   loading: boolean;
   onRescan: () => void;
   onArchive: (slug: string) => void;
-  onUnarchive: (slug: string) => void;
+  onUnarchive: (slug: string, status?: ProjectStatus) => void;
   scannedAt?: string;
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
 }
@@ -145,10 +145,11 @@ export function DashboardGrid({
   const handleArchive = useCallback((slug: string) => {
     const project = projects.find((p) => p.slug === slug);
     const name = project?.name ?? slug;
+    const prevStatus = project?.status ?? "active";
     onArchive(slug);
     showToast(`Archived "${name}".`, undefined, {
       label: "Undo",
-      onClick: () => onUnarchive(slug),
+      onClick: () => onUnarchive(slug, prevStatus),
     });
   }, [projects, onArchive, onUnarchive, showToast]);
 
@@ -203,10 +204,19 @@ export function DashboardGrid({
     return result;
   }, [projects, search, statusFilter, sortBy, gitDirtyOverrides, pinnedSlugs]);
 
-  const archivedProjects = useMemo(
-    () => projects.filter((p) => p.status === "archived"),
-    [projects]
-  );
+  const archivedProjects = useMemo(() => {
+    let result = projects.filter((p) => p.status === "archived");
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter((p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.framework?.toLowerCase().includes(q) ||
+        p.orm?.toLowerCase().includes(q) ||
+        p.slug.includes(q)
+      );
+    }
+    return result;
+  }, [projects, search]);
 
   // Keyboard shortcuts
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -525,6 +535,8 @@ export function DashboardGrid({
         >
           <button
             onClick={() => setArchivedExpanded((v) => !v)}
+            aria-expanded={archivedExpanded}
+            aria-controls="archived-projects-list"
             style={{
               width: "100%", display: "flex", alignItems: "center", gap: "6px",
               padding: "8px 12px",
@@ -542,6 +554,7 @@ export function DashboardGrid({
           </button>
           {archivedExpanded && (
             <div
+              id="archived-projects-list"
               style={{
                 borderTop: "1px solid var(--border-subtle)",
                 display: "flex", flexDirection: "column",

@@ -24,13 +24,10 @@ export function AppNav() {
   const [statusApproval, setStatusApproval] = useState(0);
 
   useEffect(() => {
-    let errors = 0;
-    let id: ReturnType<typeof setInterval>;
     async function fetchPending() {
       try {
         const res = await fetch("/api/manual-steps?pending=true");
-        if (!res.ok) { errors++; if (errors >= 5) clearInterval(id); return; }
-        errors = 0;
+        if (!res.ok) return;
         const data = await res.json();
         const total = data.reduce(
           (sum: number, p: { manualSteps: { pendingSteps: number } }) =>
@@ -39,33 +36,28 @@ export function AppNav() {
         );
         setStepsPending(total);
       } catch {
-        errors++;
-        if (errors >= 5) clearInterval(id);
+        // silently ignore, will retry on next tick
       }
     }
     fetchPending();
-    id = setInterval(fetchPending, 30_000);
+    const id = setInterval(fetchPending, 30_000);
     return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
-    let errors = 0;
-    let id: ReturnType<typeof setInterval>;
     async function fetchApproval() {
       try {
         const res = await fetch("/api/status");
-        if (!res.ok) { errors++; if (errors >= 5) clearInterval(id); return; }
-        errors = 0;
+        if (!res.ok) return;
         const data = await res.json() as { sessions: LiveSession[] };
         const count = data.sessions?.filter((s) => s.status === "approval").length ?? 0;
         setStatusApproval(count);
       } catch {
-        errors++;
-        if (errors >= 5) clearInterval(id);
+        // silently ignore, will retry on next tick
       }
     }
     fetchApproval();
-    id = setInterval(fetchApproval, 10_000);
+    const id = setInterval(fetchApproval, 10_000);
     return () => clearInterval(id);
   }, []);
 

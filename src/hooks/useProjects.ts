@@ -44,12 +44,12 @@ export function useProjects() {
   const updateStatus = useCallback(
     async (slug: string, status: ProjectStatus) => {
       try {
-        await fetch("/api/config", {
+        const res = await fetch("/api/config", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slug, status }),
         });
-        // Update local state
+        if (!res.ok) return;
         setData((prev) => {
           if (!prev) return prev;
           return {
@@ -60,7 +60,7 @@ export function useProjects() {
           };
         });
       } catch {
-        // Silently fail
+        // network errors — local state left unchanged
       }
     },
     []
@@ -76,7 +76,7 @@ export function useProjects() {
   );
 
   const unarchiveProject = useCallback(
-    (slug: string) => updateStatus(slug, "active"),
+    (slug: string, status: ProjectStatus = "active") => updateStatus(slug, status),
     [updateStatus]
   );
 

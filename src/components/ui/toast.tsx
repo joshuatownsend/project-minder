@@ -42,6 +42,7 @@ export function ToastContainer({
             <div className="flex items-center gap-2 shrink-0">
               {msg.action && (
                 <button
+                  type="button"
                   onClick={() => { msg.action?.onClick(); onDismiss(msg.id); }}
                   className="text-xs font-medium text-[var(--info)] hover:underline"
                 >
@@ -49,6 +50,8 @@ export function ToastContainer({
                 </button>
               )}
               <button
+                type="button"
+                aria-label="Dismiss notification"
                 onClick={() => onDismiss(msg.id)}
                 className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               >
