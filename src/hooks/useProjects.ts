@@ -70,31 +70,17 @@ export function useProjects() {
     fetchProjects();
   }, [fetchProjects]);
 
-  const hideProject = useCallback(
-    async (slug: string, dirName: string) => {
-      try {
-        await fetch("/api/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "hide", dirName }),
-        });
-        // Optimistic update: remove from list, bump hidden count
-        setData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            projects: prev.projects.filter((p) => p.slug !== slug),
-            hiddenCount: prev.hiddenCount + 1,
-          };
-        });
-      } catch {
-        // Silently fail
-      }
-    },
-    []
+  const archiveProject = useCallback(
+    (slug: string) => updateStatus(slug, "archived"),
+    [updateStatus]
   );
 
-  return { data, loading, error, rescan, updateStatus, hideProject };
+  const unarchiveProject = useCallback(
+    (slug: string) => updateStatus(slug, "active"),
+    [updateStatus]
+  );
+
+  return { data, loading, error, rescan, updateStatus, archiveProject, unarchiveProject };
 }
 
 export function useProject(slug: string) {

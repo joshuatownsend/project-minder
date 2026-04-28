@@ -7,16 +7,17 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function Home() {
   useDocumentTitle("Dashboard");
-  const { data, loading, rescan, hideProject } = useProjects();
+  const { data, loading, rescan, archiveProject, unarchiveProject } = useProjects();
   const { statuses } = useGitDirtyStatus();
 
   return (
     <DashboardGrid
       projects={data?.projects ?? []}
-      hiddenCount={data?.hiddenCount ?? 0}
       loading={loading}
       onRescan={rescan}
-      onHide={hideProject}
+      onArchive={archiveProject}
+      onUnarchive={unarchiveProject}
+      scannedAt={data?.scannedAt}
       gitDirtyOverrides={statuses}
     />
   );

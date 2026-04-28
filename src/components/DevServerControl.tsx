@@ -143,7 +143,7 @@ export function DevServerControl({
             {server!.status === "starting" ? "starting…" : `●  :${port || "?"}`}
           </span>
           <button
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); doAction("stop"); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (window.confirm("Stop dev server?")) doAction("stop"); }}
             disabled={loading}
             title="Stop dev server"
             aria-label="Stop dev server"
@@ -228,7 +228,7 @@ export function DevServerControl({
           </Button>
         ) : (
           <>
-            <Button variant="destructive" size="sm" onClick={() => doAction("stop")} disabled={loading}>
+            <Button variant="destructive" size="sm" onClick={() => { if (window.confirm("Stop dev server?")) doAction("stop"); }} disabled={loading}>
               <Square className="h-4 w-4 mr-1" />
               Stop
             </Button>

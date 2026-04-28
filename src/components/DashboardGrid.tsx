@@ -5,10 +5,14 @@ import { ProjectData, ProjectStatus } from "@/lib/types";
 import { useLiveSessionStatus } from "@/hooks/useLiveSessionStatus";
 import { ProjectCard } from "./ProjectCard";
 import { SparklineList } from "./SparklineList";
-import { ManageHiddenProjects } from "./ManageHiddenProjects";
 import { Skeleton } from "./ui/skeleton";
 import { QuickAddTodosModal } from "./QuickAddTodosModal";
-import { Search, RefreshCw, Plus, LayoutGrid, Rows3, LayoutDashboard, CircleHelp } from "lucide-react";
+import { useToast } from "./ToastProvider";
+import Link from "next/link";
+import {
+  Search, RefreshCw, Plus, LayoutGrid, Rows3, LayoutDashboard,
+  CircleHelp, ChevronDown, ChevronRight, RotateCcw,
+} from "lucide-react";
 import { useHelp } from "./HelpProvider";
 import { usePathname } from "next/navigation";
 
@@ -22,41 +26,54 @@ interface DirtyStatusOverride {
 
 interface DashboardGridProps {
   projects: ProjectData[];
-  hiddenCount: number;
   loading: boolean;
   onRescan: () => void;
-  onHide: (slug: string, dirName: string) => void;
+  onArchive: (slug: string) => void;
+  onUnarchive: (slug: string) => void;
+  scannedAt?: string;
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
+}
+
+function timeAgo(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 export function DashboardGrid({
   projects,
-  hiddenCount,
   loading,
   onRescan,
-  onHide,
+  onArchive,
+  onUnarchive,
+  scannedAt,
   gitDirtyOverrides,
 }: DashboardGridProps) {
-  const [search, setSearch]             = useState("");
-  const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
-  const [sortBy, setSortBy]             = useState<SortOption>("activity");
-  const [viewMode, setViewMode]         = useState<ViewMode>("full");
-  const [showHidden, setShowHidden]     = useState(false);
-  const [quickAddOpen, setQuickAddOpen] = useState(false);
-  const [activityData, setActivityData] = useState<Record<string, number[]>>({});
+  const [search, setSearch]               = useState("");
+  const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
+  const [sortBy, setSortBy]               = useState<SortOption>("activity");
+  const [viewMode, setViewMode]           = useState<ViewMode>("full");
+  const [quickAddOpen, setQuickAddOpen]   = useState(false);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
+  const [activityData, setActivityData]   = useState<Record<string, number[]>>({});
   const [activityError, setActivityError] = useState(false);
-  const [pinnedSlugs, setPinnedSlugs] = useState<string[]>([]);
+  const [pinnedSlugs, setPinnedSlugs]     = useState<string[]>([]);
   const activityFetched = useRef(false);
   const { openHelpForRoute } = useHelp();
   const pathname = usePathname();
   const liveStatus = useLiveSessionStatus();
+  const { showToast } = useToast();
 
   // Apply dashboard defaults from config on first mount
   useEffect(() => {
     fetch("/api/config")
       .then((r) => r.json())
       .then((cfg) => {
-        if (cfg.defaultSort)        setSortBy(cfg.defaultSort as SortOption);
+        if (cfg.defaultSort)         setSortBy(cfg.defaultSort as SortOption);
         if (cfg.defaultStatusFilter) setStatusFilter(cfg.defaultStatusFilter as ProjectStatus | "all");
         if (cfg.viewMode)            setViewMode(cfg.viewMode as ViewMode);
         if (Array.isArray(cfg.pinnedSlugs)) setPinnedSlugs(cfg.pinnedSlugs);
@@ -112,6 +129,16 @@ export function DashboardGrid({
     persistViewMode(mode);
   }, [persistViewMode]);
 
+  const handleArchive = useCallback((slug: string) => {
+    const project = projects.find((p) => p.slug === slug);
+    const name = project?.name ?? slug;
+    onArchive(slug);
+    showToast(`Archived "${name}".`, undefined, {
+      label: "Undo",
+      onClick: () => onUnarchive(slug),
+    });
+  }, [projects, onArchive, onUnarchive, showToast]);
+
   const filtered = useMemo(() => {
     let result = gitDirtyOverrides
       ? projects.map((p) => {
@@ -163,6 +190,11 @@ export function DashboardGrid({
     return result;
   }, [projects, search, statusFilter, sortBy, gitDirtyOverrides, pinnedSlugs]);
 
+  const archivedProjects = useMemo(
+    () => projects.filter((p) => p.status === "archived"),
+    [projects]
+  );
+
   // Keyboard shortcuts
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const active = document.activeElement;
@@ -180,7 +212,11 @@ export function DashboardGrid({
       e.preventDefault();
       cycleViewMode();
     }
-  }, [cycleViewMode]);
+    if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !inField) {
+      e.preventDefault();
+      onRescan();
+    }
+  }, [cycleViewMode, onRescan]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -194,10 +230,10 @@ export function DashboardGrid({
     { value: "archived", label: "Archived" },
   ];
 
-  const sortOptions: { value: SortOption; label: string }[] = [
-    { value: "activity", label: "Recent"  },
-    { value: "claude",   label: "Claude"  },
-    { value: "name",     label: "A–Z"     },
+  const sortOptions: { value: SortOption; label: string; title: string }[] = [
+    { value: "activity", label: "Recent",   title: "Sort by most recent file activity" },
+    { value: "claude",   label: "By Claude", title: "Sort by most recent Claude session" },
+    { value: "name",     label: "A–Z",       title: "Sort alphabetically" },
   ];
 
   const viewOptions: { value: ViewMode; icon: React.ReactNode; title: string; label: string }[] = [
@@ -206,8 +242,6 @@ export function DashboardGrid({
     { value: "list",    icon: <Rows3           style={{ width: "11px", height: "11px" }} />, title: "Sparkline list", label: "List"    },
   ];
 
-  const archivedCount = projects.filter((p) => p.status === "archived").length;
-
   const overlaidProjects = filtered.map((project) => {
     const liveKey = project.path.replace(/[:\\/]/g, "-");
     const live = liveStatus.get(liveKey);
@@ -215,6 +249,8 @@ export function DashboardGrid({
       ? { ...project, claude: { ...project.claude, mostRecentSessionStatus: live.status, mostRecentSessionId: live.sessionId } }
       : project;
   });
+
+  const showArchivedSection = statusFilter === "all" && archivedProjects.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -287,6 +323,7 @@ export function DashboardGrid({
             <button
               key={opt.value}
               onClick={() => setSortBy(opt.value)}
+              title={opt.title}
               className="toolbar-btn"
               style={{
                 padding: "5px 11px", fontSize: "0.72rem",
@@ -359,7 +396,7 @@ export function DashboardGrid({
         <button
           onClick={onRescan}
           disabled={loading}
-          title="Rescan projects"
+          title="Rescan projects (r)"
           className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
@@ -396,7 +433,7 @@ export function DashboardGrid({
         </button>
       </div>
 
-      {/* ── Meta row: count + hidden ──────────────────────────────────────── */}
+      {/* ── Meta row ─────────────────────────────────────────────────────── */}
       <div
         style={{
           display: "flex", alignItems: "center", gap: "12px",
@@ -406,31 +443,26 @@ export function DashboardGrid({
         <span style={{ fontFamily: "var(--font-mono)" }}>
           {filtered.length} project{filtered.length !== 1 ? "s" : ""}
         </span>
-        {hiddenCount > 0 && (
-          <button
-            onClick={() => setShowHidden(true)}
-            style={{
-              background: "none", border: "none", color: "var(--text-muted)",
-              fontSize: "0.72rem", fontFamily: "var(--font-body)",
-              cursor: "pointer", padding: 0,
-              textDecoration: "underline", textUnderlineOffset: "2px",
-            }}
-          >
-            {hiddenCount} hidden
-          </button>
-        )}
-        {statusFilter === "all" && archivedCount > 0 && (
-          <button
-            onClick={() => setStatusFilter("archived")}
-            style={{
-              background: "none", border: "none", color: "var(--text-muted)",
-              fontSize: "0.72rem", fontFamily: "var(--font-body)",
-              cursor: "pointer", padding: 0,
-              textDecoration: "underline", textUnderlineOffset: "2px",
-            }}
-          >
-            {archivedCount} archived
-          </button>
+        {scannedAt && (
+          <>
+            <span aria-hidden="true" style={{ color: "var(--border-default)" }}>·</span>
+            <span style={{ fontFamily: "var(--font-mono)" }}>
+              Scanned {timeAgo(scannedAt)}
+            </span>
+            <button
+              onClick={onRescan}
+              disabled={loading}
+              style={{
+                background: "none", border: "none", padding: 0,
+                color: "var(--text-muted)", fontSize: "0.72rem",
+                fontFamily: "var(--font-body)", cursor: "pointer",
+                textDecoration: "underline", textUnderlineOffset: "2px",
+                opacity: loading ? 0.5 : 1,
+              }}
+            >
+              Rescan
+            </button>
+          </>
         )}
       </div>
 
@@ -469,7 +501,7 @@ export function DashboardGrid({
             <ProjectCard
               key={project.slug}
               project={project}
-              onHide={onHide}
+              onArchive={handleArchive}
               compact={viewMode === "compact"}
               pinned={pinnedSlugs.includes(project.slug)}
               onTogglePin={onTogglePin}
@@ -483,21 +515,86 @@ export function DashboardGrid({
         </div>
       )}
 
+      {/* ── Archived section ─────────────────────────────────────────────── */}
+      {showArchivedSection && (
+        <div
+          style={{
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            overflow: "hidden",
+          }}
+        >
+          <button
+            onClick={() => setArchivedExpanded((v) => !v)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", gap: "6px",
+              padding: "8px 12px",
+              background: "transparent", border: "none",
+              fontSize: "0.72rem", fontFamily: "var(--font-body)",
+              color: "var(--text-muted)", cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            {archivedExpanded
+              ? <ChevronDown style={{ width: "12px", height: "12px", flexShrink: 0 }} />
+              : <ChevronRight style={{ width: "12px", height: "12px", flexShrink: 0 }} />
+            }
+            Archived ({archivedProjects.length})
+          </button>
+          {archivedExpanded && (
+            <div
+              style={{
+                borderTop: "1px solid var(--border-subtle)",
+                display: "flex", flexDirection: "column",
+              }}
+            >
+              {archivedProjects.map((p, i) => (
+                <div
+                  key={p.slug}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "10px",
+                    padding: "7px 12px",
+                    borderTop: i > 0 ? "1px solid var(--border-subtle)" : "none",
+                  }}
+                >
+                  <Link
+                    href={`/project/${p.slug}`}
+                    style={{
+                      flex: 1, minWidth: 0,
+                      fontSize: "0.8rem", fontFamily: "var(--font-body)",
+                      color: "var(--text-secondary)", textDecoration: "none",
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {p.name}
+                  </Link>
+                  <button
+                    onClick={() => onUnarchive(p.slug)}
+                    title="Unarchive"
+                    style={{
+                      display: "flex", alignItems: "center", gap: "4px",
+                      padding: "3px 8px", flexShrink: 0,
+                      fontSize: "0.68rem", fontFamily: "var(--font-body)",
+                      color: "var(--text-muted)", background: "transparent",
+                      border: "1px solid var(--border-subtle)", borderRadius: "3px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <RotateCcw style={{ width: "9px", height: "9px" }} />
+                    Unarchive
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <QuickAddTodosModal
         projects={projects}
         open={quickAddOpen}
         onClose={() => setQuickAddOpen(false)}
       />
-
-      {showHidden && (
-        <ManageHiddenProjects
-          onClose={() => setShowHidden(false)}
-          onUnhide={() => {
-            setShowHidden(false);
-            onRescan();
-          }}
-        />
-      )}
     </div>
   );
 }

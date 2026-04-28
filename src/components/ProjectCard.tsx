@@ -16,22 +16,21 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Database, MoreVertical, EyeOff, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff } from "lucide-react";
+import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff } from "lucide-react";
 import { StatusDot } from "./ui/StatusDot";
 
 interface ProjectCardProps {
   project: ProjectData;
-  onHide?: (slug: string, dirName: string) => void;
+  onArchive?: (slug: string) => void;
   compact?: boolean;
   pinned?: boolean;
   onTogglePin?: (slug: string) => void;
 }
 
-export function ProjectCard({ project, onHide, compact = false, pinned = false, onTogglePin }: ProjectCardProps) {
+export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const router = useRouter();
 
-  const dirName = project.path.split(/[\\/]/).pop() || project.slug;
 
   // ── Aggregate worktree counts ──────────────────────────────────────────
   const pendingTodos = (() => {
@@ -255,7 +254,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                   width: "32px", height: "32px", padding: 0,
                   background: "none", border: "none", cursor: "pointer",
                   color: pinned ? "var(--info)" : "var(--text-muted)",
-                  opacity: pinned ? 1 : 0.25,
+                  opacity: pinned ? 1 : 0.4,
                   transition: "opacity 0.1s, color 0.1s",
                 }}
               >
@@ -263,7 +262,7 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
               </button>
             )}
 
-            {onHide && (
+            {onArchive && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -284,15 +283,9 @@ export function ProjectCard({ project, onHide, compact = false, pinned = false, 
                   align="end"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
-                  <DropdownMenuItem
-                    onClick={() => {
-                      if (window.confirm(`Hide "${project.name}" from the dashboard? You can unhide it later.`)) {
-                        onHide(project.slug, dirName);
-                      }
-                    }}
-                  >
-                    <EyeOff style={{ width: "12px", height: "12px", marginRight: "6px" }} />
-                    Hide project
+                  <DropdownMenuItem onClick={() => onArchive(project.slug)}>
+                    <Archive style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                    Archive
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

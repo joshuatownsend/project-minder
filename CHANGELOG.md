@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Dev server stop confirmation** — compact and full-panel Stop buttons now prompt `window.confirm` before killing the process, preventing accidental shutdowns.
+- **Archive consolidation** — "Hidden" UX path removed from the dashboard entirely. The card three-dot dropdown now says "Archive" (no confirmation required; archive is reversible). Archiving shows a toast with a 5-second "Undo" action. Scanner exclusion (`hidden[]`) remains a Setup-only power feature.
+- **Collapsed archived section** — when projects are archived and the status filter is "All", a collapsible "Archived (N)" row appears below the main grid. Expanding it shows a lightweight list of archived project names with one-click "Unarchive" buttons.
+- **Toast action buttons** — `showToast` now accepts an optional third `action: { label, onClick }` argument; the toast renders the action as a text button before the dismiss X.
+- **Last-scan indicator** — the dashboard meta row now shows "Scanned Xm ago · Rescan" using the `scannedAt` timestamp from the scan result.
+- **Rescan keyboard shortcut** — `r` (no modifier, outside input fields) triggers a rescan from the dashboard.
+- **Conditional ProjectDetail tabs** — Sessions, Manual Steps, and Insights tabs are hidden when the project has no data for them (`sessionCount === 0`, no `MANUAL_STEPS.md`, zero insights). Memory, Agents, and Skills tabs always remain.
+
+### Changed
+- **Sort label** — "Claude" sort option renamed to "By Claude" with `title="Sort by most recent Claude session"` tooltip.
+- **Pin button opacity** — unpinned pin button on full cards raised from 0.25 → 0.4 for better discoverability.
 - **Dashboard accessibility pass** — visually-hidden `<label>` for search input; `scope="col"` on all table header cells in the sparkline list; `aria-label` on pin buttons and session badge buttons; descriptive `title` attributes on `▲` attention indicators; `:focus-visible` ring (2px `--info` teal) applied globally via CSS.
 - **Pinned card visual treatment** — pinned cards in full and compact view now show a subtle `--info-bg` background tint and `--info-border` border, matching the sparkline row treatment. A direct pin button is now present on the full card face (hidden until hover, always visible when pinned) — no longer requires opening the three-dot dropdown.
 - **Pin failure recovery** — `onTogglePin` now reverts the optimistic local state if the config PATCH fails, preventing pin state drift.

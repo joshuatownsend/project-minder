@@ -10,8 +10,13 @@ import {
 } from "react";
 import { ToastContainer, type ToastMessage } from "./ui/toast";
 
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastContextValue {
-  showToast: (title: string, description?: string) => void;
+  showToast: (title: string, description?: string, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -27,9 +32,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showToast = useCallback(
-    (title: string, description?: string) => {
+    (title: string, description?: string, action?: ToastAction) => {
       const id = String(nextId.current++);
-      setMessages((prev) => [...prev, { id, title, description }]);
+      setMessages((prev) => [...prev, { id, title, description, action }]);
       setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
     },
     [dismiss]
