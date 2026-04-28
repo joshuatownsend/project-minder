@@ -412,6 +412,18 @@ function ResultBlock({ result, mode }: { result: ApplyTemplateResult; mode: "pre
   );
 }
 
+/** Skill keys are "<slug>:<layout>" — surface the layout in the kind badge so
+ *  bundled skills (directory tree) read distinctly from standalone .md files. */
+function kindLabel(unit: { kind: string; key: string }): string {
+  if (unit.kind === "skill") {
+    const layout = unit.key.split(":")[1];
+    if (layout === "bundled" || layout === "standalone") {
+      return `skill (${layout})`;
+    }
+  }
+  return unit.kind;
+}
+
 function UnitResultRow({
   unit,
   result,
@@ -447,11 +459,11 @@ function UnitResultRow({
           borderRadius: "3px",
           padding: "1px 4px",
           color: "var(--text-muted)",
-          minWidth: "55px",
+          minWidth: "75px",
           textAlign: "center",
         }}
       >
-        {unit.kind}
+        {kindLabel(unit)}
       </span>
       <span style={{ flex: 1, minWidth: 0, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {unit.name ?? unit.key}

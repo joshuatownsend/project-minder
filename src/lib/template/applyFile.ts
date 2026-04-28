@@ -103,16 +103,51 @@ export async function applyDirectory(args: {
   }
 
   if (dryRun) {
+    const files = await listDirFiles(sourceDir);
+    const shown = files.slice(0, 12);
+    const more = files.length - shown.length;
+    const preview =
+      `[copy directory] ${path.basename(sourceDir)}/\n` +
+      `  → ${targetDir}\n` +
+      `  ${files.length} file${files.length === 1 ? "" : "s"}:\n` +
+      shown.map((f) => `    - ${f}`).join("\n") +
+      (more > 0 ? `\n    … (+${more} more)` : "");
     return {
       ok: true,
       status: "would-apply",
       changedFiles: [targetDir],
-      diffPreview: `[copy directory] ${sourceDir}\n  → ${targetDir}`,
+      diffPreview: preview,
     };
   }
 
   const written = await copyDirRecursive(sourceDir, targetDir);
   return { ok: true, status: "applied", changedFiles: written };
+}
+
+/** Walk `dir` and return every file path relative to it, depth-first.
+ *  Used by the bundled-skill dryRun preview so the user sees what's actually
+ *  in the bundle before clicking apply. */
+async function listDirFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(curr: string, rel: string): Promise<void> {
+    const entries = await fs.readdir(curr, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        await walk(path.join(curr, e.name), childRel);
+      } else if (e.isFile() || e.isSymbolicLink()) {
+        out.push(childRel);
+      }
+    }
+  }
+  try {
+    await walk(dir, "");
+  } catch {
+    // Source dir disappeared between the existence check and the walk — return
+    // whatever we collected. The caller will see an empty list rather than throw.
+  }
+  return out.sort();
 }
 
 async function pickRename(filePath: string): Promise<string> {

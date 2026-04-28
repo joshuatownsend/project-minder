@@ -206,4 +206,48 @@ describe("applyDirectory", () => {
     expect(await fs.readFile(path.join(tmp, "dst.copy", "SKILL.md"), "utf-8")).toBe("src");
     expect(await fs.readFile(path.join(dst, "SKILL.md"), "utf-8")).toBe("existing");
   });
+
+  it("dryRun preview lists every file in the bundle", async () => {
+    const src = path.join(tmp, "src");
+    const dst = path.join(tmp, "dst");
+    await fs.mkdir(path.join(src, "sub"), { recursive: true });
+    await fs.writeFile(path.join(src, "SKILL.md"), "skill", "utf-8");
+    await fs.writeFile(path.join(src, "helper.css"), "/* style */", "utf-8");
+    await fs.writeFile(path.join(src, "sub", "helper.md"), "helper", "utf-8");
+
+    const result = await applyDirectory({
+      sourceDir: src,
+      targetDir: dst,
+      conflict: "skip",
+      dryRun: true,
+    });
+
+    expect(result.status).toBe("would-apply");
+    expect(result.diffPreview).toContain("[copy directory]");
+    expect(result.diffPreview).toContain("3 files");
+    expect(result.diffPreview).toContain("SKILL.md");
+    expect(result.diffPreview).toContain("helper.css");
+    expect(result.diffPreview).toContain("sub/helper.md");
+    // No write should have happened.
+    await expect(fs.access(dst)).rejects.toThrow();
+  });
+
+  it("dryRun preview truncates long file lists with `… (+N more)`", async () => {
+    const src = path.join(tmp, "src");
+    const dst = path.join(tmp, "dst");
+    await fs.mkdir(src, { recursive: true });
+    for (let i = 0; i < 20; i++) {
+      await fs.writeFile(path.join(src, `f${i}.md`), `${i}`, "utf-8");
+    }
+
+    const result = await applyDirectory({
+      sourceDir: src,
+      targetDir: dst,
+      conflict: "skip",
+      dryRun: true,
+    });
+
+    expect(result.diffPreview).toContain("20 files");
+    expect(result.diffPreview).toMatch(/\(\+\d+ more\)/);
+  });
 });
