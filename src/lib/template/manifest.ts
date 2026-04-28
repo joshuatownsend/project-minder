@@ -57,8 +57,9 @@ import {
   emptyInventory,
   inventoryCount,
   inventoryKeyFor,
+  normalizeInventory,
 } from "./inventoryUtils";
-export { emptyInventory, inventoryCount, inventoryKeyFor };
+export { emptyInventory, inventoryCount, inventoryKeyFor, normalizeInventory };
 
 export interface ManifestValidationError {
   field: string;
@@ -167,10 +168,18 @@ export async function readManifest(
   } catch (e) {
     return { errors: [{ field: "(file)", message: `not valid JSON: ${(e as Error).message}` }] };
   }
-  // Default `units` to an empty inventory when missing. Cleaner UX than rejecting an
-  // otherwise-valid manifest that just omits the field.
-  if (parsed && typeof parsed === "object" && !(parsed as Record<string, unknown>).units) {
-    (parsed as Record<string, unknown>).units = emptyInventory();
+  // Default `units` to an empty inventory when missing, and normalize any
+  // missing per-kind arrays to `[]`. Pre-V4 manifests don't have a `settings`
+  // entry — spreading `undefined` in flattenInventory would throw at apply
+  // time. Normalizing here means every downstream consumer (apply orchestrator,
+  // UI, snapshot promotion) sees a fully-populated inventory.
+  if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (!obj.units) {
+      obj.units = emptyInventory();
+    } else if (typeof obj.units === "object" && !Array.isArray(obj.units)) {
+      obj.units = normalizeInventory(obj.units as Partial<TemplateUnitInventory>);
+    }
   }
   return validateManifest(parsed);
 }

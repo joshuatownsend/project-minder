@@ -53,6 +53,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
 
   for (const [key, value] of Object.entries(root)) {
     if (RESERVED_SETTINGS_KEYS.has(key)) continue;
+    // The apply layer's `parsePath` interprets dots as path separators, so a
+    // literal key like "feature.flag" can't be addressed safely by Template
+    // Mode — picking it would produce a UNIT_NOT_FOUND at apply time.
+    // Filter unsupported keys out of the picker entirely; users can still
+    // template the parent object if needed.
+    if (key.includes(".")) continue;
     entries.push(buildEntry(key, value, key === "env"));
     // Surface common known nested paths so the user can pick the granular
     // path rather than the whole parent object.

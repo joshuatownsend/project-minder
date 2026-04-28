@@ -225,28 +225,73 @@ export async function saveAsSnapshot(
   // Settings keys — read each path from source's settings.json and write
   // into bundleSettings before serializing. Done last so it shares the
   // settings.json write with hooks + plugin enables.
-  if (inv.settings.length > 0) {
+  if ((inv.settings ?? []).length > 0) {
     const sourceSettingsPath = path.join(sourceProject.path, ".claude", "settings.json");
     let sourceDoc: unknown = {};
-    if (await fileExists(sourceSettingsPath)) {
-      try {
-        const raw = await fs.readFile(sourceSettingsPath, "utf-8");
-        sourceDoc = tryParseJsonc<unknown>(raw) ?? {};
-      } catch {
-        sourceDoc = {};
+    try {
+      const raw = await fs.readFile(sourceSettingsPath, "utf-8");
+      if (raw.trim().length > 0) {
+        const parsed = tryParseJsonc<unknown>(raw);
+        // A malformed source for a manifest with `inv.settings` populated
+        // would silently produce a snapshot bundle whose contents don't
+        // match the manifest, leading to UNIT_NOT_FOUND errors later. Fail
+        // loudly so the user fixes the source instead of shipping a broken
+        // snapshot.
+        if (parsed === null) {
+          return {
+            error: {
+              code: "MALFORMED_SOURCE_SETTINGS",
+              message: `Source ${sourceSettingsPath} is not valid JSON. Refusing to snapshot — manifest would diverge from bundle.`,
+            },
+          };
+        }
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          sourceDoc = parsed;
+        }
       }
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        return {
+          error: {
+            code: "SOURCE_SETTINGS_READ_FAILED",
+            message: `Could not read ${sourceSettingsPath}: ${(e as Error).message}`,
+          },
+        };
+      }
+      // ENOENT is fine — sourceDoc stays {}, peeks will report not found.
     }
+
     let acc: unknown = bundleSettings;
+    const skipped: string[] = [];
     for (const u of inv.settings) {
       if (u.key.length === 0) continue;
-      const peek = getJsonPath(sourceDoc, u.key);
+      let peek: ReturnType<typeof getJsonPath>;
+      try {
+        peek = getJsonPath(sourceDoc, u.key);
+      } catch (e) {
+        // Malformed path (forbidden segment, empty segment) — record and
+        // continue. The manifest would have rejected this at write time, so
+        // hitting it here means a hand-edited manifest. Surface, don't crash.
+        skipped.push(`${u.key}: ${(e as Error).message}`);
+        continue;
+      }
       if (!peek.found) continue;
       try {
         acc = setJsonPath(acc, u.key, peek.value);
-      } catch {
-        // PATH_NON_OBJECT_INTERMEDIATE etc. — skip the offending key rather
-        // than abort the entire snapshot. Other valid units still bundle.
+      } catch (e) {
+        skipped.push(`${u.key}: ${(e as Error).message}`);
       }
+    }
+    if (skipped.length > 0) {
+      return {
+        error: {
+          code: "SETTINGS_BUNDLE_FAILED",
+          message:
+            `Could not snapshot ${skipped.length} settings unit${skipped.length === 1 ? "" : "s"}: ` +
+            skipped.join("; "),
+        },
+      };
     }
     if (acc && typeof acc === "object" && !Array.isArray(acc)) {
       Object.assign(bundleSettings, acc as Record<string, unknown>);
@@ -320,16 +365,21 @@ export async function deleteTemplate(config: MinderConfig, slug: string): Promis
 export { makeHookKey };
 
 /** Build a flat array of unit refs across kinds (used by UI for total count
- *  + iteration shortcuts). */
+ *  + iteration shortcuts).
+ *
+ *  Tolerates legacy manifests written before a unit kind existed — pre-V4
+ *  templates have no `settings` entry, and spreading `undefined` would throw
+ *  `TypeError: ... is not iterable`. We default each missing kind to `[]`
+ *  so `applyTemplate` keeps working for templates created before this PR. */
 export function flattenInventory(inv: TemplateUnitInventory): TemplateUnitRef[] {
   return [
-    ...inv.agents,
-    ...inv.skills,
-    ...inv.commands,
-    ...inv.hooks,
-    ...inv.mcp,
-    ...inv.plugins,
-    ...inv.workflows,
-    ...inv.settings,
+    ...(inv.agents ?? []),
+    ...(inv.skills ?? []),
+    ...(inv.commands ?? []),
+    ...(inv.hooks ?? []),
+    ...(inv.mcp ?? []),
+    ...(inv.plugins ?? []),
+    ...(inv.workflows ?? []),
+    ...(inv.settings ?? []),
   ];
 }

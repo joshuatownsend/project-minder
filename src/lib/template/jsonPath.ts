@@ -16,9 +16,43 @@
 
 export type JsonPath = string;
 
+/** Segments that are NEVER acceptable in a path. Bracket assignment of
+ *  `__proto__`, `prototype`, or `constructor` would mutate the target
+ *  object's prototype rather than write a normal data key — a textbook
+ *  prototype-pollution primitive. Settings paths come from
+ *  user-controlled template manifests, so we deny these unconditionally. */
+const FORBIDDEN_SEGMENTS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+]);
+
+/** Splits a dotted path into segments, validating that each is non-empty
+ *  and not a prototype-mutating key. Throws `JsonPathError` on violation
+ *  so the apply layer surfaces a structured error code rather than a
+ *  silent corruption.
+ *
+ *  Empty segments would produce `obj[""] = …` writes that almost certainly
+ *  reflect a malformed manifest path (e.g. `a..b`, `.a`, `a.`); we reject
+ *  rather than silently accept them. */
 export function parsePath(path: JsonPath): string[] {
   if (path === "") return [];
-  return path.split(".");
+  const segments = path.split(".");
+  for (const seg of segments) {
+    if (seg.length === 0) {
+      throw new JsonPathError(
+        "EMPTY_SEGMENT",
+        `Path "${path}" contains an empty segment (leading/trailing/consecutive dots).`
+      );
+    }
+    if (FORBIDDEN_SEGMENTS.has(seg)) {
+      throw new JsonPathError(
+        "FORBIDDEN_SEGMENT",
+        `Path "${path}" contains a prototype-mutating segment "${seg}". Refusing to walk.`
+      );
+    }
+  }
+  return segments;
 }
 
 /** Returns `{ found: true, value }` or `{ found: false }`. Distinguishes

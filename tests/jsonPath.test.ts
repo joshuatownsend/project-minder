@@ -108,6 +108,47 @@ describe("isConcatDedupePath", () => {
   });
 });
 
+describe("parsePath — defenses (PR #29 review)", () => {
+  function expectThrowsWithCode(fn: () => unknown, code: string) {
+    try {
+      fn();
+      expect.fail(`expected JsonPathError("${code}") but no throw`);
+    } catch (e) {
+      expect(e).toBeInstanceOf(JsonPathError);
+      expect((e as JsonPathError).code).toBe(code);
+    }
+  }
+
+  it("rejects __proto__ to prevent prototype pollution", () => {
+    expectThrowsWithCode(() => parsePath("__proto__"), "FORBIDDEN_SEGMENT");
+    expectThrowsWithCode(() => parsePath("__proto__.polluted"), "FORBIDDEN_SEGMENT");
+    expectThrowsWithCode(() => parsePath("a.__proto__.b"), "FORBIDDEN_SEGMENT");
+  });
+
+  it("rejects prototype + constructor segments", () => {
+    expectThrowsWithCode(() => parsePath("prototype"), "FORBIDDEN_SEGMENT");
+    expectThrowsWithCode(() => parsePath("constructor"), "FORBIDDEN_SEGMENT");
+    expectThrowsWithCode(() => parsePath("a.constructor.x"), "FORBIDDEN_SEGMENT");
+  });
+
+  it("rejects empty segments from leading/trailing/consecutive dots", () => {
+    expectThrowsWithCode(() => parsePath(".a"), "EMPTY_SEGMENT");
+    expectThrowsWithCode(() => parsePath("a."), "EMPTY_SEGMENT");
+    expectThrowsWithCode(() => parsePath("a..b"), "EMPTY_SEGMENT");
+  });
+
+  it("setJsonPath does NOT pollute Object.prototype via __proto__", () => {
+    const before = (Object.prototype as Record<string, unknown>).polluted;
+    expectThrowsWithCode(
+      () => setJsonPath({}, "__proto__.polluted", "BAD"),
+      "FORBIDDEN_SEGMENT"
+    );
+    // The prototype-pollution check: Object.prototype was untouched.
+    expect((Object.prototype as Record<string, unknown>).polluted).toBe(before);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
 describe("RESERVED_SETTINGS_KEYS", () => {
   it("reserves the keys covered by dedicated unit kinds", () => {
     expect(RESERVED_SETTINGS_KEYS.has("hooks")).toBe(true);

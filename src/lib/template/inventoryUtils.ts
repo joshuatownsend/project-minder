@@ -44,16 +44,36 @@ export function emptyInventory(): TemplateUnitInventory {
   };
 }
 
-/** Total number of units across all kinds. Useful for UI summaries. */
+/** Total number of units across all kinds. Useful for UI summaries.
+ *
+ *  Tolerates legacy manifests written before a unit kind existed — those
+ *  manifests have no entry for the new kind, so reading `.length` would
+ *  throw `Cannot read properties of undefined`. We coalesce missing arrays
+ *  to 0 here so applying or browsing pre-V4 templates doesn't crash. */
 export function inventoryCount(inv: TemplateUnitInventory): number {
   return (
-    inv.agents.length +
-    inv.skills.length +
-    inv.commands.length +
-    inv.hooks.length +
-    inv.mcp.length +
-    inv.plugins.length +
-    inv.workflows.length +
-    inv.settings.length
+    (inv.agents?.length ?? 0) +
+    (inv.skills?.length ?? 0) +
+    (inv.commands?.length ?? 0) +
+    (inv.hooks?.length ?? 0) +
+    (inv.mcp?.length ?? 0) +
+    (inv.plugins?.length ?? 0) +
+    (inv.workflows?.length ?? 0) +
+    (inv.settings?.length ?? 0)
   );
+}
+
+/** Returns a new inventory with every kind defaulted to `[]` if missing.
+ *  Use whenever a legacy manifest might be in flight. */
+export function normalizeInventory(inv: Partial<TemplateUnitInventory>): TemplateUnitInventory {
+  return {
+    agents: inv.agents ?? [],
+    skills: inv.skills ?? [],
+    commands: inv.commands ?? [],
+    hooks: inv.hooks ?? [],
+    mcp: inv.mcp ?? [],
+    plugins: inv.plugins ?? [],
+    workflows: inv.workflows ?? [],
+    settings: inv.settings ?? [],
+  };
 }

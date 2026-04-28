@@ -88,15 +88,26 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
     try {
       const raw = await fs.readFile(targetSettings, "utf-8");
       if (raw.trim().length > 0) {
-        const parsed = tryParseJsonc<Record<string, unknown>>(raw);
+        const parsed = tryParseJsonc<unknown>(raw);
         if (parsed === null) {
           return errorResult(
             "MALFORMED_TARGET",
             `Target ${targetSettings} is not valid JSON. Refusing to overwrite.`
           );
         }
-        targetDoc = parsed ?? {};
+        // settings.json must have an object at the root. If parse succeeded
+        // but yielded an array, scalar, or null, treating it as `{}` would
+        // silently overwrite the user's content with our merged doc. Refuse.
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return errorResult(
+            "MALFORMED_TARGET",
+            `Target ${targetSettings} must contain a JSON object at the root. Refusing to overwrite.`
+          );
+        }
+        targetDoc = parsed as Record<string, unknown>;
       }
+      // Empty-but-existing file: leave targetDoc as {}. Same observable
+      // behavior as ENOENT — no key found, apply proceeds as "[add]".
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -107,7 +118,15 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
       }
       // ENOENT → leave targetDoc as {}.
     }
-    const targetPeek = getJsonPath(targetDoc, keyPath);
+    let targetPeek: ReturnType<typeof getJsonPath>;
+    try {
+      targetPeek = getJsonPath(targetDoc, keyPath);
+    } catch (e) {
+      if (e instanceof JsonPathError) {
+        return errorResult(e.code, e.message);
+      }
+      throw e;
+    }
     targetHadKey = targetPeek.found;
     const targetCurr = targetPeek.found ? targetPeek.value : undefined;
 
@@ -201,13 +220,27 @@ async function readKey(
       ),
     };
   }
+  // Treat an empty-but-existing source file the same as ENOENT — no doc, no
+  // keys to copy. `tryParseJsonc("")` returns null which would otherwise be
+  // reported as MALFORMED_SOURCE; that's a surprising failure mode for a
+  // valid no-content file.
+  if (raw.trim().length === 0) {
+    return { found: false };
+  }
   const parsed = tryParseJsonc<unknown>(raw);
   if (parsed === null) {
     return {
       error: errorResult("MALFORMED_SOURCE", `Source ${filePath} is not valid JSON.`),
     };
   }
-  return getJsonPath(parsed, keyPath);
+  try {
+    return getJsonPath(parsed, keyPath);
+  } catch (e) {
+    if (e instanceof JsonPathError) {
+      return { error: errorResult(e.code, e.message) };
+    }
+    throw e;
+  }
 }
 
 /**

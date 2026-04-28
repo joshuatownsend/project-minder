@@ -284,6 +284,79 @@ describe("applySettings — dryRun", () => {
   });
 });
 
+describe("applySettings — review-comment regressions (PR #29)", () => {
+  it("rejects target that parses but has a non-object root (e.g. [])", async () => {
+    await writeSource({ statusLine: "x" });
+    await fs.writeFile(
+      path.join(target, ".claude", "settings.json"),
+      JSON.stringify(["arr", "root"]),
+      "utf-8"
+    );
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceProjectPath: source,
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("MALFORMED_TARGET");
+    // The original array root must NOT have been overwritten.
+    const raw = await fs.readFile(path.join(target, ".claude", "settings.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual(["arr", "root"]);
+  });
+
+  it("treats empty source settings.json as no-key, not MALFORMED_SOURCE", async () => {
+    // Empty file (zero bytes) — readKey should return found:false, not error.
+    await fs.writeFile(path.join(source, ".claude", "settings.json"), "", "utf-8");
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceProjectPath: source,
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("UNIT_NOT_FOUND");
+  });
+
+  it("treats whitespace-only source settings.json as no-key", async () => {
+    await fs.writeFile(path.join(source, ".claude", "settings.json"), "   \n\n  ", "utf-8");
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceProjectPath: source,
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("UNIT_NOT_FOUND");
+  });
+
+  it("rejects __proto__ paths from a malformed manifest with FORBIDDEN_SEGMENT", async () => {
+    await writeSource({ a: "value" });
+    const result = await applySettings({
+      settingsPath: "__proto__.polluted",
+      sourceProjectPath: source,
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("FORBIDDEN_SEGMENT");
+    // Confirm Object.prototype was not mutated.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("rejects empty path segments with EMPTY_SEGMENT", async () => {
+    await writeSource({ a: { b: 1 } });
+    const result = await applySettings({
+      settingsPath: "a..b",
+      sourceProjectPath: source,
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("EMPTY_SEGMENT");
+  });
+});
+
 describe("mergeValues — direct unit tests", () => {
   it("source wins on type mismatch", () => {
     expect(mergeValues({ a: 1 }, "scalar", "")).toBe("scalar");
