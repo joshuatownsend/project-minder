@@ -7,7 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Dev server stop confirmation** — compact and full-panel Stop buttons now prompt `window.confirm` before killing the process, preventing accidental shutdowns.
+- **Dev server error state** — compact card badge now shows a red "error" pill with last-output tooltip and a Retry button when the server exits non-zero; full-panel Start button relabels to "Retry" in error state.
+- **Dev server error details** — `doAction` extracts `error` field from non-ok API responses and shows it as the toast description ("Failed to start dev server", "EADDRINUSE: port in use") instead of the generic fallback.
 - **Archive consolidation** — "Hidden" UX path removed from the dashboard entirely. The card three-dot dropdown now says "Archive" (no confirmation required; archive is reversible). Archiving shows a toast with a 5-second "Undo" action. Scanner exclusion (`hidden[]`) remains a Setup-only power feature.
 - **Collapsed archived section** — when projects are archived and the status filter is "All", a collapsible "Archived (N)" row appears below the main grid. Expanding it shows a lightweight list of archived project names with one-click "Unarchive" buttons.
 - **Toast action buttons** — `showToast` now accepts an optional third `action: { label, onClick }` argument; the toast renders the action as a text button before the dismiss X.
@@ -16,7 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Conditional ProjectDetail tabs** — Sessions, Manual Steps, and Insights tabs are hidden when the project has no data for them (`sessionCount === 0`, no `MANUAL_STEPS.md`, zero insights). Memory, Agents, and Skills tabs always remain.
 
 ### Changed
-- **Sort label** — "Claude" sort option renamed to "By Claude" with `title="Sort by most recent Claude session"` tooltip.
+- **Dev server stop confirmation removed** — Stop (compact + full panel) no longer shows `window.confirm`. The status transition is immediate feedback; dev server stops are trivially reversible (restart in 2s).
+- **Sort label** — "By Claude" renamed to "Last Session" with a `Bot` icon; `title="Sort by most recent Claude session"` on hover.
+- **Toolbar icon treatment** — Status filter and Sort buttons now match the View mode toggle: icon above label, stacked vertically, `minHeight: 32px`. Each status has a unique icon (Layers/CircleDot/CirclePause/Archive); each sort has a unique icon (Clock/Bot/ArrowUpAZ). Quick Add and Rescan standalone buttons also gain `minHeight: 32px` for consistent hit-area sizing.
+- **Default sort** — dashboard initial sort changed from "Recent" (file activity) to "Last Session" (Claude session recency), matching the primary workflow of resuming Claude-assisted work. Saved config preference still takes precedence.
+- **Rescan error toast** — "Scan failed / Check the console" → "Rescan failed / Showing cached results", clarifying that the project list is preserved on failure.
 - **Pin button opacity** — unpinned pin button on full cards raised from 0.25 → 0.4 for better discoverability.
 - **Dashboard accessibility pass** — visually-hidden `<label>` for search input; `scope="col"` on all table header cells in the sparkline list; `aria-label` on pin buttons and session badge buttons; descriptive `title` attributes on `▲` attention indicators; `:focus-visible` ring (2px `--info` teal) applied globally via CSS.
 - **Pinned card visual treatment** — pinned cards in full and compact view now show a subtle `--info-bg` background tint and `--info-border` border, matching the sparkline row treatment. A direct pin button is now present on the full card face (hidden until hover, always visible when pinned) — no longer requires opening the three-dot dropdown.

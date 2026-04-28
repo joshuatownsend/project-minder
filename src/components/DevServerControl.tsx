@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "./ui/button";
-import { Play, Square, RotateCw, Terminal, ExternalLink } from "lucide-react";
+import { Play, Square, RotateCw, Terminal, ExternalLink, AlertCircle } from "lucide-react";
 import { useToast } from "./ToastProvider";
 
 interface DevServerInfo {
@@ -71,7 +71,6 @@ export function DevServerControl({
     }
   }, [slug]);
 
-  // Poll for status when server is running/starting
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
@@ -87,7 +86,6 @@ export function DevServerControl({
     };
   }, [server?.status, fetchStatus]);
 
-  // Auto-scroll output
   useEffect(() => {
     if (outputRef.current && showOutput) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
@@ -102,8 +100,10 @@ export function DevServerControl({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, projectPath, port: devPort }),
       });
-      if (!res.ok) throw new Error(`Server responded ${res.status}`);
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Server responded ${res.status}`);
+      }
       if (data.command) {
         setServer(data);
         if (action === "start" || action === "restart") {
@@ -112,18 +112,58 @@ export function DevServerControl({
       } else {
         setServer(null);
       }
-    } catch {
-      showToast(`Failed to ${action} dev server`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "";
+      showToast(`Failed to ${action} dev server`, detail || undefined);
     } finally {
       setLoading(false);
     }
   };
 
-  const isActive =
-    server?.status === "running" || server?.status === "starting";
+  const isActive = server?.status === "running" || server?.status === "starting";
   const port = server?.port || devPort;
 
   if (compact) {
+    // Errored state: show red pill + retry
+    if (server?.status === "errored") {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span
+            title={server.output?.slice(-3).join(" ") || "Server exited with an error"}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "3px",
+              fontFamily: "var(--font-mono)", fontSize: "0.68rem", fontWeight: 600,
+              color: "var(--status-error-text)", background: "var(--status-error-bg)",
+              border: "1px solid var(--status-error-border)",
+              borderRadius: "3px", padding: "2px 6px", lineHeight: 1.4,
+              cursor: "help",
+            }}
+          >
+            <AlertCircle style={{ width: "9px", height: "9px" }} />
+            error
+          </span>
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); doAction("start"); }}
+            disabled={loading}
+            title="Retry dev server"
+            aria-label="Retry dev server"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: "32px", height: "32px",
+              background: "transparent",
+              border: "1px solid var(--border-default)",
+              borderRadius: "3px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            <RotateCw style={{ width: "9px", height: "9px" }} />
+          </button>
+        </div>
+      );
+    }
+
     if (isActive) {
       return (
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -143,7 +183,7 @@ export function DevServerControl({
             {server!.status === "starting" ? "starting…" : `●  :${port || "?"}`}
           </span>
           <button
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (window.confirm("Stop dev server?")) doAction("stop"); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); doAction("stop"); }}
             disabled={loading}
             title="Stop dev server"
             aria-label="Stop dev server"
@@ -164,7 +204,7 @@ export function DevServerControl({
       );
     }
 
-    // Stopped state — always rendered, disabled if no port configured
+    // Stopped state
     const canStart = !!devPort;
     return (
       <button
@@ -224,11 +264,11 @@ export function DevServerControl({
         {!isActive ? (
           <Button variant="default" size="sm" onClick={() => doAction("start")} disabled={loading}>
             <Play className="h-4 w-4 mr-1" />
-            {loading ? "Starting…" : "Start"}
+            {loading ? "Starting…" : server?.status === "errored" ? "Retry" : "Start"}
           </Button>
         ) : (
           <>
-            <Button variant="destructive" size="sm" onClick={() => { if (window.confirm("Stop dev server?")) doAction("stop"); }} disabled={loading}>
+            <Button variant="destructive" size="sm" onClick={() => doAction("stop")} disabled={loading}>
               <Square className="h-4 w-4 mr-1" />
               Stop
             </Button>

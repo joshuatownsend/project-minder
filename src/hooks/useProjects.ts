@@ -35,7 +35,7 @@ export function useProjects() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
-      showToast("Scan failed", "Check the console for details");
+      showToast("Rescan failed", "Showing cached results");
     } finally {
       setLoading(false);
     }

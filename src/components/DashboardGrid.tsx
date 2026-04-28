@@ -12,6 +12,7 @@ import Link from "next/link";
 import {
   Search, RefreshCw, Plus, LayoutGrid, Rows3, LayoutDashboard,
   CircleHelp, ChevronDown, ChevronRight, RotateCcw,
+  Layers, CircleDot, CirclePause, Archive, Clock, Bot, ArrowUpAZ,
 } from "lucide-react";
 import { useHelp } from "./HelpProvider";
 import { usePathname } from "next/navigation";
@@ -55,7 +56,7 @@ export function DashboardGrid({
 }: DashboardGridProps) {
   const [search, setSearch]               = useState("");
   const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
-  const [sortBy, setSortBy]               = useState<SortOption>("activity");
+  const [sortBy, setSortBy]               = useState<SortOption>("claude");
   const [viewMode, setViewMode]           = useState<ViewMode>("full");
   const [quickAddOpen, setQuickAddOpen]   = useState(false);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -223,17 +224,17 @@ export function DashboardGrid({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const statusOptions: { value: ProjectStatus | "all"; label: string }[] = [
-    { value: "all",      label: "All"      },
-    { value: "active",   label: "Active"   },
-    { value: "paused",   label: "Paused"   },
-    { value: "archived", label: "Archived" },
+  const statusOptions: { value: ProjectStatus | "all"; label: string; icon: React.ReactNode }[] = [
+    { value: "all",      label: "All",      icon: <Layers      style={{ width: "11px", height: "11px" }} /> },
+    { value: "active",   label: "Active",   icon: <CircleDot   style={{ width: "11px", height: "11px" }} /> },
+    { value: "paused",   label: "Paused",   icon: <CirclePause style={{ width: "11px", height: "11px" }} /> },
+    { value: "archived", label: "Archived", icon: <Archive     style={{ width: "11px", height: "11px" }} /> },
   ];
 
-  const sortOptions: { value: SortOption; label: string; title: string }[] = [
-    { value: "activity", label: "Recent",   title: "Sort by most recent file activity" },
-    { value: "claude",   label: "By Claude", title: "Sort by most recent Claude session" },
-    { value: "name",     label: "A–Z",       title: "Sort alphabetically" },
+  const sortOptions: { value: SortOption; label: string; title: string; icon: React.ReactNode }[] = [
+    { value: "activity", label: "Recent",       title: "Sort by most recent file activity",  icon: <Clock     style={{ width: "11px", height: "11px" }} /> },
+    { value: "claude",   label: "Last Session", title: "Sort by most recent Claude session", icon: <Bot       style={{ width: "11px", height: "11px" }} /> },
+    { value: "name",     label: "A–Z",          title: "Sort alphabetically",                icon: <ArrowUpAZ style={{ width: "11px", height: "11px" }} /> },
   ];
 
   const viewOptions: { value: ViewMode; icon: React.ReactNode; title: string; label: string }[] = [
@@ -295,18 +296,21 @@ export function DashboardGrid({
             <button
               key={opt.value}
               onClick={() => setStatusFilter(opt.value)}
+              title={opt.label}
               className="toolbar-btn"
               style={{
-                padding: "5px 11px", fontSize: "0.72rem",
-                fontWeight: statusFilter === opt.value ? 600 : 400,
-                fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-                color: statusFilter === opt.value ? "var(--text-primary)" : "var(--text-secondary)",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                gap: "2px", padding: "5px 10px", minHeight: "32px",
+                color: statusFilter === opt.value ? "var(--text-primary)" : "var(--text-muted)",
                 background: statusFilter === opt.value ? "var(--bg-elevated)" : "transparent",
                 border: "none", borderRight: "1px solid var(--border-subtle)",
                 cursor: "pointer", transition: "background 0.1s, color 0.1s", lineHeight: 1,
               }}
             >
-              {opt.label}
+              {opt.icon}
+              <span style={{ fontSize: "0.52rem", fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1 }}>
+                {opt.label}
+              </span>
             </button>
           ))}
         </div>
@@ -326,16 +330,18 @@ export function DashboardGrid({
               title={opt.title}
               className="toolbar-btn"
               style={{
-                padding: "5px 11px", fontSize: "0.72rem",
-                fontWeight: sortBy === opt.value ? 600 : 400,
-                fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-                color: sortBy === opt.value ? "var(--text-primary)" : "var(--text-secondary)",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                gap: "2px", padding: "5px 10px", minHeight: "32px",
+                color: sortBy === opt.value ? "var(--text-primary)" : "var(--text-muted)",
                 background: sortBy === opt.value ? "var(--bg-elevated)" : "transparent",
                 border: "none", borderRight: "1px solid var(--border-subtle)",
                 cursor: "pointer", transition: "background 0.1s, color 0.1s", lineHeight: 1,
               }}
             >
-              {opt.label}
+              {opt.icon}
+              <span style={{ fontSize: "0.52rem", fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1 }}>
+                {opt.label}
+              </span>
             </button>
           ))}
         </div>
@@ -381,7 +387,7 @@ export function DashboardGrid({
           className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
-            padding: "5px 11px", fontSize: "0.72rem",
+            padding: "5px 11px", fontSize: "0.72rem", minHeight: "32px",
             fontFamily: "var(--font-body)", letterSpacing: "0.03em",
             color: "var(--text-secondary)", background: "var(--bg-surface)",
             border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)",
@@ -400,7 +406,7 @@ export function DashboardGrid({
           className="toolbar-btn"
           style={{
             display: "flex", alignItems: "center", gap: "5px",
-            padding: "5px 11px", fontSize: "0.72rem",
+            padding: "5px 11px", fontSize: "0.72rem", minHeight: "32px",
             fontFamily: "var(--font-body)", letterSpacing: "0.03em",
             color: "var(--text-secondary)",
             background: "var(--bg-surface)",
