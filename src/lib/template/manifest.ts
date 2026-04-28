@@ -40,6 +40,7 @@ const VALID_UNIT_KINDS: readonly UnitKind[] = [
   "mcp",
   "plugin",
   "workflow",
+  "settingsKey",
 ];
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -48,30 +49,17 @@ export function isValidSlug(slug: string): boolean {
   return SLUG_RE.test(slug) && slug.length <= 64;
 }
 
-export function emptyInventory(): TemplateUnitInventory {
-  return {
-    agents: [],
-    skills: [],
-    commands: [],
-    hooks: [],
-    mcp: [],
-    plugins: [],
-    workflows: [],
-  };
-}
-
-/** Total number of units across all kinds. Useful for UI summaries. */
-export function inventoryCount(inv: TemplateUnitInventory): number {
-  return (
-    inv.agents.length +
-    inv.skills.length +
-    inv.commands.length +
-    inv.hooks.length +
-    inv.mcp.length +
-    inv.plugins.length +
-    inv.workflows.length
-  );
-}
+// Pure inventory helpers live in `inventoryUtils.ts` so client components can
+// import them without dragging the rest of this module's server-side
+// dependency graph (atomicFs → fs, config → platform → child_process) into
+// the browser bundle. Re-exported here for back-compat with server callers.
+import {
+  emptyInventory,
+  inventoryCount,
+  inventoryKeyFor,
+  normalizeInventory,
+} from "./inventoryUtils";
+export { emptyInventory, inventoryCount, inventoryKeyFor, normalizeInventory };
 
 export interface ManifestValidationError {
   field: string;
@@ -127,32 +115,6 @@ export function validateManifest(
   return { manifest: raw as TemplateManifest };
 }
 
-/** Map a UnitKind to the plural property name used inside `units`. */
-export function inventoryKeyFor(kind: UnitKind): keyof TemplateUnitInventory {
-  switch (kind) {
-    case "agent":
-      return "agents";
-    case "skill":
-      return "skills";
-    case "command":
-      return "commands";
-    case "hook":
-      return "hooks";
-    case "mcp":
-      return "mcp";
-    case "plugin":
-      return "plugins";
-    case "workflow":
-      return "workflows";
-    default: {
-      // Compile-time exhaustiveness — adding a new UnitKind without updating
-      // this switch will surface as a TS error here.
-      const _exhaustive: never = kind;
-      throw new Error(`Unhandled UnitKind: ${String(_exhaustive)}`);
-    }
-  }
-}
-
 function validateInventory(raw: unknown): ManifestValidationError[] {
   const errors: ManifestValidationError[] = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -206,10 +168,18 @@ export async function readManifest(
   } catch (e) {
     return { errors: [{ field: "(file)", message: `not valid JSON: ${(e as Error).message}` }] };
   }
-  // Default `units` to an empty inventory when missing. Cleaner UX than rejecting an
-  // otherwise-valid manifest that just omits the field.
-  if (parsed && typeof parsed === "object" && !(parsed as Record<string, unknown>).units) {
-    (parsed as Record<string, unknown>).units = emptyInventory();
+  // Default `units` to an empty inventory when missing, and normalize any
+  // missing per-kind arrays to `[]`. Pre-V4 manifests don't have a `settings`
+  // entry — spreading `undefined` in flattenInventory would throw at apply
+  // time. Normalizing here means every downstream consumer (apply orchestrator,
+  // UI, snapshot promotion) sees a fully-populated inventory.
+  if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (!obj.units) {
+      obj.units = emptyInventory();
+    } else if (typeof obj.units === "object" && !Array.isArray(obj.units)) {
+      obj.units = normalizeInventory(obj.units as Partial<TemplateUnitInventory>);
+    }
   }
   return validateManifest(parsed);
 }

@@ -10,6 +10,7 @@ import type {
   TemplateUnitRef,
   UnitKind,
 } from "@/lib/types";
+import { inventoryCount } from "@/lib/template/inventoryUtils";
 
 interface Props {
   slug: string;
@@ -31,6 +32,7 @@ const POLICIES_BY_KIND: Record<UnitKind, ConflictPolicy[]> = {
   command: ["skip", "overwrite", "rename"],
   plugin: ["skip", "overwrite", "merge"],
   workflow: ["skip", "overwrite", "rename"],
+  settingsKey: ["skip", "overwrite", "merge"],
 };
 
 export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
@@ -56,6 +58,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
       ...manifest.units.mcp,
       ...manifest.units.plugins,
       ...manifest.units.workflows,
+      ...manifest.units.settings,
     ],
     [manifest]
   );
@@ -171,7 +174,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
           Apply <code style={inlineCode}>{manifest.name}</code>
         </h2>
         <p style={{ marginTop: "4px", fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-          {manifest.kind} · {flatCount(manifest)} unit{flatCount(manifest) === 1 ? "" : "s"}
+          {manifest.kind} · {inventoryCount(manifest.units)} unit{inventoryCount(manifest.units) === 1 ? "" : "s"}
         </p>
 
         <fieldset style={{ marginTop: "12px", border: "none", padding: 0 }}>
@@ -490,9 +493,6 @@ function summarize(s: ApplyTemplateResult["summary"], mode: "preview" | "apply")
   return parts.length === 0 ? "no changes" : parts.join(", ");
 }
 
-function flatCount(m: TemplateManifest): number {
-  return m.units.agents.length + m.units.skills.length + m.units.commands.length + m.units.hooks.length + m.units.mcp.length;
-}
 
 const inlineCode: React.CSSProperties = {
   fontFamily: "var(--font-mono)",

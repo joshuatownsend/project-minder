@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Template Mode V4 — `settingsKey` unit kind.** Templates can now copy arbitrary `.claude/settings.json` keys by dotted path (e.g. `permissions.allow`, `env`, `statusLine`). Apply uses a deep-merge on `merge` policy:
+  - Scalars + non-allowlisted arrays replace by default.
+  - **`permissions.allow` / `permissions.ask` / `permissions.deny` concat-and-dedupe** — the target keeps its existing patterns plus the source's, deduplicated by JSON-equality.
+  - Nested objects deep-merge recursively; concat-dedupe still applies at nested array paths even when the parent object is being merged.
+  - Type mismatches let source win (replace).
+  Idempotent merges short-circuit when target is already deep-equal to the merged result (`status: "skipped"`, `changedFiles: []`). Reserved keys covered by dedicated unit kinds (`hooks`, `mcpServers`, `enabledPlugins`) are excluded from the picker. `rename` is rejected — settings keys aren't renameable.
+- **`GET /api/projects/[slug]/settings-keys`** — returns the project's settings.json structure (top-level keys + the well-known `permissions.allow` / `permissions.ask` / `permissions.deny` nested paths) decorated with valueType and a truncated preview. Env values are redacted (key names only) — env is the only common settings.json secret.
+- **MarkAsTemplateModal settings picker** — a new "settings keys" section lists pickable paths from the source project. TemplateDetail and TemplatesBrowser surface the new unit count.
 - **Template Mode V3 — polish + two new unit kinds.** Two new `UnitKind` values land:
   - **`plugin`** — applying flips the target's `.claude/settings.json` `enabledPlugins[<name>@<marketplace>] = true`. If the plugin isn't installed at `~/.claude/plugins/`, the apply still writes the enable flag and surfaces a warning with a copy-pastable `/plugin install …` hint.
   - **`workflow`** — file-replace copies a `.github/workflows/<file>.yml` from source to target. Path-traversal and absolute keys rejected; `merge` is rejected since workflows have no internal merge semantics.

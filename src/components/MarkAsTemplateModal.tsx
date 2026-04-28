@@ -31,6 +31,12 @@ interface PluginEnableRow {
   installed: boolean;
 }
 
+interface SettingsKeyRow {
+  path: string;
+  valueType: "scalar" | "array" | "object";
+  preview: string;
+}
+
 interface AvailableUnits {
   agents: AgentEntry[];
   skills: SkillEntry[];
@@ -39,6 +45,7 @@ interface AvailableUnits {
   mcp: McpServer[];
   plugins: PluginEnableRow[];
   workflows: Workflow[];
+  settingsKeys: SettingsKeyRow[];
 }
 
 export function MarkAsTemplateModal({ project, onClose }: Props) {
@@ -62,19 +69,21 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
         // commands listing via the new walker — but commands aren't yet on
         // their own API, so we read the project's CommandEntries from the
         // project detail endpoint when available.
-        const [agentsRes, skillsRes, configRes, pluginsRes, commandsRes] = await Promise.all([
+        const [agentsRes, skillsRes, configRes, pluginsRes, commandsRes, settingsRes] = await Promise.all([
           fetch(`/api/agents?source=project&project=${encodeURIComponent(project.slug)}`),
           fetch(`/api/skills?source=project&project=${encodeURIComponent(project.slug)}`),
           fetch(`/api/claude-config?type=all&project=${encodeURIComponent(project.slug)}`),
           fetch(`/api/projects/${encodeURIComponent(project.slug)}/plugins`),
           fetch(`/api/commands?source=project&project=${encodeURIComponent(project.slug)}`),
+          fetch(`/api/projects/${encodeURIComponent(project.slug)}/settings-keys`),
         ]);
-        const [agentsData, skillsData, configData, pluginsData, commandsData] = await Promise.all([
+        const [agentsData, skillsData, configData, pluginsData, commandsData, settingsData] = await Promise.all([
           agentsRes.json(),
           skillsRes.json(),
           configRes.json(),
           pluginsRes.json().catch(() => ({ enables: [] })),
           commandsRes.json().catch(() => []),
+          settingsRes.json().catch(() => ({ entries: [] })),
         ]);
 
         // The agents/skills routes return rows in a `{ entry, usage }` shape;
@@ -111,6 +120,10 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
               .filter(Boolean) as CommandEntry[]
           : [];
 
+        const settingsKeys: SettingsKeyRow[] = Array.isArray(settingsData?.entries)
+          ? (settingsData.entries as SettingsKeyRow[])
+          : [];
+
         if (cancelled) return;
         setAvailable({
           agents: agentEntries,
@@ -120,6 +133,7 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
           mcp,
           plugins,
           workflows,
+          settingsKeys,
         });
       } catch (e) {
         if (!cancelled) setLoadError((e as Error).message);
@@ -282,6 +296,17 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
               selected={selected}
               onToggle={toggle}
             />
+            <UnitGroup
+              title="settings keys (.claude/settings.json)"
+              entries={available.settingsKeys.map((s) => ({
+                kind: "settingsKey" as UnitKind,
+                key: s.path,
+                label: s.path,
+                sub: `${s.valueType} · ${s.preview}`,
+              }))}
+              selected={selected}
+              onToggle={toggle}
+            />
           </div>
         )}
 
@@ -386,6 +411,7 @@ function collectAllKeys(available: AvailableUnits | null): string[] {
   available.mcp.forEach((m) => keys.push(`mcp:${m.name}`));
   available.plugins.forEach((p) => keys.push(`plugin:${p.key}`));
   available.workflows.forEach((w) => keys.push(`workflow:${workflowKey(w.file)}`));
+  available.settingsKeys.forEach((s) => keys.push(`settingsKey:${s.path}`));
   return keys;
 }
 
@@ -407,6 +433,7 @@ function buildInventory(available: AvailableUnits, selected: Set<string>): Templ
     mcp: [],
     plugins: [],
     workflows: [],
+    settings: [],
   };
   for (const a of available.agents) {
     if (selected.has(`agent:${a.slug}`)) {
@@ -447,6 +474,11 @@ function buildInventory(available: AvailableUnits, selected: Set<string>): Templ
       inv.workflows.push(
         unitRef("workflow", k, w.name ?? k, w.triggers.join(", ") || undefined)
       );
+    }
+  }
+  for (const s of available.settingsKeys) {
+    if (selected.has(`settingsKey:${s.path}`)) {
+      inv.settings.push(unitRef("settingsKey", s.path, s.path, `${s.valueType} · ${s.preview}`));
     }
   }
   return inv;

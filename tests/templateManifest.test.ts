@@ -115,6 +115,40 @@ describe("validateManifest", () => {
   });
 });
 
+describe("readManifest — legacy backfill (PR #29 review)", () => {
+  it("backfills missing per-kind arrays so flattenInventory doesn't throw", async () => {
+    // Simulate a pre-V4 manifest written before the `settings` array existed.
+    // Even before V4, V2/V3 manifests might have had no `plugins` or
+    // `workflows` arrays. Reading must normalize all to `[]`.
+    const dir = templateDirForSlug(config, "legacy");
+    await fs.mkdir(dir, { recursive: true });
+    const legacyManifest = {
+      schemaVersion: 1,
+      slug: "legacy",
+      name: "Legacy",
+      kind: "live",
+      liveSourceSlug: "src",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      // Only the V1 unit kinds present — settings/plugins/workflows missing.
+      units: { agents: [], skills: [], commands: [], hooks: [], mcp: [] },
+    };
+    await fs.writeFile(
+      manifestPathForSlug(config, "legacy"),
+      JSON.stringify(legacyManifest),
+      "utf-8"
+    );
+    const r = await readManifest(config, "legacy");
+    expect(r && "manifest" in r).toBe(true);
+    if (r && "manifest" in r) {
+      // All eight inventory arrays should be present and `[]`.
+      expect(r.manifest.units.plugins).toEqual([]);
+      expect(r.manifest.units.workflows).toEqual([]);
+      expect(r.manifest.units.settings).toEqual([]);
+    }
+  });
+});
+
 describe("readManifest / writeManifest", () => {
   it("round-trips a live manifest", async () => {
     const m = buildManifest({ slug: "rt", name: "Round Trip", kind: "live", liveSourceSlug: "src" });

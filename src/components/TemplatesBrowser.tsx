@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Layers } from "lucide-react";
 import type { TemplateManifest } from "@/lib/types";
+import { inventoryCount } from "@/lib/template/inventoryUtils";
 
 interface ListResponse {
   manifests: TemplateManifest[];
@@ -91,14 +92,7 @@ export function TemplatesBrowser() {
 
 function TemplateRow({ manifest }: { manifest: TemplateManifest }) {
   const inv = manifest.units;
-  const totalUnits =
-    inv.agents.length +
-    inv.skills.length +
-    inv.commands.length +
-    inv.hooks.length +
-    inv.mcp.length +
-    inv.plugins.length +
-    inv.workflows.length;
+  const totalUnits = inventoryCount(inv);
 
   return (
     <Link
@@ -152,6 +146,7 @@ function TemplateRow({ manifest }: { manifest: TemplateManifest }) {
           {inv.mcp.length > 0 && <span>· {inv.mcp.length} mcp</span>}
           {inv.plugins.length > 0 && <span>· {inv.plugins.length} plugin{inv.plugins.length === 1 ? "" : "s"}</span>}
           {inv.workflows.length > 0 && <span>· {inv.workflows.length} workflow{inv.workflows.length === 1 ? "" : "s"}</span>}
+          {inv.settings.length > 0 && <span>· {inv.settings.length} setting{inv.settings.length === 1 ? "" : "s"}</span>}
           {manifest.kind === "live" && manifest.liveSourceSlug && (
             <span>· tracks <strong>{manifest.liveSourceSlug}</strong></span>
           )}

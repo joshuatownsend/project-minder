@@ -153,6 +153,7 @@ export function TemplateDetail({ slug }: Props) {
       <UnitList title="mcp servers" refs={inv.mcp} />
       <UnitList title="plugins (enable flag)" refs={inv.plugins} />
       <UnitList title="workflows (.github/workflows)" refs={inv.workflows} />
+      <UnitList title="settings keys (.claude/settings.json)" refs={inv.settings} />
 
       {showApply && (
         <ApplyTemplateModal
