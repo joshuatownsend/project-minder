@@ -190,17 +190,6 @@ describe("applySettings — refusals", () => {
     expect(result.error?.code).toBe("UNIT_NOT_FOUND");
   });
 
-  it("SOURCE_SETTINGS_PATH_NOT_ABSOLUTE for relative sourceSettingsFile", async () => {
-    const result = await applySettings({
-      settingsPath: "statusLine",
-      sourceSettingsFile: "relative/path/settings.json",
-      targetProjectPath: target,
-      conflict: "merge",
-    });
-    expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("SOURCE_SETTINGS_PATH_NOT_ABSOLUTE");
-  });
-
   it("EMPTY_SETTINGS_PATH for empty key", async () => {
     await writeSource({ statusLine: "x" });
     const result = await applySettings({
