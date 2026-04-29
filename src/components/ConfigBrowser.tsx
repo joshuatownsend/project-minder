@@ -18,7 +18,7 @@ const TABS: { key: TabKey; label: string; icon: typeof Webhook }[] = [
   { key: "plugins",      label: "Plugins",    icon: Box },
   { key: "mcp",          label: "MCP",        icon: Server },
   { key: "cicd",         label: "CI / CD",    icon: WorkflowIcon },
-  { key: "settingsKeys", label: "Keys",       icon: Key },
+  { key: "settingskeys", label: "Keys",       icon: Key },
 ];
 
 export function ConfigBrowser() {
@@ -167,7 +167,7 @@ function countFor(type: TabKey, data: ReturnType<typeof useConfig>["data"]): num
     case "plugins":      return data.plugins.length;
     case "mcp":          return data.mcp.length;
     case "cicd":         return data.cicd.reduce((acc, c) => acc + c.cicd.workflows.length, 0);
-    case "settingsKeys": return data.settingsKeys.length;
+    case "settingskeys": return data.settingsKeys.length;
     default:             return 0;
   }
 }
@@ -183,7 +183,7 @@ function ActiveSection({
   if (type === "hooks") return <HooksList rows={data.hooks} />;
   if (type === "plugins") return <PluginsList rows={data.plugins} />;
   if (type === "mcp") return <McpList rows={data.mcp} />;
-  if (type === "settingsKeys") return <SettingsKeyList rows={data.settingsKeys} />;
+  if (type === "settingskeys") return <SettingsKeyList rows={data.settingsKeys} />;
   return <CicdList rows={data.cicd} />;
 }
 

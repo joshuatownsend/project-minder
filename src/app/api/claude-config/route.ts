@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
     payload.cicd = collectCicd(projects);
   }
 
-  if ((type === "settingsKeys" || type === "all") && includeUserScope) {
+  if ((type === "settingskeys" || type === "all") && includeUserScope) {
     payload.settingsKeys = userConfig.settingsKeys;
   }
 

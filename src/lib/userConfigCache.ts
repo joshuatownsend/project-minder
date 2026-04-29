@@ -5,6 +5,7 @@ import { extractHookEntries } from "./scanner/claudeHooks";
 import { parseMcpServers } from "./scanner/mcpServers";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { loadInstalledPlugins } from "./indexer/walkPlugins";
+import { RESERVED_SETTINGS_KEYS } from "./template/jsonPath";
 import {
   HookEntry,
   McpServer,
@@ -62,13 +63,10 @@ async function readUserConfig(): Promise<UserConfig> {
   };
 }
 
-/** Top-level keys excluded from `settingsKeys` because they have dedicated catalog tabs. */
-const SETTINGS_KEY_EXCLUSIONS = new Set(["hooks", "mcpServers", "enabledPlugins"]);
-
 /** @internal Exported for vitest. */
 export function extractSettingsKeys(doc: Record<string, unknown>): SettingsKeyEntry[] {
   return Object.entries(doc)
-    .filter(([k]) => !SETTINGS_KEY_EXCLUSIONS.has(k))
+    .filter(([k]) => !RESERVED_SETTINGS_KEYS.has(k))
     .map(([keyPath, value]) => ({ keyPath, value }));
 }
 

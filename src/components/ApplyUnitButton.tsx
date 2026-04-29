@@ -22,7 +22,8 @@ interface ApplyUnitButtonProps {
   compact?: boolean;
 }
 
-/** Conflict policies per unit kind. Mirrors `applyFile.ts`/`applyHook.ts` accept-lists. */
+/** Conflict policies per unit kind. Mirrors backend accept-lists; `plugin` intentionally
+ *  omits `overwrite` since enabling a boolean flag is idempotent — skip/merge are equivalent. */
 function policiesFor(kind: UnitKind): ConflictPolicy[] {
   switch (kind) {
     case "hook":

@@ -427,7 +427,7 @@ export interface CiCdInfo {
 /** A single top-level entry from `~/.claude/settings.json`, excluding keys
  *  that already have dedicated catalog tabs (hooks, mcpServers, enabledPlugins). */
 export interface SettingsKeyEntry {
-  /** Top-level dotted key path (e.g. "statusLine", "permissions"). */
+  /** Top-level key name (e.g. "statusLine", "permissions"). */
   keyPath: string;
   value: unknown;
 }
@@ -440,9 +440,9 @@ export interface UserConfig {
 }
 
 /** Catalog kinds surfaced by `/api/claude-config`. "all" returns every section. */
-export type ConfigType = "hooks" | "plugins" | "mcp" | "cicd" | "settingsKeys" | "all";
+export type ConfigType = "hooks" | "plugins" | "mcp" | "cicd" | "settingskeys" | "all";
 
-export const CONFIG_TYPES: readonly ConfigType[] = ["hooks", "plugins", "mcp", "cicd", "settingsKeys", "all"];
+export const CONFIG_TYPES: readonly ConfigType[] = ["hooks", "plugins", "mcp", "cicd", "settingskeys", "all"];
 
 export interface ScanResult {
   projects: ProjectData[];

@@ -44,7 +44,7 @@ describe("extractSettingsKeys", () => {
     expect(byKey.debugMode).toBe(false);
   });
 
-  it("returns only the excluded keys when doc has only those", () => {
+  it("returns empty array when doc has only excluded keys", () => {
     const doc = {
       hooks: {},
       mcpServers: {},
