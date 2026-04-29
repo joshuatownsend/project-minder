@@ -47,7 +47,7 @@ describe("applySettings — happy path", () => {
     await writeSource({ statusLine: "minimal" });
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -62,7 +62,7 @@ describe("applySettings — happy path", () => {
     await writeTarget({ statusLine: "untouched", env: { OTHER: "x" } });
     await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -79,7 +79,7 @@ describe("applySettings — concat-dedupe for permissions.allow", () => {
     await writeTarget({ permissions: { allow: ["Bash(git:*)", "Edit(*)"] } });
     const result = await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -93,7 +93,7 @@ describe("applySettings — concat-dedupe for permissions.allow", () => {
     await writeTarget({ permissions: { allow: ["Edit(*)"] } });
     await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "overwrite",
     });
@@ -108,7 +108,7 @@ describe("applySettings — concat-dedupe for permissions.allow", () => {
     await writeTarget({ permissions: { allow: ["Edit(*)"], ask: ["Read(*)"] } });
     await applySettings({
       settingsPath: "permissions",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -127,7 +127,7 @@ describe("applySettings — non-concat array paths replace by default", () => {
     await writeTarget({ customArray: [1, 2, 3] });
     await applySettings({
       settingsPath: "customArray",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -142,7 +142,7 @@ describe("applySettings — conflict policies", () => {
     await writeTarget({ statusLine: "existing" });
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "skip",
     });
@@ -154,7 +154,7 @@ describe("applySettings — conflict policies", () => {
     await writeSource({ statusLine: "x" });
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "rename",
     });
@@ -168,7 +168,7 @@ describe("applySettings — conflict policies", () => {
     await writeTarget(same);
     const result = await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -182,7 +182,7 @@ describe("applySettings — refusals", () => {
     await writeSource({ statusLine: "x" });
     const result = await applySettings({
       settingsPath: "missing.key",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -194,7 +194,7 @@ describe("applySettings — refusals", () => {
     await writeSource({ statusLine: "x" });
     const result = await applySettings({
       settingsPath: "",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -211,7 +211,7 @@ describe("applySettings — refusals", () => {
     );
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -227,7 +227,7 @@ describe("applySettings — refusals", () => {
     );
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -240,7 +240,7 @@ describe("applySettings — refusals", () => {
     await writeTarget({ permissions: "scalar-instead-of-object" });
     const result = await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -254,7 +254,7 @@ describe("applySettings — dryRun", () => {
     await writeSource({ statusLine: "preview" });
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
       dryRun: true,
@@ -271,7 +271,7 @@ describe("applySettings — dryRun", () => {
     await writeTarget({ permissions: { allow: ["Edit(*)"] } });
     const result = await applySettings({
       settingsPath: "permissions.allow",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
       dryRun: true,
@@ -294,7 +294,7 @@ describe("applySettings — review-comment regressions (PR #29)", () => {
     );
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -310,7 +310,7 @@ describe("applySettings — review-comment regressions (PR #29)", () => {
     await fs.writeFile(path.join(source, ".claude", "settings.json"), "", "utf-8");
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -322,7 +322,7 @@ describe("applySettings — review-comment regressions (PR #29)", () => {
     await fs.writeFile(path.join(source, ".claude", "settings.json"), "   \n\n  ", "utf-8");
     const result = await applySettings({
       settingsPath: "statusLine",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -334,7 +334,7 @@ describe("applySettings — review-comment regressions (PR #29)", () => {
     await writeSource({ a: "value" });
     const result = await applySettings({
       settingsPath: "__proto__.polluted",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
@@ -348,12 +348,77 @@ describe("applySettings — review-comment regressions (PR #29)", () => {
     await writeSource({ a: { b: 1 } });
     const result = await applySettings({
       settingsPath: "a..b",
-      sourceProjectPath: source,
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
       targetProjectPath: target,
       conflict: "merge",
     });
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("EMPTY_SEGMENT");
+  });
+});
+
+describe("applySettings — user-scope source (V5)", () => {
+  it("reads a value from sourceSettingsFile (any path, including ~/.claude/settings.json)", async () => {
+    // Simulate ~/.claude/settings.json living anywhere on disk.
+    const userSettingsFile = path.join(tmp, "userClaude", "settings.json");
+    await fs.mkdir(path.dirname(userSettingsFile), { recursive: true });
+    await fs.writeFile(
+      userSettingsFile,
+      JSON.stringify({ statusLine: "user-style" }, null, 2),
+      "utf-8"
+    );
+
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceSettingsFile: userSettingsFile,
+      targetProjectPath: target,
+      conflict: "merge",
+      sourceScope: "user",
+    });
+
+    expect(result.ok).toBe(true);
+    const doc = JSON.parse(
+      await fs.readFile(path.join(target, ".claude", "settings.json"), "utf-8")
+    ) as { statusLine: string };
+    expect(doc.statusLine).toBe("user-style");
+  });
+
+  it("surfaces a user→project promotion warning", async () => {
+    const userSettingsFile = path.join(tmp, "userClaude", "settings.json");
+    await fs.mkdir(path.dirname(userSettingsFile), { recursive: true });
+    await fs.writeFile(
+      userSettingsFile,
+      JSON.stringify({ statusLine: "user-style" }, null, 2),
+      "utf-8"
+    );
+
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceSettingsFile: userSettingsFile,
+      targetProjectPath: target,
+      conflict: "merge",
+      sourceScope: "user",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings?.some((w) => /user-scope/.test(w))).toBe(true);
+    expect(result.warnings?.some((w) => /anyone using this repo/.test(w))).toBe(true);
+  });
+
+  it("does not surface a warning when sourceScope is undefined / 'project'", async () => {
+    await writeSource({ statusLine: "ok" });
+
+    const result = await applySettings({
+      settingsPath: "statusLine",
+      sourceSettingsFile: path.join(source, ".claude", "settings.json"),
+      targetProjectPath: target,
+      conflict: "merge",
+    });
+
+    expect(result.ok).toBe(true);
+    // No warnings field at all (or empty) — promotion noise should never
+    // appear for project→project applies.
+    expect(result.warnings ?? []).toEqual([]);
   });
 });
 

@@ -28,6 +28,11 @@ export async function applyMcp(args: ApplyMcpArgs): Promise<ApplyResult> {
   const { server, targetProjectPath, conflict, sourceSlug, dryRun } = args;
   const targetMcpPath = path.join(targetProjectPath, ".mcp.json");
   const warnings: string[] = [];
+  if (server.source === "user") {
+    warnings.push(
+      "user-scope source promoted to project-shared (.mcp.json) — will apply to anyone using this repo"
+    );
+  }
 
   return withFileLock(targetMcpPath, async () => {
     let doc: Record<string, unknown> = {};
