@@ -69,6 +69,12 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
       "Settings unit key must be a non-empty dotted path (e.g. 'permissions.allow')."
     );
   }
+  if (!path.isAbsolute(sourceSettingsFile)) {
+    return errorResult(
+      "SOURCE_SETTINGS_PATH_NOT_ABSOLUTE",
+      `sourceSettingsFile must be an absolute path; received "${sourceSettingsFile}".`
+    );
+  }
 
   const sourceSettings = sourceSettingsFile;
   const targetSettings = path.join(targetProjectPath, ".claude", "settings.json");

@@ -61,7 +61,7 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
   }
 
   // Reject literal absolute paths into the source root (would silently break in target).
-  const projPathCheck = checkSourceProjectPath(invocation.command, sourceRootForRejection);
+  const projPathCheck = checkSourceRootPath(invocation.command, sourceRootForRejection);
   if (projPathCheck) {
     return errorResult("PROJECT_PATH_IN_SOURCE", projPathCheck);
   }
@@ -215,7 +215,7 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
  * `sourceRoot` is the project path for project-source hooks, or `~/.claude`
  * for user-source hooks. Otherwise returns null.
  */
-export function checkSourceProjectPath(invocation: string, sourceRoot: string): string | null {
+export function checkSourceRootPath(invocation: string, sourceRoot: string): string | null {
   const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
   const cmdN = norm(invocation);
   const srcN = norm(path.resolve(sourceRoot));

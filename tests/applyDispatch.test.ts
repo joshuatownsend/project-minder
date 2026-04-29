@@ -122,7 +122,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(state.tmp, { recursive: true, force: true });
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import {
   applyHook,
-  checkSourceProjectPath,
+  checkSourceRootPath,
   extractHookScriptRefs,
 } from "@/lib/template/applyHook";
 import type { HookEntry } from "@/lib/types";
@@ -219,14 +219,14 @@ describe("applyHook — script reference handling", () => {
     expect(refs).toEqual(["abc.sh"]);
   });
 
-  it("checkSourceProjectPath flags absolute source paths", () => {
+  it("checkSourceRootPath flags absolute source paths", () => {
     // Use a real-resolved path so this works cross-platform (Windows resolves "/src" → "C:\src").
     const realSource = sourceProj;
     const cmd = `bash ${realSource}/.claude/hooks/x.sh`;
-    expect(checkSourceProjectPath(cmd, realSource)).toMatch(
+    expect(checkSourceRootPath(cmd, realSource)).toMatch(
       /absolute path into the source/
     );
-    expect(checkSourceProjectPath("bash $CLAUDE_PROJECT_DIR/.claude/hooks/x.sh", realSource)).toBeNull();
+    expect(checkSourceRootPath("bash $CLAUDE_PROJECT_DIR/.claude/hooks/x.sh", realSource)).toBeNull();
   });
 });
 
