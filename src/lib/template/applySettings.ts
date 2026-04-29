@@ -18,9 +18,15 @@ interface ApplySettingsArgs {
   /** Dotted path inside `.claude/settings.json` — e.g. "permissions.allow",
    *  "env.MY_VAR", "statusLine". */
   settingsPath: string;
-  sourceProjectPath: string;
+  /** Absolute path to the source settings file. For project source:
+   *  `<projectPath>/.claude/settings.json`. For user source:
+   *  `~/.claude/settings.json`. */
+  sourceSettingsFile: string;
   targetProjectPath: string;
   conflict: ConflictPolicy;
+  /** When copied from user-scope, the resulting project-scope settings entry
+   *  is broader than the source intent. Surfaced as a warning. */
+  sourceScope?: "user" | "project";
   dryRun?: boolean;
 }
 
@@ -44,9 +50,10 @@ interface ApplySettingsArgs {
 export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResult> {
   const {
     settingsPath: keyPath,
-    sourceProjectPath,
+    sourceSettingsFile,
     targetProjectPath,
     conflict,
+    sourceScope,
     dryRun,
   } = args;
 
@@ -62,9 +69,12 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
       "Settings unit key must be a non-empty dotted path (e.g. 'permissions.allow')."
     );
   }
-
-  const sourceSettings = path.join(sourceProjectPath, ".claude", "settings.json");
+  const sourceSettings = path.resolve(sourceSettingsFile);
   const targetSettings = path.join(targetProjectPath, ".claude", "settings.json");
+  const promotionWarnings: string[] =
+    sourceScope === "user"
+      ? [`user-scope source promoted to project-shared (settings.json) at "${keyPath}" — will apply to anyone using this repo`]
+      : [];
 
   // Read the source value. If absent, there's nothing to copy.
   const sourceValue = await readKey(sourceSettings, keyPath);
@@ -132,7 +142,7 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
 
     // Skip if target has the key and policy is skip.
     if (targetHadKey && conflict === "skip") {
-      return { ok: true, status: "skipped", changedFiles: [] };
+      return { ok: true, status: "skipped", changedFiles: [], warnings: promotionWarnings.length > 0 ? promotionWarnings : undefined };
     }
 
     // Compute the new value at the key path.
@@ -150,7 +160,7 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
       // the recursive merge result is deep-equal to what was already there.
       newValue = mergeValues(targetCurr, sourceValue.value, keyPath);
       if (deepEqual(targetCurr, newValue)) {
-        return { ok: true, status: "skipped", changedFiles: [] };
+        return { ok: true, status: "skipped", changedFiles: [], warnings: promotionWarnings.length > 0 ? promotionWarnings : undefined };
       }
       action = "[merge]";
     }
@@ -185,6 +195,7 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
         status: "would-apply",
         changedFiles: [targetSettings],
         diffPreview: preview,
+        warnings: promotionWarnings.length > 0 ? promotionWarnings : undefined,
       };
     }
 
@@ -192,7 +203,7 @@ export async function applySettings(args: ApplySettingsArgs): Promise<ApplyResul
     await atomicWriteFile(targetSettings, serialized);
 
     const status = targetHadKey && conflict === "merge" ? "merged" : "applied";
-    return { ok: true, status, changedFiles: [targetSettings] };
+    return { ok: true, status, changedFiles: [targetSettings], warnings: promotionWarnings.length > 0 ? promotionWarnings : undefined };
   });
 }
 

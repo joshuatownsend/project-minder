@@ -190,3 +190,46 @@ describe("applyMcp — dryRun", () => {
     await expect(fs.access(path.join(target, ".mcp.json"))).rejects.toThrow();
   });
 });
+
+describe("applyMcp — user-scope source (V5)", () => {
+  it("surfaces a user→project promotion warning", async () => {
+    const userServer = srv({
+      source: "user",
+      sourcePath: path.join(tmp, "userClaude", "settings.json"),
+    });
+
+    const result = await applyMcp({
+      server: userServer,
+      targetProjectPath: target,
+      conflict: "skip",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings?.some((w) => /user-scope/.test(w))).toBe(true);
+    expect(result.warnings?.some((w) => /anyone using this repo/.test(w))).toBe(true);
+  });
+
+  it("env-keys-only invariant still holds for user-scope source", async () => {
+    // The McpServer shape strips env values at read time. applyMcp never
+    // re-reads source files — it works off envKeys only — so user-scope
+    // shouldn't change that invariant. Sanity-check by passing a server with
+    // envKeys set and verifying the written .mcp.json has empty placeholders.
+    const userServer = srv({
+      source: "user",
+      envKeys: ["API_KEY", "TOKEN"],
+      sourcePath: path.join(tmp, "userClaude", "settings.json"),
+    });
+
+    const result = await applyMcp({
+      server: userServer,
+      targetProjectPath: target,
+      conflict: "skip",
+    });
+
+    expect(result.ok).toBe(true);
+    const doc = (await readMcp(path.join(target, ".mcp.json"))) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(doc.mcpServers.ctx.env).toEqual({ API_KEY: "", TOKEN: "" });
+  });
+});

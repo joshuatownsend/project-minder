@@ -253,3 +253,42 @@ describe("applyPlugin — dryRun", () => {
     await expect(fs.access(path.join(target, ".claude", "settings.json"))).rejects.toThrow();
   });
 });
+
+describe("applyPlugin — user-scope source (V5)", () => {
+  it("surfaces a user→project promotion warning when sourceScope is 'user'", async () => {
+    vi.doMock("@/lib/indexer/walkPlugins", () => ({
+      loadInstalledPlugins: async () => [
+        { pluginName: "review", marketplace: "official", installPath: "/x" },
+      ],
+    }));
+    const { applyPlugin: fn } = await import("@/lib/template/applyPlugin");
+    const result = await fn({
+      pluginKey: "review@official",
+      targetProjectPath: target,
+      conflict: "skip",
+      sourceScope: "user",
+    });
+    expect(result.ok).toBe(true);
+    // The user→project warning should mention the broader-scope rationale,
+    // separate from the existing "not installed" warning.
+    expect(result.warnings?.some((w) => /user-scope plugin enable/.test(w))).toBe(true);
+    expect(result.warnings?.some((w) => /anyone using this repo/.test(w))).toBe(true);
+  });
+
+  it("does not surface a promotion warning when sourceScope is 'project'", async () => {
+    vi.doMock("@/lib/indexer/walkPlugins", () => ({
+      loadInstalledPlugins: async () => [
+        { pluginName: "review", marketplace: "official", installPath: "/x" },
+      ],
+    }));
+    const { applyPlugin: fn } = await import("@/lib/template/applyPlugin");
+    const result = await fn({
+      pluginKey: "review@official",
+      targetProjectPath: target,
+      conflict: "skip",
+      sourceScope: "project",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings?.some((w) => /user-scope plugin enable/.test(w))).toBe(false);
+  });
+});

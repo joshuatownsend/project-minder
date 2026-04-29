@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Template Mode V5 — user-scope source for hooks, MCP, plugins, and settings keys.** The four backend dispatchers in `src/lib/template/apply.ts` that previously rejected `source.kind === "user"` now read from `~/.claude/settings.json` (via the existing `getUserConfig()` cache) and dispatch to the same primitives. The read-side and `/api/claude-config/user` endpoint were already in place from V3; V5 wires them through to the apply layer. New behaviors:
+  - **`applyHook`** now takes `sourceHooksDir` + `sourceRootForRejection` (was `sourceProjectPath`). Project source maps to `<projectPath>/.claude/hooks` + `<projectPath>`; user source maps to `~/.claude/hooks` + `~/.claude`. The split preserves the existing project-case rejection that fires on any reference into the source project, not just into `.claude/`.
+  - **`applySettings`** takes `sourceSettingsFile` (absolute path) instead of `sourceProjectPath`, so it can read either `<project>/.claude/settings.json` or `~/.claude/settings.json` without inferring layout.
+  - **User→project promotion warnings** surface for every unit kind: hooks, MCP, plugins, and settings keys. Copying from user-scope to project-scope means going from personal-machine to team-shared, so every result includes a warning that mentions "anyone using this repo." Plugins get a louder warning since user-scope plugins are already globally active for the source user.
+  - **`applyPlugin`** + **`applySettings`** gain an optional `sourceScope: "user" | "project"` param to drive the warning (their input data has no source field to derive from, unlike `HookEntry.source` and `McpServer.source`).
+
+### Changed
+- **`applyHook` parameter rename**: `sourceProjectPath` → `{ sourceHooksDir, sourceRootForRejection }`. Existing callers in `apply.ts` updated. No behavior change for project source.
+- **`applySettings` parameter rename**: `sourceProjectPath` → `sourceSettingsFile`. Caller now passes the absolute settings file path instead of the project root, decoupling the primitive from any assumption about source layout.
+
+### Added
 - **Template Mode V4 — `settingsKey` unit kind.** Templates can now copy arbitrary `.claude/settings.json` keys by dotted path (e.g. `permissions.allow`, `env`, `statusLine`). Apply uses a deep-merge on `merge` policy:
   - Scalars + non-allowlisted arrays replace by default.
   - **`permissions.allow` / `permissions.ask` / `permissions.deny` concat-and-dedupe** — the target keeps its existing patterns plus the source's, deduplicated by JSON-equality.

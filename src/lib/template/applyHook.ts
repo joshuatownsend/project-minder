@@ -17,7 +17,14 @@ import { makeHookKey } from "./unitKey";
 interface ApplyHookArgs {
   /** Single-command HookEntry (callers pre-explode multi-command entries). */
   entry: HookEntry;
-  sourceProjectPath: string;
+  /** Where hook script files live in the source.
+   *  Project: `<projectPath>/.claude/hooks`. User: `~/.claude/hooks`. */
+  sourceHooksDir: string;
+  /** Literal path to refuse in invocations (would silently break in target).
+   *  Project: `<projectPath>`. User: `~/.claude`. The existing project-case rule
+   *  rejects any reference into the source project, not just into `.claude/`,
+   *  which is why this is a separate param from `sourceHooksDir`. */
+  sourceRootForRejection: string;
   targetProjectPath: string;
   conflict: ConflictPolicy;
   dryRun?: boolean;
@@ -27,13 +34,14 @@ interface ApplyHookArgs {
  * Merge a single hook into the target's `.claude/settings.json`.
  *
  *  - Always writes to `settings.json` (project-shared), never `settings.local.json`.
- *    A `local` source is auto-promoted; the warning surfaces this to the UI.
+ *    `local` and `user` sources auto-promote; the warning surfaces this to the UI.
  *  - Identity = `event + matcher + sha256(invocation)` so re-applying is idempotent.
  *  - Referenced hook scripts (`.claude/hooks/<name>` or `$CLAUDE_PROJECT_DIR/...`)
- *    are copied alongside. Absolute paths into the source project are rejected.
+ *    are copied from `sourceHooksDir`. Literal absolute paths into the source
+ *    root (`sourceRootForRejection`) are rejected.
  */
 export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
-  const { entry, sourceProjectPath, targetProjectPath, conflict, dryRun } = args;
+  const { entry, sourceHooksDir, sourceRootForRejection, targetProjectPath, conflict, dryRun } = args;
 
   if (entry.commands.length !== 1) {
     return errorResult(
@@ -48,18 +56,21 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
   if (entry.source === "local") {
     warnings.push("local-scope source promoted to project-shared (settings.json)");
   }
+  if (entry.source === "user") {
+    warnings.push("user-scope source promoted to project-shared (settings.json) — will apply to anyone using this repo");
+  }
 
-  // Reject literal absolute paths into the source project (would silently break in target).
-  const projPathCheck = checkSourceProjectPath(invocation.command, sourceProjectPath);
+  // Reject literal absolute paths into the source root (would silently break in target).
+  const projPathCheck = checkSourceRootPath(invocation.command, sourceRootForRejection);
   if (projPathCheck) {
     return errorResult("PROJECT_PATH_IN_SOURCE", projPathCheck);
   }
 
-  // Resolve referenced hook scripts.
+  // Resolve referenced hook scripts from the source's hooks dir.
   const scriptRefs = extractHookScriptRefs(invocation.command);
   const scriptCopies: { from: string; to: string }[] = [];
   for (const ref of scriptRefs) {
-    const from = path.join(sourceProjectPath, ".claude", "hooks", ref);
+    const from = path.join(sourceHooksDir, ref);
     if (!(await fileExists(from))) continue;
     const to = path.join(targetProjectPath, ".claude", "hooks", ref);
     scriptCopies.push({ from, to });
@@ -200,16 +211,17 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
 }
 
 /** Returns an error message if the invocation literally references the source
- * project's filesystem path — those references will silently break in the
- * target. Otherwise returns null.
+ * filesystem path — those references will silently break in the target.
+ * `sourceRoot` is the project path for project-source hooks, or `~/.claude`
+ * for user-source hooks. Otherwise returns null.
  */
-export function checkSourceProjectPath(invocation: string, sourceProjectPath: string): string | null {
+export function checkSourceRootPath(invocation: string, sourceRoot: string): string | null {
   const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
   const cmdN = norm(invocation);
-  const srcN = norm(path.resolve(sourceProjectPath));
+  const srcN = norm(path.resolve(sourceRoot));
   if (cmdN.includes(srcN)) {
     return (
-      `Invocation contains an absolute path into the source project ("${sourceProjectPath}"). ` +
+      `Invocation contains an absolute path into the source ("${sourceRoot}"). ` +
       `Rewrite to use a relative path or $CLAUDE_PROJECT_DIR before applying.`
     );
   }

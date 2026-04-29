@@ -17,10 +17,12 @@ import { scanMcpServers } from "../scanner/mcpServers";
 import { invalidateCatalogCache } from "../indexer/catalog";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { invalidateCommandsRouteCache } from "@/app/api/commands/route";
+import os from "os";
 import { walkProjectCommands, walkUserCommands } from "../indexer/walkCommands";
 import { walkProjectAgents, walkUserAgents } from "../indexer/walkAgents";
 import { walkProjectSkills, walkUserSkills } from "../indexer/walkSkills";
 import { loadProvenanceContext } from "../indexer/provenance";
+import { getUserConfig } from "../userConfigCache";
 import type { AgentEntry, SkillEntry } from "../indexer/types";
 import { applySingleFile, applyDirectory } from "./applyFile";
 import { applyHook } from "./applyHook";
@@ -232,18 +234,34 @@ async function dispatchHook(
   source: ResolvedSource,
   targetProjectPath: string
 ): Promise<ApplyResult> {
-  if (source.kind !== "project") {
-    return errorResult("UNSUPPORTED_SOURCE", "Hook source must be a project (user-scope hooks not supported in V1/V2).");
+  let allEntries: HookEntry[];
+  let sourceHooksDir: string;
+  let sourceRootForRejection: string;
+
+  if (source.kind === "user") {
+    const userCfg = await getUserConfig();
+    allEntries = userCfg.hooks.entries;
+    const userClaude = path.join(os.homedir(), ".claude");
+    sourceHooksDir = path.join(userClaude, "hooks");
+    // Reject literal absolute paths into ~/.claude (would break in any other
+    // user's checkout). We don't reject `~` itself — that's the user's home
+    // dir and may legitimately appear in hook commands like `cd ~/.bashrc`.
+    sourceRootForRejection = userClaude;
+  } else {
+    const hooksInfo = await scanClaudeHooks(source.path);
+    allEntries = hooksInfo?.entries ?? [];
+    sourceHooksDir = path.join(source.path, ".claude", "hooks");
+    sourceRootForRejection = source.path;
   }
-  const hooksInfo = await scanClaudeHooks(source.path);
-  const allEntries: HookEntry[] = hooksInfo?.entries ?? [];
+
   const exploded = allEntries.flatMap(explodeHookCommands);
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
   return applyHook({
     entry,
-    sourceProjectPath: source.path,
+    sourceHooksDir,
+    sourceRootForRejection,
     targetProjectPath,
     conflict: request.conflict,
     dryRun: request.dryRun,
@@ -255,11 +273,19 @@ async function dispatchMcp(
   source: ResolvedSource,
   targetProjectPath: string
 ): Promise<ApplyResult> {
-  if (source.kind !== "project") {
-    return errorResult("UNSUPPORTED_SOURCE", "MCP source must be a project (user-scope MCP not supported in V1/V2).");
+  let all: McpServer[];
+  let sourceSlug: string | undefined;
+
+  if (source.kind === "user") {
+    const userCfg = await getUserConfig();
+    all = userCfg.mcpServers.servers;
+    sourceSlug = "user";
+  } else {
+    const mcpInfo = await scanMcpServers(source.path);
+    all = mcpInfo?.servers ?? [];
+    sourceSlug = source.slug;
   }
-  const mcpInfo = await scanMcpServers(source.path);
-  const all: McpServer[] = mcpInfo?.servers ?? [];
+
   const server = findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
@@ -267,7 +293,7 @@ async function dispatchMcp(
     server,
     targetProjectPath,
     conflict: request.conflict,
-    sourceSlug: source.slug,
+    sourceSlug,
     dryRun: request.dryRun,
   });
 }
@@ -297,17 +323,17 @@ async function dispatchSettings(
   source: ResolvedSource,
   targetProjectPath: string
 ): Promise<ApplyResult> {
-  if (source.kind !== "project") {
-    return errorResult(
-      "UNSUPPORTED_SOURCE",
-      "Settings source must be a project (user-scope settings copy not supported in V4)."
-    );
-  }
+  const sourceSettingsFile =
+    source.kind === "user"
+      ? path.join(os.homedir(), ".claude", "settings.json")
+      : path.join(source.path, ".claude", "settings.json");
+
   return applySettings({
     settingsPath: request.unit.key,
-    sourceProjectPath: source.path,
+    sourceSettingsFile,
     targetProjectPath,
     conflict: request.conflict,
+    sourceScope: source.kind === "user" ? "user" : "project",
     dryRun: request.dryRun,
   });
 }
@@ -317,33 +343,45 @@ async function dispatchPlugin(
   source: ResolvedSource,
   targetProjectPath: string
 ): Promise<ApplyResult> {
-  if (source.kind !== "project") {
-    return errorResult(
-      "UNSUPPORTED_SOURCE",
-      "Plugin source must be a project (user-scope plugin enables not supported in V3)."
-    );
-  }
   // Verify the plugin is actually enabled in the source — refuse to template
   // a disabled or unknown enable. The applyPlugin primitive itself doesn't
   // re-read the source; that's the dispatch layer's job.
-  const enables = await scanProjectPluginEnables(source.path);
-  const found = enables.find((e) => e.key === request.unit.key);
-  if (!found) {
+  let isEnabled = false;
+  let isPresent = false;
+  if (source.kind === "user") {
+    const userCfg = await getUserConfig();
+    const found = userCfg.plugins.plugins.find((p) => {
+      const key = p.marketplace ? `${p.name}@${p.marketplace}` : p.name;
+      return key === request.unit.key;
+    });
+    isPresent = !!found;
+    isEnabled = !!found?.enabled;
+  } else {
+    const enables = await scanProjectPluginEnables(source.path);
+    const found = enables.find((e) => e.key === request.unit.key);
+    isPresent = !!found;
+    isEnabled = !!found?.enabled;
+  }
+
+  if (!isPresent) {
     return errorResult(
       "UNIT_NOT_FOUND",
-      `Plugin "${request.unit.key}" is not present in the source project's enabledPlugins.`
+      source.kind === "user"
+        ? `Plugin "${request.unit.key}" is not present in the user's enabledPlugins.`
+        : `Plugin "${request.unit.key}" is not present in the source project's enabledPlugins.`
     );
   }
-  if (!found.enabled) {
+  if (!isEnabled) {
     return errorResult(
       "PLUGIN_NOT_ENABLED",
-      `Plugin "${request.unit.key}" is set to false in the source project — refusing to template a disabled enable.`
+      `Plugin "${request.unit.key}" is set to false in the source — refusing to template a disabled enable.`
     );
   }
   return applyPlugin({
     pluginKey: request.unit.key,
     targetProjectPath,
     conflict: request.conflict,
+    sourceScope: source.kind === "user" ? "user" : "project",
     dryRun: request.dryRun,
   });
 }

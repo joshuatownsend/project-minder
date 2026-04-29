@@ -17,6 +17,10 @@ interface ApplyPluginArgs {
   displayName?: string;
   targetProjectPath: string;
   conflict: ConflictPolicy;
+  /** When the plugin enable is being copied from the user's global scope, the
+   *  resulting project-scope enable is much broader (everyone using the repo).
+   *  We surface that with a warning so the UI can highlight the change. */
+  sourceScope?: "user" | "project";
   dryRun?: boolean;
 }
 
@@ -28,7 +32,7 @@ interface ApplyPluginArgs {
  * with a copy-pastable install hint.
  */
 export async function applyPlugin(args: ApplyPluginArgs): Promise<ApplyResult> {
-  const { pluginKey, displayName, targetProjectPath, conflict, dryRun } = args;
+  const { pluginKey, displayName, targetProjectPath, conflict, sourceScope, dryRun } = args;
   const targetSettingsPath = path.join(targetProjectPath, ".claude", "settings.json");
 
   // Check user-scope install registry up front so the warning lands in the
@@ -39,6 +43,11 @@ export async function applyPlugin(args: ApplyPluginArgs): Promise<ApplyResult> {
   const isInstalled = installed.some((p) => installedKey(p) === pluginKey);
 
   const warnings: string[] = [];
+  if (sourceScope === "user") {
+    warnings.push(
+      `user-scope plugin enable promoted to project-shared — anyone using this repo will have "${pluginKey}" enabled when they have it installed`
+    );
+  }
   if (!isInstalled) {
     warnings.push(
       `plugin "${pluginKey}" is not installed at ~/.claude/plugins/. ` +
