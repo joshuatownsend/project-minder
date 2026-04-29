@@ -1,6 +1,6 @@
 # Configuration
 
-The Config page (`/config`) is the single entry point for portfolio-wide configuration. It has five tabs:
+The Config page (`/config`) is the single entry point for portfolio-wide configuration. It has six tabs:
 
 | Tab | What it shows |
 |-----|---------------|
@@ -9,6 +9,7 @@ The Config page (`/config`) is the single entry point for portfolio-wide configu
 | **Plugins** | All Claude Code plugins installed via `~/.claude/plugins/installed_plugins.json` with their enabled / disabled / blocked status |
 | **MCP** | Every MCP server configured in any project's `.mcp.json` plus user-level servers from `~/.claude/settings.json` |
 | **CI / CD** | Every project that has a `.github/workflows/*.yml`, Vercel/Railway/Fly/Render/Netlify/Heroku/Docker hosting config, or Dependabot updates |
+| **Keys** | All top-level keys from your `~/.claude/settings.json` that don't have a dedicated tab (i.e. excludes `hooks`, `mcpServers`, `enabledPlugins`). Use this to copy settings like `statusLine`, `permissions`, or custom keys to any project. |
 
 The CI/CD tab parses workflows down to the **per-job** level: triggers, schedule crons, runs-on, and the deduped list of action `uses:` references for each job. It deliberately does **not** parse step `run:` scripts — those tend to be project-specific noise. Each row retains its source file path, which Template Mode uses to copy units verbatim across projects.
 
@@ -16,17 +17,19 @@ User-level data (plugins, user-level hooks/MCP) lives only on `/config`. Per-pro
 
 ## Template Mode — copy a unit to another project
 
-Each project-scoped row on the **Hooks** and **MCP** tabs has a `↗ copy to project` action. Clicking it opens a small popover that:
+Rows on the **Hooks**, **MCP**, **Plugins**, and **Keys** tabs all have a `↗ copy to project` action. Clicking it opens a small popover that:
 
-- Lets you pick a target project from your scanned dev roots (the source project is excluded).
+- Lets you pick a target project from your scanned dev roots (the source project is excluded for project-scoped units; all projects are available for user-scope units).
 - Shows conflict-policy radios — `skip`, `overwrite`, `merge`, or `rename` (varies by unit type).
 - Renders an inline diff via **Preview** before you commit.
 - Writes atomically when you click **Apply**, with cache invalidation so the dashboard reflects the change immediately.
 
 Behavior worth knowing:
 
-- **Hooks** — identity is `event + matcher + sha256(invocation)`, so re-applying the same hook is idempotent (no duplicates). Local-scope hooks (`settings.local.json`) are auto-promoted to project-shared (`settings.json`) at the target with a warning. Referenced scripts under `.claude/hooks/<file>` are copied alongside; absolute paths into the source project are rejected.
-- **MCP servers** — env *values* are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key, with a warning listing what you need to fill in.
+- **Hooks** — identity is `event + matcher + sha256(invocation)`, so re-applying the same hook is idempotent (no duplicates). Local-scope hooks (`settings.local.json`) are auto-promoted to project-shared (`settings.json`) at the target with a warning. User-scope hooks from `~/.claude/settings.json` also carry a promotion warning — copying to a project makes the hook shared with everyone using that repo. Referenced scripts under `.claude/hooks/<file>` are copied alongside; absolute paths into the source project are rejected.
+- **MCP servers** — env *values* are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key, with a warning listing what you need to fill in. User-scope MCP rows get the same promotion warning.
+- **Plugins** — the apply button appears on enabled plugins only. It writes the enable flag (`enabledPlugins[key] = true`) to the target's `.claude/settings.json`. If the plugin isn't installed at `~/.claude/plugins/`, the flag is still written and a warning appears with the install command. Conflict policy is `skip` or `merge` (rename is not meaningful for enable-flags).
+- **Keys** — copies the value at the selected dotted path into the target's `.claude/settings.json` using deep-merge semantics. `permissions.allow` / `ask` / `deny` arrays concat-and-dedupe; other arrays replace by default; objects deep-merge. Carries a user→project promotion warning.
 - **Agents and skills** — the same `↗ copy to project` action lives on rows in `/agents` and `/skills`. Bundled skills (directory + companion files) copy as a tree; standalone `.md` skills and agents copy as single files.
 
 ## Project Config tab

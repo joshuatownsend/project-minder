@@ -7,6 +7,7 @@ import type {
   HookEntry,
   McpServer,
   PluginEntry,
+  SettingsKeyEntry,
 } from "@/lib/types";
 
 export type { ConfigType };
@@ -29,14 +30,17 @@ export interface CicdRow {
   cicd: CiCdInfo;
 }
 
+export type SettingsKeyRow = SettingsKeyEntry;
+
 export interface ConfigPayload {
   hooks: HookRow[];
   plugins: PluginEntry[];
   mcp: McpRow[];
   cicd: CicdRow[];
+  settingsKeys: SettingsKeyRow[];
 }
 
-const empty: ConfigPayload = { hooks: [], plugins: [], mcp: [], cicd: [] };
+const empty: ConfigPayload = { hooks: [], plugins: [], mcp: [], cicd: [], settingsKeys: [] };
 
 export function useConfig(
   type: ConfigType | undefined = "all",

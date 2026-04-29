@@ -5,11 +5,13 @@ import { extractHookEntries } from "./scanner/claudeHooks";
 import { parseMcpServers } from "./scanner/mcpServers";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { loadInstalledPlugins } from "./indexer/walkPlugins";
+import { RESERVED_SETTINGS_KEYS } from "./template/jsonPath";
 import {
   HookEntry,
   McpServer,
   PluginEntry,
   PluginsInfo,
+  SettingsKeyEntry,
   UserConfig,
 } from "./types";
 
@@ -57,19 +59,21 @@ async function readUserConfig(): Promise<UserConfig> {
     plugins,
     hooks: { entries: hookEntries },
     mcpServers: { servers: mcpServers },
+    settingsKeys: settings ? extractSettingsKeys(settings) : [],
   };
 }
 
-interface UserSettings {
-  hooks?: unknown;
-  mcpServers?: unknown;
-  enabledPlugins?: Record<string, unknown>;
+/** @internal Exported for vitest. */
+export function extractSettingsKeys(doc: Record<string, unknown>): SettingsKeyEntry[] {
+  return Object.entries(doc)
+    .filter(([k]) => !RESERVED_SETTINGS_KEYS.has(k))
+    .map(([keyPath, value]) => ({ keyPath, value }));
 }
 
-async function readSettings(filePath: string): Promise<UserSettings | null> {
+async function readSettings(filePath: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return tryParseJsonc<UserSettings>(raw);
+    return tryParseJsonc<Record<string, unknown>>(raw);
   } catch {
     return null;
   }
@@ -77,14 +81,14 @@ async function readSettings(filePath: string): Promise<UserSettings | null> {
 
 async function readPluginsInfo(
   claudeDir: string,
-  settings: UserSettings | null
+  settings: Record<string, unknown> | null
 ): Promise<PluginsInfo> {
   const [installed, blocklist] = await Promise.all([
     loadInstalledPlugins(),
     readBlocklist(path.join(claudeDir, "plugins", "blocklist.json")),
   ]);
 
-  const enabledMap = settings?.enabledPlugins ?? {};
+  const enabledMap = (settings?.enabledPlugins as Record<string, unknown> | undefined) ?? {};
   const blockedSet = new Set(blocklist);
 
   const installedKeys = new Set<string>();
