@@ -1,5 +1,198 @@
 # Insights
 
+<!-- insight:7e6d506a3290 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:47:26.463Z -->
+## ★ Insight
+The popover overflow is a classic CSS layout problem: `position: absolute` popovers anchored to their trigger button always clip at the viewport edge when the trigger is near the right side. A production fix uses a `getBoundingClientRect()` check on mount to flip the `left`/`right` anchor — or a library like Floating UI. Worth a future TODO.
+
+---
+
+<!-- insight:b29c349c6890 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:39:36.457Z -->
+## ★ Insight
+Keep a Changelog's rule of one category heading per version is subtle — the format looks valid even with duplicates since markdown doesn't enforce uniqueness. The issue only becomes apparent when generating release notes programmatically or trying to scan the file visually. Keeping entries merged is both the spec-compliant and human-readable choice.
+
+---
+
+<!-- insight:b9fdd304fe44 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:31:05.857Z -->
+## ★ Insight
+The `h.projectSlug ?` ternary was a silent guard that hid the button entirely for user-scope items. Replacing it with an explicit `else if h.source === "user"` branch makes the intent visible — project-scope items get `excludeTargetSlugs` to prevent applying to their own source; user-scope items have no such restriction.
+
+---
+
+<!-- insight:cf69a8fc683a | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:29:19.030Z -->
+## ★ Insight
+Changing `UserSettings` to `Record<string, unknown>` is cleaner than adding an index signature — it avoids the footgun where narrower typed properties shadow the catch-all. The cast on `enabledPlugins` at the call site is explicit and localized rather than baked into the interface shape.
+
+---
+
+<!-- insight:e997aeb489b2 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:29:01.731Z -->
+## ★ Insight
+The V5.5 implementation is bottom-up: types first so TypeScript catches mismatches everywhere else before we touch the UI. The `SettingsKeyEntry` shape intentionally uses `unknown` for `value` rather than `JsonValue` — the settings file is user-controlled and can hold arbitrary shapes, so the UI just previews it rather than trying to type it precisely.
+
+---
+
+<!-- insight:5036c649aff9 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T12:30:31.680Z -->
+## ★ Insight
+`vi.mock("os")` replaces the module in Vitest's ESM registry, but `apply.ts` already holds a bound reference to the original `os` object by the time the test runs. `vi.spyOn` patches the property directly on the module singleton, which is the same object every importer holds — so it reliably intercepts calls in any module.
+
+---
+
+<!-- insight:1f2c468a2850 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T12:25:17.370Z -->
+## ★ Insight
+- `vi.hoisted()` runs its callback *before* module hoisting, so you can safely use its return value inside `vi.mock` factories — the plain `let tmp = ""` pattern relies on the factory reading the variable lazily at call time, which often works but isn't guaranteed by the spec.
+- Dispatcher-level integration tests have a different contract than primitive tests: they prove the right source is selected (getUserConfig vs. scanners) and the right params are threaded through, not that the write is bit-for-bit correct. End-to-end (real write) achieves both in one pass.
+
+---
+
+<!-- insight:c3313131e0d4 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T00:58:13.693Z -->
+## ★ Insight
+- **The source field on the entry shape is already doing the work for two of the four primitives.** `HookEntry.source` and `McpServer.source` are already on the data — applyHook can derive the warning from `entry.source === "user"` without any new parameter. applyPlugin and applySettings don't have a source field on their input (just a plugin key or a settings path), so they need an explicit `sourceScope` flag. This asymmetry is fine: it maps to whether the data itself encodes provenance.
+- **Why the warning is louder for plugins than hooks:** A user-scope plugin enable is *already* globally active on the source machine. Templating it to a project means saying "everyone using this repo also gets this plugin enabled when they have it installed." That's a much bigger commitment than copying a single hook.
+
+---
+
+<!-- insight:6a231696bf42 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T00:55:13.225Z -->
+## ★ Insight
+- **Param overload is a code smell that tests can't catch.** `applyHook`'s `sourceProjectPath` was doing two separate jobs (script resolution + rejection target) — they happened to want the same value when the only source kind was `project`. Splitting them now, before adding user-scope, is cheaper than splitting them later when one job has multiple call sites with different semantics.
+- **Symmetric features need symmetric treatment.** The advisor caught that `dispatchSettings` has the *same* gap as hook/mcp/plugin — I'd planned to do three but missed the fourth. They're all "read from a different source, dispatch to the same primitive." Doing them as a set is one PR; deferring one to V5.x means future-me re-deriving the same context.
+
+---
+
+<!-- insight:091540acf5eb | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T21:57:48.950Z -->
+## ★ Insight
+The PR #29 review caught what I'd consider a CVE-class bug — **`__proto__` prototype pollution via crafted template manifests** — that no other test suite or smoke test would have surfaced. The lesson worth carrying forward: **any time user-controlled strings flow into bracket-property assignment (`obj[seg] = …`), there's a prototype-pollution vector**. The fix pattern (deny-list at the path validator + a regression test that asserts `Object.prototype` is genuinely untouched) is the canonical defense. The Copilot bot deserves credit — that finding was specific, accurate, and exactly the kind of thing humans miss in their own code.
+
+---
+
+<!-- insight:d53d48d4f62c | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T21:45:12.889Z -->
+## ★ Insight
+The most dangerous of the nine is **`__proto__` prototype pollution in `setJsonPath`**. Settings paths come from user-controlled template manifests; a manifest with `unit.key = "__proto__.polluted"` would mutate `Object.prototype`, contaminating every object in the running process. This is the same primitive that famously took down lodash and several other widely-used libraries — a textbook attack on JSON-walker code that uses bracket assignment with arbitrary string keys. The fix is a simple deny-list at the segment validator, but missing it would have been a CVE-class bug.
+
+---
+
+<!-- insight:471d9cb5d331 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T21:15:22.427Z -->
+## ★ Insight
+The simplify pass surfaced a layering bug that was *invisible* until the helper-extraction made it concrete: client components were transitively importing `fs` and `child_process` through `manifest.ts → atomicFs → fs` and `manifest.ts → config → platform → child_process`. Next.js had been silently tree-shaking it, but the moment a client component reached for `inventoryCount`, the full graph crossed the server/client boundary and Turbopack failed. The fix — extracting pure helpers into `inventoryUtils.ts` — is the right architectural shape regardless of the simplify finding; it makes the client/server split explicit at the import-graph level rather than relying on tree-shaking to paper over the leak.
+
+---
+
+<!-- insight:aa88eb97a7cc | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T21:08:28.150Z -->
+## ★ Insight
+The ternary-cascade bug in `route.ts` is a textbook case of **parallel mappings drifting**. When V3 added `workflow` and V4 added `settingsKey`, each addition required edits in *two* places: `inventoryKeyFor` (`manifest.ts`) AND the ternary cascade (`route.ts`). Both got updated correctly here, but the structure invites future drift. Replacing the cascade with the existing helper makes `manifest.ts` the single source of truth.
+
+---
+
+<!-- insight:a5a5e14c4e7d | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:57:41.510Z -->
+## ★ Insight
+The most subtle part of V4 was `mergeValues`'s **path-preservation through nested merges**. When the user picks `permissions` (whole object) instead of `permissions.allow`, the merge of the parent should *still* trigger concat-dedupe at the child path. That works because `mergeValues` recurses with `keyPath = "${keyPath}.${k}"` rather than starting fresh — by the time it hits the `allow` array, `isConcatDedupePath("permissions.allow")` returns true even though the user-facing unit key was just `permissions`. Without that path threading, the concat-dedupe semantics would be invisibly inconsistent depending on what granularity the user picked.
+
+---
+
+<!-- insight:bc32f685a7cc | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:42:52.774Z -->
+## ★ Insight
+`applySettings` closes the largest remaining gap in Template Mode: most users care more about templating their `permissions.allow` list (which controls Bash command auto-approval) than they do about the specialized hook/plugin/MCP paths. The implementation hinges on getting the merge semantics right — what should happen when both source and target have `permissions.allow: ["Bash(git:*)", "Read(*)"]` overlapping with `["Bash(git:*)", "Edit(*)"]`? Concat-and-dedupe vs replace vs error is a documented contract, not just an implementation detail.
+
+---
+
+<!-- insight:ee22332bcc60 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:40:05.819Z -->
+## ★ Insight
+The merge surfaced an instructive layering of branch-protection signals: `mergeable: MERGEABLE` (no conflicts) but `mergeStateStatus: BLOCKED` (rule violation). The two are independent — GitHub will report mergeable at the file level even when policy blocks. The blocker here was `required_review_thread_resolution: true` in the ruleset — bot-flagged threads need explicit resolution, not just a reply. Worth knowing for any future PR with bot reviewers: queue up `gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: ... }) }'` calls as part of the post-fix workflow rather than discovering it at merge time.
+
+---
+
+<!-- insight:d585c4a301b5 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:36:12.398Z -->
+## ★ Insight
+Three of the eight comments traced to the same architectural flaw: `dryRun` had been implemented as **"skip the final write"** rather than **"skip *all* mutations."** Bootstrap mkdir+git init, `applyDirectory`'s `fs.rm`, and `applyPlugin`'s no-op write all sat above the `if (dryRun)` check. The discipline going forward: dry-run paths should be implementable as a side-effect-free function that returns `{ok, status: "would-apply"}` — anything that mutates disk before that check is a bug.
+
+---
+
+<!-- insight:e64e396d846e | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:26:14.181Z -->
+## ★ Insight
+Three of these are the same class of bug: **dry-run paths that aren't actually dry**. Comment #1 (bootstrap mkdir + git init in preview), #6 (`fs.rm` before checking dryRun), and partly #8 (dry-run claims it would write when it wouldn't) all share the same root: dry-run was implemented as "skip the final write" instead of "skip *all* mutations." That's a design smell worth being deliberate about — the fix isn't just three patches, it's a discipline I should apply across the apply layer.
+
+---
+
+<!-- insight:ac8bc2ffc625 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T20:01:53.377Z -->
+## ★ Insight
+The bundled-skill polish illustrates a small but important UX pattern: **dry-run previews should show the *consequences* of a click, not just confirm it'll happen**. A directory copy that just says `[copy directory] foo/ → bar/` is a tautology. Listing the actual files (12 with truncation) turns the preview from acknowledgment into information — "oh, this skill ships a `helper.css` I didn't realize was part of it." For high-stakes actions like cross-project copy, that visibility shifts the user from hopeful to confident.
+
+---
+
+<!-- insight:4f9e446332a0 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T19:31:03.544Z -->
+## ★ Insight
+The criteria I'm using to sort follow-ons:
+- **Pre-PR essentials** = things a reviewer will catch and you'll have to add anyway
+- **Polish (small, completes the story)** = items deferred *during* V1–V3 that would feel incomplete to leave for later
+- **Defer to V4+** = items unrelated or large enough to deserve their own PR — bundling them dilutes the V3 narrative
+
+---
+
+<!-- insight:59a70da62fca | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T19:26:30.202Z -->
+## ★ Insight
+Two patterns made V3 cheap:
+- **`inventoryKeyFor(kind)` with exhaustiveness check** — adding new unit kinds previously meant grepping for every place that mapped UnitKind to plural inventory key. Now there's one switch with a `never` fallback, and TypeScript fails the build if you forget to handle a new kind. This is what made adding `plugin` then `workflow` back-to-back a 5-minute change in the manifest layer.
+- **The "virtual project root" abstraction from V2 paid off again** — workflow apply just reuses `dispatchWorkflow(source, target)` with `source.path` resolved through the same machinery. Snapshot bundles already mirror a real project's `.github/workflows/` layout, so promoting `applyWorkflow` to a unit kind required zero changes in `resolveTemplateSourcePath`.
+
+---
+
+<!-- insight:dcabbfb18e21 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T18:30:11.989Z -->
+## ★ Insight
+The architectural choice that paid off most in V2 was making snapshot bundles mirror a real project's `.claude/` layout. That single decision meant:
+- `walkProjectAgents`, `walkProjectSkills`, `walkProjectCommands`, `scanClaudeHooks`, `scanMcpServers` all became snapshot readers for free — zero new code paths to maintain.
+- The smoke test confirmed it works end-to-end: applying the snapshot template produced an *identical* dispatch result to applying the live template, because both flavors resolved to a "virtual project root" the existing scanners read uniformly.
+- A user can `cd` into `<devRoot>/.minder/templates/<slug>/bundle/` and the `.claude/` looks exactly like a real project's. They can edit, diff, version it. Custom asset layouts make snapshots opaque — this design keeps them inspectable.
+
+---
+
+<!-- insight:b0275c6627ca | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T18:11:33.660Z -->
+## ★ Insight
+Why mirror the source project's directory layout inside the bundle instead of inventing a new manifest schema with assetPaths? Two reasons:
+- **Reuse**: every existing scanner becomes a snapshot reader for free. No second code path to maintain or test.
+- **Inspectability**: a user can `cd` into a snapshot bundle and the `.claude/` looks exactly like a real project's `.claude/`. They can edit it, diff it, version it. Custom asset layouts make snapshots opaque.
+
+---
+
+<!-- insight:fcbb690bd436 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T17:59:46.738Z -->
+## ★ Insight
+The default behavior of "auto-dismiss on success" is a UX trap whenever success carries actionable info. For Template Mode, *every* hook copy from a `settings.local.json` source carries a warning the user must act on (the hook is now project-shared, visible to teammates). Auto-closing through that warning silently strands the user with state they didn't realize they needed to know about. The fix wires the timer to the *quality* of the result, not just `ok: true`.
+
+---
+
+<!-- insight:a7083a94d7df | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T17:24:38.630Z -->
+## ★ Insight
+Two design choices proved their worth during smoke testing:
+- **Server-side hook expansion** (one row per invocation) caught the multi-command bug the advisor flagged. Without it, a `PostToolUse|Edit` tuple with two commands would silently copy only the first when the user clicked the button.
+- **Read from indexed `McpServer` shape, not raw `.mcp.json`** — this is the env-secret-leak guard. The smoke test confirmed env keys land at the target as empty strings. If `applyMcp` had re-read the source file, the env *values* would have followed. Read-side and write-side invariants must match.
+
+---
+
+<!-- insight:76de8838cef1 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T16:59:48.003Z -->
+## ★ Insight
+Two design choices worth understanding:
+- **`ensureInsideDevRoots` uses `path.relative` instead of `startsWith`** — `startsWith` gives false positives like `C:\dev\foo` matching `C:\dev`'s prefix even when the resolved path is `C:\dev\foobar`. `path.relative` gives a `..`-prefixed result for true escapes and correctly handles trailing separators.
+- **`hookKey` hashes the command** — a single `event+matcher` tuple can carry multiple commands (e.g., two `PostToolUse|Edit` hooks). Without hashing the command into the key, idempotent apply would either over-apply (writing both each time) or under-apply (treating them as the same unit). 16 hex chars of sha256 is plenty for collision avoidance at human-config scale.
+
+---
+
+<!-- insight:b24b158e360f | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T16:56:51.028Z -->
+## ★ Insight
+A subtle reason this plan ships in three phases: every later phase depends on read-side invariants you've already enforced. V1 leans entirely on the existing scanner/indexer outputs (which already dedupe, redact secrets, and carry `sourcePath`). V2 adds the template manifest as a thin layer over those same outputs. V3 adds polish without touching the core pipeline. The hardest part is V1's apply layer — once that's solid, V2 and V3 are mostly UI and orchestration.
+
+---
+
+<!-- insight:e9c7c490e26f | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T16:51:44.145Z -->
+## ★ Insight
+Two architectural patterns drive this plan and are worth flagging:
+- **Identity-keyed hooks (`event|matcher|sha256(command)`)** — without hashing the command into the key, idempotent re-apply silently double-writes when a single `event+matcher` pair has multiple commands. Same trick is why Git keys blobs by content hash, not filename.
+- **Live + snapshot template duality** — both the user's mental model ("a template is a real project I maintain") and the safety win ("a template is a frozen point-in-time copy") get satisfied by making `kind` a manifest field with uniform `resolveTemplateAssets()` resolution. Reader code never branches on `kind`, only the writer does.
+
+---
+
+<!-- insight:d1e6ae84d664 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-28T16:46:56.524Z -->
+## ★ Insight
+The most consequential design choice for Template Mode is whether a "template" is a **vendored snapshot** (a frozen copy at `<devRoot>/.minder/templates/<slug>/`) or a **live project flagged as template** (any project tagged `isTemplate: true` in `.minder.json`). Vendoring is more stable — edits to a source project don't silently change the template — but it duplicates data. Flagging is leaner but means your template drifts whenever you tweak the source. This decision changes the manifest shape, the API, the UI, and the test surface.
+
+---
+
 <!-- insight:ab23b3b8224d | session:f25d4efc-f1ec-4403-bbf7-6fcab73d7cda | 2026-04-27T15:38:20.892Z -->
 ## ★ Insight
 The `CatalogActionStrip` duplication is a classic structural isomorphism: `SkillRow.entry` and `AgentRow.entry` share identical base fields (`provenance`, `realPath`, `filePath`) because both are shaped from `CatalogEntryBase`. Extracting the action strip just needs a minimal structural interface for those three fields — no need to import the full `CatalogEntry` type.

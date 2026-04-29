@@ -102,6 +102,7 @@ function makeUserConfig(overrides: Partial<UserConfig> = {}): UserConfig {
     hooks: { entries: [] },
     mcpServers: { servers: [] },
     plugins: { plugins: [] },
+    settingsKeys: [],
     ...overrides,
   };
 }

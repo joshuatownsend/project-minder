@@ -11,6 +11,7 @@ import {
   McpServer,
   PluginEntry,
   ProjectData,
+  SettingsKeyEntry,
 } from "@/lib/types";
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -33,11 +34,14 @@ interface CicdRow {
   cicd: CiCdInfo;
 }
 
+type SettingsKeyRow = SettingsKeyEntry;
+
 interface AggregatedPayload {
   hooks: HookRow[];
   plugins: PluginEntry[];
   mcp: McpRow[];
   cicd: CicdRow[];
+  settingsKeys: SettingsKeyRow[];
 }
 
 const globalForCC = globalThis as unknown as {
@@ -109,6 +113,7 @@ export async function GET(request: NextRequest) {
     plugins: [],
     mcp: [],
     cicd: [],
+    settingsKeys: [],
   };
 
   if (type === "hooks" || type === "all") {
@@ -139,6 +144,10 @@ export async function GET(request: NextRequest) {
 
   if (type === "cicd" || type === "all") {
     payload.cicd = collectCicd(projects);
+  }
+
+  if ((type === "settingsKeys" || type === "all") && includeUserScope) {
+    payload.settingsKeys = userConfig.settingsKeys;
   }
 
   if (query) {
@@ -212,6 +221,10 @@ function applyQuery(payload: AggregatedPayload, q: string): void {
       .join(" ")
       .toLowerCase()
       .includes(q)
+  );
+
+  payload.settingsKeys = payload.settingsKeys.filter((sk) =>
+    sk.keyPath.toLowerCase().includes(q)
   );
 
   payload.cicd = payload.cicd.filter((c) => {

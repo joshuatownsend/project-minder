@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders } from "lucide-react";
+import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders, Key } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useConfig, type HookRow, type McpRow, type CicdRow } from "@/hooks/useConfig";
+import { useConfig, type HookRow, type McpRow, type CicdRow, type SettingsKeyRow } from "@/hooks/useConfig";
 import { CONFIG_TYPES, type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
 import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
@@ -13,11 +13,12 @@ import { ApplyUnitButton } from "./ApplyUnitButton";
 type TabKey = ConfigType | "settings";
 
 const TABS: { key: TabKey; label: string; icon: typeof Webhook }[] = [
-  { key: "settings", label: "Settings",   icon: Sliders },
-  { key: "hooks",    label: "Hooks",      icon: Webhook },
-  { key: "plugins",  label: "Plugins",    icon: Box },
-  { key: "mcp",      label: "MCP",        icon: Server },
-  { key: "cicd",     label: "CI / CD",    icon: WorkflowIcon },
+  { key: "settings",     label: "Settings",   icon: Sliders },
+  { key: "hooks",        label: "Hooks",      icon: Webhook },
+  { key: "plugins",      label: "Plugins",    icon: Box },
+  { key: "mcp",          label: "MCP",        icon: Server },
+  { key: "cicd",         label: "CI / CD",    icon: WorkflowIcon },
+  { key: "settingsKeys", label: "Keys",       icon: Key },
 ];
 
 export function ConfigBrowser() {
@@ -162,11 +163,12 @@ export function ConfigBrowser() {
 
 function countFor(type: TabKey, data: ReturnType<typeof useConfig>["data"]): number {
   switch (type) {
-    case "hooks":   return data.hooks.length;
-    case "plugins": return data.plugins.length;
-    case "mcp":     return data.mcp.length;
-    case "cicd":    return data.cicd.reduce((acc, c) => acc + c.cicd.workflows.length, 0);
-    default:        return 0;
+    case "hooks":        return data.hooks.length;
+    case "plugins":      return data.plugins.length;
+    case "mcp":          return data.mcp.length;
+    case "cicd":         return data.cicd.reduce((acc, c) => acc + c.cicd.workflows.length, 0);
+    case "settingsKeys": return data.settingsKeys.length;
+    default:             return 0;
   }
 }
 
@@ -181,6 +183,7 @@ function ActiveSection({
   if (type === "hooks") return <HooksList rows={data.hooks} />;
   if (type === "plugins") return <PluginsList rows={data.plugins} />;
   if (type === "mcp") return <McpList rows={data.mcp} />;
+  if (type === "settingsKeys") return <SettingsKeyList rows={data.settingsKeys} />;
   return <CicdList rows={data.cicd} />;
 }
 
@@ -209,14 +212,20 @@ function HooksList({ rows }: { rows: HookRow[] }) {
             </span>
           </span>
           {h.source === "local" && <LocalScopeBadge />}
-          {h.projectSlug && (
+          {h.projectSlug ? (
             <ApplyUnitButton
               unit={{ kind: "hook", key: h.unitKey }}
               source={{ kind: "project", slug: h.projectSlug }}
               excludeTargetSlugs={[h.projectSlug]}
               compact
             />
-          )}
+          ) : h.source === "user" ? (
+            <ApplyUnitButton
+              unit={{ kind: "hook", key: h.unitKey }}
+              source={{ kind: "user" }}
+              compact
+            />
+          ) : null}
           <SourceBadge projectSlug={h.projectSlug} projectName={h.projectName} />
         </div>
       ))}
@@ -279,12 +288,58 @@ function PluginsList({ rows }: { rows: PluginEntry[] }) {
                 v{p.version}
               </span>
             )}
+            {p.enabled && (
+              <ApplyUnitButton
+                unit={{ kind: "plugin", key: p.marketplace ? `${p.name}@${p.marketplace}` : p.name }}
+                source={{ kind: "user" }}
+                compact
+              />
+            )}
             <StatusPill status={status} />
           </div>
         );
       })}
     </div>
   );
+}
+
+function SettingsKeyList({ rows }: { rows: SettingsKeyRow[] }) {
+  if (rows.length === 0) {
+    return <Empty label="No extra settings keys in ~/.claude/settings.json." />;
+  }
+  return (
+    <div>
+      {rows.map((sk) => (
+        <div
+          key={sk.keyPath}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "7px 0",
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--accent)", flexShrink: 0 }}>
+            {sk.keyPath}
+          </code>
+          <span style={{ flex: 1, minWidth: 0, fontSize: "0.68rem", color: "var(--text-secondary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {truncateJson(sk.value)}
+          </span>
+          <ApplyUnitButton
+            unit={{ kind: "settingsKey", key: sk.keyPath }}
+            source={{ kind: "user" }}
+            compact
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function truncateJson(value: unknown, max = 48): string {
+  const s = JSON.stringify(value) ?? "null";
+  return s.length <= max ? s : s.slice(0, max) + "…";
 }
 
 function McpList({ rows }: { rows: McpRow[] }) {
@@ -314,14 +369,20 @@ function McpList({ rows }: { rows: McpRow[] }) {
               env {m.envKeys.length}
             </span>
           )}
-          {m.projectSlug && (
+          {m.projectSlug ? (
             <ApplyUnitButton
               unit={{ kind: "mcp", key: m.name }}
               source={{ kind: "project", slug: m.projectSlug }}
               excludeTargetSlugs={[m.projectSlug]}
               compact
             />
-          )}
+          ) : m.source === "user" ? (
+            <ApplyUnitButton
+              unit={{ kind: "mcp", key: m.name }}
+              source={{ kind: "user" }}
+              compact
+            />
+          ) : null}
           <SourceBadge projectSlug={m.projectSlug} projectName={m.projectName} />
         </div>
       ))}

@@ -7,17 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Template Mode V5.5 — UI surface for user-scope apply.** The `/config` browser now exposes `↗ copy to project` buttons for all user-scope artifacts:
+  - **Hooks**: user-scope hook rows (those with `source === "user"`) now show the apply button (previously hidden by the `projectSlug &&` guard). Clicking opens the conflict-policy popover with `source: { kind: "user" }` so the apply layer routes through `getUserConfig()`.
+  - **MCP servers**: same fix — user-scope MCP rows now have an apply button.
+  - **Plugins**: every *enabled* plugin row now has an apply button. The conflict policy is `skip` or `merge` only (rename is not meaningful for enable-flags).
+  - **Keys tab** (`/config?type=settingsKeys`): a new "Keys" tab in the Config browser lists all top-level keys from `~/.claude/settings.json`, excluding `hooks`, `mcpServers`, and `enabledPlugins` (those have dedicated tabs). Each row shows the key path, a truncated JSON preview, and an apply button with `skip` / `overwrite` / `merge` policies. The tab count is live and searchable.
+- **`settingsKey` and `plugin` conflict policies** added to `ApplyUnitButton.policiesFor` — previously the popover rendered a single `skip` radio for these kinds.
 - **Template Mode V5 — user-scope source for hooks, MCP, plugins, and settings keys.** The four backend dispatchers in `src/lib/template/apply.ts` that previously rejected `source.kind === "user"` now read from `~/.claude/settings.json` (via the existing `getUserConfig()` cache) and dispatch to the same primitives. The read-side and `/api/claude-config/user` endpoint were already in place from V3; V5 wires them through to the apply layer. New behaviors:
   - **`applyHook`** now takes `sourceHooksDir` + `sourceRootForRejection` (was `sourceProjectPath`). Project source maps to `<projectPath>/.claude/hooks` + `<projectPath>`; user source maps to `~/.claude/hooks` + `~/.claude`. The split preserves the existing project-case rejection that fires on any reference into the source project, not just into `.claude/`.
   - **`applySettings`** takes `sourceSettingsFile` (absolute path) instead of `sourceProjectPath`, so it can read either `<project>/.claude/settings.json` or `~/.claude/settings.json` without inferring layout.
   - **User→project promotion warnings** surface for every unit kind: hooks, MCP, plugins, and settings keys. Copying from user-scope to project-scope means going from personal-machine to team-shared, so every result includes a warning that mentions "anyone using this repo." Plugins get a louder warning since user-scope plugins are already globally active for the source user.
   - **`applyPlugin`** + **`applySettings`** gain an optional `sourceScope: "user" | "project"` param to drive the warning (their input data has no source field to derive from, unlike `HookEntry.source` and `McpServer.source`).
-
-### Changed
-- **`applyHook` parameter rename**: `sourceProjectPath` → `{ sourceHooksDir, sourceRootForRejection }`. Existing callers in `apply.ts` updated. No behavior change for project source.
-- **`applySettings` parameter rename**: `sourceProjectPath` → `sourceSettingsFile`. Caller now passes the absolute settings file path instead of the project root, decoupling the primitive from any assumption about source layout.
-
-### Added
 - **Template Mode V4 — `settingsKey` unit kind.** Templates can now copy arbitrary `.claude/settings.json` keys by dotted path (e.g. `permissions.allow`, `env`, `statusLine`). Apply uses a deep-merge on `merge` policy:
   - Scalars + non-allowlisted arrays replace by default.
   - **`permissions.allow` / `permissions.ask` / `permissions.deny` concat-and-dedupe** — the target keeps its existing patterns plus the source's, deduplicated by JSON-equality.
@@ -62,6 +62,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Conditional ProjectDetail tabs** — Sessions, Manual Steps, and Insights tabs are hidden when the project has no data for them (`sessionCount === 0`, no `MANUAL_STEPS.md`, zero insights). Memory, Agents, and Skills tabs always remain.
 
 ### Changed
+- **`applyHook` parameter rename**: `sourceProjectPath` → `{ sourceHooksDir, sourceRootForRejection }`. Existing callers in `apply.ts` updated. No behavior change for project source.
+- **`applySettings` parameter rename**: `sourceProjectPath` → `sourceSettingsFile`. Caller now passes the absolute settings file path instead of the project root, decoupling the primitive from any assumption about source layout.
 - **Dev server stop confirmation removed** — Stop (compact + full panel) no longer shows `window.confirm`. The status transition is immediate feedback; dev server stops are trivially reversible (restart in 2s).
 - **Sort label** — "By Claude" renamed to "Last Session" with a `Bot` icon; `title="Sort by most recent Claude session"` on hover.
 - **Toolbar icon treatment** — Status filter and Sort buttons now match the View mode toggle: icon above label, stacked vertically, `minHeight: 32px`. Each status has a unique icon (Layers/CircleDot/CirclePause/Archive); each sort has a unique icon (Clock/Bot/ArrowUpAZ). Quick Add and Rescan standalone buttons also gain `minHeight: 32px` for consistent hit-area sizing.

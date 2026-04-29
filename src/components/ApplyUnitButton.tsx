@@ -26,7 +26,10 @@ interface ApplyUnitButtonProps {
 function policiesFor(kind: UnitKind): ConflictPolicy[] {
   switch (kind) {
     case "hook":
+    case "settingsKey":
       return ["skip", "overwrite", "merge"];
+    case "plugin":
+      return ["skip", "merge"];
     case "mcp":
       return ["skip", "overwrite", "merge", "rename"];
     case "agent":
