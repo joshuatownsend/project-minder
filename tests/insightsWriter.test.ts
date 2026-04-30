@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { appendInsights } from "@/lib/insightsWriter";
 import { InsightEntry } from "@/lib/types";
 
-// Mock fs
+// Mock fs. `rename` is needed because the writer goes through writeFileAtomic
+// (tmp + rename); the test asserts on the temp-file write rather than the
+// rename target, since that's where the formatted content lands first.
 vi.mock("fs", () => ({
   promises: {
     readFile: vi.fn(),
     writeFile: vi.fn(),
+    rename: vi.fn(async () => undefined),
   },
 }));
 

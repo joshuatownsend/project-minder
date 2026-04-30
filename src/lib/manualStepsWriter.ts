@@ -1,41 +1,7 @@
 import { promises as fs } from "fs";
-import path from "path";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { ManualStepsInfo } from "./types";
-
-/**
- * Per-file mutex to serialize read-modify-write cycles.
- * Prevents concurrent toggles from clobbering each other.
- */
-const fileLocks = new Map<string, Promise<unknown>>();
-
-function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const normalized = path.resolve(filePath);
-  const prev = fileLocks.get(normalized) ?? Promise.resolve();
-  const next = prev.then(fn, fn); // run fn after previous completes (even if it failed)
-  fileLocks.set(normalized, next);
-  // Clean up the map entry once this operation finishes
-  next.finally(() => {
-    if (fileLocks.get(normalized) === next) {
-      fileLocks.delete(normalized);
-    }
-  });
-  return next;
-}
-
-/**
- * Atomic write: write to a temp file then rename.
- * On Windows, rename overwrites the target atomically at the FS level,
- * so concurrent readers never see partial content.
- */
-async function atomicWriteFile(
-  filePath: string,
-  content: string
-): Promise<void> {
-  const tmpPath = filePath + ".tmp." + process.pid;
-  await fs.writeFile(tmpPath, content, "utf-8");
-  await fs.rename(tmpPath, filePath);
-}
+import { writeFileAtomic, withFileLock } from "./atomicWrite";
 
 export async function toggleStepInFile(
   filePath: string,
@@ -66,7 +32,7 @@ export async function toggleStepInFile(
     }
 
     const newContent = lines.join("\n");
-    await atomicWriteFile(filePath, newContent);
+    await writeFileAtomic(filePath, newContent);
     return parseManualStepsMd(newContent);
   });
 }

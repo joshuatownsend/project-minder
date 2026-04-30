@@ -4,6 +4,7 @@ import os from "os";
 import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
+import { writeFileAtomic, withFileLock } from "../atomicWrite";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -166,51 +167,58 @@ export async function appendInsights(
 
   const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
 
-  let existingContent = "";
-  try {
-    existingContent = await fs.readFile(insightsMdPath, "utf-8");
-  } catch {
-    // File doesn't exist yet
-  }
+  // Lock the entire read→dedupe→write sequence. `writeFileAtomic` alone
+  // protects byte-level integrity, but two concurrent appendInsights calls
+  // (e.g. a background scan + a worktree-sync request) would each read the
+  // same starting state and the second writer would clobber the first's
+  // additions. Locking the whole RMW serializes them so both batches land.
+  return withFileLock(insightsMdPath, async () => {
+    let existingContent = "";
+    try {
+      existingContent = await fs.readFile(insightsMdPath, "utf-8");
+    } catch {
+      // File doesn't exist yet
+    }
 
-  const { knownIds } = parseInsightsMd(existingContent);
+    const { knownIds } = parseInsightsMd(existingContent);
 
-  const seen = new Set(knownIds);
-  const newEntries = entries.filter((e) => {
-    if (seen.has(e.id)) return false;
-    seen.add(e.id);
-    return true;
+    const seen = new Set(knownIds);
+    const newEntries = entries.filter((e) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+
+    if (newEntries.length === 0) return { count: 0, content: null };
+
+    newEntries.sort((a, b) => {
+      const dateA = new Date(a.date).getTime() || 0;
+      const dateB = new Date(b.date).getTime() || 0;
+      return dateB - dateA;
+    });
+
+    const formattedEntries = newEntries.map((e) => {
+      const d = e.date ? new Date(e.date) : null;
+      const dateStr = d && isFinite(d.getTime()) ? d.toISOString() : "unknown";
+      return (
+        `<!-- insight:${e.id} | session:${e.sessionId} | ${dateStr} -->\n` +
+        `## ★ Insight\n` +
+        `${e.content}\n` +
+        `\n` +
+        `---\n`
+      );
+    });
+
+    const existingBody = existingContent
+      .replace(/^#\s+Insights\s*(?:\r?\n)+/, "")
+      .trimStart();
+
+    const finalContent =
+      `# Insights\n\n` + formattedEntries.join("\n") + (existingBody ? `\n${existingBody}` : "");
+
+    await writeFileAtomic(insightsMdPath, finalContent);
+    return { count: newEntries.length, content: finalContent };
   });
-
-  if (newEntries.length === 0) return { count: 0, content: null };
-
-  newEntries.sort((a, b) => {
-    const dateA = new Date(a.date).getTime() || 0;
-    const dateB = new Date(b.date).getTime() || 0;
-    return dateB - dateA;
-  });
-
-  const formattedEntries = newEntries.map((e) => {
-    const d = e.date ? new Date(e.date) : null;
-    const dateStr = d && isFinite(d.getTime()) ? d.toISOString() : "unknown";
-    return (
-      `<!-- insight:${e.id} | session:${e.sessionId} | ${dateStr} -->\n` +
-      `## ★ Insight\n` +
-      `${e.content}\n` +
-      `\n` +
-      `---\n`
-    );
-  });
-
-  const existingBody = existingContent
-    .replace(/^#\s+Insights\s*(?:\r?\n)+/, "")
-    .trimStart();
-
-  const finalContent =
-    `# Insights\n\n` + formattedEntries.join("\n") + (existingBody ? `\n${existingBody}` : "");
-
-  await fs.writeFile(insightsMdPath, finalContent, "utf-8");
-  return { count: newEntries.length, content: finalContent };
 }
 
 // ─── INSIGHTS.md Parser ───────────────────────────────────────────────────────

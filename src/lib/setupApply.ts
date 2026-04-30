@@ -13,6 +13,7 @@ import {
   HOOKS_VALIDATE_TODO,
   HOOKS_VALIDATE_MANUAL_STEPS,
 } from "./setup-content";
+import { writeFileAtomic } from "./atomicWrite";
 
 export type ApplyAction = "claude-md" | "hooks" | "both";
 export type ApplyStatus = "applied" | "already-present";
@@ -107,7 +108,7 @@ async function applyClaudeMd(projectPath: string): Promise<ClaudeMdResult> {
       await backupFile(claudeMdPath);
       content = existing.trimEnd() + "\n\n" + blocksToAdd.join("\n\n");
     }
-    await fs.writeFile(claudeMdPath, content, "utf-8");
+    await writeFileAtomic(claudeMdPath, content);
   }
 
   return {
@@ -144,7 +145,7 @@ async function writeScriptIdempotent(filePath: string, content: string): Promise
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     // File doesn't exist — write it fresh
   }
-  await fs.writeFile(filePath, content, "utf-8");
+  await writeFileAtomic(filePath, content);
   return "applied";
 }
 
@@ -192,6 +193,6 @@ async function mergeSettingsJson(settingsPath: string): Promise<ApplyStatus> {
   if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = [];
   settings.hooks.PreToolUse.push({ ...DESIRED_HOOK_ENTRY, hooks: missingHooks });
 
-  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+  await writeFileAtomic(settingsPath, JSON.stringify(settings, null, 2));
   return "applied";
 }

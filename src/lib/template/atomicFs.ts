@@ -1,34 +1,12 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { writeFileAtomic, withFileLock as sharedWithFileLock } from "../atomicWrite";
 
-/**
- * Per-file mutex keyed on the resolved absolute path. Mirrors the pattern in
- * `manualStepsWriter.ts` — a separate Map here is fine because Template Mode
- * targets `.claude/settings.json` and `.mcp.json`, which manual steps never
- * touch. Sharing a Map across modules would only matter if they wrote the same
- * files, which they don't.
- */
-const fileLocks = new Map<string, Promise<unknown>>();
-
-export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const normalized = path.resolve(filePath);
-  const prev = fileLocks.get(normalized) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  fileLocks.set(normalized, next);
-  next.finally(() => {
-    if (fileLocks.get(normalized) === next) {
-      fileLocks.delete(normalized);
-    }
-  });
-  return next;
-}
-
-/** Write to a temp sibling, then rename. Rename is atomic on Windows and POSIX. */
-export async function atomicWriteFile(filePath: string, content: string): Promise<void> {
-  const tmp = filePath + ".tmp." + process.pid + "." + Math.random().toString(36).slice(2, 8);
-  await fs.writeFile(tmp, content, "utf-8");
-  await fs.rename(tmp, filePath);
-}
+// Re-exported under the historic name `atomicWriteFile` so the template-mode
+// callers don't need to be touched. New call sites should import
+// `writeFileAtomic` from `@/lib/atomicWrite` directly.
+export const atomicWriteFile = writeFileAtomic;
+export const withFileLock = sharedWithFileLock;
 
 export async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });

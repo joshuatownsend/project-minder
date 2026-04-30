@@ -274,6 +274,64 @@ Deferred to P0.5 (low-priority — no measured CLS issue, can copy SessionsBrows
 
 ---
 
+## After P1 — 2026-04-30
+
+P1 = server consolidation. New `FileCache<T>` mtime primitive in `src/lib/usage/cache.ts`, parser switched from 2-min TTL to mtime-driven cache, single-flight dedup for cold-path concurrency, `writeFileAtomic` + `withFileLock` extracted to top-level `src/lib/atomicWrite.ts` and applied across config/setup/insight/manual-step writers, scanner cache moved to `globalThis`, ETag + `Cache-Control` headers on `/api/sessions`, `/api/usage`, `/api/stats`, plain `Cache-Control` on `/api/agents`, `/api/skills`.
+
+### API timings — cold (after `rm -rf .next` + restart, disk caches present)
+
+| Route | Baseline cold | P1 cold | Δ |
+|---|---|---|---|
+| `/api/sessions` | 7.97 s | ~10.0 s | +25 % (one-time per restart) |
+| `/api/usage?period=month` | 6.90 s | ~10.4 s | +51 % (one-time per restart) |
+| `/api/stats` | n/a | 0.40 s | new |
+| `/api/agents` | n/a | 1.66 s | new |
+| `/api/skills` | n/a | 0.36 s | new |
+
+Cold path is slightly worse on `/api/sessions` and `/api/usage` because the new in-process FileCache is empty after restart and has to stat 3,211 files plus parse changed ones. The on-disk `claudeStatsCache` is still warm, so parse work itself is bounded — most of the 10 s is fs.stat round-trips. P2 (SQLite) eliminates this cost by persisting parsed state across restarts.
+
+### API timings — warm (in-process FileCache populated)
+
+| Route | Baseline warm | P1 warm | Δ |
+|---|---|---|---|
+| `/api/sessions` | 0.21 s | **0.044 s** | **−79 %** |
+| `/api/usage?period=month` | 2.27 s | **0.014 s** | **−99.4 %** |
+| `/api/stats` | n/a | 0.098 s | new |
+| `/api/agents` | n/a | 0.018 s | new |
+| `/api/skills` | n/a | 0.020 s | new |
+
+The 99.4 % reduction on `/api/usage` is the headline P1 win: prior to P1, every 2-min TTL miss re-parsed 1.1 GB. With mtime caching, only files that actually changed since the last sweep get re-parsed, and a stat-only sweep is ≤ 20 ms.
+
+### API timings — 304 round-trip (with `If-None-Match`)
+
+| Route | Time | Status |
+|---|---|---|
+| `/api/sessions` | 0.011 s | 304 |
+| `/api/usage?period=month` | 0.016 s | 304 |
+| `/api/stats` | 0.094 s | 304 |
+
+Browsers will use these headers automatically across cross-page navigations: clicking from `/sessions` → `/usage` → `/stats` → back will short-circuit to 304s instead of full payload re-fetches as long as the underlying JSONL/scan state hasn't changed.
+
+### Verification
+
+- `npm run typecheck` — clean.
+- `npm test` — **545/545 passing** including new `tests/fileCache.test.ts` (7 tests covering single-flight dedup, mtime/size invalidation, LRU eviction, max-mtime reporting).
+- `npm run build` — clean (one pre-existing NFT warning unchanged from baseline).
+- `curl -H 'If-None-Match: <etag>'` round-trip → 304 with same ETag, < 110 ms across all three routes.
+- ETag inputs: max JSONL mtime + query params (`/api/usage`), in-route cache `cachedAt` + filter (`/api/sessions`), max(scan timestamp, JSONL mtime) (`/api/stats`).
+
+### Why /api/agents and /api/skills don't get an ETag yet
+
+Both routes depend on TWO file sources: the JSONL corpus (covered by `getJsonlMaxMtime()`) and the agent/skill catalog directories walked by `loadCatalog`. The catalog walk isn't mtime-cached yet — that lands as part of P1.5 (or naturally with P2's SQLite indexer). For now, both routes get plain `Cache-Control: private, max-age=120` matching their existing 2-min in-process TTLs, so browsers dedupe back-to-back navigations without us claiming a freshness signal we can't enforce.
+
+### What didn't change in P1 (intentionally deferred)
+
+- **Streaming session detail** — `/api/sessions/[sessionId]` still loads the full file. Becomes trivial once P2's SQLite holds turn metadata + byte offsets.
+- **Single shared façade `src/lib/data/index.ts`** — would be churn without the SQLite backend behind it. Lands naturally with P2.
+- **`loadCatalog` mtime-cache** — see above. Cheap once we touch the indexer for SQLite.
+
+---
+
 ## How to recapture after each phase
 
 After landing each phase (P0/P1/P2/P3), append a new section to this file titled `## After P<n> — <date>` with the same tables filled in fresh, then add a final `### Delta vs baseline` subsection with percentage changes. Do not edit the baseline tables above — they are frozen as the reference point.

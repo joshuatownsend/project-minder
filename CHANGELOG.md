@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Performance
+- **P1 server consolidation.** The big WARM-path win — `/api/usage` warm dropped from 2.27 s to 14 ms (−99 %), `/api/sessions` warm from 211 ms to 44 ms, and three routes now support 304 short-circuits via `If-None-Match`. Cross-page navigations re-using cached data drop to ≤ 110 ms.
+  - **`FileCache<T>` mtime primitive (`src/lib/usage/cache.ts`)** — generic per-file cache keyed on `mtimeMs + size` with single-flight dedup on cold-path concurrency and LRU eviction. Replaces the prior 2-min TTL that re-parsed the entire 1.1 GB JSONL corpus on every miss.
+  - **Parser refactored to use FileCache** — `parseAllSessions()` now stat-sweeps the JSONL tree and only re-parses files whose mtime/size changed since the last call. First-call cost is unchanged; subsequent calls are stat-bounded.
+  - **Atomic file writes (`src/lib/atomicWrite.ts`)** — promoted the existing tmp+rename pattern to a top-level helper with shared `withFileLock`. Applied to `.minder.json`, `CLAUDE.md`, `.claude/settings.json`, `INSIGHTS.md`, `MANUAL_STEPS.md`, `TODO.md` writers. Prevents corruption when HMR or process exit interrupts a write mid-flush.
+  - **`mutateConfig()` helper** — read-modify-write cycles for `.minder.json` now run inside `withFileLock` so concurrent mutations from API handlers don't clobber each other's reads.
+  - **Scanner cache moved to `globalThis`** — survives HMR module reloads instead of being thrown away on every dev-server save.
+  - **ETag + `Cache-Control: private, max-age=0, stale-while-revalidate=60`** on `/api/sessions`, `/api/usage`, `/api/stats`. ETag inputs are mtime-derived so 304 round-trips are sub-100 ms.
+  - **Plain `Cache-Control: private, max-age=120`** on `/api/agents`, `/api/skills` — matches their existing 2-min TTL semantics. ETag deferred until the agent/skill catalog walk is mtime-cached (P1.5 / P2).
+
 ### Added
 - **Template Mode V5.5 — UI surface for user-scope apply.** The `/config` browser now exposes `↗ copy to project` buttons for all user-scope artifacts:
   - **Hooks**: user-scope hook rows (those with `source === "user"`) now show the apply button (previously hidden by the `projectSlug &&` guard). Clicking opens the conflict-policy popover with `source: { kind: "user" }` so the apply layer routes through `getUserConfig()`.

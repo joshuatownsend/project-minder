@@ -2,34 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { scanTodoMd } from "./scanner/todoMd";
 import { TodoInfo } from "./types";
-
-/**
- * Per-file mutex to serialize read-modify-write cycles.
- * Prevents concurrent appends from clobbering each other.
- */
-const fileLocks = new Map<string, Promise<unknown>>();
-
-function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const normalized = path.resolve(filePath);
-  const prev = fileLocks.get(normalized) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  fileLocks.set(normalized, next);
-  next.finally(() => {
-    if (fileLocks.get(normalized) === next) {
-      fileLocks.delete(normalized);
-    }
-  });
-  return next;
-}
-
-async function atomicWriteFile(
-  filePath: string,
-  content: string
-): Promise<void> {
-  const tmpPath = filePath + ".tmp." + process.pid;
-  await fs.writeFile(tmpPath, content, "utf-8");
-  await fs.rename(tmpPath, filePath);
-}
+import { writeFileAtomic, withFileLock } from "./atomicWrite";
 
 const MAX_TODO_LENGTH = 500;
 
@@ -92,7 +65,7 @@ export async function appendTodosToFile(
     const appended =
       base + sanitized.map((t) => `- [ ] ${t}`).join("\n") + "\n";
 
-    await atomicWriteFile(filePath, appended);
+    await writeFileAtomic(filePath, appended);
 
     const info = await scanTodoMd(projectPath);
     // scanTodoMd returns undefined only if zero items — after an append this
@@ -132,7 +105,7 @@ export async function toggleTodoInFile(
     }
 
     if (changed) {
-      await atomicWriteFile(filePath, lines.join("\n"));
+      await writeFileAtomic(filePath, lines.join("\n"));
     }
     const info = await scanTodoMd(projectPath);
     return info ?? { total: 0, completed: 0, pending: 0, items: [] };

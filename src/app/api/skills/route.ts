@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { buildSkillAliasMap } from "@/lib/indexer/canonicalize";
 import { parseAllSessions } from "@/lib/usage/parser";
@@ -6,6 +6,7 @@ import { groupSkillCalls } from "@/lib/usage/skillParser";
 import { getCachedScan } from "@/lib/cache";
 import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache } from "@/lib/skillUpdateCache";
+import { jsonWithCacheControl } from "@/lib/httpCache";
 import type { QueueItem } from "@/lib/skillUpdateCache";
 import type { SkillStats } from "@/lib/usage/types";
 import type { SkillEntry } from "@/lib/indexer/types";
@@ -65,7 +66,7 @@ export async function GET(request: NextRequest) {
   const cached = getRouteCache(cacheKey);
   if (cached) {
     skillUpdateCache.enqueue(buildUpdateItems(cached));
-    return NextResponse.json(cached);
+    return jsonWithCacheControl(cached);
   }
 
   const [catalog, sessionMap] = await Promise.all([
@@ -145,5 +146,5 @@ export async function GET(request: NextRequest) {
   setRouteCache(cacheKey, result);
   skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return NextResponse.json(result);
+  return jsonWithCacheControl(result);
 }

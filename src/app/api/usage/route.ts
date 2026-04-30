@@ -1,12 +1,24 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { generateUsageReport } from "@/lib/usage/aggregator";
 import { validatePeriod } from "@/lib/usage/constants";
+import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 
 const CACHE_TTL = 2 * 60_000;
 
+interface UsageCacheSlot {
+  report: UsageReport;
+  cachedAt: number;
+  // Snapshot of `getJsonlMaxMtime()` at report-generation time. Used as the
+  // ETag input so the ETag describes the bytes we're about to serve, not the
+  // current filesystem state — otherwise a JSONL change inside the cache TTL
+  // window would rotate the ETag while the served bytes stayed identical.
+  maxMtime: number;
+}
+
 const globalForUsage = globalThis as unknown as {
-  __usageCache?: Map<string, { report: UsageReport; cachedAt: number }>;
+  __usageCache?: Map<string, UsageCacheSlot>;
 };
 
 if (!globalForUsage.__usageCache) {
@@ -21,13 +33,28 @@ export async function GET(request: NextRequest) {
   const cacheKey = `${safePeriod}:${project || "all"}`;
   const cache = globalForUsage.__usageCache!;
   const cached = cache.get(cacheKey);
+  const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL;
 
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL) {
-    return NextResponse.json(cached.report);
+  let slot: UsageCacheSlot;
+  if (fresh) {
+    slot = cached!;
+  } else {
+    const report = await generateUsageReport(safePeriod, project);
+    // Capture max mtime AFTER generateUsageReport — it calls parseAllSessions
+    // which populates the FileCache, so getJsonlMaxMtime() now reflects every
+    // input file we read for this report.
+    slot = { report, cachedAt: Date.now(), maxMtime: getJsonlMaxMtime() };
+    cache.set(cacheKey, slot);
   }
 
-  const report = await generateUsageReport(safePeriod, project);
-  cache.set(cacheKey, { report, cachedAt: Date.now() });
+  const etag = computeETag({
+    salt: "usage-v1",
+    maxMtimeMs: slot.maxMtime,
+    parts: [safePeriod, project ?? ""],
+  });
 
-  return NextResponse.json(report);
+  const notModified = ifNoneMatch(request, etag);
+  if (notModified) return notModified;
+
+  return jsonWithETag(slot.report, etag);
 }
