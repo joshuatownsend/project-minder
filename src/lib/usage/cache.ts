@@ -103,6 +103,22 @@ export class FileCache<T> {
   }
 
   /**
+   * Drop every cached slot whose path is not in `liveSet`. Callers that walk
+   * a known set of files (e.g. `readdir` of a session directory) can pass the
+   * set in to evict slots for files that disappeared since the last sweep.
+   *
+   * Without this, `maxMtimeMs()` keeps reflecting the mtime of a deleted file
+   * forever, which makes ETags stick to a value that no longer corresponds to
+   * any real input — clients would then get 304s after a session deletion
+   * even though the response body did change.
+   */
+  retainOnly(liveSet: Set<string>): void {
+    for (const path of this.slots.keys()) {
+      if (!liveSet.has(path)) this.slots.delete(path);
+    }
+  }
+
+  /**
    * Max mtime across all currently cached entries — exposed as a side-channel
    * so routes can compute an ETag without changing parser return signatures.
    */

@@ -195,6 +195,12 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   }
 
   const result = new Map<string, UsageTurn[]>();
+  // Track every JSONL we observed during this sweep so we can evict slots for
+  // files that were deleted since the last call. Without this, `maxMtimeMs()`
+  // keeps reflecting a deleted file's mtime forever and ETags stick to a
+  // value that no longer matches reality — clients would get 304s after a
+  // session deletion even though the response body changed.
+  const liveSet = new Set<string>();
 
   // Process subdirectories in batches of 5 to avoid overwhelming the FS.
   for (let i = 0; i < subdirs.length; i += 5) {
@@ -212,6 +218,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
 
         for (const file of files) {
           const filePath = path.join(dirPath, file);
+          liveSet.add(filePath);
 
           // FileCache stat's the file, returns the cached parse if mtime+size
           // are unchanged, otherwise calls the factory. Skip oversized files
@@ -241,6 +248,9 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
     );
   }
 
+  // Evict slots for files that disappeared since the last sweep. This keeps
+  // `maxMtimeMs()` honest as a change signal for ETag computation.
+  cache.retainOnly(liveSet);
   return result;
 }
 

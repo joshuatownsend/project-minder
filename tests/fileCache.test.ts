@@ -103,6 +103,23 @@ describe("FileCache", () => {
     expect(cache.maxMtimeMs()).toBe(3000);
   });
 
+  it("retainOnly drops slots not in the live set (deleted files)", async () => {
+    const cache = new FileCache<string>();
+    mockStat.mockResolvedValueOnce(statResult(1000, 1));
+    await cache.getOrCompute("/keep", async () => "k");
+    mockStat.mockResolvedValueOnce(statResult(9999, 1));
+    await cache.getOrCompute("/drop", async () => "d");
+
+    expect(cache.size).toBe(2);
+    expect(cache.maxMtimeMs()).toBe(9999);
+
+    cache.retainOnly(new Set(["/keep"]));
+
+    expect(cache.size).toBe(1);
+    // Deleted file's mtime no longer leaks into the freshness signal.
+    expect(cache.maxMtimeMs()).toBe(1000);
+  });
+
   it("evicts least-recently-seen entries past maxEntries", async () => {
     const cache = new FileCache<string>({ maxEntries: 3 });
     // /a, /b, /c all inserted; touch /a to keep it fresh; insert /d to overflow.

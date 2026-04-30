@@ -5,10 +5,32 @@ import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 
 const CACHE_TTL = 30_000; // 30s — kept short so live status badges on the dashboard are timely
 
+interface SessionsCacheSlot {
+  sessions: SessionSummary[];
+  cachedAt: number;
+  // Content-derived watermark: max(endTime, startTime) across the cached
+  // session set. Captured at refresh time and used as the ETag input so the
+  // ETag only rotates when the underlying session content actually changed,
+  // not on every CACHE_TTL boundary. Matches the semantics already in place
+  // for /api/usage and /api/stats.
+  maxSessionMs: number;
+}
+
 // globalThis singleton — survives Next.js module reloads
 const globalForSessions = globalThis as unknown as {
-  __sessionsCache?: { sessions: SessionSummary[]; cachedAt: number };
+  __sessionsCache?: SessionsCacheSlot;
 };
+
+function deriveMaxSessionMs(sessions: SessionSummary[]): number {
+  let max = 0;
+  for (const s of sessions) {
+    const ts = s.endTime ?? s.startTime;
+    if (!ts) continue;
+    const ms = new Date(ts).getTime();
+    if (Number.isFinite(ms) && ms > max) max = ms;
+  }
+  return max;
+}
 
 export async function GET(request: NextRequest) {
   const project = request.nextUrl.searchParams.get("project");
@@ -19,18 +41,17 @@ export async function GET(request: NextRequest) {
   let cache = globalForSessions.__sessionsCache;
   if (!cache || Date.now() - cache.cachedAt > CACHE_TTL) {
     const sessions = await scanAllSessions();
-    cache = { sessions, cachedAt: Date.now() };
+    cache = {
+      sessions,
+      cachedAt: Date.now(),
+      maxSessionMs: deriveMaxSessionMs(sessions),
+    };
     globalForSessions.__sessionsCache = cache;
   }
 
-  // ETag uses the cache's `cachedAt` as the freshness signal — it rotates
-  // every CACHE_TTL window. Within a window, all repeat calls match the same
-  // ETag and return 304. We don't need to stat individual JSONL files here
-  // because scanAllSessions already does that internally and only produces a
-  // new SessionSummary[] when something changed.
   const etag = computeETag({
     salt: "sessions-v1",
-    maxMtimeMs: cache.cachedAt,
+    maxMtimeMs: cache.maxSessionMs,
     parts: [project ?? "", cache.sessions.length],
   });
 
