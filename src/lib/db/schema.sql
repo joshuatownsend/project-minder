@@ -107,7 +107,10 @@ CREATE TABLE turns (
   text_offset          INTEGER,
   text_preview         TEXT,
   category             TEXT,
-  category_version     INTEGER NOT NULL DEFAULT 0,
+  -- Same `derived_version` semantics as on sessions/agents/skills/commands:
+  -- bump the code's version constant to invalidate just this column's
+  -- derivation. Named identically across tables on purpose.
+  derived_version      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, turn_index),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;
@@ -268,6 +271,9 @@ CREATE INDEX commands_by_source ON commands(source);
 CREATE TABLE mcp_servers (
   id                TEXT PRIMARY KEY,
   name              TEXT NOT NULL,
+  -- 'plugin' is intentionally absent: MCP servers register at user or
+  -- project scope only. Plugin-bundled MCP servers surface as user-scope
+  -- after the plugin is enabled, so they collapse into 'user'.
   source            TEXT NOT NULL CHECK (source IN ('user','project')),
   project_slug      TEXT,
   command           TEXT,
@@ -347,6 +353,18 @@ CREATE VIRTUAL TABLE catalog_fts USING fts5(
 -- search we'd need to also stream JSONL content into FTS — explicitly
 -- deferred to keep DB size bounded. The preview covers prompt-text search,
 -- which is the primary use case.
+--
+-- Why DELETE+INSERT rather than UPDATE on the FTS row? FTS5 with UNINDEXED
+-- columns doesn't support partial UPDATE cleanly — the recommended pattern
+-- is delete-then-reinsert. See https://sqlite.org/fts5.html.
+--
+-- Known cost concern (TODO P2a-2): the DELETE WHERE session_id=? AND
+-- turn_index=? filters on UNINDEXED FTS columns, so each delete forces a
+-- scan over prompts_fts. For one-off updates this is fine; for a cascaded
+-- delete of a session with thousands of turns it's O(turns × fts_rows).
+-- The fix is to give turns an integer FTS rowid alias and delete by it
+-- (FTS5 external-content pattern). Deferred until P2a-2 ingest lets us
+-- measure the actual delete cost on a populated index.
 
 CREATE TRIGGER turns_ai AFTER INSERT ON turns
 BEGIN
@@ -354,7 +372,12 @@ BEGIN
   VALUES (NEW.session_id, NEW.turn_index, NEW.role, NEW.ts, COALESCE(NEW.text_preview, ''));
 END;
 
-CREATE TRIGGER turns_au AFTER UPDATE ON turns
+-- Narrow the trigger to only the columns mirrored into FTS. A re-derive
+-- UPDATE that only touches `category` / `derived_version` / token counts
+-- doesn't fire this trigger at all. `AFTER UPDATE OF <columns>` is
+-- evaluated by SQLite at the statement level, cheaper than a per-row
+-- WHEN clause.
+CREATE TRIGGER turns_au AFTER UPDATE OF text_preview, role, ts ON turns
 BEGIN
   DELETE FROM prompts_fts WHERE session_id = OLD.session_id AND turn_index = OLD.turn_index;
   INSERT INTO prompts_fts (session_id, turn_index, role, ts, text)
@@ -375,7 +398,9 @@ BEGIN
   VALUES ('agent', NEW.id, NEW.name, COALESCE(NEW.description, ''), COALESCE(NEW.body_excerpt, ''));
 END;
 
-CREATE TRIGGER agents_au AFTER UPDATE ON agents
+-- Narrow to FTS-mirrored columns: `derived_version`, `indexed_at_ms`,
+-- `file_mtime_ms`, etc. update routinely without changing search content.
+CREATE TRIGGER agents_au AFTER UPDATE OF name, description, body_excerpt ON agents
 BEGIN
   DELETE FROM catalog_fts WHERE kind = 'agent' AND id = OLD.id;
   INSERT INTO catalog_fts (kind, id, name, description, text)
@@ -393,7 +418,7 @@ BEGIN
   VALUES ('skill', NEW.id, NEW.name, COALESCE(NEW.description, ''), COALESCE(NEW.body_excerpt, ''));
 END;
 
-CREATE TRIGGER skills_au AFTER UPDATE ON skills
+CREATE TRIGGER skills_au AFTER UPDATE OF name, description, body_excerpt ON skills
 BEGIN
   DELETE FROM catalog_fts WHERE kind = 'skill' AND id = OLD.id;
   INSERT INTO catalog_fts (kind, id, name, description, text)
@@ -411,7 +436,7 @@ BEGIN
   VALUES ('command', NEW.id, NEW.name, COALESCE(NEW.description, ''), COALESCE(NEW.body_excerpt, ''));
 END;
 
-CREATE TRIGGER commands_au AFTER UPDATE ON commands
+CREATE TRIGGER commands_au AFTER UPDATE OF name, description, body_excerpt ON commands
 BEGIN
   DELETE FROM catalog_fts WHERE kind = 'command' AND id = OLD.id;
   INSERT INTO catalog_fts (kind, id, name, description, text)

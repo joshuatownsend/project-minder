@@ -46,9 +46,14 @@ export const DB_PATH = path.join(DB_DIR, "index.db");
 
 interface ConnectionState {
   db: DatabaseT.Database | null;
-  available: boolean;
   /** Last init error, if any. Useful for debug surfaces. */
   lastError: Error | null;
+  /**
+   * In-flight open promise. Single-flight guard: if two callers race into
+   * `getDb()` while the DB isn't yet open, both await the same promise
+   * instead of each calling `new Database(...)` and leaking a handle.
+   */
+  inFlight: Promise<DatabaseT.Database | null> | null;
 }
 
 const g = globalThis as unknown as {
@@ -58,12 +63,8 @@ const g = globalThis as unknown as {
 if (!g.__minderDb) {
   g.__minderDb = {
     db: null,
-    // `available` flips to true only after the first successful open.
-    // Until then, it tracks "did the native binary load at all?" — flipping
-    // to false only when require() failed, never on a transient open
-    // failure (corrupt file, permission, etc.) that initDb can recover from.
-    available: false,
     lastError: loadError,
+    inFlight: null,
   };
 }
 
@@ -87,23 +88,45 @@ async function ensureDbDir(): Promise<void> {
 export async function getDb(): Promise<DatabaseT.Database | null> {
   if (!Database) return null;
   if (state.db) return state.db;
+  if (state.inFlight) return state.inFlight;
 
-  try {
-    await ensureDbDir();
-    const db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
-    db.pragma("synchronous = NORMAL");
-    db.pragma("foreign_keys = ON");
-    db.pragma("mmap_size = 268435456"); // 256 MB
-    db.pragma("temp_store = MEMORY");
-    db.pragma("busy_timeout = 5000");
-    state.db = db;
-    state.available = true;
-    return db;
-  } catch (err) {
-    state.lastError = err as Error;
-    return null;
-  }
+  state.inFlight = (async () => {
+    try {
+      await ensureDbDir();
+      // Re-check after the await: another caller may have raced through
+      // ensureDbDir on an earlier turn of the event loop. Without this
+      // we'd open two handles when the singleton was meant to gate.
+      if (state.db) return state.db;
+      const db = new Database!(DB_PATH);
+      db.pragma("journal_mode = WAL");
+      db.pragma("synchronous = NORMAL");
+      db.pragma("foreign_keys = ON");
+      db.pragma("mmap_size = 268435456"); // 256 MB
+      db.pragma("temp_store = MEMORY");
+      db.pragma("busy_timeout = 5000");
+      state.db = db;
+      state.lastError = null;
+      return db;
+    } catch (err) {
+      state.lastError = err as Error;
+      return null;
+    } finally {
+      state.inFlight = null;
+    }
+  })();
+
+  return state.inFlight;
+}
+
+/**
+ * `true` when the better-sqlite3 native binary loaded successfully at
+ * module init. Distinct from `isDbAvailable()`: this is "can we ever
+ * open a DB on this platform?" while `isDbAvailable()` is "is one open
+ * right now?". Used by `initDb()` to distinguish driver-missing (no
+ * recovery possible, return cleanly) from open-failed (try quarantine).
+ */
+export function isDriverLoaded(): boolean {
+  return Database !== null;
 }
 
 /**
@@ -116,11 +139,12 @@ export function getDbSync(): DatabaseT.Database | null {
 }
 
 /**
- * `true` when better-sqlite3 loaded and (after `getDb()` ran) the DB
- * opened successfully. Read this before assuming the index is queryable.
+ * `true` when better-sqlite3 loaded AND a connection is currently open.
+ * Derived from state, not a sticky flag — flips back to false after
+ * `closeDb()`. Read this before assuming the index is queryable.
  */
 export function isDbAvailable(): boolean {
-  return state.available;
+  return Database !== null && state.db !== null;
 }
 
 export function getDbError(): Error | null {
@@ -136,4 +160,7 @@ export function closeDb(): void {
     try { state.db.close(); } catch { /* ignore */ }
     state.db = null;
   }
+  // Don't null inFlight: if a concurrent open is mid-flight it will clear
+  // itself in the finally block. Pre-emptively nulling it would let a
+  // second concurrent caller spawn a duplicate open.
 }

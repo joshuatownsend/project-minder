@@ -3,7 +3,8 @@ import path from "path";
 import { promises as fs } from "fs";
 import { existsSync, readFileSync } from "fs";
 import type DatabaseT from "better-sqlite3";
-import { DB_DIR, DB_PATH, getDb, closeDb } from "./connection";
+import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
+import { renameWithRetry } from "../atomicWrite";
 
 // Migration runner for the local SQLite index.
 //
@@ -63,6 +64,21 @@ function resolveSchemaPath(): string {
   throw new Error("schema.sql not found; expected at src/lib/db/schema.sql");
 }
 
+/**
+ * Sentinel error used to signal "the meta table tells us this DB has
+ * already been initialized but its schema_version stamp is missing or
+ * unreadable." Distinguishable by initDb() so it can route to the
+ * quarantine-and-rebuild path rather than blindly re-running v1 (which
+ * would fail with "table already exists").
+ */
+class SchemaVersionMissingError extends Error {
+  readonly schemaVersionMissing = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "SchemaVersionMissingError";
+  }
+}
+
 function getCurrentVersion(db: DatabaseT.Database): number {
   // The first migration creates the meta table, so on a fresh DB the
   // table won't exist yet — that's the signal to start at 0.
@@ -73,7 +89,21 @@ function getCurrentVersion(db: DatabaseT.Database): number {
   const versionRow = db
     .prepare("SELECT value FROM meta WHERE key='schema_version'")
     .get() as { value?: string } | undefined;
-  return versionRow ? parseInt(versionRow.value!, 10) || 0 : 0;
+  if (!versionRow) {
+    // meta exists but the stamp is gone. Re-running v1 would fail with
+    // "table already exists" because v1's schema.sql is plain CREATE
+    // TABLE statements. Treat as corruption — caller quarantines.
+    throw new SchemaVersionMissingError(
+      "meta table present but schema_version row missing"
+    );
+  }
+  const parsed = parseInt(versionRow.value!, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new SchemaVersionMissingError(
+      `meta.schema_version is unreadable: ${JSON.stringify(versionRow.value)}`
+    );
+  }
+  return parsed;
 }
 
 function setCurrentVersion(db: DatabaseT.Database, version: number): void {
@@ -106,76 +136,78 @@ function applyPendingMigrations(db: DatabaseT.Database): { applied: number[]; cu
 }
 
 /**
+ * Move WAL/SHM siblings of `DB_PATH` to `dest` siblings (rename) or
+ * delete them outright. Leftover WAL on a fresh DB at the same path
+ * causes "database disk image is malformed" on next open, so a sibling
+ * that won't move and won't delete is genuinely dangerous.
+ *
+ * The rename path uses `renameWithRetry` because WAL/SHM hold the same
+ * Windows file-lock-release-lag as the main DB. If retries exhaust, we
+ * fall back to delete — losing forensic snapshots of the WAL beats
+ * leaving a poison pill in place.
+ */
+async function moveOrDeleteSiblings(dest: string | null): Promise<void> {
+  for (const ext of [".wal", ".shm"]) {
+    const src = DB_PATH + ext;
+    if (dest) {
+      try {
+        await renameWithRetry(src, dest + ext);
+        continue;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") continue; // didn't exist, fine
+        // Rename gave up — fall through to delete so the rebuilt DB
+        // doesn't reopen against a stale WAL.
+      }
+    }
+    try {
+      await fs.rm(src, { force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {
+      /* may not exist or genuinely stuck — best effort */
+    }
+  }
+}
+
+/**
  * Rename a corrupt DB file aside. The next `getDb()` will open a fresh
  * empty DB at the same path; the indexer rebuilds the contents.
  *
- * Windows-specific retry loop: closing a SQLite DB handle releases the
- * underlying file lock asynchronously on Windows. A `rename` call that
- * lands within ~tens of milliseconds of `close()` can fail with EBUSY.
- * We retry a few times with a short backoff before giving up.
+ * On Windows, file handles release asynchronously after close — see
+ * `renameWithRetry` for the retry rationale. If rename still fails after
+ * the retry budget we fall back to deleting the file: forensic
+ * preservation is nice-to-have, clearing the slot for rebuild is the
+ * must-have.
  */
 async function quarantineCorruptDb(reason: string): Promise<string | null> {
-  try {
-    await fs.access(DB_PATH);
-  } catch {
-    return null; // nothing to quarantine
-  }
+  // No `fs.access` pre-check — rename's ENOENT path tells us "nothing to
+  // quarantine" without a TOCTOU window.
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dest = path.join(DB_DIR, `index.db.corrupt-${stamp}`);
 
-  let renamed = false;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      await fs.rename(DB_PATH, dest);
-      renamed = true;
-      break;
-    } catch (err) {
-      lastErr = err;
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EBUSY" && code !== "EPERM") throw err;
-      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
-    }
-  }
-
-  if (!renamed) {
-    // Last resort on Windows: rename keeps failing because something still
-    // holds a file lock. Forensic preservation is nice-to-have; clearing
-    // the slot so the rebuild can proceed is the must-have. fs.rm with
-    // maxRetries was added for exactly this OS-level lock-release lag.
+  try {
+    await renameWithRetry(DB_PATH, dest);
+    await moveOrDeleteSiblings(dest);
+    // eslint-disable-next-line no-console
+    console.warn(`[db] Quarantined corrupt index to ${dest} (${reason}). Will rebuild.`);
+    return dest;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null; // nothing to quarantine
+    // Rename gave up after retries (still locked, or some other failure).
+    // Fall back to outright delete so the rebuild can proceed.
     try {
       await fs.rm(DB_PATH, { force: true, maxRetries: 10, retryDelay: 100 });
+      await moveOrDeleteSiblings(null);
       // eslint-disable-next-line no-console
       console.warn(
-        `[db] Could not preserve corrupt index (rename kept failing): ${(lastErr as Error)?.message ?? "unknown"}. ` +
+        `[db] Could not preserve corrupt index (rename kept failing): ${(err as Error).message}. ` +
           `Deleted instead so rebuild can proceed.`
       );
-      // Clean WAL/SHM siblings if present.
-      for (const ext of [".wal", ".shm"]) {
-        try {
-          await fs.rm(DB_PATH + ext, { force: true, maxRetries: 5, retryDelay: 50 });
-        } catch { /* may not exist */ }
-      }
       return null;
-    } catch (rmErr) {
-      // If even rm failed, something is genuinely wrong — bubble the
-      // original rename error since it was the first symptom.
-      throw lastErr ?? rmErr;
-    }
-  }
-
-  // Also move the WAL/SHM siblings if they exist — leftover WAL on a fresh
-  // DB at the same path causes "database disk image is malformed".
-  for (const ext of [".wal", ".shm"]) {
-    try {
-      await fs.rename(DB_PATH + ext, dest + ext);
     } catch {
-      /* may not exist */
+      throw err; // bubble the original symptom
     }
   }
-  // eslint-disable-next-line no-console
-  console.warn(`[db] Quarantined corrupt index to ${dest} (${reason}). Will rebuild.`);
-  return dest;
 }
 
 export interface InitResult {
@@ -191,11 +223,19 @@ export interface InitResult {
  * call from indexer startup and from any read-side path that wants the
  * DB ready before its first query.
  *
- * Three corruption recovery paths are wired in:
- *   1. `getDb()` returns null (open threw) — try once to quarantine the
- *      file at DB_PATH and reopen.
- *   2. `PRAGMA integrity_check` returns non-'ok' — quarantine and reopen.
- *   3. Migration throws — bubbled up as `result.error`.
+ * Recovery paths:
+ *   0. Driver missing (`isDriverLoaded() === false`) — return cleanly
+ *      with `available: false` and no quarantine. The caller (read-side
+ *      façade) falls back to file-parse mode. We never quarantine here
+ *      because the file isn't necessarily corrupt — the platform just
+ *      lacks the binary.
+ *   1. `getDb()` returns null with driver loaded — assume corruption,
+ *      quarantine and reopen once.
+ *   2. `PRAGMA quick_check` returns non-'ok' — quarantine and reopen.
+ *   3. `getCurrentVersion` throws SchemaVersionMissingError — meta table
+ *      exists but stamp is gone; re-running v1 would fail with "table
+ *      already exists." Quarantine and reopen.
+ *   4. Migration throws (non-corruption) — bubbled up as `result.error`.
  *
  * The indexer is responsible for repopulating the rebuilt DB.
  */
@@ -208,30 +248,50 @@ export async function initDb(): Promise<InitResult> {
     error: null,
   };
 
+  // Path 0: driver missing. Don't quarantine — the file is fine, the
+  // platform just lacks the native binary. Surface the underlying load
+  // error so debug surfaces can distinguish "no binary" from "broken DB".
+  if (!isDriverLoaded()) {
+    const cause = getDbError();
+    result.error = new Error("better-sqlite3 driver unavailable on this platform", {
+      cause: cause ?? undefined,
+    });
+    return result;
+  }
+
   let db = await getDb();
   if (!db) {
-    // Path 1: open threw. Most common cause is a corrupt file from a
-    // previous unclean shutdown. Try to quarantine and reopen once.
+    // Path 1: driver loaded but open threw. Most common cause is a
+    // corrupt file from a previous unclean shutdown. Try to quarantine
+    // and reopen once.
     result.quarantined = await quarantineCorruptDb("open failed; possible corruption");
     db = await getDb();
     if (!db) {
-      result.error = new Error("better-sqlite3 unavailable or DB failed to open after quarantine");
+      result.error = new Error("DB failed to open after quarantine", {
+        cause: getDbError() ?? undefined,
+      });
       return result;
     }
   }
 
-  // Path 2: integrity_check on every open. Fast on a healthy DB.
-  const integrity = db.prepare("PRAGMA integrity_check").get() as {
-    integrity_check?: string;
+  // Path 2: quick_check on every open. quick_check is materially cheaper
+  // than integrity_check (skips index/UNIQUE cross-checks) and catches the
+  // same corruption classes that matter for a derived index — page-level
+  // damage and freelist breakage. We can rebuild from the JSONLs anyway,
+  // so we don't need integrity_check's index-level assurance on startup.
+  const integrity = db.prepare("PRAGMA quick_check").get() as {
+    quick_check?: string;
   };
-  if (integrity.integrity_check !== "ok") {
+  if (integrity.quick_check !== "ok") {
     closeDb();
     result.quarantined = await quarantineCorruptDb(
-      `integrity_check returned ${integrity.integrity_check}`
+      `quick_check returned ${integrity.quick_check}`
     );
     db = await getDb();
     if (!db) {
-      result.error = new Error("Failed to reopen DB after quarantine");
+      result.error = new Error("Failed to reopen DB after quarantine", {
+        cause: getDbError() ?? undefined,
+      });
       return result;
     }
   }
@@ -243,6 +303,29 @@ export async function initDb(): Promise<InitResult> {
     result.schemaVersion = current;
     return result;
   } catch (err) {
+    // Path 3: SchemaVersionMissingError — meta table exists but stamp is
+    // missing. Quarantine and retry once. Any other error bubbles.
+    if (err instanceof SchemaVersionMissingError) {
+      closeDb();
+      result.quarantined = await quarantineCorruptDb(`schema_version unreadable: ${err.message}`);
+      const reopened = await getDb();
+      if (!reopened) {
+        result.error = new Error("Failed to reopen DB after schema_version quarantine", {
+          cause: getDbError() ?? undefined,
+        });
+        return result;
+      }
+      try {
+        const { applied, current } = applyPendingMigrations(reopened);
+        result.available = true;
+        result.appliedMigrations = applied;
+        result.schemaVersion = current;
+        return result;
+      } catch (retryErr) {
+        result.error = retryErr as Error;
+        return result;
+      }
+    }
     result.error = err as Error;
     return result;
   }

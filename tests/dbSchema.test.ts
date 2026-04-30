@@ -1,27 +1,37 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "path";
 import { readFileSync } from "fs";
-import Database from "better-sqlite3";
+import type DatabaseT from "better-sqlite3";
 
 // Schema smoke test: round-trip every table to validate constraints, FK
 // cascades, and FTS5 trigger sync. Runs against an in-memory DB so it
 // doesn't touch ~/.minder/index.db.
 //
-// (Note: db.exec below is the better-sqlite3 multi-statement API, not
-// Node's child_process.exec. No shell, no injection surface.)
+// `better-sqlite3` is an optional dependency: load it dynamically and
+// skip the suite when the native binary isn't installed for this
+// platform. (Note: db.exec below is the better-sqlite3 multi-statement
+// API, not Node's child_process.exec. No shell, no injection surface.)
+
+let Database: typeof DatabaseT | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Database = require("better-sqlite3");
+} catch {
+  /* driver not available — describe.skipIf handles below */
+}
 
 const SCHEMA_PATH = path.join(__dirname, "..", "src", "lib", "db", "schema.sql");
 
 function open() {
-  const db = new Database(":memory:");
+  const db = new Database!(":memory:");
   db.pragma("foreign_keys = ON");
   const sql = readFileSync(SCHEMA_PATH, "utf-8");
   db.exec(sql);
   return db;
 }
 
-describe("schema.sql", () => {
-  let db: Database.Database;
+describe.skipIf(!Database)("schema.sql", () => {
+  let db: DatabaseT.Database;
   beforeAll(() => {
     db = open();
   });

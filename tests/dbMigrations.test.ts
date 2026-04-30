@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
-import Database from "better-sqlite3";
+import { isWindows } from "@/lib/platform";
 
 // Migrations integration test. Uses a temp HOME so we don't touch the real
 // ~/.minder/index.db. Walks through:
@@ -14,11 +14,23 @@ import Database from "better-sqlite3";
 // state on globalThis (HMR-safe in production, but breaks test isolation
 // unless we reset).
 //
-// (Note: SQLite multi-statement runs below use the better-sqlite3 driver
-// API, not Node's child_process.)
+// Native dependency check: `better-sqlite3` is an `optionalDependencies`
+// entry, so on platforms without a prebuilt binary the driver fails to
+// load and the rest of the runtime falls back gracefully. The test suite
+// matches that contract: skip rather than crash.
+
+let driverAvailable: boolean;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("better-sqlite3");
+  driverAvailable = true;
+} catch {
+  driverAvailable = false;
+}
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 async function freshTempHome() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-db-test-"));
@@ -27,6 +39,10 @@ async function freshTempHome() {
 
 async function reloadModulesPointingAt(home: string) {
   vi.resetModules();
+  // The connection module caches its state on globalThis to survive HMR.
+  // Tests need a clean slate per reload, otherwise a stale db handle or
+  // lastError from a previous test leaks across.
+  delete (globalThis as { __minderDb?: unknown }).__minderDb;
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
@@ -35,6 +51,7 @@ async function reloadModulesPointingAt(home: string) {
 
 beforeEach(async () => {
   originalHome = process.env.HOME;
+  originalUserProfile = process.env.USERPROFILE;
   tmpHome = await freshTempHome();
   process.env.HOME = tmpHome;
   process.env.USERPROFILE = tmpHome;
@@ -42,7 +59,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  if (originalHome) process.env.HOME = originalHome;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
   try {
     await fs.rm(tmpHome, { recursive: true, force: true });
   } catch {
@@ -50,7 +70,7 @@ afterEach(async () => {
   }
 });
 
-describe("initDb", () => {
+describe.skipIf(!driverAvailable)("initDb", () => {
   it("applies the initial migration on a fresh DB", async () => {
     const { conn, mig } = await reloadModulesPointingAt(tmpHome);
     const result = await mig.initDb();
@@ -89,7 +109,7 @@ describe("initDb", () => {
   // production scenario this guards (corrupt file from a previously crashed
   // process) doesn't have this contention because the prior process has
   // long since released the lock by the time we see the file.
-  const testFn = process.platform === "win32" ? it.skip : it;
+  const testFn = isWindows ? it.skip : it;
   testFn("quarantines a corrupt DB and rebuilds", { timeout: 15000 }, async () => {
     const minderDir = path.join(tmpHome, ".minder");
     await fs.mkdir(minderDir, { recursive: true });
@@ -118,6 +138,70 @@ describe("initDb", () => {
       .all()
       .map((r: any) => r.name);
     expect(tables).toContain("sessions");
+    conn.closeDb();
+  });
+
+  it("recovers when meta exists but schema_version is missing", async () => {
+    // First run: produces a populated DB.
+    const first = await reloadModulesPointingAt(tmpHome);
+    await first.mig.initDb();
+    const db1 = await first.conn.getDb();
+    expect(db1).not.toBeNull();
+    // Wipe the version stamp while leaving the rest of meta intact.
+    db1!.prepare("DELETE FROM meta WHERE key='schema_version'").run();
+    first.conn.closeDb();
+
+    // Second run: getCurrentVersion now sees meta-without-stamp and
+    // throws SchemaVersionMissingError; initDb routes to the quarantine
+    // path and rebuilds.
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    expect(result.available).toBe(true);
+    expect(result.quarantined).not.toBeNull();
+    expect(result.schemaVersion).toBe(1);
+    second.conn.closeDb();
+  });
+
+  it("returns cleanly without quarantine when driver is unavailable", async () => {
+    // Simulate driver-missing by stubbing Database to null on the freshly
+    // imported module. We do this via a synthetic state where the module
+    // graph thinks the optional dep failed to load. The contract: initDb
+    // must NOT call quarantineCorruptDb in this case.
+    const { conn, mig } = await reloadModulesPointingAt(tmpHome);
+    // Sanity check: in this test environment the driver IS loaded
+    // (otherwise the suite is skipped). We monkey-patch the module's
+    // exported isDriverLoaded predicate via the singleton state.
+    const stateRef = (globalThis as { __minderDb?: { db: unknown } }).__minderDb;
+    expect(stateRef).toBeDefined();
+    const writeSpy = vi.spyOn(conn, "isDriverLoaded").mockReturnValue(false);
+    const errorSpy = vi.spyOn(conn, "getDbError").mockReturnValue(new Error("native binary missing"));
+
+    const result = await mig.initDb();
+    expect(result.available).toBe(false);
+    expect(result.quarantined).toBeNull();
+    expect(result.appliedMigrations).toEqual([]);
+    expect(result.error).not.toBeNull();
+    expect(result.error?.message).toMatch(/driver unavailable/);
+
+    writeSpy.mockRestore();
+    errorSpy.mockRestore();
+    conn.closeDb();
+  });
+});
+
+describe.skipIf(!driverAvailable)("getDb single-flight", () => {
+  it("opens exactly one handle under concurrent callers", async () => {
+    const { conn } = await reloadModulesPointingAt(tmpHome);
+    // Fire 8 concurrent getDb()s on a fresh module. With a working
+    // single-flight gate, all return the same instance; without it,
+    // each opens its own (and most leak).
+    const handles = await Promise.all(
+      Array.from({ length: 8 }, () => conn.getDb())
+    );
+    const unique = new Set(handles);
+    expect(unique.size).toBe(1);
+    expect(handles[0]).not.toBeNull();
     conn.closeDb();
   });
 });
