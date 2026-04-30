@@ -6,13 +6,27 @@ import {
   type ConversationEntry,
 } from "@/lib/scanner/claudeConversations";
 import type { UsageTurn } from "./types";
+import { FileCache } from "./cache";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
+// Per-file mtime-keyed cache. Replaces the old 2-min TTL: with mtime caching,
+// we only re-parse files that actually changed since last seen. Memory ceiling
+// is bounded by FileCache's LRU sweep.
+//
+// Stored on globalThis so the cache survives Next.js HMR module reloads. Same
+// rationale as the existing globalThis caches in /api/sessions, /api/stats etc.
 const globalForParser = globalThis as unknown as {
-  __usageParserCache?: { data: Map<string, UsageTurn[]>; cachedAt: number };
+  __usageFileCache?: FileCache<UsageTurn[]>;
+  __usageAllSessionsInFlight?: Promise<Map<string, UsageTurn[]>>;
 };
+
+function getFileCache(): FileCache<UsageTurn[]> {
+  if (!globalForParser.__usageFileCache) {
+    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 5000 });
+  }
+  return globalForParser.__usageFileCache;
+}
 
 // ── Content extraction helpers ────────────────────────────────────────────────
 
@@ -166,33 +180,23 @@ export async function parseSessionTurns(
   return turns;
 }
 
-// ── All-sessions parser with caching ─────────────────────────────────────────
+// ── All-sessions parser with mtime caching ───────────────────────────────────
 
-export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
-  // Check cache
-  const cached = globalForParser.__usageParserCache;
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-    return cached.data;
-  }
-
+async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  const cache = getFileCache();
 
   let subdirs: string[];
   try {
     const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    subdirs = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+    subdirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
-    // ~/.claude/projects doesn't exist yet
-    const empty = new Map<string, UsageTurn[]>();
-    globalForParser.__usageParserCache = { data: empty, cachedAt: Date.now() };
-    return empty;
+    return new Map();
   }
 
   const result = new Map<string, UsageTurn[]>();
 
-  // Process subdirectories in batches of 5
+  // Process subdirectories in batches of 5 to avoid overwhelming the FS.
   for (let i = 0; i < subdirs.length; i += 5) {
     const batch = subdirs.slice(i, i + 5);
     await Promise.all(
@@ -209,17 +213,27 @@ export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
         for (const file of files) {
           const filePath = path.join(dirPath, file);
 
-          // Check file size
-          try {
-            const stat = await fs.stat(filePath);
-            if (stat.size > MAX_SESSION_FILE_SIZE) continue;
-          } catch {
-            continue;
-          }
+          // FileCache stat's the file, returns the cached parse if mtime+size
+          // are unchanged, otherwise calls the factory. Skip oversized files
+          // before parsing — they're typically session-in-progress logs that
+          // we'll re-evaluate on the next sweep when they may have been rolled.
+          //
+          // The factory has its own try/catch because a file can disappear in
+          // the gap between the FileCache's outer stat and our second stat
+          // (log rotation, session pruning). Pre-P1 behavior was "one bad
+          // file doesn't kill the sweep" — keep it.
+          const turns = await cache.getOrCompute(filePath, async (fp) => {
+            try {
+              const stat = await fs.stat(fp);
+              if (stat.size > MAX_SESSION_FILE_SIZE) return [];
+              return await parseSessionTurns(fp, dirName);
+            } catch {
+              return [];
+            }
+          });
 
-          const sessionId = path.basename(file, ".jsonl");
-          const turns = await parseSessionTurns(filePath, dirName);
-          if (turns.length > 0) {
+          if (turns && turns.length > 0) {
+            const sessionId = path.basename(file, ".jsonl");
             result.set(sessionId, turns);
           }
         }
@@ -227,6 +241,32 @@ export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
     );
   }
 
-  globalForParser.__usageParserCache = { data: result, cachedAt: Date.now() };
   return result;
+}
+
+export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
+  // Single-flight: if pulse + dashboard mount fire in parallel on a cold
+  // server, only one of them does the 1.1 GB sweep — the rest await the
+  // same promise. After the first call settles, subsequent calls hit the
+  // FileCache directly and stat 3k files (cheap), no full re-parse.
+  if (globalForParser.__usageAllSessionsInFlight) {
+    return globalForParser.__usageAllSessionsInFlight;
+  }
+  const promise = buildAllSessions().finally(() => {
+    globalForParser.__usageAllSessionsInFlight = undefined;
+  });
+  globalForParser.__usageAllSessionsInFlight = promise;
+  return promise;
+}
+
+/**
+ * Max mtime across all currently cached JSONL files. Used as the input to
+ * route ETag computation — when no file has changed since the last response,
+ * the ETag is identical and the route can return 304.
+ *
+ * Note: this only reflects files that have been parsed at least once. Until
+ * the first `parseAllSessions()` call completes, it returns 0.
+ */
+export function getJsonlMaxMtime(): number {
+  return getFileCache().maxMtimeMs();
 }

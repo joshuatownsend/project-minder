@@ -4,6 +4,7 @@ import os from "os";
 import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
+import { writeFileAtomic } from "../atomicWrite";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ export async function appendInsights(
   const finalContent =
     `# Insights\n\n` + formattedEntries.join("\n") + (existingBody ? `\n${existingBody}` : "");
 
-  await fs.writeFile(insightsMdPath, finalContent, "utf-8");
+  await writeFileAtomic(insightsMdPath, finalContent);
   return { count: newEntries.length, content: finalContent };
 }
 
