@@ -7,6 +7,10 @@ import {
 } from "@/lib/scanner/claudeConversations";
 import type { UsageTurn } from "./types";
 import { FileCache } from "./cache";
+import {
+  extractText as extractTextRaw,
+  extractToolResults as extractToolResultsRaw,
+} from "./contentBlocks";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -28,33 +32,16 @@ function getFileCache(): FileCache<UsageTurn[]> {
   return globalForParser.__usageFileCache;
 }
 
-// ── Content extraction helpers ────────────────────────────────────────────────
+// Content extraction goes through `contentBlocks.ts` so the SQLite ingest
+// path produces identical text projections. The slice limits below are
+// the legacy file-parse caps (kept for the existing UsageTurn shape).
 
 function extractText(content: any[]): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b: any) => b.type === "text" && b.text)
-    .map((b: any) => b.text)
-    .join("\n")
-    .slice(0, 500);
+  return extractTextRaw(content).slice(0, 500);
 }
 
 function extractToolResults(content: any[]): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b: any) => b.type === "tool_result")
-    .map((b: any) => {
-      if (typeof b.content === "string") return b.content;
-      if (Array.isArray(b.content)) {
-        return b.content
-          .filter((c: any) => c.type === "text" && c.text)
-          .map((c: any) => c.text)
-          .join("\n");
-      }
-      return "";
-    })
-    .join("\n")
-    .slice(0, 2000);
+  return extractToolResultsRaw(content).slice(0, 2000);
 }
 
 // ── Dir name canonicalization ─────────────────────────────────────────────────

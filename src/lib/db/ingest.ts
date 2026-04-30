@@ -7,7 +7,21 @@ import { canonicalizeDirName } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
-import { loadPricing, getModelPricing } from "@/lib/usage/costCalculator";
+import { loadPricing, getModelPricing, applyPricing } from "@/lib/usage/costCalculator";
+import { parseMcpTool } from "@/lib/usage/mcpParser";
+import {
+  extractText,
+  extractToolResults,
+  isHumanText,
+  toolUseBlocks,
+} from "@/lib/usage/contentBlocks";
+import {
+  FILE_OP_BY_TOOL,
+  AGENT_DISPATCH_TOOL,
+  SKILL_DISPATCH_TOOL,
+  isFileWriteOp,
+  type FileOp,
+} from "@/lib/usage/toolNames";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
 
@@ -59,7 +73,7 @@ interface ParsedToolUse {
   skillName: string | null;
   argumentsJson: string | null;
   filePath: string | null;
-  fileOp: "read" | "write" | "edit" | "delete" | null;
+  fileOp: FileOp | null;
   isError: 0 | 1;
 }
 
@@ -114,44 +128,31 @@ interface ParsedSession {
 // ── Tool-call classification helpers ───────────────────────────────────────
 
 /**
- * Detect MCP tools by Claude Code's `mcp__<server>__<tool>` naming convention.
- * Returns server/tool names or null/null for non-MCP tools.
- */
-function parseMcpToolName(toolName: string): { server: string | null; tool: string | null } {
-  if (!toolName.startsWith("mcp__")) return { server: null, tool: null };
-  // Format: mcp__<server>__<tool>. Server and tool may themselves contain
-  // underscores, so split on the *first* `__` after the prefix and treat
-  // the rest as the tool name.
-  const rest = toolName.slice(5);
-  const sep = rest.indexOf("__");
-  if (sep === -1) return { server: rest, tool: null };
-  return { server: rest.slice(0, sep), tool: rest.slice(sep + 2) };
-}
-
-/**
- * Map a tool call to a (file_path, file_op) pair if it's a write/edit-shaped
- * operation. Returns null/null for non-file tools or when the path is missing.
+ * Map a tool call to a (file_path, file_op) pair when both can be derived.
+ * `file_path` is the canonical Claude Code argument key for path-shaped
+ * tools — Read, Write, Edit, MultiEdit. Returns null/null for non-file
+ * tools or when the path is missing.
  */
 function extractFileOp(
   toolName: string,
   args: Record<string, unknown> | undefined
-): { filePath: string | null; fileOp: ParsedToolUse["fileOp"] } {
+): { filePath: string | null; fileOp: FileOp | null } {
   if (!args) return { filePath: null, fileOp: null };
   const fp = typeof args.file_path === "string" ? args.file_path : null;
   if (!fp) return { filePath: null, fileOp: null };
-  if (toolName === "Write") return { filePath: fp, fileOp: "write" };
-  if (toolName === "Edit" || toolName === "MultiEdit") return { filePath: fp, fileOp: "edit" };
-  if (toolName === "Read") return { filePath: fp, fileOp: "read" };
-  return { filePath: fp, fileOp: null };
+  return { filePath: fp, fileOp: FILE_OP_BY_TOOL[toolName] ?? null };
 }
 
-/**
- * If this is a Task tool call, the subagent name is on `arguments.subagent_type`.
- * Other agent dispatchers may surface here too — keep central so we can extend.
- */
+/** `Agent` tool args carry `subagent_type` per Claude Code's JSONL convention. */
 function extractAgentName(toolName: string, args: Record<string, unknown> | undefined): string | null {
-  if (toolName !== "Task" || !args) return null;
+  if (toolName !== AGENT_DISPATCH_TOOL || !args) return null;
   return typeof args.subagent_type === "string" ? args.subagent_type : null;
+}
+
+/** `Skill` tool args carry `skill` per Claude Code's JSONL convention. */
+function extractSkillName(toolName: string, args: Record<string, unknown> | undefined): string | null {
+  if (toolName !== SKILL_DISPATCH_TOOL || !args) return null;
+  return typeof args.skill === "string" ? args.skill : null;
 }
 
 // ── JSONL → ParsedSession ──────────────────────────────────────────────────
@@ -159,31 +160,6 @@ function extractAgentName(toolName: string, args: Record<string, unknown> | unde
 function truncateText(s: string | undefined | null, max: number): string | null {
   if (!s) return null;
   return s.length > max ? s.slice(0, max) : s;
-}
-
-function extractTurnText(content: any[]): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b: any) => b.type === "text" && typeof b.text === "string")
-    .map((b: any) => b.text)
-    .join("\n");
-}
-
-function extractToolResultText(content: any[]): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b: any) => b.type === "tool_result")
-    .map((b: any) => {
-      if (typeof b.content === "string") return b.content;
-      if (Array.isArray(b.content)) {
-        return b.content
-          .filter((c: any) => c.type === "text" && typeof c.text === "string")
-          .map((c: any) => c.text)
-          .join("\n");
-      }
-      return "";
-    })
-    .join("\n");
 }
 
 async function readJsonlSession(
@@ -260,17 +236,27 @@ async function readJsonlSession(
       assistantTurnCount++;
 
       const content = entry.message?.content ?? [];
-      const text = extractTurnText(content);
+      // Single pass: extract text and tool_use blocks together rather
+      // than filtering the array twice.
+      let text = "";
+      const toolBlocks: Array<{ id?: string; name?: string; input?: unknown }> = [];
+      if (Array.isArray(content)) {
+        for (const b of content as any[]) {
+          if (b?.type === "text" && typeof b.text === "string") {
+            if (text) text += "\n";
+            text += b.text;
+          } else if (b?.type === "tool_use") {
+            toolBlocks.push(b);
+          }
+        }
+      }
       const textPreview = truncateText(text, TEXT_PREVIEW_LIMIT);
 
-      const toolBlocks = Array.isArray(content)
-        ? content.filter((b: any) => b.type === "tool_use")
-        : [];
-
-      const toolUses: ParsedToolUse[] = toolBlocks.map((b: any, idx: number) => {
+      const toolUses: ParsedToolUse[] = toolBlocks.map((b, idx): ParsedToolUse => {
         const args = (b.input ?? {}) as Record<string, unknown>;
-        const { server, tool } = parseMcpToolName(b.name ?? "");
-        const { filePath: fp, fileOp } = extractFileOp(b.name ?? "", args);
+        const toolName = typeof b.name === "string" ? b.name : "unknown";
+        const mcp = parseMcpTool(toolName);
+        const { filePath: fp, fileOp } = extractFileOp(toolName, args);
         let argsJson: string | null = null;
         try {
           argsJson = truncateText(JSON.stringify(args), ARGS_JSON_LIMIT);
@@ -280,11 +266,11 @@ async function readJsonlSession(
         return {
           sequenceInTurn: idx,
           toolUseId: typeof b.id === "string" ? b.id : null,
-          toolName: typeof b.name === "string" ? b.name : "unknown",
-          mcpServer: server,
-          mcpTool: tool,
-          agentName: extractAgentName(b.name ?? "", args),
-          skillName: null,
+          toolName,
+          mcpServer: mcp?.server ?? null,
+          mcpTool: mcp?.tool ?? null,
+          agentName: extractAgentName(toolName, args),
+          skillName: extractSkillName(toolName, args),
           argumentsJson: argsJson,
           filePath: fp,
           fileOp,
@@ -331,15 +317,14 @@ async function readJsonlSession(
       const messageContent = entry.message?.content ?? [];
       const topLevelContent = (entry.content ?? []) as any[];
       const textSource = messageContent.length > 0 ? messageContent : topLevelContent;
-      const userText = extractTurnText(textSource);
-      const toolResultText = extractToolResultText(textSource);
+      const userText = extractText(textSource);
+      const toolResultText = extractToolResults(textSource);
       const previewSource = userText || toolResultText;
       const textPreview = truncateText(previewSource, TEXT_PREVIEW_LIMIT);
-      // Track first/last *human* prompt — exclude tool-result-only turns.
-      // Hook-injected prompts (text starting with `<`) are also excluded;
-      // they're system noise rather than the user's intent.
-      const looksHuman = userText && !userText.trim().startsWith("<");
-      if (looksHuman) {
+      // Track first/last *human* prompt — `isHumanText` excludes
+      // hook-injected payloads (text starting with `<`) and tool-result
+      // -only turns (no `userText`).
+      if (isHumanText(userText)) {
         if (!initialPrompt) initialPrompt = textPreview;
         lastPrompt = textPreview;
       }
@@ -394,12 +379,7 @@ async function readJsonlSession(
   let costUsd = 0;
   for (const t of turns) {
     if (t.role !== "assistant" || !t.model) continue;
-    const pricing = getModelPricing(t.model);
-    costUsd +=
-      t.inputTokens * pricing.inputCostPerToken +
-      t.outputTokens * pricing.outputCostPerToken +
-      t.cacheCreateTokens * pricing.cacheWriteCostPerToken +
-      t.cacheReadTokens * pricing.cacheReadCostPerToken;
+    costUsd += applyPricing(getModelPricing(t.model), t);
   }
 
   // Derive: one-shot detection across the whole session.
@@ -583,7 +563,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       });
       rows++;
 
-      if (tu.fileOp && tu.filePath && tu.fileOp !== "read") {
+      // INSERT OR IGNORE collapses repeated edits to the same file in the
+      // same turn into a single row by design (PK is session_id + turn_index
+      // + file_path).
+      if (tu.filePath && isFileWriteOp(tu.fileOp)) {
         insertFileEdit.run(s.sessionId, t.turnIndex, tu.filePath, tu.fileOp, t.ts);
         rows++;
       }
@@ -659,11 +642,12 @@ function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
       cache_read_tokens: number;
     }>;
     for (const r of rows) {
-      cost +=
-        r.input_tokens * pricing.inputCostPerToken +
-        r.output_tokens * pricing.outputCostPerToken +
-        r.cache_create_tokens * pricing.cacheWriteCostPerToken +
-        r.cache_read_tokens * pricing.cacheReadCostPerToken;
+      cost += applyPricing(pricing, {
+        inputTokens: r.input_tokens,
+        outputTokens: r.output_tokens,
+        cacheCreateTokens: r.cache_create_tokens,
+        cacheReadTokens: r.cache_read_tokens,
+      });
     }
     if (rows.length > 0) {
       updateCostStmt.run(cost, day, projectSlug, model);
@@ -680,29 +664,40 @@ export interface ReconcileOptions {
   force?: boolean;
 }
 
+export interface FileReconcileResult {
+  /** Row count written across sessions/turns/tool_uses/file_edits. 0 = skipped. */
+  rowsWritten: number;
+  /** (day|project|model) tuples whose daily_costs row needs recomputing. */
+  affectedDays: Set<string>;
+}
+
 /**
- * Reconcile a single JSONL file into the DB. Returns row count written, or
- * 0 if the file was skipped via the no-op gate. Caller is responsible for
- * `loadPricing()` having completed first.
+ * Reconcile a single JSONL file into the DB. Caller is responsible for
+ * `loadPricing()` having completed first AND for refreshing daily_costs
+ * with the returned `affectedDays` (batched at the end of a multi-file
+ * reconcile to avoid recomputing the same tuple N times).
  */
 export async function reconcileSessionFile(
   db: DatabaseT.Database,
   filePath: string,
   projectDirName: string,
   options: { force?: boolean } = {}
-): Promise<number> {
-  let stat: { mtimeMs: number; size: number };
+): Promise<FileReconcileResult> {
+  const empty: FileReconcileResult = { rowsWritten: 0, affectedDays: new Set() };
+  let mtimeMs: number;
+  let size: number;
   try {
     const s = await fs.stat(filePath);
-    stat = { mtimeMs: s.mtimeMs, size: s.size };
+    mtimeMs = Math.floor(s.mtimeMs);
+    size = s.size;
   } catch {
-    return 0;
+    return empty;
   }
   // A session previously ingested at <50 MB that has since grown past the
   // limit will keep its stale row — we return 0 here without re-parsing or
   // pruning. The file-parse path has the same behavior. P2a-2.3's byte_offset
   // tail will let us amend the row incrementally and remove the cap.
-  if (stat.size > MAX_SESSION_FILE_SIZE) return 0;
+  if (size > MAX_SESSION_FILE_SIZE) return empty;
 
   const sessionId = path.basename(filePath, ".jsonl");
   if (!options.force) {
@@ -715,29 +710,23 @@ export async function reconcileSessionFile(
       | undefined;
     if (
       existing &&
-      existing.file_mtime_ms === Math.floor(stat.mtimeMs) &&
-      existing.file_size === stat.size &&
+      existing.file_mtime_ms === mtimeMs &&
+      existing.file_size === size &&
       existing.derived_version === DERIVED_VERSION
     ) {
-      return 0;
+      return empty;
     }
   }
 
-  const parsed = await readJsonlSession(
-    filePath,
-    projectDirName,
-    Math.floor(stat.mtimeMs),
-    stat.size
-  );
-  if (!parsed) return 0;
+  const parsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
+  if (!parsed) return empty;
 
   let rows = 0;
   const txn = db.transaction(() => {
     rows = writeSession(db, parsed);
   });
   txn();
-  refreshDailyCosts(db, parsed.affectedDays);
-  return rows;
+  return { rowsWritten: rows, affectedDays: parsed.affectedDays };
 }
 
 /**
@@ -766,6 +755,10 @@ export async function reconcileAllSessions(
   }
 
   const liveFilePaths = new Set<string>();
+  // Collected across all changed sessions and the prune pass; one
+  // refresh at the end avoids recomputing the same (day, project,
+  // model) tuple N times when N sessions touch the same day.
+  const affectedDays = new Set<string>();
 
   // Sequential per-file because all writes go through the single writer
   // connection. Parallelism would just queue on the busy_timeout. The
@@ -785,10 +778,11 @@ export async function reconcileAllSessions(
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
-        const written = await reconcileSessionFile(db, filePath, dirName, options);
-        if (written > 0) {
+        const result = await reconcileSessionFile(db, filePath, dirName, options);
+        if (result.rowsWritten > 0) {
           stats.filesChanged++;
-          stats.rowsWritten += written;
+          stats.rowsWritten += result.rowsWritten;
+          for (const tuple of result.affectedDays) affectedDays.add(tuple);
         }
       } catch {
         stats.errors++;
@@ -803,6 +797,9 @@ export async function reconcileAllSessions(
     .prepare("SELECT session_id, project_slug, file_path FROM sessions")
     .all() as Array<{ session_id: string; project_slug: string; file_path: string }>;
   const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
+  const deletePrunedDailyByProject = db.prepare(
+    "DELETE FROM daily_costs WHERE project_slug = ?"
+  );
   const stalePruned = new Set<string>();
   for (const r of allSessions) {
     if (!liveFilePaths.has(r.file_path)) {
@@ -811,12 +808,11 @@ export async function reconcileAllSessions(
     }
   }
 
-  // Pruned sessions removed cost contributions on their days — do a coarse
-  // refresh by collecting every (day, project, model) tuple still present
-  // for the affected projects. Cheap because we only refresh tuples that
-  // actually exist in `turns`.
+  // Pruned sessions removed cost contributions on their days. We drop the
+  // affected projects' daily_costs entirely then re-derive every tuple
+  // still present for those projects in `turns`. Cheaper than per-tuple
+  // delta math and immune to "project lost its last session for a day".
   if (stalePruned.size > 0) {
-    const tuples = new Set<string>();
     const ph = Array.from(stalePruned).map(() => "?").join(",");
     const rows = db
       .prepare(
@@ -826,14 +822,12 @@ export async function reconcileAllSessions(
            AND s.project_slug IN (${ph})`
       )
       .all(...Array.from(stalePruned)) as Array<{ day: string; project_slug: string; model: string }>;
-    for (const r of rows) tuples.add(`${r.day}|${r.project_slug}|${r.model}`);
-    // Also delete daily_costs rows whose project_slug is in the pruned set
-    // but whose tuple is no longer in `turns` (the project may have lost
-    // its only session for a given day).
-    for (const slug of stalePruned) {
-      db.prepare("DELETE FROM daily_costs WHERE project_slug = ?").run(slug);
-    }
-    refreshDailyCosts(db, tuples);
+    for (const r of rows) affectedDays.add(`${r.day}|${r.project_slug}|${r.model}`);
+    for (const slug of stalePruned) deletePrunedDailyByProject.run(slug);
+  }
+
+  if (affectedDays.size > 0) {
+    refreshDailyCosts(db, affectedDays);
   }
 
   return stats;

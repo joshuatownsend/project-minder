@@ -164,6 +164,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(stats.filesSeen).toBe(1);
     expect(stats.filesChanged).toBe(1);
     expect(stats.errors).toBe(0);
+    expect(stats.rowsWritten).toBeGreaterThan(0);
 
     const db = (await reloaded.conn.getDb())!;
     const session = db
@@ -328,7 +329,9 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
-  it("extracts agent invocations from Task tool calls", async () => {
+  it("extracts agent invocations from Agent tool calls", async () => {
+    // Real Claude Code JSONL emits "Agent" (not "Task" — that's the Anthropic
+    // API SDK's tool name). Match the existing classifier/agentParser.
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-a", "s1.jsonl");
     await writeJsonl(sessionFile, [
@@ -337,7 +340,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
         "2026-04-30T10:00:01Z",
         "claude-sonnet-4-5",
         "Spawning a reviewer",
-        [{ id: "tu_1", name: "Task", input: { subagent_type: "code-reviewer", prompt: "..." } }]
+        [{ id: "tu_1", name: "Agent", input: { subagent_type: "code-reviewer", prompt: "..." } }]
       ),
     ]);
 
@@ -345,9 +348,33 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
 
     const row = db
-      .prepare("SELECT agent_name FROM tool_uses WHERE tool_name = 'Task'")
+      .prepare("SELECT agent_name FROM tool_uses WHERE tool_name = 'Agent'")
       .get() as { agent_name: string };
     expect(row.agent_name).toBe("code-reviewer");
+
+    reloaded.conn.closeDb();
+  });
+
+  it("extracts skill invocations from Skill tool calls", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-sk", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "use a skill"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "Invoking",
+        [{ id: "tu_1", name: "Skill", input: { skill: "simplify" } }]
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const row = db
+      .prepare("SELECT skill_name FROM tool_uses WHERE tool_name = 'Skill'")
+      .get() as { skill_name: string };
+    expect(row.skill_name).toBe("simplify");
 
     reloaded.conn.closeDb();
   });
