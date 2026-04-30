@@ -176,6 +176,30 @@ export function getModelPricing(model: string): ModelPricing {
   );
 }
 
+export interface TokenCounts {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreateTokens: number;
+  cacheReadTokens: number;
+}
+
+/**
+ * Apply pricing to a token-count tuple. Sync — caller is responsible for
+ * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
+ *
+ * Single source of truth for the cost formula across the file-parse path
+ * and the SQLite ingest path. Both must produce identical numbers when
+ * P2b switches the read side over.
+ */
+export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number {
+  return (
+    tokens.inputTokens * pricing.inputCostPerToken +
+    tokens.outputTokens * pricing.outputCostPerToken +
+    tokens.cacheCreateTokens * pricing.cacheWriteCostPerToken +
+    tokens.cacheReadTokens * pricing.cacheReadCostPerToken
+  );
+}
+
 /**
  * Compute cost for a single usage turn.
  */
@@ -183,13 +207,7 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
   if (!pricingMap) {
     await loadPricing();
   }
-  const pricing = getModelPricing(turn.model);
-  return (
-    turn.inputTokens * pricing.inputCostPerToken +
-    turn.outputTokens * pricing.outputCostPerToken +
-    turn.cacheCreateTokens * pricing.cacheWriteCostPerToken +
-    turn.cacheReadTokens * pricing.cacheReadCostPerToken
-  );
+  return applyPricing(getModelPricing(turn.model), turn);
 }
 
 /**
