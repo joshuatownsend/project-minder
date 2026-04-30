@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useUsage } from "@/hooks/useUsage";
 import { VALID_PERIODS } from "@/lib/usage/constants";
 import type { CategoryType, ProjectDetail } from "@/lib/usage/types";
@@ -262,20 +262,31 @@ function ProjectBreakdownView({
 }) {
   const [focusCategory, setFocusCategory] = useState<CategoryType | null>(null);
 
-  // Determine which categories are present in the data
-  const presentCategories = ALL_CATEGORIES.filter((cat) =>
-    projectDetails.some((p) => p.categoryBreakdown.some((c) => c.category === cat))
+  // Determine which categories are present in the data — depends only on the
+  // raw projectDetails, so cache against it (the focus toggle re-renders the
+  // chips without re-walking every project's category breakdown).
+  const presentCategories = useMemo(
+    () =>
+      ALL_CATEGORIES.filter((cat) =>
+        projectDetails.some((p) => p.categoryBreakdown.some((c) => c.category === cat))
+      ),
+    [projectDetails]
   );
 
-  // Sort projects by focused category cost, or total cost
-  const sorted = [...projectDetails].sort((a, b) => {
-    if (focusCategory) {
-      const aCost = a.categoryBreakdown.find((c) => c.category === focusCategory)?.cost ?? 0;
-      const bCost = b.categoryBreakdown.find((c) => c.category === focusCategory)?.cost ?? 0;
-      return bCost - aCost;
-    }
-    return b.cost - a.cost;
-  });
+  // Sort projects by focused category cost, or total cost. Recomputes only
+  // when the data or focus selection changes.
+  const sorted = useMemo(
+    () =>
+      [...projectDetails].sort((a, b) => {
+        if (focusCategory) {
+          const aCost = a.categoryBreakdown.find((c) => c.category === focusCategory)?.cost ?? 0;
+          const bCost = b.categoryBreakdown.find((c) => c.category === focusCategory)?.cost ?? 0;
+          return bCost - aCost;
+        }
+        return b.cost - a.cost;
+      }),
+    [projectDetails, focusCategory]
+  );
 
   const maxCost = sorted[0]?.cost ?? 1;
 

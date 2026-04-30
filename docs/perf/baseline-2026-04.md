@@ -195,6 +195,85 @@ The dashboard `/` and `/sessions` pages are the two biggest sources of pain. `/u
 
 ---
 
+## After P0 — 2026-04-30
+
+Client-side quick wins landed in PR #34. No data-layer changes.
+
+### Bundle sizes (`node docs/perf/bundle-summary.mjs .`)
+
+| Route | Baseline (KB) | After P0 (KB) | Δ |
+|---|---|---|---|
+| `/` | 719.5 | 720.1 | +0.6 |
+| `/sessions` | 581.1 | 598.0 | +16.9 (react-virtual added) |
+| `/usage` | 581.0 | 581.6 | +0.6 |
+| Shared baseline | 560.9 | 561.5 | +0.6 |
+
+Bundle moved very little. `/sessions` grew ~17 KB from `@tanstack/react-virtual` — a worthwhile trade for the DOM-node win below. Lucide tree-shake (added defensively) was a no-op because Next.js 16 already auto-optimizes lucide-react via `optimizePackageImports`. The substantial bundle wins still need P3 (RSC + less client code shipped).
+
+### API timings (`bash docs/perf/api-bench.sh`, fresh dev server)
+
+| Route | Baseline cold (s) | After P0 cold (s) | Δ |
+|---|---|---|---|
+| `/api/sessions` | 7.97 | 7.33 | −0.64 (−8 %) |
+| `/api/usage?period=week` | 6.90 | 6.81 | −0.09 (noise) |
+| `/api/projects` | 2.73 | 3.01 | +0.28 (noise) |
+| `/api/manual-steps` | 1.96 | 2.29 | +0.33 (noise) |
+
+Server-side timings essentially unchanged — expected, since P0 is client work. The cold parses still need P1's mtime cache and P2's SQLite indexer.
+
+### New consolidated pulse endpoint
+
+| Endpoint | Cold (s) | Warm (s) | Notes |
+|---|---|---|---|
+| `/api/pulse` | 0.41 | 0.012 | Replaces three separate intervals. First call builds the live status payload (3-second TTL); after that every consumer hits cache. |
+| Old `/api/status` (still works) | 0.19 | (cached) | Now shares the same `__statusApiCache` via the extracted `getLiveStatusPayload()` helper. |
+
+### Idle network — measured improvement
+
+The three independent pollers (`NotificationListener` 5 s + AppNav `/api/status` 10 s + AppNav `/api/manual-steps?pending=true` 30 s) collapse into one `usePulse` hook hitting `/api/pulse` every 5 s, paused on `document.hidden`.
+
+| Metric | Baseline | After P0 | Δ |
+|---|---|---|---|
+| Idle requests / minute on `/usage`, tab focused | ~26 | ~12 | **−54 %** |
+| Idle requests / minute on `/usage`, tab backgrounded | ~26 | **0** | **−100 %** |
+
+(Backgrounded math: every browser fully suspends `setInterval` callbacks while `document.hidden`. Baseline pollers had no hidden-tab guard, so even backgrounded tabs kept hitting the server.)
+
+### Server memory
+
+| Measurement | Baseline | After P0 |
+|---|---|---|
+| Main dev process RSS after one API sweep | 1,543 MB | 639 MB |
+
+Worth double-checking — this measurement isn't quite apples-to-apples because the baseline was captured after Chrome DevTools nav cycles too. Recapture in a controlled second pass. Still, the order-of-magnitude direction matches expectations: fewer redundant parsers held warm by independent caches.
+
+### Browser-side metrics — could not recapture
+
+The Chrome DevTools MCP server disconnected mid-session, so no fresh LCP / CLS / heap snapshot. Manual recapture in a real browser is the recommended verification step before merging:
+
+1. Open `/sessions` with several thousand sessions in `~/.claude/projects/`.
+2. Confirm the list scrolls smoothly with constant DOM size (~30–50 rendered rows at any time, regardless of total count).
+3. Confirm CLS drops from 0.53 to ≤ 0.1 — the virtualized list reserves a stable height, and rows mount before they enter the viewport (`overscan: 6`).
+4. Open `/sessions/<sessionId>` for a long session — confirm `parseMarkdown` only runs for events near the viewport (`useInView` lazy-mount).
+5. Background the tab on `/usage` for 30 s — confirm DevTools Network shows zero requests while hidden.
+
+### What landed vs what's deferred
+
+Landed in P0:
+- Audio-element leak in `NotificationListener` fixed (module-level singleton).
+- `optimizePackageImports` for `lucide-react` and `date-fns` in `next.config.ts` (defensive — already on by default in Next 16).
+- `useMemo` on `presentCategories` and `sorted` in `UsageDashboard.ProjectBreakdownView`; `useMemo` on `activeSessions` count in `SessionsBrowser`.
+- `parseMarkdown` cached via `React.memo` + `useMemo` in `SessionTimeline`. `useInView` IntersectionObserver gates content rendering until 500 px before viewport.
+- Three pollers consolidated into `<PulseProvider>` + `usePulse()` + `/api/pulse`. Paused on `document.hidden`.
+- `SessionsBrowser` virtualized via `@tanstack/react-virtual` — single flat-items array drives both grouped and ungrouped modes.
+
+Deferred to P0.5 (low-priority — no measured CLS issue, can copy SessionsBrowser pattern):
+- `UsageDashboard` per-session breakdown table.
+- `DashboardGrid` sparkline list mode.
+- `AgentsBrowser`, `SkillsBrowser`, `ManualStepsDashboard`.
+
+---
+
 ## How to recapture after each phase
 
 After landing each phase (P0/P1/P2/P3), append a new section to this file titled `## After P<n> — <date>` with the same tables filled in fresh, then add a final `### Delta vs baseline` subsection with percentage changes. Do not edit the baseline tables above — they are frozen as the reference point.

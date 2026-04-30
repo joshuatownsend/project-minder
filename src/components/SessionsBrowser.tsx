@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAllSessions } from "@/hooks/useSessions";
 import { SessionSummary } from "@/lib/types";
 import {
@@ -399,86 +400,78 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
   });
 }
 
-function ProjectSection({
+function SectionHeader({
   group,
   collapsed,
   onToggle,
-  search = "",
 }: {
   group: ProjectGroup;
   collapsed: boolean;
   onToggle: () => void;
-  search?: string;
 }) {
   return (
-    <div>
-      {/* Section header */}
-      <div
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        paddingBottom: "10px",
+        paddingTop: "14px",
+      }}
+    >
+      <button
+        onClick={onToggle}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          paddingBottom: "10px",
-          marginBottom: collapsed ? 0 : "2px",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: "16px", height: "16px",
+          background: "transparent", border: "none",
+          color: "var(--text-muted)", cursor: "pointer", padding: 0, flexShrink: 0,
         }}
       >
-        <button
-          onClick={onToggle}
-          style={{
-            display: "flex", alignItems: "center", justifyContent: "center",
-            width: "16px", height: "16px",
-            background: "transparent", border: "none",
-            color: "var(--text-muted)", cursor: "pointer", padding: 0, flexShrink: 0,
-          }}
-        >
-          {collapsed
-            ? <ChevronRight style={{ width: "12px", height: "12px" }} />
-            : <ChevronDown style={{ width: "12px", height: "12px" }} />}
-        </button>
+        {collapsed
+          ? <ChevronRight style={{ width: "12px", height: "12px" }} />
+          : <ChevronDown style={{ width: "12px", height: "12px" }} />}
+      </button>
 
-        <Link
-          href={`/project/${group.projectName}`}
-          style={{
-            fontSize: "0.78rem", fontWeight: 600, letterSpacing: "0.02em",
-            textTransform: "uppercase", color: "var(--text-primary)", textDecoration: "none",
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {group.projectName}
-        </Link>
+      <Link
+        href={`/project/${group.projectName}`}
+        style={{
+          fontSize: "0.78rem", fontWeight: 600, letterSpacing: "0.02em",
+          textTransform: "uppercase", color: "var(--text-primary)", textDecoration: "none",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {group.projectName}
+      </Link>
 
-        {group.activeSessions > 0 && <ActiveDot />}
+      {group.activeSessions > 0 && <ActiveDot />}
 
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
-          {group.sessions.length}
-        </span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+        {group.sessions.length}
+      </span>
 
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
-          {formatTokens(group.totalTokens)} · {formatCost(group.totalCost)} · {formatDuration(group.totalDurationMs)}
-        </span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
+        {formatTokens(group.totalTokens)} · {formatCost(group.totalCost)} · {formatDuration(group.totalDurationMs)}
+      </span>
 
-        {group.avgOneShotRate !== undefined && (
-          <OneShotBadge rate={group.avgOneShotRate} />
-        )}
-
-        <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
-
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)", flexShrink: 0 }}>
-          {formatDate(group.lastActivity)}
-        </span>
-      </div>
-
-      {/* Sessions */}
-      {!collapsed && (
-        <div style={{ paddingLeft: "26px", borderTop: "1px solid var(--border-subtle)" }}>
-          {group.sessions.map((s) => (
-            <SessionRow key={s.sessionId} session={s} showProject={false} search={search} />
-          ))}
-        </div>
+      {group.avgOneShotRate !== undefined && (
+        <OneShotBadge rate={group.avgOneShotRate} />
       )}
+
+      <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)", flexShrink: 0 }}>
+        {formatDate(group.lastActivity)}
+      </span>
     </div>
   );
 }
+
+// Flat item kinds — the virtualized list renders these in order. Headers and
+// session rows interleave in grouped mode; only rows appear in flat mode.
+type FlatItem =
+  | { kind: "header"; group: ProjectGroup; collapsed: boolean }
+  | { kind: "row"; session: SessionSummary; showProject: boolean };
 
 // ── Main browser ──────────────────────────────────────────────────────────────
 export function SessionsBrowser() {
@@ -527,7 +520,10 @@ export function SessionsBrowser() {
     [filtered, groupByProject]
   );
 
-  const activeSessions = data.filter((s) => s.status === "working" || s.status === "needs_attention").length;
+  const activeSessions = useMemo(
+    () => data.filter((s) => s.status === "working" || s.status === "needs_attention").length,
+    [data]
+  );
 
   const toggleCollapse = (path: string) => {
     setCollapsedSlugs((prev) => {
@@ -538,6 +534,38 @@ export function SessionsBrowser() {
   };
 
   const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectPath));
+
+  // Flatten the (possibly grouped) tree into a single positional array so one
+  // virtualizer can drive both render modes. Recomputes only when the inputs
+  // change (filtered list, grouping, or which sections are collapsed).
+  const flatItems = useMemo<FlatItem[]>(() => {
+    if (!groupByProject) {
+      return filtered.map((s) => ({ kind: "row" as const, session: s, showProject: true }));
+    }
+    const items: FlatItem[] = [];
+    for (const group of projectGroups) {
+      const collapsed = collapsedSlugs.has(group.projectPath);
+      items.push({ kind: "header", group, collapsed });
+      if (!collapsed) {
+        for (const session of group.sessions) {
+          items.push({ kind: "row", session, showProject: false });
+        }
+      }
+    }
+    return items;
+  }, [filtered, projectGroups, collapsedSlugs, groupByProject]);
+
+  // Window-relative scroll container. We use an inner scrollable region rather
+  // than window-virtualizer so we don't have to manage scrollMargin against
+  // the page header on every render.
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollContainerRef.current,
+    // 70px row, 50px header — measureElement corrects after first paint.
+    estimateSize: (index) => (flatItems[index]?.kind === "header" ? 50 : 70),
+    overscan: 6,
+  });
 
   const sortOptions: { value: SortOption; label: string }[] = [
     { value: "recent",  label: "Recent" },
@@ -632,23 +660,57 @@ export function SessionsBrowser() {
           <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>No sessions found.</p>
           {search && <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", opacity: 0.6 }}>Try a different search term.</p>}
         </div>
-      ) : groupByProject ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-          {projectGroups.map((group) => (
-            <ProjectSection
-              key={group.projectPath}
-              group={group}
-              collapsed={collapsedSlugs.has(group.projectPath)}
-              onToggle={() => toggleCollapse(group.projectPath)}
-              search={search}
-            />
-          ))}
-        </div>
       ) : (
-        <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
-          {filtered.map((s) => (
-            <SessionRow key={s.sessionId} session={s} showProject search={search} />
-          ))}
+        // Virtualized list — only rows currently in (or near) the viewport are
+        // mounted. Holds DOM size constant regardless of session count.
+        <div
+          ref={scrollContainerRef}
+          style={{
+            // Fill the remaining viewport. The 220px reserve covers the page
+            // header band + this component's own header/meta rows.
+            height: "calc(100vh - 220px)",
+            minHeight: "400px",
+            overflowY: "auto",
+            // Visually unobtrusive scroll container (no border / shadow).
+            borderTop: groupByProject ? "none" : "1px solid var(--border-subtle)",
+          }}
+        >
+          <div
+            style={{
+              height: virtualizer.getTotalSize(),
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((vItem) => {
+              const item = flatItems[vItem.index];
+              return (
+                <div
+                  key={vItem.key}
+                  data-index={vItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vItem.start}px)`,
+                    paddingLeft: item.kind === "row" && !item.showProject ? "26px" : "0",
+                  }}
+                >
+                  {item.kind === "header" ? (
+                    <SectionHeader
+                      group={item.group}
+                      collapsed={item.collapsed}
+                      onToggle={() => toggleCollapse(item.group.projectPath)}
+                    />
+                  ) : (
+                    <SessionRow session={item.session} showProject={item.showProject} search={search} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

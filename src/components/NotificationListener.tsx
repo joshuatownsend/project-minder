@@ -1,67 +1,54 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useToast } from "./ToastProvider";
+import { usePulse, type PulseChange } from "./PulseProvider";
 
-const POLL_INTERVAL = 5000;
+// Module-level singleton — reused across every notification so we don't
+// leak a fresh HTMLAudioElement (and its associated network handle + media
+// session entry) on each alert. Lazily created on first use to stay SSR-safe.
+let notificationAudio: HTMLAudioElement | null = null;
+function playNotificationSound() {
+  if (typeof window === "undefined") return;
+  try {
+    if (!notificationAudio) {
+      notificationAudio = new Audio("/sounds/notification.wav");
+      notificationAudio.volume = 0.3;
+    }
+    notificationAudio.currentTime = 0;
+    notificationAudio.play().catch(() => {});
+  } catch {
+    // Audio not supported
+  }
+}
 
 export function NotificationListener() {
   const { showToast } = useToast();
-  const lastChecked = useRef(new Date().toISOString());
-  const permissionRequested = useRef(false);
+  const { subscribeChanges } = usePulse();
 
+  // Request OS notification permission once on mount.
   useEffect(() => {
-    // Request notification permission on mount
-    if (!permissionRequested.current && "Notification" in window) {
-      permissionRequested.current = true;
-      if (Notification.permission === "default") {
-        Notification.requestPermission();
-      }
+    if (typeof window === "undefined") return;
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
     }
+  }, []);
 
-    const interval = setInterval(async () => {
-      try {
-        const since = lastChecked.current;
-        lastChecked.current = new Date().toISOString();
+  // Subscribe to fresh change events from the shared pulse stream. The
+  // PulseProvider owns the polling loop; we just react to the events it pushes.
+  useEffect(() => {
+    return subscribeChanges((changes: PulseChange[]) => {
+      for (const change of changes) {
+        showToast(`New manual step: ${change.projectName}`, change.title);
 
-        const res = await fetch(
-          `/api/manual-steps/changes?since=${encodeURIComponent(since)}`
-        );
-        if (!res.ok) return;
-
-        const changes = await res.json();
-        if (!Array.isArray(changes) || changes.length === 0) return;
-
-        for (const change of changes) {
-          // In-app toast
-          showToast(
-            `New manual step: ${change.projectName}`,
-            change.title
-          );
-
-          // OS notification
-          if ("Notification" in window && Notification.permission === "granted") {
-            new Notification(`Manual Step: ${change.projectName}`, {
-              body: change.title,
-            });
-          }
-
-          // Sound alert
-          try {
-            const audio = new Audio("/sounds/notification.wav");
-            audio.volume = 0.3;
-            audio.play().catch(() => {});
-          } catch {
-            // Audio not supported
-          }
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          new Notification(`Manual Step: ${change.projectName}`, { body: change.title });
         }
-      } catch {
-        // Network error, will retry next interval
-      }
-    }, POLL_INTERVAL);
 
-    return () => clearInterval(interval);
-  }, [showToast]);
+        playNotificationSound();
+      }
+    });
+  }, [subscribeChanges, showToast]);
 
   return null;
 }
