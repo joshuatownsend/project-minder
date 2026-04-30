@@ -6,7 +6,6 @@ import { HelpPanel } from "@/components/HelpPanel";
 import { HelpButton } from "@/components/HelpButton";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationListener } from "@/components/NotificationListener";
-import { ManualStepsNavBadge } from "@/components/ManualStepsNavBadge";
 import { AppNav } from "@/components/AppNav";
 import { PulseProvider } from "@/components/PulseProvider";
 import { PortConflictIndicator } from "@/components/PortConflictIndicator";

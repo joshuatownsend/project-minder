@@ -8,11 +8,15 @@ import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 
 // Lifted out of `app/api/status/route.ts` so /api/pulse can share the same
-// 3-second cache without an internal HTTP hop or duplicating the build logic.
-// Both routes call `getLiveStatusPayload()`; the first caller in any 3-second
-// window pays the FS cost, every subsequent caller hits the globalThis cache.
+// cache without an internal HTTP hop or duplicating the build logic. Both
+// routes call `getLiveStatusPayload()`; the first caller in any TTL window
+// pays the FS cost, every subsequent caller hits the globalThis cache.
+//
+// TTL must be ≥ the pulse poll interval (5 s) — otherwise every pulse triggers
+// a fresh FS sweep and the cache is functionally inert. We pad to 6 s so a
+// pulse arriving slightly before its peer interval still hits the cache.
 
-const API_CACHE_TTL = 3_000;
+const API_CACHE_TTL = 6_000;
 const SESSION_MAX_AGE_MS = 4 * 60 * 60_000;
 const MTIME_EVICT_MS = 15 * 60_000;
 

@@ -64,13 +64,14 @@ export function PulseProvider({ children }: { children: ReactNode }) {
     async function poll() {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
+      // Snapshot the cursor BEFORE the fetch so we can advance it only on
+      // success. If the fetch fails, the next poll re-uses the same `since`
+      // and any change events that arrived in the gap are still delivered
+      // exactly once. The server returns `generatedAt` which is the canonical
+      // "next cursor" — using it (instead of "now") avoids skipping events
+      // generated between request-send and response-arrival.
+      const since = lastCheckedRef.current;
       try {
-        const since = lastCheckedRef.current;
-        // Bump the cursor BEFORE awaiting so the next poll's window starts here
-        // even if this request takes a while or fails — avoids re-emitting the
-        // same change events on retry.
-        lastCheckedRef.current = new Date().toISOString();
-
         const res = await fetch(`/api/pulse?since=${encodeURIComponent(since)}`);
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as {
@@ -79,6 +80,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
           changes: PulseChange[];
           generatedAt: string;
         };
+
+        lastCheckedRef.current = data.generatedAt;
 
         setSnapshot({
           pendingSteps: data.pendingSteps,
@@ -97,7 +100,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         // Network blip — we'll retry next interval. Don't throw, don't clear
-        // the snapshot (last-known-good values keep rendering).
+        // the snapshot (last-known-good values keep rendering), and don't
+        // advance lastCheckedRef so the missed changes get redelivered.
       } finally {
         inFlightRef.current = false;
       }

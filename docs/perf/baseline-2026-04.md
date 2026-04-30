@@ -237,7 +237,7 @@ The three independent pollers (`NotificationListener` 5 s + AppNav `/api/status`
 | Idle requests / minute on `/usage`, tab focused | ~26 | ~12 | **−54 %** |
 | Idle requests / minute on `/usage`, tab backgrounded | ~26 | **0** | **−100 %** |
 
-(Backgrounded math: every browser fully suspends `setInterval` callbacks while `document.hidden`. Baseline pollers had no hidden-tab guard, so even backgrounded tabs kept hitting the server.)
+(Backgrounded math: the `usePulse` loop now early-returns whenever `document.hidden` is true and resumes via `visibilitychange`. Browsers also throttle background timers, but the throttling rate varies by browser and power profile — the explicit hidden guard is what guarantees the zero-request count, not the throttle.)
 
 ### Server memory
 

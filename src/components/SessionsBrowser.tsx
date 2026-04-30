@@ -421,6 +421,8 @@ function SectionHeader({
     >
       <button
         onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.projectName} sessions`}
         style={{
           display: "flex", alignItems: "center", justifyContent: "center",
           width: "16px", height: "16px",
