@@ -168,19 +168,39 @@ function truncateText(s: string | undefined | null, max: number): string | null 
   return s.length > max ? s.slice(0, max) : s;
 }
 
+interface ReadOptions {
+  /** Byte position to start reading from. 0 = full file. */
+  fromOffset?: number;
+  /** Turn index to assign to the first parsed turn. 0 for full parse. */
+  startTurnIndex?: number;
+}
+
 async function readJsonlSession(
   filePath: string,
   projectDirName: string,
   fileMtimeMs: number,
-  fileSize: number
+  fileSize: number,
+  options: ReadOptions = {}
 ): Promise<ParsedSession | null> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = toSlug(canonicalDir);
+  const fromOffset = options.fromOffset ?? 0;
+  const startTurnIndex = options.startTurnIndex ?? 0;
 
   let raw: string;
   try {
-    raw = await fs.readFile(filePath, "utf8");
+    if (fromOffset > 0) {
+      // Tail read from a known byte offset. The invariant carried by
+      // `sessions.byte_offset` is "position immediately after the last
+      // `\n` we've consumed", so a stream starting at that offset
+      // begins on a clean line boundary. Real Claude Code JSONLs always
+      // end with `\n`, which makes this round-trip safely.
+      const buf = await fs.readFile(filePath);
+      raw = buf.subarray(fromOffset).toString("utf8");
+    } else {
+      raw = await fs.readFile(filePath, "utf8");
+    }
   } catch {
     return null;
   }
@@ -220,7 +240,7 @@ async function readJsonlSession(
     endTs = timestamp;
     if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
 
-    const turnIndex = turns.length;
+    const turnIndex = startTurnIndex + turns.length;
 
     if (type === "assistant") {
       const model = entry.message?.model;
@@ -674,6 +694,338 @@ export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): 
   refreshAllTuples(tuples);
 }
 
+// ── Tail-append support ────────────────────────────────────────────────────
+
+/**
+ * Rehydrate an existing session's turns as `UsageTurn[]` for re-running
+ * `detectOneShot` (and any other classifier that needs the full turn
+ * history) over old + new combined. The detector looks at sliding
+ * windows of turns — Edit → Bash(test) → re-edit — so a tail append can
+ * change the verdict on prior turns. We have to feed it the union, not
+ * just the new bytes.
+ */
+function loadExistingTurnsAsUsage(
+  db: DatabaseT.Database,
+  sessionId: string,
+  projectSlug: string,
+  projectDirName: string
+): UsageTurn[] {
+  const turnRows = db
+    .prepare(
+      `SELECT turn_index, ts, role, model,
+              input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+              is_error
+       FROM turns WHERE session_id = ? ORDER BY turn_index`
+    )
+    .all(sessionId) as Array<{
+    turn_index: number;
+    ts: string;
+    role: "user" | "assistant";
+    model: string | null;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+    is_error: number;
+  }>;
+
+  if (turnRows.length === 0) return [];
+
+  // Pull tool calls in one query and group by turn_index for assembly
+  // into the UsageTurn shape `detectOneShot` consumes.
+  const toolRows = db
+    .prepare(
+      `SELECT turn_index, sequence_in_turn, tool_name, arguments_json
+       FROM tool_uses WHERE session_id = ? ORDER BY turn_index, sequence_in_turn`
+    )
+    .all(sessionId) as Array<{
+    turn_index: number;
+    sequence_in_turn: number;
+    tool_name: string;
+    arguments_json: string | null;
+  }>;
+  const toolsByTurn = new Map<number, ToolCall[]>();
+  for (const r of toolRows) {
+    let args: Record<string, unknown> | undefined;
+    if (r.arguments_json) {
+      try {
+        args = JSON.parse(r.arguments_json) as Record<string, unknown>;
+      } catch {
+        args = undefined;
+      }
+    }
+    const list = toolsByTurn.get(r.turn_index) ?? [];
+    list.push({ name: r.tool_name, arguments: args });
+    toolsByTurn.set(r.turn_index, list);
+  }
+
+  return turnRows.map((r): UsageTurn => ({
+    timestamp: r.ts,
+    sessionId,
+    projectSlug,
+    projectDirName,
+    model: r.model ?? "",
+    role: r.role,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheCreateTokens: r.cache_create_tokens,
+    cacheReadTokens: r.cache_read_tokens,
+    toolCalls: toolsByTurn.get(r.turn_index) ?? [],
+    isError: r.is_error === 1,
+  }));
+}
+
+/**
+ * Append the new turns / tool_uses / file_edits from a tail parse and
+ * recompute the session row's aggregates over old + new combined.
+ *
+ * Caller wraps in a transaction. The new turns must already have their
+ * `turn_index` shifted past the existing ones (the parser does this via
+ * `startTurnIndex`).
+ */
+function appendSessionTail(
+  db: DatabaseT.Database,
+  parsed: ParsedSession,
+  fileMtimeMs: number,
+  fileSize: number
+): { rows: number; affectedDays: Set<string> } {
+  let rows = 0;
+  const sessionId = parsed.sessionId;
+
+  // Insert just the new rows. Reuse the writer prepares from writeSession-
+  // style inserts but skip the DELETE FROM sessions step — we're amending,
+  // not replacing.
+  const insertTurn = db.prepare(
+    `INSERT INTO turns (
+       session_id, turn_index, ts, role, model,
+       input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+       is_error, parent_tool_use_id, text_preview, category, derived_version
+     ) VALUES (
+       @session_id, @turn_index, @ts, @role, @model,
+       @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
+       @is_error, @parent_tool_use_id, @text_preview, @category, @derived_version
+     )`
+  );
+  const insertToolUse = db.prepare(
+    `INSERT INTO tool_uses (
+       session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
+       mcp_server, mcp_tool, agent_name, skill_name,
+       arguments_json, file_path, file_op, is_error
+     ) VALUES (
+       @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
+       @mcp_server, @mcp_tool, @agent_name, @skill_name,
+       @arguments_json, @file_path, @file_op, @is_error
+     )`
+  );
+  const insertFileEdit = db.prepare(
+    `INSERT OR IGNORE INTO file_edits (session_id, turn_index, file_path, op, ts)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+
+  for (const t of parsed.turns) {
+    const category = t.role === "assistant" ? classifyTurn(t.usageTurn) : null;
+    insertTurn.run({
+      session_id: sessionId,
+      turn_index: t.turnIndex,
+      ts: t.ts,
+      role: t.role,
+      model: t.model,
+      input_tokens: t.inputTokens,
+      output_tokens: t.outputTokens,
+      cache_create_tokens: t.cacheCreateTokens,
+      cache_read_tokens: t.cacheReadTokens,
+      is_error: t.isError,
+      parent_tool_use_id: t.parentToolUseId,
+      text_preview: t.textPreview,
+      category,
+      derived_version: DERIVED_VERSION,
+    });
+    rows++;
+
+    for (const tu of t.toolUses) {
+      insertToolUse.run({
+        session_id: sessionId,
+        turn_index: t.turnIndex,
+        sequence_in_turn: tu.sequenceInTurn,
+        tool_use_id: tu.toolUseId,
+        ts: t.ts,
+        tool_name: tu.toolName,
+        mcp_server: tu.mcpServer,
+        mcp_tool: tu.mcpTool,
+        agent_name: tu.agentName,
+        skill_name: tu.skillName,
+        arguments_json: tu.argumentsJson,
+        file_path: tu.filePath,
+        file_op: tu.fileOp,
+        is_error: tu.isError,
+      });
+      rows++;
+
+      if (tu.filePath && isFileWriteOp(tu.fileOp)) {
+        const result = insertFileEdit.run(sessionId, t.turnIndex, tu.filePath, tu.fileOp, t.ts);
+        rows += Number(result.changes);
+      }
+    }
+  }
+
+  // Recompute session aggregates over the union of old + new turns.
+  // Cheaper to do it in SQL than to rehydrate everything into JS — the
+  // numeric columns are summable directly. primary_model is the
+  // most-frequent assistant model. has_one_shot needs JS because the
+  // detector is window-based.
+  const aggRow = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS turn_count,
+         SUM(CASE WHEN role='user'      THEN 1 ELSE 0 END) AS user_turn_count,
+         SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) AS assistant_turn_count,
+         SUM(is_error)                                     AS error_count,
+         SUM(input_tokens)        AS input_tokens,
+         SUM(output_tokens)       AS output_tokens,
+         SUM(cache_create_tokens) AS cache_create_tokens,
+         SUM(cache_read_tokens)   AS cache_read_tokens,
+         MIN(ts) AS start_ts,
+         MAX(ts) AS end_ts
+       FROM turns WHERE session_id = ?`
+    )
+    .get(sessionId) as {
+    turn_count: number;
+    user_turn_count: number;
+    assistant_turn_count: number;
+    error_count: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+    start_ts: string | null;
+    end_ts: string | null;
+  };
+
+  const toolCallCount = (db
+    .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = ?")
+    .get(sessionId) as { n: number }).n;
+
+  const modelRow = db
+    .prepare(
+      `SELECT model, COUNT(*) AS n FROM turns
+       WHERE session_id = ? AND role='assistant' AND model IS NOT NULL
+       GROUP BY model ORDER BY n DESC LIMIT 1`
+    )
+    .get(sessionId) as { model: string; n: number } | undefined;
+  const primaryModel = modelRow?.model ?? null;
+
+  // Cost per assistant turn — same formula as full parse.
+  const costRows = db
+    .prepare(
+      `SELECT model, input_tokens, output_tokens, cache_create_tokens, cache_read_tokens
+       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
+    )
+    .all(sessionId) as Array<{
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+  }>;
+  let costUsd = 0;
+  for (const r of costRows) {
+    costUsd += applyPricing(getModelPricing(r.model), {
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+      cacheCreateTokens: r.cache_create_tokens,
+      cacheReadTokens: r.cache_read_tokens,
+    });
+  }
+
+  // One-shot detection over old + new combined.
+  const allUsageTurns = loadExistingTurnsAsUsage(
+    db,
+    sessionId,
+    parsed.projectSlug,
+    parsed.projectDirName
+  );
+  const oneShot = detectOneShot(allUsageTurns);
+  const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
+
+  const cacheTotal = aggRow.cache_create_tokens + aggRow.cache_read_tokens;
+  const cacheHitRatio = cacheTotal > 0 ? aggRow.cache_read_tokens / cacheTotal : null;
+
+  // Initial / last prompt: pull first/last user-role human-text preview.
+  // Existing initial_prompt should be preserved; only last_prompt may
+  // change on a tail. Read existing first.
+  const promptRow = db
+    .prepare("SELECT initial_prompt FROM sessions WHERE session_id = ?")
+    .get(sessionId) as { initial_prompt: string | null } | undefined;
+  const lastPrompt = parsed.lastPrompt ?? promptRow?.initial_prompt ?? null;
+
+  db.prepare(
+    `UPDATE sessions SET
+       file_path           = @file_path,
+       file_mtime_ms       = @file_mtime_ms,
+       file_size           = @file_size,
+       byte_offset         = @byte_offset,
+       start_ts            = @start_ts,
+       end_ts              = @end_ts,
+       primary_model       = @primary_model,
+       turn_count          = @turn_count,
+       user_turn_count     = @user_turn_count,
+       assistant_turn_count = @assistant_turn_count,
+       tool_call_count     = @tool_call_count,
+       error_count         = @error_count,
+       input_tokens        = @input_tokens,
+       output_tokens       = @output_tokens,
+       cache_create_tokens = @cache_create_tokens,
+       cache_read_tokens   = @cache_read_tokens,
+       cost_usd            = @cost_usd,
+       cache_hit_ratio     = @cache_hit_ratio,
+       has_one_shot        = @has_one_shot,
+       last_prompt         = @last_prompt,
+       indexed_at_ms       = @indexed_at_ms
+     WHERE session_id = @session_id`
+  ).run({
+    session_id: sessionId,
+    file_path: parsed.filePath,
+    file_mtime_ms: fileMtimeMs,
+    file_size: fileSize,
+    byte_offset: fileSize,
+    start_ts: aggRow.start_ts,
+    end_ts: aggRow.end_ts,
+    primary_model: primaryModel,
+    turn_count: aggRow.turn_count,
+    user_turn_count: aggRow.user_turn_count,
+    assistant_turn_count: aggRow.assistant_turn_count,
+    tool_call_count: toolCallCount,
+    error_count: aggRow.error_count,
+    input_tokens: aggRow.input_tokens,
+    output_tokens: aggRow.output_tokens,
+    cache_create_tokens: aggRow.cache_create_tokens,
+    cache_read_tokens: aggRow.cache_read_tokens,
+    cost_usd: costUsd,
+    cache_hit_ratio: cacheHitRatio,
+    has_one_shot: hasOneShot,
+    last_prompt: lastPrompt,
+    indexed_at_ms: Date.now(),
+  });
+  rows++;
+
+  // affectedDays: union of every (day, project, model) tuple the session
+  // currently contributes to (after the append) — old days that no longer
+  // have any turns are handled by the caller's old-tuples union, but in
+  // a tail, no day disappears. Just emit current-state tuples.
+  const affectedDays = new Set<string>();
+  const dayRows = db
+    .prepare(
+      `SELECT DISTINCT substr(ts, 1, 10) AS day, model
+       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
+    )
+    .all(sessionId) as Array<{ day: string; model: string }>;
+  for (const r of dayRows) {
+    affectedDays.add(`${r.day}|${parsed.projectSlug}|${r.model}`);
+  }
+
+  return { rows, affectedDays };
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export interface ReconcileOptions {
@@ -719,14 +1071,21 @@ export async function reconcileSessionFile(
   if (size > MAX_SESSION_FILE_SIZE) return empty;
 
   const sessionId = path.basename(filePath, ".jsonl");
+  let existing:
+    | {
+        file_path: string;
+        file_mtime_ms: number;
+        file_size: number;
+        byte_offset: number;
+        derived_version: number;
+      }
+    | undefined;
   if (!options.force) {
-    const existing = db
+    existing = db
       .prepare(
-        "SELECT file_path, file_mtime_ms, file_size, derived_version FROM sessions WHERE session_id = ?"
+        "SELECT file_path, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
       )
-      .get(sessionId) as
-      | { file_path: string; file_mtime_ms: number; file_size: number; derived_version: number }
-      | undefined;
+      .get(sessionId) as typeof existing;
     if (
       existing &&
       existing.file_path === filePath &&
@@ -738,10 +1097,51 @@ export async function reconcileSessionFile(
     }
   }
 
-  // Collect tuples that the OLD session row contributed to. Without this,
-  // a re-ingested session that moves an assistant turn from day X to day Y
-  // (or changes its model) would leave day-X's daily_costs row holding
-  // stale token totals from the deleted turn.
+  // Decide between tail-append and full-replace. The tail path is only
+  // safe when the file grew at the end with no prefix changes, the path
+  // is the same, and the derivation version matches what the existing
+  // rows were stamped with. Anything else means our cursor is invalid
+  // and we have to re-parse from scratch.
+  const canTail =
+    !options.force &&
+    existing !== undefined &&
+    existing.file_path === filePath &&
+    existing.derived_version === DERIVED_VERSION &&
+    size > existing.file_size &&
+    mtimeMs >= existing.file_mtime_ms;
+
+  if (canTail) {
+    const startTurnIndex = (db
+      .prepare("SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?")
+      .get(sessionId) as { next_idx: number }).next_idx;
+    const tailParsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
+      fromOffset: existing!.byte_offset,
+      startTurnIndex,
+    });
+    // tailParsed === null is "tail had no usable turns" — still update
+    // the cursor so we don't keep re-reading the same trailing junk
+    // (e.g., comment lines or sidechain entries). UPDATE just the file
+    // metadata.
+    if (!tailParsed) {
+      db.prepare(
+        "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
+      ).run(mtimeMs, size, size, Date.now(), sessionId);
+      return empty;
+    }
+    let rows = 0;
+    let affectedDays = new Set<string>();
+    const txn = db.transaction(() => {
+      const result = appendSessionTail(db, tailParsed, mtimeMs, size);
+      rows = result.rows;
+      affectedDays = result.affectedDays;
+    });
+    txn();
+    return { rowsWritten: rows, affectedDays };
+  }
+
+  // Full replace path. Collect tuples the OLD session contributed to so a
+  // turn that moves between days/models doesn't leave a stale daily_costs
+  // row behind; union with the new affectedDays for the refresh.
   const oldTuples = collectExistingDailyTuples(db, sessionId);
 
   const parsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
@@ -752,8 +1152,6 @@ export async function reconcileSessionFile(
     rows = writeSession(db, parsed);
   });
   txn();
-  // Union old + new so refreshDailyCosts hits both the tuples that
-  // disappeared and the tuples that appeared.
   const affectedDays = new Set<string>(parsed.affectedDays);
   for (const tuple of oldTuples) affectedDays.add(tuple);
   return { rowsWritten: rows, affectedDays };

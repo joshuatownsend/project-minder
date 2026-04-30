@@ -460,6 +460,174 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("tails a session: appends without changing existing turn_indexes", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tail", "s1.jsonl");
+    const initial: JsonlEntry[] = [
+      userTurn("2026-04-30T10:00:00Z", "first prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "first reply"),
+    ];
+    await writeJsonl(sessionFile, initial);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const sessionRowBefore = db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number };
+    expect(sessionRowBefore.turn_count).toBe(2);
+    expect(sessionRowBefore.byte_offset).toBe(sessionRowBefore.file_size);
+    const turnIndexesBefore = db
+      .prepare("SELECT turn_index FROM turns WHERE session_id = 's1' ORDER BY turn_index")
+      .all()
+      .map((r: any) => r.turn_index);
+    expect(turnIndexesBefore).toEqual([0, 1]);
+
+    // Append two new turns to the file. Watcher would do this; we simulate
+    // by appending the JSON lines directly so the existing prefix is
+    // byte-for-byte identical (which is the precondition for tail).
+    const tailEntries: JsonlEntry[] = [
+      userTurn("2026-04-30T10:00:02Z", "follow up"),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "follow reply"),
+    ];
+    await fs.appendFile(
+      sessionFile,
+      tailEntries.map((e) => JSON.stringify(e)).join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Existing turn rows must NOT have changed turn_indexes — appended
+    // turns get the next indexes.
+    const turnIndexesAfter = db
+      .prepare("SELECT turn_index FROM turns WHERE session_id = 's1' ORDER BY turn_index")
+      .all()
+      .map((r: any) => r.turn_index);
+    expect(turnIndexesAfter).toEqual([0, 1, 2, 3]);
+
+    const sessionRowAfter = db
+      .prepare(
+        "SELECT turn_count, assistant_turn_count, user_turn_count, byte_offset, file_size FROM sessions WHERE session_id = 's1'"
+      )
+      .get() as {
+      turn_count: number;
+      assistant_turn_count: number;
+      user_turn_count: number;
+      byte_offset: number;
+      file_size: number;
+    };
+    expect(sessionRowAfter.turn_count).toBe(4);
+    expect(sessionRowAfter.assistant_turn_count).toBe(2);
+    expect(sessionRowAfter.user_turn_count).toBe(2);
+    expect(sessionRowAfter.byte_offset).toBe(sessionRowAfter.file_size);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("falls back to full re-parse when the file shrinks", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-shrink", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "long prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "long reply"),
+      userTurn("2026-04-30T10:00:02Z", "another prompt"),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "another reply"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db
+        .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
+        .get() as { turn_count: number }).turn_count
+    ).toBe(4);
+
+    // Truncate to a smaller content set — simulates a session that was
+    // rewritten / compacted. Cursor is invalid; reconcile must fall
+    // back to full re-parse.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "short"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const turn = (db
+      .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { turn_count: number });
+    expect(turn.turn_count).toBe(2);
+
+    // FK cascade should have removed the orphaned turns from the previous
+    // 4-turn version.
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 's1'").get() as { n: number })
+        .n
+    ).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail re-runs detectOneShot over old + new combined", async () => {
+    // detectOneShot looks at sliding windows of turns: an Edit appended
+    // alone wouldn't flag has_one_shot, but Edit + Bash(test) + result
+    // -with-no-error does. Verify a tail can flip the verdict by
+    // appending only the verification turn.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-shot", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "editing",
+        [{ id: "tu_e", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(0);
+
+    // Append a verification turn (Bash test) and a successful tool result.
+    await fs.appendFile(
+      sessionFile,
+      [
+        assistantTurn(
+          "2026-04-30T10:00:02Z",
+          "claude-sonnet-4-5",
+          "verifying",
+          [{ id: "tu_b", name: "Bash", input: { command: "npm test" } }]
+        ),
+        {
+          type: "user" as const,
+          timestamp: "2026-04-30T10:00:03Z",
+          message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b" }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
   it("refreshes daily_costs for the OLD day when a turn moves between days", async () => {
     // Regression test: re-ingesting a session that moves an assistant
     // turn from day X to day Y previously left day X's daily_costs row
