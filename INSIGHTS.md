@@ -1,5 +1,138 @@
 # Insights
 
+<!-- insight:23dafdd29fdf | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:02:53.089Z -->
+## ★ Insight
+- Lesson for the future: `git stash pop` returning "stash entry is kept" is the silent-failure mode that bit us. When you see that message, run `git status` and `git stash show stash@{0}` immediately — anything that didn't actually re-land is sitting in the stash, not in the working tree, and a subsequent `git stash drop` would delete it forever. Better practice on dirty-tree commits is `git commit -- specific.files` rather than stash-and-pop, since the file-level commit avoids the round-trip entirely.
+- All 12 source repos were valuable but a few stand out: Clauditor (multiple variants), `build-your-own-dashboard-prompt.md` (the embedded brainstorming doc), and the Anthropic OTEL telemetry feature are the highest-leverage. The Mission Control section in particular reframes Project Minder from observer → controller — that's a strategic direction shift worth flagging to you, not just a backlog dump.
+
+---
+
+<!-- insight:01ab4161e407 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T20:45:34.216Z -->
+## ★ Insight
+- The biggest of these is the `toolResultText` rehydration gap. `detectOneShot` reads `turn.toolResultText` to find error patterns ("FAIL", "Error:", etc.) in tool result content. When we rehydrate user turns from `text_preview` only, we lose that text. Result: a previously-failed verification turn looks like "no error" after tail-append, and `has_one_shot` flips to true incorrectly. This is exactly the kind of subtle parity bug that ships unnoticed until someone's stats look wrong.
+- The fix needs a schema migration: add a `tool_result_preview` column to `turns` so the tool-result content survives the round-trip. Fresh DBs get it via `schema.sql`; existing DBs get it via migration v2. Bumping `DERIVED_VERSION` to 2 forces a one-time full re-parse of all sessions so the column is populated before any tail-append depends on it.
+
+---
+
+<!-- insight:6d9a7410c888 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T20:01:20.495Z -->
+## ★ Insight
+- The advisor's call on `byte_offset = position-after-last-newline` is the kind of invariant that's worth documenting in code: it's invisible until something breaks. P2a-2.1 wrote `file.size` and got away with it because Claude Code's JSONL writer always terminates with `\n`. Document the dependency explicitly so a future writer that drops the trailing newline doesn't silently corrupt our cursor.
+- `detectOneShot` is the subtle constraint here. It looks at sliding windows of turns — Edit→Bash(test)→re-edit. A turn appended in the tail can change the verdict on prior turns. So we can't just run detection on the new tail in isolation; we have to re-run over old+new, which means rehydrating UsageTurn[] from existing DB rows. That's a new helper.
+
+---
+
+<!-- insight:f08d96e4485a | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T18:57:12.336Z -->
+## ★ Insight
+- The reuse review surfaced a latent bug: I'd written `extractAgentName` to match `tool_name === "Task"` based on the Anthropic API SDK convention, but the existing parsers (`agentParser.ts`, `classifier.ts`) all match `"Agent"` because that's what Claude Code's internal protocol actually emits. Verified by sampling ~10 real JSONL sessions in this user's `~/.claude/projects/`. This is exactly why "reuse existing" beats "rewrite parallel" — the existing code already had the right convention baked in.
+- The three agents converged on cost-formula triplication and tool-name string-literal duplication. Both are clean-up wins.
+
+---
+
+<!-- insight:9d33163e1793 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T18:00:49.966Z -->
+## ★ Insight
+- 15 comments total. Some already addressed by /simplify (closeDb→available reset, isDbAvailable derivation, turns_au guard). Several are real correctness issues — the getDb race, "quarantine when driver missing," and "meta exists but schema_version missing" are all bugs latent in the current code.
+- The FTS UNINDEXED-column delete concern (Copilot #8) is real but the suggested fix is a structural redesign with a mapping table; better to acknowledge with a TODO and defer to P2a-2 when ingest data lets us measure rather than speculate.
+
+---
+
+<!-- insight:fc163b3ece24 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T17:53:12.395Z -->
+## ★ Insight
+- Two of the React/Next.js idioms collide here: "wrap entire card in `<Link>` for cardwide navigation" + "interactive sub-action inside card." Browsers can't represent that — `<a>` inside `<a>` has no defined semantic. Different codebases solve this differently; the most common patterns are (a) make the card a `<div>` with an onClick + an inner `<Link>` for the primary destination, or (b) keep the outer `<Link>` and make sub-actions buttons that programmatically navigate.
+- We're picking (b) because the card already has a richer set of interactive descendants (DevServerControl, PortEditor, DropdownMenu) all using preventDefault/stopPropagation — adding one more is consistent. The trade-off: the CI badge loses real link semantics (no middle-click "open in new tab"), but it stays consistent with the card's existing internal-action vocabulary.
+
+---
+
+<!-- insight:9446a2841c4f | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T17:42:37.819Z -->
+## ★ Insight
+- The three agents converged on a real issue I missed: `derived_version` vs `category_version` are the same concept under two names. That kind of subtle naming drift is exactly what causes future bugs in the re-derive loop because the indexer has to remember which column matters per table.
+- The TOCTOU pre-check (`fs.access` before `fs.rename`) was independently flagged by both reuse and efficiency reviewers — when two unrelated lenses converge on the same line, that's a strong signal.
+
+---
+
+<!-- insight:05095771be56 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T15:13:13.778Z -->
+## ★ Insight
+- 14 files / 747 insertions / 330 deletions for one phase. The deletion count is meaningful — when polling consolidation is done right, you remove more code than you add (the AppNav timers and NotificationListener interval went away entirely). Net additions of 417 lines is mostly `<PulseProvider>` + `liveStatus.ts` + the virtualized SessionsBrowser scaffolding.
+- This PR closed three independent timer loops, an Audio leak, and an O(n²) breakdown re-render — but didn't touch any of the data-layer work the plan calls out as the **biggest** wins (cold parse times, RSS pressure, LCP). Those need P1 (mtime cache) and P2 (SQLite). Easy to forget that "client quick wins" are a real but bounded category.
+- The two fix-up commits (one on this PR, one on #33) added a useful pattern for the remaining phases: keep the initial commit narrow, let the bots find real bugs, batch-resolve threads after the fix lands. Faster than addressing comments inline during initial development.
+
+---
+
+<!-- insight:d3f50f607c7f | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T15:12:02.262Z -->
+## ★ Insight
+- The cursor-advance bug (#2) is a classic distributed-systems pattern: when client and server agree on a "high water mark", advancing the watermark optimistically (before confirmation) gives at-most-once delivery; advancing only after confirmation gives at-least-once. For change events feeding toasts and notifications, at-least-once is usually correct — duplicate toasts are mildly annoying; missed events are silently broken.
+- The `liveStatus` TTL/poll interval mismatch (#3) is the kind of bug that's invisible in code review but obvious in retrospect: if `cache_ttl < poll_interval`, the cache is functionally inert. A useful invariant to audit any time you couple a cache layer to a polling cadence.
+- The `pendingSteps: 0` regression (#1) was a deliberate design choice ("don't block the 5s pulse on a 2.7s scan") that turned out to be wrong because the watcher invalidates the cache exactly when changes happen — the worst-case timing. The right fix used a separate, cheaper data path (the watcher's own file reads) rather than rethinking the original trade-off.
+
+---
+
+<!-- insight:e7bddb91ae88 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:50:48.071Z -->
+## ★ Insight
+- The `next.config.ts` change turned out to be a no-op (Next 16 already auto-optimizes lucide). I left it in defensively — it makes the *intent* explicit in code even if it doesn't move bytes. Useful baseline if a future Next version changes its default optimization list.
+- The `/api/pulse` design has one nuance worth noting: it deliberately **does not trigger** a project scan. If we did, every 5 s pulse would risk blocking on a 2.7 s `scanAllProjects()` call when the cache is cold. Instead we read from the existing scan cache, returning `pendingSteps: 0` when it's cold. That's accurate (the dashboard hasn't told us yet) and self-corrects within seconds once the user navigates anywhere that warms the cache.
+- `useInView` paired with `React.memo` + `useMemo` gives compounding wins: parse work only happens for items in/near viewport, AND when those items do mount, parse runs once. Without the memo, scrolling past an item and back would re-parse it on every cycle.
+
+---
+
+<!-- insight:1ee78e5d3f62 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:42:03.045Z -->
+## ★ Insight
+- Virtualization with grouped data is most cleanly done by **flattening** the tree into a single positional array of items where each item is tagged with its kind. The virtualizer doesn't need to know about groups — it just renders item N at position N. Group/section semantics live in the source array, not in the rendering layer.
+- `useVirtualizer.measureElement` reports actual rendered height back to the virtualizer so dynamic heights work without manual measurement. The trade-off is one extra DOM measurement per render — negligible compared to mounting 1,000+ items at once.
+
+---
+
+<!-- insight:f084fd450b8f | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:35:21.713Z -->
+## ★ Insight
+- `React.memo` on `RenderedContent` skips re-rendering when the parent re-renders but `text` is unchanged. Combined with `useMemo` on the actual `parseMarkdown` call, the work happens once per unique text value rather than once per parent render.
+- An `IntersectionObserver` with `rootMargin: '500px'` starts mounting content half a viewport before it scrolls into view — by the time the user reaches it, parsing is already done. We only observe until the item becomes visible once, then disconnect — a one-shot pattern that avoids keeping observers alive forever.
+
+---
+
+<!-- insight:32e3a65b3075 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:33:02.717Z -->
+## ★ Insight
+- Next.js 16's `optimizePackageImports` includes a built-in list of known-good libraries (lucide-react, date-fns, @mui/icons-material, recharts, etc.) that get auto-optimized without any config. Setting them explicitly is a no-op for them, but useful as defensive documentation.
+- The 222 KB largest shared chunk is likely React + Next.js runtime, not icons. To drop it materially, you need RSC (less client code shipped) or to swap heavy deps — neither is in P0 scope.
+
+---
+
+<!-- insight:8da4372f5175 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:31:21.066Z -->
+## ★ Insight
+- A `new Audio(...)` is a heavyweight Web API object: it allocates a media element, registers itself with the document's media session, and holds a network handle to the source URL. Allocating one per notification means every alert leaks resources until GC. A module-level singleton means we allocate one element for the lifetime of the page.
+- Calling `audio.currentTime = 0` before `audio.play()` is the standard way to "rewind and replay" the same element when notifications fire in quick succession.
+
+---
+
+<!-- insight:7fd9572aecac | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:30:17.208Z -->
+## ★ Insight
+- The repo uses GitHub's newer **Rulesets** rather than the legacy branch protection (the `branches/main/protection` API returned 404 even though merging was clearly blocked). Inspect rulesets via `repos/{owner}/{repo}/rules/branches/main` — that's where `required_review_thread_resolution: true` and the `verify` status check are defined.
+- `required_review_thread_resolution` is a useful guardrail but it counts every bot comment as a thread that has to be resolved, even when the bots are repeating themselves. Batch-resolving via the GraphQL `resolveReviewThread` mutation is far cleaner than clicking through the UI — particularly when you've addressed the underlying issue in a follow-up commit and just need the threads marked resolved.
+- The 9 line comments collapsed into 4 unique issues, but the threads-to-resolve count is still 10 — duplicates count as separate threads. Worth knowing for future PRs that attract noisy bot reviewers.
+
+---
+
+<!-- insight:a4acf12fa5d2 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:19:48.080Z -->
+## ★ Insight
+- The pre-commit hook (typecheck + tests) saved the commit from going out broken — but only after I cleaned `.next/dev/types/` of the half-written files left behind when I killed the dev server abruptly. Future-me note: when killing a Next.js dev server mid-flight, those auto-generated `routes.d.ts` / `validator.ts` files can be left malformed and blow up the next typecheck.
+- The PR is intentionally narrow: 5 files, 302 insertions, no app-code changes. That's the right shape for a baseline PR — reviewers see exactly what's measured, nothing else moves. Future phase PRs should each be similarly scoped (P0 in its own PR, P1 in its own, etc.) so we can roll back any phase independently.
+- The 7 "uncommitted changes" warning is the user's own pre-existing work (modified `INSIGHTS.md`/`TODO.md`, untracked `PRODUCT.md`/`agentlytics-repo`/`capture-new.mjs`/`docs/brainstorming`/`screenshots`). I deliberately left those alone — they're not part of this PR's story.
+
+---
+
+<!-- insight:d2b47fe283f5 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T14:09:58.816Z -->
+## ★ Insight
+- The dev server's in-memory `parseAllSessions` cache holds a `Map<sessionId, UsageTurn[]>` for all 3,211 sessions. After warming, that's why warm-cache responses are 14–34 ms — the array of turns is sitting in V8 RAM. The flip side is the 1.5 GB RSS we measured. P2's SQLite indexer trades that RAM for a memory-bounded query engine.
+- `/sessions` CLS of 0.53 is the smoking gun for poor visual stability — every time data lands and a row gets added to the un-virtualized list, the page reflows. P0 virtualization plus a fixed-height skeleton during loading should drop this below 0.1.
+- Lucide-react being 44 MB on disk doesn't directly translate to bundle size (the tree-shake decides what ships), but the 222 KB largest shared chunk likely contains the icons that 45 files barrel-import. After `modularizeImports` we'll see that chunk shrink — that's the cleanest before/after measurement.
+
+---
+
+<!-- insight:37cdf3ddc714 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T13:55:31.881Z -->
+## ★ Insight
+- The plan deliberately introduces the mtime primitive (`FileCache<T>`) in P1 *before* the SQLite indexer in P2 — that primitive becomes the indexer's sync trigger, so P1 isn't throwaway work, it's the seam P2 plugs into.
+- All four phases are designed so each one ships independently and improves the app on its own. The SQLite work in P2 is a foundation, not a prerequisite — but P3 (RSC + Server Components fetching directly) only makes sense once server queries are sub-100ms, which only P2 achieves.
+- The schema in P2 is shaped not just for current pain but for the heaviest 30 backlog items (file-coupling arc diagrams, MCP rug-pull detection, OTEL ingest, FTS5 search). The "what this unlocks" table in the plan is the core argument for doing P2 now rather than papering over with more in-memory caches.
+
+---
+
 <!-- insight:7e6d506a3290 | session:6f96f34a-6a76-44a4-a686-602ae5220bca | 2026-04-29T14:47:26.463Z -->
 ## ★ Insight
 The popover overflow is a classic CSS layout problem: `position: absolute` popovers anchored to their trigger button always clip at the viewport edge when the trigger is near the right side. A production fix uses a `getBoundingClientRect()` check on mount to flip the `left`/`right` anchor — or a library like Floating UI. Worth a future TODO.

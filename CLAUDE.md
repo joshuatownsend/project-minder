@@ -129,6 +129,10 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Consider our TODO list when planning new features. If something on the list can be accomplished during a plan or implement run, suggest it.
 - Add TODO items if they make sense to do in the future, even if not part of the current plan you are creating.
 
+## Tracking TODO.md / MANUAL_STEPS.md / INSIGHTS.md in Git
+
+These three files all get committed. Don't stash them — `git stash pop` can silently keep the entry on conflict and a later `git stash drop` permanently deletes the changes. If you need to keep these files out of a feature commit, make a small `chore:` commit for them instead. Full rationale and per-file guidance lives on the dashboard's Setup page under "Tracking in Git."
+
 ## Documentation Policy
 
 After completing any feature or fix, before considering the task done:
