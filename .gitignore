@@ -41,5 +41,11 @@ CLAUDE_MD_SNIPPET.md
 # scratch files
 manual-steps-tracker.html
 
+# perf artifacts (large binary captures - kept locally, not committed)
+docs/perf/*.heapsnapshot
+docs/perf/trace-*.json
+docs/perf/report.html
+docs/perf/report.json
+
 # git worktrees
 .worktrees/
