@@ -33,6 +33,8 @@ export const TRACKED_FILES_NOTE = `These are plain markdown — diffable, mergea
 
 For team projects, MANUAL_STEPS.md can occasionally surface machine-specific paths that one developer wrote but another shouldn't follow. The CLAUDE.md instructions above guard against that, but it's worth a brief skim during PR review.`;
 
+export const TRACKED_FILES_NOTE_PARAGRAPHS = TRACKED_FILES_NOTE.split("\n\n");
+
 export const CLAUDE_MD_TODO_BLOCK = `## TODO
 - If I give you a TODO, save it to TODO.md in our repo.
 - Consider our TODO list when planning new features. If something on the list can be accomplished during a plan or implement run, suggest it.

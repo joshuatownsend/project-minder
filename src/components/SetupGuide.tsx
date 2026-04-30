@@ -10,7 +10,7 @@ import {
   HOOKS_VALIDATE_TODO,
   HOOKS_VALIDATE_MANUAL_STEPS,
   TRACKED_FILES,
-  TRACKED_FILES_NOTE,
+  TRACKED_FILES_NOTE_PARAGRAPHS,
 } from "@/lib/setup-content";
 import type { ApplyAction, ApplyResult, ApplyStatus } from "@/lib/setupApply";
 import { useProjects } from "@/hooks/useProjects";
@@ -252,12 +252,12 @@ export function SetupGuide() {
             whiteSpace: "pre-wrap",
           }}
         >
-          {TRACKED_FILES_NOTE.split("\n\n").map((paragraph, i) => (
+          {TRACKED_FILES_NOTE_PARAGRAPHS.map((paragraph, i) => (
             <p
               key={i}
               style={{
                 margin: 0,
-                marginBottom: i < TRACKED_FILES_NOTE.split("\n\n").length - 1 ? "10px" : 0,
+                marginBottom: i < TRACKED_FILES_NOTE_PARAGRAPHS.length - 1 ? "10px" : 0,
               }}
             >
               {paragraph.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((seg, j) => {
