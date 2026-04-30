@@ -1,6 +1,8 @@
 # Performance Baseline — 2026-04-30
 
-This file records measurements taken **before** the performance overhaul (see `~/.claude/plans/performance-of-project-minder-playful-river.md`). Each later phase appends a section comparing against this baseline. Do not edit the baseline section once captured — it is the reference point.
+This file records measurements taken **before** the performance overhaul. Each later phase appends a section comparing against this baseline. Do not edit the baseline section once captured — it is the reference point.
+
+> **Reproducibility note** — Project Minder is itself a local-only "filesystem-as-database" tool that scans `C:\dev\*` (or any configured `devRoot`) for projects and reads `~/.claude/projects/` for Claude Code session data. Paths in this doc that look local-specific (`~/.claude/...`, `C:\dev\*`, `~/.claude/plans/...`) describe the **input dataset** the dashboard ran against — they are not required inputs anyone else needs to reproduce on their machine, and they will differ per user. The plan that motivates these measurements is summarized in PR #33's description and the commit message; the canonical full version lives in the author's local plan file. To recapture the baseline on a different machine, run the helpers in this directory (`bundle-summary.mjs`, `api-bench.sh`) against your own dev server and dataset — the headline numbers will differ, but the methodology is portable.
 
 ## Environment
 
