@@ -13,7 +13,6 @@ import {
   extractText,
   extractToolResults,
   isHumanText,
-  toolUseBlocks,
 } from "@/lib/usage/contentBlocks";
 import {
   FILE_OP_BY_TOOL,
@@ -48,13 +47,20 @@ import { DERIVED_VERSION } from "./derivationVersion";
 //   `detectOneShot`, and `getModelPricing` ingest into the DB so a future
 //   read-side switch (P2b) is just "same numbers, faster query."
 //
-// * **No watcher, no worker_thread yet.** This module is callable
+// * **No watcher, no `worker_threads` yet.** This module is callable
 //   directly. The watcher (P2a-2.2) and worker wrap (P2a-2.4) come in
 //   later slices. Tests call these functions directly.
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const TEXT_PREVIEW_LIMIT = 500;
 const ARGS_JSON_LIMIT = 10_000;
+// Parity with the file-parse path (`src/lib/usage/parser.ts`): user text
+// is truncated to 500 chars, tool-result text to 2000 chars before the
+// downstream classifier / one-shot detector see them. The two paths
+// MUST produce identical UsageTurn values or detection verdicts will
+// diverge between file-parse and SQLite.
+const USAGE_USER_TEXT_LIMIT = 500;
+const USAGE_TOOL_RESULT_LIMIT = 2000;
 
 interface IngestStats {
   filesSeen: number;
@@ -317,8 +323,8 @@ async function readJsonlSession(
       const messageContent = entry.message?.content ?? [];
       const topLevelContent = (entry.content ?? []) as any[];
       const textSource = messageContent.length > 0 ? messageContent : topLevelContent;
-      const userText = extractText(textSource);
-      const toolResultText = extractToolResults(textSource);
+      const userText = extractText(textSource).slice(0, USAGE_USER_TEXT_LIMIT);
+      const toolResultText = extractToolResults(textSource).slice(0, USAGE_TOOL_RESULT_LIMIT);
       const previewSource = userText || toolResultText;
       const textPreview = truncateText(previewSource, TEXT_PREVIEW_LIMIT);
       // Track first/last *human* prompt — `isHumanText` excludes
@@ -565,10 +571,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
 
       // INSERT OR IGNORE collapses repeated edits to the same file in the
       // same turn into a single row by design (PK is session_id + turn_index
-      // + file_path).
+      // + file_path). Use `.changes` so the rows counter doesn't overcount
+      // ignored duplicates.
       if (tu.filePath && isFileWriteOp(tu.fileOp)) {
-        insertFileEdit.run(s.sessionId, t.turnIndex, tu.filePath, tu.fileOp, t.ts);
-        rows++;
+        const result = insertFileEdit.run(s.sessionId, t.turnIndex, tu.filePath, tu.fileOp, t.ts);
+        rows += Number(result.changes);
       }
     }
   }
@@ -581,6 +588,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
  * tuples. We always recompute the full tuple from `turns` rather than
  * try to apply an incremental delta — easy to get wrong when sessions
  * are replaced wholesale.
+ *
+ * Wrapped in a single transaction: if the process crashes mid-refresh,
+ * the rollup is either fully old or fully new for this batch, never a
+ * partial mix.
  */
 function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
   if (tuples.size === 0) return;
@@ -629,7 +640,13 @@ function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
     "UPDATE daily_costs SET cost_usd = ? WHERE day = ? AND project_slug = ? AND model = ?"
   );
 
-  for (const tuple of tuples) {
+  const refreshAllTuples = db.transaction((pendingTuples: Set<string>) => {
+    for (const tuple of pendingTuples) {
+      refreshOneTuple(tuple);
+    }
+  });
+
+  function refreshOneTuple(tuple: string): void {
     const [day, projectSlug, model] = tuple.split("|");
     deleteStmt.run(day, projectSlug, model);
     insertStmt.run(model, projectSlug, day);
@@ -653,6 +670,8 @@ function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
       updateCostStmt.run(cost, day, projectSlug, model);
     }
   }
+
+  refreshAllTuples(tuples);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -703,13 +722,14 @@ export async function reconcileSessionFile(
   if (!options.force) {
     const existing = db
       .prepare(
-        "SELECT file_mtime_ms, file_size, derived_version FROM sessions WHERE session_id = ?"
+        "SELECT file_path, file_mtime_ms, file_size, derived_version FROM sessions WHERE session_id = ?"
       )
       .get(sessionId) as
-      | { file_mtime_ms: number; file_size: number; derived_version: number }
+      | { file_path: string; file_mtime_ms: number; file_size: number; derived_version: number }
       | undefined;
     if (
       existing &&
+      existing.file_path === filePath &&
       existing.file_mtime_ms === mtimeMs &&
       existing.file_size === size &&
       existing.derived_version === DERIVED_VERSION
@@ -717,6 +737,12 @@ export async function reconcileSessionFile(
       return empty;
     }
   }
+
+  // Collect tuples that the OLD session row contributed to. Without this,
+  // a re-ingested session that moves an assistant turn from day X to day Y
+  // (or changes its model) would leave day-X's daily_costs row holding
+  // stale token totals from the deleted turn.
+  const oldTuples = collectExistingDailyTuples(db, sessionId);
 
   const parsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
   if (!parsed) return empty;
@@ -726,7 +752,30 @@ export async function reconcileSessionFile(
     rows = writeSession(db, parsed);
   });
   txn();
-  return { rowsWritten: rows, affectedDays: parsed.affectedDays };
+  // Union old + new so refreshDailyCosts hits both the tuples that
+  // disappeared and the tuples that appeared.
+  const affectedDays = new Set<string>(parsed.affectedDays);
+  for (const tuple of oldTuples) affectedDays.add(tuple);
+  return { rowsWritten: rows, affectedDays };
+}
+
+/**
+ * For an existing session, return the (day|project|model) tuples its
+ * assistant turns currently contribute to. Used to ensure those tuples
+ * get refreshed when the session is replaced — otherwise a turn that
+ * moves between days/models would leave the prior tuple stale.
+ */
+function collectExistingDailyTuples(db: DatabaseT.Database, sessionId: string): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT substr(t.ts, 1, 10) AS day, s.project_slug AS project_slug, t.model AS model
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.session_id = ? AND t.role = 'assistant' AND t.model IS NOT NULL`
+    )
+    .all(sessionId) as Array<{ day: string; project_slug: string; model: string }>;
+  const tuples = new Set<string>();
+  for (const r of rows) tuples.add(`${r.day}|${r.project_slug}|${r.model}`);
+  return tuples;
 }
 
 /**

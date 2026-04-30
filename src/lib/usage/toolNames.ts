@@ -1,9 +1,10 @@
-// Canonical tool-name constants used across the file-parse path
-// (`classifier.ts`, `agentParser.ts`, `skillParser.ts`) and the SQLite
-// ingest path (`db/ingest.ts`). Keeping these in one module prevents
-// drift between the two paths — particularly the agent-dispatch tool
-// name, which Claude Code's JSONL emits as "Agent" (not "Task" as the
-// public Anthropic SDK uses).
+// Canonical tool-name constants for the SQLite ingest path
+// (`src/lib/db/ingest.ts`). Keeps the `Agent` / `Skill` / file-op
+// conventions in one place so ingest can't silently drift from real
+// JSONL emission. The file-parse modules (`classifier.ts`,
+// `agentParser.ts`, `skillParser.ts`) currently hardcode the same
+// names — when convenient they should migrate to import from here so
+// drift can't happen across paths either.
 
 export type FileOp = "read" | "write" | "edit" | "delete";
 
@@ -11,12 +12,17 @@ export type FileOp = "read" | "write" | "edit" | "delete";
  * Tool name → `tool_uses.file_op` mapping when the tool also takes a
  * `file_path` argument. Used by ingest to populate `file_op` and decide
  * whether the `file_edits` projection should get a row.
+ *
+ * `NotebookEdit` is included as an `edit` op — it carries the same
+ * `file_path` argument shape and the file_edits projection should treat
+ * notebook edits identically to source edits.
  */
 export const FILE_OP_BY_TOOL: Readonly<Record<string, FileOp>> = {
   Read: "read",
   Write: "write",
   Edit: "edit",
   MultiEdit: "edit",
+  NotebookEdit: "edit",
 };
 
 /** Tools that can launch a subagent. The args carry `subagent_type`. */

@@ -423,4 +423,91 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
 
     reloaded.conn.closeDb();
   });
+
+  it("survives a file_path move with unchanged content", async () => {
+    // Regression test: the no-op gate previously matched on session_id /
+    // mtime / size only. A renamed file with identical content would skip
+    // the ingest, then the prune pass would delete the row because the
+    // old path was no longer in liveFilePaths. Including file_path in the
+    // gate means a path-only change re-ingests so the row stays.
+    const { reloaded, projectsDir } = await setup();
+    const oldPath = path.join(projectsDir, "C--dev-old", "abc.jsonl");
+    const newPath = path.join(projectsDir, "C--dev-new", "abc.jsonl");
+    const entries: JsonlEntry[] = [
+      userTurn("2026-04-30T10:00:00Z", "hi"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ];
+    await writeJsonl(oldPath, entries);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id = 'abc'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Move the file (identical content, identical size; mtime may even
+    // round-match). Reconcile must update file_path, not delete the row.
+    await fs.mkdir(path.dirname(newPath), { recursive: true });
+    await fs.rename(oldPath, newPath);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const row = db
+      .prepare("SELECT file_path, project_dir_name FROM sessions WHERE session_id = 'abc'")
+      .get() as { file_path: string; project_dir_name: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.file_path).toBe(newPath);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("refreshes daily_costs for the OLD day when a turn moves between days", async () => {
+    // Regression test: re-ingesting a session that moves an assistant
+    // turn from day X to day Y previously left day X's daily_costs row
+    // holding stale token/cost totals from the deleted turn. Now we
+    // collect the OLD session's tuples before replace and union them
+    // with the new ones for the refresh.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-shift", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "before"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "day X reply", [], {
+        input_tokens: 1_000_000,
+        output_tokens: 500_000,
+      }),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db
+        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-04-30'")
+        .get() as { n: number }).n
+    ).toBe(1);
+
+    // Re-ingest with the assistant turn moved to a different day.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-05-01T10:00:00Z", "after"),
+      assistantTurn("2026-05-01T10:00:01Z", "claude-sonnet-4-5", "day Y reply", [], {
+        input_tokens: 1_000_000,
+        output_tokens: 500_000,
+      }),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Day X should be gone (no remaining assistant turns), day Y populated.
+    expect(
+      (db
+        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-04-30'")
+        .get() as { n: number }).n
+    ).toBe(0);
+    expect(
+      (db
+        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-05-01'")
+        .get() as { n: number }).n
+    ).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
 });
