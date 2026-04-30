@@ -1,7 +1,7 @@
 import "server-only";
 import path from "path";
 import os from "os";
-import { promises as fs } from "fs";
+import { promises as fs, createReadStream } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
@@ -53,7 +53,13 @@ import { DERIVED_VERSION } from "./derivationVersion";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const TEXT_PREVIEW_LIMIT = 500;
-const ARGS_JSON_LIMIT = 10_000;
+// 32 KB is large enough to hold ~all real-world Bash commands and Edit
+// payloads we've seen in user JSONLs. The column is TEXT (no SQLite
+// limit); storage cost is bounded by the typical-much-smaller-than-cap
+// distribution of args. The previous 10 KB limit was small enough that
+// long Edit `old_string` / `new_string` payloads made the JSON invalid
+// after slicing, which broke rehydration in `loadExistingTurnsAsUsage`.
+const ARGS_JSON_LIMIT = 32_000;
 // Parity with the file-parse path (`src/lib/usage/parser.ts`): user text
 // is truncated to 500 chars, tool-result text to 2000 chars before the
 // downstream classifier / one-shot detector see them. The two paths
@@ -95,6 +101,14 @@ interface ParsedTurn {
   isError: 0 | 1;
   parentToolUseId: string | null;
   textPreview: string | null;
+  /**
+   * For user turns carrying a tool_result, the truncated result text.
+   * Stored separately from `textPreview` so `detectOneShot`'s error-
+   * pattern check survives the rehydrate-from-DB round-trip after a
+   * tail-append. Null on assistant turns and on user turns that don't
+   * have tool_result content.
+   */
+  toolResultPreview: string | null;
   toolUses: ParsedToolUse[];
   // UsageTurn-shaped projection for classifier/one-shot reuse.
   usageTurn: UsageTurn;
@@ -107,6 +121,14 @@ interface ParsedSession {
   filePath: string;
   fileMtimeMs: number;
   fileSize: number;
+  /**
+   * Byte position immediately after the last `\n` we consumed. This is
+   * the safe cursor — anything beyond it is a partial line that hasn't
+   * been flushed yet. Stored as `sessions.byte_offset`, used as the
+   * `fromOffset` for the next tail read so a mid-flush race never
+   * permanently drops a turn.
+   */
+  byteOffset: number;
   startTs: string | null;
   endTs: string | null;
   primaryModel: string | null;
@@ -161,6 +183,38 @@ function extractSkillName(toolName: string, args: Record<string, unknown> | unde
   return typeof args.skill === "string" ? args.skill : null;
 }
 
+const COMMAND_RECOVERY_RE = /"command"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/;
+
+/**
+ * Parse `tool_uses.arguments_json` from the DB. Tries `JSON.parse` first
+ * (the common case); on failure, falls back to a regex match of the
+ * `command` field so `detectOneShot` can still see Bash / PowerShell
+ * verification commands when the stored JSON was truncated past the
+ * boundary of the `command` value.
+ *
+ * The fallback only recovers `command` because that's the single field
+ * the one-shot detector reads. Other detectors that need more fields
+ * should prompt a structural fix (separate column or larger limit).
+ */
+function parseStoredArgs(json: string | null): Record<string, unknown> | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    // Capture everything after `"command":"` up to the first non-escaped
+    // `"` or end of string. If the truncation cut mid-escape sequence,
+    // the JSON.parse below throws and we give up.
+    const match = COMMAND_RECOVERY_RE.exec(json);
+    if (!match) return undefined;
+    try {
+      const command = JSON.parse(`"${match[1]}"`);
+      return { command };
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 // ── JSONL → ParsedSession ──────────────────────────────────────────────────
 
 function truncateText(s: string | undefined | null, max: number): string | null {
@@ -168,19 +222,87 @@ function truncateText(s: string | undefined | null, max: number): string | null 
   return s.length > max ? s.slice(0, max) : s;
 }
 
+/**
+ * Read [start, EOF) of a file and return the bytes up to the LAST `\n`
+ * along with the byte position immediately after it. Anything after the
+ * last newline is treated as a partial line that hasn't been flushed yet
+ * and must NOT advance the cursor — otherwise a writer mid-flush could
+ * cause us to skip a turn permanently when its first half lands before
+ * a reconcile and the second half lands after.
+ *
+ * Returns `{ text: "", safeOffset: start }` when there's no `\n` in the
+ * tail (purely partial content).
+ *
+ * Backed by `createReadStream({ start })` so the OS only delivers bytes
+ * after `start`. The byte-vs-char distinction matters because we can't
+ * use `String.lastIndexOf("\n")` here — we need the BYTE position to
+ * compute a correct cursor on multi-byte UTF-8 content.
+ */
+async function readTailToLastNewline(
+  filePath: string,
+  start: number
+): Promise<{ text: string; safeOffset: number }> {
+  const stream = createReadStream(filePath, { start });
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const buf = Buffer.concat(chunks);
+  // Walk backwards looking for the last 0x0A. lastIndexOf on a Buffer is
+  // a single byte scan; cheaper than the BoyerMoore lookup ChainExt'd
+  // strings would do.
+  const lastNewline = buf.lastIndexOf(0x0a);
+  if (lastNewline === -1) {
+    return { text: "", safeOffset: start };
+  }
+  const text = buf.subarray(0, lastNewline + 1).toString("utf8");
+  return { text, safeOffset: start + lastNewline + 1 };
+}
+
+interface ReadOptions {
+  /** Byte position to start reading from. 0 = full file. */
+  fromOffset?: number;
+  /** Turn index to assign to the first parsed turn. 0 for full parse. */
+  startTurnIndex?: number;
+}
+
+/**
+ * Parse a session JSONL (full or tail). Returns the parsed session and
+ * the safe byte cursor — the position immediately after the last `\n`
+ * we consumed. Callers should ALWAYS use the returned `safeOffset` to
+ * update `sessions.byte_offset`, even when `parsed` is null (a partial
+ * line at EOF means we read 0 turns; the cursor stays where it was so
+ * the next reconcile picks up the line once the writer flushes it).
+ */
+interface ReadResult {
+  parsed: ParsedSession | null;
+  safeOffset: number;
+}
+
 async function readJsonlSession(
   filePath: string,
   projectDirName: string,
   fileMtimeMs: number,
-  fileSize: number
-): Promise<ParsedSession | null> {
+  fileSize: number,
+  options: ReadOptions = {}
+): Promise<ReadResult | null> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = toSlug(canonicalDir);
+  const fromOffset = options.fromOffset ?? 0;
+  const startTurnIndex = options.startTurnIndex ?? 0;
 
+  // Read up to the LAST `\n` and capture the byte position immediately
+  // after it as the safe cursor. Both full-parse and tail-parse use the
+  // same primitive so the cursor invariant ("position after the last
+  // consumed `\n`") holds regardless of whether the writer is mid-flush.
+  // If a partial line is appended at EOF, we ingest everything before it
+  // and leave the cursor parked at the start of the partial line — the
+  // next reconcile picks it up after the writer finishes.
   let raw: string;
+  let safeOffset: number;
   try {
-    raw = await fs.readFile(filePath, "utf8");
+    const result = await readTailToLastNewline(filePath, fromOffset);
+    raw = result.text;
+    safeOffset = result.safeOffset;
   } catch {
     return null;
   }
@@ -220,7 +342,7 @@ async function readJsonlSession(
     endTs = timestamp;
     if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
 
-    const turnIndex = turns.length;
+    const turnIndex = startTurnIndex + turns.length;
 
     if (type === "assistant") {
       const model = entry.message?.model;
@@ -314,6 +436,7 @@ async function readJsonlSession(
         isError,
         parentToolUseId: null,
         textPreview,
+        toolResultPreview: null,
         toolUses,
         usageTurn,
       });
@@ -363,13 +486,14 @@ async function readJsonlSession(
         isError: 0,
         parentToolUseId: null,
         textPreview,
+        toolResultPreview: toolResultText || null,
         toolUses: [],
         usageTurn,
       });
     }
   }
 
-  if (turns.length === 0) return null;
+  if (turns.length === 0) return { parsed: null, safeOffset };
 
   // Derive: primary model = most-frequent assistant model.
   let primaryModel: string | null = null;
@@ -406,32 +530,36 @@ async function readJsonlSession(
   }
 
   return {
-    sessionId,
-    projectDirName: canonicalDir,
-    projectSlug,
-    filePath,
-    fileMtimeMs,
-    fileSize,
-    startTs,
-    endTs,
-    primaryModel,
-    gitBranch,
-    initialPrompt,
-    lastPrompt,
-    turnCount: turns.length,
-    userTurnCount,
-    assistantTurnCount,
-    toolCallCount,
-    errorCount,
-    inputTokens,
-    outputTokens,
-    cacheCreateTokens,
-    cacheReadTokens,
-    costUsd,
-    cacheHitRatio,
-    hasOneShot,
-    turns,
-    affectedDays,
+    parsed: {
+      sessionId,
+      projectDirName: canonicalDir,
+      projectSlug,
+      filePath,
+      fileMtimeMs,
+      fileSize,
+      byteOffset: safeOffset,
+      startTs,
+      endTs,
+      primaryModel,
+      gitBranch,
+      initialPrompt,
+      lastPrompt,
+      turnCount: turns.length,
+      userTurnCount,
+      assistantTurnCount,
+      toolCallCount,
+      errorCount,
+      inputTokens,
+      outputTokens,
+      cacheCreateTokens,
+      cacheReadTokens,
+      costUsd,
+      cacheHitRatio,
+      hasOneShot,
+      turns,
+      affectedDays,
+    },
+    safeOffset,
   };
 }
 
@@ -479,7 +607,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     file_path: s.filePath,
     file_mtime_ms: s.fileMtimeMs,
     file_size: s.fileSize,
-    byte_offset: s.fileSize, // P2a-2.1: cursor = whole file. Real tail comes in 2.3.
+    // Cursor invariant: position immediately after the last `\n` we
+    // consumed. NOT `s.fileSize` — if the writer is mid-flush, the trailing
+    // partial line shouldn't move the cursor past it (that would
+    // permanently drop the turn when the line completes).
+    byte_offset: s.byteOffset,
     start_ts: s.startTs,
     end_ts: s.endTs,
     primary_model: s.primaryModel,
@@ -507,11 +639,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, category, derived_version
+       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @category, @derived_version
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -545,6 +677,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       is_error: t.isError,
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
+      tool_result_preview: t.toolResultPreview,
       category,
       derived_version: DERIVED_VERSION,
     });
@@ -674,6 +807,346 @@ export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): 
   refreshAllTuples(tuples);
 }
 
+// ── Tail-append support ────────────────────────────────────────────────────
+
+/**
+ * Rehydrate an existing session's turns as `UsageTurn[]` for re-running
+ * `detectOneShot` (and any other classifier that needs the full turn
+ * history) over old + new combined. The detector looks at sliding
+ * windows of turns — Edit → Bash(test) → re-edit — so a tail append can
+ * change the verdict on prior turns. We have to feed it the union, not
+ * just the new bytes.
+ */
+function loadExistingTurnsAsUsage(
+  db: DatabaseT.Database,
+  sessionId: string,
+  projectSlug: string,
+  projectDirName: string
+): UsageTurn[] {
+  const turnRows = db
+    .prepare(
+      `SELECT turn_index, ts, role, model,
+              input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+              is_error, text_preview, tool_result_preview
+       FROM turns WHERE session_id = ? ORDER BY turn_index`
+    )
+    .all(sessionId) as Array<{
+    turn_index: number;
+    ts: string;
+    role: "user" | "assistant";
+    model: string | null;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+    is_error: number;
+    text_preview: string | null;
+    tool_result_preview: string | null;
+  }>;
+
+  if (turnRows.length === 0) return [];
+
+  // Pull tool calls in one query and group by turn_index for assembly
+  // into the UsageTurn shape `detectOneShot` consumes.
+  const toolRows = db
+    .prepare(
+      `SELECT turn_index, sequence_in_turn, tool_name, arguments_json
+       FROM tool_uses WHERE session_id = ? ORDER BY turn_index, sequence_in_turn`
+    )
+    .all(sessionId) as Array<{
+    turn_index: number;
+    sequence_in_turn: number;
+    tool_name: string;
+    arguments_json: string | null;
+  }>;
+  const toolsByTurn = new Map<number, ToolCall[]>();
+  for (const r of toolRows) {
+    const args = parseStoredArgs(r.arguments_json);
+    const list = toolsByTurn.get(r.turn_index) ?? [];
+    list.push({ name: r.tool_name, arguments: args });
+    toolsByTurn.set(r.turn_index, list);
+  }
+
+  return turnRows.map((r): UsageTurn => ({
+    timestamp: r.ts,
+    sessionId,
+    projectSlug,
+    projectDirName,
+    model: r.model ?? "",
+    role: r.role,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheCreateTokens: r.cache_create_tokens,
+    cacheReadTokens: r.cache_read_tokens,
+    toolCalls: toolsByTurn.get(r.turn_index) ?? [],
+    isError: r.is_error === 1,
+    // detectOneShot reads `toolResultText` to find ERROR_PATTERNS in
+    // tool result content. Without this, prior failed verifications
+    // would look like "no error" after a tail-append and has_one_shot
+    // could flip to true incorrectly. text_preview is the truncated
+    // human prompt for non-result user turns; tool_result_preview is
+    // the truncated tool result for result-bearing user turns.
+    userMessageText: r.role === "user" ? (r.text_preview ?? undefined) : undefined,
+    toolResultText: r.role === "user" ? (r.tool_result_preview ?? undefined) : undefined,
+  }));
+}
+
+/**
+ * Append the new turns / tool_uses / file_edits from a tail parse and
+ * recompute the session row's aggregates over old + new combined.
+ *
+ * Caller wraps in a transaction. The new turns must already have their
+ * `turn_index` shifted past the existing ones (the parser does this via
+ * `startTurnIndex`).
+ */
+function appendSessionTail(
+  db: DatabaseT.Database,
+  parsed: ParsedSession,
+  fileMtimeMs: number,
+  fileSize: number
+): { rows: number; affectedDays: Set<string> } {
+  let rows = 0;
+  const sessionId = parsed.sessionId;
+
+  // Insert just the new rows. Reuse the writer prepares from writeSession-
+  // style inserts but skip the DELETE FROM sessions step — we're amending,
+  // not replacing.
+  const insertTurn = db.prepare(
+    `INSERT INTO turns (
+       session_id, turn_index, ts, role, model,
+       input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
+     ) VALUES (
+       @session_id, @turn_index, @ts, @role, @model,
+       @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
+     )`
+  );
+  const insertToolUse = db.prepare(
+    `INSERT INTO tool_uses (
+       session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
+       mcp_server, mcp_tool, agent_name, skill_name,
+       arguments_json, file_path, file_op, is_error
+     ) VALUES (
+       @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
+       @mcp_server, @mcp_tool, @agent_name, @skill_name,
+       @arguments_json, @file_path, @file_op, @is_error
+     )`
+  );
+  const insertFileEdit = db.prepare(
+    `INSERT OR IGNORE INTO file_edits (session_id, turn_index, file_path, op, ts)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+
+  for (const t of parsed.turns) {
+    const category = t.role === "assistant" ? classifyTurn(t.usageTurn) : null;
+    insertTurn.run({
+      session_id: sessionId,
+      turn_index: t.turnIndex,
+      ts: t.ts,
+      role: t.role,
+      model: t.model,
+      input_tokens: t.inputTokens,
+      output_tokens: t.outputTokens,
+      cache_create_tokens: t.cacheCreateTokens,
+      cache_read_tokens: t.cacheReadTokens,
+      is_error: t.isError,
+      parent_tool_use_id: t.parentToolUseId,
+      text_preview: t.textPreview,
+      tool_result_preview: t.toolResultPreview,
+      category,
+      derived_version: DERIVED_VERSION,
+    });
+    rows++;
+
+    for (const tu of t.toolUses) {
+      insertToolUse.run({
+        session_id: sessionId,
+        turn_index: t.turnIndex,
+        sequence_in_turn: tu.sequenceInTurn,
+        tool_use_id: tu.toolUseId,
+        ts: t.ts,
+        tool_name: tu.toolName,
+        mcp_server: tu.mcpServer,
+        mcp_tool: tu.mcpTool,
+        agent_name: tu.agentName,
+        skill_name: tu.skillName,
+        arguments_json: tu.argumentsJson,
+        file_path: tu.filePath,
+        file_op: tu.fileOp,
+        is_error: tu.isError,
+      });
+      rows++;
+
+      if (tu.filePath && isFileWriteOp(tu.fileOp)) {
+        const result = insertFileEdit.run(sessionId, t.turnIndex, tu.filePath, tu.fileOp, t.ts);
+        rows += Number(result.changes);
+      }
+    }
+  }
+
+  // Recompute session aggregates over the union of old + new turns.
+  // Cheaper to do it in SQL than to rehydrate everything into JS — the
+  // numeric columns are summable directly. primary_model is the
+  // most-frequent assistant model. has_one_shot needs JS because the
+  // detector is window-based.
+  const aggRow = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS turn_count,
+         SUM(CASE WHEN role='user'      THEN 1 ELSE 0 END) AS user_turn_count,
+         SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) AS assistant_turn_count,
+         SUM(is_error)                                     AS error_count,
+         SUM(input_tokens)        AS input_tokens,
+         SUM(output_tokens)       AS output_tokens,
+         SUM(cache_create_tokens) AS cache_create_tokens,
+         SUM(cache_read_tokens)   AS cache_read_tokens,
+         MIN(ts) AS start_ts,
+         MAX(ts) AS end_ts
+       FROM turns WHERE session_id = ?`
+    )
+    .get(sessionId) as {
+    turn_count: number;
+    user_turn_count: number;
+    assistant_turn_count: number;
+    error_count: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+    start_ts: string | null;
+    end_ts: string | null;
+  };
+
+  const toolCallCount = (db
+    .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = ?")
+    .get(sessionId) as { n: number }).n;
+
+  const modelRow = db
+    .prepare(
+      `SELECT model, COUNT(*) AS n FROM turns
+       WHERE session_id = ? AND role='assistant' AND model IS NOT NULL
+       GROUP BY model ORDER BY n DESC LIMIT 1`
+    )
+    .get(sessionId) as { model: string; n: number } | undefined;
+  const primaryModel = modelRow?.model ?? null;
+
+  // Cost per assistant turn — same formula as full parse.
+  const costRows = db
+    .prepare(
+      `SELECT model, input_tokens, output_tokens, cache_create_tokens, cache_read_tokens
+       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
+    )
+    .all(sessionId) as Array<{
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_create_tokens: number;
+    cache_read_tokens: number;
+  }>;
+  let costUsd = 0;
+  for (const r of costRows) {
+    costUsd += applyPricing(getModelPricing(r.model), {
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+      cacheCreateTokens: r.cache_create_tokens,
+      cacheReadTokens: r.cache_read_tokens,
+    });
+  }
+
+  // One-shot detection over old + new combined.
+  const allUsageTurns = loadExistingTurnsAsUsage(
+    db,
+    sessionId,
+    parsed.projectSlug,
+    parsed.projectDirName
+  );
+  const oneShot = detectOneShot(allUsageTurns);
+  const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
+
+  const cacheTotal = aggRow.cache_create_tokens + aggRow.cache_read_tokens;
+  const cacheHitRatio = cacheTotal > 0 ? aggRow.cache_read_tokens / cacheTotal : null;
+
+  // last_prompt: prefer the human prompt parsed from the tail. If the
+  // tail was assistant-only (no new human prompt), keep whatever the
+  // session already had — `initial_prompt` is the WRONG fallback,
+  // it'd regress a multi-prompt session's last prompt back to its
+  // first one on the first assistant-only append.
+  const promptRow = db
+    .prepare("SELECT last_prompt FROM sessions WHERE session_id = ?")
+    .get(sessionId) as { last_prompt: string | null } | undefined;
+  const lastPrompt = parsed.lastPrompt ?? promptRow?.last_prompt ?? null;
+
+  db.prepare(
+    `UPDATE sessions SET
+       file_path           = @file_path,
+       file_mtime_ms       = @file_mtime_ms,
+       file_size           = @file_size,
+       byte_offset         = @byte_offset,
+       start_ts            = @start_ts,
+       end_ts              = @end_ts,
+       primary_model       = @primary_model,
+       turn_count          = @turn_count,
+       user_turn_count     = @user_turn_count,
+       assistant_turn_count = @assistant_turn_count,
+       tool_call_count     = @tool_call_count,
+       error_count         = @error_count,
+       input_tokens        = @input_tokens,
+       output_tokens       = @output_tokens,
+       cache_create_tokens = @cache_create_tokens,
+       cache_read_tokens   = @cache_read_tokens,
+       cost_usd            = @cost_usd,
+       cache_hit_ratio     = @cache_hit_ratio,
+       has_one_shot        = @has_one_shot,
+       last_prompt         = @last_prompt,
+       indexed_at_ms       = @indexed_at_ms
+     WHERE session_id = @session_id`
+  ).run({
+    session_id: sessionId,
+    file_path: parsed.filePath,
+    file_mtime_ms: fileMtimeMs,
+    file_size: fileSize,
+    // Same invariant as writeSession: cursor = position after the last
+    // consumed `\n`, never `fileSize` (which could be past a partial line).
+    byte_offset: parsed.byteOffset,
+    start_ts: aggRow.start_ts,
+    end_ts: aggRow.end_ts,
+    primary_model: primaryModel,
+    turn_count: aggRow.turn_count,
+    user_turn_count: aggRow.user_turn_count,
+    assistant_turn_count: aggRow.assistant_turn_count,
+    tool_call_count: toolCallCount,
+    error_count: aggRow.error_count,
+    input_tokens: aggRow.input_tokens,
+    output_tokens: aggRow.output_tokens,
+    cache_create_tokens: aggRow.cache_create_tokens,
+    cache_read_tokens: aggRow.cache_read_tokens,
+    cost_usd: costUsd,
+    cache_hit_ratio: cacheHitRatio,
+    has_one_shot: hasOneShot,
+    last_prompt: lastPrompt,
+    indexed_at_ms: Date.now(),
+  });
+  rows++;
+
+  // affectedDays: union of every (day, project, model) tuple the session
+  // currently contributes to (after the append) — old days that no longer
+  // have any turns are handled by the caller's old-tuples union, but in
+  // a tail, no day disappears. Just emit current-state tuples.
+  const affectedDays = new Set<string>();
+  const dayRows = db
+    .prepare(
+      `SELECT DISTINCT substr(ts, 1, 10) AS day, model
+       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
+    )
+    .all(sessionId) as Array<{ day: string; model: string }>;
+  for (const r of dayRows) {
+    affectedDays.add(`${r.day}|${parsed.projectSlug}|${r.model}`);
+  }
+
+  return { rows, affectedDays };
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export interface ReconcileOptions {
@@ -719,14 +1192,21 @@ export async function reconcileSessionFile(
   if (size > MAX_SESSION_FILE_SIZE) return empty;
 
   const sessionId = path.basename(filePath, ".jsonl");
+  let existing:
+    | {
+        file_path: string;
+        file_mtime_ms: number;
+        file_size: number;
+        byte_offset: number;
+        derived_version: number;
+      }
+    | undefined;
   if (!options.force) {
-    const existing = db
+    existing = db
       .prepare(
-        "SELECT file_path, file_mtime_ms, file_size, derived_version FROM sessions WHERE session_id = ?"
+        "SELECT file_path, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
       )
-      .get(sessionId) as
-      | { file_path: string; file_mtime_ms: number; file_size: number; derived_version: number }
-      | undefined;
+      .get(sessionId) as typeof existing;
     if (
       existing &&
       existing.file_path === filePath &&
@@ -738,23 +1218,65 @@ export async function reconcileSessionFile(
     }
   }
 
-  // Collect tuples that the OLD session row contributed to. Without this,
-  // a re-ingested session that moves an assistant turn from day X to day Y
-  // (or changes its model) would leave day-X's daily_costs row holding
-  // stale token totals from the deleted turn.
+  // Decide between tail-append and full-replace. The tail path is only
+  // safe when the file grew at the end with no prefix changes, the path
+  // is the same, and the derivation version matches what the existing
+  // rows were stamped with. Anything else means our cursor is invalid
+  // and we have to re-parse from scratch.
+  const canTail =
+    !options.force &&
+    existing !== undefined &&
+    existing.file_path === filePath &&
+    existing.derived_version === DERIVED_VERSION &&
+    size > existing.file_size &&
+    mtimeMs >= existing.file_mtime_ms;
+
+  if (canTail) {
+    const startTurnIndex = (db
+      .prepare("SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?")
+      .get(sessionId) as { next_idx: number }).next_idx;
+    const tailResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
+      fromOffset: existing!.byte_offset,
+      startTurnIndex,
+    });
+    // `parsed === null` means "tail had no usable turns" — still update
+    // the cursor + file_size so we don't keep re-reading the same
+    // trailing junk (e.g., comment lines or sidechain entries). The
+    // safe cursor is `safeOffset`, NOT `size` — anything past
+    // `safeOffset` is a partial line that hasn't been flushed.
+    if (!tailResult || !tailResult.parsed) {
+      const newCursor = tailResult?.safeOffset ?? existing!.byte_offset;
+      db.prepare(
+        "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
+      ).run(mtimeMs, size, newCursor, Date.now(), sessionId);
+      return empty;
+    }
+    const tailParsed = tailResult.parsed;
+    let rows = 0;
+    let affectedDays = new Set<string>();
+    const txn = db.transaction(() => {
+      const result = appendSessionTail(db, tailParsed, mtimeMs, size);
+      rows = result.rows;
+      affectedDays = result.affectedDays;
+    });
+    txn();
+    return { rowsWritten: rows, affectedDays };
+  }
+
+  // Full replace path. Collect tuples the OLD session contributed to so a
+  // turn that moves between days/models doesn't leave a stale daily_costs
+  // row behind; union with the new affectedDays for the refresh.
   const oldTuples = collectExistingDailyTuples(db, sessionId);
 
-  const parsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
-  if (!parsed) return empty;
+  const fullResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
+  if (!fullResult || !fullResult.parsed) return empty;
 
   let rows = 0;
   const txn = db.transaction(() => {
-    rows = writeSession(db, parsed);
+    rows = writeSession(db, fullResult.parsed!);
   });
   txn();
-  // Union old + new so refreshDailyCosts hits both the tuples that
-  // disappeared and the tuples that appeared.
-  const affectedDays = new Set<string>(parsed.affectedDays);
+  const affectedDays = new Set<string>(fullResult.parsed.affectedDays);
   for (const tuple of oldTuples) affectedDays.add(tuple);
   return { rowsWritten: rows, affectedDays };
 }

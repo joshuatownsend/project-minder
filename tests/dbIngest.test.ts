@@ -179,7 +179,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(1);
+    expect(session.derived_version).toBe(2);
 
     const turnRows = db
       .prepare("SELECT role, category FROM turns WHERE session_id = 'abc-session' ORDER BY turn_index")
@@ -456,6 +456,390 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .get() as { file_path: string; project_dir_name: string } | undefined;
     expect(row).toBeDefined();
     expect(row!.file_path).toBe(newPath);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tails a session: appends without changing existing turn_indexes", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tail", "s1.jsonl");
+    const initial: JsonlEntry[] = [
+      userTurn("2026-04-30T10:00:00Z", "first prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "first reply"),
+    ];
+    await writeJsonl(sessionFile, initial);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const sessionRowBefore = db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number };
+    expect(sessionRowBefore.turn_count).toBe(2);
+    expect(sessionRowBefore.byte_offset).toBe(sessionRowBefore.file_size);
+    const turnIndexesBefore = db
+      .prepare("SELECT turn_index FROM turns WHERE session_id = 's1' ORDER BY turn_index")
+      .all()
+      .map((r: any) => r.turn_index);
+    expect(turnIndexesBefore).toEqual([0, 1]);
+
+    // Append two new turns to the file. Watcher would do this; we simulate
+    // by appending the JSON lines directly so the existing prefix is
+    // byte-for-byte identical (which is the precondition for tail).
+    const tailEntries: JsonlEntry[] = [
+      userTurn("2026-04-30T10:00:02Z", "follow up"),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "follow reply"),
+    ];
+    await fs.appendFile(
+      sessionFile,
+      tailEntries.map((e) => JSON.stringify(e)).join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Existing turn rows must NOT have changed turn_indexes — appended
+    // turns get the next indexes.
+    const turnIndexesAfter = db
+      .prepare("SELECT turn_index FROM turns WHERE session_id = 's1' ORDER BY turn_index")
+      .all()
+      .map((r: any) => r.turn_index);
+    expect(turnIndexesAfter).toEqual([0, 1, 2, 3]);
+
+    const sessionRowAfter = db
+      .prepare(
+        "SELECT turn_count, assistant_turn_count, user_turn_count, byte_offset, file_size FROM sessions WHERE session_id = 's1'"
+      )
+      .get() as {
+      turn_count: number;
+      assistant_turn_count: number;
+      user_turn_count: number;
+      byte_offset: number;
+      file_size: number;
+    };
+    expect(sessionRowAfter.turn_count).toBe(4);
+    expect(sessionRowAfter.assistant_turn_count).toBe(2);
+    expect(sessionRowAfter.user_turn_count).toBe(2);
+    expect(sessionRowAfter.byte_offset).toBe(sessionRowAfter.file_size);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("falls back to full re-parse when the file shrinks", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-shrink", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "long prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "long reply"),
+      userTurn("2026-04-30T10:00:02Z", "another prompt"),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "another reply"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db
+        .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
+        .get() as { turn_count: number }).turn_count
+    ).toBe(4);
+
+    // Truncate to a smaller content set — simulates a session that was
+    // rewritten / compacted. Cursor is invalid; reconcile must fall
+    // back to full re-parse.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "short"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const turn = (db
+      .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { turn_count: number });
+    expect(turn.turn_count).toBe(2);
+
+    // FK cascade should have removed the orphaned turns from the previous
+    // 4-turn version.
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 's1'").get() as { n: number })
+        .n
+    ).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail rehydration preserves toolResultText for the one-shot detector", async () => {
+    // Regression test for PR #40 review: rehydrating user turns from
+    // `text_preview` alone lost the tool-result content that
+    // detectOneShot's error-pattern check relies on. After tail-append,
+    // a previously-FAILED verification would look like "no error" and
+    // has_one_shot would flip to true incorrectly.
+    //
+    // Build a session where the FIRST cycle's verification fails
+    // (Edit → Bash(test) → result with "FAIL"), then tail-append a
+    // SECOND cycle that succeeds. detectOneShot should count one
+    // verified task (the second cycle) as one-shot — not two —
+    // because the rehydrated first cycle still carries the failure.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-rehy", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "first edit",
+        [{ id: "tu_e1", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+      assistantTurn(
+        "2026-04-30T10:00:02Z",
+        "claude-sonnet-4-5",
+        "verifying",
+        [{ id: "tu_b1", name: "Bash", input: { command: "npm test" } }]
+      ),
+      {
+        type: "user" as const,
+        timestamp: "2026-04-30T10:00:03Z",
+        // Verification failed — the result text contains FAIL.
+        message: { content: [{ type: "tool_result", content: "FAIL: tests broke", tool_use_id: "tu_b1" }] },
+      },
+      // Re-edit (the failure path: another Edit appears, marking the
+      // first cycle as not-one-shot).
+      assistantTurn(
+        "2026-04-30T10:00:04Z",
+        "claude-sonnet-4-5",
+        "second edit",
+        [{ id: "tu_e2", name: "Edit", input: { file_path: "/x.ts", old_string: "b", new_string: "c" } }]
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Sanity: the failure should have been recorded — tool_result_preview
+    // for the failing user turn must contain "FAIL" so the detector can
+    // see it on rehydrate.
+    const userTurnWithResult = db
+      .prepare("SELECT tool_result_preview FROM turns WHERE session_id = 's1' AND role = 'user' AND tool_result_preview IS NOT NULL")
+      .get() as { tool_result_preview: string };
+    expect(userTurnWithResult.tool_result_preview).toContain("FAIL");
+
+    // Append a SECOND cycle that succeeds. The tail-append rehydrates
+    // the prior turns including the failing tool_result; if rehydration
+    // works, the detector treats cycle 1 as failed (correct) and cycle 2
+    // as one-shot (correct) — has_one_shot = 1 because cycle 2 succeeded.
+    await fs.appendFile(
+      sessionFile,
+      [
+        assistantTurn(
+          "2026-04-30T10:00:05Z",
+          "claude-sonnet-4-5",
+          "verifying again",
+          [{ id: "tu_b2", name: "Bash", input: { command: "npm test" } }]
+        ),
+        {
+          type: "user" as const,
+          timestamp: "2026-04-30T10:00:06Z",
+          message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b2" }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail re-runs detectOneShot over old + new combined", async () => {
+    // detectOneShot looks at sliding windows of turns: an Edit appended
+    // alone wouldn't flag has_one_shot, but Edit + Bash(test) + result
+    // -with-no-error does. Verify a tail can flip the verdict by
+    // appending only the verification turn.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-shot", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "editing",
+        [{ id: "tu_e", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(0);
+
+    // Append a verification turn (Bash test) and a successful tool result.
+    await fs.appendFile(
+      sessionFile,
+      [
+        assistantTurn(
+          "2026-04-30T10:00:02Z",
+          "claude-sonnet-4-5",
+          "verifying",
+          [{ id: "tu_b", name: "Bash", input: { command: "npm test" } }]
+        ),
+        {
+          type: "user" as const,
+          timestamp: "2026-04-30T10:00:03Z",
+          message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b" }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("doesn't advance byte_offset past a partial trailing line", async () => {
+    // Regression test for the byte_offset advancement bug: if the writer
+    // is mid-flush, an incomplete final line should NOT move the cursor
+    // past it — otherwise the line is permanently dropped when the
+    // writer finishes.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-mid", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "first"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "first reply"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const cursorAfterClean = (db
+      .prepare("SELECT byte_offset, file_size FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number });
+    expect(cursorAfterClean.byte_offset).toBe(cursorAfterClean.file_size);
+
+    // Append a complete line followed by a partial line (no trailing \n)
+    // — simulating a writer mid-flush.
+    const completeLine = JSON.stringify(
+      assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "second reply")
+    ) + "\n";
+    const partial = '{"type":"assistant","timestamp":"2026-04-30T10:00:03Z","mess';
+    await fs.appendFile(sessionFile, completeLine + partial);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const cursorAfterPartial = (db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number });
+    // The complete line was ingested (turn 0 user, turn 1 assistant,
+    // turn 2 assistant from the appended complete line — partial is NOT
+    // a turn yet).
+    expect(cursorAfterPartial.turn_count).toBe(3);
+    // Cursor parked at end of the complete line, NOT at file_size.
+    expect(cursorAfterPartial.byte_offset).toBeLessThan(cursorAfterPartial.file_size);
+    expect(cursorAfterPartial.byte_offset).toBe(
+      cursorAfterPartial.file_size - Buffer.byteLength(partial, "utf8")
+    );
+
+    // Now flush the partial line — append the rest + newline. The next
+    // reconcile must pick up the previously-partial line as a new turn.
+    const completed =
+      'age":{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"third"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n';
+    await fs.appendFile(sessionFile, completed);
+    const further = new Date(Date.now() + 10000);
+    await fs.utimes(sessionFile, further, further);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const final = (db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number });
+    expect(final.turn_count).toBe(4); // the previously-partial turn now ingested
+    expect(final.byte_offset).toBe(final.file_size);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("recovers Bash command from truncated arguments_json on rehydrate", async () => {
+    // Regression test: a Bash command whose JSON-stringified args exceed
+    // ARGS_JSON_LIMIT gets truncated to invalid JSON. Rehydration must
+    // still surface the `command` field so detectOneShot can see it.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-trunc", "s1.jsonl");
+    // Build a Bash command long enough to bust the 32 KB cap.
+    const longCommand = "npm test " + "X".repeat(40_000);
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "editing",
+        [{ id: "tu_e", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+      assistantTurn(
+        "2026-04-30T10:00:02Z",
+        "claude-sonnet-4-5",
+        "verifying",
+        [{ id: "tu_b", name: "Bash", input: { command: longCommand } }]
+      ),
+      {
+        type: "user" as const,
+        timestamp: "2026-04-30T10:00:03Z",
+        message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b" }] },
+      },
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Stored args were truncated past the close-quote — confirm.
+    const stored = (db
+      .prepare("SELECT arguments_json FROM tool_uses WHERE tool_name = 'Bash'")
+      .get() as { arguments_json: string });
+    let parseFailed = false;
+    try {
+      JSON.parse(stored.arguments_json);
+    } catch {
+      parseFailed = true;
+    }
+    expect(parseFailed).toBe(true);
+
+    // Append a NEW user prompt to trigger a tail-append. The tail rerun
+    // of detectOneShot must rehydrate the Bash turn's `command` field
+    // (via parseStoredArgs's fallback regex) and correctly classify the
+    // edit-verify-success cycle as one-shot.
+    await fs.appendFile(
+      sessionFile,
+      JSON.stringify(userTurn("2026-04-30T10:00:04Z", "anything else?")) + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
 
     reloaded.conn.closeDb();
   });

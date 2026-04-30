@@ -106,6 +106,12 @@ CREATE TABLE turns (
   parent_tool_use_id   TEXT,
   text_offset          INTEGER,
   text_preview         TEXT,
+  -- For user turns that carry a tool_result, the truncated result text
+  -- (~2000 chars). Stored separately from `text_preview` so that
+  -- `detectOneShot`'s error-pattern check can survive a rehydrate-from-DB
+  -- round-trip after a tail-append; otherwise prior failed verifications
+  -- would be invisible and one-shot stats would drift on tail.
+  tool_result_preview  TEXT,
   category             TEXT,
   -- Same `derived_version` semantics as on sessions/agents/skills/commands:
   -- bump the code's version constant to invalidate just this column's

@@ -76,8 +76,12 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await mig.initDb();
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
-    expect(result.appliedMigrations).toEqual([1]);
-    expect(result.schemaVersion).toBe(1);
+    // Fresh DBs run all migrations in order — v1 (initial schema) and
+    // v2 (idempotent column add). v2 is a no-op on fresh DBs because
+    // schema.sql already includes the column, but it still bumps the
+    // schema_version stamp.
+    expect(result.appliedMigrations).toEqual([1, 2]);
+    expect(result.schemaVersion).toBe(2);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -99,7 +103,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(1);
+    expect(result.schemaVersion).toBe(2);
     second.conn.closeDb();
   });
 
@@ -129,7 +133,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1]);
+    expect(result.appliedMigrations).toEqual([1, 2]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -159,7 +163,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(1);
+    expect(result.schemaVersion).toBe(2);
     second.conn.closeDb();
   });
 
@@ -187,6 +191,41 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     writeSpy.mockRestore();
     errorSpy.mockRestore();
     conn.closeDb();
+  });
+
+  it("v2 migration is idempotent: simulated v1 DB upgrades cleanly to v2", async () => {
+    // Simulate a database that was created against the v1 schema (no
+    // tool_result_preview column) and bring it up to v2. The migration
+    // must add the column without failing on fresh DBs that already
+    // have it (handled by the table_info check in migrations.ts).
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    await reloaded.mig.initDb();
+    const db = await reloaded.conn.getDb();
+    expect(db).not.toBeNull();
+
+    // Confirm v2 column exists after the fresh init.
+    const colsAfter = db!.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+    expect(colsAfter.some((c) => c.name === "tool_result_preview")).toBe(true);
+
+    // Simulate a "rolled-back-to-v1" state by dropping the column and
+    // resetting the schema_version stamp, then re-running initDb. v2
+    // should re-apply.
+    db!.exec("ALTER TABLE turns DROP COLUMN tool_result_preview");
+    db!.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
+    reloaded.conn.closeDb();
+
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    expect(result.appliedMigrations).toEqual([2]);
+    expect(result.schemaVersion).toBe(2);
+
+    const db2 = await second.conn.getDb();
+    const colsRecovered = db2!
+      .prepare("PRAGMA table_info(turns)")
+      .all() as Array<{ name: string }>;
+    expect(colsRecovered.some((c) => c.name === "tool_result_preview")).toBe(true);
+    second.conn.closeDb();
   });
 });
 

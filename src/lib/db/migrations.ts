@@ -45,6 +45,20 @@ const MIGRATIONS: Migration[] = [
       db.exec(sql);
     },
   },
+  {
+    version: 2,
+    name: "add turns.tool_result_preview",
+    up: (db) => {
+      // Idempotent: fresh DBs ran the latest schema.sql in v1 which already
+      // includes the column. Only existing DBs upgraded from v1 need the
+      // ALTER. SQLite doesn't have ADD COLUMN IF NOT EXISTS so we check
+      // the current schema before adding.
+      const cols = db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "tool_result_preview")) {
+        db.exec("ALTER TABLE turns ADD COLUMN tool_result_preview TEXT");
+      }
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {
