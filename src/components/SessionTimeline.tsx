@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { TimelineEvent } from "@/lib/types";
 import { User, Bot, Wrench, Brain, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { parseMarkdown, hasCodeFence } from "@/lib/markdown";
@@ -25,8 +25,43 @@ function formatOffset(timestamp: string | undefined, sessionStart: string | unde
   return `+${minutes}m${seconds % 60}s`;
 }
 
-function RenderedContent({ text }: { text: string }) {
-  const segments = parseMarkdown(text);
+// One-shot intersection observer: returns true once the element has entered
+// the viewport (or come within `rootMargin`) and stays true. Disconnects after
+// the first hit so we don't keep observers alive for off-screen items the user
+// has already passed. SSR-safe — defaults to `false` until the effect runs.
+function useInView(rootMargin = "500px"): [React.RefObject<HTMLDivElement | null>, boolean] {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [inView, setInView] = useState(false);
+
+  useEffect(() => {
+    if (inView) return;
+    const node = ref.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      // No IO support — fall back to mounting eagerly so content still renders.
+      setInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [inView, rootMargin]);
+
+  return [ref, inView];
+}
+
+const RenderedContent = memo(function RenderedContent({ text }: { text: string }) {
+  // parseMarkdown walks the string once per unique value; React.memo prevents
+  // re-running it when the parent re-renders with the same text prop.
+  const segments = useMemo(() => parseMarkdown(text), [text]);
   return (
     <>
       {segments.map((seg, i) => {
@@ -74,7 +109,7 @@ function RenderedContent({ text }: { text: string }) {
       })}
     </>
   );
-}
+});
 
 function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionStart?: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -84,9 +119,11 @@ function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionSt
   const threshold = hasCodeFence(event.content) ? 400 : 150;
   const isLong = event.content.length > threshold;
   const displayText = isLong && !expanded ? event.content.slice(0, threshold) + "…" : event.content;
+  const [containerRef, inView] = useInView("500px");
 
   return (
     <div
+      ref={containerRef}
       style={{
         display: "flex",
         gap: "10px",
@@ -114,7 +151,14 @@ function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionSt
           )}
         </div>
         <div style={{ fontSize: "0.78rem", color: "var(--text-primary)", lineHeight: 1.5 }}>
-          <RenderedContent text={displayText} />
+          {inView ? (
+            <RenderedContent text={displayText} />
+          ) : (
+            // Off-screen placeholder: plain whitespace-preserving text. Same
+            // line-wrap behavior as the parsed output for non-code content, so
+            // the swap is layout-stable for the common case.
+            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{displayText}</span>
+          )}
         </div>
         {isLong && (
           <button

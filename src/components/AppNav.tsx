@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import type { LiveSession } from "@/lib/types";
+import { usePulse } from "./PulseProvider";
 
 const navItems = [
   { href: "/manual-steps", label: "Steps",    badge: "steps"    },
@@ -22,46 +21,11 @@ const navItems = [
 
 export function AppNav() {
   const pathname = usePathname();
-  const [stepsPending, setStepsPending] = useState(0);
-  const [statusApproval, setStatusApproval] = useState(0);
-
-  useEffect(() => {
-    async function fetchPending() {
-      try {
-        const res = await fetch("/api/manual-steps?pending=true");
-        if (!res.ok) return;
-        const data = await res.json();
-        const total = data.reduce(
-          (sum: number, p: { manualSteps: { pendingSteps: number } }) =>
-            sum + p.manualSteps.pendingSteps,
-          0
-        );
-        setStepsPending(total);
-      } catch {
-        // silently ignore, will retry on next tick
-      }
-    }
-    fetchPending();
-    const id = setInterval(fetchPending, 30_000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    async function fetchApproval() {
-      try {
-        const res = await fetch("/api/status");
-        if (!res.ok) return;
-        const data = await res.json() as { sessions: LiveSession[] };
-        const count = data.sessions?.filter((s) => s.status === "approval").length ?? 0;
-        setStatusApproval(count);
-      } catch {
-        // silently ignore, will retry on next tick
-      }
-    }
-    fetchApproval();
-    const id = setInterval(fetchApproval, 10_000);
-    return () => clearInterval(id);
-  }, []);
+  // Counts come from the shared pulse stream — no per-component intervals.
+  // Both badges update on the same 5s tick that drives the notification toaster.
+  const { snapshot } = usePulse();
+  const stepsPending = snapshot.pendingSteps;
+  const statusApproval = snapshot.approvalCount;
 
   return (
     <nav style={{ display: "flex", alignItems: "center", gap: "2px", flexWrap: "wrap" }}>
