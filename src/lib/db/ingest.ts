@@ -593,7 +593,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
  * the rollup is either fully old or fully new for this batch, never a
  * partial mix.
  */
-function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
+export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): void {
   if (tuples.size === 0) return;
   const deleteStmt = db.prepare(
     "DELETE FROM daily_costs WHERE day = ? AND project_slug = ? AND model = ?"
