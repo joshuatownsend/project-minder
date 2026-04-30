@@ -42,6 +42,12 @@ import { getDb, getDbSync } from "./connection";
 const DEBOUNCE_MS = 250;
 const SWEEP_INTERVAL_MS = 30_000;
 const AWAIT_WRITE_FINISH_MS = 250;
+// Cap on how long we'll wait for chokidar's initial scan. A malformed
+// watch path or a permission issue can leave `ready` un-emitted; we
+// don't want server boot to hang forever waiting on it. 30 s is well
+// past any plausible scan time (the initial scan is metadata-only —
+// chokidar isn't reading file contents).
+const READY_TIMEOUT_MS = 30_000;
 
 interface WatcherState {
   watcher: FSWatcher | null;
@@ -215,6 +221,22 @@ export async function startIngestWatcher(
 
   state.watcher = watcher;
 
+  // Attach the error listener BEFORE we await `ready`. Without it, an
+  // EventEmitter `error` emission during the initial scan has no listener
+  // and Node treats it as an uncaught error — crashing server boot.
+  // We also need it wired up so the `ready` race below can reject on
+  // startup failure instead of hanging forever.
+  let pendingErrorReject: ((err: Error) => void) | null = null;
+  watcher.on("error", (err) => {
+    state.errors++;
+    // eslint-disable-next-line no-console
+    console.warn(`[ingest-watcher] chokidar error: ${(err as Error).message}`);
+    if (pendingErrorReject) {
+      pendingErrorReject(err as Error);
+      pendingErrorReject = null;
+    }
+  });
+
   const onJsonl = (handler: (state: WatcherState, fp: string) => void) =>
     (filePath: string) => {
       if (!filePath.endsWith(".jsonl")) return;
@@ -224,19 +246,38 @@ export async function startIngestWatcher(
   watcher.on("change", onJsonl(scheduleReconcile));
   watcher.on("unlink", onJsonl(scheduleUnlink));
 
-  // Don't return until the initial scan has completed and chokidar is
-  // actually watching. Without this, callers that immediately create a
-  // file would race the ready phase — `ignoreInitial: true` swallows
-  // anything that landed before the scan was done.
-  await new Promise<void>((resolve) => {
-    const onReady = () => resolve();
-    watcher.once("ready", onReady);
-  });
-  watcher.on("error", (err) => {
-    state.errors++;
+  // Don't return until the initial scan has completed. Race ready
+  // against (a) an emitted error and (b) a 30 s timeout so a malformed
+  // watch path can't block server boot indefinitely.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      pendingErrorReject = reject;
+      const timeout = setTimeout(() => {
+        pendingErrorReject = null;
+        reject(new Error("chokidar ready timeout (30 s)"));
+      }, READY_TIMEOUT_MS);
+      timeout.unref?.();
+      watcher.once("ready", () => {
+        clearTimeout(timeout);
+        pendingErrorReject = null;
+        resolve();
+      });
+    });
+  } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn(`[ingest-watcher] chokidar error: ${(err as Error).message}`);
-  });
+    console.warn(
+      `[ingest-watcher] failed to reach 'ready': ${(err as Error).message}. ` +
+        `Falling back to sweep-only mode.`
+    );
+    try {
+      await watcher.close();
+    } catch {
+      /* ignore */
+    }
+    state.watcher = null;
+    if (!options.disableSweep) startSweep(state);
+    return snapshot(state);
+  }
 
   if (!options.disableSweep) startSweep(state);
   return snapshot(state);
@@ -253,7 +294,11 @@ export async function stopIngestWatcher(): Promise<void> {
   state.inFlight.clear();
   state.needsAnotherPass.clear();
   if (state.sweepTimer) {
-    clearInterval(state.sweepTimer);
+    // Sweep is now self-scheduling setTimeout, not setInterval. The
+    // re-arm guard in startSweep also gates on the singleton still
+    // being us — `delete g.__minderIngestWatcher` below is the second
+    // line of defense in case a tick is currently mid-flight.
+    clearTimeout(state.sweepTimer);
     state.sweepTimer = null;
   }
   if (state.watcher) {
@@ -373,7 +418,13 @@ function scheduleUnlink(state: WatcherState, filePath: string): void {
 }
 
 function startSweep(state: WatcherState): void {
-  state.sweepTimer = setInterval(async () => {
+  // Self-scheduling setTimeout, NOT setInterval. Under a slow disk or a
+  // very large project tree `reconcileAllSessions` could take longer
+  // than `SWEEP_INTERVAL_MS`; setInterval would queue a second sweep
+  // before the first finished, contending on the writer connection and
+  // doubling the work. setTimeout-after-completion guarantees one sweep
+  // at a time. `stopIngestWatcher` clears whichever phase is pending.
+  const tick = async (): Promise<void> => {
     try {
       const db = getDbSync() ?? (await getDb());
       if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
@@ -381,8 +432,15 @@ function startSweep(state: WatcherState): void {
       state.errors++;
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
+    } finally {
+      // Re-arm only if we're still the active watcher (stopIngestWatcher
+      // detaches the singleton via `delete g.__minderIngestWatcher`).
+      if (g.__minderIngestWatcher === state) {
+        state.sweepTimer = setTimeout(tick, SWEEP_INTERVAL_MS);
+        state.sweepTimer.unref?.();
+      }
     }
-  }, SWEEP_INTERVAL_MS);
-  // Don't keep the Node process alive solely for the sweep timer.
+  };
+  state.sweepTimer = setTimeout(tick, SWEEP_INTERVAL_MS);
   state.sweepTimer.unref?.();
 }

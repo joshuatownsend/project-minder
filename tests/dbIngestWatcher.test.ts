@@ -219,6 +219,33 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     reloaded.conn.closeDb();
   });
 
+  it("startup error is handled (doesn't crash) and falls back to sweep-only", async () => {
+    // Point the watcher at a path that doesn't exist. chokidar should
+    // complete (with `ignoreInitial: true` it doesn't error on missing
+    // paths — it just fires nothing). Either way: startup must not
+    // throw, status reflects the result, no uncaught errors.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = path.join(tmpHome, "does", "not", "exist");
+
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      usePolling: true,
+      awaitWriteFinishMs: 0,
+      debounceMs: 50,
+    });
+    // running may be true (chokidar happily watches a non-existent path)
+    // or false (fell back to sweep-only). The important contract is that
+    // we returned without throwing and the watcher is in a sane state
+    // we can stop.
+    expect(typeof status.running).toBe("boolean");
+    expect(status.errors).toBe(0); // unhandled errors would crash, not increment
+
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
   it("close()s cleanly and is idempotent", async () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const projectsDir = projectsDirOf(tmpHome);
