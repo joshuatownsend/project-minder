@@ -49,9 +49,22 @@ export async function GET(request: NextRequest) {
     globalForSessions.__sessionsCache = cache;
   }
 
+  // ETag inputs include both `cachedAt` and `maxSessionMs` deliberately. There
+  // are two failure modes to dodge here:
+  //   - Rotate-too-often (ETag = cachedAt only): clients lose 304s every 30 s
+  //     even when nothing actually changed.
+  //   - Rotate-too-rarely (ETag = maxSessionMs only): SessionSummary contains
+  //     time-dependent fields (`isActive`, `status`) that scanAllSessions
+  //     recomputes on every refresh based on the current clock. Two sessions
+  //     could "go inactive" across cache rebuilds without any JSONL editing,
+  //     and a content-only ETag would 304 conditional clients into displaying
+  //     stale activity badges indefinitely.
+  // Combining both means the ETag is stable WITHIN a 30 s window (304s work
+  // for back-to-back navigations) but rotates ACROSS windows so any
+  // time-driven status flip surfaces on the next refresh.
   const etag = computeETag({
     salt: "sessions-v1",
-    maxMtimeMs: cache.maxSessionMs,
+    maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
     parts: [project ?? "", cache.sessions.length],
   });
 
