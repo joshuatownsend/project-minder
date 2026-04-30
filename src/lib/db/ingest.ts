@@ -1,7 +1,7 @@
 import "server-only";
 import path from "path";
 import os from "os";
-import { promises as fs } from "fs";
+import { promises as fs, createReadStream } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
@@ -95,6 +95,14 @@ interface ParsedTurn {
   isError: 0 | 1;
   parentToolUseId: string | null;
   textPreview: string | null;
+  /**
+   * For user turns carrying a tool_result, the truncated result text.
+   * Stored separately from `textPreview` so `detectOneShot`'s error-
+   * pattern check survives the rehydrate-from-DB round-trip after a
+   * tail-append. Null on assistant turns and on user turns that don't
+   * have tool_result content.
+   */
+  toolResultPreview: string | null;
   toolUses: ParsedToolUse[];
   // UsageTurn-shaped projection for classifier/one-shot reuse.
   usageTurn: UsageTurn;
@@ -168,6 +176,19 @@ function truncateText(s: string | undefined | null, max: number): string | null 
   return s.length > max ? s.slice(0, max) : s;
 }
 
+/**
+ * Read [start, EOF) of a file as a UTF-8 string without buffering the
+ * prefix. Backed by `createReadStream({ start })` so the OS only delivers
+ * bytes after `start`. Used by the tail-append path so an active 50 MB
+ * session log only costs the size of the appended bytes per reconcile.
+ */
+async function readTailString(filePath: string, start: number): Promise<string> {
+  const stream = createReadStream(filePath, { start, encoding: "utf8" });
+  let acc = "";
+  for await (const chunk of stream) acc += chunk as string;
+  return acc;
+}
+
 interface ReadOptions {
   /** Byte position to start reading from. 0 = full file. */
   fromOffset?: number;
@@ -191,13 +212,13 @@ async function readJsonlSession(
   let raw: string;
   try {
     if (fromOffset > 0) {
-      // Tail read from a known byte offset. The invariant carried by
-      // `sessions.byte_offset` is "position immediately after the last
-      // `\n` we've consumed", so a stream starting at that offset
+      // Tail read from a known byte offset via a ranged stream — only
+      // the bytes after `fromOffset` enter memory, never the prefix.
+      // The invariant carried by `sessions.byte_offset` is "position
+      // immediately after the last `\n` we've consumed", so the stream
       // begins on a clean line boundary. Real Claude Code JSONLs always
       // end with `\n`, which makes this round-trip safely.
-      const buf = await fs.readFile(filePath);
-      raw = buf.subarray(fromOffset).toString("utf8");
+      raw = await readTailString(filePath, fromOffset);
     } else {
       raw = await fs.readFile(filePath, "utf8");
     }
@@ -334,6 +355,7 @@ async function readJsonlSession(
         isError,
         parentToolUseId: null,
         textPreview,
+        toolResultPreview: null,
         toolUses,
         usageTurn,
       });
@@ -383,6 +405,7 @@ async function readJsonlSession(
         isError: 0,
         parentToolUseId: null,
         textPreview,
+        toolResultPreview: toolResultText || null,
         toolUses: [],
         usageTurn,
       });
@@ -527,11 +550,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, category, derived_version
+       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @category, @derived_version
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -565,6 +588,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       is_error: t.isError,
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
+      tool_result_preview: t.toolResultPreview,
       category,
       derived_version: DERIVED_VERSION,
     });
@@ -714,7 +738,7 @@ function loadExistingTurnsAsUsage(
     .prepare(
       `SELECT turn_index, ts, role, model,
               input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-              is_error
+              is_error, text_preview, tool_result_preview
        FROM turns WHERE session_id = ? ORDER BY turn_index`
     )
     .all(sessionId) as Array<{
@@ -727,6 +751,8 @@ function loadExistingTurnsAsUsage(
     cache_create_tokens: number;
     cache_read_tokens: number;
     is_error: number;
+    text_preview: string | null;
+    tool_result_preview: string | null;
   }>;
 
   if (turnRows.length === 0) return [];
@@ -772,6 +798,14 @@ function loadExistingTurnsAsUsage(
     cacheReadTokens: r.cache_read_tokens,
     toolCalls: toolsByTurn.get(r.turn_index) ?? [],
     isError: r.is_error === 1,
+    // detectOneShot reads `toolResultText` to find ERROR_PATTERNS in
+    // tool result content. Without this, prior failed verifications
+    // would look like "no error" after a tail-append and has_one_shot
+    // could flip to true incorrectly. text_preview is the truncated
+    // human prompt for non-result user turns; tool_result_preview is
+    // the truncated tool result for result-bearing user turns.
+    userMessageText: r.role === "user" ? (r.text_preview ?? undefined) : undefined,
+    toolResultText: r.role === "user" ? (r.tool_result_preview ?? undefined) : undefined,
   }));
 }
 
@@ -799,11 +833,11 @@ function appendSessionTail(
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, category, derived_version
+       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @category, @derived_version
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -837,6 +871,7 @@ function appendSessionTail(
       is_error: t.isError,
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
+      tool_result_preview: t.toolResultPreview,
       category,
       derived_version: DERIVED_VERSION,
     });
@@ -950,13 +985,15 @@ function appendSessionTail(
   const cacheTotal = aggRow.cache_create_tokens + aggRow.cache_read_tokens;
   const cacheHitRatio = cacheTotal > 0 ? aggRow.cache_read_tokens / cacheTotal : null;
 
-  // Initial / last prompt: pull first/last user-role human-text preview.
-  // Existing initial_prompt should be preserved; only last_prompt may
-  // change on a tail. Read existing first.
+  // last_prompt: prefer the human prompt parsed from the tail. If the
+  // tail was assistant-only (no new human prompt), keep whatever the
+  // session already had — `initial_prompt` is the WRONG fallback,
+  // it'd regress a multi-prompt session's last prompt back to its
+  // first one on the first assistant-only append.
   const promptRow = db
-    .prepare("SELECT initial_prompt FROM sessions WHERE session_id = ?")
-    .get(sessionId) as { initial_prompt: string | null } | undefined;
-  const lastPrompt = parsed.lastPrompt ?? promptRow?.initial_prompt ?? null;
+    .prepare("SELECT last_prompt FROM sessions WHERE session_id = ?")
+    .get(sessionId) as { last_prompt: string | null } | undefined;
+  const lastPrompt = parsed.lastPrompt ?? promptRow?.last_prompt ?? null;
 
   db.prepare(
     `UPDATE sessions SET

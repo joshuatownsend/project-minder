@@ -179,7 +179,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(1);
+    expect(session.derived_version).toBe(2);
 
     const turnRows = db
       .prepare("SELECT role, category FROM turns WHERE session_id = 'abc-session' ORDER BY turn_index")
@@ -566,6 +566,96 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       (db.prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 's1'").get() as { n: number })
         .n
     ).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail rehydration preserves toolResultText for the one-shot detector", async () => {
+    // Regression test for PR #40 review: rehydrating user turns from
+    // `text_preview` alone lost the tool-result content that
+    // detectOneShot's error-pattern check relies on. After tail-append,
+    // a previously-FAILED verification would look like "no error" and
+    // has_one_shot would flip to true incorrectly.
+    //
+    // Build a session where the FIRST cycle's verification fails
+    // (Edit → Bash(test) → result with "FAIL"), then tail-append a
+    // SECOND cycle that succeeds. detectOneShot should count one
+    // verified task (the second cycle) as one-shot — not two —
+    // because the rehydrated first cycle still carries the failure.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-rehy", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "first edit",
+        [{ id: "tu_e1", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+      assistantTurn(
+        "2026-04-30T10:00:02Z",
+        "claude-sonnet-4-5",
+        "verifying",
+        [{ id: "tu_b1", name: "Bash", input: { command: "npm test" } }]
+      ),
+      {
+        type: "user" as const,
+        timestamp: "2026-04-30T10:00:03Z",
+        // Verification failed — the result text contains FAIL.
+        message: { content: [{ type: "tool_result", content: "FAIL: tests broke", tool_use_id: "tu_b1" }] },
+      },
+      // Re-edit (the failure path: another Edit appears, marking the
+      // first cycle as not-one-shot).
+      assistantTurn(
+        "2026-04-30T10:00:04Z",
+        "claude-sonnet-4-5",
+        "second edit",
+        [{ id: "tu_e2", name: "Edit", input: { file_path: "/x.ts", old_string: "b", new_string: "c" } }]
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Sanity: the failure should have been recorded — tool_result_preview
+    // for the failing user turn must contain "FAIL" so the detector can
+    // see it on rehydrate.
+    const userTurnWithResult = db
+      .prepare("SELECT tool_result_preview FROM turns WHERE session_id = 's1' AND role = 'user' AND tool_result_preview IS NOT NULL")
+      .get() as { tool_result_preview: string };
+    expect(userTurnWithResult.tool_result_preview).toContain("FAIL");
+
+    // Append a SECOND cycle that succeeds. The tail-append rehydrates
+    // the prior turns including the failing tool_result; if rehydration
+    // works, the detector treats cycle 1 as failed (correct) and cycle 2
+    // as one-shot (correct) — has_one_shot = 1 because cycle 2 succeeded.
+    await fs.appendFile(
+      sessionFile,
+      [
+        assistantTurn(
+          "2026-04-30T10:00:05Z",
+          "claude-sonnet-4-5",
+          "verifying again",
+          [{ id: "tu_b2", name: "Bash", input: { command: "npm test" } }]
+        ),
+        {
+          type: "user" as const,
+          timestamp: "2026-04-30T10:00:06Z",
+          message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b2" }] },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
 
     reloaded.conn.closeDb();
   });
