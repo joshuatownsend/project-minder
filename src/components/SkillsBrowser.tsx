@@ -302,8 +302,12 @@ export function SkillsBrowser() {
   // so `fetchBodyFor` can dedupe without rotating its callback identity on
   // every successful fetch.
   const [bodiesById, setBodiesById] = useState<Map<string, string>>(new Map());
+  // Sync the dedupe-cache ref AFTER commit. Mutating a ref during render is
+  // unsafe under concurrent rendering — see AgentsBrowser for the rationale.
   const bodiesByIdRef = useRef(bodiesById);
-  bodiesByIdRef.current = bodiesById;
+  useEffect(() => {
+    bodiesByIdRef.current = bodiesById;
+  }, [bodiesById]);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 300);
@@ -390,6 +394,9 @@ export function SkillsBrowser() {
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => 56,
     overscan: 6,
+    // Stable per-row identity — see AgentsBrowser for the rationale. Index-
+    // based keys leak local row state across reorders.
+    getItemKey: (index) => rowKey(filtered[index], index),
   });
 
   const segmentStyle = (active: boolean): React.CSSProperties => ({

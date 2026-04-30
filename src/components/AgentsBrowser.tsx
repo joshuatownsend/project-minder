@@ -315,8 +315,17 @@ export function AgentsBrowser() {
   // would rotate the callback's identity on every successful fetch and
   // ripple into per-row re-renders.
   const [bodiesById, setBodiesById] = useState<Map<string, string>>(new Map());
+  // Sync the dedupe-cache ref AFTER commit, not during render. Mutating a
+  // ref during render is unsafe under concurrent rendering — an aborted
+  // render would leave the ref pointing at state that never committed,
+  // and `fetchBodyFor` would then dedupe against a phantom entry. Effects
+  // only run on committed renders, so the ref always tracks reality.
+  // The user-triggered fetch click happens post-commit, so the ref is
+  // always current by the time fetchBodyFor reads it.
   const bodiesByIdRef = useRef(bodiesById);
-  bodiesByIdRef.current = bodiesById;
+  useEffect(() => {
+    bodiesByIdRef.current = bodiesById;
+  }, [bodiesById]);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 300);
@@ -410,6 +419,11 @@ export function AgentsBrowser() {
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => 56,
     overscan: 6,
+    // Stable per-row identity. Without this, vItem.key defaults to the index
+    // — and when filtering/sorting reorders the array, React reuses the same
+    // mounted AgentRowItem instance for a different row. Per-row local state
+    // (e.g. `bodyLoading`) leaks across agents until the next remount.
+    getItemKey: (index) => rowKey(filtered[index], index),
   });
 
   const segmentStyle = (active: boolean): React.CSSProperties => ({
