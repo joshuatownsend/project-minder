@@ -3,6 +3,36 @@
  * Extracted to keep SetupGuide.tsx focused on layout.
  */
 
+/**
+ * Recommended git treatment for the three project-level markdown files
+ * Project Minder writes. Surfaced on the Setup page so users have a
+ * single canonical answer to "should I commit these?"
+ */
+export const TRACKED_FILES = [
+  {
+    name: "TODO.md",
+    treatment: "Commit",
+    reason:
+      "Durable backlog of intent. Survives sessions, gets reviewed in PRs, syncs across machines.",
+  },
+  {
+    name: "INSIGHTS.md",
+    treatment: "Commit",
+    reason:
+      "Codebase knowledge captured by Claude across sessions. Travels with the repo so every contributor benefits.",
+  },
+  {
+    name: "MANUAL_STEPS.md",
+    treatment: "Commit",
+    reason:
+      "Append-only checklist of manual steps the developer still needs to perform (Clerk setup, DNS changes, etc.). The append-only rule keeps merge conflicts trivial. On solo projects it's how you preserve setup state across machines; on teams it's how the next person sees what's pending.",
+  },
+] as const;
+
+export const TRACKED_FILES_NOTE = `These are plain markdown — diffable, mergeable, and reviewable in pull requests. The biggest risk is **stashing** them mid-work: \`git stash pop\` can silently leave the stash in place on conflict, and a later \`git stash drop\` will permanently delete the changes. Eagerly commit these files to a small \`chore:\` commit instead of stashing them out of feature PRs.
+
+For team projects, MANUAL_STEPS.md can occasionally surface machine-specific paths that one developer wrote but another shouldn't follow. The CLAUDE.md instructions above guard against that, but it's worth a brief skim during PR review.`;
+
 export const CLAUDE_MD_TODO_BLOCK = `## TODO
 - If I give you a TODO, save it to TODO.md in our repo.
 - Consider our TODO list when planning new features. If something on the list can be accomplished during a plan or implement run, suggest it.

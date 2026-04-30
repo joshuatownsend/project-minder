@@ -9,6 +9,8 @@ import {
   HOOKS_SETTINGS_SNIPPET,
   HOOKS_VALIDATE_TODO,
   HOOKS_VALIDATE_MANUAL_STEPS,
+  TRACKED_FILES,
+  TRACKED_FILES_NOTE,
 } from "@/lib/setup-content";
 import type { ApplyAction, ApplyResult, ApplyStatus } from "@/lib/setupApply";
 import { useProjects } from "@/hooks/useProjects";
@@ -181,6 +183,102 @@ export function SetupGuide() {
         >
           <strong style={{ color: "var(--text-secondary)", fontWeight: 600 }}>This is sufficient for most projects.</strong>{" "}
           The instructions are advisory — Claude follows them when writing these files. If you want guaranteed format compliance that blocks malformed writes before they touch disk, continue to Step 2.
+        </div>
+      </div>
+
+      {/* Tracking in git */}
+      <div style={{ marginBottom: "36px" }}>
+        <SectionHeader label="Tracking in Git" />
+        <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: "16px" }}>
+          Project Minder writes three project-level markdown files that capture work in progress. We recommend{" "}
+          <strong style={{ color: "var(--text-primary)", fontWeight: 600 }}>committing all three</strong>:
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "16px" }}>
+          {TRACKED_FILES.map((file) => (
+            <div
+              key={file.name}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "auto auto 1fr",
+                gap: "12px",
+                alignItems: "baseline",
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius)",
+                padding: "10px 14px",
+              }}
+            >
+              <code
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.78rem",
+                  color: "var(--accent)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {file.name}
+              </code>
+              <span
+                style={{
+                  fontSize: "0.7rem",
+                  fontFamily: "var(--font-mono)",
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--success, var(--accent))",
+                  background: "var(--success-bg, var(--accent-bg))",
+                  border: "1px solid var(--success-border, var(--accent-border))",
+                  borderRadius: "3px",
+                  padding: "2px 7px",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {file.treatment}
+              </span>
+              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                {file.reason}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            padding: "12px 14px",
+            fontSize: "0.76rem",
+            color: "var(--text-muted)",
+            lineHeight: 1.55,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {TRACKED_FILES_NOTE.split("\n\n").map((paragraph, i) => (
+            <p
+              key={i}
+              style={{
+                margin: 0,
+                marginBottom: i < TRACKED_FILES_NOTE.split("\n\n").length - 1 ? "10px" : 0,
+              }}
+            >
+              {paragraph.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((seg, j) => {
+                if (seg.startsWith("**") && seg.endsWith("**")) {
+                  return (
+                    <strong key={j} style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+                      {seg.slice(2, -2)}
+                    </strong>
+                  );
+                }
+                if (seg.startsWith("`") && seg.endsWith("`")) {
+                  return (
+                    <code key={j} style={{ fontFamily: "var(--font-mono)", fontSize: "0.74rem" }}>
+                      {seg.slice(1, -1)}
+                    </code>
+                  );
+                }
+                return <span key={j}>{seg}</span>;
+              })}
+            </p>
+          ))}
         </div>
       </div>
 
