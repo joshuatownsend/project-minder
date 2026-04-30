@@ -54,3 +54,37 @@ export async function writeFileAtomic(
     throw err;
   }
 }
+
+/**
+ * Rename `src` to `dest`, retrying on Windows EBUSY/EPERM.
+ *
+ * Why retry? On Windows, file handles release asynchronously after a
+ * `close()` (or after a constructor that opened-then-threw). A rename
+ * landing within tens of ms of the prior holder's close can fail with
+ * EBUSY. POSIX doesn't have this issue but the retry loop is cheap.
+ *
+ * On a fast path (no contention) the first attempt succeeds. On a slow
+ * path the linear backoff caps at ~2.75 s total wait (50ms × 1..10).
+ *
+ * Errors other than EBUSY/EPERM (most importantly ENOENT) are NOT
+ * retried — those are caller bugs, not lock contention.
+ */
+export async function renameWithRetry(
+  src: string,
+  dest: string,
+  attempts: number = 10
+): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fs.rename(src, dest);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" && code !== "EPERM") throw err;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}

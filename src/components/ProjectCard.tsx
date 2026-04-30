@@ -418,10 +418,27 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 </span>
               )}
               {workflowCount > 0 && (
-                <Link
-                  href={`/config?type=cicd&project=${encodeURIComponent(project.slug)}`}
+                // Rendered as a span (not <Link>) because the entire card is
+                // already wrapped in a <Link> — nesting <a> inside <a> is
+                // invalid HTML and triggers a hydration error. router.push
+                // gives us the navigation; the outer card's link covers the
+                // middle-click/right-click "open in new tab" affordance.
+                <span
+                  role="link"
+                  tabIndex={0}
                   title={`${pluralize(workflowCount, "workflow")} — open in /config`}
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    router.push(`/config?type=cicd&project=${encodeURIComponent(project.slug)}`);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      router.push(`/config?type=cicd&project=${encodeURIComponent(project.slug)}`);
+                    }
+                  }}
                   style={{
                     fontSize: "0.6rem",
                     fontFamily: "var(--font-mono)",
@@ -431,11 +448,11 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                     padding: "1px 5px",
                     borderRadius: "3px",
                     letterSpacing: "0.04em",
-                    textDecoration: "none",
+                    cursor: "pointer",
                   }}
                 >
                   CI
-                </Link>
+                </span>
               )}
             </div>
 
