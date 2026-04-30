@@ -718,6 +718,132 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("doesn't advance byte_offset past a partial trailing line", async () => {
+    // Regression test for the byte_offset advancement bug: if the writer
+    // is mid-flush, an incomplete final line should NOT move the cursor
+    // past it — otherwise the line is permanently dropped when the
+    // writer finishes.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-mid", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "first"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "first reply"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const cursorAfterClean = (db
+      .prepare("SELECT byte_offset, file_size FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number });
+    expect(cursorAfterClean.byte_offset).toBe(cursorAfterClean.file_size);
+
+    // Append a complete line followed by a partial line (no trailing \n)
+    // — simulating a writer mid-flush.
+    const completeLine = JSON.stringify(
+      assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "second reply")
+    ) + "\n";
+    const partial = '{"type":"assistant","timestamp":"2026-04-30T10:00:03Z","mess';
+    await fs.appendFile(sessionFile, completeLine + partial);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const cursorAfterPartial = (db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number });
+    // The complete line was ingested (turn 0 user, turn 1 assistant,
+    // turn 2 assistant from the appended complete line — partial is NOT
+    // a turn yet).
+    expect(cursorAfterPartial.turn_count).toBe(3);
+    // Cursor parked at end of the complete line, NOT at file_size.
+    expect(cursorAfterPartial.byte_offset).toBeLessThan(cursorAfterPartial.file_size);
+    expect(cursorAfterPartial.byte_offset).toBe(
+      cursorAfterPartial.file_size - Buffer.byteLength(partial, "utf8")
+    );
+
+    // Now flush the partial line — append the rest + newline. The next
+    // reconcile must pick up the previously-partial line as a new turn.
+    const completed =
+      'age":{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"third"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n';
+    await fs.appendFile(sessionFile, completed);
+    const further = new Date(Date.now() + 10000);
+    await fs.utimes(sessionFile, further, further);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const final = (db
+      .prepare("SELECT byte_offset, file_size, turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { byte_offset: number; file_size: number; turn_count: number });
+    expect(final.turn_count).toBe(4); // the previously-partial turn now ingested
+    expect(final.byte_offset).toBe(final.file_size);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("recovers Bash command from truncated arguments_json on rehydrate", async () => {
+    // Regression test: a Bash command whose JSON-stringified args exceed
+    // ARGS_JSON_LIMIT gets truncated to invalid JSON. Rehydration must
+    // still surface the `command` field so detectOneShot can see it.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-trunc", "s1.jsonl");
+    // Build a Bash command long enough to bust the 32 KB cap.
+    const longCommand = "npm test " + "X".repeat(40_000);
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fix it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "editing",
+        [{ id: "tu_e", name: "Edit", input: { file_path: "/x.ts", old_string: "a", new_string: "b" } }]
+      ),
+      assistantTurn(
+        "2026-04-30T10:00:02Z",
+        "claude-sonnet-4-5",
+        "verifying",
+        [{ id: "tu_b", name: "Bash", input: { command: longCommand } }]
+      ),
+      {
+        type: "user" as const,
+        timestamp: "2026-04-30T10:00:03Z",
+        message: { content: [{ type: "tool_result", content: "all tests passed", tool_use_id: "tu_b" }] },
+      },
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Stored args were truncated past the close-quote — confirm.
+    const stored = (db
+      .prepare("SELECT arguments_json FROM tool_uses WHERE tool_name = 'Bash'")
+      .get() as { arguments_json: string });
+    let parseFailed = false;
+    try {
+      JSON.parse(stored.arguments_json);
+    } catch {
+      parseFailed = true;
+    }
+    expect(parseFailed).toBe(true);
+
+    // Append a NEW user prompt to trigger a tail-append. The tail rerun
+    // of detectOneShot must rehydrate the Bash turn's `command` field
+    // (via parseStoredArgs's fallback regex) and correctly classify the
+    // edit-verify-success cycle as one-shot.
+    await fs.appendFile(
+      sessionFile,
+      JSON.stringify(userTurn("2026-04-30T10:00:04Z", "anything else?")) + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      (db
+        .prepare("SELECT has_one_shot FROM sessions WHERE session_id = 's1'")
+        .get() as { has_one_shot: number }).has_one_shot
+    ).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
   it("refreshes daily_costs for the OLD day when a turn moves between days", async () => {
     // Regression test: re-ingesting a session that moves an assistant
     // turn from day X to day Y previously left day X's daily_costs row

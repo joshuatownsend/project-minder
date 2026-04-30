@@ -53,7 +53,13 @@ import { DERIVED_VERSION } from "./derivationVersion";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 const TEXT_PREVIEW_LIMIT = 500;
-const ARGS_JSON_LIMIT = 10_000;
+// 32 KB is large enough to hold ~all real-world Bash commands and Edit
+// payloads we've seen in user JSONLs. The column is TEXT (no SQLite
+// limit); storage cost is bounded by the typical-much-smaller-than-cap
+// distribution of args. The previous 10 KB limit was small enough that
+// long Edit `old_string` / `new_string` payloads made the JSON invalid
+// after slicing, which broke rehydration in `loadExistingTurnsAsUsage`.
+const ARGS_JSON_LIMIT = 32_000;
 // Parity with the file-parse path (`src/lib/usage/parser.ts`): user text
 // is truncated to 500 chars, tool-result text to 2000 chars before the
 // downstream classifier / one-shot detector see them. The two paths
@@ -115,6 +121,14 @@ interface ParsedSession {
   filePath: string;
   fileMtimeMs: number;
   fileSize: number;
+  /**
+   * Byte position immediately after the last `\n` we consumed. This is
+   * the safe cursor — anything beyond it is a partial line that hasn't
+   * been flushed yet. Stored as `sessions.byte_offset`, used as the
+   * `fromOffset` for the next tail read so a mid-flush race never
+   * permanently drops a turn.
+   */
+  byteOffset: number;
   startTs: string | null;
   endTs: string | null;
   primaryModel: string | null;
@@ -169,6 +183,38 @@ function extractSkillName(toolName: string, args: Record<string, unknown> | unde
   return typeof args.skill === "string" ? args.skill : null;
 }
 
+const COMMAND_RECOVERY_RE = /"command"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/;
+
+/**
+ * Parse `tool_uses.arguments_json` from the DB. Tries `JSON.parse` first
+ * (the common case); on failure, falls back to a regex match of the
+ * `command` field so `detectOneShot` can still see Bash / PowerShell
+ * verification commands when the stored JSON was truncated past the
+ * boundary of the `command` value.
+ *
+ * The fallback only recovers `command` because that's the single field
+ * the one-shot detector reads. Other detectors that need more fields
+ * should prompt a structural fix (separate column or larger limit).
+ */
+function parseStoredArgs(json: string | null): Record<string, unknown> | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    // Capture everything after `"command":"` up to the first non-escaped
+    // `"` or end of string. If the truncation cut mid-escape sequence,
+    // the JSON.parse below throws and we give up.
+    const match = COMMAND_RECOVERY_RE.exec(json);
+    if (!match) return undefined;
+    try {
+      const command = JSON.parse(`"${match[1]}"`);
+      return { command };
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 // ── JSONL → ParsedSession ──────────────────────────────────────────────────
 
 function truncateText(s: string | undefined | null, max: number): string | null {
@@ -177,16 +223,38 @@ function truncateText(s: string | undefined | null, max: number): string | null 
 }
 
 /**
- * Read [start, EOF) of a file as a UTF-8 string without buffering the
- * prefix. Backed by `createReadStream({ start })` so the OS only delivers
- * bytes after `start`. Used by the tail-append path so an active 50 MB
- * session log only costs the size of the appended bytes per reconcile.
+ * Read [start, EOF) of a file and return the bytes up to the LAST `\n`
+ * along with the byte position immediately after it. Anything after the
+ * last newline is treated as a partial line that hasn't been flushed yet
+ * and must NOT advance the cursor — otherwise a writer mid-flush could
+ * cause us to skip a turn permanently when its first half lands before
+ * a reconcile and the second half lands after.
+ *
+ * Returns `{ text: "", safeOffset: start }` when there's no `\n` in the
+ * tail (purely partial content).
+ *
+ * Backed by `createReadStream({ start })` so the OS only delivers bytes
+ * after `start`. The byte-vs-char distinction matters because we can't
+ * use `String.lastIndexOf("\n")` here — we need the BYTE position to
+ * compute a correct cursor on multi-byte UTF-8 content.
  */
-async function readTailString(filePath: string, start: number): Promise<string> {
-  const stream = createReadStream(filePath, { start, encoding: "utf8" });
-  let acc = "";
-  for await (const chunk of stream) acc += chunk as string;
-  return acc;
+async function readTailToLastNewline(
+  filePath: string,
+  start: number
+): Promise<{ text: string; safeOffset: number }> {
+  const stream = createReadStream(filePath, { start });
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const buf = Buffer.concat(chunks);
+  // Walk backwards looking for the last 0x0A. lastIndexOf on a Buffer is
+  // a single byte scan; cheaper than the BoyerMoore lookup ChainExt'd
+  // strings would do.
+  const lastNewline = buf.lastIndexOf(0x0a);
+  if (lastNewline === -1) {
+    return { text: "", safeOffset: start };
+  }
+  const text = buf.subarray(0, lastNewline + 1).toString("utf8");
+  return { text, safeOffset: start + lastNewline + 1 };
 }
 
 interface ReadOptions {
@@ -196,32 +264,45 @@ interface ReadOptions {
   startTurnIndex?: number;
 }
 
+/**
+ * Parse a session JSONL (full or tail). Returns the parsed session and
+ * the safe byte cursor — the position immediately after the last `\n`
+ * we consumed. Callers should ALWAYS use the returned `safeOffset` to
+ * update `sessions.byte_offset`, even when `parsed` is null (a partial
+ * line at EOF means we read 0 turns; the cursor stays where it was so
+ * the next reconcile picks up the line once the writer flushes it).
+ */
+interface ReadResult {
+  parsed: ParsedSession | null;
+  safeOffset: number;
+}
+
 async function readJsonlSession(
   filePath: string,
   projectDirName: string,
   fileMtimeMs: number,
   fileSize: number,
   options: ReadOptions = {}
-): Promise<ParsedSession | null> {
+): Promise<ReadResult | null> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = toSlug(canonicalDir);
   const fromOffset = options.fromOffset ?? 0;
   const startTurnIndex = options.startTurnIndex ?? 0;
 
+  // Read up to the LAST `\n` and capture the byte position immediately
+  // after it as the safe cursor. Both full-parse and tail-parse use the
+  // same primitive so the cursor invariant ("position after the last
+  // consumed `\n`") holds regardless of whether the writer is mid-flush.
+  // If a partial line is appended at EOF, we ingest everything before it
+  // and leave the cursor parked at the start of the partial line — the
+  // next reconcile picks it up after the writer finishes.
   let raw: string;
+  let safeOffset: number;
   try {
-    if (fromOffset > 0) {
-      // Tail read from a known byte offset via a ranged stream — only
-      // the bytes after `fromOffset` enter memory, never the prefix.
-      // The invariant carried by `sessions.byte_offset` is "position
-      // immediately after the last `\n` we've consumed", so the stream
-      // begins on a clean line boundary. Real Claude Code JSONLs always
-      // end with `\n`, which makes this round-trip safely.
-      raw = await readTailString(filePath, fromOffset);
-    } else {
-      raw = await fs.readFile(filePath, "utf8");
-    }
+    const result = await readTailToLastNewline(filePath, fromOffset);
+    raw = result.text;
+    safeOffset = result.safeOffset;
   } catch {
     return null;
   }
@@ -412,7 +493,7 @@ async function readJsonlSession(
     }
   }
 
-  if (turns.length === 0) return null;
+  if (turns.length === 0) return { parsed: null, safeOffset };
 
   // Derive: primary model = most-frequent assistant model.
   let primaryModel: string | null = null;
@@ -449,32 +530,36 @@ async function readJsonlSession(
   }
 
   return {
-    sessionId,
-    projectDirName: canonicalDir,
-    projectSlug,
-    filePath,
-    fileMtimeMs,
-    fileSize,
-    startTs,
-    endTs,
-    primaryModel,
-    gitBranch,
-    initialPrompt,
-    lastPrompt,
-    turnCount: turns.length,
-    userTurnCount,
-    assistantTurnCount,
-    toolCallCount,
-    errorCount,
-    inputTokens,
-    outputTokens,
-    cacheCreateTokens,
-    cacheReadTokens,
-    costUsd,
-    cacheHitRatio,
-    hasOneShot,
-    turns,
-    affectedDays,
+    parsed: {
+      sessionId,
+      projectDirName: canonicalDir,
+      projectSlug,
+      filePath,
+      fileMtimeMs,
+      fileSize,
+      byteOffset: safeOffset,
+      startTs,
+      endTs,
+      primaryModel,
+      gitBranch,
+      initialPrompt,
+      lastPrompt,
+      turnCount: turns.length,
+      userTurnCount,
+      assistantTurnCount,
+      toolCallCount,
+      errorCount,
+      inputTokens,
+      outputTokens,
+      cacheCreateTokens,
+      cacheReadTokens,
+      costUsd,
+      cacheHitRatio,
+      hasOneShot,
+      turns,
+      affectedDays,
+    },
+    safeOffset,
   };
 }
 
@@ -522,7 +607,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     file_path: s.filePath,
     file_mtime_ms: s.fileMtimeMs,
     file_size: s.fileSize,
-    byte_offset: s.fileSize, // P2a-2.1: cursor = whole file. Real tail comes in 2.3.
+    // Cursor invariant: position immediately after the last `\n` we
+    // consumed. NOT `s.fileSize` — if the writer is mid-flush, the trailing
+    // partial line shouldn't move the cursor past it (that would
+    // permanently drop the turn when the line completes).
+    byte_offset: s.byteOffset,
     start_ts: s.startTs,
     end_ts: s.endTs,
     primary_model: s.primaryModel,
@@ -772,14 +861,7 @@ function loadExistingTurnsAsUsage(
   }>;
   const toolsByTurn = new Map<number, ToolCall[]>();
   for (const r of toolRows) {
-    let args: Record<string, unknown> | undefined;
-    if (r.arguments_json) {
-      try {
-        args = JSON.parse(r.arguments_json) as Record<string, unknown>;
-      } catch {
-        args = undefined;
-      }
-    }
+    const args = parseStoredArgs(r.arguments_json);
     const list = toolsByTurn.get(r.turn_index) ?? [];
     list.push({ name: r.tool_name, arguments: args });
     toolsByTurn.set(r.turn_index, list);
@@ -1024,7 +1106,9 @@ function appendSessionTail(
     file_path: parsed.filePath,
     file_mtime_ms: fileMtimeMs,
     file_size: fileSize,
-    byte_offset: fileSize,
+    // Same invariant as writeSession: cursor = position after the last
+    // consumed `\n`, never `fileSize` (which could be past a partial line).
+    byte_offset: parsed.byteOffset,
     start_ts: aggRow.start_ts,
     end_ts: aggRow.end_ts,
     primary_model: primaryModel,
@@ -1151,20 +1235,23 @@ export async function reconcileSessionFile(
     const startTurnIndex = (db
       .prepare("SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?")
       .get(sessionId) as { next_idx: number }).next_idx;
-    const tailParsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
+    const tailResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
       fromOffset: existing!.byte_offset,
       startTurnIndex,
     });
-    // tailParsed === null is "tail had no usable turns" — still update
-    // the cursor so we don't keep re-reading the same trailing junk
-    // (e.g., comment lines or sidechain entries). UPDATE just the file
-    // metadata.
-    if (!tailParsed) {
+    // `parsed === null` means "tail had no usable turns" — still update
+    // the cursor + file_size so we don't keep re-reading the same
+    // trailing junk (e.g., comment lines or sidechain entries). The
+    // safe cursor is `safeOffset`, NOT `size` — anything past
+    // `safeOffset` is a partial line that hasn't been flushed.
+    if (!tailResult || !tailResult.parsed) {
+      const newCursor = tailResult?.safeOffset ?? existing!.byte_offset;
       db.prepare(
         "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
-      ).run(mtimeMs, size, size, Date.now(), sessionId);
+      ).run(mtimeMs, size, newCursor, Date.now(), sessionId);
       return empty;
     }
+    const tailParsed = tailResult.parsed;
     let rows = 0;
     let affectedDays = new Set<string>();
     const txn = db.transaction(() => {
@@ -1181,15 +1268,15 @@ export async function reconcileSessionFile(
   // row behind; union with the new affectedDays for the refresh.
   const oldTuples = collectExistingDailyTuples(db, sessionId);
 
-  const parsed = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
-  if (!parsed) return empty;
+  const fullResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
+  if (!fullResult || !fullResult.parsed) return empty;
 
   let rows = 0;
   const txn = db.transaction(() => {
-    rows = writeSession(db, parsed);
+    rows = writeSession(db, fullResult.parsed!);
   });
   txn();
-  const affectedDays = new Set<string>(parsed.affectedDays);
+  const affectedDays = new Set<string>(fullResult.parsed.affectedDays);
   for (const tuple of oldTuples) affectedDays.add(tuple);
   return { rowsWritten: rows, affectedDays };
 }
