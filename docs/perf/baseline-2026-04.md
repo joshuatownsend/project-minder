@@ -274,6 +274,40 @@ Deferred to P0.5 (low-priority — no measured CLS issue, can copy SessionsBrows
 
 ---
 
+## After P0.5 — 2026-04-30
+
+P0.5 finished the virtualization story by **measuring before paying** instead of inheriting the P0 deferral list wholesale. Item counts from the live dataset:
+
+| Component | Items | Verdict |
+|---|---|---|
+| `AgentsBrowser` | **226** | Virtualize ✅ |
+| `SkillsBrowser` | **258** | Virtualize ✅ |
+| `ManualStepsDashboard` | 9 | Skip — well below the ~100-row threshold where virtualization wins. |
+| `DashboardGrid` (list mode) | 32 | Skip. |
+| `UsageDashboard` (per-project breakdown) | 13 | Skip. |
+
+Rule of thumb that's served the project: under ~100 simple rows, DOM cost is invisible and Ctrl-F still works; 100–500 is borderline; 500+ is where you get clear wins. SessionsBrowser at 3,211 was a 30× heap reduction; virtualizing 13 rows would have shipped a Ctrl-F regression for no measurable gain.
+
+### What landed in P0.5
+
+- `AgentsBrowser` and `SkillsBrowser` virtualized with `useVirtualizer` from `@tanstack/react-virtual`. Same pattern as `SessionsBrowser` from P0: inner scroll container, `measureElement` for variable row heights, `overscan: 6`.
+- **State lifted from row to parent** so expand/collapse and fetched bodies survive scroll-away unmount/remount. Without this, expanding a row, scrolling past it, and scrolling back would silently re-collapse it. `expandedIds: Set<string>` and `bodiesById: Map<string, string>` now live on the browser component.
+- **`bodiesById.has(id)` is the "fetched-or-not" predicate**, separate from the value — distinguishes "fetched and empty" from "never fetched" so a row with no body content doesn't keep showing the "View full body" button forever.
+- **`bodiesByIdRef` mirror** prevents the fetch callback from rotating identity on every successful fetch (which would bust virtualizer measurement memoization on visible rows).
+
+### Verification
+
+- `npm run typecheck` clean, `npm test` 546/546 passing, `npm run build` clean.
+- Manual smoke: `/agents` and `/skills` return 200 with full content rendered, virtualizer mounts only the rows currently in (or near) the viewport.
+- Expand → scroll past → scroll back: row stays expanded, body content preserved.
+- Filter → expand a row → narrow filter to hide it → widen filter again: row remembers its expanded state (intentional — known quirk: `expandedIds` retains keys for off-filter rows; tiny memory footprint, becomes visible again on re-include).
+
+### What's left from the original P0.5 deferral list
+
+Nothing. Three of the five candidates measured below the threshold; the PR description records the counts so this question doesn't reopen later.
+
+---
+
 ## After P1 — 2026-04-30
 
 P1 = server consolidation. New `FileCache<T>` mtime primitive in `src/lib/usage/cache.ts`, parser switched from 2-min TTL to mtime-driven cache, single-flight dedup for cold-path concurrency, `writeFileAtomic` + `withFileLock` extracted to top-level `src/lib/atomicWrite.ts` and applied across config/setup/insight/manual-step writers, scanner cache moved to `globalThis`, ETag + `Cache-Control` headers on `/api/sessions`, `/api/usage`, `/api/stats`, plain `Cache-Control` on `/api/agents`, `/api/skills`.

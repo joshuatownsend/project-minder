@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAgents } from "@/hooks/useAgents";
 import type { AgentRow } from "@/hooks/useAgents";
 import { useUpdateStatuses } from "@/hooks/useUpdateStatuses";
@@ -11,35 +12,58 @@ import { CatalogActionStrip } from "@/components/CatalogActionStrip";
 import { formatRelativeTime } from "@/lib/utils";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
-function AgentRow({ row, updateStatus }: { row: AgentRow; updateStatus?: SkillUpdateStatus }) {
-  const [expanded, setExpanded] = useState(false);
-  const [bodyFull, setBodyFull] = useState<string | null>(null);
+// Stable identity for a row across virtualizer remounts. Falls back through
+// catalog id → orphan-usage name → flat-array index. Index is the unhappy
+// fallback only — the first two cover ~100% of rows in practice.
+function rowKey(row: AgentRow, idx: number): string {
+  return row.entry?.id ?? `usage:${row.usage?.name ?? idx}`;
+}
+
+function AgentRowItem({
+  row,
+  updateStatus,
+  expanded,
+  onToggle,
+  bodyFull,
+  bodyFetched,
+  onFetchBody,
+}: {
+  row: AgentRow;
+  updateStatus?: SkillUpdateStatus;
+  expanded: boolean;
+  onToggle: () => void;
+  bodyFull: string | null;
+  // Distinguishes "not fetched yet" from "fetched and the body is empty."
+  // Without this, an agent with a genuinely empty bodyFull would keep showing
+  // the "View full body" button and re-fetching on every click.
+  bodyFetched: boolean;
+  onFetchBody: () => Promise<void>;
+}) {
   const [bodyLoading, setBodyLoading] = useState(false);
+
+  // Loading is transient and per-mount: when the row scrolls out of view the
+  // virtualizer unmounts it; if the user scrolls back the parent's body cache
+  // is still warm, so we just don't re-fetch.
+  async function fetchBody() {
+    if (bodyFetched || !row.entry?.id) return;
+    setBodyLoading(true);
+    try {
+      await onFetchBody();
+    } finally {
+      setBodyLoading(false);
+    }
+  }
 
   const name = row.entry?.name ?? row.usage?.name ?? "Unknown";
   const description = row.entry?.description ?? "";
   const truncDesc =
     description.length > 160 ? description.slice(0, 160) + "…" : description;
 
-  async function fetchBody() {
-    if (bodyFull !== null || !row.entry?.id) return;
-    setBodyLoading(true);
-    try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(row.entry.id)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setBodyFull(data.bodyFull ?? "");
-      }
-    } finally {
-      setBodyLoading(false);
-    }
-  }
-
   return (
     <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
       <div
         style={{ display: "flex", alignItems: "flex-start", gap: "8px", cursor: "pointer" }}
-        onClick={() => setExpanded((v) => !v)}
+        onClick={onToggle}
       >
         <span style={{ marginTop: "2px", color: "var(--text-muted)", flexShrink: 0 }}>
           {expanded ? (
@@ -204,7 +228,7 @@ function AgentRow({ row, updateStatus }: { row: AgentRow; updateStatus?: SkillUp
             </pre>
           )}
 
-          {row.entry?.id && bodyFull === null && (
+          {row.entry?.id && !bodyFetched && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -275,6 +299,33 @@ export function AgentsBrowser() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortBy, setSortBy] = useState<SortKey>("invocations");
   const [hasUpdateOnly, setHasUpdateOnly] = useState(false);
+  // Lifted state — survives virtualizer mount/unmount as the user scrolls.
+  // Otherwise expanding a row, scrolling away, and scrolling back would
+  // collapse it again, which feels like the page lost its place.
+  //
+  // Known quirk: filter changes don't prune `expandedIds`. If the user expands
+  // some rows then narrows the filter, the expanded set retains keys that
+  // aren't currently visible. The leaked entries are tiny strings and become
+  // visible again as soon as the filter is widened, so we accept it.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  // Map value: the fetched body text. `bodiesById.has(id)` is the
+  // "fetched-or-not" predicate — distinguishing "fetched but empty" (`""`)
+  // from "never fetched" (no entry). Mirrored to a ref so `fetchBodyFor`
+  // can dedupe without taking `bodiesById` as a useCallback dep, which
+  // would rotate the callback's identity on every successful fetch and
+  // ripple into per-row re-renders.
+  const [bodiesById, setBodiesById] = useState<Map<string, string>>(new Map());
+  // Sync the dedupe-cache ref AFTER commit, not during render. Mutating a
+  // ref during render is unsafe under concurrent rendering — an aborted
+  // render would leave the ref pointing at state that never committed,
+  // and `fetchBodyFor` would then dedupe against a phantom entry. Effects
+  // only run on committed renders, so the ref always tracks reality.
+  // The user-triggered fetch click happens post-commit, so the ref is
+  // always current by the time fetchBodyFor reads it.
+  const bodiesByIdRef = useRef(bodiesById);
+  useEffect(() => {
+    bodiesByIdRef.current = bodiesById;
+  }, [bodiesById]);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 300);
@@ -334,6 +385,46 @@ export function AgentsBrowser() {
 
   const total = data.length;
   const invoked = data.filter((r) => (r.usage?.invocations ?? 0) > 0).length;
+
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const fetchBodyFor = useCallback(async (id: string) => {
+    if (bodiesByIdRef.current.has(id)) return;
+    const res = await fetch(`/api/agents/${encodeURIComponent(id)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setBodiesById((prev) => {
+      const next = new Map(prev);
+      next.set(id, data.bodyFull ?? "");
+      return next;
+    });
+  }, []);
+
+  // Virtualization: 226 agents in this dataset, expandable detail panels make
+  // the rendered tree large enough that React's diff cost dominates at full
+  // expansion. Inner scroll container so each list page can size itself
+  // without coupling to the page header layout — same pattern as
+  // SessionsBrowser. estimateSize is a collapsed-row guess; measureElement
+  // corrects after first paint and re-measures when expand/collapse fires.
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 56,
+    overscan: 6,
+    // Stable per-row identity. Without this, vItem.key defaults to the index
+    // — and when filtering/sorting reorders the array, React reuses the same
+    // mounted AgentRowItem instance for a different row. Per-row local state
+    // (e.g. `bodyLoading`) leaks across agents until the next remount.
+    getItemKey: (index) => rowKey(filtered[index], index),
+  });
 
   const segmentStyle = (active: boolean): React.CSSProperties => ({
     padding: "3px 9px",
@@ -503,13 +594,55 @@ export function AgentsBrowser() {
           >
             {filtered.length} agent{filtered.length !== 1 ? "s" : ""}
           </div>
-          {filtered.map((row, i) => (
-            <AgentRow
-              key={row.entry?.id ?? row.usage?.name ?? i}
-              row={row}
-              updateStatus={row.entry ? statuses[row.entry.id] : undefined}
-            />
-          ))}
+          <div
+            ref={scrollContainerRef}
+            style={{
+              height: "calc(100vh - 260px)",
+              minHeight: "400px",
+              overflowY: "auto",
+            }}
+          >
+            <div
+              style={{
+                height: virtualizer.getTotalSize(),
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {virtualizer.getVirtualItems().map((vItem) => {
+                const row = filtered[vItem.index];
+                const key = rowKey(row, vItem.index);
+                const expanded = expandedIds.has(key);
+                const bodyId = row.entry?.id;
+                const bodyFetched = bodyId ? bodiesById.has(bodyId) : false;
+                const bodyFull = bodyId && bodyFetched ? bodiesById.get(bodyId) ?? "" : null;
+                return (
+                  <div
+                    key={vItem.key}
+                    data-index={vItem.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${vItem.start}px)`,
+                    }}
+                  >
+                    <AgentRowItem
+                      row={row}
+                      updateStatus={row.entry ? statuses[row.entry.id] : undefined}
+                      expanded={expanded}
+                      onToggle={() => toggleExpanded(key)}
+                      bodyFull={bodyFull}
+                      bodyFetched={bodyFetched}
+                      onFetchBody={() => (bodyId ? fetchBodyFor(bodyId) : Promise.resolve())}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
     </div>
