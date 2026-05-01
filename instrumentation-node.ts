@@ -79,13 +79,15 @@ export async function startIngest(): Promise<void> {
 async function startInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
-    // Pass `bypassEnvFlag: true` because instrumentation.ts has
-    // already gated on the relevant env flags. The watcher's own
-    // NODE_ENV=test guard is also bypassed by this option, which is
-    // why we short-circuit on NODE_ENV=test in the parent
-    // `instrumentation.ts` instead — keeping defense-in-depth without
-    // double-gating the worker fallback path (where MINDER_INDEXER
-    // may not be set).
+    // Pass `bypassEnvFlag: true` because we only reach this function
+    // after the parent `instrumentation.ts` runtime/test gate passes
+    // AND `startIngest()` above has handled the `MINDER_INDEXER*` mode
+    // selection. Re-checking the env flag inside the watcher would
+    // (a) double-gate, and (b) wrongly skip the worker fallback path,
+    // where the user set `MINDER_INDEXER_WORKER=1` but not
+    // `MINDER_INDEXER=1`. The watcher's own NODE_ENV=test guard is
+    // also bypassed by this option — defense-in-depth lives at the
+    // top of `instrumentation.ts` instead.
     const status = await startIngestWatcher({ bypassEnvFlag: true });
     if (status.running) {
       // eslint-disable-next-line no-console
