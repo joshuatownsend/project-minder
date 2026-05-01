@@ -12,12 +12,15 @@ import type {
 
 // SQL-backed session detail loader. Mirrors `scanSessionDetail`'s output
 // shape, building it from the indexed `sessions` / `turns` / `tool_uses`
-// / `file_edits` tables instead of re-parsing the JSONL on every detail
-// view. The cold path turns from "stat + read 50MB JSONL + parse" into
-// "5 small SELECTs against indexed columns."
+// tables instead of re-parsing the JSONL on every detail view. The cold
+// path turns from "stat + read 50MB JSONL + parse" into "3 small SELECTs
+// against indexed columns" — one each for `sessions`, `turns`, and
+// `tool_uses`. `modelsUsed` is derived from the already-loaded `turns`
+// rows (no separate `SELECT DISTINCT model` round-trip).
 //
-// **Documented divergences from the file-parse path**, all preserved
-// here intentionally because the source data isn't in the index:
+// **Documented divergences from the file-parse path** — these are
+// intentional because the underlying data isn't in the index, and
+// closing them would require schema/ingest changes:
 //
 // 1. `recaps`: returned as `undefined` (was: parsed from
 //    `entry.type === "system" && subtype === "away_summary"`). Ingest
@@ -42,12 +45,36 @@ import type {
 // 5. `bash` entries in `fileOperations`: derived from
 //    `tool_uses WHERE tool_name='Bash'` rather than synthesized at
 //    parse time. The `file_edits` table's CHECK constraint excludes
-//    'bash', so we don't write them there — the read query joins
-//    write/edit/delete from `file_edits` with bash from `tool_uses`.
+//    'bash', so we don't write them there — the read query reads
+//    everything from `tool_uses` for parity with file-parse's
+//    per-tool-use emission semantics.
+// 6. **No `thinking` events in `timeline`**: file-parse emits a
+//    `thinking` event for each `block.type === "thinking"` block on an
+//    assistant message. Ingest doesn't persist content blocks, so the
+//    DB path can't reconstruct them. Same applies to the
+//    "one-`assistant`-event-per-text-block" semantic — file-parse emits
+//    N events for an assistant turn with N text blocks (interleaved
+//    with tool_use events in original order); the DB path emits at
+//    most one `assistant` event per turn followed by a flat run of
+//    `tool_use` events, because `text_preview` collapses all text
+//    blocks into a single 500-char prefix. Sessions with multi-block
+//    assistant content or thinking will therefore have shorter
+//    timelines and a different event-type sequence under MINDER_USE_DB.
+// 7. **Sidechain entries skipped at ingest**: `scanSessionFile` counts
+//    sidechain assistant entries toward `messageCount`, token totals,
+//    `toolUsage`, `modelsUsed`, and `costEstimate`. The DB indexer
+//    drops `entry.isSidechain` rows, so SessionSummary aggregates can
+//    be lower in the DB path for sessions that dispatched subagents.
+// 8. **`fileOperations` only emits for the file-parse tool set**:
+//    Read/Write/Edit/Glob/Grep + Bash. MultiEdit/NotebookEdit (which
+//    are persisted to `file_edits` for hot-file analytics) are
+//    deliberately filtered out here so DB and file-parse agree.
 //
-// All numeric SessionSummary fields (token counts, message counts,
-// costs, oneShotRate) and the timeline content match the file-parse
-// path byte-for-byte.
+// SessionSummary fields derived from indexed non-sidechain rows match
+// the file-parse path within the bounds of (3) and (7) above. The
+// timeline content matches for sessions with single-text-block
+// assistant turns and no `thinking` blocks (the common case in the
+// test fixture).
 
 interface SessionRow {
   session_id: string;
@@ -82,6 +109,7 @@ interface TurnRow {
   model: string | null;
   is_error: number;
   text_preview: string | null;
+  tool_result_preview: string | null;
   output_tokens: number;
 }
 
@@ -98,7 +126,17 @@ interface ToolRow {
   file_op: string | null;
 }
 
+// Match file-parse's slice lengths: assistant text capped at 300
+// (`scanSessionDetail`'s per-block slice), user text capped at 200
+// (`extractTextContent`'s slice in the file-parse path).
 const TIMELINE_TEXT_LIMIT = 300;
+const USER_TIMELINE_TEXT_LIMIT = 200;
+
+// File operations parity gate: file-parse emits entries only for these
+// tools (FILE_TOOL_OPERATIONS in `scanSessionDetail`) plus `Bash`.
+// MultiEdit/NotebookEdit are persisted to `file_edits` for hot-file
+// analytics but deliberately excluded here so the two backends agree.
+const FILE_OP_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
 
 /**
  * Look up a session by id and reconstruct the full `SessionDetail`
@@ -132,9 +170,12 @@ export function loadSessionDetailFromDb(
 
   // `model` folded into the turns SELECT so we can derive `modelsUsed`
   // in JS without a separate `SELECT DISTINCT model` round-trip.
+  // `tool_result_preview` lets us detect tool-result-only user turns
+  // (file-parse skips them; see `buildTimeline`).
   const turns = db
     .prepare(
-      `SELECT turn_index, ts, role, model, is_error, text_preview, output_tokens
+      `SELECT turn_index, ts, role, model, is_error,
+              text_preview, tool_result_preview, output_tokens
        FROM turns
        WHERE session_id = ?
        ORDER BY turn_index`
@@ -218,16 +259,24 @@ function buildTimeline(turns: TurnRow[], toolsByTurn: Map<number, ToolRow[]>): T
   const events: TimelineEvent[] = [];
   for (const turn of turns) {
     if (turn.role === "user") {
-      // file-parse skips the user turn unless it had a non-empty human
-      // text; we mirror by skipping turns whose text_preview is null
-      // (tool-result-only user turns).
-      if (turn.text_preview) {
-        events.push({
-          type: "user",
-          timestamp: turn.ts,
-          content: turn.text_preview,
-        });
-      }
+      // file-parse skips user turns whose only content is a tool_result
+      // block (`extractTextContent` returns "" → no timeline push). At
+      // ingest time, when there's no actual user text, `text_preview`
+      // is sourced from the tool_result text and equals the prefix of
+      // `tool_result_preview` (text_preview is hard-truncated to 500;
+      // tool_result_preview retains up to 2000). Detect that case via
+      // `startsWith` rather than `===` so it works for tool results
+      // longer than 500 chars.
+      if (!turn.text_preview) continue;
+      const isToolResultOnly =
+        turn.tool_result_preview !== null &&
+        turn.tool_result_preview.startsWith(turn.text_preview);
+      if (isToolResultOnly) continue;
+      events.push({
+        type: "user",
+        timestamp: turn.ts,
+        content: turn.text_preview.slice(0, USER_TIMELINE_TEXT_LIMIT),
+      });
       continue;
     }
     // assistant
@@ -303,20 +352,12 @@ interface ToolAggregates {
  * previously had their JSON re-parsed in multiple helpers parse it
  * once here.
  *
- * For `fileOperations`: we deliberately go through `tool_uses` rather
- * than `file_edits`. `file_edits` dedupes to one row per
- * (session, turn, file) for hot-file analytics, but the file-parse
- * path emits one entry per tool_use (no dedup). Three categories:
- *   1. Tools with `file_op` set (Read/Write/Edit/MultiEdit/NotebookEdit) —
- *      `file_op` is the canonical operation.
- *   2. Tools with `file_path` set but no `file_op` (e.g., Glob/Grep
- *      with `file_path` argument) — operation = lowercased tool_name.
- *      This contract works because the file-parse path's
- *      `FILE_TOOL_OPERATIONS` map happens to use lowercase keys; if
- *      that ever changes, both paths must move together.
- *   3. `Bash` calls (no file_path) — synthesize
- *      `{path: command.slice(0,100), operation: "bash"}` from
- *      `arguments_json`.
+ * For `fileOperations`: reads from `tool_uses` rather than `file_edits`
+ * because the file-parse path emits one entry per tool_use (no dedup),
+ * while `file_edits` dedupes to one row per (session, turn, file) for
+ * hot-file analytics. Filtered to FILE_OP_TOOLS + Bash to match
+ * file-parse's `FILE_TOOL_OPERATIONS` map exactly. MultiEdit and
+ * NotebookEdit are deliberately excluded so the two backends agree.
  */
 function aggregateTools(tools: ToolRow[]): ToolAggregates {
   const toolsByTurn = new Map<number, ToolRow[]>();
@@ -341,11 +382,13 @@ function aggregateTools(tools: ToolRow[]): ToolAggregates {
       skillsUsed[tu.skill_name] = (skillsUsed[tu.skill_name] ?? 0) + 1;
     }
 
-    // File ops — see header comment for the three categories.
-    if (tu.file_path) {
+    // File ops — restricted to file-parse's tool set for parity. See
+    // FILE_OP_TOOLS comment. Operation values match `FILE_TOOL_OPERATIONS`
+    // in `scanSessionDetail` (lowercased tool name).
+    if (tu.file_path && FILE_OP_TOOLS.has(tu.tool_name)) {
       fileOperations.push({
         path: tu.file_path,
-        operation: tu.file_op ?? tu.tool_name.toLowerCase(),
+        operation: tu.tool_name.toLowerCase(),
         timestamp: tu.ts ?? undefined,
         toolName: tu.tool_name,
       });
@@ -361,23 +404,26 @@ function aggregateTools(tools: ToolRow[]): ToolAggregates {
       }
     }
 
-    // Subagents — `messageCount` and `toolUsage` stay zero/empty
-    // (sidechain entries aren't indexed; documented divergence).
+    // Subagents — gated on `args.prompt` to mirror file-parse's
+    // `if (toolName === "Agent" && input.prompt)` existence test, so
+    // an Agent invocation without a prompt doesn't synthesize a
+    // subagent row. `messageCount` and `toolUsage` stay zero/empty
+    // because sidechain entries aren't indexed (documented divergence).
     if (tu.tool_name === "Agent") {
       const args = parseStoredArgs(tu.arguments_json) ?? {};
-      const description =
-        typeof args.description === "string"
-          ? args.description.slice(0, 200)
-          : typeof args.prompt === "string"
-            ? String(args.prompt).slice(0, 200)
-            : "";
-      subagents.push({
-        agentId: tu.tool_use_id ?? `tu_${tu.turn_index}_${tu.sequence_in_turn}`,
-        type: tu.agent_name ?? "general-purpose",
-        description,
-        messageCount: 0,
-        toolUsage: {},
-      });
+      if (typeof args.prompt === "string") {
+        const description =
+          typeof args.description === "string"
+            ? args.description.slice(0, 200)
+            : String(args.prompt).slice(0, 200);
+        subagents.push({
+          agentId: tu.tool_use_id ?? `tu_${tu.turn_index}_${tu.sequence_in_turn}`,
+          type: tu.agent_name ?? "general-purpose",
+          description,
+          messageCount: 0,
+          toolUsage: {},
+        });
+      }
     }
   }
 

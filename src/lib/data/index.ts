@@ -143,11 +143,13 @@ export interface SessionDetailResult {
  * the session has a row in the index; otherwise falls back to the
  * file-parse path.
  *
- * No `needsReconcileAfterV3` gate here — session detail queries don't
- * read `cost_usd` or `category_costs`, so partially-reconciled DBs
- * still serve correct numbers (token totals and one-shot counts default
- * to 0 on un-reconciled rows, same as the file-parse path's behavior
- * before v3 ingested those metrics).
+ * The v3 readiness gate applies here too: `loadSessionDetailFromDb`
+ * reads `sessions.cost_usd` (→ `costEstimate`) and
+ * `verified_task_count` / `one_shot_task_count` (→ `oneShotRate`),
+ * which are 0 on un-reconciled rows during the v3 catch-up window.
+ * Without the gate the DB backend would silently serve $0 and
+ * `oneShotRate=undefined` for a half-reconciled corpus while the
+ * file-parse path returns the right numbers.
  *
  * The DB path returns `null` when the session isn't indexed (vs.
  * "indexed but not found"). The façade treats `null` as "fall through
@@ -166,6 +168,10 @@ async function tryDbSessionDetail(sessionId: string): Promise<SessionDetail | nu
   try {
     const db = await getReadyDb();
     if (!db) return null;
+    if (needsReconcileAfterV3(db)) {
+      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
+      return null;
+    }
     return loadSessionDetailFromDb(db, sessionId);
   } catch (err) {
     logFallthroughOnce((err as Error).message);

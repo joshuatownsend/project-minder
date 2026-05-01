@@ -14,6 +14,19 @@ import { promises as fs } from "fs";
 // 2. `searchableText` undefined in DB path
 // 3. `subagents.messageCount` and `toolUsage` zeroed in DB path
 // 4. `status` heuristic (working/idle from age) in DB path
+// 5. `bash` fileOperations from `tool_uses` not `file_edits`
+// 6. No `thinking` events; at most one `assistant` event per turn
+// 7. Sidechain entries skipped at ingest
+// 8. fileOperations limited to Read/Write/Edit/Glob/Grep + Bash
+//
+// **Fixture constraint**: every assistant turn in `setupFixture` has at
+// most one text block and no `thinking` blocks, no sidechain entries,
+// and no MultiEdit/NotebookEdit calls. That keeps the parity assertions
+// (`timeline.length`, event-type sequence, `fileOperations` set) true
+// despite divergences (6)–(8). Adding a multi-block/thinking/sidechain
+// case to the fixture would intentionally break those asserts and
+// require relaxing them to "DB events are a subsequence of file events"
+// — out of scope until ingest persists content blocks.
 //
 // Skipped when better-sqlite3 isn't loadable.
 
@@ -164,12 +177,14 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     expect(result.detail!.subagents[0].type).toBe("Explore");
   });
 
-  it("DB backend returns 404 when no session row exists, falling back to file-parse", async () => {
+  it("falls back to file-parse when the session isn't indexed", async () => {
     await setupFixture();
     process.env.MINDER_USE_DB = "1";
     const { facade } = await reloadModules();
     // No reconcile → DB has no rows for this session → DB path returns null
     // → façade falls through to file-parse, which finds the JSONL on disk.
+    // The HTTP layer would only return 404 if BOTH backends miss; this test
+    // proves the DB miss alone doesn't 404.
     const result = await facade.getSessionDetail(SESSION_ID);
     expect(result.meta.backend).toBe("file");
     expect(result.detail).not.toBeNull();
