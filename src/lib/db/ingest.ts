@@ -1511,10 +1511,16 @@ export async function reconcileAllSessions(
     refreshCategoryCosts(db, affectedCategoryTuples);
   }
 
-  // Clear the v3 readiness gate now that the SQL-aggregate path has
-  // populated `turns.cost_usd` and the `category_costs` rollup. The
-  // façade reads this row before trusting the SQL backend.
-  db.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
+  // Clear the v3 readiness gate ONLY when the reconcile pass is
+  // known-good. Per-file failures land in `stats.errors` without
+  // failing the whole pass, so clearing unconditionally would drop the
+  // gate while some sessions are still stamped at the old derived_version
+  // — at which point the SQL-aggregate path serves silently incomplete
+  // totals. Holding the flag until a clean pass means the next watcher
+  // tick re-tries the failed files; once they succeed, the gate clears.
+  if (stats.errors === 0) {
+    db.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
+  }
 
   return stats;
 }

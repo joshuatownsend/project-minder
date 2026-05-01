@@ -403,6 +403,11 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
     turns: number;
   }>;
 
+  // ORDER BY (projectSlug, count DESC) — global `ORDER BY count DESC`
+  // would interleave rows from different projects, so the contiguous-
+  // rows loop below would cap at 5 too early for some slugs and miss
+  // their actual top tools. Per-slug ordering keeps each project's rows
+  // contiguous and pre-sorted, making `if (list.length < 5)` correct.
   const toolRows = db
     .prepare(
       `SELECT s.project_slug AS projectSlug, tu.tool_name AS name, COUNT(*) AS count
@@ -413,7 +418,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR t.ts >= ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.tool_name
-       ORDER BY count DESC`
+       ORDER BY s.project_slug, count DESC`
     )
     .all(f.periodStart, f.periodStart, ...slugs) as Array<{
     projectSlug: string;
