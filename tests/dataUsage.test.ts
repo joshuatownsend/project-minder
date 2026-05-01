@@ -150,9 +150,9 @@ afterEach(async () => {
 });
 
 describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", () => {
-  it("file backend runs by default and returns a populated report", async () => {
+  it("file backend runs when MINDER_USE_DB=0 and returns a populated report", async () => {
     await setupFixture();
-    delete process.env.MINDER_USE_DB;
+    process.env.MINDER_USE_DB = "0";
     const { facade } = await reloadModules();
     const result = await facade.getUsage("all", undefined);
 
@@ -167,7 +167,7 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const projectsDir = await setupFixture();
 
     // -- File backend run --
-    delete process.env.MINDER_USE_DB;
+    process.env.MINDER_USE_DB = "0";
     const { facade: fileFacade } = await reloadModules();
     const fileResult = await fileFacade.getUsage("all", undefined);
     expect(fileResult.meta.backend).toBe("file");
@@ -294,6 +294,22 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
 
     const result = await facade.getUsage("all", undefined);
     expect(result.meta.backend).toBe("file");
+  });
+
+  it("DB backend runs by default when MINDER_USE_DB is unset", async () => {
+    // Pin the default-on contract: an unset MINDER_USE_DB must produce
+    // backend === "db". Without this test the default is implicit and
+    // easy to regress on a future refactor of dbModeRequested().
+    const projectsDir = await setupFixture();
+    delete process.env.MINDER_USE_DB;
+    const { facade, conn, mig, ingest } = await reloadModules();
+    const init = await mig.initDb();
+    expect(init.available).toBe(true);
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+
+    const result = await facade.getUsage("all", undefined);
+    expect(result.meta.backend).toBe("db");
+    expect(result.report.totalSessions).toBe(2);
   });
 
   it("falls back to file backend when MINDER_USE_DB=1 but DB has no schema", async () => {

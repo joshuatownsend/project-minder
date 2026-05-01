@@ -84,8 +84,13 @@ export interface StartIngestWatcherOptions {
   /** Override the watch root. Defaults to `~/.claude/projects`. */
   projectsDir?: string;
   /**
-   * Skip the env-flag check. Tests pass this so they don't have to set
-   * `MINDER_INDEXER=1` in process env.
+   * Bypass BOTH gates that would otherwise short-circuit
+   * `startIngestWatcher`: an explicit `MINDER_INDEXER=0` opt-out AND
+   * the `NODE_ENV === "test"` defense-in-depth. Tests pass this so a
+   * watcher actually starts under vitest (where `NODE_ENV=test`) and
+   * regardless of whatever `MINDER_INDEXER` value the host shell has
+   * set. Production code paths must never set this — instrumentation
+   * gates the test runtime upstream in `instrumentation.ts`.
    */
   bypassEnvFlag?: boolean;
   /** Suppress the 30 s sweep timer (tests don't want background timers). */
@@ -120,14 +125,17 @@ export interface WatcherStatus {
 
 /**
  * Start the ingest watcher. Idempotent — a second call closes the prior
- * watcher first. Returns the status snapshot. Returns a disabled status
- * (without starting) when `MINDER_INDEXER` is not "1" and `bypassEnvFlag`
- * is unset.
+ * watcher first. Returns the status snapshot. The watcher defaults on;
+ * set `MINDER_INDEXER=0` to opt out. Returns a disabled status (without
+ * starting) when EITHER (a) `MINDER_INDEXER=0`, OR (b) `NODE_ENV ===
+ * "test"` — and `bypassEnvFlag` is unset. The vitest gate is a
+ * defense-in-depth: tests that legitimately need a watcher pass
+ * `bypassEnvFlag: true` and override both gates at once.
  */
 export async function startIngestWatcher(
   options: StartIngestWatcherOptions = {}
 ): Promise<WatcherStatus> {
-  if (!options.bypassEnvFlag && process.env.MINDER_INDEXER !== "1") {
+  if (!options.bypassEnvFlag && process.env.MINDER_INDEXER === "0") {
     return idleStatus();
   }
   // Vitest sets NODE_ENV=test; instrumentation.ts can be loaded in test

@@ -137,16 +137,20 @@ afterEach(async () => {
 describe.skipIf(!driverAvailable)("ingestWatcher", () => {
   const projectsDirOf = (home: string) => path.join(home, ".claude", "projects");
 
-  it("returns idle status when MINDER_INDEXER is unset and bypass is off", async () => {
+  it("returns idle status when MINDER_INDEXER=0 and bypass is off", async () => {
+    // The watcher defaults on. `=0` is the opt-out signal — pin that
+    // an idle status path still exists for tests that need the
+    // watcher *not* running.
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const original = process.env.MINDER_INDEXER;
-    delete process.env.MINDER_INDEXER;
+    process.env.MINDER_INDEXER = "0";
     try {
       const status = await reloaded.watcher.startIngestWatcher();
       expect(status.running).toBe(false);
       expect(status.startedAt).toBeNull();
     } finally {
-      if (original !== undefined) process.env.MINDER_INDEXER = original;
+      if (original === undefined) delete process.env.MINDER_INDEXER;
+      else process.env.MINDER_INDEXER = original;
     }
   });
 
