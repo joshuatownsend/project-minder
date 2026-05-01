@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { validatePeriod } from "@/lib/usage/constants";
-import { getUsage } from "@/lib/data";
+import { getUsage, dbModeRequested } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 
@@ -32,7 +32,12 @@ export async function GET(request: NextRequest) {
   const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
 
-  const cacheKey = `${safePeriod}:${project || "all"}`;
+  // Include the requested backend in the cache key so a flag flip
+  // (MINDER_USE_DB toggled at runtime) invalidates the slot immediately
+  // — without this, a cached file-backend report could be served to a
+  // db-backend caller for the rest of the 2-min TTL window.
+  const requestedBackend = dbModeRequested() ? "db" : "file";
+  const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}`;
   const cache = globalForUsage.__usageCache!;
   const cached = cache.get(cacheKey);
   const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL;

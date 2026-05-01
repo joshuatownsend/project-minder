@@ -23,6 +23,7 @@ import {
 } from "@/lib/usage/toolNames";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
+import { parseStoredArgs } from "./storedArgs";
 
 // Session ingest pipeline.
 //
@@ -183,37 +184,9 @@ function extractSkillName(toolName: string, args: Record<string, unknown> | unde
   return typeof args.skill === "string" ? args.skill : null;
 }
 
-const COMMAND_RECOVERY_RE = /"command"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/;
-
-/**
- * Parse `tool_uses.arguments_json` from the DB. Tries `JSON.parse` first
- * (the common case); on failure, falls back to a regex match of the
- * `command` field so `detectOneShot` can still see Bash / PowerShell
- * verification commands when the stored JSON was truncated past the
- * boundary of the `command` value.
- *
- * The fallback only recovers `command` because that's the single field
- * the one-shot detector reads. Other detectors that need more fields
- * should prompt a structural fix (separate column or larger limit).
- */
-function parseStoredArgs(json: string | null): Record<string, unknown> | undefined {
-  if (!json) return undefined;
-  try {
-    return JSON.parse(json) as Record<string, unknown>;
-  } catch {
-    // Capture everything after `"command":"` up to the first non-escaped
-    // `"` or end of string. If the truncation cut mid-escape sequence,
-    // the JSON.parse below throws and we give up.
-    const match = COMMAND_RECOVERY_RE.exec(json);
-    if (!match) return undefined;
-    try {
-      const command = JSON.parse(`"${match[1]}"`);
-      return { command };
-    } catch {
-      return undefined;
-    }
-  }
-}
+// `parseStoredArgs` and its `COMMAND_RECOVERY_RE` regex moved to
+// `./storedArgs` so the read-side data façade (`src/lib/data/usageFromDb.ts`)
+// can share the same recovery rules. Imported at the top of this file.
 
 // ── JSONL → ParsedSession ──────────────────────────────────────────────────
 

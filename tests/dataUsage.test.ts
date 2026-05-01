@@ -193,22 +193,46 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     expect(db.tokens).toEqual(file.tokens);
     expect(db.totalCost).toBeCloseTo(file.totalCost, 6);
 
-    // byProject / byModel are sorted-by-cost lists, so a direct deep
-    // compare is meaningful (no ordering ambiguity).
-    expect(db.byProject.map((p) => p.projectSlug).sort()).toEqual(
-      file.byProject.map((p) => p.projectSlug).sort()
-    );
-    expect(db.byModel.map((m) => m.model).sort()).toEqual(
-      file.byModel.map((m) => m.model).sort()
-    );
-    expect(db.byCategory.map((c) => c.category).sort()).toEqual(
-      file.byCategory.map((c) => c.category).sort()
-    );
+    // Per-dimension value parity (not just name sets). For each
+    // breakdown list, build a map keyed on the dimension's identifier
+    // and assert every numeric field agrees within float tolerance.
+    // Without this the parity test would pass even if backends produced
+    // different costs per project / model / category — exactly the kind
+    // of silent drift the per-backend ETag salt is currently hedging
+    // against.
+    const fileProjects = new Map(file.byProject.map((p) => [p.projectSlug, p]));
+    for (const dbProj of db.byProject) {
+      const fileProj = fileProjects.get(dbProj.projectSlug);
+      expect(fileProj, `project ${dbProj.projectSlug} missing in file backend`).toBeDefined();
+      expect(dbProj.cost).toBeCloseTo(fileProj!.cost, 6);
+      expect(dbProj.tokens).toBe(fileProj!.tokens);
+      expect(dbProj.turns).toBe(fileProj!.turns);
+    }
 
-    // Tool aggregates should match by name.
-    expect(new Set(db.topTools.map(([n]) => n))).toEqual(
-      new Set(file.topTools.map(([n]) => n))
-    );
+    const fileModels = new Map(file.byModel.map((m) => [m.model, m]));
+    for (const dbModel of db.byModel) {
+      const fileModel = fileModels.get(dbModel.model);
+      expect(fileModel, `model ${dbModel.model} missing in file backend`).toBeDefined();
+      expect(dbModel.cost).toBeCloseTo(fileModel!.cost, 6);
+      expect(dbModel.inputTokens).toBe(fileModel!.inputTokens);
+      expect(dbModel.outputTokens).toBe(fileModel!.outputTokens);
+      expect(dbModel.turns).toBe(fileModel!.turns);
+    }
+
+    const fileCategories = new Map(file.byCategory.map((c) => [c.category, c]));
+    for (const dbCat of db.byCategory) {
+      const fileCat = fileCategories.get(dbCat.category);
+      expect(fileCat, `category ${dbCat.category} missing in file backend`).toBeDefined();
+      expect(dbCat.turns).toBe(fileCat!.turns);
+      expect(dbCat.tokens).toBe(fileCat!.tokens);
+      expect(dbCat.cost).toBeCloseTo(fileCat!.cost, 6);
+    }
+
+    // Top-tool counts should match by name.
+    const fileTools = new Map(file.topTools);
+    for (const [name, count] of db.topTools) {
+      expect(fileTools.get(name), `tool ${name} missing in file backend`).toBe(count);
+    }
   });
 
   it("falls back to file backend when MINDER_USE_DB=1 but DB has no schema", async () => {

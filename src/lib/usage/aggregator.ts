@@ -4,6 +4,7 @@ import { computeTurnCost, loadPricing } from "./costCalculator";
 import { groupByBinary } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
+import { getPeriodStart } from "./periods";
 import type {
   UsageTurn,
   UsageReport,
@@ -16,31 +17,10 @@ import type {
   ToolCall,
 } from "./types";
 
-function getPeriodStart(period: string): Date | null {
-  const now = new Date();
-  switch (period) {
-    case "today": {
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      return start;
-    }
-    case "week": {
-      const start = new Date(now);
-      start.setDate(start.getDate() - start.getDay());
-      start.setHours(0, 0, 0, 0);
-      return start;
-    }
-    case "month":
-      return new Date(now.getFullYear(), now.getMonth(), 1);
-    case "all":
-      return null;
-    default:
-      return null;
-  }
-}
+type Period = "today" | "week" | "month" | "all";
 
 export async function generateUsageReport(
-  period: "today" | "week" | "month" | "all",
+  period: Period,
   project?: string
 ): Promise<UsageReport> {
   const sessionMap = await parseAllSessions();
@@ -69,11 +49,10 @@ export async function generateUsageReport(
  */
 export async function aggregateUsage(
   turns: UsageTurn[],
-  period: string
+  period: Period
 ): Promise<UsageReport> {
-  // `loadPricing` is idempotent (24-h FileCache) — safe to call here even
-  // when invoked back-to-back with `generateUsageReport`'s own load. The
-  // first cold call hits the network; the rest are no-ops.
+  // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
+  // and seeds a 24-h FileCache; subsequent calls return immediately.
   await loadPricing();
 
   // Classify and cost only assistant turns (user turns have empty model/zero tokens)

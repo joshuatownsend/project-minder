@@ -1,69 +1,27 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
+import { parseStoredArgs } from "@/lib/db/storedArgs";
+import { getPeriodStart } from "@/lib/usage/periods";
 
 // SQLite-backed rehydrate of `UsageTurn[]` for the `/api/usage` route.
 //
-// **Why rehydrate then aggregate** instead of running SQL aggregates
-// directly: `aggregator.ts` runs classification, per-turn cost, one-shot
-// detection, shell-binary parsing, and per-MCP rollups. Several of those
-// derive from per-turn JS state that the schema currently doesn't store
-// pre-aggregated. The realistic structural perf win — SUM(...) GROUP BY
-// per dimension — needs schema additions (`turns.cost_usd`, a
-// `category_costs` rollup) that ship in a follow-up slice. Until then,
-// this path's win is "skip the 1.1 GB JSONL re-parse"; it still runs the
-// same in-JS aggregation as the file-parse backend.
-//
-// Period filtering happens in SQL: `WHERE turns.ts >= @periodStart`
-// against the indexed `turns_by_role_ts` index. Project filtering joins
-// `sessions` and filters on `project_slug`.
+// Rehydrate-then-aggregate (rather than SQL aggregates direct): the
+// existing aggregator runs classification, per-turn cost, one-shot
+// detection, shell-binary parsing, and per-MCP rollups — none of those
+// dimensions are pre-aggregated in the schema today. The structural
+// `SUM(...) GROUP BY` win needs schema additions (`turns.cost_usd`, a
+// `category_costs` rollup) that ship as P2b-2.5. This slice's win is
+// just "skip the 1.1 GB JSONL re-parse"; we still run the same in-JS
+// aggregation as the file-parse backend.
 //
 // **Truncation parity**: `text_preview` (500 chars) and
-// `tool_result_preview` (2000 chars) match the limits applied by
-// `parser.ts` in the file-parse path, so `classifyTurn` and
-// `detectOneShot` consume identical inputs across backends. No drift.
-
-// Mirrors `parseStoredArgs` in `src/lib/db/ingest.ts`. Kept as a local
-// copy to avoid the data layer reaching back into the indexer's internals.
-const COMMAND_RECOVERY_RE = /"command"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/;
-function parseStoredArgs(json: string | null): Record<string, unknown> | undefined {
-  if (!json) return undefined;
-  try {
-    return JSON.parse(json) as Record<string, unknown>;
-  } catch {
-    const match = COMMAND_RECOVERY_RE.exec(json);
-    if (!match) return undefined;
-    try {
-      const value = JSON.parse(`"${match[1]}"`) as string;
-      return { command: value };
-    } catch {
-      return undefined;
-    }
-  }
-}
+// `tool_result_preview` (2000 chars) match the limits `parser.ts`
+// applies in the file-parse path, so `classifyTurn` and `detectOneShot`
+// consume byte-identical inputs across backends. No drift.
 
 export function periodStartIso(period: string, now: Date = new Date()): string | null {
-  switch (period) {
-    case "today": {
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      return start.toISOString();
-    }
-    case "week": {
-      const start = new Date(now);
-      start.setDate(start.getDate() - start.getDay());
-      start.setHours(0, 0, 0, 0);
-      return start.toISOString();
-    }
-    case "month": {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      return start.toISOString();
-    }
-    case "all":
-      return null;
-    default:
-      return null;
-  }
+  return getPeriodStart(period, now)?.toISOString() ?? null;
 }
 
 interface TurnRow {
