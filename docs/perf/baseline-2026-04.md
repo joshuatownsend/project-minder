@@ -366,6 +366,64 @@ Both routes depend on TWO file sources: the JSONL corpus (covered by `getJsonlMa
 
 ---
 
+## After P2b-3.5 — 2026-05-01
+
+Prepared-statement cache landed (`prepCached(db, sql)` helper in `src/lib/db/connection.ts`, applied to all read-side SQL in `usageFromDb.ts` + `sessionDetailFromDb.ts`). Measured `/api/usage?period=all` against the user's real DB with the v3 readiness flag temporarily cleared and the indexer worker disabled (so DB-side measurements are clean of HTTP-vs-write contention).
+
+### `/api/usage?period=all` timing — same corpus as P2b-2.5
+
+| Backend | Cold (route compile + first hit) | Warm (8 runs, range / mean) | Verdict |
+|---|---|---|---|
+| File-parse (master baseline) | 16.6 s | 30–72 ms (~45 ms) | reference |
+| SQL (P2b-2.5, no cache) | 4.2 s | 27–34 ms (~31 ms) | inside target |
+| **SQL (P2b-3.5, with cache)** | **4.7 s** | **18–24 ms (~21 ms)** | **~30% faster than P2b-2.5** |
+
+Both runs are dev mode (`MINDER_USE_DB=1 MINDER_INDEXER=0 npm run dev`, Turbopack route compile included in cold). Backend confirmed via `X-Minder-Backend: db` header on every response.
+
+### What the cache actually buys
+
+Theoretical estimate was 1–3 ms (17 prepares × ~50–200 µs each). Measured delta is closer to 10 ms — larger than the bare prepare-cost arithmetic. Two factors that probably explain the gap:
+
+1. **Statement reuse skips per-call SQL parsing AND query-plan re-validation.** better-sqlite3's `prepare()` does both — the second cost (re-validating against the schema) is documented but not benchmarked explicitly in their docs.
+2. **Hot-path JS less garbage.** Each `db.prepare()` allocated a fresh `Statement` wrapper object; reusing one drops 17 allocations + their finalizers per request. On a 20 ms request that adds up.
+
+The delta is real but the absolute number (~10 ms saved on a ~30 ms request) is below the noise floor of cross-machine comparison. Frame this as "structural — the cache shape is correct for the eventual `MINDER_USE_DB` default flip" rather than "a major perf win."
+
+### Methodology
+
+```bash
+# 1. Kill any running dev server, clear v3 gate, restart bare-bones
+node -e "
+  import('better-sqlite3').then(({default: D}) => {
+    const db = new D(require('os').homedir() + '/.minder/index.db');
+    db.prepare(\"DELETE FROM meta WHERE key='needs_reconcile_after_v3'\").run();
+    db.close();
+  });
+"
+MINDER_USE_DB=1 MINDER_INDEXER=0 npm run dev   # disable worker for clean reads
+
+# 2. Warmup — compiles route, first SQL prepare for every statement
+curl -sS -o /dev/null -w "cold: %{time_total}s\n" \
+  "http://localhost:4100/api/usage?period=all"
+
+# 3. 8 warm runs — the cache is now populated for all 17 statements
+for i in 1 2 3 4 5 6 7 8; do
+  curl -sS -o /dev/null -w "warm-$i: %{time_total}s\n" \
+    "http://localhost:4100/api/usage?period=all"
+done
+
+# 4. Restore v3 gate, restart with worker
+node -e "
+  import('better-sqlite3').then(({default: D}) => {
+    const db = new D(require('os').homedir() + '/.minder/index.db');
+    db.prepare(\"INSERT OR REPLACE INTO meta(key,value) VALUES('needs_reconcile_after_v3','1')\").run();
+    db.close();
+  });
+"
+```
+
+---
+
 ## After P2b-2.5 — 2026-05-01
 
 SQL-aggregate read path landed (`turns.cost_usd`, `category_costs` rollup, direct SUM/GROUP BY in `loadUsageReportFromSql`). Measured `/api/usage?period=all` against the user's real DB (222 MB SQLite, 160 sessions, 124 077 turns; partially-reconciled at 23.8% v3 to capture timing without waiting for the full re-derive — query workload is data-volume-driven, not value-driven).
