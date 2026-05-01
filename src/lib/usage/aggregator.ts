@@ -43,8 +43,6 @@ export async function generateUsageReport(
   period: "today" | "week" | "month" | "all",
   project?: string
 ): Promise<UsageReport> {
-  await loadPricing();
-
   const sessionMap = await parseAllSessions();
 
   let turns: UsageTurn[] = [];
@@ -59,6 +57,24 @@ export async function generateUsageReport(
   if (project) {
     turns = turns.filter((t) => t.projectSlug === project);
   }
+
+  return aggregateUsage(turns, period);
+}
+
+/**
+ * Pure aggregation over a pre-filtered set of turns. Public so the data
+ * façade can hand in turns rehydrated from SQLite (P2b-2) without
+ * re-parsing the JSONL corpus. The aggregation logic itself is identical
+ * across backends — what changes is only how `turns` was assembled.
+ */
+export async function aggregateUsage(
+  turns: UsageTurn[],
+  period: string
+): Promise<UsageReport> {
+  // `loadPricing` is idempotent (24-h FileCache) — safe to call here even
+  // when invoked back-to-back with `generateUsageReport`'s own load. The
+  // first cold call hits the network; the rest are no-ops.
+  await loadPricing();
 
   // Classify and cost only assistant turns (user turns have empty model/zero tokens)
   const assistantTurns = turns.filter((t) => t.role === "assistant");

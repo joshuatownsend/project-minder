@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
-import { generateUsageReport } from "@/lib/usage/aggregator";
 import { validatePeriod } from "@/lib/usage/constants";
-import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { getUsage } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 
@@ -10,11 +9,14 @@ const CACHE_TTL = 2 * 60_000;
 interface UsageCacheSlot {
   report: UsageReport;
   cachedAt: number;
-  // Snapshot of `getJsonlMaxMtime()` at report-generation time. Used as the
-  // ETag input so the ETag describes the bytes we're about to serve, not the
-  // current filesystem state — otherwise a JSONL change inside the cache TTL
-  // window would rotate the ETag while the served bytes stayed identical.
+  // Snapshot of the input-mtime signal at report-generation time. For the
+  // file-parse backend this is `getJsonlMaxMtime()`; for the DB backend it's
+  // `MAX(file_mtime_ms) FROM sessions`. Used as the ETag input so the ETag
+  // describes the bytes we're about to serve, not the current state — a
+  // change inside the cache TTL window would otherwise rotate the ETag while
+  // the served bytes stayed identical.
   maxMtime: number;
+  backend: "db" | "file";
 }
 
 const globalForUsage = globalThis as unknown as {
@@ -39,22 +41,32 @@ export async function GET(request: NextRequest) {
   if (fresh) {
     slot = cached!;
   } else {
-    const report = await generateUsageReport(safePeriod, project);
-    // Capture max mtime AFTER generateUsageReport — it calls parseAllSessions
-    // which populates the FileCache, so getJsonlMaxMtime() now reflects every
-    // input file we read for this report.
-    slot = { report, cachedAt: Date.now(), maxMtime: getJsonlMaxMtime() };
+    const { report, meta } = await getUsage(safePeriod, project);
+    slot = {
+      report,
+      cachedAt: Date.now(),
+      maxMtime: meta.maxMtimeMs,
+      backend: meta.backend,
+    };
     cache.set(cacheKey, slot);
   }
 
+  // Salt the ETag with the backend so a runtime flag flip (e.g. operator
+  // toggles MINDER_USE_DB between server starts) invalidates client caches
+  // — backends could differ on edge cases until the schema is fully aligned.
   const etag = computeETag({
-    salt: "usage-v1",
+    salt: `usage-v2-${slot.backend}`,
     maxMtimeMs: slot.maxMtime,
     parts: [safePeriod, project ?? ""],
   });
 
   const notModified = ifNoneMatch(request, etag);
-  if (notModified) return notModified;
+  if (notModified) {
+    notModified.headers.set("X-Minder-Backend", slot.backend);
+    return notModified;
+  }
 
-  return jsonWithETag(slot.report, etag);
+  const response = jsonWithETag(slot.report, etag);
+  response.headers.set("X-Minder-Backend", slot.backend);
+  return response;
 }
