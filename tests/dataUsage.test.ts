@@ -233,6 +233,67 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     for (const [name, count] of db.topTools) {
       expect(fileTools.get(name), `tool ${name} missing in file backend`).toBe(count);
     }
+
+    // Daily buckets: same set of dates, same numbers per date.
+    const fileDaily = new Map(file.daily.map((d) => [d.date, d]));
+    expect(db.daily.length).toBe(file.daily.length);
+    for (const dbDay of db.daily) {
+      const fileDay = fileDaily.get(dbDay.date);
+      expect(fileDay, `date ${dbDay.date} missing in file backend`).toBeDefined();
+      expect(dbDay.cost).toBeCloseTo(fileDay!.cost, 6);
+      expect(dbDay.inputTokens).toBe(fileDay!.inputTokens);
+      expect(dbDay.outputTokens).toBe(fileDay!.outputTokens);
+      expect(dbDay.turns).toBe(fileDay!.turns);
+    }
+
+    // MCP stats: same servers, same totalCalls. Tools mix may differ in
+    // tie-breaking order but counts per (server, tool) must match.
+    const fileMcp = new Map(file.mcpStats.map((m) => [m.server, m]));
+    expect(db.mcpStats.length).toBe(file.mcpStats.length);
+    for (const dbMcp of db.mcpStats) {
+      const fileEntry = fileMcp.get(dbMcp.server);
+      expect(fileEntry, `mcp server ${dbMcp.server} missing in file backend`).toBeDefined();
+      expect(dbMcp.totalCalls).toBe(fileEntry!.totalCalls);
+      for (const [tool, count] of Object.entries(dbMcp.tools)) {
+        expect(fileEntry!.tools[tool], `mcp tool ${dbMcp.server}/${tool} mismatch`).toBe(count);
+      }
+    }
+
+    // Shell binary counts: same set of binaries, same counts.
+    const fileShell = new Map(file.shellStats.map((s) => [s.binary, s.count]));
+    expect(db.shellStats.length).toBe(file.shellStats.length);
+    for (const dbShell of db.shellStats) {
+      expect(fileShell.get(dbShell.binary), `shell binary ${dbShell.binary} mismatch`).toBe(
+        dbShell.count
+      );
+    }
+
+    // One-shot aggregates. period=all has no boundary divergence between
+    // backends — both compute over the whole corpus.
+    expect(db.oneShot.totalVerifiedTasks).toBe(file.oneShot.totalVerifiedTasks);
+    expect(db.oneShot.oneShotTasks).toBe(file.oneShot.oneShotTasks);
+    expect(db.oneShot.rate).toBeCloseTo(file.oneShot.rate, 6);
+  });
+
+  it("DB backend falls back to file when meta.needs_reconcile_after_v3 is set", async () => {
+    const projectsDir = await setupFixture();
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    const init = await mig.initDb();
+    expect(init.available).toBe(true);
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+
+    // Reconcile clears the v3 readiness flag on success — re-set it to
+    // simulate a process that's been restarted between migration apply
+    // and a clean reconcile run.
+    const db = (await conn.getDb())!;
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('needs_reconcile_after_v3', '1') " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ).run();
+
+    const result = await facade.getUsage("all", undefined);
+    expect(result.meta.backend).toBe("file");
   });
 
   it("falls back to file backend when MINDER_USE_DB=1 but DB has no schema", async () => {

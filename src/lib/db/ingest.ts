@@ -113,6 +113,19 @@ interface ParsedTurn {
   toolUses: ParsedToolUse[];
   // UsageTurn-shaped projection for classifier/one-shot reuse.
   usageTurn: UsageTurn;
+  /**
+   * Per-turn dollar cost. Computed once in `readJsonlSession` so writers
+   * (`writeSession` and `appendSessionTail`) can persist it directly
+   * without re-applying pricing. 0 on user turns and on assistant turns
+   * with synthetic / unknown model.
+   */
+  costUsd: number;
+  /**
+   * Classifier output for assistant turns, null otherwise. Computed once
+   * here so the (day, project, category) rollup can be derived alongside
+   * (day, project, model) without a second classifier pass.
+   */
+  category: string | null;
 }
 
 interface ParsedSession {
@@ -148,10 +161,19 @@ interface ParsedSession {
   costUsd: number;
   cacheHitRatio: number | null;
   hasOneShot: 0 | 1;
+  // detectOneShot's full output, persisted so /api/usage's oneShot
+  // aggregate is `SUM(verified_task_count), SUM(one_shot_task_count)
+  // FROM sessions WHERE filter` instead of a per-session window scan.
+  verifiedTaskCount: number;
+  oneShotTaskCount: number;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
   affectedDays: Set<string>;
+  // (day, project, category) tuples to recompute in category_costs after
+  // this session is replaced. Sister set to affectedDays for the
+  // category-keyed rollup.
+  affectedCategoryTuples: Set<string>;
 }
 
 // ── Tool-call classification helpers ───────────────────────────────────────
@@ -412,6 +434,8 @@ async function readJsonlSession(
         toolResultPreview: null,
         toolUses,
         usageTurn,
+        costUsd: 0,
+        category: null,
       });
     } else {
       // user turn
@@ -462,6 +486,8 @@ async function readJsonlSession(
         toolResultPreview: toolResultText || null,
         toolUses: [],
         usageTurn,
+        costUsd: 0,
+        category: null,
       });
     }
   }
@@ -478,11 +504,18 @@ async function readJsonlSession(
     }
   }
 
-  // Derive: cost (sum per-turn) and category (per assistant turn).
+  // Derive: per-turn cost + classifier category. Stamp on the ParsedTurn
+  // so writers can persist directly without redoing the work. Sum to the
+  // session-level total for the row.
   let costUsd = 0;
   for (const t of turns) {
-    if (t.role !== "assistant" || !t.model) continue;
-    costUsd += applyPricing(getModelPricing(t.model), t);
+    if (t.role === "assistant") {
+      t.category = classifyTurn(t.usageTurn);
+      if (t.model) {
+        t.costUsd = applyPricing(getModelPricing(t.model), t);
+        costUsd += t.costUsd;
+      }
+    }
   }
 
   // Derive: one-shot detection across the whole session.
@@ -496,10 +529,19 @@ async function readJsonlSession(
 
   // Derive: affected (day, project, model) tuples for daily_costs.
   const affectedDays = new Set<string>();
+  // Sister set keyed on category instead of model. Drives the
+  // `category_costs` rollup. Only assistant turns contribute (user turns
+  // have no category).
+  const affectedCategoryTuples = new Set<string>();
   for (const t of turns) {
-    if (t.role !== "assistant" || !t.model) continue;
+    if (t.role !== "assistant") continue;
     const day = t.ts.slice(0, 10); // YYYY-MM-DD
-    affectedDays.add(`${day}|${projectSlug}|${t.model}`);
+    if (t.model) {
+      affectedDays.add(`${day}|${projectSlug}|${t.model}`);
+    }
+    if (t.category) {
+      affectedCategoryTuples.add(`${day}|${projectSlug}|${t.category}`);
+    }
   }
 
   return {
@@ -529,8 +571,11 @@ async function readJsonlSession(
       costUsd,
       cacheHitRatio,
       hasOneShot,
+      verifiedTaskCount: oneShot.totalVerifiedTasks,
+      oneShotTaskCount: oneShot.oneShotTasks,
       turns,
       affectedDays,
+      affectedCategoryTuples,
     },
     safeOffset,
   };
@@ -558,7 +603,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        tool_call_count, error_count,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        cost_usd, cache_hit_ratio,
-       has_one_shot,
+       has_one_shot, verified_task_count, one_shot_task_count,
        git_branch, initial_prompt, last_prompt,
        derived_version, indexed_at_ms
      ) VALUES (
@@ -569,7 +614,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @tool_call_count, @error_count,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @cost_usd, @cache_hit_ratio,
-       @has_one_shot,
+       @has_one_shot, @verified_task_count, @one_shot_task_count,
        @git_branch, @initial_prompt, @last_prompt,
        @derived_version, @indexed_at_ms
      )`
@@ -600,6 +645,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     cost_usd: s.costUsd,
     cache_hit_ratio: s.cacheHitRatio,
     has_one_shot: s.hasOneShot,
+    verified_task_count: s.verifiedTaskCount,
+    one_shot_task_count: s.oneShotTaskCount,
     git_branch: s.gitBranch,
     initial_prompt: s.initialPrompt,
     last_prompt: s.lastPrompt,
@@ -612,11 +659,13 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
+       is_error, parent_tool_use_id, text_preview, tool_result_preview,
+       category, cost_usd, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
+       @category, @cost_usd, @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -636,7 +685,6 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   );
 
   for (const t of s.turns) {
-    const category = t.role === "assistant" ? classifyTurn(t.usageTurn) : null;
     insertTurn.run({
       session_id: s.sessionId,
       turn_index: t.turnIndex,
@@ -651,7 +699,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
       tool_result_preview: t.toolResultPreview,
-      category,
+      category: t.category,
+      cost_usd: t.costUsd,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -780,6 +829,59 @@ export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): 
   refreshAllTuples(tuples);
 }
 
+/**
+ * Sister to `refreshDailyCosts`, keyed on category instead of model.
+ * Recomputes `category_costs` rows for the given (day|project|category)
+ * tuples from the source `turns` rows.
+ *
+ * Pure SQL — no JS pricing pass needed because `turns.cost_usd` was
+ * stamped at ingest. That makes this function dramatically simpler than
+ * `refreshDailyCosts` (which still exists in its JS-pricing form for
+ * backward compatibility).
+ *
+ * Wrapped in a single transaction so a mid-refresh crash leaves the
+ * rollup either fully old or fully new for this batch, never partial.
+ */
+export function refreshCategoryCosts(db: DatabaseT.Database, tuples: Set<string>): void {
+  if (tuples.size === 0) return;
+  // Named bindings throughout (vs the positional pattern in
+  // `refreshDailyCosts`) — adjacent statements binding the same fields
+  // in different orders is a maintenance trap.
+  const deleteStmt = db.prepare(
+    "DELETE FROM category_costs WHERE day = @day AND project_slug = @projectSlug AND category = @category"
+  );
+  const insertStmt = db.prepare(
+    `INSERT INTO category_costs (day, project_slug, category, turns, tokens, cost_usd)
+     SELECT
+       substr(t.ts, 1, 10)        AS day,
+       s.project_slug             AS project_slug,
+       t.category                 AS category,
+       COUNT(*)                   AS turns,
+       SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens) AS tokens,
+       SUM(t.cost_usd)            AS cost_usd
+     FROM turns t
+     JOIN sessions s USING (session_id)
+     WHERE t.role = 'assistant'
+       AND t.category = @category
+       AND s.project_slug = @projectSlug
+       AND substr(t.ts, 1, 10) = @day
+     GROUP BY day, s.project_slug, t.category`
+  );
+
+  const refreshAll = db.transaction((pending: Set<string>) => {
+    for (const tuple of pending) {
+      const [day, projectSlug, category] = tuple.split("|");
+      // Pipe-delimited tuple key matches `affectedDays` shape. Categories
+      // are a closed set from `classifyTurn`, none containing `|`.
+      const params = { day, projectSlug, category };
+      deleteStmt.run(params);
+      insertStmt.run(params);
+    }
+  });
+
+  refreshAll(tuples);
+}
+
 // ── Tail-append support ────────────────────────────────────────────────────
 
 /**
@@ -877,7 +979,7 @@ function appendSessionTail(
   parsed: ParsedSession,
   fileMtimeMs: number,
   fileSize: number
-): { rows: number; affectedDays: Set<string> } {
+): { rows: number; affectedDays: Set<string>; affectedCategoryTuples: Set<string> } {
   let rows = 0;
   const sessionId = parsed.sessionId;
 
@@ -888,11 +990,13 @@ function appendSessionTail(
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, tool_result_preview, category, derived_version
+       is_error, parent_tool_use_id, text_preview, tool_result_preview,
+       category, cost_usd, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview, @category, @derived_version
+       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
+       @category, @cost_usd, @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -912,7 +1016,6 @@ function appendSessionTail(
   );
 
   for (const t of parsed.turns) {
-    const category = t.role === "assistant" ? classifyTurn(t.usageTurn) : null;
     insertTurn.run({
       session_id: sessionId,
       turn_index: t.turnIndex,
@@ -927,7 +1030,8 @@ function appendSessionTail(
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
       tool_result_preview: t.toolResultPreview,
-      category,
+      category: t.category,
+      cost_usd: t.costUsd,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -963,6 +1067,8 @@ function appendSessionTail(
   // numeric columns are summable directly. primary_model is the
   // most-frequent assistant model. has_one_shot needs JS because the
   // detector is window-based.
+  // cost_usd folds in via SUM(turns.cost_usd) — no second JS pricing
+  // pass since each turn's cost was stamped at insert.
   const aggRow = db
     .prepare(
       `SELECT
@@ -974,6 +1080,7 @@ function appendSessionTail(
          SUM(output_tokens)       AS output_tokens,
          SUM(cache_create_tokens) AS cache_create_tokens,
          SUM(cache_read_tokens)   AS cache_read_tokens,
+         SUM(cost_usd)            AS cost_usd,
          MIN(ts) AS start_ts,
          MAX(ts) AS end_ts
        FROM turns WHERE session_id = ?`
@@ -987,6 +1094,7 @@ function appendSessionTail(
     output_tokens: number;
     cache_create_tokens: number;
     cache_read_tokens: number;
+    cost_usd: number | null;
     start_ts: string | null;
     end_ts: string | null;
   };
@@ -1004,28 +1112,7 @@ function appendSessionTail(
     .get(sessionId) as { model: string; n: number } | undefined;
   const primaryModel = modelRow?.model ?? null;
 
-  // Cost per assistant turn — same formula as full parse.
-  const costRows = db
-    .prepare(
-      `SELECT model, input_tokens, output_tokens, cache_create_tokens, cache_read_tokens
-       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
-    )
-    .all(sessionId) as Array<{
-    model: string;
-    input_tokens: number;
-    output_tokens: number;
-    cache_create_tokens: number;
-    cache_read_tokens: number;
-  }>;
-  let costUsd = 0;
-  for (const r of costRows) {
-    costUsd += applyPricing(getModelPricing(r.model), {
-      inputTokens: r.input_tokens,
-      outputTokens: r.output_tokens,
-      cacheCreateTokens: r.cache_create_tokens,
-      cacheReadTokens: r.cache_read_tokens,
-    });
-  }
+  const costUsd = aggRow.cost_usd ?? 0;
 
   // One-shot detection over old + new combined.
   const allUsageTurns = loadExistingTurnsAsUsage(
@@ -1071,6 +1158,8 @@ function appendSessionTail(
        cost_usd            = @cost_usd,
        cache_hit_ratio     = @cache_hit_ratio,
        has_one_shot        = @has_one_shot,
+       verified_task_count = @verified_task_count,
+       one_shot_task_count = @one_shot_task_count,
        last_prompt         = @last_prompt,
        indexed_at_ms       = @indexed_at_ms
      WHERE session_id = @session_id`
@@ -1097,27 +1186,22 @@ function appendSessionTail(
     cost_usd: costUsd,
     cache_hit_ratio: cacheHitRatio,
     has_one_shot: hasOneShot,
+    verified_task_count: oneShot.totalVerifiedTasks,
+    one_shot_task_count: oneShot.oneShotTasks,
     last_prompt: lastPrompt,
     indexed_at_ms: Date.now(),
   });
   rows++;
 
-  // affectedDays: union of every (day, project, model) tuple the session
-  // currently contributes to (after the append) — old days that no longer
-  // have any turns are handled by the caller's old-tuples union, but in
-  // a tail, no day disappears. Just emit current-state tuples.
-  const affectedDays = new Set<string>();
-  const dayRows = db
-    .prepare(
-      `SELECT DISTINCT substr(ts, 1, 10) AS day, model
-       FROM turns WHERE session_id = ? AND role='assistant' AND model IS NOT NULL`
-    )
-    .all(sessionId) as Array<{ day: string; model: string }>;
-  for (const r of dayRows) {
-    affectedDays.add(`${r.day}|${parsed.projectSlug}|${r.model}`);
-  }
-
-  return { rows, affectedDays };
+  // Emit just the new turns' tuples. On a tail, prior days/categories
+  // are unchanged in `turns`, so re-deriving their rollup rows would be
+  // a no-op refresh. `parsed.affectedDays` / `parsed.affectedCategoryTuples`
+  // were built in `readJsonlSession` over precisely the new-turn slice.
+  return {
+    rows,
+    affectedDays: parsed.affectedDays,
+    affectedCategoryTuples: parsed.affectedCategoryTuples,
+  };
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -1134,13 +1218,15 @@ export interface FileReconcileResult {
   rowsWritten: number;
   /** (day|project|model) tuples whose daily_costs row needs recomputing. */
   affectedDays: Set<string>;
+  /** (day|project|category) tuples whose category_costs row needs recomputing. */
+  affectedCategoryTuples: Set<string>;
 }
 
 /**
  * Reconcile a single JSONL file into the DB. Caller is responsible for
- * `loadPricing()` having completed first AND for refreshing daily_costs
- * with the returned `affectedDays` (batched at the end of a multi-file
- * reconcile to avoid recomputing the same tuple N times).
+ * `loadPricing()` having completed first AND for refreshing daily_costs +
+ * category_costs with the returned tuple sets (batched at the end of a
+ * multi-file reconcile to avoid recomputing the same tuple N times).
  */
 export async function reconcileSessionFile(
   db: DatabaseT.Database,
@@ -1148,7 +1234,11 @@ export async function reconcileSessionFile(
   projectDirName: string,
   options: { force?: boolean } = {}
 ): Promise<FileReconcileResult> {
-  const empty: FileReconcileResult = { rowsWritten: 0, affectedDays: new Set() };
+  const empty: FileReconcileResult = {
+    rowsWritten: 0,
+    affectedDays: new Set(),
+    affectedCategoryTuples: new Set(),
+  };
   let mtimeMs: number;
   let size: number;
   try {
@@ -1227,19 +1317,23 @@ export async function reconcileSessionFile(
     const tailParsed = tailResult.parsed;
     let rows = 0;
     let affectedDays = new Set<string>();
+    let affectedCategoryTuples = new Set<string>();
     const txn = db.transaction(() => {
       const result = appendSessionTail(db, tailParsed, mtimeMs, size);
       rows = result.rows;
       affectedDays = result.affectedDays;
+      affectedCategoryTuples = result.affectedCategoryTuples;
     });
     txn();
-    return { rowsWritten: rows, affectedDays };
+    return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
   }
 
   // Full replace path. Collect tuples the OLD session contributed to so a
-  // turn that moves between days/models doesn't leave a stale daily_costs
-  // row behind; union with the new affectedDays for the refresh.
+  // turn that moves between days/models / categories doesn't leave a stale
+  // daily_costs / category_costs row behind; union with the new tuples
+  // for the refresh.
   const oldTuples = collectExistingDailyTuples(db, sessionId);
+  const oldCategoryTuples = collectExistingCategoryTuples(db, sessionId);
 
   const fullResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
   if (!fullResult || !fullResult.parsed) return empty;
@@ -1251,7 +1345,9 @@ export async function reconcileSessionFile(
   txn();
   const affectedDays = new Set<string>(fullResult.parsed.affectedDays);
   for (const tuple of oldTuples) affectedDays.add(tuple);
-  return { rowsWritten: rows, affectedDays };
+  const affectedCategoryTuples = new Set<string>(fullResult.parsed.affectedCategoryTuples);
+  for (const tuple of oldCategoryTuples) affectedCategoryTuples.add(tuple);
+  return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
 }
 
 /**
@@ -1270,6 +1366,26 @@ function collectExistingDailyTuples(db: DatabaseT.Database, sessionId: string): 
     .all(sessionId) as Array<{ day: string; project_slug: string; model: string }>;
   const tuples = new Set<string>();
   for (const r of rows) tuples.add(`${r.day}|${r.project_slug}|${r.model}`);
+  return tuples;
+}
+
+/**
+ * Sister to `collectExistingDailyTuples`, keyed on category. When the
+ * classifier version bumps (via `DERIVED_VERSION`), a turn's category can
+ * move on re-parse — without unioning OLD + NEW (day, project, category)
+ * tuples, the row keyed on the OLD category goes stale in
+ * `category_costs`. Same shape as the daily flow on purpose.
+ */
+function collectExistingCategoryTuples(db: DatabaseT.Database, sessionId: string): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT substr(t.ts, 1, 10) AS day, s.project_slug AS project_slug, t.category AS category
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.session_id = ? AND t.role = 'assistant' AND t.category IS NOT NULL`
+    )
+    .all(sessionId) as Array<{ day: string; project_slug: string; category: string }>;
+  const tuples = new Set<string>();
+  for (const r of rows) tuples.add(`${r.day}|${r.project_slug}|${r.category}`);
   return tuples;
 }
 
@@ -1300,9 +1416,11 @@ export async function reconcileAllSessions(
 
   const liveFilePaths = new Set<string>();
   // Collected across all changed sessions and the prune pass; one
-  // refresh at the end avoids recomputing the same (day, project,
-  // model) tuple N times when N sessions touch the same day.
+  // refresh at the end avoids recomputing the same (day, project, model)
+  // / (day, project, category) tuple N times when N sessions touch the
+  // same key.
   const affectedDays = new Set<string>();
+  const affectedCategoryTuples = new Set<string>();
 
   // Sequential per-file because all writes go through the single writer
   // connection. Parallelism would just queue on the busy_timeout. The
@@ -1327,6 +1445,7 @@ export async function reconcileAllSessions(
           stats.filesChanged++;
           stats.rowsWritten += result.rowsWritten;
           for (const tuple of result.affectedDays) affectedDays.add(tuple);
+          for (const tuple of result.affectedCategoryTuples) affectedCategoryTuples.add(tuple);
         }
       } catch {
         stats.errors++;
@@ -1344,6 +1463,9 @@ export async function reconcileAllSessions(
   const deletePrunedDailyByProject = db.prepare(
     "DELETE FROM daily_costs WHERE project_slug = ?"
   );
+  const deletePrunedCategoryByProject = db.prepare(
+    "DELETE FROM category_costs WHERE project_slug = ?"
+  );
   const stalePruned = new Set<string>();
   for (const r of allSessions) {
     if (!liveFilePaths.has(r.file_path)) {
@@ -1352,13 +1474,13 @@ export async function reconcileAllSessions(
     }
   }
 
-  // Pruned sessions removed cost contributions on their days. We drop the
-  // affected projects' daily_costs entirely then re-derive every tuple
-  // still present for those projects in `turns`. Cheaper than per-tuple
-  // delta math and immune to "project lost its last session for a day".
+  // Pruned sessions removed contributions on their days. Drop the affected
+  // projects' daily_costs / category_costs entirely then re-derive every
+  // tuple still present for those projects. Cheaper than per-tuple delta
+  // math and immune to "project lost its last session for a day".
   if (stalePruned.size > 0) {
     const ph = Array.from(stalePruned).map(() => "?").join(",");
-    const rows = db
+    const dayRows = db
       .prepare(
         `SELECT DISTINCT substr(t.ts, 1, 10) AS day, s.project_slug AS project_slug, t.model AS model
          FROM turns t JOIN sessions s USING (session_id)
@@ -1366,12 +1488,38 @@ export async function reconcileAllSessions(
            AND s.project_slug IN (${ph})`
       )
       .all(...Array.from(stalePruned)) as Array<{ day: string; project_slug: string; model: string }>;
-    for (const r of rows) affectedDays.add(`${r.day}|${r.project_slug}|${r.model}`);
-    for (const slug of stalePruned) deletePrunedDailyByProject.run(slug);
+    for (const r of dayRows) affectedDays.add(`${r.day}|${r.project_slug}|${r.model}`);
+    const catRows = db
+      .prepare(
+        `SELECT DISTINCT substr(t.ts, 1, 10) AS day, s.project_slug AS project_slug, t.category AS category
+         FROM turns t JOIN sessions s USING (session_id)
+         WHERE t.role = 'assistant' AND t.category IS NOT NULL
+           AND s.project_slug IN (${ph})`
+      )
+      .all(...Array.from(stalePruned)) as Array<{ day: string; project_slug: string; category: string }>;
+    for (const r of catRows) affectedCategoryTuples.add(`${r.day}|${r.project_slug}|${r.category}`);
+    for (const slug of stalePruned) {
+      deletePrunedDailyByProject.run(slug);
+      deletePrunedCategoryByProject.run(slug);
+    }
   }
 
   if (affectedDays.size > 0) {
     refreshDailyCosts(db, affectedDays);
+  }
+  if (affectedCategoryTuples.size > 0) {
+    refreshCategoryCosts(db, affectedCategoryTuples);
+  }
+
+  // Clear the v3 readiness gate ONLY when the reconcile pass is
+  // known-good. Per-file failures land in `stats.errors` without
+  // failing the whole pass, so clearing unconditionally would drop the
+  // gate while some sessions are still stamped at the old derived_version
+  // — at which point the SQL-aggregate path serves silently incomplete
+  // totals. Holding the flag until a clean pass means the next watcher
+  // tick re-tries the failed files; once they succeed, the gate clears.
+  if (stats.errors === 0) {
+    db.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
   }
 
   return stats;
