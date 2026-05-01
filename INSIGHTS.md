@@ -1,5 +1,192 @@
 # Insights
 
+<!-- insight:c1e5b19570ab | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T17:19:34.515Z -->
+## ★ Insight
+`.env.local` is a Next.js convention — it's loaded automatically at server start, takes precedence over `.env` and `.env.development`, and is never sent to the browser. Setting `MINDER_INDEXER_WORKER=1` here means every `npm run dev` from now on spawns the worker thread, with no per-shell env juggling.
+
+---
+
+<!-- insight:c5127e532916 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T17:07:51.546Z -->
+## ★ Insight
+"Burned in" in the existing CHANGELOG language implies an observation period, not just a code change. P2b-4 just landed and the May-8 soak check is scheduled. Stacking a second default flip (worker mode) on top muddies attribution — if anything weird happens in the next week, was it the read-path flip or the worker flip? The soak window is precisely the time *not* to add another default change.
+
+---
+
+<!-- insight:16400dc63c0d | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T17:05:01.405Z -->
+## ★ Insight
+Bundle sizes are roughly flat vs P-1 baseline (+1-18 KB per route) because two effects offset: lucide tree-shake (which was already on at baseline via `optimizePackageImports`) saved nothing new, while `@tanstack/react-virtual` in P0.5 added ~18 KB to the three virtualized routes. **This is the right outcome** — bundle was never the load-bearing constraint; the warm-API and idle-CPU wins are where this app's perf actually moved.
+
+---
+
+<!-- insight:7c86a5fa35bc | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T16:56:28.147Z -->
+## ★ Insight
+The original plan grouped all P0 items into one slice, but the work falls into two distinct risk profiles: **bundle/memoization wins** (config tweak, useMemo wrappings — near-zero risk, highly mechanical) and **virtualization** (component-level UX changes, needs browser testing per component). Bundling them into one PR makes review harder. Splitting into two PRs keeps each one reviewable in 5-10 minutes.
+
+---
+
+<!-- insight:f82413a1b4a1 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T16:28:16.312Z -->
+## ★ Insight
+Comment #1 is the substantive one. The header comment promises driver-missing is logged, but `getReadyDb()` collapses two distinct cases into one return: user opt-out (`!dbModeRequested()` — no warning needed) and missing native driver (`!isDriverLoaded()` — DOES warrant a warning, exactly the silent-degradation case the once-logger was designed for). The right fix isn't just updating the comment — it's splitting the early returns so the driver-missing case actually fires the warning.
+
+---
+
+<!-- insight:e53c20779e77 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T16:10:03.132Z -->
+## ★ Insight
+The reviewers split cleanly: **efficiency** says ship as-is (chokidar handles missing dirs, no startup block, no leaks); **reuse** says ship as-is (no existing helper to defer to, nothing to refactor); **quality** flags three items — comment rot ("P2b-4" markers will age poorly), a misleading warning message, and a missing shared helper for the env-flag check.
+
+---
+
+<!-- insight:f75e87644877 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:59:11.554Z -->
+## ★ Insight
+The first test reads "file backend runs by default" — that's a literal claim about the previous default. In the inverted world, file-parse is the **opt-out** mode, not the default. The test name and `delete process.env.MINDER_USE_DB` both have to flip semantics together.
+
+---
+
+<!-- insight:f5989daf32ee | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:56:42.020Z -->
+## ★ Insight
+**Why `!== "0"` over a positive opt-out flag like `MINDER_USE_FILE=1`:** the existing flag is already in user memory (env files, scripts, docs) — inverting its semantics with `=== "0"` is a less invasive cognitive change than introducing a second flag. It also keeps a single source of truth: there's exactly one knob to think about.
+
+---
+
+<!-- insight:3b0c132488b8 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:47:25.555Z -->
+## ★ Insight
+The master plan says "keep both code paths for one release after P2 ships; remove the file-parse fallback once stable" — so a two-step rollout (flip default → soak → remove fallback) is what was designed.
+
+---
+
+<!-- insight:700f046f43e9 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:39:57.693Z -->
+## ★ Insight
+Three perf PRs landed in sequence on the same overall plan:
+- **#48 (P2b-3)**: Structural SQL-backed session detail (façade + parity tests)
+- **#49 (P2b-3.5)**: ~30% read-path warm latency win via prepared-statement cache
+- **#50 (reconcile-throughput)**: 88× reconcile throughput by dropping the FK-cascade FTS trigger
+
+---
+
+<!-- insight:499cc925d0d6 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:39:12.111Z -->
+## ★ Insight
+The Copilot finding I'd noted as "future work" was actually a 5-line fix that should have been in v1 of the PR. Lesson: when a reviewer (whether human or another agent) flags an optimization as "out of scope but worth doing later," check the cost-to-fix before deferring. A sub-microsecond PK lookup vs a ~125ms FTS scan on every brand-new-session ingest is exactly the asymmetry where "later" should be "now" — the cost of the fix is so much smaller than the cost of shipping without it that scope-discipline becomes a worse trade than just doing it.
+
+---
+
+<!-- insight:07c6271c5abf | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T15:24:56.463Z -->
+## ★ Insight
+Two transferable lessons from this measurement:
+
+---
+
+<!-- insight:85e478633828 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T14:19:36.216Z -->
+## ★ Insight
+The Codex P2 finding is the textbook example of why "static SQL only" is a contract worth enforcing in the docstring: I missed it when refactoring because the IN-list interpolation looks like it's "still a static query" — the SQL text is hardcoded, just with a computed placeholder count. The check that catches it is mechanical: search for `${` in any SQL passed to `prepCached`. Adding that check to a future code review prompt would have caught it pre-PR.
+
+---
+
+<!-- insight:284b26a32c45 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T13:49:29.529Z -->
+## ★ Insight
+Two patterns from this slice worth keeping for future perf work:
+
+---
+
+<!-- insight:9111bd07b52b | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T13:34:26.895Z -->
+## ★ Insight
+The advisor's nudge from WeakMap to `ConnectionState`-owned Map is elegant: the lifecycle questions (when does the cache become invalid? what about HMR reopens?) all dissolve when the cache and the db handle live as siblings on one struct. `closeDb()` already nulls `state.db`; nulling `state.preparedCache` next to it makes the invariant trivially obvious — "cache exists iff db exists."
+
+---
+
+<!-- insight:c6e9fdbeb995 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T13:20:34.186Z -->
+## ★ Insight
+The full P2b-3 slice is now in main: SQL-backed session detail, façade extraction (`getReadyDb()`), v3 readiness gate applied to every SQL read path, and 4 parity tests documenting 8 explicit divergences. The squash diff is 826 lines added — the pre-merge state has structural soundness (parity tests, divergence docs, gate) that the original implementation lacked, which is exactly what review iteration is for.
+
+---
+
+<!-- insight:8d9fba553855 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T12:57:28.764Z -->
+## ★ Insight
+The most subtle mistake in the original PR was a **stale-comment correctness bug**: `index.ts` claimed session detail "doesn't read `cost_usd`" while the loader literally returned `costEstimate: session.cost_usd`. Comments rot when code moves, but the v3 readiness gate in this codebase is *load-bearing* — it's the only thing standing between users and silent $0 costs during the catch-up window. Lesson: when a comment justifies skipping a safety check, treat it like an audit checkpoint and re-verify against the actual code path.
+
+---
+
+<!-- insight:ec78f2259e3f | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T12:50:24.988Z -->
+## ★ Insight
+The key design choice here is **prefix-matching** vs **equality** for detecting tool-result-only user turns. Copilot suggested `text_preview === tool_result_preview`, but that breaks once `toolResultText > 500` chars because `text_preview` is hard-truncated to 500 while `tool_result_preview` retains up to 2000. Using `tool_result_preview.startsWith(text_preview)` works for all lengths and only false-positives if a real user prompt happens to be a literal prefix of the tool result — which is essentially impossible in practice.
+
+---
+
+<!-- insight:3cbb860a6858 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T12:22:52.340Z -->
+## ★ Insight
+- **Why `file_edits` is the wrong source for `fileOperations`**: it's keyed `(session_id, turn_index, file_path)` to dedupe multiple edits to the same file in a single turn — that's right for "hot-file" analytics ("which files get edited most often") but wrong for the timeline view where each tool call is a distinct event. Always check whether a denormalized table optimizes for *your* query before joining it.
+- **Two divergent gates from one shared helper**: `tryDbBackend` checks `needsReconcileAfterV3` because `cost_usd` is the v3-fragile column. `tryDbSessionDetail` skips that gate because session detail doesn't read `cost_usd` — partially-reconciled DBs return correct session detail. The `getReadyDb()` helper covers what's truly common (driver, init, handle); each callsite decides what dimension-specific gate it needs. Premature abstraction is worse than two-line duplication.
+- **Preferring indexed columns over JSON re-parse**: the schema already has `tool_uses.skill_name` and `tool_uses.agent_name` extracted at ingest. Using them at read time avoids parsing `arguments_json` for the common case — saves both CPU and the truncation-recovery edge cases that `parseStoredArgs` handles. Only the rare fields (Bash `command`, Agent `description`) still need JSON.
+
+---
+
+<!-- insight:0fe614d92db5 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T12:08:15.587Z -->
+## ★ Insight
+- **Five documented divergences** vs file-parse path (recaps, searchableText, subagents.messageCount/toolUsage, status, all derivable; SQL path matches file-parse on every numeric field)
+- **`SessionDetailView` uses `data.isActive` not `data.status`** — status is in the type but not displayed in detail view, so the heuristic-from-mtime is acceptable
+- **`tool_uses.agent_name` is 67% populated** on real DB (1215/1799 Agent rows). For sessions where it's null (older format), we'd lose the agent type but still count subagents from row count
+
+---
+
+<!-- insight:9d5865bfe71a | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T11:34:03.723Z -->
+## ★ Insight
+- **Why `'server-only'` works as the build-time signal**: the `server-only` package (`packages/server-only/index.js`) just throws at module evaluation. But Turbopack and Next.js recognize the import as a *constraint marker* — any module that imports it is unconditionally excluded from client and Edge bundle targets. The `throw` is just defense-in-depth in case something slips through.
+- **Runtime vs build-time gates are different problems**: `process.env.NEXT_RUNTIME !== "nodejs"` is a runtime check that prevents *execution*. `'server-only'` is a build-time check that prevents *compilation*. Edge warnings are a compilation-phase problem; only the build-time signal can suppress them.
+- **Why the dynamic import path stays static**: `await import("./instrumentation-node")` is fine — Turbopack does trace through the string, but it stops at `instrumentation-node.ts` because that file's `'server-only'` import disqualifies it from Edge compilation. The chain breaks there, never reaches `@/lib/db/...`.
+
+---
+
+<!-- insight:ac4ee90e7458 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T05:04:04.749Z -->
+## ★ Insight
+- **Why the SQL backend beats the master plan estimate**: SQLite's mmap (`mmap_size=256MB`) keeps the whole 222MB DB resident, so `WHERE role='assistant'` scans hit RAM, not disk. The `turns_by_role_ts(role, ts)` index covers the WHERE clause directly. With prepared-statement caching across requests, the only per-request cost is the GROUP BY hash construction — that's what 27-34ms is buying you.
+- **Why warm file-parse is ~45ms despite re-parsing nothing**: it's still doing a 124K-element JS reduce per dimension (byModel, byProject, daily, etc.) on the cached `UsageTurn[]`. SQLite's hash aggregate in C beats V8's `for...of` loops in JS by enough to flip the comparison. Counter to the assumption that "DB has overhead vs in-memory JS" — the in-memory JS is doing the same work less efficiently.
+
+---
+
+<!-- insight:27c9da793dd6 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T04:34:43.310Z -->
+## ★ Insight
+- **File-parse warm path is already fast** because `parseAllSessions` has a 2-min in-memory globalThis cache (`__usageFileCache`) — first hit re-parses 1.1 GB, subsequent hits aggregate from cached `UsageTurn[]`. So the warm 30-72ms is "skip the parse, run the JS aggregation" — exactly what P2b-2 already delivers without any DB.
+- **The real comparison for P2b-2.6**: not file-parse-warm vs DB, but DB-cold-after-cache-invalidation vs file-parse-cold. The DB advantage is consistent fast cold response (no 2-min TTL window), not warm performance.
+
+---
+
+<!-- insight:bf082681045d | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T03:45:03.370Z -->
+## ★ Insight
+- **The "two backends, one shape" pattern**: by routing both backends through the same `UsageReport` interface, the parity test becomes a property test — _every dimension matches_ regardless of how it was computed. The test caught the pre-rollup architecture's blind spot too: the original parity test only compared name sets (sorted slug arrays). The strengthened version checks numeric values per-dimension, which catches the cost-drift class of bug that arises from re-deriving the same data through different code paths.
+- **Why SQL aggregation is so much faster**: SQLite's query planner can use `tool_uses_by_name_ts` and the `category_costs.day` index to satisfy `WHERE t.ts >= ? GROUP BY tool_name` without scanning. The file-parse path can't index across files; it must read 1.1 GB to find which 3,000 lines have which tool_name. That's the structural difference between "20× faster" and "100× faster" perf wins.
+
+---
+
+<!-- insight:ceeaf4c9909a | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T03:31:07.963Z -->
+## ★ Insight
+- **Idempotent ALTER pattern**: SQLite has no `ADD COLUMN IF NOT EXISTS`, so the migration probes `PRAGMA table_info(...)` first. Migration v2 already established this pattern; v3 reuses it for three columns so re-running v3 against a partially-applied state (e.g., crash mid-migration) is safe.
+- **Why the readiness flag instead of "just rebuild on next read"**: between migration apply and reconcile, `cost_usd` is 0 on every existing turn. Without a gate, the SQL path would return totalCost=$0 — a silent wrong answer. The meta-key flag forces explicit fall-through to file-parse during the window. Survives process restarts because it's persisted in the DB itself.
+
+---
+
+<!-- insight:9c32e5ed6089 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T03:25:38.477Z -->
+## ★ Insight
+- **Why the rollup table matters**: `category_costs` lets `byCategory` be a direct `SUM(...) GROUP BY category` over a small pre-aggregated table (one row per `day × project × category`), instead of joining 1.1 GB of `turns` and computing classifications. The `daily_costs` table already does this for `(day, project, model)`; we're extending the same pattern.
+- **Per-turn `cost_usd` is the keystone**: once each `turns` row knows its dollar cost, every "by X" SUM becomes trivial. `byModel`, `byProject`, `daily`, even ad-hoc "/api/sql" reports all benefit. Without it, every aggregate has to round-trip through JS pricing.
+- **The migration backfill puzzle**: cost depends on JS pricing data that's loaded lazily. Pure-SQL backfill in `migrations.ts` isn't possible. Two paths — bump `DERIVED_VERSION` (forces re-parse on next reconcile, expensive once) vs run a JS-side backfill after migration but before first read. The advisor call below will help me pick.
+
+---
+
+<!-- insight:7dc2c97def5d | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T03:18:09.774Z -->
+## ★ Insight
+- **The strongest finding was the parity test critique** — `expect(...byProject.map(p => p.projectSlug).sort()).toEqual(...)` passes even if every project's cost disagrees. The whole point of the per-backend ETag salt comment ("backends could differ on edge cases") was admitting the parity test wasn't as strong as its name implied. Now it actually compares costs.
+- **Memoizing `initDb()` was the highest-impact perf fix** — without it, every `/api/usage` hit under `MINDER_USE_DB=1` was paying the cost of a full-DB `quick_check`. The route-level cache TTL would have masked it for 2 min, but TTL expiration + a hot dashboard would have been a noticeable regression vs the file-parse path. The pattern was already correct in `/api/sql` route — just needed lifting.
+- **The `parseStoredArgs` extraction is small but load-bearing**: a future loosening of `COMMAND_RECOVERY_RE` (e.g. recovering more fields) now propagates to both backends in one commit instead of silently drifting.
+
+---
+
+<!-- insight:a08e30b13530 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T03:07:21.488Z -->
+## ★ Insight
+- **The truncation-parity audit was the highest-value 5 minutes** of this slice. If `parser.ts` had truncated to different lengths than the indexer, the two backends would have produced different category breakdowns and one-shot rates — silently. ETag wouldn't catch it (different inputs → different ETags) and tests wouldn't catch it without an explicit cross-backend diff. Reading both sides of the boundary before writing the rehydrate path was what made the parity test trivially passable.
+- **`getJsonlMaxMtime()` is captured AFTER report generation, not before.** This isn't obvious from the existing route — but `parseAllSessions` warms the FileCache as a side effect, so a pre-call read returns 0 on a cold process. The DB analog `MAX(file_mtime_ms) FROM sessions` doesn't have this ordering constraint (it's already populated by the indexer), but the façade preserves the order so both paths are symmetric.
+- **The salt change (`usage-v1` → `usage-v2-{backend}`) is the kind of cache-invalidation move that would bite us in production if it were just a refactor.** A user running with `MINDER_USE_DB=1` and an older cached `usage-v1` ETag would get a 304 against bytes generated by the file-parse path on their previous server boot. Salting the ETag with the backend prevents stale cross-backend hits.
+
+---
+
 <!-- insight:0f3f99379ef4 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T02:57:48.180Z -->
 ## ★ Insight
 - Both `classifier.ts` and `oneShotDetector.ts` use **short keyword regexes** (`\bfix\b`, `\bFAIL\b`, `\bError:\b`) that almost always appear in the first 500/2000 chars if they appear at all. The truncation drift between file-parse (full text) and DB-rehydrate (preview) exists, but is bounded.
