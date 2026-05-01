@@ -1,6 +1,7 @@
 import "server-only";
 import { generateUsageReport } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { scanSessionDetail } from "@/lib/scanner/claudeConversations";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
 import {
@@ -8,7 +9,9 @@ import {
   getDbMaxMtimeMs,
   needsReconcileAfterV3,
 } from "./usageFromDb";
+import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import type { UsageReport } from "@/lib/usage/types";
+import type { SessionDetail } from "@/lib/types";
 
 // Read-side data façade for /api/usage (and, in later slices, /api/sessions
 // and friends). Backend selection is `MINDER_USE_DB=1`; default remains
@@ -57,6 +60,32 @@ export interface UsageResult {
   meta: UsageBackendMeta;
 }
 
+type DbHandle = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/**
+ * Common DB-readiness gate for SQL-backed read paths. Returns the open
+ * `db` handle when everything's healthy, or `null` to signal "fall back
+ * to file-parse" — same contract every consumer follows. Each callsite
+ * still applies its own dimension-specific gates (e.g., the usage path
+ * checks `needsReconcileAfterV3` because `cost_usd` is the column at
+ * risk during v3 catch-up; session detail doesn't read `cost_usd` so
+ * it skips that check).
+ */
+async function getReadyDb(): Promise<DbHandle | null> {
+  if (!dbModeRequested() || !isDriverLoaded()) return null;
+  const init = await ensureSchemaReady();
+  if (!init.available) {
+    logFallthroughOnce(init.error?.message ?? "schema unavailable");
+    return null;
+  }
+  const db = await getDb();
+  if (!db) {
+    logFallthroughOnce("getDb returned null after init");
+    return null;
+  }
+  return db;
+}
+
 /**
  * Try the SQLite-backed path. Returns `null` (caller falls back to
  * file-parse) on any failure or unmet precondition. Each guard takes
@@ -66,18 +95,9 @@ async function tryDbBackend(
   period: "today" | "week" | "month" | "all",
   project: string | undefined
 ): Promise<UsageResult | null> {
-  if (!dbModeRequested() || !isDriverLoaded()) return null;
   try {
-    const init = await ensureSchemaReady();
-    if (!init.available) {
-      logFallthroughOnce(init.error?.message ?? "schema unavailable");
-      return null;
-    }
-    const db = await getDb();
-    if (!db) {
-      logFallthroughOnce("getDb returned null after init");
-      return null;
-    }
+    const db = await getReadyDb();
+    if (!db) return null;
     // v3 readiness gate: between migration apply and reconcile,
     // `turns.cost_usd` is 0 on every existing row. Without this guard
     // the SQL aggregate would return totalCost = $0 — a silent wrong
@@ -111,4 +131,50 @@ export async function getUsage(
   // effect, so a pre-call read returns 0 on a cold process.
   const report = await generateUsageReport(period, project);
   return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
+}
+
+export interface SessionDetailResult {
+  detail: SessionDetail | null;
+  meta: { backend: "db" | "file" };
+}
+
+/**
+ * Single-session detail loader. SQL-backed when `MINDER_USE_DB=1` and
+ * the session has a row in the index; otherwise falls back to the
+ * file-parse path.
+ *
+ * The v3 readiness gate applies here too: `loadSessionDetailFromDb`
+ * reads `sessions.cost_usd` (→ `costEstimate`) and
+ * `verified_task_count` / `one_shot_task_count` (→ `oneShotRate`),
+ * which are 0 on un-reconciled rows during the v3 catch-up window.
+ * Without the gate the DB backend would silently serve $0 and
+ * `oneShotRate=undefined` for a half-reconciled corpus while the
+ * file-parse path returns the right numbers.
+ *
+ * The DB path returns `null` when the session isn't indexed (vs.
+ * "indexed but not found"). The façade treats `null` as "fall through
+ * to file-parse" so a session that exists on disk but hasn't been
+ * indexed yet still resolves.
+ */
+export async function getSessionDetail(sessionId: string): Promise<SessionDetailResult> {
+  const dbDetail = await tryDbSessionDetail(sessionId);
+  if (dbDetail) return { detail: dbDetail, meta: { backend: "db" } };
+
+  const detail = await scanSessionDetail(sessionId);
+  return { detail, meta: { backend: "file" } };
+}
+
+async function tryDbSessionDetail(sessionId: string): Promise<SessionDetail | null> {
+  try {
+    const db = await getReadyDb();
+    if (!db) return null;
+    if (needsReconcileAfterV3(db)) {
+      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
+      return null;
+    }
+    return loadSessionDetailFromDb(db, sessionId);
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
 }
