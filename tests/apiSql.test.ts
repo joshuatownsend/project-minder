@@ -224,4 +224,38 @@ describe.skipIf(!driverAvailable)("/api/sql", () => {
     expect(body.error).toBe("db unavailable");
     expect(body.reason).toMatch(/binary/);
   });
+
+  it("auto-initializes schema on first call (no prior initDb)", async () => {
+    // Cold start: tmpHome has no ~/.minder/index.db. The route must run
+    // initDb() itself rather than letting `getDb()` open an empty DB and
+    // fall into the 400 'no such table' path. Verifies the schema-
+    // readiness gate calls initDb on first request.
+    const { route } = await reloadModules();
+    const res = await route.GET(mkGet("SELECT COUNT(*) AS n FROM sessions"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Empty schema, but the table exists — count is 0 rather than a
+    // 'no such table' error.
+    expect(body.rows[0].n).toBe(0);
+  });
+
+  it("returns 503 when initDb reports the schema is unavailable", async () => {
+    // Drive the `init.available === false` branch: the driver loaded but
+    // initDb couldn't bring the schema up (e.g. corrupt rebuild loop,
+    // permissions). Should surface as 503 'db unavailable' so the UI can
+    // distinguish 'indexer hasn't run' from 'your query is wrong.'
+    const { mig, route } = await reloadModules();
+    vi.spyOn(mig, "initDb").mockResolvedValue({
+      available: false,
+      appliedMigrations: [],
+      schemaVersion: 0,
+      quarantined: null,
+      error: new Error("simulated init failure"),
+    });
+    const res = await route.GET(mkGet("SELECT 1"));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toBe("db unavailable");
+    expect(body.reason).toMatch(/simulated init failure/);
+  });
 });

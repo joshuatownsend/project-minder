@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getDbError, isDriverLoaded } from "@/lib/db/connection";
+import { initDb, type InitResult } from "@/lib/db/migrations";
 
 // Read-only ad-hoc SQL endpoint against the local SQLite index.
 //
@@ -21,9 +22,15 @@ import { getDb, getDbError, isDriverLoaded } from "@/lib/db/connection";
 // and gives the same protection.
 //
 // **Failure modes**
-//   - Driver missing or DB not initialized → 503 with `{error, reason}`.
+//   - Driver missing or DB schema not ready → 503 with `{error, reason}`.
 //     Distinct from query errors so the UI / debug surfaces can show
-//     "indexer hasn't run yet" vs "your query is wrong."
+//     "indexer hasn't run yet" vs "your query is wrong." The "schema not
+//     ready" case matters: `getDb()` will happily create an empty
+//     `~/.minder/index.db` with no tables, so a naked `getDb()` check
+//     would let `SELECT * FROM sessions` fall into the 400 "no such
+//     table" path on first run instead of the documented 503. We call
+//     `initDb()` (idempotent; cached per process) to ensure schema is
+//     present before accepting queries.
 //   - Disallowed statement → 400 with `{error: "only SELECT…"}`.
 //   - Malformed / unknown-table SQL → 400 with the SQLite message.
 //
@@ -31,6 +38,17 @@ import { getDb, getDbError, isDriverLoaded } from "@/lib/db/connection";
 // `POST /api/sql {sql, params?}` (for longer queries and bound params).
 
 export const MAX_ROWS = 10_000;
+
+// Once-per-process schema-readiness gate. `initDb()` is idempotent: on a
+// warm DB it just opens the handle, runs `PRAGMA quick_check`, and
+// confirms `meta.schema_version` matches the latest registry entry. We
+// cache the *promise* (not the result) so concurrent first requests
+// share one in-flight init instead of racing migrations.
+let initPromise: Promise<InitResult> | null = null;
+function ensureSchemaReady(): Promise<InitResult> {
+  if (!initPromise) initPromise = initDb();
+  return initPromise;
+}
 // First non-whitespace token must be SELECT or WITH (CTE → SELECT).
 // All other leading keywords (INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/
 // ATTACH/DETACH/PRAGMA/VACUUM/REINDEX/REPLACE/TRUNCATE/BEGIN/COMMIT/
@@ -97,6 +115,14 @@ async function runQuery(
   // can surface a useful hint.
   if (!isDriverLoaded()) {
     return dbUnavailable("better-sqlite3 native binary not loaded on this platform");
+  }
+  // Run migrations (or confirm they've already run) before accepting
+  // queries. Without this, a cold-start request would create an empty
+  // DB and queries against `sessions` etc. would 400 "no such table"
+  // instead of returning a useful 503.
+  const init = await ensureSchemaReady();
+  if (!init.available) {
+    return dbUnavailable(init.error?.message ?? "DB schema not initialized");
   }
   const db = await getDb();
   if (!db) {
