@@ -73,7 +73,16 @@ type DbHandle = NonNullable<Awaited<ReturnType<typeof getDb>>>;
  * it skips that check).
  */
 async function getReadyDb(): Promise<DbHandle | null> {
-  if (!dbModeRequested() || !isDriverLoaded()) return null;
+  // User explicitly opted out (MINDER_USE_DB=0) — silent fall-through.
+  // Not a degradation case; the operator knows.
+  if (!dbModeRequested()) return null;
+  // Driver missing IS a silent-degradation case — DB mode was requested
+  // (default-on or explicit =1) but better-sqlite3 isn't loadable. Log
+  // once so operators can spot the configuration gap.
+  if (!isDriverLoaded()) {
+    logFallthroughOnce("better-sqlite3 driver not loaded");
+    return null;
+  }
   const init = await ensureSchemaReady();
   if (!init.available) {
     logFallthroughOnce(init.error?.message ?? "schema unavailable");
