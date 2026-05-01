@@ -115,6 +115,21 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 4,
+    name: "drop turns_ad cascade trigger",
+    up: (db) => {
+      // The AFTER DELETE trigger on `turns` filtered on the UNINDEXED
+      // `session_id` / `turn_index` columns of `prompts_fts`, forcing a
+      // full table scan per cascade-deleted turn. With ~120k turns and
+      // hundreds of cascade deletes per session-replace, that scan
+      // dominated reconcile wall-time. `turns` is `WITHOUT ROWID`, so
+      // the FTS5 rowid-alignment trick doesn't apply — instead the
+      // writer bulk-deletes `prompts_fts` rows for the session in one
+      // scan before the cascade.
+      db.exec("DROP TRIGGER IF EXISTS turns_ad");
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

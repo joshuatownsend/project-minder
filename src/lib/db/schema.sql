@@ -403,13 +403,17 @@ CREATE VIRTUAL TABLE catalog_fts USING fts5(
 -- columns doesn't support partial UPDATE cleanly — the recommended pattern
 -- is delete-then-reinsert. See https://sqlite.org/fts5.html.
 --
--- Known cost concern (TODO P2a-2): the DELETE WHERE session_id=? AND
--- turn_index=? filters on UNINDEXED FTS columns, so each delete forces a
--- scan over prompts_fts. For one-off updates this is fine; for a cascaded
--- delete of a session with thousands of turns it's O(turns × fts_rows).
--- The fix is to give turns an integer FTS rowid alias and delete by it
--- (FTS5 external-content pattern). Deferred until P2a-2 ingest lets us
--- measure the actual delete cost on a populated index.
+-- **No `AFTER DELETE` trigger on `turns`.** A trigger that filters on the
+-- UNINDEXED `session_id` / `turn_index` columns scans the entire
+-- `prompts_fts` table (we can't pin to `turns.ROWID` because the table is
+-- `WITHOUT ROWID`). Multiplied by the ~hundreds of FK-cascade deletes a
+-- single session-replace fires, that scan dominated reconcile wall-time
+-- (measured at 99%). Instead, the writer (`writeSession` /
+-- `reconcileAllSessions` prune loop) bulk-deletes `prompts_fts` rows for
+-- the session in **one** scan before the cascade DELETE — then the
+-- cascade has nothing to clean up. The contract is: any code path that
+-- deletes turns must also clean `prompts_fts` for the affected session.
+-- Today both writers go through helpers in `ingest.ts` that handle this.
 
 CREATE TRIGGER turns_ai AFTER INSERT ON turns
 BEGIN
@@ -427,11 +431,6 @@ BEGIN
   DELETE FROM prompts_fts WHERE session_id = OLD.session_id AND turn_index = OLD.turn_index;
   INSERT INTO prompts_fts (session_id, turn_index, role, ts, text)
   VALUES (NEW.session_id, NEW.turn_index, NEW.role, NEW.ts, COALESCE(NEW.text_preview, ''));
-END;
-
-CREATE TRIGGER turns_ad AFTER DELETE ON turns
-BEGIN
-  DELETE FROM prompts_fts WHERE session_id = OLD.session_id AND turn_index = OLD.turn_index;
 END;
 
 -- catalog_fts is a union view over agents/skills/commands; one trigger set

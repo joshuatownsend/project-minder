@@ -1,6 +1,7 @@
 import "server-only";
 import path from "path";
 import os from "os";
+import { performance } from "perf_hooks";
 import { promises as fs, createReadStream } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName } from "@/lib/usage/parser";
@@ -24,6 +25,22 @@ import {
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
 import { parseStoredArgs } from "./storedArgs";
+
+// ── Optional per-stage profiling ──────────────────────────────────────────
+// Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
+// Used by `scripts/profile-reconcile.mjs` to pinpoint reconcile bottlenecks.
+const PROFILE = process.env.MINDER_PROFILE_INGEST === "1";
+const ingestTimings: Record<string, number> = {};
+function tick(label: string, durMs: number): void {
+  if (!PROFILE) return;
+  ingestTimings[label] = (ingestTimings[label] ?? 0) + durMs;
+}
+export function getIngestTimings(): Record<string, number> {
+  return { ...ingestTimings };
+}
+export function resetIngestTimings(): void {
+  for (const k of Object.keys(ingestTimings)) delete ingestTimings[k];
+}
 
 // Session ingest pipeline.
 //
@@ -294,6 +311,7 @@ async function readJsonlSession(
   // next reconcile picks it up after the writer finishes.
   let raw: string;
   let safeOffset: number;
+  const tRead = PROFILE ? performance.now() : 0;
   try {
     const result = await readTailToLastNewline(filePath, fromOffset);
     raw = result.text;
@@ -301,6 +319,7 @@ async function readJsonlSession(
   } catch {
     return null;
   }
+  if (PROFILE) tick("fileRead", performance.now() - tRead);
 
   const turns: ParsedTurn[] = [];
   let startTs: string | null = null;
@@ -318,6 +337,7 @@ async function readJsonlSession(
   let userTurnCount = 0;
   let assistantTurnCount = 0;
 
+  const tParse = PROFILE ? performance.now() : 0;
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -492,6 +512,7 @@ async function readJsonlSession(
     }
   }
 
+  if (PROFILE) tick("parseTurns", performance.now() - tParse);
   if (turns.length === 0) return { parsed: null, safeOffset };
 
   // Derive: primary model = most-frequent assistant model.
@@ -508,6 +529,7 @@ async function readJsonlSession(
   // so writers can persist directly without redoing the work. Sum to the
   // session-level total for the row.
   let costUsd = 0;
+  const tClassify = PROFILE ? performance.now() : 0;
   for (const t of turns) {
     if (t.role === "assistant") {
       t.category = classifyTurn(t.usageTurn);
@@ -517,10 +539,13 @@ async function readJsonlSession(
       }
     }
   }
+  if (PROFILE) tick("classify+price", performance.now() - tClassify);
 
   // Derive: one-shot detection across the whole session.
   const allUsageTurns = turns.map((t) => t.usageTurn);
+  const tOneShot = PROFILE ? performance.now() : 0;
   const oneShot = detectOneShot(allUsageTurns);
+  if (PROFILE) tick("detectOneShot", performance.now() - tOneShot);
   const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
 
   // Derive: cache hit ratio. Undefined when there's no cache activity at all.
@@ -592,8 +617,17 @@ async function readJsonlSession(
 function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   let rows = 0;
 
+  const tDelete = PROFILE ? performance.now() : 0;
+  // FTS5 indexes by its internal rowid; filtering on UNINDEXED columns
+  // (`session_id`, `turn_index`) forces a full table scan. Doing that
+  // scan once per session beats letting the FK cascade fire a per-turn
+  // trigger N times (N × scan cost). Caller contract: any code path
+  // that deletes turns must clean `prompts_fts` for the session first.
+  db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(s.sessionId);
   db.prepare("DELETE FROM sessions WHERE session_id = ?").run(s.sessionId);
+  if (PROFILE) tick("write.delete", performance.now() - tDelete);
 
+  const tInsertSession = PROFILE ? performance.now() : 0;
   db.prepare(
     `INSERT INTO sessions (
        session_id, project_slug, project_dir_name, file_path,
@@ -654,6 +688,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     indexed_at_ms: Date.now(),
   });
   rows++;
+  if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
 
   const insertTurn = db.prepare(
     `INSERT INTO turns (
@@ -684,6 +719,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
      VALUES (?, ?, ?, ?, ?)`
   );
 
+  const tInsertChildren = PROFILE ? performance.now() : 0;
   for (const t of s.turns) {
     insertTurn.run({
       session_id: s.sessionId,
@@ -734,6 +770,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       }
     }
   }
+  if (PROFILE) tick("write.insertChildren", performance.now() - tInsertChildren);
 
   return rows;
 }
@@ -1342,7 +1379,9 @@ export async function reconcileSessionFile(
   const txn = db.transaction(() => {
     rows = writeSession(db, fullResult.parsed!);
   });
+  const tWrite = PROFILE ? performance.now() : 0;
   txn();
+  if (PROFILE) tick("writeSession", performance.now() - tWrite);
   const affectedDays = new Set<string>(fullResult.parsed.affectedDays);
   for (const tuple of oldTuples) affectedDays.add(tuple);
   const affectedCategoryTuples = new Set<string>(fullResult.parsed.affectedCategoryTuples);
@@ -1455,10 +1494,14 @@ export async function reconcileAllSessions(
 
   // Prune sessions whose JSONL file vanished. One SELECT pulls the full
   // (session_id, project_slug, file_path) tuple — no per-row lookup. Cascade
-  // FK deletes clean turns / tool_uses / file_edits.
+  // FK deletes clean turns / tool_uses / file_edits. The `turns_ad` trigger
+  // was dropped in v4, so each session's `prompts_fts` rows are explicitly
+  // bulk-deleted here in one scan before the cascade — same contract as
+  // `writeSession`'s pre-delete.
   const allSessions = db
     .prepare("SELECT session_id, project_slug, file_path FROM sessions")
     .all() as Array<{ session_id: string; project_slug: string; file_path: string }>;
+  const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
   const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
   const deletePrunedDailyByProject = db.prepare(
     "DELETE FROM daily_costs WHERE project_slug = ?"
@@ -1469,6 +1512,7 @@ export async function reconcileAllSessions(
   const stalePruned = new Set<string>();
   for (const r of allSessions) {
     if (!liveFilePaths.has(r.file_path)) {
+      deleteFtsBySession.run(r.session_id);
       deleteStale.run(r.session_id);
       stalePruned.add(r.project_slug);
     }
