@@ -366,6 +366,41 @@ Both routes depend on TWO file sources: the JSONL corpus (covered by `getJsonlMa
 
 ---
 
+## After P2b-4 — 2026-05-01
+
+`MINDER_USE_DB` and `MINDER_INDEXER` defaults flipped to on. No new perf measurement in this slice — the structural wins were already captured in P2b-2.5 (SQL aggregate path), P2b-3 (SQL session detail), P2b-3.5 (prepared-statement cache), and the reconcile-throughput fix below. P2b-4 is the rollout slice that turns those wins on for every user without an opt-in flag.
+
+### What "default on" means in practice
+
+For a fresh clone, `npm run dev` now:
+
+- Boots the in-process chokidar watcher at server start (instrumentation-node.ts).
+- Routes `/api/usage` and `/api/sessions/[sessionId]` through the SQLite-backed read path on every hit.
+- Falls back to file-parse on driver-missing / init-failure / `meta.needs_reconcile_after_v3` set — no behavior change there; the safety net stays.
+
+### Soak-window behavior to watch
+
+If a previous-generation install upgrades into this slice, the FIRST boot still pays the v3 catch-up cost (~20 s now, post-reconcile-throughput fix). The DB read path falls back to file-parse during catch-up because `meta.needs_reconcile_after_v3` is set; once the reconcile completes, subsequent reads go straight to SQL. No user-visible action required.
+
+### Methodology / verification commands
+
+```bash
+# Default-on (no flags needed):
+npm run dev
+
+# Confirm DB backend is actually serving:
+curl -sI http://localhost:4100/api/usage?period=all | grep -i x-minder-backend
+# expect: X-Minder-Backend: db
+
+# Force the legacy file-parse path (escape hatch):
+MINDER_USE_DB=0 npm run dev
+
+# Suppress the watcher (e.g. for clean read-side benchmarking):
+MINDER_INDEXER=0 npm run dev
+```
+
+---
+
 ## After reconcile-throughput fix — 2026-05-01
 
 Profiled `reconcileSessionFile` against the user's real corpus (124k turns, 160 sessions) using a per-stage `MINDER_PROFILE_INGEST=1` instrumentation harness (`scripts/profile-reconcile.mjs`). The schema's own TODO at line 406 had predicted the bottleneck a year before measurement.
@@ -448,7 +483,7 @@ Theoretical estimate was 1–3 ms (17 prepares × ~50–200 µs each). Measured 
 1. **Statement reuse skips per-call SQL parsing AND query-plan re-validation.** better-sqlite3's `prepare()` does both — the second cost (re-validating against the schema) is documented but not benchmarked explicitly in their docs.
 2. **Hot-path JS less garbage.** Each `db.prepare()` allocated a fresh `Statement` wrapper object; reusing one drops 17 allocations + their finalizers per request. On a 20 ms request that adds up.
 
-The delta is real but the absolute number (~10 ms saved on a ~30 ms request) is below the noise floor of cross-machine comparison. Frame this as "structural — the cache shape is correct for the eventual `MINDER_USE_DB` default flip" rather than "a major perf win."
+The delta is real but the absolute number (~10 ms saved on a ~30 ms request) is below the noise floor of cross-machine comparison. Frame this as "structural — the cache shape is correct for the `MINDER_USE_DB` default flip that landed in P2b-4" rather than "a major perf win."
 
 ### Methodology
 

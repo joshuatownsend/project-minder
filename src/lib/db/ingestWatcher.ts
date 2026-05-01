@@ -84,8 +84,8 @@ export interface StartIngestWatcherOptions {
   /** Override the watch root. Defaults to `~/.claude/projects`. */
   projectsDir?: string;
   /**
-   * Skip the env-flag check. Tests pass this so they don't have to set
-   * `MINDER_INDEXER=1` in process env.
+   * Skip the env-flag check. Tests pass this so they don't have to
+   * unset `MINDER_INDEXER` in process env (the watcher defaults on).
    */
   bypassEnvFlag?: boolean;
   /** Suppress the 30 s sweep timer (tests don't want background timers). */
@@ -120,14 +120,14 @@ export interface WatcherStatus {
 
 /**
  * Start the ingest watcher. Idempotent — a second call closes the prior
- * watcher first. Returns the status snapshot. Returns a disabled status
- * (without starting) when `MINDER_INDEXER` is not "1" and `bypassEnvFlag`
- * is unset.
+ * watcher first. Returns the status snapshot. The watcher defaults on;
+ * set `MINDER_INDEXER=0` to opt out. Returns a disabled status (without
+ * starting) when the opt-out is active and `bypassEnvFlag` is unset.
  */
 export async function startIngestWatcher(
   options: StartIngestWatcherOptions = {}
 ): Promise<WatcherStatus> {
-  if (!options.bypassEnvFlag && process.env.MINDER_INDEXER !== "1") {
+  if (!options.bypassEnvFlag && process.env.MINDER_INDEXER === "0") {
     return idleStatus();
   }
   // Vitest sets NODE_ENV=test; instrumentation.ts can be loaded in test

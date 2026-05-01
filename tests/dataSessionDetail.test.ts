@@ -159,9 +159,9 @@ afterEach(async () => {
 });
 
 describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend parity", () => {
-  it("file backend serves by default and returns a populated SessionDetail", async () => {
+  it("file backend serves when MINDER_USE_DB=0 and returns a populated SessionDetail", async () => {
     await setupFixture();
-    delete process.env.MINDER_USE_DB;
+    process.env.MINDER_USE_DB = "0";
     const { facade } = await reloadModules();
     const result = await facade.getSessionDetail(SESSION_ID);
 
@@ -194,7 +194,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const projectsDir = await setupFixture();
 
     // -- File-parse run --
-    delete process.env.MINDER_USE_DB;
+    process.env.MINDER_USE_DB = "0";
     const { facade: fileFacade } = await reloadModules();
     const fileResult = await fileFacade.getSessionDetail(SESSION_ID);
     expect(fileResult.meta.backend).toBe("file");

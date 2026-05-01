@@ -13,9 +13,10 @@ import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import type { UsageReport } from "@/lib/usage/types";
 import type { SessionDetail } from "@/lib/types";
 
-// Read-side data façade for /api/usage (and, in later slices, /api/sessions
-// and friends). Backend selection is `MINDER_USE_DB=1`; default remains
-// the file-parse path that ships in production today.
+// Read-side data façade for /api/usage, /api/sessions, and friends.
+// Backend selection is `MINDER_USE_DB`; the default is on. Set
+// `MINDER_USE_DB=0` to force the legacy file-parse path (e.g. to debug
+// a regression).
 //
 // The DB-backed path falls through to file-parse on any failure (driver
 // missing, init failure, getDb null, thrown error during the load) so a
@@ -26,14 +27,14 @@ import type { SessionDetail } from "@/lib/types";
 const FLAG = "MINDER_USE_DB";
 
 export function dbModeRequested(): boolean {
-  return process.env[FLAG] === "1";
+  return process.env[FLAG] !== "0";
 }
 
 // Once-per-process schema-readiness gate. `initDb()` runs `quick_check`
 // plus a `meta`/`sqlite_master` lookup, which we don't want on every
-// /api/usage hit when MINDER_USE_DB=1. Cache the *promise* so concurrent
-// first requests share one in-flight init. Same pattern as
-// `/api/sql/route.ts`'s `ensureSchemaReady`.
+// /api/usage hit. Cache the *promise* so concurrent first requests
+// share one in-flight init. Same pattern as `/api/sql/route.ts`'s
+// `ensureSchemaReady`.
 let initPromise: Promise<InitResult> | null = null;
 function ensureSchemaReady(): Promise<InitResult> {
   if (!initPromise) initPromise = initDb();
@@ -45,7 +46,7 @@ function logFallthroughOnce(reason: string): void {
   if (fallthroughLogged) return;
   fallthroughLogged = true;
   // eslint-disable-next-line no-console
-  console.warn(`[data] ${FLAG}=1 set but DB-backed path unavailable: ${reason}. Falling back to file-parse.`);
+  console.warn(`[data] DB-backed path unavailable: ${reason}. Falling back to file-parse. Set ${FLAG}=0 to skip the DB path entirely.`);
 }
 
 export interface UsageBackendMeta {
@@ -139,9 +140,9 @@ export interface SessionDetailResult {
 }
 
 /**
- * Single-session detail loader. SQL-backed when `MINDER_USE_DB=1` and
- * the session has a row in the index; otherwise falls back to the
- * file-parse path.
+ * Single-session detail loader. SQL-backed by default when the
+ * session has a row in the index; otherwise falls back to the
+ * file-parse path. Set `MINDER_USE_DB=0` to force the legacy path.
  *
  * The v3 readiness gate applies here too: `loadSessionDetailFromDb`
  * reads `sessions.cost_usd` (→ `costEstimate`) and

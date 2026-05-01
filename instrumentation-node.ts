@@ -10,15 +10,17 @@ import "server-only";
 //
 // Three ingest modes, in priority order:
 //
-//   MINDER_INDEXER_WORKER=1  → start the worker_threads-hosted ingest
-//                              (P2a-2.4; phase 1 = trivial ping/pong stub).
-//   MINDER_INDEXER=1         → start the in-process chokidar watcher
-//                              (P2a-2.2 / 2.3 path; remains the default
-//                              and serves as the fallback if the worker
-//                              path turns out to be broken on a given
-//                              platform / Next.js version).
-//   neither                  → no-op. Dashboard runs on the file-parse
-//                              path. Ingest is strictly additive in P2a.
+//   MINDER_INDEXER_WORKER=1  → start the worker_threads-hosted ingest.
+//                              Strictly opt-in until worker mode is
+//                              burned in.
+//   default                  → start the in-process chokidar watcher.
+//                              The dashboard's default read path is
+//                              SQL-backed, which depends on this
+//                              watcher keeping the index fresh. Set
+//                              `MINDER_INDEXER=0` to disable.
+//
+// To run with neither — pure file-parse mode — set both
+// `MINDER_INDEXER=0` and `MINDER_USE_DB=0`.
 
 export async function startIngest(): Promise<void> {
   if (process.env.MINDER_INDEXER_WORKER === "1") {
@@ -71,7 +73,7 @@ export async function startIngest(): Promise<void> {
     return;
   }
 
-  if (process.env.MINDER_INDEXER === "1") {
+  if (process.env.MINDER_INDEXER !== "0") {
     await startInProcessWatcher();
   }
 }
