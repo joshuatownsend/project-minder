@@ -17,10 +17,14 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 
 ### Dashboard & Scanning
 - Auto-scans one or more directories (e.g. `~/dev/*`) and renders every project as a card
+- **Three view modes** — full cards, compact cards, or sparkline list with 14-day Claude-session activity bars per row (`v` to cycle)
+- **Project pinning** — pin frequently-touched projects to the top of every view; pinned rows show a subtle teal tint
 - Background git dirty-status checks — amber `+N` indicators appear as results arrive
-- Search, filter by status, and sort across all projects
-- Per-project status labels (active, paused, archived), hide/unhide, and port overrides
-- 5-minute in-memory scan cache; force-rescan anytime from the UI
+- Search, filter by status, and sort across all projects (default sort: most-recent Claude session)
+- Per-project status labels (active, paused, archived); one-click archive with toast "Undo" action
+- Port overrides + per-slug dev-port detection
+- CI badge on cards when GitHub workflows are present (deep-links into `/config`)
+- 5-minute in-memory scan cache; force-rescan anytime from the UI (keyboard shortcut `r`)
 
 ### Claude Code Integration
 - **System Status page** — `/status` shows a live cross-project view of every recent Claude Code session in four buckets: Needs Approval, Working, Waiting for You, and Other/Stale. Polls every 3 seconds. Worktree sessions appear labeled by branch. The nav badge shows the pending-approval count. Classification uses a 4-state heuristic: stalled mtime on write-type tools → Approval; active tools → Working; clean `end_turn` → Waiting for You; stale >10 min → Other/Stale.
@@ -52,6 +56,11 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 - **Apply Template modal** — target = existing project or a not-yet-existing path under devRoot (Project Minder runs `mkdir` + `git init`, no language scaffolding). Default conflict policy plus expandable per-unit overrides; aggregate dry-run preview with per-unit diffs and warnings before commit
 - **Plugin "requires install" UX** — applying a plugin enable when the plugin isn't installed at `~/.claude/plugins/` writes the flag anyway and surfaces a copy-pastable `/plugin install <name>@<marketplace>` hint; the flag activates automatically once the plugin lands
 - **Path safety** — every target is `path.resolve`d into one of the configured dev roots; `<root>/.minder/` is reserved; path-traversal in workflow keys is rejected
+
+### Hooks, Plugins, MCP & CI/CD
+- **`/config` cross-project catalog** — 5-tab shell surfacing project Hooks, Plugins, MCP servers, GitHub Actions workflows, dependabot, and Vercel/Railway/Fly/Render/Netlify/Heroku host config across every scanned project. Per-row provenance shows whether a hook came from `.claude/settings.json` (project-shared) or `.claude/settings.local.json` (local-only) — copying a `local` hook via Template Mode auto-promotes it to project-shared
+- **Project Config tab** — appears on a project detail page when project-local hooks, `.mcp.json`, or CI/CD config is present (no user-level repetition; user-scope items live on `/config`)
+- **CI workflow parsing** — workflows expose normalized `on:` triggers, schedule crons, jobs (id, name, runs-on), and deduped action `uses:` references; vercel.json crons extracted; dependabot updates emitted per-ecosystem
 
 ### Project Management
 - **TODO tracking** — reads each project's `TODO.md`; add items inline or via a cross-project Quick Add modal (Shift+T)
@@ -107,16 +116,41 @@ All settings live in `.minder.json` at the repo root. The in-app **Config page**
 | `devRoots` | `string[]` | Directories to scan. First entry is the primary root. |
 | `devRoot` | `string` | Legacy single-root fallback. Kept in sync automatically. |
 | `statuses` | `Record<string, "active" \| "paused" \| "archived">` | Per-project status labels. |
-| `hidden` | `string[]` | Project slugs hidden from the dashboard. |
+| `hidden` | `string[]` | Project slugs excluded entirely from the scan (Setup-only power feature). |
 | `portOverrides` | `Record<string, number>` | Override the detected dev port for a project. |
+| `viewMode` | `"full" \| "compact" \| "list"` | Default dashboard view. |
+| `pinnedSlugs` | `string[]` | Project slugs pinned to the top of every view. |
+| `defaultSort` | `"activity" \| "name" \| "claude"` | Initial sort order. |
+| `defaultStatusFilter` | `"all" \| "active" \| "paused" \| "archived"` | Initial status filter. |
+| `templates` | `{ defaultConflictPolicy?, lastUsedSlug? }` | Apply Template modal preferences. |
+
+### Environment overrides
+
+Set in `.env.local` (gitignored) for persistent per-machine overrides:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MINDER_USE_DB` | on | `=0` forces read paths back to file-parse (skips the SQLite index). |
+| `MINDER_INDEXER` | on | `=0` suppresses the chokidar watcher (no automatic index updates). |
+| `MINDER_INDEXER_WORKER` | off | `=1` hosts the watcher in a `worker_thread` for crash isolation. |
 
 ---
 
 ## How It Works
 
-Project Minder is a Next.js app that runs entirely on your local machine — no database, no cloud sync. On each dashboard load it scans your configured directories in parallel batches, running 9 scanner modules per project (package.json, git, Claude sessions, TODOs, manual steps, insights, and more). Results are cached in memory for 5 minutes. A background worker checks git dirty status in rolling batches of 3 repos, and the dashboard polls for results as they arrive.
+Project Minder is a Next.js app that runs entirely on your local machine — no cloud sync, no telemetry. Two storage tiers cooperate:
+
+- **Filesystem as source of truth.** Project metadata, TODOs, manual steps, insights, and Claude Code config all stay where they already live (your project directories, `~/.claude/`, `MANUAL_STEPS.md` in your repos). Edit any of them in your editor and the dashboard reflects the change.
+- **Local SQLite index** at `~/.minder/index.db`. A chokidar watcher tails `~/.claude/projects/**/*.jsonl` and incrementally updates derived tables (sessions, turns, tool uses, daily costs, plus an FTS5 prompt-search table). The dashboard reads aggregates directly from indexed columns instead of re-parsing 1+ GB of JSONL on every request. The index is purely derived — delete it and it rebuilds on next boot.
+
+On each dashboard load Project Minder scans your configured directories in parallel batches, running scanner modules per project (package.json, git, Claude sessions, TODOs, manual steps, insights, hooks, MCP servers, CI/CD config, and more). Project-scan results are cached in memory for 5 minutes; the SQLite index is kept fresh in real time by the watcher. A background worker checks git dirty status in rolling batches of 3 repos.
 
 The process manager spawns dev servers as child processes using project-local binaries and stores the last 200 lines of output per process. On Windows it uses `taskkill /F /T` for clean process-tree teardown; on macOS/Linux it sends `SIGTERM` to the process group.
+
+### Power tools
+
+- **Read-only `/api/sql`** — query the local SQLite index for ad-hoc analytics. `GET /api/sql?sql=…` or `POST /api/sql {sql, params?}`. SELECT/WITH only, hard 10 000-row cap, both regex pre-gate and `stmt.readonly` enforcement.
+- **Worker mode (opt-in)** — set `MINDER_INDEXER_WORKER=1` to host the watcher in a Node `worker_thread`. Server boots immediately while the initial reconcile (~20 s for 3k JSONL files post-throughput-tuning) runs in the background. If SQLite or chokidar throws fatally, the dashboard falls back to the in-process watcher automatically.
 
 ---
 
