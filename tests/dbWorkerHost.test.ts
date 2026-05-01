@@ -42,7 +42,18 @@ setInterval(() => {}, 60_000);
 async function reloadHost() {
   vi.resetModules();
   delete (globalThis as { __minderWorker?: unknown }).__minderWorker;
-  return await import("@/lib/db/workerHost");
+  const mod = await import("@/lib/db/workerHost");
+  // Phase-1 inline workers don't understand the phase-2 `start`
+  // handshake or need the loader shim. Wrap startWorker so existing
+  // tests stay terse.
+  const startWorker = mod.startWorker;
+  return {
+    ...mod,
+    startWorker: (
+      opts: Parameters<typeof startWorker>[0] = {}
+    ): ReturnType<typeof startWorker> =>
+      startWorker({ sendStart: false, ...opts }),
+  };
 }
 
 afterEach(async () => {

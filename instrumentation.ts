@@ -31,13 +31,30 @@ export async function register(): Promise<void> {
 
   if (process.env.MINDER_INDEXER_WORKER === "1") {
     try {
-      const { startWorker } = await import("@/lib/db/workerHost");
-      const status = await startWorker();
+      const { startWorker, stopWorker } = await import("@/lib/db/workerHost");
+      // awaitStart: false — return as soon as the worker is alive and
+      // the watcher module is loaded. The initial reconcile runs in
+      // the background; instrumentation doesn't block server startup
+      // on it.
+      //
+      // onStartFailure — if the async start handshake fails (worker
+      // is alive but the watcher inside it couldn't start, e.g. DB
+      // driver unavailable or watcher init throws), tear down the
+      // worker and switch to the in-process watcher so ingest doesn't
+      // silently stay off.
+      const status = await startWorker({
+        awaitStart: false,
+        onStartFailure: (err: Error) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[ingest-worker] async start failed (${err.message}); switching to in-process watcher.`
+          );
+          void stopWorker().then(() => startInProcessWatcher());
+        },
+      });
       if (status.running) {
         // eslint-disable-next-line no-console
-        console.info(
-          `[ingest-worker] started; entry=${status.workerEntry}`
-        );
+        console.info(`[ingest-worker] spawned; entry=${status.workerEntry}`);
       }
     } catch (err) {
       // eslint-disable-next-line no-console
