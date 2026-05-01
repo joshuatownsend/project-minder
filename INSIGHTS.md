@@ -1,5 +1,28 @@
 # Insights
 
+<!-- insight:0f3f99379ef4 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T02:57:48.180Z -->
+## ★ Insight
+- Both `classifier.ts` and `oneShotDetector.ts` use **short keyword regexes** (`\bfix\b`, `\bFAIL\b`, `\bError:\b`) that almost always appear in the first 500/2000 chars if they appear at all. The truncation drift between file-parse (full text) and DB-rehydrate (preview) exists, but is bounded.
+- The risk concentrates on long verification outputs where a final `× 3 failed` summary line appears past the 2000-char preview cutoff. Worth measuring in tests but unlikely to materially shift one-shot rates.
+- For ETag in DB mode, `MAX(file_mtime_ms) FROM sessions` is the clean analog to `getJsonlMaxMtime()` — and the indexer's tail-append path updates `file_mtime_ms` (verified at ingest.ts:1083), so the cache key advances when sessions grow.
+
+---
+
+<!-- insight:26b24f20cd94 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T02:45:07.415Z -->
+## ★ Insight
+- **Promise memoization vs result memoization**: caching the *promise* (not its resolved value) is what makes this race-safe. Two concurrent first requests both reach `initPromise = initDb()` if we cached the result, but with promise memoization the second request gets the in-flight promise and awaits the same migration run. SQLite's file lock would still serialize the actual writes, but we'd see one of them throw "table already exists" because both passed the `getCurrentVersion === 0` check.
+- **Spying on ESM namespace bindings**: `vi.spyOn(mig, "initDb").mockResolvedValue(...)` works here because vitest's transformer makes namespace-object properties configurable, and the route's `import { initDb }` is a live binding pointing at the same property descriptor. Same pattern used by the existing driver-missing test (`vi.spyOn(conn, "isDriverLoaded")`).
+
+---
+
+<!-- insight:87f1d5f9f7a1 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T02:38:53.518Z -->
+## ★ Insight
+- `initDb()` is **idempotent** — its migration runner reads `meta.schema_version`, only runs `version > current`, and wraps each in a transaction. Safe to call from a read-side route on first hit.
+- The right place to fix this is at the route boundary, with a **once-per-process cached promise**, so we pay the integrity_check cost exactly once and reuse the resolved init across every subsequent SQL request.
+- The `available: false` flag on the returned `InitResult` is the canonical "is the index queryable" signal — distinct from `getDb() !== null` (which only proves a handle is open, not that schema exists).
+
+---
+
 <!-- insight:d778c603dc0c | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T00:14:06.268Z -->
 ## ★ Insight
 End-to-end worker boot, watcher start, and clean shutdown — all green. The watcher actually opened the SQLite DB inside the worker, ran migrations, attached chokidar, and reported `running: true` in 32 ms against a tmpdir.

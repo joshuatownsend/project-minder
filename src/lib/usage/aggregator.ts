@@ -4,6 +4,7 @@ import { computeTurnCost, loadPricing } from "./costCalculator";
 import { groupByBinary } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
+import { getPeriodStart } from "./periods";
 import type {
   UsageTurn,
   UsageReport,
@@ -16,35 +17,12 @@ import type {
   ToolCall,
 } from "./types";
 
-function getPeriodStart(period: string): Date | null {
-  const now = new Date();
-  switch (period) {
-    case "today": {
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      return start;
-    }
-    case "week": {
-      const start = new Date(now);
-      start.setDate(start.getDate() - start.getDay());
-      start.setHours(0, 0, 0, 0);
-      return start;
-    }
-    case "month":
-      return new Date(now.getFullYear(), now.getMonth(), 1);
-    case "all":
-      return null;
-    default:
-      return null;
-  }
-}
+type Period = "today" | "week" | "month" | "all";
 
 export async function generateUsageReport(
-  period: "today" | "week" | "month" | "all",
+  period: Period,
   project?: string
 ): Promise<UsageReport> {
-  await loadPricing();
-
   const sessionMap = await parseAllSessions();
 
   let turns: UsageTurn[] = [];
@@ -59,6 +37,23 @@ export async function generateUsageReport(
   if (project) {
     turns = turns.filter((t) => t.projectSlug === project);
   }
+
+  return aggregateUsage(turns, period);
+}
+
+/**
+ * Pure aggregation over a pre-filtered set of turns. Public so the data
+ * façade can hand in turns rehydrated from SQLite (P2b-2) without
+ * re-parsing the JSONL corpus. The aggregation logic itself is identical
+ * across backends — what changes is only how `turns` was assembled.
+ */
+export async function aggregateUsage(
+  turns: UsageTurn[],
+  period: Period
+): Promise<UsageReport> {
+  // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
+  // and seeds a 24-h FileCache; subsequent calls return immediately.
+  await loadPricing();
 
   // Classify and cost only assistant turns (user turns have empty model/zero tokens)
   const assistantTurns = turns.filter((t) => t.role === "assistant");

@@ -1,0 +1,103 @@
+import "server-only";
+import { aggregateUsage, generateUsageReport } from "@/lib/usage/aggregator";
+import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { getDb, isDriverLoaded } from "@/lib/db/connection";
+import { initDb, type InitResult } from "@/lib/db/migrations";
+import { loadFilteredUsageTurns, getDbMaxMtimeMs } from "./usageFromDb";
+import type { UsageReport } from "@/lib/usage/types";
+
+// Read-side data façade for /api/usage (and, in later slices, /api/sessions
+// and friends). Backend selection is `MINDER_USE_DB=1`; default remains
+// the file-parse path that ships in production today.
+//
+// The DB-backed path falls through to file-parse on any failure (driver
+// missing, init failure, getDb null, thrown error during the load) so a
+// misconfigured indexer never breaks /api/usage. The fall-through is
+// logged once per process so operators can spot a silently-degraded DB
+// mode.
+
+const FLAG = "MINDER_USE_DB";
+
+export function dbModeRequested(): boolean {
+  return process.env[FLAG] === "1";
+}
+
+// Once-per-process schema-readiness gate. `initDb()` runs `quick_check`
+// plus a `meta`/`sqlite_master` lookup, which we don't want on every
+// /api/usage hit when MINDER_USE_DB=1. Cache the *promise* so concurrent
+// first requests share one in-flight init. Same pattern as
+// `/api/sql/route.ts`'s `ensureSchemaReady`.
+let initPromise: Promise<InitResult> | null = null;
+function ensureSchemaReady(): Promise<InitResult> {
+  if (!initPromise) initPromise = initDb();
+  return initPromise;
+}
+
+let fallthroughLogged = false;
+function logFallthroughOnce(reason: string): void {
+  if (fallthroughLogged) return;
+  fallthroughLogged = true;
+  // eslint-disable-next-line no-console
+  console.warn(`[data] ${FLAG}=1 set but DB-backed path unavailable: ${reason}. Falling back to file-parse.`);
+}
+
+export interface UsageBackendMeta {
+  /** Which backend produced the report; surfaces in HTTP `X-Minder-Backend`. */
+  backend: "db" | "file";
+  /** Max input mtime — feeds ETag computation upstream. */
+  maxMtimeMs: number;
+}
+
+export interface UsageResult {
+  report: UsageReport;
+  meta: UsageBackendMeta;
+}
+
+/**
+ * Try the SQLite-backed path. Returns `null` (caller falls back to
+ * file-parse) on any failure or unmet precondition. Each guard takes
+ * a single early-return; the happy path is the unindented bottom.
+ */
+async function tryDbBackend(
+  period: "today" | "week" | "month" | "all",
+  project: string | undefined
+): Promise<UsageResult | null> {
+  if (!dbModeRequested() || !isDriverLoaded()) return null;
+  try {
+    const init = await ensureSchemaReady();
+    if (!init.available) {
+      logFallthroughOnce(init.error?.message ?? "schema unavailable");
+      return null;
+    }
+    const db = await getDb();
+    if (!db) {
+      logFallthroughOnce("getDb returned null after init");
+      return null;
+    }
+    const turns = loadFilteredUsageTurns(db, period, project);
+    const report = await aggregateUsage(turns, period);
+    return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Run the usage report through whichever backend is enabled. Always
+ * returns a valid `UsageReport` — the DB backend transparently falls
+ * back to file-parse on any failure.
+ */
+export async function getUsage(
+  period: "today" | "week" | "month" | "all",
+  project?: string
+): Promise<UsageResult> {
+  const dbResult = await tryDbBackend(period, project);
+  if (dbResult) return dbResult;
+
+  // File-parse backend. `getJsonlMaxMtime()` is captured AFTER report
+  // generation — `parseAllSessions` warms the FileCache as a side
+  // effect, so a pre-call read returns 0 on a cold process.
+  const report = await generateUsageReport(period, project);
+  return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
+}
