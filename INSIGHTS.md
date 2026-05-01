@@ -1,5 +1,24 @@
 # Insights
 
+<!-- insight:30b3498264a7 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:51:48.981Z -->
+## ★ Insight
+The `[ingest-worker] started; entry=...` line in production confirms three things at once: (1) the instrumentation hook's env-flag dispatch chose the worker path; (2) `process.cwd()` resolves to the project root under `next start` (so the worker entry path is correct); (3) `startWorker()`'s `await readyPromise` resolved — the worker emitted `ready` and the host registered it. The HTTP 200 from `/api/projects` while the worker is alive proves the main thread's HTTP server isn't blocked by worker spawn.
+
+---
+
+<!-- insight:ba8ef1369fe0 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:41:18.441Z -->
+## ★ Insight
+The advisor's framing is sharp: "lifecycle is where the bugs are." With Next.js + Turbopack + Node `worker_threads`, the bundling layer is the trap — Turbopack will try to bundle anything under `src/` or `app/`, but a root-level `workers/` directory escapes its scope entirely. Using `process.cwd()` at runtime sidesteps the dev-vs-`.next/` path divergence too, which would otherwise need awkward `import.meta.url` shims.
+
+---
+
+<!-- insight:b2ebe4b50db2 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:15:47.569Z -->
+## ★ Insight
+- The byte_offset bug is the kind that only surfaces when a JSONL writer is mid-flush — a race window of milliseconds. But Project Minder's whole design is to react in real time to those flushes, so we'll hit it. The fix is to track the position *after the last consumed `\n`* and never advance past a partial line. Same code path applies to both full and tail reads, so the fix is one helper.
+- The truncated-JSON bug is the classic "two-step downgrade" failure: we truncate (lossy), then we parse (strict), and there's no recovery in between. Fixing the truncation alone (bump limit) is a partial fix; adding a best-effort `command` recovery on rehydration is the belt-and-braces.
+
+---
+
 <!-- insight:23dafdd29fdf | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:02:53.089Z -->
 ## ★ Insight
 - Lesson for the future: `git stash pop` returning "stash entry is kept" is the silent-failure mode that bit us. When you see that message, run `git status` and `git stash show stash@{0}` immediately — anything that didn't actually re-land is sitting in the stash, not in the working tree, and a subsequent `git stash drop` would delete it forever. Better practice on dirty-tree commits is `git commit -- specific.files` rather than stash-and-pop, since the file-level commit avoids the round-trip entirely.
