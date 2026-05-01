@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scanSessionDetail } from "@/lib/scanner/claudeConversations";
+import { getSessionDetail } from "@/lib/data";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const { sessionId } = await params;
-  const detail = await scanSessionDetail(sessionId);
+  const { detail, meta } = await getSessionDetail(sessionId);
 
   if (!detail) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  return NextResponse.json(detail);
+  return NextResponse.json(detail, {
+    headers: { "X-Minder-Backend": meta.backend },
+  });
 }
