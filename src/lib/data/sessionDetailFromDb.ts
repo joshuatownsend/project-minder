@@ -2,6 +2,7 @@ import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
+import { prepCached } from "@/lib/db/connection";
 import type {
   SessionDetail,
   TimelineEvent,
@@ -152,8 +153,7 @@ export function loadSessionDetailFromDb(
   // hex-only — so a path-traversal attempt can't even hit the DB.
   if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
 
-  const session = db
-    .prepare(
+  const session = prepCached(db,
       `SELECT session_id, project_slug, project_dir_name, file_mtime_ms,
               start_ts, end_ts, primary_model,
               turn_count, user_turn_count, assistant_turn_count,
@@ -172,8 +172,7 @@ export function loadSessionDetailFromDb(
   // in JS without a separate `SELECT DISTINCT model` round-trip.
   // `tool_result_preview` lets us detect tool-result-only user turns
   // (file-parse skips them; see `buildTimeline`).
-  const turns = db
-    .prepare(
+  const turns = prepCached(db,
       `SELECT turn_index, ts, role, model, is_error,
               text_preview, tool_result_preview, output_tokens
        FROM turns
@@ -182,8 +181,7 @@ export function loadSessionDetailFromDb(
     )
     .all(sessionId) as TurnRow[];
 
-  const tools = db
-    .prepare(
+  const tools = prepCached(db,
       `SELECT turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
               agent_name, skill_name, arguments_json, file_path, file_op
        FROM tool_uses

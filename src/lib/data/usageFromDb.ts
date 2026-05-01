@@ -13,6 +13,7 @@ import type {
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { getPeriodStart } from "@/lib/usage/periods";
 import { groupByBinary } from "@/lib/usage/shellParser";
+import { prepCached } from "@/lib/db/connection";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -54,8 +55,7 @@ export function periodStartIso(period: string, now: Date = new Date()): string |
  * advances as soon as a file changes.
  */
 export function getDbMaxMtimeMs(db: DatabaseT.Database): number {
-  const row = db
-    .prepare("SELECT MAX(file_mtime_ms) AS m FROM sessions")
+  const row = prepCached(db, "SELECT MAX(file_mtime_ms) AS m FROM sessions")
     .get() as { m: number | null } | undefined;
   return row?.m ?? 0;
 }
@@ -67,8 +67,7 @@ export function getDbMaxMtimeMs(db: DatabaseT.Database): number {
  * accurate during the v3 catch-up window.
  */
 export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
-  const row = db
-    .prepare("SELECT value FROM meta WHERE key = 'needs_reconcile_after_v3'")
+  const row = prepCached(db, "SELECT value FROM meta WHERE key = 'needs_reconcile_after_v3'")
     .get() as { value?: string } | undefined;
   return row?.value === "1";
 }
@@ -157,8 +156,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
   // count), one for distinct-session count over ALL turns. The file-parse
   // aggregator counts unique session IDs across user+assistant turns
   // (every turn in the period is a "live session"); we mirror that.
-  const a = db
-    .prepare(
+  const a = prepCached(db,
       `SELECT
          COALESCE(SUM(t.cost_usd), 0)            AS cost_usd,
          COALESCE(SUM(t.input_tokens), 0)        AS input_tokens,
@@ -172,8 +170,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
          AND (@project IS NULL OR s.project_slug = @project)`
     )
     .get(f) as Omit<TotalsRow, "distinct_sessions">;
-  const sRow = db
-    .prepare(
+  const sRow = prepCached(db,
       `SELECT COUNT(DISTINCT t.session_id) AS distinct_sessions
        FROM turns t JOIN sessions s USING (session_id)
        WHERE (@periodStart IS NULL OR t.ts >= @periodStart)
@@ -184,8 +181,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
 }
 
 function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
-  return db
-    .prepare(
+  return prepCached(db,
       `SELECT
          t.model AS model,
          COALESCE(SUM(t.input_tokens), 0)        AS inputTokens,
@@ -205,8 +201,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
 }
 
 function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdown[] {
-  return db
-    .prepare(
+  return prepCached(db,
       `SELECT
          s.project_slug      AS projectSlug,
          s.project_dir_name  AS projectDirName,
@@ -227,8 +222,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
 function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreakdown[] {
   // From the `category_costs` rollup. `oneShotRate` is intentionally
   // omitted — see header comment.
-  const rows = db
-    .prepare(
+  const rows = prepCached(db,
       `SELECT
          category,
          COALESCE(SUM(turns), 0)    AS turns,
@@ -250,8 +244,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
-  return db
-    .prepare(
+  return prepCached(db,
       `SELECT
          substr(t.ts, 1, 10)              AS date,
          COALESCE(SUM(t.cost_usd), 0)     AS cost,
@@ -269,8 +262,7 @@ function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
 }
 
 function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number][] {
-  const rows = db
-    .prepare(
+  const rows = prepCached(db,
       `SELECT tu.tool_name AS name, COUNT(*) AS count
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
@@ -287,8 +279,7 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
 }
 
 function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[] {
-  const rows = db
-    .prepare(
+  const rows = prepCached(db,
       `SELECT tu.mcp_server AS server, tu.mcp_tool AS tool, COUNT(*) AS count
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
@@ -322,8 +313,7 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
   // small fraction of all tool calls — then tokenize commands in JS via
   // the same `groupByBinary` the file-parse path uses. parseStoredArgs
   // handles the rare truncated-JSON case.
-  const rows = db
-    .prepare(
+  const rows = prepCached(db,
       `SELECT tu.arguments_json
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
@@ -344,8 +334,7 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
 function queryOneShot(db: DatabaseT.Database, f: FilterParams) {
   // Session-level sum. Boundary sessions over-count slightly for
   // bounded periods; period=all has zero divergence from file-parse.
-  const row = db
-    .prepare(
+  const row = prepCached(db,
       `SELECT
          COALESCE(SUM(verified_task_count), 0) AS verified,
          COALESCE(SUM(one_shot_task_count), 0) AS oneShot
@@ -366,8 +355,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // top tools. We stitch in JS rather than SQL because building the
   // shape from a single query needs window functions / JSON aggregation
   // that would explode the SQL surface area for marginal gain.
-  const headers = db
-    .prepare(
+  const headers = prepCached(db,
       `SELECT
          s.project_slug      AS projectSlug,
          s.project_dir_name  AS projectDirName,
@@ -386,6 +374,13 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   const slugs = headers.map((h) => h.projectSlug);
   const placeholders = slugs.map(() => "?").join(",");
 
+  // The next three queries interpolate `IN (${placeholders})` whose
+  // length tracks `headers.length`. That makes the SQL string
+  // variable-shape — caching it would grow the prepared cache
+  // unboundedly as project counts shift across requests, violating
+  // `prepCached`'s static-SQL contract. Use `db.prepare()` directly
+  // here. The three queries each fire once per request anyway, and
+  // their wins come from the SQL aggregation, not the prepare.
   const catRows = db
     .prepare(
       `SELECT cc.project_slug AS projectSlug, cc.category AS category,

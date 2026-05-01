@@ -54,6 +54,14 @@ interface ConnectionState {
    * instead of each calling `new Database(...)` and leaking a handle.
    */
   inFlight: Promise<DatabaseT.Database | null> | null;
+  /**
+   * Prepared-statement cache, keyed by literal SQL text. Lifecycle is 1:1
+   * with the `db` handle: created in `getDb()` on a successful open,
+   * nulled in `closeDb()` together with `db`. Foreign db handles (e.g.,
+   * a fresh `Database` opened in a test) bypass the cache via the
+   * identity check in `prepCached`.
+   */
+  preparedCache: Map<string, DatabaseT.Statement> | null;
 }
 
 const g = globalThis as unknown as {
@@ -65,6 +73,7 @@ if (!g.__minderDb) {
     db: null,
     lastError: loadError,
     inFlight: null,
+    preparedCache: null,
   };
 }
 
@@ -105,6 +114,7 @@ export async function getDb(): Promise<DatabaseT.Database | null> {
       db.pragma("temp_store = MEMORY");
       db.pragma("busy_timeout = 5000");
       state.db = db;
+      state.preparedCache = new Map();
       state.lastError = null;
       return db;
     } catch (err) {
@@ -159,8 +169,47 @@ export function closeDb(): void {
   if (state.db) {
     try { state.db.close(); } catch { /* ignore */ }
     state.db = null;
+    state.preparedCache = null;
   }
   // Don't null inFlight: if a concurrent open is mid-flight it will clear
   // itself in the finally block. Pre-emptively nulling it would let a
   // second concurrent caller spawn a duplicate open.
+}
+
+/**
+ * Cached `db.prepare(sql)`. Memoizes the resulting `Statement` per
+ * literal SQL string against the singleton db handle so a hot read
+ * path doesn't re-parse the same query on every request.
+ *
+ * Caching applies only when `db` is the singleton owned by this module
+ * (`state.db`). Foreign db handles — e.g., a `Database` opened
+ * directly in a test — fall through to a plain `db.prepare(sql)` so
+ * test isolation is preserved.
+ *
+ * **Do not pass dynamic SQL** (string-interpolated WHERE clauses,
+ * variable IN-list arity, user-supplied SQL): the cache is unbounded
+ * by design, so unique inputs would leak memory. Bind parameters
+ * (named `@name` or positional `?` — both work with this codebase)
+ * and keep the SQL string itself static. Variable-shape queries
+ * (e.g., `IN (?, ?, ?)` whose `?` count tracks input length) must
+ * use `db.prepare()` directly.
+ */
+export function prepCached(
+  db: DatabaseT.Database,
+  sql: string
+): DatabaseT.Statement {
+  if (db !== state.db || !state.preparedCache) {
+    return db.prepare(sql);
+  }
+  let stmt = state.preparedCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    state.preparedCache.set(sql, stmt);
+  }
+  return stmt;
+}
+
+/** @internal Test-only: current cache size, or 0 when no db is open. */
+export function preparedCacheSize(): number {
+  return state.preparedCache?.size ?? 0;
 }
