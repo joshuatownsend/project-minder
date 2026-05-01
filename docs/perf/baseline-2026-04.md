@@ -366,6 +366,67 @@ Both routes depend on TWO file sources: the JSONL corpus (covered by `getJsonlMa
 
 ---
 
+## After reconcile-throughput fix — 2026-05-01
+
+Profiled `reconcileSessionFile` against the user's real corpus (124k turns, 160 sessions) using a per-stage `MINDER_PROFILE_INGEST=1` instrumentation harness (`scripts/profile-reconcile.mjs`). The schema's own TODO at line 406 had predicted the bottleneck a year before measurement.
+
+### Per-stage breakdown — 10-session sample across size buckets
+
+**Before** (turns_ad trigger active):
+
+| stage | total ms | % |
+|---|---|---|
+| fileRead | 41.7 | 0.0% |
+| parseTurns | 46.9 | 0.0% |
+| classify+price | 5.8 | 0.0% |
+| detectOneShot | 2.0 | 0.0% |
+| **write.delete** | **101 949** | **99.4%** |
+| write.insertSession | 4.0 | 0.0% |
+| write.insertChildren | 185.5 | 0.2% |
+| **total** | **102 528** | **100%** |
+
+For the 366-turn / 1 MB session: `write.delete` alone took 44 380 ms — 121 ms per cascade-deleted row. The cascade fires `turns_ad` per turn; each fire runs `DELETE FROM prompts_fts WHERE session_id=? AND turn_index=?` which is a full scan over the UNINDEXED FTS columns. 366 × 124k FTS rows × ~1 µs = ~45 seconds. Matches observation.
+
+**After** (turns_ad dropped, writer bulk-deletes prompts_fts):
+
+| stage | total ms | % |
+|---|---|---|
+| fileRead | 25.1 | 2.2% |
+| parseTurns | 27.1 | 2.3% |
+| classify+price | 3.9 | 0.3% |
+| detectOneShot | 1.5 | 0.1% |
+| **write.delete** | **964.9** | **83.5%** |
+| write.insertSession | 2.4 | 0.2% |
+| write.insertChildren | 55.1 | 4.8% |
+| **total** | **1 155** | **100%** |
+
+`write.delete` is still the largest stage but now ~125 ms per session (one full FTS scan to delete the session's rows in one shot), regardless of session size. **88× total speedup**, throughput `5.9 → 519 sessions/min`.
+
+### Headline
+
+| | Before | After | Δ |
+|---|---|---|---|
+| Throughput (sessions/min) | 5.9 | 519 | 88× |
+| 160-session catch-up wall time | ~80–100 min | ~20 s | 240–300× |
+
+The schema-bump catch-up that previously made every `DERIVED_VERSION` increment a multi-hour event now completes faster than a coffee break.
+
+### Floor: the remaining 83% in `write.delete`
+
+`write.delete` per session is dominated by `DELETE FROM prompts_fts WHERE session_id = ?` — a single full scan of the FTS5 shadow table because `session_id` is UNINDEXED. The textbook fix is to align `prompts_fts.rowid` with `turns.ROWID` (FTS5 external-content pattern) and delete by rowid in O(log N), but `turns` is `WITHOUT ROWID` so the alignment can't be authored as a schema-only change. Closing the floor would require rebuilding `turns` as a regular rowid table — out of scope for this slice. The current 88× win is sufficient to remove reconcile throughput from the master plan's risk list.
+
+### Methodology
+
+The migration runs automatically on the next `initDb()` (it drops the `turns_ad` trigger). To profile against a populated DB:
+
+```
+node scripts/profile-reconcile.mjs --count=10
+```
+
+The script picks 10 sessions across log10 size buckets, force-reconciles each, and prints per-stage timings via the `MINDER_PROFILE_INGEST=1` hooks. Run with the indexer worker disabled (set `MINDER_INDEXER=0`) so timings are clean of writer contention.
+
+---
+
 ## After P2b-3.5 — 2026-05-01
 
 Prepared-statement cache landed (`prepCached(db, sql)` helper in `src/lib/db/connection.ts`, applied to all read-side SQL in `usageFromDb.ts` + `sessionDetailFromDb.ts`). Measured `/api/usage?period=all` against the user's real DB with the v3 readiness flag temporarily cleared and the indexer worker disabled (so DB-side measurements are clean of HTTP-vs-write contention).

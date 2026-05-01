@@ -133,7 +133,7 @@ describe.skipIf(!Database)("schema.sql", () => {
     expect(count.n).toBe(2);
   });
 
-  it("FTS5 trigger keeps prompts_fts in sync with turns", () => {
+  it("FTS5 trigger keeps prompts_fts in sync with turns on INSERT/UPDATE", () => {
     db.prepare(
       "INSERT INTO sessions (session_id, project_dir_name, file_path, file_mtime_ms, file_size, indexed_at_ms) " +
         "VALUES ('fts', 'd', '/fts', 0, 0, 0)"
@@ -143,18 +143,43 @@ describe.skipIf(!Database)("schema.sql", () => {
         "VALUES ('fts', 0, '2026-01-01', 'user', 'fix the migration bug')"
     ).run();
 
+    // turns_ai trigger fired on INSERT.
     const hits = db.prepare("SELECT session_id, turn_index FROM prompts_fts WHERE prompts_fts MATCH 'migration'").all();
     expect(hits.length).toBe(1);
 
+    // turns_au trigger fired on UPDATE OF text_preview.
     db.prepare("UPDATE turns SET text_preview = 'all done' WHERE session_id = 'fts' AND turn_index = 0").run();
     const stillMigration = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'migration'").all();
     expect(stillMigration.length).toBe(0);
     const nowDone = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'done'").all();
     expect(nowDone.length).toBe(1);
+  });
 
-    db.prepare("DELETE FROM turns WHERE session_id = 'fts'").run();
-    const empty = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'done'").all();
-    expect(empty.length).toBe(0);
+  it("DELETE on turns does NOT auto-clean prompts_fts (writer's responsibility)", () => {
+    // The `turns_ad` AFTER DELETE trigger was dropped in migration v4
+    // because it scanned `prompts_fts` per cascade-deleted turn (filtering
+    // on UNINDEXED columns). The writer (`writeSession` and the
+    // reconcileAllSessions prune loop) is now responsible for bulk-
+    // deleting prompts_fts rows for the session in one scan before the
+    // cascade — see ingest.ts. This test pins that contract so a future
+    // re-add of the trigger is a deliberate decision, not a regression.
+    db.prepare(
+      "INSERT INTO sessions (session_id, project_dir_name, file_path, file_mtime_ms, file_size, indexed_at_ms) " +
+        "VALUES ('orphan', 'd', '/o', 0, 0, 0)"
+    ).run();
+    db.prepare(
+      "INSERT INTO turns (session_id, turn_index, ts, role, text_preview) " +
+        "VALUES ('orphan', 0, '2026-01-01', 'user', 'orphan needle text')"
+    ).run();
+    db.prepare("DELETE FROM turns WHERE session_id = 'orphan' AND turn_index = 0").run();
+    // The FTS row remains because no trigger handled the delete.
+    const stranded = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'needle'").all();
+    expect(stranded.length).toBe(1);
+
+    // The bulk-by-session pattern the writer uses cleans correctly.
+    db.prepare("DELETE FROM prompts_fts WHERE session_id = 'orphan'").run();
+    const cleaned = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'needle'").all();
+    expect(cleaned.length).toBe(0);
   });
 
   it("FTS5 trigger keeps catalog_fts in sync with each catalog table", () => {
