@@ -26,7 +26,10 @@ const root = path.resolve(here, "..");
 
 const argv = process.argv.slice(2);
 const countArg = argv.find((a) => a.startsWith("--count="));
-const COUNT = countArg ? parseInt(countArg.split("=")[1], 10) : 10;
+const DEFAULT_COUNT = 10;
+const parsedCount = countArg ? Number.parseInt(countArg.split("=")[1], 10) : DEFAULT_COUNT;
+const COUNT =
+  Number.isInteger(parsedCount) && parsedCount >= 1 ? parsedCount : DEFAULT_COUNT;
 
 // Bundle ingest.ts (and its deps) into an ESM module we can import here.
 const tmpFile = path.join(os.tmpdir(), `pm-profile-ingest-${Date.now()}.mjs`);
@@ -141,7 +144,10 @@ for (const { filePath, dirName, size } of sample) {
   totals.rows += rows;
 }
 
-function pct(n) { return ((n / totals.totalMs) * 100).toFixed(1); }
+function pct(n) {
+  if (totals.totalMs <= 0) return "0.0";
+  return ((n / totals.totalMs) * 100).toFixed(1);
+}
 console.log("\n--- Totals ---");
 console.log(`total wall time:        ${totals.totalMs.toFixed(1)} ms`);
 console.log(`fileRead:               ${totals.fileRead.toFixed(1)} ms (${pct(totals.fileRead)}%)`);

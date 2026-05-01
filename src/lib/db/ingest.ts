@@ -623,8 +623,17 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // scan once per session beats letting the FK cascade fire a per-turn
   // trigger N times (N × scan cost). Caller contract: any code path
   // that deletes turns must clean `prompts_fts` for the session first.
-  db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(s.sessionId);
-  db.prepare("DELETE FROM sessions WHERE session_id = ?").run(s.sessionId);
+  //
+  // Skip both deletes when no row exists — saves the ~125 ms FTS scan
+  // for brand-new sessions (cold-start indexing, new project mid-
+  // stream). The PK lookup on `sessions` is microseconds.
+  const existingSession = db
+    .prepare("SELECT 1 FROM sessions WHERE session_id = ?")
+    .get(s.sessionId);
+  if (existingSession) {
+    db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(s.sessionId);
+    db.prepare("DELETE FROM sessions WHERE session_id = ?").run(s.sessionId);
+  }
   if (PROFILE) tick("write.delete", performance.now() - tDelete);
 
   const tInsertSession = PROFILE ? performance.now() : 0;
