@@ -366,6 +366,58 @@ Both routes depend on TWO file sources: the JSONL corpus (covered by `getJsonlMa
 
 ---
 
+## After P2b-2.5 — 2026-05-01
+
+SQL-aggregate read path landed (`turns.cost_usd`, `category_costs` rollup, direct SUM/GROUP BY in `loadUsageReportFromSql`). Measured `/api/usage?period=all` against the user's real DB (222 MB SQLite, 160 sessions, 124 077 turns; partially-reconciled at 23.8% v3 to capture timing without waiting for the full re-derive — query workload is data-volume-driven, not value-driven).
+
+### `/api/usage?period=all` timing
+
+| Backend | Cold (route compile + first hit) | Warm (5 cache-busted runs, mean) | Verdict |
+|---|---|---|---|
+| File-parse (master baseline) | 16.6 s | 30–72 ms (~45 ms) | reference |
+| **SQL (P2b-2.5)** | **4.2 s** | **27–34 ms (~31 ms)** | **inside 50–200 ms target** |
+
+Both are dev mode (`pnpm run dev`, Turbopack route compile included in cold). Backend confirmed via `X-Minder-Backend` header on each response.
+
+### What this means for the P2b backlog
+
+- **P2b-2.6 (switch byModel/byProject/byDaily/totals to read `daily_costs` rollup) is deferred indefinitely.** The current path scans `turns ⨝ sessions` directly, but with `mmap_size=256MB` keeping the 222MB DB resident and `turns_by_role_ts(role, ts)` covering the WHERE clause, hash aggregates run in 27–34 ms. Going through `daily_costs` would shave a few ms off but is not needed to hit the master plan's perf target. Revisit only if the corpus grows ~10× or warm timing drifts above 100 ms.
+- **Cold path is 4× faster** than file-parse (4.2 s vs 16.6 s) — the structural win the master plan promised on the cold-cache scenario.
+- **Warm path is competitive with file-parse warm** because file-parse warm benefits from the `parseAllSessions` in-memory cache (`__usageFileCache`, 2-min TTL). Counter-intuitively, SQLite hash-aggregates in C beat V8's `for...of` JS reduces over the same data — SQL warm (~31 ms) is actually slightly faster than file-parse warm (~45 ms).
+
+### v3 reconcile pace — flag for future tuning
+
+The DERIVED_VERSION bump triggered a full re-derive of all 160 sessions. Observed pace: ~38 sessions in 32 minutes (~1.2 sessions/min, decelerating). At this rate the corpus catches up in ~80–100 minutes of wall-clock time — an order of magnitude longer than the master plan's "30–60 s first-boot indexing" estimate. Likely root causes:
+
+- Per-session: full JSONL re-parse (50 MB cap) + DELETE-with-FK-cascade + INSERT all turns/tool_uses/file_edits. Each session writes ~1000–10 000 row INSERTs in one transaction.
+- Sequential per-file because all writes go through the single writer connection.
+- Possible: contention with HTTP-side reads under dev-mode load; cleaner pace expected when worker is the only client.
+
+This is one-time on schema bumps; tail-append remains cheap. Worth a follow-up perf pass if we ever ship a third schema bump (`P2c`+) — batching per-tuple rollup refreshes and considering parallel parse + serialized write would meaningfully reduce the bump cost.
+
+### Methodology
+
+```bash
+# 1. Start dev server with DB backend, no worker (read-only timing)
+MINDER_USE_DB=1 pnpm run dev
+
+# 2. Warmup (compiles route, first SQL hit)
+curl -sS -o /dev/null -w "warmup: %{time_total}s\n" \
+  "http://localhost:4100/api/usage?period=all"
+
+# 3. 5 cache-busted runs
+for i in 1 2 3 4 5; do
+  curl -sS -o /dev/null -w "run $i: %{time_total}s\n" \
+    "http://localhost:4100/api/usage?period=all&_=$i"
+done
+
+# Confirm backend
+curl -sS -D - -o /dev/null "http://localhost:4100/api/usage?period=all" | \
+  grep -i x-minder-backend
+```
+
+---
+
 ## How to recapture after each phase
 
 After landing each phase (P0/P1/P2/P3), append a new section to this file titled `## After P<n> — <date>` with the same tables filled in fresh, then add a final `### Delta vs baseline` subsection with percentage changes. Do not edit the baseline tables above — they are frozen as the reference point.
