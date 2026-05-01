@@ -187,9 +187,12 @@ export function closeDb(): void {
  * test isolation is preserved.
  *
  * **Do not pass dynamic SQL** (string-interpolated WHERE clauses,
- * user-supplied SQL): the cache is unbounded by design, so unique
- * inputs would leak memory. Templated callers must bind parameters
- * with `@name` and keep the SQL string itself static.
+ * variable IN-list arity, user-supplied SQL): the cache is unbounded
+ * by design, so unique inputs would leak memory. Bind parameters
+ * (named `@name` or positional `?` — both work with this codebase)
+ * and keep the SQL string itself static. Variable-shape queries
+ * (e.g., `IN (?, ?, ?)` whose `?` count tracks input length) must
+ * use `db.prepare()` directly.
  */
 export function prepCached(
   db: DatabaseT.Database,

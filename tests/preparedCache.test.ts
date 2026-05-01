@@ -28,15 +28,27 @@ try {
 let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
+// Track the singleton's connection module across reloadModules() calls
+// so afterEach can close the open db handle. Without this, the global
+// state's db handle leaks past the `delete globalThis.__minderDb` reset
+// — fine on POSIX (eventually GC'd) but on Windows the open .db file
+// can block `fs.rm(tmpHome, …)` from removing the tempdir.
+let activeConn: typeof import("@/lib/db/connection") | null = null;
 
 async function reloadModules() {
+  // Close any previously-opened singleton before resetting modules so
+  // its file handle is released before we delete the global state.
+  if (activeConn) {
+    activeConn.closeDb();
+    activeConn = null;
+  }
   vi.resetModules();
   delete (globalThis as { __minderDb?: unknown }).__minderDb;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
-  return {
-    conn: await import("@/lib/db/connection"),
-    mig: await import("@/lib/db/migrations"),
-  };
+  const conn = await import("@/lib/db/connection");
+  const mig = await import("@/lib/db/migrations");
+  activeConn = conn;
+  return { conn, mig };
 }
 
 beforeEach(async () => {
@@ -48,6 +60,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (activeConn) {
+    activeConn.closeDb();
+    activeConn = null;
+  }
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;

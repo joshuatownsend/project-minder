@@ -374,7 +374,15 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   const slugs = headers.map((h) => h.projectSlug);
   const placeholders = slugs.map(() => "?").join(",");
 
-  const catRows = prepCached(db,
+  // The next three queries interpolate `IN (${placeholders})` whose
+  // length tracks `headers.length`. That makes the SQL string
+  // variable-shape — caching it would grow the prepared cache
+  // unboundedly as project counts shift across requests, violating
+  // `prepCached`'s static-SQL contract. Use `db.prepare()` directly
+  // here. The three queries each fire once per request anyway, and
+  // their wins come from the SQL aggregation, not the prepare.
+  const catRows = db
+    .prepare(
       `SELECT cc.project_slug AS projectSlug, cc.category AS category,
               SUM(cc.cost_usd) AS cost, SUM(cc.turns) AS turns
        FROM category_costs cc
@@ -395,7 +403,8 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // rows loop below would cap at 5 too early for some slugs and miss
   // their actual top tools. Per-slug ordering keeps each project's rows
   // contiguous and pre-sorted, making `if (list.length < 5)` correct.
-  const toolRows = prepCached(db,
+  const toolRows = db
+    .prepare(
       `SELECT s.project_slug AS projectSlug, tu.tool_name AS name, COUNT(*) AS count
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
@@ -412,7 +421,8 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
     count: number;
   }>;
 
-  const mcpRows = prepCached(db,
+  const mcpRows = db
+    .prepare(
       `SELECT s.project_slug AS projectSlug, tu.mcp_server AS server, COUNT(*) AS count
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
