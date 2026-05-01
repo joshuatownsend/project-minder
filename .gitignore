@@ -31,7 +31,9 @@ next-env.d.ts
 
 # project minder config (user-specific)
 .minder.json
-MANUAL_STEPS.md
+# MANUAL_STEPS.md is intentionally NOT ignored — see "Tracking in Git"
+# on the Setup page. Append-only checklist of pending dev work; commit
+# it like TODO.md and INSIGHTS.md.
 
 # claude code
 .claude/

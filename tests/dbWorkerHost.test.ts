@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import path from "path";
-import { fileURLToPath } from "url";
 import { writeFileSync, mkdtempSync, rmSync } from "fs";
 import os from "os";
 
@@ -16,13 +15,11 @@ import os from "os";
 // worker into tmpdir per-test and pass it in via `workerEntry`.
 
 let tmpDir: string | null = null;
-let workerEntry: string | null = null;
 
 function createInlineWorker(body: string): string {
   if (!tmpDir) tmpDir = mkdtempSync(path.join(os.tmpdir(), "pm-worker-host-"));
   const file = path.join(tmpDir, `worker-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
   writeFileSync(file, body, "utf8");
-  workerEntry = file;
   return file;
 }
 
@@ -34,12 +31,6 @@ parentPort.on("message", (msg) => {
   else if (msg?.type === "stop") process.exit(0);
   else if (msg?.type === "crash") throw new Error("synthetic crash");
 });
-`;
-
-const SLOW_READY_WORKER = `
-import { parentPort } from "node:worker_threads";
-// Never send 'ready' — used to test the ready timeout path.
-parentPort.on("message", () => {});
 `;
 
 const NEVER_READY_NO_HANDLERS_WORKER = `
@@ -69,7 +60,6 @@ afterEach(async () => {
       /* ignore */
     }
     tmpDir = null;
-    workerEntry = null;
   }
 });
 
@@ -239,5 +229,28 @@ describe("workerHost lifecycle", () => {
     // If readyPromise weren't rejected by stopWorker, this would take
     // ~30 s instead of < 1 s.
     expect(stopElapsed).toBeLessThan(2000);
+  });
+
+  it("rejects readyPromise when worker exits before emitting ready (no 10 s hang)", async () => {
+    // Worker exits with non-zero immediately, never sending 'ready'.
+    // Without the exit-handler rejection, startWorker would hang the
+    // full readyTimeoutMs.
+    const entry = createInlineWorker(`process.exit(1);`);
+    const host = await reloadHost();
+    const t0 = Date.now();
+    const result = await host.startWorker({ workerEntry: entry, readyTimeoutMs: 30_000 }).then(
+      () => "resolved",
+      (e: Error) => `rejected:${e.message}`
+    );
+    const elapsed = Date.now() - t0;
+    expect(result).toMatch(/rejected:.*exited.*before ready/);
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  it("getWorkerStatus reflects the custom workerEntry passed to startWorker", async () => {
+    const entry = createInlineWorker(TRIVIAL_WORKER);
+    const host = await reloadHost();
+    await host.startWorker({ workerEntry: entry });
+    expect(host.getWorkerStatus().workerEntry).toBe(entry);
   });
 });

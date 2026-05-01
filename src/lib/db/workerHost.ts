@@ -34,6 +34,8 @@ type MessageSubscriber = (msg: unknown) => void;
 
 interface WorkerHostState {
   worker: Worker | null;
+  /** Resolved worker-entry path, set at spawn time. Surfaced via getWorkerStatus. */
+  workerEntry: string;
   startedAt: number | null;
   lastReadyAt: number | null;
   lastMessageAt: number | null;
@@ -66,9 +68,10 @@ interface WorkerHostState {
 
 const g = globalThis as unknown as { __minderWorker?: WorkerHostState };
 
-function freshState(readyTimeoutMs: number): WorkerHostState {
+function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostState {
   return {
     worker: null,
+    workerEntry,
     startedAt: null,
     lastReadyAt: null,
     lastMessageAt: null,
@@ -121,14 +124,14 @@ export interface StartWorkerOptions {
 export async function startWorker(options: StartWorkerOptions = {}): Promise<WorkerHostStatus> {
   await stopWorker();
 
-  const state = freshState(options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+  const entry = options.workerEntry ?? path.join(process.cwd(), WORKER_REL_PATH);
+  const state = freshState(options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS, entry);
   g.__minderWorker = state;
 
-  const entry = options.workerEntry ?? path.join(process.cwd(), WORKER_REL_PATH);
   spawnAndAttach(state, entry);
 
   await state.readyPromise;
-  return snapshot(state, entry);
+  return snapshot(state);
 }
 
 /**
@@ -182,7 +185,7 @@ export function getWorkerStatus(): WorkerHostStatus {
       workerEntry: "",
     };
   }
-  return snapshot(state, path.join(process.cwd(), WORKER_REL_PATH));
+  return snapshot(state);
 }
 
 export function postMessage(message: unknown): boolean {
@@ -210,14 +213,14 @@ export function onWorkerMessage(handler: MessageSubscriber): () => void {
   };
 }
 
-function snapshot(state: WorkerHostState, workerEntry: string): WorkerHostStatus {
+function snapshot(state: WorkerHostState): WorkerHostStatus {
   return {
     running: state.worker !== null,
     startedAt: state.startedAt,
     lastReadyAt: state.lastReadyAt,
     lastMessageAt: state.lastMessageAt,
     crashesLastHour: pruneCrashHistory(state),
-    workerEntry,
+    workerEntry: state.workerEntry,
   };
 }
 
@@ -294,6 +297,15 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     if (state.readyTimeout) {
       clearTimeout(state.readyTimeout);
       state.readyTimeout = null;
+    }
+    // If the worker exits before emitting `ready` (e.g. process.exit
+    // without an `error` event), nothing else will ever settle the
+    // pending readyPromise — the awaiting `startWorker` would hang.
+    // Reject here so the caller sees a clean failure.
+    if (state.readyReject) {
+      state.readyReject(new Error(`worker exited (code ${code}) before ready`));
+      state.readyReject = null;
+      state.readyResolve = null;
     }
     if (state.stopping) return;
     if (code === 0) return;

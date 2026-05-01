@@ -22,6 +22,12 @@
 
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // Vitest sets NODE_ENV=test. Do not start any ingest path in test
+  // contexts — both the worker and the in-process watcher have their
+  // own NODE_ENV gates, but we short-circuit here so a stray
+  // instrumentation load (e.g. via dynamic-import in a test) never
+  // races against tmpHome fixtures.
+  if (process.env.NODE_ENV === "test") return;
 
   if (process.env.MINDER_INDEXER_WORKER === "1") {
     try {
@@ -39,8 +45,18 @@ export async function register(): Promise<void> {
         `[ingest-worker] failed to start: ${(err as Error).message}. ` +
           `Falling back to in-process watcher (MINDER_INDEXER mode).`
       );
-      // Fall through to the in-process path so the user always has
-      // working ingest while we de-risk the worker integration.
+      // Tear down the worker host before handing off. Otherwise a
+      // pending crash-respawn (a non-zero pre-ready exit triggers the
+      // exit handler's respawn loop independently of the rejected
+      // startWorker promise) would run alongside the in-process
+      // watcher and we'd have two ingest pipelines fighting for the
+      // writer connection.
+      try {
+        const { stopWorker } = await import("@/lib/db/workerHost");
+        await stopWorker();
+      } catch {
+        /* swallow — best-effort teardown */
+      }
       await startInProcessWatcher();
     }
     return;
@@ -54,6 +70,12 @@ export async function register(): Promise<void> {
 async function startInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
+    // Pass `bypassEnvFlag: true` because instrumentation.ts has
+    // already gated on the relevant env flags. The watcher's own
+    // NODE_ENV=test guard is also bypassed by this option, which is
+    // why we short-circuit on NODE_ENV=test at the top of register()
+    // instead — keeping defense-in-depth without double-gating the
+    // worker fallback path (where MINDER_INDEXER may not be set).
     const status = await startIngestWatcher({ bypassEnvFlag: true });
     if (status.running) {
       // eslint-disable-next-line no-console
