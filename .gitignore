@@ -51,3 +51,6 @@ docs/perf/report.json
 
 # git worktrees
 .worktrees/
+
+# worker bundle (built fresh by predev/prebuild via scripts/build-worker.mjs)
+workers/dist/

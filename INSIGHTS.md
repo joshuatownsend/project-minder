@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:d778c603dc0c | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T00:14:06.268Z -->
+## ★ Insight
+End-to-end worker boot, watcher start, and clean shutdown — all green. The watcher actually opened the SQLite DB inside the worker, ran migrations, attached chokidar, and reported `running: true` in 32 ms against a tmpdir.
+
+---
+
+<!-- insight:62a2ceac35b1 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T23:57:51.374Z -->
+## ★ Insight
+The unified `module.register` hook didn't catch the CJS path because tsx's CommonJS transformer goes through `Module._compile` directly — that's a code path that pre-dates `module.register` and doesn't consult its hooks. Priming `require.cache` BEFORE tsx attaches is the surgical fix: when the CJS resolver looks up `server-only`, it finds the cached entry and skips compiling/executing the actual file. Defense-in-depth still intact for Next.js (different process), vitest (different config), and main thread (different worker boundary).
+
+---
+
+<!-- insight:c096d3434073 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T23:50:39.605Z -->
+## ★ Insight
+The advisor's framing is exactly right: phase 2 is an empirical question, not an architectural one. The right loader strategy is whichever one resolves the *specific* error Node throws when the worker tries to import the watcher. Predicting in advance is wasted research. Stacked-PR branching (off the worker-threads branch, not main) saves the rebase dance — GitHub auto-retargets when the base merges.
+
+---
+
 <!-- insight:30b3498264a7 | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-04-30T21:51:48.981Z -->
 ## ★ Insight
 The `[ingest-worker] started; entry=...` line in production confirms three things at once: (1) the instrumentation hook's env-flag dispatch chose the worker path; (2) `process.cwd()` resolves to the project root under `next start` (so the worker entry path is correct); (3) `startWorker()`'s `await readyPromise` resolved — the worker emitted `ready` and the host registered it. The HTTP 200 from `/api/projects` while the worker is alive proves the main thread's HTTP server isn't blocked by worker spawn.
