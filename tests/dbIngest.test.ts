@@ -179,7 +179,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(2);
+    expect(session.derived_version).toBe(3);
 
     const turnRows = db
       .prepare("SELECT role, category FROM turns WHERE session_id = 'abc-session' ORDER BY turn_index")

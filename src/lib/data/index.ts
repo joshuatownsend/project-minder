@@ -1,9 +1,13 @@
 import "server-only";
-import { aggregateUsage, generateUsageReport } from "@/lib/usage/aggregator";
+import { generateUsageReport } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
-import { loadFilteredUsageTurns, getDbMaxMtimeMs } from "./usageFromDb";
+import {
+  loadUsageReportFromSql,
+  getDbMaxMtimeMs,
+  needsReconcileAfterV3,
+} from "./usageFromDb";
 import type { UsageReport } from "@/lib/usage/types";
 
 // Read-side data façade for /api/usage (and, in later slices, /api/sessions
@@ -74,8 +78,15 @@ async function tryDbBackend(
       logFallthroughOnce("getDb returned null after init");
       return null;
     }
-    const turns = loadFilteredUsageTurns(db, period, project);
-    const report = await aggregateUsage(turns, period);
+    // v3 readiness gate: between migration apply and reconcile,
+    // `turns.cost_usd` is 0 on every existing row. Without this guard
+    // the SQL aggregate would return totalCost = $0 — a silent wrong
+    // answer. Cleared by `reconcileAllSessions` on success.
+    if (needsReconcileAfterV3(db)) {
+      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)");
+      return null;
+    }
+    const report = loadUsageReportFromSql(db, period, project);
     return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
   } catch (err) {
     logFallthroughOnce((err as Error).message);

@@ -76,12 +76,13 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await mig.initDb();
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
-    // Fresh DBs run all migrations in order — v1 (initial schema) and
-    // v2 (idempotent column add). v2 is a no-op on fresh DBs because
-    // schema.sql already includes the column, but it still bumps the
-    // schema_version stamp.
-    expect(result.appliedMigrations).toEqual([1, 2]);
-    expect(result.schemaVersion).toBe(2);
+    // Fresh DBs run every migration in order. v2 / v3 are no-ops on
+    // fresh DBs because schema.sql already includes their additions,
+    // but each still bumps the schema_version stamp. Note that v3
+    // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
+    // that's harmless because the indexer's first reconcile clears it.
+    expect(result.appliedMigrations).toEqual([1, 2, 3]);
+    expect(result.schemaVersion).toBe(3);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -103,7 +104,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
     second.conn.closeDb();
   });
 
@@ -133,7 +134,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -163,7 +164,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
     second.conn.closeDb();
   });
 
@@ -217,14 +218,65 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2]);
-    expect(result.schemaVersion).toBe(2);
+    expect(result.appliedMigrations).toEqual([2, 3]);
+    expect(result.schemaVersion).toBe(3);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
       .prepare("PRAGMA table_info(turns)")
       .all() as Array<{ name: string }>;
     expect(colsRecovered.some((c) => c.name === "tool_result_preview")).toBe(true);
+    second.conn.closeDb();
+  });
+
+  it("v3 migration: simulated v2 DB upgrades cleanly to v3 with readiness flag", async () => {
+    // Create a real v2-shaped DB by initializing once, then drop the
+    // v3 columns and the rollup table so we can prove the migration
+    // re-adds them. This is closer to what an upgraded user actually
+    // has on disk than a mock.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    await reloaded.mig.initDb();
+    const db = await reloaded.conn.getDb();
+    expect(db).not.toBeNull();
+
+    // Roll back to a v2-shaped state: drop the columns / table the v3
+    // migration is responsible for adding, and reset the schema_version
+    // stamp.
+    db!.exec("ALTER TABLE turns DROP COLUMN cost_usd");
+    db!.exec("ALTER TABLE sessions DROP COLUMN verified_task_count");
+    db!.exec("ALTER TABLE sessions DROP COLUMN one_shot_task_count");
+    db!.exec("DROP TABLE category_costs");
+    db!.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+    db!.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
+    reloaded.conn.closeDb();
+
+    // Re-init: only v3 should run, exclusively.
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    expect(result.appliedMigrations).toEqual([3]);
+    expect(result.schemaVersion).toBe(3);
+
+    const db2 = await second.conn.getDb();
+    expect(db2).not.toBeNull();
+
+    // Schema additions are in place.
+    const turnCols = db2!.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+    expect(turnCols.some((c) => c.name === "cost_usd")).toBe(true);
+    const sessionCols = db2!.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+    expect(sessionCols.some((c) => c.name === "verified_task_count")).toBe(true);
+    expect(sessionCols.some((c) => c.name === "one_shot_task_count")).toBe(true);
+    const tableRow = db2!
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='category_costs'")
+      .get() as { name?: string } | undefined;
+    expect(tableRow?.name).toBe("category_costs");
+
+    // Readiness flag was set so the read-side falls back until reconcile
+    // populates the new columns.
+    const flag = db2!
+      .prepare("SELECT value FROM meta WHERE key = 'needs_reconcile_after_v3'")
+      .get() as { value?: string } | undefined;
+    expect(flag?.value).toBe("1");
     second.conn.closeDb();
   });
 });

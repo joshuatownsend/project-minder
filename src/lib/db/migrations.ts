@@ -59,6 +59,62 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 3,
+    name: "add cost_usd / one-shot counts / category_costs rollup",
+    up: (db) => {
+      // Schema additions that unlock the SQL-aggregate read path on
+      // /api/usage (P2b-2.5). All ALTERs are idempotent — fresh DBs got
+      // the columns via v1's schema.sql; only DBs upgraded from v1/v2
+      // need the structural change.
+      //
+      // Cost backfill is NOT done here — pricing data lives in JS and is
+      // loaded asynchronously, which won't fit a sync migration. Instead
+      // we set `meta.needs_reconcile_after_v3 = 1` so the read-side
+      // façade falls back to file-parse until the next reconcile (which
+      // is forced by the bumped `DERIVED_VERSION` constant) populates
+      // `turns.cost_usd` and the rollup. The reconcile clears the flag
+      // on success.
+      const turnCols = db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+      if (!turnCols.some((c) => c.name === "cost_usd")) {
+        db.exec("ALTER TABLE turns ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0");
+      }
+      const sessionCols = db
+        .prepare("PRAGMA table_info(sessions)")
+        .all() as Array<{ name: string }>;
+      if (!sessionCols.some((c) => c.name === "verified_task_count")) {
+        db.exec("ALTER TABLE sessions ADD COLUMN verified_task_count INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!sessionCols.some((c) => c.name === "one_shot_task_count")) {
+        db.exec("ALTER TABLE sessions ADD COLUMN one_shot_task_count INTEGER NOT NULL DEFAULT 0");
+      }
+      const tableExists = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='category_costs'")
+        .get() as { name?: string } | undefined;
+      if (!tableExists) {
+        db.exec(`
+          CREATE TABLE category_costs (
+            day           TEXT NOT NULL,
+            project_slug  TEXT NOT NULL,
+            category      TEXT NOT NULL,
+            turns         INTEGER NOT NULL DEFAULT 0,
+            tokens        INTEGER NOT NULL DEFAULT 0,
+            cost_usd      REAL    NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, project_slug, category)
+          ) WITHOUT ROWID;
+          CREATE INDEX category_costs_by_day ON category_costs(day DESC);
+        `);
+      }
+      // Readiness gate: the SQL-aggregate path is unsafe to use until the
+      // bumped DERIVED_VERSION drives a full re-parse. Cleared by
+      // `reconcileAllSessions` on success. Survives process restarts so
+      // a crash mid-rebuild doesn't leave the read path serving zeros.
+      db.prepare(
+        "INSERT INTO meta (key, value) VALUES ('needs_reconcile_after_v3', '1') " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

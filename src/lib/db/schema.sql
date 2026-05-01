@@ -74,6 +74,13 @@ CREATE TABLE sessions (
   has_compaction_loop   INTEGER NOT NULL DEFAULT 0 CHECK (has_compaction_loop IN (0,1)),
   has_tool_failure_streak INTEGER NOT NULL DEFAULT 0 CHECK (has_tool_failure_streak IN (0,1)),
   has_one_shot          INTEGER NOT NULL DEFAULT 0 CHECK (has_one_shot IN (0,1)),
+  -- Per-session one-shot counts (sums of detectOneShot's totalVerifiedTasks
+  -- and oneShotTasks). Stored so that aggregate queries over a period are a
+  -- direct SUM(...) instead of rehydrating every turn through detectOneShot's
+  -- window scan. has_one_shot is the binary "did this session have any?";
+  -- these are the precise numerator/denominator for the rate.
+  verified_task_count   INTEGER NOT NULL DEFAULT 0,
+  one_shot_task_count   INTEGER NOT NULL DEFAULT 0,
   git_branch            TEXT,
   initial_prompt        TEXT,
   last_prompt           TEXT,
@@ -106,6 +113,13 @@ CREATE TABLE turns (
   parent_tool_use_id   TEXT,
   text_offset          INTEGER,
   text_preview         TEXT,
+  -- Per-turn dollar cost, derived at ingest from `applyPricing`. The session
+  -- row's `cost_usd` is SUM(this) over assistant turns. Storing per-turn
+  -- lets every "by X" aggregate (`byModel`, `byProject`, `byCategory`,
+  -- `daily`) be a single SQL `SUM(cost_usd) GROUP BY ...` instead of
+  -- rehydrating turns and re-running JS pricing. Default 0 covers user
+  -- turns and synthetic-model assistant turns naturally.
+  cost_usd             REAL    NOT NULL DEFAULT 0,
   -- For user turns that carry a tool_result, the truncated result text
   -- (~2000 chars). Stored separately from `text_preview` so that
   -- `detectOneShot`'s error-pattern check can survive a rehydrate-from-DB
@@ -194,6 +208,31 @@ CREATE TABLE daily_costs (
 ) WITHOUT ROWID;
 
 CREATE INDEX daily_costs_by_day ON daily_costs(day DESC);
+
+-- ─── category_costs ─────────────────────────────────────────────────────
+-- Pre-aggregated rollup by (day, project, category). Sister table to
+-- `daily_costs`, but keyed on the classifier's category instead of model.
+-- Drives `byCategory` on /api/usage as a direct SELECT — no rehydrate,
+-- no in-JS classification pass. Updated incrementally by the ingest
+-- pipeline whenever a session's turns change category mix (e.g., a
+-- classifier version bump moves a turn from 'Coding' to 'Refactoring').
+--
+-- Note: `byCategory.oneShotRate` is intentionally NOT denormalized here.
+-- The rate is per-(category, session) and would need a much wider
+-- pre-aggregate to maintain. The SQL read-path leaves the field
+-- undefined; consumers that need it fall back to the file-parse backend.
+
+CREATE TABLE category_costs (
+  day           TEXT NOT NULL,
+  project_slug  TEXT NOT NULL,
+  category      TEXT NOT NULL,
+  turns         INTEGER NOT NULL DEFAULT 0,
+  tokens        INTEGER NOT NULL DEFAULT 0,
+  cost_usd      REAL    NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, project_slug, category)
+) WITHOUT ROWID;
+
+CREATE INDEX category_costs_by_day ON category_costs(day DESC);
 
 -- ─── catalogs (agents / skills / commands) ────────────────────────────────
 -- One row per catalog entry. `source` is 'user' | 'plugin' | 'project'.
