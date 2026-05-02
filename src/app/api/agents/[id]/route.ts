@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { loadCatalog } from "@/lib/indexer/catalog";
-import { parseAllSessions } from "@/lib/usage/parser";
-import { groupAgentCalls } from "@/lib/usage/agentParser";
+import { getAgentUsage } from "@/lib/data";
 import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
 
 export async function GET(
@@ -18,17 +17,17 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const [bodyText, sessionMap] = await Promise.all([
+  const [bodyText, agentUsage] = await Promise.all([
     fs.readFile(entry.filePath, "utf-8").catch(() => ""),
-    parseAllSessions(),
+    getAgentUsage(),
   ]);
 
-  const allTurns = Array.from(sessionMap.values()).flat();
-  const statsArr = groupAgentCalls(allTurns);
   const aliasMap = buildAgentAliasMap(catalog.agents);
-  const usage = statsArr.find(
+  const usage = agentUsage.stats.find(
     (s) => aliasMap.get(s.name.toLowerCase()) === entry
   );
 
-  return NextResponse.json({ entry, bodyFull: bodyText, usage });
+  const response = NextResponse.json({ entry, bodyFull: bodyText, usage });
+  response.headers.set("X-Minder-Backend", agentUsage.meta.backend);
+  return response;
 }
