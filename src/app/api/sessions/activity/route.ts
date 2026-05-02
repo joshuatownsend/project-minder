@@ -1,20 +1,33 @@
 import { NextResponse } from "next/server";
-import { scanAllSessions, encodePath } from "@/lib/scanner/claudeConversations";
+import { encodePath } from "@/lib/scanner/claudeConversations";
+import { getSessionsList, type SessionsListResult } from "@/lib/data";
 import { readConfig, getDevRoots } from "@/lib/config";
-import { SessionSummary } from "@/lib/types";
 
 const CACHE_TTL = 30_000;
 
+// Shared globalThis cache slot with /api/sessions — both routes consume the
+// same SessionSummary[] so a single refresh serves both endpoints.
 const globalForSessions = globalThis as unknown as {
-  __sessionsCache?: { sessions: SessionSummary[]; cachedAt: number };
+  __sessionsCache?: { result: SessionsListResult; cachedAt: number; maxSessionMs: number };
 };
 
 // Returns Record<projectSlug, number[]> — 14 daily session counts, UTC, oldest→newest
 export async function GET() {
   let cache = globalForSessions.__sessionsCache;
   if (!cache || Date.now() - cache.cachedAt > CACHE_TTL) {
-    const sessions = await scanAllSessions();
-    cache = { sessions, cachedAt: Date.now() };
+    const result = await getSessionsList();
+    // Match /api/sessions/route.ts's slot shape exactly so the two routes
+    // share the cache cleanly. `maxSessionMs` is unused here but kept so
+    // a refresh from this route still satisfies the other route's ETag
+    // inputs without recomputing.
+    let max = 0;
+    for (const s of result.sessions) {
+      const ts = s.endTime ?? s.startTime;
+      if (!ts) continue;
+      const ms = new Date(ts).getTime();
+      if (Number.isFinite(ms) && ms > max) max = ms;
+    }
+    cache = { result, cachedAt: Date.now(), maxSessionMs: max };
     globalForSessions.__sessionsCache = cache;
   }
 
@@ -39,7 +52,7 @@ export async function GET() {
 
   const result: Record<string, number[]> = {};
 
-  for (const session of cache.sessions) {
+  for (const session of cache.result.sessions) {
     const reEncoded = encodePath(session.projectPath);
     const prefix = encodedPrefixes.find((p) => reEncoded.startsWith(p));
     if (!prefix) continue;
@@ -56,5 +69,7 @@ export async function GET() {
     if (idx !== -1) result[slug][idx]++;
   }
 
-  return NextResponse.json(result);
+  const response = NextResponse.json(result);
+  response.headers.set("X-Minder-Backend", cache.result.meta.backend);
+  return response;
 }

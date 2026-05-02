@@ -1,7 +1,7 @@
 import "server-only";
 import { generateUsageReport } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
-import { scanSessionDetail } from "@/lib/scanner/claudeConversations";
+import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
 import {
@@ -10,8 +10,9 @@ import {
   needsReconcileAfterV3,
 } from "./usageFromDb";
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
+import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import type { UsageReport } from "@/lib/usage/types";
-import type { SessionDetail } from "@/lib/types";
+import type { SessionDetail, SessionSummary } from "@/lib/types";
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
 // Backend selection is `MINDER_USE_DB`; the default is on. Set
@@ -183,6 +184,66 @@ async function tryDbSessionDetail(sessionId: string): Promise<SessionDetail | nu
       return null;
     }
     return loadSessionDetailFromDb(db, sessionId);
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
+}
+
+export interface SessionsListResult {
+  sessions: SessionSummary[];
+  meta: { backend: "db" | "file"; maxMtimeMs: number };
+}
+
+/**
+ * Cross-project session list. SQL-backed by default when the index has
+ * sessions; falls back to `scanAllSessions` (file-parse) on driver-missing,
+ * init-failure, awaiting-v3 reconcile, empty index, or any thrown error.
+ *
+ * The empty-index case is treated as a fall-through (rather than returning
+ * an empty list) so a brand-new install with the indexer still warming up
+ * still surfaces sessions on the dashboard. The two backends produce the
+ * same SessionSummary shape modulo seven documented divergences listed in
+ * `sessionsListFromDb.ts`'s header comment.
+ *
+ * Project filtering is intentionally NOT pushed into this layer — the
+ * route caches the unfiltered set so a back-to-back "all projects" then
+ * "single project" navigation reuses the same cache. Matches the file-
+ * parse route's existing post-cache filter pattern.
+ */
+export async function getSessionsList(): Promise<SessionsListResult> {
+  const dbResult = await tryDbSessionsList();
+  if (dbResult) return dbResult;
+
+  const sessions = await scanAllSessions();
+  return {
+    sessions,
+    meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() },
+  };
+}
+
+async function tryDbSessionsList(): Promise<SessionsListResult | null> {
+  try {
+    const db = await getReadyDb();
+    if (!db) return null;
+    // Apply the v3 readiness gate uniformly with the other DB-backed
+    // paths: `sessions.cost_usd` is `0` until reconcile re-derives it,
+    // and the per-session `costEstimate` shown in cards would silently
+    // collapse to $0 without this check during the catch-up window.
+    if (needsReconcileAfterV3(db)) {
+      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
+      return null;
+    }
+    const sessions = loadSessionsListFromDb(db);
+    if (sessions.length === 0) {
+      // Empty index — likely indexer still warming up on a new install.
+      // Fall through to file-parse so the dashboard isn't blank.
+      return null;
+    }
+    return {
+      sessions,
+      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
+    };
   } catch (err) {
     logFallthroughOnce((err as Error).message);
     return null;
