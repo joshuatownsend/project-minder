@@ -34,15 +34,43 @@ export function dbModeRequested(): boolean {
   return process.env[FLAG] !== "0";
 }
 
-// Once-per-process schema-readiness gate. `initDb()` runs `quick_check`
-// plus a `meta`/`sqlite_master` lookup, which we don't want on every
+// Schema-readiness gate. `initDb()` runs `quick_check` plus a
+// `meta`/`sqlite_master` lookup, which we don't want on every
 // /api/usage hit. Cache the *promise* so concurrent first requests
 // share one in-flight init. Same pattern as `/api/sql/route.ts`'s
 // `ensureSchemaReady`.
+//
+// **Failure recovery**: if `initDb()` reports the schema as unavailable
+// (driver missing, corruption-quarantine rename failed mid-flight,
+// etc.) we DO NOT cache that failure forever. The original behavior
+// poisoned every subsequent DB-backed read until process restart;
+// observed in soak as a single transient `EBUSY` on the corruption-
+// quarantine rename silently downgrading every route to file-parse for
+// the rest of the dev session, with `logFallthroughOnce` masking
+// repeats. Now: only cache successful inits; on failure, clear the
+// cached promise so the next call retries `initDb()` from scratch.
+//
+// In-flight callers always share the same promise (writes only happen
+// in `then` after resolution), so there's no thundering-herd risk
+// during init itself; the retry only kicks in after the failed promise
+// has resolved.
 let initPromise: Promise<InitResult> | null = null;
 function ensureSchemaReady(): Promise<InitResult> {
-  if (!initPromise) initPromise = initDb();
-  return initPromise;
+  if (initPromise) return initPromise;
+  const promise = initDb();
+  initPromise = promise;
+  // Async cleanup: if init resolved with `available: false` OR threw,
+  // clear the cache so the next call retries. Wait for the promise to
+  // settle first — concurrent callers during this init still get the
+  // shared (failed) result, only NEW callers after settlement retry.
+  promise
+    .then((result) => {
+      if (!result.available && initPromise === promise) initPromise = null;
+    })
+    .catch(() => {
+      if (initPromise === promise) initPromise = null;
+    });
+  return promise;
 }
 
 let fallthroughLogged = false;

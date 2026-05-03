@@ -145,6 +145,24 @@ interface ParsedTurn {
   category: string | null;
 }
 
+/**
+ * Schema-compatible storage for the `inferSessionStatus` snapshot.
+ *
+ * The full TypeScript `SessionStatus` (`working | idle | needs_attention`)
+ * doesn't fit the existing `sessions.status` CHECK constraint
+ * (`'active','inactive','errored','approval','working','waiting','other'`),
+ * and changing the constraint requires a SQLite table rebuild — not
+ * worth it for what's effectively a one-bit signal. We collapse the
+ * inference to "had unresolved pendings at last ingest" (`'waiting'`)
+ * vs "no pendings at last ingest" (`'inactive'`) and let the loader
+ * apply time-gating against `file_mtime_ms` at read time. That keeps
+ * `working / needs_attention` time-fresh without re-ingesting (file
+ * mtime advances on every tail-append) at the cost of staleness when
+ * a tool resolution arrives via tail-only appends — see
+ * `appendSessionTail` for the staleness window note.
+ */
+type StoredStatus = "waiting" | "inactive";
+
 interface ParsedSession {
   sessionId: string;
   projectDirName: string;
@@ -183,6 +201,16 @@ interface ParsedSession {
   // FROM sessions WHERE filter` instead of a per-session window scan.
   verifiedTaskCount: number;
   oneShotTaskCount: number;
+  /**
+   * Snapshot of `inferSessionStatus`'s pending-tools verdict at the
+   * end of this parse. `'waiting'` means the last non-sidechain
+   * assistant turn had `tool_use` blocks that no subsequent
+   * non-sidechain user turn resolved with a matching `tool_result`.
+   * `'inactive'` means everything paired up (or there's no assistant
+   * turn at all). Loader time-gates the `'waiting'` case against
+   * `file_mtime_ms` — see `loadSessionsListFromDb`.
+   */
+  storedStatus: StoredStatus;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -334,6 +362,19 @@ async function readJsonlSession(
   let cacheReadTokens = 0;
   let toolCallCount = 0;
   let errorCount = 0;
+
+  // Status-inference state. Mirrors `inferSessionStatus`'s walk
+  // (`src/lib/scanner/sessionStatus.ts`) but inlined into the same
+  // pass that builds turns/tool_uses so we don't re-read entries.
+  // `lastAssistantPendingIds` tracks the most recent non-sidechain
+  // assistant turn's tool_use IDs minus any that subsequent
+  // non-sidechain user turns have resolved with matching tool_results.
+  // After the loop: empty set ⇒ idle (`'inactive'`); non-empty ⇒
+  // pending (`'waiting'`). Time-gating to needs_attention/working
+  // happens at READ time against `file_mtime_ms`.
+  let lastAssistantStopReason: string | null = null;
+  let lastAssistantPendingIds: Set<string> = new Set();
+  let sawAnyAssistant = false;
   let userTurnCount = 0;
   let assistantTurnCount = 0;
 
@@ -457,6 +498,18 @@ async function readJsonlSession(
         costUsd: 0,
         category: null,
       });
+
+      // Status inference: this assistant turn becomes the new "last
+      // assistant" — capture its stop_reason and reset the pending set
+      // to its tool_use IDs. Subsequent user turns can shrink this set
+      // by resolving tool_results.
+      sawAnyAssistant = true;
+      lastAssistantStopReason =
+        typeof entry.message?.stop_reason === "string" ? entry.message.stop_reason : null;
+      lastAssistantPendingIds = new Set();
+      for (const b of toolBlocks) {
+        if (typeof b.id === "string") lastAssistantPendingIds.add(b.id);
+      }
     } else {
       // user turn
       userTurnCount++;
@@ -509,6 +562,26 @@ async function readJsonlSession(
         costUsd: 0,
         category: null,
       });
+
+      // Status inference: walk this user turn's content for
+      // tool_result blocks and shrink the pending set. Mirrors the
+      // forward-walk in `inferSessionStatus` (lines 53-63 there),
+      // including its `if (!Array.isArray(userContent)) continue`
+      // guard — `entry.message.content` can be a string (the Claude
+      // API allows that), and `messageContent.length > 0` is true for
+      // non-empty strings, so without the array gate `for..of` would
+      // iterate characters and `b?.type` would be undefined for each.
+      if (
+        sawAnyAssistant &&
+        lastAssistantPendingIds.size > 0 &&
+        Array.isArray(textSource)
+      ) {
+        for (const b of textSource as any[]) {
+          if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+            lastAssistantPendingIds.delete(b.tool_use_id);
+          }
+        }
+      }
     }
   }
 
@@ -569,6 +642,29 @@ async function readJsonlSession(
     }
   }
 
+  // Derive: stored status snapshot. Mirrors `inferSessionStatus`'s
+  // exit conditions, scoped to the LAST non-sidechain assistant turn
+  // (older assistant turns aren't considered — same as the canonical
+  // algorithm's `walk backward to find the last meaningful assistant
+  // turn`):
+  //   - No assistant turn at all → idle (`'inactive'`).
+  //   - Last assistant ended with `stop_reason === 'end_turn'` AND
+  //     its tool_use blocks (if any) are all resolved → idle.
+  //   - Last assistant has pending tool_uses unresolved by subsequent
+  //     non-sidechain user tool_results → waiting.
+  //   - Otherwise (every pending was resolved) → idle.
+  // Time-gating to working/needs_attention happens at READ time
+  // against `file_mtime_ms`, so this snapshot only encodes the
+  // pending-vs-resolved bit, not the freshness classification.
+  let storedStatus: StoredStatus = "inactive";
+  if (sawAnyAssistant) {
+    const naturalCompletion =
+      lastAssistantStopReason === "end_turn" && lastAssistantPendingIds.size === 0;
+    if (!naturalCompletion && lastAssistantPendingIds.size > 0) {
+      storedStatus = "waiting";
+    }
+  }
+
   return {
     parsed: {
       sessionId,
@@ -598,6 +694,7 @@ async function readJsonlSession(
       hasOneShot,
       verifiedTaskCount: oneShot.totalVerifiedTasks,
       oneShotTaskCount: oneShot.oneShotTasks,
+      storedStatus,
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -641,7 +738,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO sessions (
        session_id, project_slug, project_dir_name, file_path,
        file_mtime_ms, file_size, byte_offset,
-       start_ts, end_ts, primary_model,
+       start_ts, end_ts, primary_model, status,
        turn_count, user_turn_count, assistant_turn_count,
        tool_call_count, error_count,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
@@ -652,7 +749,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
        @file_mtime_ms, @file_size, @byte_offset,
-       @start_ts, @end_ts, @primary_model,
+       @start_ts, @end_ts, @primary_model, @status,
        @turn_count, @user_turn_count, @assistant_turn_count,
        @tool_call_count, @error_count,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
@@ -676,6 +773,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     start_ts: s.startTs,
     end_ts: s.endTs,
     primary_model: s.primaryModel,
+    status: s.storedStatus,
     turn_count: s.turnCount,
     user_turn_count: s.userTurnCount,
     assistant_turn_count: s.assistantTurnCount,
@@ -1183,6 +1281,25 @@ function appendSessionTail(
     .get(sessionId) as { last_prompt: string | null } | undefined;
   const lastPrompt = parsed.lastPrompt ?? promptRow?.last_prompt ?? null;
 
+  // Status update on tail: only refresh when the tail itself contained
+  // an assistant turn (`assistantTurnCount > 0` in `parsed`). Reasoning:
+  //   - Tail with assistant turn: the tail's `storedStatus` correctly
+  //     reflects the new "last assistant" + any subsequent tail user
+  //     turn resolutions.
+  //   - Tail with only user turns: `storedStatus` would be `'inactive'`
+  //     because no `sawAnyAssistant` in the tail, but the actual state
+  //     is "prior pendings minus any resolved by this tail" — and we
+  //     don't have the prior pending IDs cached. Conservatively keep
+  //     the previous status; let the next full reconcile correct it.
+  // Documented staleness window: a `'waiting'` session whose pendings
+  // are all resolved via tail-only user turns will keep showing as
+  // `'waiting'` (and time-gate to `working / needs_attention / idle`
+  // depending on file mtime) until the next process restart triggers a
+  // full reconcile. Acceptable trade-off for the ~150-session corpus.
+  const refreshStatus = parsed.assistantTurnCount > 0;
+  const statusUpdateClause = refreshStatus ? "status = @status, " : "";
+  const statusUpdateParam = refreshStatus ? { status: parsed.storedStatus } : {};
+
   db.prepare(
     `UPDATE sessions SET
        file_path           = @file_path,
@@ -1192,7 +1309,7 @@ function appendSessionTail(
        start_ts            = @start_ts,
        end_ts              = @end_ts,
        primary_model       = @primary_model,
-       turn_count          = @turn_count,
+       ${statusUpdateClause}turn_count          = @turn_count,
        user_turn_count     = @user_turn_count,
        assistant_turn_count = @assistant_turn_count,
        tool_call_count     = @tool_call_count,
@@ -1210,6 +1327,7 @@ function appendSessionTail(
        indexed_at_ms       = @indexed_at_ms
      WHERE session_id = @session_id`
   ).run({
+    ...statusUpdateParam,
     session_id: sessionId,
     file_path: parsed.filePath,
     file_mtime_ms: fileMtimeMs,
