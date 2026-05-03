@@ -22,6 +22,7 @@
 
 - [x] **Unit tests for `setupApply.ts`** — Cover idempotent apply logic with temp-dir fixtures: initial apply, re-apply (already-present), malformed `settings.local.json`, and partial hook presence/merge behavior.
 - [x] **Integration test for scanner-orchestrator feature-flag gating** — `tests/scannerFeatureFlags.test.ts` (9 cases) mocks every scanner module + fs + readConfig and asserts both that the gated scanner is NOT called when its flag is false AND that the resulting ProjectData carries the expected neutral value. Covers all six gated flags + a default-on case + a non-gated-scanners-still-run case + an explicit-true-vs-absent-map equivalence case.
+- [ ] **Local typecheck misses cross-file errors after a widened union due to `tsconfig.tsbuildinfo` incremental cache** — Wave 1.1 widened `HelpSlug` (added `'settings'`); local `npm run typecheck` passed, but CI failed because `HelpPanel.tsx`'s `Record<HelpSlug, string>` mapping needed the new key. tsgo's incremental cache didn't invalidate `HelpPanel.tsx` since that file's bytes didn't change. Two-fix proposal: (a) make the local pre-commit hook `rm -f tsconfig.tsbuildinfo` before running typecheck, or (b) drop `incremental: true` from `tsconfig.json` since the typecheck path uses `--noEmit` and doesn't benefit from emit-side caching. Option (b) is cleaner if it doesn't slow the dev `next` typecheck pipeline.
 
 ## Housekeeping
 
