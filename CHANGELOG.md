@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-03
+
+> **Headline**: SQLite indexer goes default-on with a fully-indexed read path. Every JSONL-derived dashboard route (`/api/usage`, `/api/sessions{,/[id],/activity}`, `/api/agents{,/[id]}`, `/api/skills{,/[id]}`, `/api/stats`) now serves from `~/.minder/index.db` by default. Fall-throughs to file-parse stay only for v3-readiness windows and brand-new installs; silent error masking is gone.
+
 ### Changed
 - **P2b-9 — silent fallback removed from the data façade.** Step 2 of the P2b-4 default-on rollout: when DB mode is requested and the DB is genuinely unhealthy (driver missing, schema init failed, connection null, or a SQL load throws), `src/lib/data/index.ts` now THROWS `DbUnavailableError` instead of swallowing the error and serving a file-parse result. Routes get a 500 — which is the right answer for "DB is supposed to work and doesn't." Pre-P2b-9 behavior masked failures via `logFallthroughOnce` and silently downgraded every read for the rest of the dev session, observed in soak as a single transient `EBUSY` poisoning the cached `ensureSchemaReady` (since fixed in P2c).
   - **`MINDER_USE_DB=0` still works** as the explicit file-parse opt-out — operators retain a documented escape hatch for debugging or platform-specific issues. The change only affects the "DB requested + DB broken" path.
