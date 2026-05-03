@@ -392,8 +392,10 @@ export type McpTransport = "stdio" | "http" | "sse" | "unknown";
  *  - "local"    — per-project entry in `~/.claude.json`
  *                 (`projects.<path>.mcpServers`); private to user, scoped
  *                 to one project
- *  - "plugin"   — `<plugin-root>/.mcp.json` or inline in
- *                 `<plugin-root>/plugin.json` of an installed plugin
+ *  - "plugin"   — `<plugin-root>/.mcp.json` of an installed plugin.
+ *                 Per Claude Code's plugin spec, `plugin.json` is a
+ *                 metadata-only manifest (name/version/description/author)
+ *                 and is NOT read for MCP entries.
  *  - "desktop"  — Claude Desktop's `claude_desktop_config.json` (the
  *                 separate desktop app; importable via
  *                 `claude mcp add-from-claude-desktop`)

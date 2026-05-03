@@ -113,4 +113,46 @@ describe("scanMcpServers", () => {
     mockReadFile.mockResolvedValue("{}");
     expect(await scanMcpServers("C:\\dev\\proj")).toBeUndefined();
   });
+
+  it("merges local-scope entries from ~/.claude.json's projects[<path>].mcpServers", async () => {
+    // Wave 1.2 follow-up #2 (Codex P2): readClaudeJsonMcp.byProject was
+    // parsed but never wired into per-project visibility. scanMcpServers
+    // now merges project-scope entries from .mcp.json with local-scope
+    // entries from ~/.claude.json so the dashboard surfaces both.
+    //
+    // Invalidate the per-process cache first so the previous test's
+    // mock data doesn't survive into this one.
+    const { invalidateClaudeJsonMcpCache } = await import("@/lib/scanner/claudeJsonMcp");
+    invalidateClaudeJsonMcpCache();
+
+    // Path-aware mock: project .mcp.json has one server, ~/.claude.json
+    // has another under projects[<projectPath>].mcpServers.
+    const projectPath = "C:\\dev\\proj";
+    mockReadFile.mockImplementation(async (path) => {
+      const p = String(path);
+      if (p.endsWith(".claude.json") && !p.includes(".mcp")) {
+        return JSON.stringify({
+          projects: {
+            [projectPath]: {
+              mcpServers: {
+                "local-only": { command: "node", args: ["local.js"] },
+              },
+            },
+          },
+        });
+      }
+      // Project .mcp.json
+      return JSON.stringify({
+        mcpServers: { "project-only": { command: "node", args: ["project.js"] } },
+      });
+    });
+
+    const result = await scanMcpServers(projectPath);
+    expect(result?.servers).toHaveLength(2);
+    const byName = Object.fromEntries(result!.servers.map((s) => [s.name, s]));
+    expect(byName["project-only"].source).toBe("project");
+    expect(byName["local-only"].source).toBe("local");
+
+    invalidateClaudeJsonMcpCache();
+  });
 });

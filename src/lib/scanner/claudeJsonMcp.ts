@@ -16,6 +16,21 @@ export interface ClaudeJsonMcpExtract {
 
 const CLAUDE_JSON_FILENAME = ".claude.json";
 
+// Per-process cache so a scan that resolves local-scope MCP for ~60
+// projects doesn't re-parse ~/.claude.json once per project. Short TTL
+// because Claude Code can rewrite this file at any time (it owns the
+// runtime state); 5s is enough to amortize a scan burst without
+// holding stale data through user-visible config edits.
+const CACHE_TTL_MS = 5_000;
+const globalForClaudeJson = globalThis as unknown as {
+  __claudeJsonMcpCache?: { extract: ClaudeJsonMcpExtract; cachedAt: number };
+};
+
+/** @internal Exported only for tests that need to invalidate between cases. */
+export function invalidateClaudeJsonMcpCache(): void {
+  globalForClaudeJson.__claudeJsonMcpCache = undefined;
+}
+
 /**
  * Read `~/.claude.json` and extract ONLY the MCP server blocks.
  *
@@ -38,12 +53,18 @@ const CLAUDE_JSON_FILENAME = ".claude.json";
  * read should never block Project Minder's read path.
  */
 export async function readClaudeJsonMcp(): Promise<ClaudeJsonMcpExtract> {
+  const cached = globalForClaudeJson.__claudeJsonMcpCache;
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.extract;
+  }
   const filePath = path.join(os.homedir(), CLAUDE_JSON_FILENAME);
   let raw: string;
   try {
     raw = await fs.readFile(filePath, "utf-8");
   } catch {
-    return { user: [], byProject: new Map() };
+    const empty: ClaudeJsonMcpExtract = { user: [], byProject: new Map() };
+    globalForClaudeJson.__claudeJsonMcpCache = { extract: empty, cachedAt: Date.now() };
+    return empty;
   }
 
   const doc = tryParseJsonc<{
@@ -51,7 +72,9 @@ export async function readClaudeJsonMcp(): Promise<ClaudeJsonMcpExtract> {
     projects?: Record<string, unknown>;
   }>(raw);
   if (!doc || typeof doc !== "object") {
-    return { user: [], byProject: new Map() };
+    const empty: ClaudeJsonMcpExtract = { user: [], byProject: new Map() };
+    globalForClaudeJson.__claudeJsonMcpCache = { extract: empty, cachedAt: Date.now() };
+    return empty;
   }
 
   const user = parseMcpServers(doc.mcpServers, "user", filePath);
@@ -66,7 +89,9 @@ export async function readClaudeJsonMcp(): Promise<ClaudeJsonMcpExtract> {
     }
   }
 
-  return { user, byProject };
+  const extract: ClaudeJsonMcpExtract = { user, byProject };
+  globalForClaudeJson.__claudeJsonMcpCache = { extract, cachedAt: Date.now() };
+  return extract;
 }
 
 /** Convenience: just the user-scope list. Equivalent to

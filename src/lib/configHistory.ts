@@ -23,7 +23,13 @@ const PRUNE_INTERVAL_MS = 60 * 60_000; // 1h between auto-prunes
 export type BackupId = string;
 
 export interface HistoryEntry {
-  /** Stable ID = directory name under HISTORY_ROOT. Format: <iso-ts>_<sha8>. */
+  /** Stable ID = directory name under HISTORY_ROOT. Format:
+   *  `<iso-ts>_<sha8|"missing">_<rand4>` where `iso-ts` has `:` and `.`
+   *  replaced with `-` for filesystem safety, `sha8` is the first 8
+   *  hex chars of the snapshot's SHA-256 (or the literal "missing" for
+   *  wasMissing snapshots), and `rand4` is 4 random bytes hex-encoded
+   *  to guarantee uniqueness across same-millisecond same-content
+   *  recordings. */
   id: BackupId;
   /** When recordPreWrite ran (ISO string, also embedded in id). */
   timestamp: string;

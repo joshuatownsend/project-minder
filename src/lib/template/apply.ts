@@ -349,7 +349,16 @@ async function dispatchMcp(
 
   if (source.kind === "user") {
     const userCfg = await getUserConfig();
-    all = userCfg.mcpServers.servers;
+    // The user-scope merged list now includes read-only sources
+    // (managed, desktop, plugin) alongside actual user-scope entries.
+    // findMcpByKey matches by name only — without this filter, a
+    // managed/desktop/plugin server sharing a name with a user-scope
+    // one could win the lookup (managed-first merge order makes that
+    // the typical outcome). applyMcp would then reject with
+    // UNSUPPORTED_MCP_SOURCE_FOR_APPLY, surfacing as "can't apply"
+    // even though a writable user-scope entry exists. Filtering to
+    // writable sources here keeps the lookup honest.
+    all = userCfg.mcpServers.servers.filter((s) => s.source === "user");
     sourceSlug = "user";
   } else {
     const mcpInfo = await scanMcpServers(source.path);

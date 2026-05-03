@@ -79,44 +79,48 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
     process.env.MINDER_USE_DB = "1";
     const { facade, mig } = await reloadModules();
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    // try/finally guarantees real timers are restored even when an
+    // assertion throws — otherwise fake timers leak into later tests
+    // in the same file/run and produce confusing async hangs.
+    try {
+      const initSpy = vi.spyOn(mig, "initDb");
+      initSpy.mockResolvedValueOnce({
+        available: false,
+        error: new Error("simulated EBUSY: rename failed"),
+        appliedMigrations: [],
+        schemaVersion: 0,
+        quarantined: null,
+      });
 
-    const initSpy = vi.spyOn(mig, "initDb");
-    initSpy.mockResolvedValueOnce({
-      available: false,
-      error: new Error("simulated EBUSY: rename failed"),
-      appliedMigrations: [],
-      schemaVersion: 0,
-      quarantined: null,
-    });
+      // First call: init fails → throws DbUnavailableError. initDb ran 1×.
+      await expect(facade.getUsage("all")).rejects.toMatchObject({
+        name: "DbUnavailableError",
+        reason: "init-failed",
+      });
+      expect(initSpy).toHaveBeenCalledTimes(1);
 
-    // First call: init fails → throws DbUnavailableError. initDb ran 1×.
-    await expect(facade.getUsage("all")).rejects.toMatchObject({
-      name: "DbUnavailableError",
-      reason: "init-failed",
-    });
-    expect(initSpy).toHaveBeenCalledTimes(1);
+      // Second call within the 30s TTL: must NOT re-run initDb. The
+      // cached failure is reused so a real outage doesn't hammer the DB
+      // layer on every poll. Caller still gets DbUnavailableError.
+      await expect(facade.getUsage("all")).rejects.toMatchObject({
+        name: "DbUnavailableError",
+        reason: "init-failed",
+      });
+      expect(initSpy).toHaveBeenCalledTimes(1);
 
-    // Second call within the 30s TTL: must NOT re-run initDb. The
-    // cached failure is reused so a real outage doesn't hammer the DB
-    // layer on every poll. Caller still gets DbUnavailableError.
-    await expect(facade.getUsage("all")).rejects.toMatchObject({
-      name: "DbUnavailableError",
-      reason: "init-failed",
-    });
-    expect(initSpy).toHaveBeenCalledTimes(1);
-
-    // Advance past the 30s TTL → next call re-attempts initDb. The
-    // unmocked initDb succeeds against the writable tmpHome; with no
-    // JSONL files the empty index makes the façade fall back to
-    // file-parse (intentional empty-index fall-through). Either
-    // backend is acceptable — what we're pinning is that the retry
-    // happened.
-    vi.advanceTimersByTime(31_000);
-    const third = await facade.getUsage("all");
-    expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(["db", "file"]).toContain(third.meta.backend);
-
-    vi.useRealTimers();
+      // Advance past the 30s TTL → next call re-attempts initDb. The
+      // unmocked initDb succeeds against the writable tmpHome; with no
+      // JSONL files the empty index makes the façade fall back to
+      // file-parse (intentional empty-index fall-through). Either
+      // backend is acceptable — what we're pinning is that the retry
+      // happened.
+      vi.advanceTimersByTime(31_000);
+      const third = await facade.getUsage("all");
+      expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(["db", "file"]).toContain(third.meta.backend);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rethrows a thrown v3-readiness gate as DbUnavailableError(reason: 'load-failed')", async () => {

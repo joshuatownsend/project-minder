@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { McpServer } from "../types";
 import { loadInstalledPlugins } from "../indexer/walkPlugins";
+import type { InstalledPlugin } from "../indexer/types";
 import { parseMcpServers } from "./mcpServers";
 import { tryParseJsonc } from "./util/jsonc";
 
@@ -20,9 +21,16 @@ import { tryParseJsonc } from "./util/jsonc";
  *
  * Fails open: missing file or unreadable plugin install yields zero
  * entries for that plugin without affecting the others.
+ *
+ * `installed` may be passed in by callers that already walked the
+ * plugin registry (e.g. `getUserConfig` shares one walk between this
+ * reader and the plugins-info builder); when omitted, we walk it
+ * ourselves so standalone callers still work.
  */
-export async function readPluginScopeMcp(): Promise<McpServer[]> {
-  const plugins = await loadInstalledPlugins();
+export async function readPluginScopeMcp(
+  installed?: InstalledPlugin[],
+): Promise<McpServer[]> {
+  const plugins = installed ?? (await loadInstalledPlugins());
   if (plugins.length === 0) return [];
 
   const perPlugin = await Promise.all(

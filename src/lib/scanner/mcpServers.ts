@@ -2,23 +2,35 @@ import { promises as fs } from "fs";
 import path from "path";
 import { McpServer, McpServersInfo, McpSource, McpTransport } from "../types";
 import { tryParseJsonc } from "./util/jsonc";
+import { readLocalScopeMcpFromClaudeJson } from "./claudeJsonMcp";
 
-/** Read project-level `.mcp.json` and return server entries. */
+/** Read MCP entries that apply to one project: project-scope from
+ *  `.mcp.json` plus local-scope from `~/.claude.json`'s
+ *  `projects[<path>].mcpServers` block. Returns undefined when neither
+ *  source has entries (so callers that test for presence still work).
+ *
+ *  Local-scope entries are tagged `source: "local"` and carry the
+ *  `~/.claude.json` path as their sourcePath — `applyMcp` rejects
+ *  applies of `local` source (read-only), so this is purely visibility. */
 export async function scanMcpServers(
   projectPath: string
 ): Promise<McpServersInfo | undefined> {
   const file = path.join(projectPath, ".mcp.json");
+  let projectScope: McpServer[] = [];
   try {
     const raw = await fs.readFile(file, "utf-8");
     const doc = tryParseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
-    if (!doc?.mcpServers) return undefined;
-
-    const servers = parseMcpServers(doc.mcpServers, "project", file);
-    if (servers.length === 0) return undefined;
-    return { servers };
+    if (doc?.mcpServers) {
+      projectScope = parseMcpServers(doc.mcpServers, "project", file);
+    }
   } catch {
-    return undefined;
+    // No project-level .mcp.json — fall through to local-scope check.
   }
+
+  const localScope = await readLocalScopeMcpFromClaudeJson(projectPath);
+  const servers = [...projectScope, ...localScope];
+  if (servers.length === 0) return undefined;
+  return { servers };
 }
 
 export function parseMcpServers(

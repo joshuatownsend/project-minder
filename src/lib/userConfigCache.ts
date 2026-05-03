@@ -48,6 +48,13 @@ async function readUserConfig(): Promise<UserConfig> {
   const claudeDir = path.join(os.homedir(), ".claude");
   const settingsPath = path.join(claudeDir, "settings.json");
 
+  // Walk the installed-plugins registry once and share the result with
+  // both consumers (plugin-MCP reader + plugin-info builder). Doing it
+  // twice doubled N file reads per cache refresh — the registry walk
+  // visits each plugin's `.claude-plugin/plugin.json` for repo URL
+  // extraction, so cost scales with installed plugin count.
+  const installedPlugins = await loadInstalledPlugins();
+
   // Read all sources in parallel — they touch disjoint files and the
   // slowest source (plugin scan, ~N file reads) shouldn't be serialized
   // behind the others.
@@ -55,12 +62,12 @@ async function readUserConfig(): Promise<UserConfig> {
     await Promise.all([
       readSettings(settingsPath),
       readClaudeJsonMcp(),
-      readPluginScopeMcp(),
+      readPluginScopeMcp(installedPlugins),
       readDesktopScopeMcp(),
       readManagedScopeMcp(),
     ]);
 
-  const plugins = await readPluginsInfo(claudeDir, settings);
+  const plugins = await readPluginsInfo(claudeDir, settings, installedPlugins);
 
   const hookEntries: HookEntry[] = settings
     ? extractHookEntries(settings.hooks, "user", settingsPath)
@@ -110,10 +117,17 @@ async function readSettings(filePath: string): Promise<Record<string, unknown> |
 
 async function readPluginsInfo(
   claudeDir: string,
-  settings: Record<string, unknown> | null
+  settings: Record<string, unknown> | null,
+  prefetchedInstalled?: import("./indexer/types").InstalledPlugin[],
 ): Promise<PluginsInfo> {
+  // Caller (readUserConfig) shares its single loadInstalledPlugins()
+  // walk via prefetchedInstalled. Standalone callers fall back to a
+  // self-contained walk so this function still works in isolation
+  // (e.g. existing tests).
   const [installed, blocklist] = await Promise.all([
-    loadInstalledPlugins(),
+    prefetchedInstalled
+      ? Promise.resolve(prefetchedInstalled)
+      : loadInstalledPlugins(),
     readBlocklist(path.join(claudeDir, "plugins", "blocklist.json")),
   ]);
 

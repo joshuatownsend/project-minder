@@ -196,6 +196,49 @@ describe("applyDispatch — user-scope MCP", () => {
     ) as { mcpServers: Record<string, unknown> };
     expect(mcp.mcpServers["my-server"]).toBeDefined();
   });
+
+  it("filters merged user-scope list to writable sources before name lookup", async () => {
+    // Wave 1.2 follow-up: getUserConfig().mcpServers.servers now merges
+    // managed/user/desktop/plugin entries into one list. Two of those
+    // sources can share a server name (e.g. "memory" both managed and
+    // user). dispatchMcp's findMcpByKey matches by NAME ONLY — without
+    // a source filter, the managed entry (first in merge order) would
+    // win the lookup, then applyMcp would reject with
+    // UNSUPPORTED_MCP_SOURCE_FOR_APPLY. Pin the filter so the apply
+    // resolves to the writable user-scope entry instead.
+    const desktopShadow: McpServer = {
+      name: "memory",
+      transport: "stdio",
+      command: "this-should-not-be-applied",
+      source: "desktop",
+      sourcePath: "/fake/claude_desktop_config.json",
+    };
+    const writableUser: McpServer = {
+      name: "memory",
+      transport: "stdio",
+      command: "this-IS-the-writable-one",
+      source: "user",
+      sourcePath: path.join(state.fakeHome, ".claude.json"),
+    };
+    vi.mocked(getUserConfig).mockResolvedValue(
+      // desktopShadow listed first to match the managed-first merge
+      // order in userConfigCache; the filter must skip past it.
+      makeUserConfig({ mcpServers: { servers: [desktopShadow, writableUser] } })
+    );
+
+    const result = await applyUnit({
+      unit: { kind: "mcp", key: "memory" },
+      source: { kind: "user" },
+      target: { kind: "path", path: state.targetPath },
+      conflict: "skip",
+    });
+
+    expect(result.ok).toBe(true);
+    const mcp = JSON.parse(
+      await fs.readFile(path.join(state.targetPath, ".mcp.json"), "utf-8")
+    ) as { mcpServers: Record<string, { command: string }> };
+    expect(mcp.mcpServers["memory"].command).toBe("this-IS-the-writable-one");
+  });
 });
 
 describe("applyDispatch — user-scope plugin", () => {

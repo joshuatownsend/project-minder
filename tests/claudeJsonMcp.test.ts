@@ -12,6 +12,10 @@ let tmpHome: string;
 
 async function reloadModule() {
   vi.resetModules();
+  // The per-process cache lives on globalThis (so it survives module
+  // reloads — that's the point of caching across the orchestrator
+  // scan burst) but tests need to start each case from a clean slate.
+  delete (globalThis as { __claudeJsonMcpCache?: unknown }).__claudeJsonMcpCache;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   return await import("@/lib/scanner/claudeJsonMcp");
 }
