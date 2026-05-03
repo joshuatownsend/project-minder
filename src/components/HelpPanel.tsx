@@ -25,6 +25,7 @@ const slugTitles: Record<HelpSlug, string> = {
   memory: "Memory Browser",
   config: "Configuration",
   setup: "Setup Guide",
+  settings: "Settings",
   templates: "Templates",
 };
 

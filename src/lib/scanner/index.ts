@@ -1,7 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { ProjectData, PortConflict, ScanResult } from "../types";
+import { MinderConfig, ProjectData, PortConflict, ScanResult } from "../types";
 import { readConfig, getDevRoots } from "../config";
+import { getFlag } from "../featureFlags";
 import { scanPackageJson } from "./packageJson";
 import { scanEnvFiles } from "./envFile";
 import { scanDockerCompose } from "./dockerCompose";
@@ -16,6 +17,16 @@ import { scanMcpServers } from "./mcpServers";
 import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
 
+// Neutral substitutes typed against the real scanner returns so downstream
+// code reads the same shape whether the scanner ran or was gated off.
+const EMPTY_CLAUDE_SESSIONS: Awaited<ReturnType<typeof scanClaudeSessions>> = {
+  sessionCount: 0,
+};
+const EMPTY_DOCKER: Awaited<ReturnType<typeof scanDockerCompose>> = {
+  services: [],
+  ports: [],
+};
+
 function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
@@ -29,7 +40,11 @@ async function isGitRepo(dirPath: string): Promise<boolean> {
   }
 }
 
-async function scanProject(dirName: string, devRoot: string): Promise<ProjectData | null> {
+async function scanProject(
+  dirName: string,
+  devRoot: string,
+  flags: MinderConfig["featureFlags"],
+): Promise<ProjectData | null> {
   const projectPath = path.join(devRoot, dirName);
 
   if (!(await isGitRepo(projectPath))) return null;
@@ -52,13 +67,23 @@ async function scanProject(dirName: string, devRoot: string): Promise<ProjectDat
   ] = await Promise.all([
     scanPackageJson(projectPath),
     scanEnvFiles(projectPath),
-    scanDockerCompose(projectPath),
+    getFlag(flags, "scanDockerCompose")
+      ? scanDockerCompose(projectPath)
+      : Promise.resolve(EMPTY_DOCKER),
     scanGit(projectPath),
     scanClaudeMd(projectPath),
-    scanTodoMd(projectPath),
-    scanClaudeSessions(projectPath),
-    scanManualStepsMd(projectPath),
-    scanInsightsMd(projectPath),
+    getFlag(flags, "scanTodos")
+      ? scanTodoMd(projectPath)
+      : Promise.resolve(undefined),
+    getFlag(flags, "scanClaudeSessions")
+      ? scanClaudeSessions(projectPath)
+      : Promise.resolve(EMPTY_CLAUDE_SESSIONS),
+    getFlag(flags, "scanManualSteps")
+      ? scanManualStepsMd(projectPath)
+      : Promise.resolve(undefined),
+    getFlag(flags, "scanInsights")
+      ? scanInsightsMd(projectPath)
+      : Promise.resolve(undefined),
     scanClaudeHooks(projectPath),
     scanMcpServers(projectPath),
     scanCiCd(projectPath),
@@ -149,9 +174,11 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 
 export async function scanAllProjects(): Promise<ScanResult> {
   const config = await readConfig();
+  const flags = config.featureFlags;
   const devRoots = getDevRoots(config);
   const BATCH_SIZE = Math.max(1, Math.round(config.scanBatchSize ?? 10));
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
+  const worktreesEnabled = getFlag(flags, "scanWorktrees");
 
   const allProjects: ProjectData[] = [];
   // Track slugs seen so far to handle collisions across roots (first root wins)
@@ -187,7 +214,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
     const rootProjects: ProjectData[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot)));
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags)));
       for (const r of results) {
         if (r) {
           rootProjects.push(r);
@@ -196,8 +223,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
       }
     }
 
-    // Attach worktree overlays for this root
-    await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
+    if (worktreesEnabled) {
+      await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
+    }
 
     allProjects.push(...rootProjects);
   }

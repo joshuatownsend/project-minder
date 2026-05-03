@@ -18,6 +18,7 @@ export const helpMapping: Record<string, string> = {
   '/templates/[slug]': 'templates',
   '/config': 'config',
   '/setup': 'setup',
+  '/settings': 'settings',
 }
 
 /**
@@ -57,6 +58,7 @@ export const helpSlugs = [
   'memory',
   'config',
   'setup',
+  'settings',
   'templates',
 ] as const
 
