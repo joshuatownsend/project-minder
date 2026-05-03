@@ -33,6 +33,25 @@ import { applySettings } from "./applySettings";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
+import { recordPreWrite } from "../configHistory";
+
+/** Snapshot every target file before a non-dryRun apply mutates it.
+ *  Failure to snapshot is logged inside recordPreWrite and returns
+ *  null — never blocks the apply. Bundled-skill applies write whole
+ *  directories and are intentionally skipped (per Wave 1.2 scope —
+ *  directory backups are a separate retention problem). */
+async function snapshotBeforeApply(
+  request: ApplyRequest,
+  targetFiles: string[],
+): Promise<void> {
+  if (request.dryRun) return;
+  const projectSlug =
+    request.target.kind === "existing" ? request.target.slug : undefined;
+  const label = `apply-${request.unit.kind}:${request.unit.key}`;
+  for (const f of targetFiles) {
+    await recordPreWrite(f, { projectSlug, label });
+  }
+}
 
 /** Resolved source location: either a virtual-project root path (with a slug
  *  used only by walkers for entry-id construction) or a user-scope flag. */
@@ -171,6 +190,7 @@ async function dispatchAgent(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "agents", `${entry.slug}.md`);
+  await snapshotBeforeApply(request, [targetFile]);
   return applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
@@ -190,6 +210,8 @@ async function dispatchSkill(
   if (entry.layout === "bundled") {
     const sourceDir = path.dirname(entry.realPath ?? entry.filePath);
     const targetDir = path.join(targetProjectPath, ".claude", "skills", entry.slug);
+    // Bundled skills write a directory tree — directory snapshots are
+    // out of scope for Wave 1.2 (TODO #56 covers files only).
     return applyDirectory({
       sourceDir,
       targetDir,
@@ -199,6 +221,7 @@ async function dispatchSkill(
   }
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "skills", `${entry.slug}.md`);
+  await snapshotBeforeApply(request, [targetFile]);
   return applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
@@ -221,6 +244,7 @@ async function dispatchCommand(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
+  await snapshotBeforeApply(request, [targetFile]);
   return applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
@@ -258,6 +282,9 @@ async function dispatchHook(
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
+  await snapshotBeforeApply(request, [
+    path.join(targetProjectPath, ".claude", "settings.json"),
+  ]);
   return applyHook({
     entry,
     sourceHooksDir,
@@ -289,6 +316,7 @@ async function dispatchMcp(
   const server = findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
+  await snapshotBeforeApply(request, [path.join(targetProjectPath, ".mcp.json")]);
   return applyMcp({
     server,
     targetProjectPath,
@@ -309,6 +337,9 @@ async function dispatchWorkflow(
       "Workflow source must be a project (user-scope workflows don't exist)."
     );
   }
+  await snapshotBeforeApply(request, [
+    path.join(targetProjectPath, ".github", "workflows", request.unit.key),
+  ]);
   return applyWorkflow({
     sourceProjectPath: source.path,
     workflowKey: request.unit.key,
@@ -328,6 +359,9 @@ async function dispatchSettings(
       ? path.join(os.homedir(), ".claude", "settings.json")
       : path.join(source.path, ".claude", "settings.json");
 
+  await snapshotBeforeApply(request, [
+    path.join(targetProjectPath, ".claude", "settings.json"),
+  ]);
   return applySettings({
     settingsPath: request.unit.key,
     sourceSettingsFile,
@@ -377,6 +411,9 @@ async function dispatchPlugin(
       `Plugin "${request.unit.key}" is set to false in the source — refusing to template a disabled enable.`
     );
   }
+  await snapshotBeforeApply(request, [
+    path.join(targetProjectPath, ".claude", "settings.json"),
+  ]);
   return applyPlugin({
     pluginKey: request.unit.key,
     targetProjectPath,

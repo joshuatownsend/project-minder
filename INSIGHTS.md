@@ -1,5 +1,20 @@
 # Insights
 
+<!-- insight:9e5c9c579956 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T16:20:43.986Z -->
+## ★ Insight
+- `withFileLock` is a process-local in-memory mutex (not OS-level) — fine for our single-process Next.js dev server, would need `proper-lockfile` or similar for cross-process safety.
+- The `prev.then(fn, fn)` pattern serializes regardless of whether the prior op resolved or rejected — important so a failed apply doesn't permanently break the lock for that path.
+
+---
+
+<!-- insight:3f5453618041 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T15:40:07.087Z -->
+## ★ Insight
+- Most-impactful fix was switching to `useToast()` — about 30 lines of inline alert markup gone, plus consistency with how `ConfigDashboard` reports load/save errors. The user gets the same auto-dismiss behavior they're used to.
+- Tightening `EMPTY_DOCKER`/`EMPTY_CLAUDE_SESSIONS` types via `Awaited<ReturnType<typeof scanDockerCompose>>` means a future change to a scanner's return shape forces the substitute to update too. The `as never[]` escape hatch I had originally would have lied silently.
+- Skipped two reviewer suggestions: (a) wrapping `(devRoot, flags)` in a context object — YAGNI for 3 args, (b) deleting `dispose()` shims as "dead code" — they're intentional Wave 1.2 scaffolding per the plan + advisor.
+
+---
+
 <!-- insight:b8d3f0032224 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T14:51:56.851Z -->
 ## ★ Insight
 - Using a tiny shared `PlaceholderRoute` component instead of three near-duplicate page files keeps each route a 5-line shim that hydrates a server-friendly client component. The component lives in `/src/components/` so it's reusable.

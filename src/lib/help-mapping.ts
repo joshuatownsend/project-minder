@@ -35,6 +35,7 @@ export const tabHelpMapping: Record<string, string> = {
   agents: 'agents',
   skills: 'skills',
   memory: 'memory',
+  'config-history': 'config-history',
 }
 
 /** All available help doc slugs. */
@@ -57,6 +58,7 @@ export const helpSlugs = [
   'status',
   'memory',
   'config',
+  'config-history',
   'setup',
   'settings',
   'templates',

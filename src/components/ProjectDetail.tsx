@@ -15,6 +15,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { MemoryTab } from "./MemoryTab";
 import { ProjectAgentsTab } from "./ProjectAgentsTab";
 import { ProjectSkillsTab } from "./ProjectSkillsTab";
+import { ConfigHistoryTab } from "./ConfigHistoryTab";
 import { ProjectConfigTab } from "./ProjectConfigTab";
 import {
   ArrowLeft,
@@ -33,7 +34,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "config";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "config" | "config-history";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -84,10 +85,30 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [hasConfigHistory, setHasConfigHistory] = useState(false);
 
   useEffect(() => {
     setTodos(project.todos);
   }, [project.slug, project.todos]);
+
+  // Show the Config History tab only when entries exist for this project.
+  // Fetched lazily on mount so the dashboard's heavy ProjectDetail render
+  // isn't blocked on the manifest read.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/config-history?project=${encodeURIComponent(project.slug)}`)
+      .then((r) => (r.ok ? r.json() : { entries: [] }))
+      .then((data: { entries?: unknown[] }) => {
+        if (!cancelled) setHasConfigHistory((data.entries?.length ?? 0) > 0);
+      })
+      .catch(() => {
+        // Silent — tab simply doesn't appear when the API errors. Restore
+        // is the user-action that exposes failures via toast.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.slug]);
 
   const openInVSCode = () => {
     window.open(`vscode://file/${project.path.replace(/\\/g, "/")}`, "_blank");
@@ -116,6 +137,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
+    ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
   ];
 
   const actionBtn = (label: string, icon: React.ReactNode, onClick: () => void, href?: string) => {
@@ -512,6 +534,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── CONFIG ───────────────────────────────────────────────── */}
           {activeTab === "config" && (
             <ProjectConfigTab project={project} />
+          )}
+
+          {/* ── CONFIG HISTORY ───────────────────────────────────────── */}
+          {activeTab === "config-history" && (
+            <ConfigHistoryTab projectSlug={project.slug} projectPath={project.path} />
           )}
         </div>
       </div>
