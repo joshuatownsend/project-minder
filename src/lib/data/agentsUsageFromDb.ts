@@ -18,9 +18,14 @@ import type { AgentStats } from "@/lib/usage/types";
 // **No documented divergences** vs the file-parse path: both backends
 // skip sidechain entries (parser.ts:103 for file-parse, ingest for DB),
 // and `agent_name` is extracted identically (`args.subagent_type` —
-// see `src/lib/db/ingest.ts:217` and `agentParser.ts:13`). The
-// invocations / projects / sessions maps should agree exactly when the
-// indexer is up-to-date with the on-disk JSONL.
+// see `src/lib/db/ingest.ts:217` and `agentParser.ts:13`). The SQL
+// filter mirrors `groupAgentCalls`'s string-existence check
+// (`if (typeof agentType !== "string" || !agentType) continue`) — the
+// `tu.agent_name <> ''` predicate matches the falsy-string branch so
+// stray empty agent_name rows don't synthesize a phantom "" agent
+// under DB mode that file-parse would have skipped. The invocations /
+// projects / sessions maps should agree exactly when the indexer is
+// up-to-date with the on-disk JSONL.
 
 interface Row {
   agent_name: string;
@@ -48,7 +53,7 @@ export function loadAgentUsageFromDb(db: DatabaseT.Database): AgentStats[] {
             MAX(tu.ts) AS last_ts
      FROM tool_uses tu
      JOIN sessions s USING (session_id)
-     WHERE tu.tool_name = 'Agent' AND tu.agent_name IS NOT NULL
+     WHERE tu.tool_name = 'Agent' AND tu.agent_name IS NOT NULL AND tu.agent_name <> ''
      GROUP BY tu.agent_name, s.project_slug, tu.session_id`
   ).all() as Row[];
 
