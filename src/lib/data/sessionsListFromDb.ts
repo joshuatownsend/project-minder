@@ -33,14 +33,29 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 //    blocks per turn) — for multi-text-block assistant turns the DB
 //    undercounts slightly. Already covered by detail loader divergence
 //    #6; practical impact is negligible.
-// 3. `status`: heuristic from file age — `working` if `isActive`,
-//    `idle` otherwise. The file-parse `inferSessionStatus` (in
-//    `src/lib/scanner/sessionStatus.ts`) walks the last 500 entries
-//    for unpaired tool_use IDs and can also return `needs_attention`
-//    when there are pending tool calls and the file has gone stale.
-//    The DB path **never** emits `needs_attention`. UI consequence:
-//    any future surface that branches on `status === "needs_attention"`
-//    would silently miss the case under MINDER_USE_DB.
+// 3. `status`: **`needs_attention` restored as of P2c.** Ingest now
+//    walks each parsed session inline with the same pending-pairs
+//    algorithm as `inferSessionStatus` (`src/lib/scanner/sessionStatus.ts`)
+//    and stores a snapshot in `sessions.status` — `'waiting'` when
+//    the last assistant turn had unresolved tool_uses, `'inactive'`
+//    otherwise. The loader reads that snapshot, then time-gates
+//    `'waiting'` against `file_mtime_ms` to derive
+//    `working / needs_attention / idle` — `working` if mtime fresh
+//    (< 90 s), `needs_attention` if in [90 s, 10 min] window,
+//    `idle` if older. Sessions written before P2c (or on the
+//    legacy file-parse path) have `status = NULL` and fall back to
+//    the original 2-min mtime heuristic until the next full
+//    reconcile populates the snapshot. **Staleness window**:
+//    `appendSessionTail` only refreshes status when the tail itself
+//    contains an assistant turn; user-only tails (e.g., a tool
+//    completion arriving alone) leave the prior `'waiting'`
+//    snapshot in place. The dashboard's time-gating hides this for
+//    abandoned sessions (they age out to `idle` after 10 min) but
+//    a session that resolved its pendings and went idle within the
+//    same dev-server lifetime keeps showing as `working` /
+//    `needs_attention` until next full reconcile. Acceptable for
+//    the typical ~150-session corpus; tracked for follow-up if it
+//    becomes noisy.
 // 4. **Sidechain entries skipped at ingest** (same as detail divergence
 //    #7): token sums, `messageCount`, `userMessageCount`,
 //    `assistantMessageCount`, `toolUsage`, `skillsUsed`, `modelsUsed`,
@@ -78,6 +93,16 @@ interface SessionRow {
   file_mtime_ms: number;
   start_ts: string | null;
   end_ts: string | null;
+  /**
+   * Stored snapshot from `inferSessionStatus`'s pending-pairs walk at
+   * last full-reconcile (or last assistant-bearing tail-append). One of
+   * `'waiting'` (had unresolved pendings) | `'inactive'` (no pendings,
+   * idle) | NULL (existing row not yet re-ingested with status). The
+   * loader time-gates `'waiting'` against `file_mtime_ms` to derive
+   * `working / needs_attention / idle` at READ time, so the snapshot
+   * carries only the pending-bit, not the freshness classification.
+   */
+  status: string | null;
   turn_count: number;
   user_turn_count: number;
   assistant_turn_count: number;
@@ -134,7 +159,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
   const headers = prepCached(
     db,
     `SELECT session_id, project_slug, project_dir_name, file_mtime_ms,
-            start_ts, end_ts,
+            start_ts, end_ts, status,
             turn_count, user_turn_count, assistant_turn_count,
             error_count,
             input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
@@ -207,7 +232,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     const searchableText = searchableBySession.get(h.session_id);
 
     const isActive = now - h.file_mtime_ms < 2 * 60_000;
-    const status: SessionStatus = isActive ? "working" : "idle";
+    const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
     const durationMs =
       h.start_ts && h.end_ts
         ? new Date(h.end_ts).getTime() - new Date(h.start_ts).getTime()
@@ -307,6 +332,47 @@ function groupSearchable(rows: TextPreviewRow[]): Map<string, string> {
     result.set(sessionId, b.parts.join(" ").slice(0, SEARCHABLE_TEXT_CAP));
   }
   return result;
+}
+
+/**
+ * Time-gated status resolution. Combines the stored snapshot from
+ * ingest (P2c) with `file_mtime_ms` to produce the same
+ * `working | idle | needs_attention` verdict as `inferSessionStatus`
+ * (`src/lib/scanner/sessionStatus.ts`) — but freshness comes from the
+ * mtime watermark, which advances on every tail-append, so the live
+ * "is this session active right now" answer stays correct without
+ * re-ingesting on every dashboard tick.
+ *
+ *   stored=`'waiting'` (had pendings):
+ *     mtime fresh < 90 s    → `working`
+ *     mtime in [90 s, 10 m] → `needs_attention`
+ *     mtime older > 10 m    → `idle`  (abandoned snapshot)
+ *   stored=`'inactive'` (no pendings)  → `idle`
+ *   stored=NULL (legacy row, not yet re-ingested with status):
+ *     fall back to the original 2-min mtime heuristic (working/idle).
+ *   any other stored value (forward-compat / unexpected):
+ *     same fallback as NULL.
+ *
+ * The 90 s and 10 min thresholds match `WORKING_MS` and `STALE_MS` in
+ * `sessionStatus.ts`. Kept in sync with the canonical impl.
+ */
+const STATUS_WORKING_MS = 90_000;
+const STATUS_STALE_MS = 10 * 60_000;
+function computeStatus(
+  stored: string | null,
+  fileMtimeMs: number,
+  now: number,
+  isActive: boolean
+): SessionStatus {
+  const ageMs = now - fileMtimeMs;
+  if (stored === "waiting") {
+    if (ageMs < STATUS_WORKING_MS) return "working";
+    if (ageMs > STATUS_STALE_MS) return "idle";
+    return "needs_attention";
+  }
+  if (stored === "inactive") return "idle";
+  // Legacy / unexpected — preserve the pre-P2c heuristic.
+  return isActive ? "working" : "idle";
 }
 
 /**

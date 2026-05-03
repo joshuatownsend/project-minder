@@ -247,7 +247,12 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
 
       // Documented divergences — assert the DB path's intentional differences.
       expect(d.recaps).toBeUndefined();
-      expect(d.status === "working" || d.status === "idle").toBe(true);
+      // status: P2c populates sessions.status at ingest, so the loader
+      // can return needs_attention in addition to working/idle. Both
+      // backends should agree on the verdict for fixture sessions —
+      // our fixture has clean end_turn-style assistants with no
+      // dangling tool_uses, so both should return 'idle'.
+      expect(d.status).toBe(f.status);
 
       // searchableText restored as of P2c — should be present on both
       // backends. We don't assert string equality (the file-parse path
