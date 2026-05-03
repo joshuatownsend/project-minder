@@ -55,19 +55,21 @@ export function dbModeRequested(): boolean {
  * match on the failure mode if needed; the default route handler
  * doesn't distinguish — both produce a 500 — but the typed error
  * keeps the contract grep-able.
+ *
+ * Uses native `Error.cause` (via the `{ cause }` constructor option)
+ * so node's default inspect / stack output includes the chained
+ * underlying error consistently. Same pattern `migrations.ts` uses.
  */
 export class DbUnavailableError extends Error {
   readonly reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed";
-  override readonly cause?: Error;
   constructor(
     reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed",
     message: string,
-    cause?: Error
+    cause?: unknown
   ) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "DbUnavailableError";
     this.reason = reason;
-    this.cause = cause;
   }
 }
 
@@ -156,7 +158,22 @@ async function getReadyDb(): Promise<DbHandle> {
       "better-sqlite3 driver not loaded — install the optional dep or set MINDER_USE_DB=0 to force file-parse."
     );
   }
-  const init = await ensureSchemaReady();
+  // `initDb()` can both resolve `{available:false}` (its documented
+  // failure return) AND reject (e.g. if `quarantineCorruptDb()`
+  // ultimately throws on a Windows EBUSY). Both shapes must surface
+  // as `DbUnavailableError(reason: 'init-failed')` for the contract
+  // to hold; without the try/catch a rejection escapes as a raw
+  // Error and pattern-matching callers / tests miss it.
+  let init: InitResult;
+  try {
+    init = await ensureSchemaReady();
+  } catch (err) {
+    throw new DbUnavailableError(
+      "init-failed",
+      `SQLite schema init threw: ${(err as Error).message}`,
+      err
+    );
+  }
   if (!init.available) {
     throw new DbUnavailableError(
       "init-failed",

@@ -113,6 +113,26 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
     expect(["db", "file"]).toContain(second.meta.backend);
   });
 
+  it("rethrows a rejected initDb() as DbUnavailableError(reason: 'init-failed')", async () => {
+    // Both reviewers (Codex P2 + Copilot) flagged this gap on PR #57:
+    // `initDb()` can both resolve `{available:false}` AND REJECT (e.g.
+    // a `quarantineCorruptDb` throw on Windows EBUSY). The contract says
+    // every DB-unavailability under MINDER_USE_DB=1 surfaces as
+    // `DbUnavailableError`; a rejection escaping as a raw `Error`
+    // breaks pattern-matching callers/tests. Pin the contract here so
+    // the next refactor can't quietly regress it.
+    process.env.MINDER_USE_DB = "1";
+    const { facade, mig } = await reloadModules();
+
+    const initSpy = vi.spyOn(mig, "initDb");
+    initSpy.mockRejectedValueOnce(new Error("simulated quarantineCorruptDb throw"));
+
+    await expect(facade.getUsage("all")).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "init-failed",
+    });
+  });
+
   it("caches the in-flight init promise so concurrent first calls share one initDb invocation", async () => {
     process.env.MINDER_USE_DB = "1";
     const { facade, mig } = await reloadModules();
