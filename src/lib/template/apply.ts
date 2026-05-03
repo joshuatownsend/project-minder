@@ -11,7 +11,7 @@ import {
 } from "../types";
 import { readConfig } from "../config";
 import { getCachedScan, setCachedScan, invalidateCache as invalidateScanCache } from "../cache";
-import { scanAllProjects } from "../scanner";
+import { scanAllProjects, toSlug } from "../scanner";
 import { scanClaudeHooks } from "../scanner/claudeHooks";
 import { scanMcpServers } from "../scanner/mcpServers";
 import { invalidateCatalogCache } from "../indexer/catalog";
@@ -34,6 +34,7 @@ import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
+import { withFileLock } from "../atomicWrite";
 
 /** Snapshot every target file before a non-dryRun apply mutates it.
  *  Returns the recorded BackupIds so callers can roll them back if the
@@ -51,7 +52,20 @@ import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
  *  bootstrapped projects through the path branch) still surface in
  *  `/api/config-history?project=<slug>` filtered queries. Returns
  *  undefined slug for paths that don't match a scanned project — those
- *  snapshots still record under the global manifest, just unscoped. */
+ *  snapshots still record under the global manifest, just unscoped.
+ *
+ *  Known limitation: `applyHook` writes BOTH the target settings.json
+ *  (which the dispatcher locks via withFileLocks) AND copies hook
+ *  scripts into `.claude/hooks/` (NOT locked — the script destinations
+ *  are computed inside applyHook based on invocation parsing, so the
+ *  dispatcher can't know them up-front). Concurrent re-applies that
+ *  overwrite the same script file therefore retain the snapshot/apply
+ *  race for that secondary surface. The original PR-#59 review only
+ *  flagged the primary settings.json write; in practice script
+ *  collisions are rare (each hook entry copies a uniquely named
+ *  script). Future work: thread script destinations back through to
+ *  the dispatcher OR move snapshotting inside applyHook's lock
+ *  callback per-script. */
 async function snapshotBeforeApply(
   request: ApplyRequest,
   targetFiles: string[],
@@ -73,7 +87,19 @@ async function resolveProjectSlugForSnapshot(
   if (target.kind === "existing") return target.slug;
   if (target.kind === "path") {
     const scan = await getOrLoadScan();
-    return scan.projects.find((p) => p.path === target.path)?.slug;
+    const fromScan = scan.projects.find((p) => p.path === target.path)?.slug;
+    if (fromScan) return fromScan;
+    // applyTemplate routes new-project bootstraps through target.kind="path"
+    // BEFORE refreshing the scan cache. The scan lookup above misses, so
+    // backups would be recorded without a projectSlug and excluded from
+    // /api/config-history?project=<slug>. Fall back to the canonical
+    // toSlug() derivation so the entry surfaces in the project's Config
+    // History tab as soon as the post-bootstrap scan picks the project
+    // up. Importing the canonical helper (vs. re-implementing kebab
+    // here) means the fallback can't drift from the scanner if toSlug
+    // ever evolves.
+    const dirName = path.basename(target.path);
+    if (dirName) return toSlug(dirName);
   }
   return undefined;
 }
@@ -95,6 +121,34 @@ async function finalizeSnapshots<T extends ApplyResult>(
     await Promise.all(ids.map((id) => removeBackup(id)));
   }
   return result;
+}
+
+/** Run `fn` with file locks held on every path in `files` for the entire
+ *  duration. Locks are acquired in sorted order so two concurrent calls
+ *  with overlapping path sets never deadlock (canonical AB/BA fix).
+ *
+ *  Used by the dispatchers to ensure snapshot-then-apply runs as one
+ *  atomic unit per target file: without this, two concurrent applies
+ *  on the same file could each snapshot the pre-A bytes (because
+ *  snapshot was outside the lock), and the second restore would skip
+ *  past A entirely. withFileLock is reentrant, so the apply primitive's
+ *  internal `withFileLock(targetMcpPath, ...)` (or equivalent) runs as
+ *  a no-op when the dispatcher already holds it. */
+async function withFileLocks<T>(
+  files: string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (files.length === 0) return fn();
+  const sorted = [...new Set(files.map((f) => path.resolve(f)))].sort();
+  // Build the nested call right-to-left so the outermost lock is the
+  // first sorted path, and the innermost callback is `fn`.
+  let inner: () => Promise<T> = fn;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const file = sorted[i];
+    const prevInner = inner;
+    inner = () => withFileLock(file, prevInner);
+  }
+  return inner();
 }
 
 /** Resolved source location: either a virtual-project root path (with a slug
@@ -234,13 +288,15 @@ async function dispatchAgent(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "agents", `${entry.slug}.md`);
-  const snaps = await snapshotBeforeApply(request, [targetFile]);
-  return finalizeSnapshots(snaps, await applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
-  }));
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchSkill(
@@ -265,13 +321,15 @@ async function dispatchSkill(
   }
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "skills", `${entry.slug}.md`);
-  const snaps = await snapshotBeforeApply(request, [targetFile]);
-  return finalizeSnapshots(snaps, await applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
-  }));
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchCommand(
@@ -288,13 +346,15 @@ async function dispatchCommand(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
-  const snaps = await snapshotBeforeApply(request, [targetFile]);
-  return finalizeSnapshots(snaps, await applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
-  }));
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchHook(
@@ -326,17 +386,18 @@ async function dispatchHook(
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
-  const snaps = await snapshotBeforeApply(request, [
-    path.join(targetProjectPath, ".claude", "settings.json"),
-  ]);
-  return finalizeSnapshots(snaps, await applyHook({
-    entry,
-    sourceHooksDir,
-    sourceRootForRejection,
-    targetProjectPath,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
-  }));
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyHook({
+      entry,
+      sourceHooksDir,
+      sourceRootForRejection,
+      targetProjectPath,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchMcp(
@@ -362,21 +423,30 @@ async function dispatchMcp(
     sourceSlug = "user";
   } else {
     const mcpInfo = await scanMcpServers(source.path);
-    all = mcpInfo?.servers ?? [];
+    // scanMcpServers now merges project-scope (.mcp.json) entries with
+    // local-scope entries from ~/.claude.json projects[<path>].mcpServers.
+    // Local entries are read-only — applyMcp rejects them — so filter
+    // them out before name lookup so the apply doesn't deterministically
+    // fail when a project has a local-scope shadow with the same name
+    // (or pick the wrong duplicate when names match).
+    all = (mcpInfo?.servers ?? []).filter((s) => s.source === "project");
     sourceSlug = source.slug;
   }
 
   const server = findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
-  const snaps = await snapshotBeforeApply(request, [path.join(targetProjectPath, ".mcp.json")]);
-  return finalizeSnapshots(snaps, await applyMcp({
-    server,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceSlug,
-    dryRun: request.dryRun,
-  }));
+  const targetFile = path.join(targetProjectPath, ".mcp.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyMcp({
+      server,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceSlug,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchWorkflow(
@@ -390,16 +460,17 @@ async function dispatchWorkflow(
       "Workflow source must be a project (user-scope workflows don't exist)."
     );
   }
-  const snaps = await snapshotBeforeApply(request, [
-    path.join(targetProjectPath, ".github", "workflows", request.unit.key),
-  ]);
-  return finalizeSnapshots(snaps, await applyWorkflow({
-    sourceProjectPath: source.path,
-    workflowKey: request.unit.key,
-    targetProjectPath,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
-  }));
+  const targetFile = path.join(targetProjectPath, ".github", "workflows", request.unit.key);
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyWorkflow({
+      sourceProjectPath: source.path,
+      workflowKey: request.unit.key,
+      targetProjectPath,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchSettings(
@@ -412,17 +483,18 @@ async function dispatchSettings(
       ? path.join(os.homedir(), ".claude", "settings.json")
       : path.join(source.path, ".claude", "settings.json");
 
-  const snaps = await snapshotBeforeApply(request, [
-    path.join(targetProjectPath, ".claude", "settings.json"),
-  ]);
-  return finalizeSnapshots(snaps, await applySettings({
-    settingsPath: request.unit.key,
-    sourceSettingsFile,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceScope: source.kind === "user" ? "user" : "project",
-    dryRun: request.dryRun,
-  }));
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySettings({
+      settingsPath: request.unit.key,
+      sourceSettingsFile,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceScope: source.kind === "user" ? "user" : "project",
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function dispatchPlugin(
@@ -464,16 +536,17 @@ async function dispatchPlugin(
       `Plugin "${request.unit.key}" is set to false in the source — refusing to template a disabled enable.`
     );
   }
-  const snaps = await snapshotBeforeApply(request, [
-    path.join(targetProjectPath, ".claude", "settings.json"),
-  ]);
-  return finalizeSnapshots(snaps, await applyPlugin({
-    pluginKey: request.unit.key,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceScope: source.kind === "user" ? "user" : "project",
-    dryRun: request.dryRun,
-  }));
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyPlugin({
+      pluginKey: request.unit.key,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceScope: source.kind === "user" ? "user" : "project",
+      dryRun: request.dryRun,
+    }));
+  });
 }
 
 async function findAgent(

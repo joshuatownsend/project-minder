@@ -184,27 +184,54 @@ describe("restore", () => {
   });
 });
 
-describe("makeId uniqueness (post-PR-#59 review)", () => {
-  it("generates distinct BackupIds for concurrent recordPreWrite on identical content", async () => {
-    // Pre-fix the id was `<iso>_<sha8|missing>` with ms-timestamp resolution,
-    // so two recordPreWrite calls in the same millisecond on identical bytes
-    // (or two missing-file snapshots) collided. Random suffix is the only
-    // collision guard — pin it with a concurrent burst.
+describe("recordPreWrite projectSlug semantics (post-PR-#59 review)", () => {
+  it("records the caller-supplied projectSlug verbatim", async () => {
+    // The slug-fallback fix lives in apply.ts (resolveProjectSlugForSnapshot),
+    // not in configHistory itself. configHistory's contract is just to
+    // record whatever slug the caller passes, so pin that contract here
+    // — the apply-layer slug derivation is exercised through
+    // applyDispatch.test.ts.
     const { recordPreWrite, list } = await reloadModule();
     const target = path.join(tmpHome, "settings.json");
     await fs.writeFile(target, '{"x":1}', "utf-8");
 
-    const N = 20;
-    const ids = await Promise.all(
-      Array.from({ length: N }, () => recordPreWrite(target)),
-    );
-    expect(ids.every((id) => id !== null)).toBe(true);
-    expect(new Set(ids).size).toBe(N);
-
+    await recordPreWrite(target, { projectSlug: "fresh-bootstrap" });
     const entries = await list();
-    expect(entries).toHaveLength(N);
-    expect(new Set(entries.map((e) => e.id)).size).toBe(N);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].projectSlug).toBe("fresh-bootstrap");
   });
+});
+
+describe("makeId uniqueness (post-PR-#59 review)", () => {
+  it(
+    "generates distinct BackupIds for concurrent recordPreWrite on identical content",
+    // Higher timeout: 20 concurrent recordPreWrite triggers 20 manifest
+    // appends + up to 20 maybePrune attempts, all serializing through
+    // the manifest lock plus AsyncLocalStorage propagation overhead.
+    // Default 5s can flake under parallel-pool I/O contention on Windows
+    // CI; 15s gives plenty of headroom while still catching real hangs.
+    { timeout: 15_000 },
+    async () => {
+      // Pre-fix the id was `<iso>_<sha8|missing>` with ms-timestamp resolution,
+      // so two recordPreWrite calls in the same millisecond on identical bytes
+      // (or two missing-file snapshots) collided. Random suffix is the only
+      // collision guard — pin it with a concurrent burst.
+      const { recordPreWrite, list } = await reloadModule();
+      const target = path.join(tmpHome, "settings.json");
+      await fs.writeFile(target, '{"x":1}', "utf-8");
+
+      const N = 20;
+      const ids = await Promise.all(
+        Array.from({ length: N }, () => recordPreWrite(target)),
+      );
+      expect(ids.every((id) => id !== null)).toBe(true);
+      expect(new Set(ids).size).toBe(N);
+
+      const entries = await list();
+      expect(entries).toHaveLength(N);
+      expect(new Set(entries.map((e) => e.id)).size).toBe(N);
+    },
+  );
 
   it("generates distinct BackupIds for two missing-file snapshots in the same ms", async () => {
     const { recordPreWrite } = await reloadModule();
