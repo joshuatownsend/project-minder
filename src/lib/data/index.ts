@@ -196,6 +196,12 @@ async function getReadyDb(): Promise<DbHandle> {
  * `DbUnavailableError(reason: 'load-failed')` so the route handler's
  * uniform error path catches them. Lets `DbUnavailableError`
  * pass through unchanged — those already carry the right shape.
+ *
+ * Also used to gate `needsReconcileAfterV3` checks so its small
+ * `SELECT FROM meta` can't escape as a raw `Error` if the meta
+ * table is partially-migrated or the handle is stale (Codex P2
+ * finding on PR #57). The function accepts both sync and async
+ * loaders.
  */
 async function callDbLoader<T>(scope: string, loader: () => T | Promise<T>): Promise<T> {
   try {
@@ -208,6 +214,18 @@ async function callDbLoader<T>(scope: string, loader: () => T | Promise<T>): Pro
       err as Error
     );
   }
+}
+
+/**
+ * Run the v3-readiness gate (`needsReconcileAfterV3`) under
+ * `callDbLoader` so a thrown SELECT (corrupt/partially-migrated
+ * `meta` table, stale handle) surfaces as
+ * `DbUnavailableError(reason: 'load-failed')` instead of a raw
+ * `Error`. Keeps the typed-error contract uniform across the four
+ * façade functions that gate on v3 readiness.
+ */
+async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
+  return callDbLoader(`${scope}:v3-gate`, () => needsReconcileAfterV3(db));
 }
 
 /**
@@ -241,7 +259,7 @@ export async function getUsage(
   if (!dbModeRequested()) return runFileUsage(period, project);
 
   const db = await getReadyDb();
-  if (needsReconcileAfterV3(db)) {
+  if (await checkV3Gate("getUsage", db)) {
     logIntentionalFallthrough(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
@@ -278,7 +296,7 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
   }
 
   const db = await getReadyDb();
-  if (needsReconcileAfterV3(db)) {
+  if (await checkV3Gate("getSessionDetail", db)) {
     logIntentionalFallthrough(
       "getSessionDetail",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
@@ -325,7 +343,7 @@ export async function getSessionsList(): Promise<SessionsListResult> {
   if (!dbModeRequested()) return runFileSessionsList();
 
   const db = await getReadyDb();
-  if (needsReconcileAfterV3(db)) {
+  if (await checkV3Gate("getSessionsList", db)) {
     logIntentionalFallthrough(
       "getSessionsList",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
@@ -474,7 +492,7 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
   if (!dbModeRequested()) return runFileClaudeUsage(projectPaths);
 
   const db = await getReadyDb();
-  if (needsReconcileAfterV3(db)) {
+  if (await checkV3Gate("getClaudeUsage", db)) {
     logIntentionalFallthrough(
       "getClaudeUsage",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"

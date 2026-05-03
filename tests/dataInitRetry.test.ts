@@ -113,6 +113,34 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
     expect(["db", "file"]).toContain(second.meta.backend);
   });
 
+  it("rethrows a thrown v3-readiness gate as DbUnavailableError(reason: 'load-failed')", async () => {
+    // Codex P2 finding on PR #57: `needsReconcileAfterV3(db)` runs a
+    // small SELECT and was previously called outside any wrapper. If
+    // that SELECT throws (corrupt/partial meta table, stale handle),
+    // the exception escaped as a raw Error not DbUnavailableError —
+    // breaking the typed-failure contract for getUsage /
+    // getSessionDetail / getSessionsList / getClaudeUsage. Pin the
+    // wrapping here.
+    process.env.MINDER_USE_DB = "1";
+    const { facade, mig } = await reloadModules();
+
+    // Initialize the DB normally so getReadyDb() succeeds.
+    await mig.initDb();
+
+    // Replace `needsReconcileAfterV3` with a throwing stub. The
+    // import path mirrors what `src/lib/data/index.ts` uses, so the
+    // mock applies to the same module instance.
+    const usageFromDb = await import("@/lib/data/usageFromDb");
+    vi.spyOn(usageFromDb, "needsReconcileAfterV3").mockImplementation(() => {
+      throw new Error("simulated stale-handle SELECT failure");
+    });
+
+    await expect(facade.getUsage("all")).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "load-failed",
+    });
+  });
+
   it("rethrows a rejected initDb() as DbUnavailableError(reason: 'init-failed')", async () => {
     // Both reviewers (Codex P2 + Copilot) flagged this gap on PR #57:
     // `initDb()` can both resolve `{available:false}` AND REJECT (e.g.
