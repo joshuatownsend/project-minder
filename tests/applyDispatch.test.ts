@@ -258,6 +258,52 @@ describe("applyDispatch — user-scope MCP", () => {
     expect(mcp.mcpServers["memory"].command).toBe("this-IS-the-writable-one");
   });
 
+  it("returns AMBIGUOUS_MCP_SOURCE when two writable user-scope entries share a name", async () => {
+    // Wave 1.2 follow-up #4 (Codex P1): the writable-source filter
+    // (s.source === "user") still lets through entries from BOTH
+    // ~/.claude/settings.json AND ~/.claude.json (both tagged source:
+    // "user" by parseMcpServers). findMcpByKey by name only would
+    // silently pick the first by merge order — applying the WRONG
+    // entry's command/env. Refuse to apply when ambiguous so the user
+    // is forced to deduplicate rather than getting silently-wrong
+    // behavior.
+    const fromSettings: McpServer = {
+      name: "memory",
+      transport: "stdio",
+      command: "from-settings.json",
+      source: "user",
+      sourcePath: path.join(state.fakeHome, ".claude", "settings.json"),
+    };
+    const fromClaudeJson: McpServer = {
+      name: "memory",
+      transport: "stdio",
+      command: "from-claude.json",
+      source: "user",
+      sourcePath: path.join(state.fakeHome, ".claude.json"),
+    };
+    vi.mocked(getUserConfig).mockResolvedValue(
+      makeUserConfig({ mcpServers: { servers: [fromSettings, fromClaudeJson] } })
+    );
+
+    const result = await applyUnit({
+      unit: { kind: "mcp", key: "memory" },
+      source: { kind: "user" },
+      target: { kind: "path", path: state.targetPath },
+      conflict: "skip",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("AMBIGUOUS_MCP_SOURCE");
+    // Error message should name both source files so the user knows
+    // exactly which to clean up.
+    expect(result.error?.message).toContain("settings.json");
+    expect(result.error?.message).toContain(".claude.json");
+    // Target file must NOT have been written.
+    await expect(
+      fs.access(path.join(state.targetPath, ".mcp.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("filters merged user-scope list to writable sources before name lookup", async () => {
     // Wave 1.2 follow-up: getUserConfig().mcpServers.servers now merges
     // managed/user/desktop/plugin entries into one list. Two of those

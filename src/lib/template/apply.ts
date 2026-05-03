@@ -433,7 +433,24 @@ async function dispatchMcp(
     sourceSlug = source.slug;
   }
 
-  const server = findMcpByKey(all, request.unit.key);
+  // Ambiguity guard: even after the writable-source filter, the
+  // user-scope list can still hold two entries with the same name —
+  // one from ~/.claude/settings.json (legacy plugin-touched location)
+  // and one from ~/.claude.json (Claude Code's actual user-scope
+  // store). findMcpByKey matches by name only and would silently pick
+  // the first by merge order, applying the WRONG entry's command/env.
+  // Refuse to apply when ambiguous so the user is forced to clean up
+  // the duplicate rather than getting silently-wrong behavior.
+  const matches = all.filter((s) => s.name === request.unit.key);
+  if (matches.length > 1) {
+    const sources = matches.map((s) => s.sourcePath).join("; ");
+    return errorResult(
+      "AMBIGUOUS_MCP_SOURCE",
+      `Multiple writable MCP servers named "${request.unit.key}" found in: ${sources}. ` +
+        `Remove the duplicate from one of these files before applying.`,
+    );
+  }
+  const server = matches[0] ?? findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
   const targetFile = path.join(targetProjectPath, ".mcp.json");

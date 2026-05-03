@@ -269,6 +269,68 @@ describe("restore byte-fidelity (post-PR-#59 review)", () => {
   });
 });
 
+describe("restore concurrency (post-PR-#59 review)", () => {
+  it(
+    "serializes against concurrent writes via withFileLock(targetPath)",
+    { timeout: 10_000 },
+    async () => {
+      // Wave 1.2 follow-up #5 (Codex P2): restore() previously mutated
+      // entry.targetPath without withFileLock, so an apply mid-flight on
+      // the same file could race the restore's write.
+      //
+      // Test strategy: grab the target's lock from outside, then start a
+      // restore. With the lock held, restore must queue (it should be
+      // calling withFileLock(target) too). Release the held lock — restore
+      // proceeds. If restore ignored the lock, it would race past the
+      // outer holder; if restore acquires the lock, it queues correctly.
+      // Verify ordering by recording timestamps.
+      const { recordPreWrite, restore } = await reloadModule();
+      const { withFileLock } = await import("@/lib/atomicWrite");
+      const target = path.join(tmpHome, "settings.json");
+      await fs.writeFile(target, "v1", "utf-8");
+      const id = await recordPreWrite(target);
+      expect(id).not.toBeNull();
+      await fs.writeFile(target, "v2", "utf-8");
+
+      const events: string[] = [];
+      let releaseHolder!: () => void;
+      const holderReady = new Promise<void>((r) => { releaseHolder = r; });
+
+      // Outer holder: grabs the lock, signals it's holding, waits for
+      // explicit release.
+      let holderGotLock!: () => void;
+      const holderHasLock = new Promise<void>((r) => { holderGotLock = r; });
+      const holderPromise = withFileLock(target, async () => {
+        events.push("holder-acquired");
+        holderGotLock();
+        await holderReady; // hold until release
+        events.push("holder-releasing");
+      });
+
+      await holderHasLock;
+      // Now start restore — it must queue behind the holder. If the
+      // restore-under-lock fix isn't in place, restore would proceed
+      // immediately and "restore-done" would land before "holder-releasing".
+      const restorePromise = (async () => {
+        await restore(id!);
+        events.push("restore-done");
+      })();
+
+      // Give restore a tick to attempt the lock. If it weren't blocked,
+      // it would complete here (the work is small).
+      await new Promise((r) => setTimeout(r, 50));
+      expect(events).toEqual(["holder-acquired"]); // restore is queued
+
+      releaseHolder();
+      await Promise.all([holderPromise, restorePromise]);
+
+      // Order must be: holder releases → restore runs → restore-done.
+      expect(events).toEqual(["holder-acquired", "holder-releasing", "restore-done"]);
+      expect(await fs.readFile(target, "utf-8")).toBe("v1");
+    },
+  );
+});
+
 describe("removeBackup (post-PR-#59 review)", () => {
   it("removes the manifest entry and the snapshot directory", async () => {
     const { recordPreWrite, removeBackup, list } = await reloadModule();

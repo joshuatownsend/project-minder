@@ -142,7 +142,13 @@ async function recordPreWriteInner(
 
 /** Restore a backup. Throws if the BackupId is unknown or the snapshot
  *  file is missing (corrupt history). The restoration itself is recorded
- *  as a fresh history entry so the user can undo a restore. */
+ *  as a fresh history entry so the user can undo a restore.
+ *
+ *  Holds `withFileLock(targetPath)` for the entire snapshot+mutate
+ *  sequence so restore can't interleave with a concurrent apply on the
+ *  same file (which also acquires this lock at the dispatcher level).
+ *  Reentrancy means the inner `recordPreWrite`/`writeFileAtomic` paths
+ *  share the lock if they re-acquire — no deadlock. */
 export async function restore(id: BackupId): Promise<void> {
   const entries = await list();
   const entry = entries.find((e) => e.id === id);
@@ -150,33 +156,35 @@ export async function restore(id: BackupId): Promise<void> {
     throw new Error(`No backup with id ${id}`);
   }
 
-  await recordPreWrite(entry.targetPath, {
-    projectSlug: entry.projectSlug,
-    label: `restore→${id}`,
-  });
+  await withFileLock(entry.targetPath, async () => {
+    await recordPreWrite(entry.targetPath, {
+      projectSlug: entry.projectSlug,
+      label: `restore→${id}`,
+    });
 
-  if (entry.wasMissing) {
-    try {
-      await fs.unlink(entry.targetPath);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") throw err;
+    if (entry.wasMissing) {
+      try {
+        await fs.unlink(entry.targetPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") throw err;
+      }
+      return;
     }
-    return;
-  }
 
-  if (!entry.snapshotPath) {
-    throw new Error(`Backup ${id} has no snapshot path (manifest corrupt)`);
-  }
-  // Read snapshot as raw bytes (the file is base64-encoded text on disk),
-  // decode to a Buffer, and write the Buffer back unchanged. Going via
-  // .toString("utf-8") would mangle any non-UTF-8 or binary content —
-  // restore must be byte-faithful even though Wave 1.2's primary targets
-  // are JSON config files.
-  const encoded = await fs.readFile(entry.snapshotPath, "utf-8");
-  const bytes = Buffer.from(encoded, "base64");
-  await fs.mkdir(path.dirname(entry.targetPath), { recursive: true });
-  await writeFileAtomic(entry.targetPath, bytes);
+    if (!entry.snapshotPath) {
+      throw new Error(`Backup ${id} has no snapshot path (manifest corrupt)`);
+    }
+    // Read snapshot as raw bytes (the file is base64-encoded text on disk),
+    // decode to a Buffer, and write the Buffer back unchanged. Going via
+    // .toString("utf-8") would mangle any non-UTF-8 or binary content —
+    // restore must be byte-faithful even though Wave 1.2's primary targets
+    // are JSON config files.
+    const encoded = await fs.readFile(entry.snapshotPath, "utf-8");
+    const bytes = Buffer.from(encoded, "base64");
+    await fs.mkdir(path.dirname(entry.targetPath), { recursive: true });
+    await writeFileAtomic(entry.targetPath, bytes);
+  });
 }
 
 /** Remove a backup's manifest entry AND its snapshot directory. Used by
