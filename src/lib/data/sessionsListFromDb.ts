@@ -31,12 +31,13 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 //    `prompts_fts` later (the data is already there); deferred until a
 //    follow-up slice.
 // 3. `status`: heuristic from file age — `working` if `isActive`,
-//    `idle` otherwise. The file-parse `inferSessionStatus` walks the
-//    last 500 entries for unpaired tool_use IDs and can also return
-//    `needs_attention`, `errored`, `approval`. The DB path **never**
-//    emits those richer statuses. UI consequence: any future surface
-//    that branches on `status === "needs_attention"` would silently
-//    miss the case under MINDER_USE_DB.
+//    `idle` otherwise. The file-parse `inferSessionStatus` (in
+//    `src/lib/scanner/sessionStatus.ts`) walks the last 500 entries
+//    for unpaired tool_use IDs and can also return `needs_attention`
+//    when there are pending tool calls and the file has gone stale.
+//    The DB path **never** emits `needs_attention`. UI consequence:
+//    any future surface that branches on `status === "needs_attention"`
+//    would silently miss the case under MINDER_USE_DB.
 // 4. **Sidechain entries skipped at ingest** (same as detail divergence
 //    #7): token sums, `messageCount`, `userMessageCount`,
 //    `assistantMessageCount`, `toolUsage`, `skillsUsed`, `modelsUsed`,
@@ -56,6 +57,16 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 //    the per-session `costEstimate` shown in cards would still drift,
 //    so the façade applies the same gate uniformly.
 // 7. `isActive`: same 2-min mtime heuristic in both backends — matches.
+// 8. **`startTime` / `endTime` derived from non-sidechain turns only**:
+//    DB ingest stamps `sessions.start_ts` / `end_ts` from `turns.ts`,
+//    and `turns` skips sidechain / meta / non-(user|assistant) entries
+//    (`src/lib/db/ingest.ts:352-357`). File-parse's `scanSessionFile`
+//    walks every JSONL entry's `timestamp` (`claudeConversations.ts:148-151`).
+//    For sessions with sidechain or system entries before the first
+//    user turn or after the last assistant turn, the DB path's
+//    `startTime` / `endTime` (and therefore `durationMs`) can fall
+//    inside the file-parse window — the file-parse window strictly
+//    contains the DB window, never the reverse.
 
 interface SessionRow {
   session_id: string;
@@ -181,7 +192,12 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     result.push({
       sessionId: h.session_id,
       projectPath: decodeDirName(h.project_dir_name),
-      projectSlug: h.project_slug ?? "",
+      // `project_slug` is set at ingest via `toSlug(canonicalDir)` so
+      // it should never be NULL on a healthy index. Schema permits NULL
+      // though, so fall back to deriving the same slug on the fly
+      // rather than serving an empty string downstream — `SessionsBrowser`'s
+      // project filter and grouping both key on a non-empty slug.
+      projectSlug: h.project_slug ?? slugifyDirName(h.project_dir_name),
       projectName: h.project_dir_name,
       startTime: h.start_ts ?? undefined,
       endTime: h.end_ts ?? undefined,
@@ -215,6 +231,19 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
   }
 
   return result;
+}
+
+/**
+ * Inline mirror of `toSlug` from `src/lib/scanner/claudeConversations.ts`.
+ * Duplicated here (3 lines) so this file can stay free of the heavy
+ * scanner module — the scanner pulls in pricing, fs caches, etc., which
+ * we don't need on the read path. Kept in sync with the original; if
+ * the slugification rule changes, both must move together.
+ */
+function slugifyDirName(dirName: string): string {
+  const parts = dirName.split("-");
+  const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
+  return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function groupCounts<T>(

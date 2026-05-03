@@ -216,10 +216,27 @@ export async function getSessionsList(): Promise<SessionsListResult> {
   if (dbResult) return dbResult;
 
   const sessions = await scanAllSessions();
+  // `getJsonlMaxMtime()` only reflects files parsed by `parseAllSessions`
+  // (the usage parser's FileCache); `scanAllSessions` doesn't warm that
+  // cache, so a cold call here would return 0 — useless as an ETag input.
+  // Derive a content-driven watermark from the sessions array's
+  // endTime/startTime fields, matching the `deriveMaxSessionMs` shape
+  // the route already uses for its own ETag inputs.
   return {
     sessions,
-    meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() },
+    meta: { backend: "file", maxMtimeMs: deriveSessionsMaxMs(sessions) },
   };
+}
+
+function deriveSessionsMaxMs(sessions: SessionSummary[]): number {
+  let max = 0;
+  for (const s of sessions) {
+    const ts = s.endTime ?? s.startTime;
+    if (!ts) continue;
+    const ms = new Date(ts).getTime();
+    if (Number.isFinite(ms) && ms > max) max = ms;
+  }
+  return max;
 }
 
 async function tryDbSessionsList(): Promise<SessionsListResult | null> {
