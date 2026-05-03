@@ -312,15 +312,17 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     expect(result.report.totalSessions).toBe(2);
   });
 
-  it("falls back to file backend when MINDER_USE_DB=1 but DB has no schema", async () => {
+  it("throws DbUnavailableError when MINDER_USE_DB=1 but init fails", async () => {
+    // P2b-9 contract: when DB mode is requested and the schema is
+    // genuinely unavailable, the façade now THROWS rather than
+    // silently degrading to file-parse. The route-level handler
+    // surfaces this as a 500 — the right answer for "DB is supposed
+    // to work and doesn't." Pre-P2b-9 this returned a file-backend
+    // result and masked the failure.
     await setupFixture();
     process.env.MINDER_USE_DB = "1";
     const { facade } = await reloadModules();
 
-    // No initDb / no ingest run — but the façade calls initDb itself,
-    // which will succeed and find an empty DB. With zero rows, the
-    // rehydrate path returns an empty report. To prove "falls back to
-    // file when DB is genuinely unavailable", spy on initDb to fail.
     const mig = await import("@/lib/db/migrations");
     vi.spyOn(mig, "initDb").mockResolvedValue({
       available: false,
@@ -330,8 +332,9 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
       error: new Error("simulated init failure"),
     });
 
-    const result = await facade.getUsage("all", undefined);
-    expect(result.meta.backend).toBe("file");
-    expect(result.report.totalSessions).toBe(2);
+    await expect(facade.getUsage("all", undefined)).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "init-failed",
+    });
   });
 });
