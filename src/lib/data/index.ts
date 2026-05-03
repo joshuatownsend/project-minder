@@ -364,7 +364,19 @@ async function tryDbSkillUsage(): Promise<SkillUsageResult | null> {
 
 export interface ClaudeUsageResult {
   stats: ClaudeUsageStats;
-  meta: { backend: "db" | "file" };
+  meta: {
+    backend: "db" | "file";
+    /**
+     * Max content-mtime watermark for ETag computation.
+     * - DB backend: `MAX(file_mtime_ms) FROM sessions` — fresh and
+     *   accurate; advances on every JSONL tail-append the indexer
+     *   processes.
+     * - File backend: `0` (the file-parse pipeline doesn't expose a
+     *   max-mtime cheaply). Caller is expected to fall back to its
+     *   own freshness signal — `/api/stats` uses `result.scannedAt`.
+     */
+    maxMtimeMs: number;
+  };
 }
 
 /**
@@ -391,7 +403,10 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
     "@/lib/scanner/claudeConversations"
   );
   const stats = await scanClaudeConversationsForProjects(projectPaths);
-  return { stats, meta: { backend: "file" } };
+  // File backend doesn't carry a cheap max-mtime watermark; route
+  // is expected to fall back to its own freshness signal (see
+  // `ClaudeUsageResult.meta.maxMtimeMs` JSDoc).
+  return { stats, meta: { backend: "file", maxMtimeMs: 0 } };
 }
 
 async function tryDbClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult | null> {
@@ -404,7 +419,7 @@ async function tryDbClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResu
     }
     const stats = loadClaudeUsageStatsFromDb(db, projectPaths);
     if (stats.conversationCount === 0) return null;
-    return { stats, meta: { backend: "db" } };
+    return { stats, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
   } catch (err) {
     logFallthroughOnce((err as Error).message);
     return null;

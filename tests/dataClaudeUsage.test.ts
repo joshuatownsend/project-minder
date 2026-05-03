@@ -203,9 +203,13 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
     expect(d.toolUsage).toEqual(f.toolUsage);
     expect(d.modelsUsed.sort()).toEqual([...f.modelsUsed].sort());
 
-    // costEstimate: documented divergence — DB more accurate. Allow a
-    // generous tolerance (10%) since both backends use the same LiteLLM
-    // pricing for the same canonical model name in this fixture.
+    // costEstimate: documented divergence — DB more accurate. Both
+    // backends should still agree to ~4 decimal places (toBeCloseTo's
+    // precision arg) on this fixture because every assistant turn
+    // carries an explicit canonical model name (`claude-sonnet-4-5`),
+    // so file-parse never falls into its sonnet-fallback branch for
+    // cache-only rows. The divergence only kicks in for corpora with
+    // non-sonnet models on cache-hit files, which the fixture avoids.
     expect(d.costEstimate).toBeGreaterThan(0);
     expect(d.costEstimate).toBeCloseTo(f.costEstimate, 4);
   });

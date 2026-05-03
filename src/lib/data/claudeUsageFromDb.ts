@@ -1,7 +1,6 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import type { ClaudeUsageStats } from "@/lib/types";
-import { encodePath } from "@/lib/scanner/claudeConversations";
 
 // SQL-backed Claude conversation aggregator for `/api/stats`. Replaces
 // the `parseAllSessions` + `scanClaudeConversationsForProjects` pair in
@@ -19,16 +18,46 @@ import { encodePath } from "@/lib/scanner/claudeConversations";
 // pays one prepare per refresh; that's fine because /api/stats has its
 // own 10-minute in-route cache layered above.
 //
-// **Documented divergence** — `costEstimate` under DB mode reads the
-// pre-computed `sessions.cost_usd` (per-turn `applyPricing` at ingest)
-// rather than the file-parse path's `loadPricing` + `getModelPricing`
-// post-aggregation pass. The file-parse path also has a quirk: cache-
-// hit files lack per-model breakdown and bucket their tokens as
-// "unknown" → sonnet-fallback pricing. The DB path knows the actual
-// model on every row, so its `costEstimate` is **more accurate** when
-// the corpus contains rows attributed to non-sonnet models. Treat as
-// an improvement, not a regression. The `needsReconcileAfterV3` gate
-// in the façade prevents serving zeroed cost during the v3 catch-up.
+// `encodePath` is inlined here as a 3-character regex replace rather
+// than imported from `@/lib/scanner/claudeConversations` — that module
+// pulls in the full file-parse pipeline (pricing, fs caches, every
+// scanner helper), and the read path shouldn't carry that weight at
+// boot just to do a path-to-dirname encoding. Kept in sync with the
+// canonical impl at `claudeConversations.ts:51`; if the encoding rule
+// changes both must move together.
+//
+// **Documented divergences from the file-parse path:**
+//
+// 1. `costEstimate` under DB mode reads the pre-computed
+//    `sessions.cost_usd` (per-turn `applyPricing` at ingest) rather
+//    than the file-parse path's `loadPricing` + `getModelPricing`
+//    post-aggregation pass. The file-parse path also has a quirk:
+//    cache-hit files lack per-model breakdown and bucket their tokens
+//    as "unknown" → sonnet-fallback pricing. The DB path knows the
+//    actual model on every row, so its `costEstimate` is **more
+//    accurate** when the corpus contains rows attributed to non-sonnet
+//    models. Treat as an improvement, not a regression. The
+//    `needsReconcileAfterV3` gate in the façade prevents serving
+//    zeroed cost during the v3 catch-up.
+//
+// 2. **Worktree sessions roll up to the parent project under DB.**
+//    Ingest applies `canonicalizeDirName` (`src/lib/usage/parser.ts:58`)
+//    which strips the `--<word>-worktrees-...` suffix from worktree
+//    dirs, so a session originating from
+//    `C--dev-my-app--claude-worktrees-foo` is stored with
+//    `project_dir_name = 'C--dev-my-app'`. File-parse uses raw dir
+//    names (`scanClaudeConversationsForProjects` filters by
+//    `encodePath(projectPath)` directly) — so the worktree dir name
+//    `C--dev-my-app--claude-worktrees-foo` is NOT in the allowedDirs
+//    set when the caller passes the parent path, and worktree
+//    sessions are excluded entirely. Result: the DB-backed totals for
+//    a parent project include its worktree work; the file-backed
+//    totals don't. The DB behavior is arguably more useful (worktree
+//    work IS work on the parent project), but it's a numeric
+//    difference reviewers should know about. Closing the divergence
+//    would require either tracking the original (non-canonicalized)
+//    dir name in the schema or walking the projects directory at
+//    query time to discover worktree dirs — both deferred.
 
 interface TotalsRow {
   conversation_count: number;
@@ -79,8 +108,9 @@ export function loadClaudeUsageStatsFromDb(
 
   // Use the same path-encoding as the file-parse filter so the IN-list
   // matches the same set of `~/.claude/projects/<dir>` entries that
-  // `scanClaudeConversationsForProjects` would consider.
-  const allowedDirs = projectPaths.map((p) => encodePath(p));
+  // `scanClaudeConversationsForProjects` would consider. See header
+  // comment for why `encodePath` is inlined here rather than imported.
+  const allowedDirs = projectPaths.map(encodePathLite);
   const placeholders = allowedDirs.map(() => "?").join(",");
 
   // One prepare per call (variable-shape SQL). The route's 10-min
@@ -146,4 +176,15 @@ export function loadClaudeUsageStatsFromDb(
   stats.modelsUsed = models.map((m) => m.model);
 
   return stats;
+}
+
+/**
+ * Inlined mirror of `encodePath` from
+ * `src/lib/scanner/claudeConversations.ts:51`. Three characters of
+ * substitution; not worth importing the heavy scanner module just for
+ * this. Kept in sync with the canonical impl — if encoding changes
+ * both move together.
+ */
+function encodePathLite(projectPath: string): string {
+  return projectPath.replace(/[:\\/]/g, "-");
 }
