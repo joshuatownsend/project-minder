@@ -11,7 +11,8 @@ import {
 } from "./usageFromDb";
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
-import type { UsageReport } from "@/lib/usage/types";
+import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
+import type { UsageReport, AgentStats } from "@/lib/usage/types";
 import type { SessionDetail, SessionSummary } from "@/lib/types";
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
@@ -261,6 +262,57 @@ async function tryDbSessionsList(): Promise<SessionsListResult | null> {
       sessions,
       meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
     };
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
+}
+
+export interface AgentUsageResult {
+  stats: AgentStats[];
+  meta: { backend: "db" | "file" };
+}
+
+/**
+ * Cross-project agent (subagent) usage stats. SQL-backed by default
+ * when `tool_uses` carries Agent rows; falls back to the file-parse
+ * `parseAllSessions` + `groupAgentCalls` path on driver-missing,
+ * init-failure, empty index, or any thrown error.
+ *
+ * No v3 readiness gate here — this path doesn't read `cost_usd` or
+ * one-shot counts; the agent stats derive purely from indexed
+ * `tool_uses` rows that are populated at the same time as the rest
+ * of the session.
+ *
+ * Empty-index fall-through (same posture as `getSessionsList`): if
+ * the indexer has zero Agent rows but JSONL files exist on disk,
+ * file-parse keeps the agents page populated until the indexer
+ * catches up. The route caller doesn't need to know which backend
+ * served — `meta.backend` and the `X-Minder-Backend` header surface
+ * it for soak monitoring.
+ */
+export async function getAgentUsage(): Promise<AgentUsageResult> {
+  const dbResult = await tryDbAgentUsage();
+  if (dbResult) return dbResult;
+
+  // File-parse fall-through. Lazy-import the file-parse pipeline to
+  // keep the DB happy-path off the import graph for `parseAllSessions`
+  // / `groupAgentCalls` — under normal operation we never load them.
+  const { parseAllSessions } = await import("@/lib/usage/parser");
+  const { groupAgentCalls } = await import("@/lib/usage/agentParser");
+  const sessionMap = await parseAllSessions();
+  const allTurns = Array.from(sessionMap.values()).flat();
+  const stats = groupAgentCalls(allTurns);
+  return { stats, meta: { backend: "file" } };
+}
+
+async function tryDbAgentUsage(): Promise<AgentUsageResult | null> {
+  try {
+    const db = await getReadyDb();
+    if (!db) return null;
+    const stats = loadAgentUsageFromDb(db);
+    if (stats.length === 0) return null;
+    return { stats, meta: { backend: "db" } };
   } catch (err) {
     logFallthroughOnce((err as Error).message);
     return null;

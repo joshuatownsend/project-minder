@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
-import { parseAllSessions } from "@/lib/usage/parser";
-import { groupAgentCalls } from "@/lib/usage/agentParser";
+import { getAgentUsage } from "@/lib/data";
 import { getCachedScan } from "@/lib/cache";
 import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache } from "@/lib/skillUpdateCache";
@@ -19,24 +18,30 @@ interface AgentRow {
   catalogMissing?: boolean;
 }
 
+interface CacheSlot {
+  data: AgentRow[];
+  backend: "db" | "file";
+  cachedAt: number;
+}
+
 const globalForAgents = globalThis as unknown as {
-  __agentsRouteCache?: Map<string, { data: AgentRow[]; cachedAt: number }>;
+  __agentsRouteCache?: Map<string, CacheSlot>;
 };
 
-function getRouteCache(key: string): AgentRow[] | null {
+function getRouteCache(key: string): CacheSlot | null {
   const cache = globalForAgents.__agentsRouteCache;
   if (!cache) return null;
   const slot = cache.get(key);
   if (!slot) return null;
-  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot.data;
+  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot;
   return null;
 }
 
-function setRouteCache(key: string, data: AgentRow[]) {
+function setRouteCache(key: string, data: AgentRow[], backend: "db" | "file") {
   if (!globalForAgents.__agentsRouteCache) {
     globalForAgents.__agentsRouteCache = new Map();
   }
-  globalForAgents.__agentsRouteCache.set(key, { data, cachedAt: Date.now() });
+  globalForAgents.__agentsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
 }
 
 export function invalidateAgentsRouteCache() {
@@ -65,18 +70,18 @@ export async function GET(request: NextRequest) {
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${query ?? ""}`;
   const cached = getRouteCache(cacheKey);
   if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached));
-    return jsonWithCacheControl(cached);
+    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
+    const response = jsonWithCacheControl(cached.data);
+    response.headers.set("X-Minder-Backend", cached.backend);
+    return response;
   }
 
-  const [catalog, sessionMap] = await Promise.all([
+  const [catalog, agentUsage] = await Promise.all([
     loadCatalog({ includeProjects: true }),
-    parseAllSessions(),
+    getAgentUsage(),
   ]);
 
-  const allTurns = Array.from(sessionMap.values()).flat();
-  const statsArr = groupAgentCalls(allTurns);
-
+  const statsArr = agentUsage.stats;
   const aliasMap = buildAgentAliasMap(catalog.agents);
   const rows: AgentRow[] = [];
   const matchedNames = new Set<string>();
@@ -144,8 +149,10 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  setRouteCache(cacheKey, result);
+  setRouteCache(cacheKey, result, agentUsage.meta.backend);
   skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return jsonWithCacheControl(result);
+  const response = jsonWithCacheControl(result);
+  response.headers.set("X-Minder-Backend", agentUsage.meta.backend);
+  return response;
 }
