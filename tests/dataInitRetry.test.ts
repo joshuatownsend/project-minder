@@ -70,47 +70,57 @@ afterEach(async () => {
 });
 
 describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on failure", () => {
-  it("does NOT cache `available: false` results — next call retries initDb", async () => {
+  it("caches an init failure for 30s, then retries on the next call", async () => {
+    // Wave 1.2 contract: P2c cleared the cache on every failure (so
+    // every dashboard poll re-ran `initDb()` end-to-end during a real
+    // outage). The new contract caches the failure result for 30s and
+    // serves it back to subsequent callers in that window — then
+    // expires the cache so a recovered DB picks up on the next call.
     process.env.MINDER_USE_DB = "1";
     const { facade, mig } = await reloadModules();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // try/finally guarantees real timers are restored even when an
+    // assertion throws — otherwise fake timers leak into later tests
+    // in the same file/run and produce confusing async hangs.
+    try {
+      const initSpy = vi.spyOn(mig, "initDb");
+      initSpy.mockResolvedValueOnce({
+        available: false,
+        error: new Error("simulated EBUSY: rename failed"),
+        appliedMigrations: [],
+        schemaVersion: 0,
+        quarantined: null,
+      });
 
-    // First call: spy on initDb to simulate a transient failure
-    // (EBUSY-on-rename style: the schema check failed but the DB itself
-    // is healthy).
-    const initSpy = vi.spyOn(mig, "initDb");
-    initSpy.mockResolvedValueOnce({
-      available: false,
-      error: new Error("simulated EBUSY: rename failed"),
-      appliedMigrations: [],
-      schemaVersion: 0,
-      quarantined: null,
-    });
+      // First call: init fails → throws DbUnavailableError. initDb ran 1×.
+      await expect(facade.getUsage("all")).rejects.toMatchObject({
+        name: "DbUnavailableError",
+        reason: "init-failed",
+      });
+      expect(initSpy).toHaveBeenCalledTimes(1);
 
-    // First façade call: DB mode requested + init fails → throws
-    // `DbUnavailableError` (P2b-9: no silent fall-through to file).
-    await expect(facade.getUsage("all")).rejects.toMatchObject({
-      name: "DbUnavailableError",
-      reason: "init-failed",
-    });
+      // Second call within the 30s TTL: must NOT re-run initDb. The
+      // cached failure is reused so a real outage doesn't hammer the DB
+      // layer on every poll. Caller still gets DbUnavailableError.
+      await expect(facade.getUsage("all")).rejects.toMatchObject({
+        name: "DbUnavailableError",
+        reason: "init-failed",
+      });
+      expect(initSpy).toHaveBeenCalledTimes(1);
 
-    // initDb was called exactly once (the failure was cached for that
-    // in-flight call, but cleared on resolution).
-    expect(initSpy).toHaveBeenCalledTimes(1);
-
-    // Second façade call: must retry initDb, not return the cached
-    // failure. We let the spy call the real initDb this time (no
-    // additional mockResolvedValueOnce), which will succeed because the
-    // `~/.minder/` directory is writable. With a fresh tmpHome and no
-    // JSONL files, the index is empty and the façade falls back to
-    // file-parse (intentional empty-index fall-through, NOT silent
-    // failure). What we're asserting here is that the retry happened
-    // and produced a non-throwing result — the fact that the empty
-    // tmpHome makes both backends report empty means either is fine.
-    const second = await facade.getUsage("all");
-
-    // initDb called again (retry happened).
-    expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(["db", "file"]).toContain(second.meta.backend);
+      // Advance past the 30s TTL → next call re-attempts initDb. The
+      // unmocked initDb succeeds against the writable tmpHome; with no
+      // JSONL files the empty index makes the façade fall back to
+      // file-parse (intentional empty-index fall-through). Either
+      // backend is acceptable — what we're pinning is that the retry
+      // happened.
+      vi.advanceTimersByTime(31_000);
+      const third = await facade.getUsage("all");
+      expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(["db", "file"]).toContain(third.meta.backend);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rethrows a thrown v3-readiness gate as DbUnavailableError(reason: 'load-failed')", async () => {

@@ -27,7 +27,11 @@ const EMPTY_DOCKER: Awaited<ReturnType<typeof scanDockerCompose>> = {
   ports: [],
 };
 
-function toSlug(dirName: string): string {
+/** Canonical slug derivation for project directories. Exported so the
+ *  template-apply layer can synthesize matching slugs for fresh-bootstrap
+ *  paths that aren't in the scan yet (otherwise the fallback could drift
+ *  from the canonical form and break `?project=<slug>` filtering). */
+export function toSlug(dirName: string): string {
   return dirName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 

@@ -24,6 +24,7 @@ const slugTitles: Record<HelpSlug, string> = {
   status: "System Status",
   memory: "Memory Browser",
   config: "Configuration",
+  "config-history": "Config History",
   setup: "Setup Guide",
   settings: "Settings",
   templates: "Templates",

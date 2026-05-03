@@ -233,3 +233,42 @@ describe("applyMcp — user-scope source (V5)", () => {
     expect(doc.mcpServers.ctx.env).toEqual({ API_KEY: "", TOKEN: "" });
   });
 });
+
+describe("applyMcp — read-only source rejection", () => {
+  // Wave 1.2 followup: McpSource was widened to include local/plugin/desktop/
+  // managed. Those sources are READ-ONLY in Project Minder (we surface them
+  // for visibility but never write them back). Pin the typed-error contract
+  // so a future bug can't quietly write a Desktop-scoped server into a
+  // project's .mcp.json.
+  for (const readOnlySource of ["local", "plugin", "desktop", "managed"] as const) {
+    it(`rejects source="${readOnlySource}" with UNSUPPORTED_MCP_SOURCE_FOR_APPLY`, async () => {
+      const result = await applyMcp({
+        server: srv({ source: readOnlySource }),
+        targetProjectPath: target,
+        conflict: "skip",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("UNSUPPORTED_MCP_SOURCE_FOR_APPLY");
+      // The target file must NOT have been created/modified.
+      await expect(fs.access(path.join(target, ".mcp.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  }
+
+  it("still allows source='user' and source='project'", async () => {
+    const userOk = await applyMcp({
+      server: srv({ source: "user" }),
+      targetProjectPath: target,
+      conflict: "skip",
+    });
+    expect(userOk.ok).toBe(true);
+
+    const projectOk = await applyMcp({
+      server: srv({ source: "project", name: "ctx2" }),
+      targetProjectPath: target,
+      conflict: "skip",
+    });
+    expect(projectOk.ok).toBe(true);
+  });
+});

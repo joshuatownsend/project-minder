@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 // Atomic file write + per-file mutex. Used by every writer that touches a
 // long-lived file the user (or another reader) might be observing — config,
@@ -18,13 +19,40 @@ import path from "path";
 //   If two callers do read→modify→write on the same file in parallel, both
 //   read the same starting state and the second write clobbers the first's
 //   changes. Per-path mutex ensures read-modify-write cycles serialize.
+//
+// Reentrancy:
+// - withFileLock is reentrant within a single async chain. The apply layer
+//   needs to record a config-history snapshot AND have the apply primitive
+//   write the file under one continuous lock — otherwise concurrent applies
+//   on the same file can both snapshot the same pre-write bytes, breaking
+//   one-step rollback semantics. AsyncLocalStorage tracks which paths the
+//   current async context already holds; a re-entrant acquisition skips the
+//   queue and just runs the callback directly. Different async chains
+//   (independent applies) still serialize as before.
+// - Caveat: if you hold lock X and then `await Promise.all([withFileLock(X,
+//   ...), withFileLock(X, ...)])`, BOTH inner callbacks take the reentrant
+//   fast-path and run concurrently — defeating mutual exclusion within
+//   your own chain. Don't do that. Hold the lock once and serialize work
+//   yourself, or split into independent chains so the FIFO queue applies.
 
 const fileLocks = new Map<string, Promise<unknown>>();
+const heldLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   const normalized = path.resolve(filePath);
+  const heldByMe = heldLocks.getStore();
+  if (heldByMe?.has(normalized)) {
+    // Re-entrant acquisition in the same async chain — run inline; the
+    // outer holder is responsible for serialization against other chains.
+    return fn();
+  }
   const prev = fileLocks.get(normalized) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+  const runWithHeld = () => {
+    const newHeld = new Set(heldByMe ?? []);
+    newHeld.add(normalized);
+    return heldLocks.run(newHeld, fn);
+  };
+  const next = prev.then(runWithHeld, runWithHeld);
   fileLocks.set(normalized, next);
   next.finally(() => {
     if (fileLocks.get(normalized) === next) {
@@ -36,7 +64,7 @@ export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise
 
 export async function writeFileAtomic(
   filePath: string,
-  content: string,
+  content: string | Buffer,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
   const tmp =
@@ -46,7 +74,14 @@ export async function writeFileAtomic(
     "." +
     Math.random().toString(36).slice(2, 8);
   try {
-    await fs.writeFile(tmp, content, encoding);
+    // Buffer payloads write raw bytes (no transcoding); the encoding arg
+    // only applies when content is a string. Restore-from-snapshot relies
+    // on this for byte-faithful round-trips of non-UTF-8/binary files.
+    if (Buffer.isBuffer(content)) {
+      await fs.writeFile(tmp, content);
+    } else {
+      await fs.writeFile(tmp, content, encoding);
+    }
     await fs.rename(tmp, filePath);
   } catch (err) {
     // If rename failed, the tmp file may still be there — best-effort cleanup.

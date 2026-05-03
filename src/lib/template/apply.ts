@@ -11,7 +11,7 @@ import {
 } from "../types";
 import { readConfig } from "../config";
 import { getCachedScan, setCachedScan, invalidateCache as invalidateScanCache } from "../cache";
-import { scanAllProjects } from "../scanner";
+import { scanAllProjects, toSlug } from "../scanner";
 import { scanClaudeHooks } from "../scanner/claudeHooks";
 import { scanMcpServers } from "../scanner/mcpServers";
 import { invalidateCatalogCache } from "../indexer/catalog";
@@ -33,6 +33,123 @@ import { applySettings } from "./applySettings";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
+import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
+import { withFileLock } from "../atomicWrite";
+
+/** Snapshot every target file before a non-dryRun apply mutates it.
+ *  Returns the recorded BackupIds so callers can roll them back if the
+ *  apply primitive turns out to be a no-op. Failure to snapshot is
+ *  logged inside recordPreWrite and returns null — never blocks the
+ *  apply (a missing backup is unfortunate, an aborted apply is worse).
+ *
+ *  Bundled-skill applies write whole directories and are intentionally
+ *  skipped (per Wave 1.2 scope — directory backups are a separate
+ *  retention problem).
+ *
+ *  Slug resolution: for `target.kind === "existing"` we use the
+ *  existing slug; for `target.kind === "path"` we look it up in the
+ *  cached scan so snapshots from `applyTemplate` (which routes
+ *  bootstrapped projects through the path branch) still surface in
+ *  `/api/config-history?project=<slug>` filtered queries. Returns
+ *  undefined slug for paths that don't match a scanned project — those
+ *  snapshots still record under the global manifest, just unscoped.
+ *
+ *  Known limitation: `applyHook` writes BOTH the target settings.json
+ *  (which the dispatcher locks via withFileLocks) AND copies hook
+ *  scripts into `.claude/hooks/` (NOT locked — the script destinations
+ *  are computed inside applyHook based on invocation parsing, so the
+ *  dispatcher can't know them up-front). Concurrent re-applies that
+ *  overwrite the same script file therefore retain the snapshot/apply
+ *  race for that secondary surface. The original PR-#59 review only
+ *  flagged the primary settings.json write; in practice script
+ *  collisions are rare (each hook entry copies a uniquely named
+ *  script). Future work: thread script destinations back through to
+ *  the dispatcher OR move snapshotting inside applyHook's lock
+ *  callback per-script. */
+async function snapshotBeforeApply(
+  request: ApplyRequest,
+  targetFiles: string[],
+): Promise<BackupId[]> {
+  if (request.dryRun) return [];
+  const projectSlug = await resolveProjectSlugForSnapshot(request.target);
+  const label = `apply-${request.unit.kind}:${request.unit.key}`;
+  const ids: BackupId[] = [];
+  for (const f of targetFiles) {
+    const id = await recordPreWrite(f, { projectSlug, label });
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+async function resolveProjectSlugForSnapshot(
+  target: ApplyTarget,
+): Promise<string | undefined> {
+  if (target.kind === "existing") return target.slug;
+  if (target.kind === "path") {
+    const scan = await getOrLoadScan();
+    const fromScan = scan.projects.find((p) => p.path === target.path)?.slug;
+    if (fromScan) return fromScan;
+    // applyTemplate routes new-project bootstraps through target.kind="path"
+    // BEFORE refreshing the scan cache. The scan lookup above misses, so
+    // backups would be recorded without a projectSlug and excluded from
+    // /api/config-history?project=<slug>. Fall back to the canonical
+    // toSlug() derivation so the entry surfaces in the project's Config
+    // History tab as soon as the post-bootstrap scan picks the project
+    // up. Importing the canonical helper (vs. re-implementing kebab
+    // here) means the fallback can't drift from the scanner if toSlug
+    // ever evolves.
+    const dirName = path.basename(target.path);
+    if (dirName) return toSlug(dirName);
+  }
+  return undefined;
+}
+
+/** Roll back snapshots when an apply primitive turned out to be a
+ *  no-op (skipped, would-apply, or errored). The snapshot was recorded
+ *  before we knew the apply's verdict; without rollback, the manifest
+ *  fills with misleading "restore points" for events that didn't
+ *  change disk — bloating prune work and confusing the Config History
+ *  tab. Rollback failures are swallowed inside removeBackup. */
+async function finalizeSnapshots<T extends ApplyResult>(
+  ids: BackupId[],
+  result: T,
+): Promise<T> {
+  if (ids.length === 0) return result;
+  const wroteToDisk =
+    result.ok && (result.status === "applied" || result.status === "merged");
+  if (!wroteToDisk) {
+    await Promise.all(ids.map((id) => removeBackup(id)));
+  }
+  return result;
+}
+
+/** Run `fn` with file locks held on every path in `files` for the entire
+ *  duration. Locks are acquired in sorted order so two concurrent calls
+ *  with overlapping path sets never deadlock (canonical AB/BA fix).
+ *
+ *  Used by the dispatchers to ensure snapshot-then-apply runs as one
+ *  atomic unit per target file: without this, two concurrent applies
+ *  on the same file could each snapshot the pre-A bytes (because
+ *  snapshot was outside the lock), and the second restore would skip
+ *  past A entirely. withFileLock is reentrant, so the apply primitive's
+ *  internal `withFileLock(targetMcpPath, ...)` (or equivalent) runs as
+ *  a no-op when the dispatcher already holds it. */
+async function withFileLocks<T>(
+  files: string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (files.length === 0) return fn();
+  const sorted = [...new Set(files.map((f) => path.resolve(f)))].sort();
+  // Build the nested call right-to-left so the outermost lock is the
+  // first sorted path, and the innermost callback is `fn`.
+  let inner: () => Promise<T> = fn;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const file = sorted[i];
+    const prevInner = inner;
+    inner = () => withFileLock(file, prevInner);
+  }
+  return inner();
+}
 
 /** Resolved source location: either a virtual-project root path (with a slug
  *  used only by walkers for entry-id construction) or a user-scope flag. */
@@ -171,11 +288,14 @@ async function dispatchAgent(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "agents", `${entry.slug}.md`);
-  return applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -190,6 +310,8 @@ async function dispatchSkill(
   if (entry.layout === "bundled") {
     const sourceDir = path.dirname(entry.realPath ?? entry.filePath);
     const targetDir = path.join(targetProjectPath, ".claude", "skills", entry.slug);
+    // Bundled skills write a directory tree — directory snapshots are
+    // out of scope for Wave 1.2 (TODO #56 covers files only).
     return applyDirectory({
       sourceDir,
       targetDir,
@@ -199,11 +321,14 @@ async function dispatchSkill(
   }
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "skills", `${entry.slug}.md`);
-  return applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -221,11 +346,14 @@ async function dispatchCommand(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
-  return applySingleFile({
-    sourcePath: sourceFile,
-    targetPath: targetFile,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySingleFile({
+      sourcePath: sourceFile,
+      targetPath: targetFile,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -258,13 +386,17 @@ async function dispatchHook(
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
-  return applyHook({
-    entry,
-    sourceHooksDir,
-    sourceRootForRejection,
-    targetProjectPath,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyHook({
+      entry,
+      sourceHooksDir,
+      sourceRootForRejection,
+      targetProjectPath,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -278,23 +410,59 @@ async function dispatchMcp(
 
   if (source.kind === "user") {
     const userCfg = await getUserConfig();
-    all = userCfg.mcpServers.servers;
+    // The user-scope merged list now includes read-only sources
+    // (managed, desktop, plugin) alongside actual user-scope entries.
+    // findMcpByKey matches by name only — without this filter, a
+    // managed/desktop/plugin server sharing a name with a user-scope
+    // one could win the lookup (managed-first merge order makes that
+    // the typical outcome). applyMcp would then reject with
+    // UNSUPPORTED_MCP_SOURCE_FOR_APPLY, surfacing as "can't apply"
+    // even though a writable user-scope entry exists. Filtering to
+    // writable sources here keeps the lookup honest.
+    all = userCfg.mcpServers.servers.filter((s) => s.source === "user");
     sourceSlug = "user";
   } else {
     const mcpInfo = await scanMcpServers(source.path);
-    all = mcpInfo?.servers ?? [];
+    // scanMcpServers now merges project-scope (.mcp.json) entries with
+    // local-scope entries from ~/.claude.json projects[<path>].mcpServers.
+    // Local entries are read-only — applyMcp rejects them — so filter
+    // them out before name lookup so the apply doesn't deterministically
+    // fail when a project has a local-scope shadow with the same name
+    // (or pick the wrong duplicate when names match).
+    all = (mcpInfo?.servers ?? []).filter((s) => s.source === "project");
     sourceSlug = source.slug;
   }
 
-  const server = findMcpByKey(all, request.unit.key);
+  // Ambiguity guard: even after the writable-source filter, the
+  // user-scope list can still hold two entries with the same name —
+  // one from ~/.claude/settings.json (legacy plugin-touched location)
+  // and one from ~/.claude.json (Claude Code's actual user-scope
+  // store). findMcpByKey matches by name only and would silently pick
+  // the first by merge order, applying the WRONG entry's command/env.
+  // Refuse to apply when ambiguous so the user is forced to clean up
+  // the duplicate rather than getting silently-wrong behavior.
+  const matches = all.filter((s) => s.name === request.unit.key);
+  if (matches.length > 1) {
+    const sources = matches.map((s) => s.sourcePath).join("; ");
+    return errorResult(
+      "AMBIGUOUS_MCP_SOURCE",
+      `Multiple writable MCP servers named "${request.unit.key}" found in: ${sources}. ` +
+        `Remove the duplicate from one of these files before applying.`,
+    );
+  }
+  const server = matches[0] ?? findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
-  return applyMcp({
-    server,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceSlug,
-    dryRun: request.dryRun,
+  const targetFile = path.join(targetProjectPath, ".mcp.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyMcp({
+      server,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceSlug,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -309,12 +477,16 @@ async function dispatchWorkflow(
       "Workflow source must be a project (user-scope workflows don't exist)."
     );
   }
-  return applyWorkflow({
-    sourceProjectPath: source.path,
-    workflowKey: request.unit.key,
-    targetProjectPath,
-    conflict: request.conflict,
-    dryRun: request.dryRun,
+  const targetFile = path.join(targetProjectPath, ".github", "workflows", request.unit.key);
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyWorkflow({
+      sourceProjectPath: source.path,
+      workflowKey: request.unit.key,
+      targetProjectPath,
+      conflict: request.conflict,
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -328,13 +500,17 @@ async function dispatchSettings(
       ? path.join(os.homedir(), ".claude", "settings.json")
       : path.join(source.path, ".claude", "settings.json");
 
-  return applySettings({
-    settingsPath: request.unit.key,
-    sourceSettingsFile,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceScope: source.kind === "user" ? "user" : "project",
-    dryRun: request.dryRun,
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applySettings({
+      settingsPath: request.unit.key,
+      sourceSettingsFile,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceScope: source.kind === "user" ? "user" : "project",
+      dryRun: request.dryRun,
+    }));
   });
 }
 
@@ -377,12 +553,16 @@ async function dispatchPlugin(
       `Plugin "${request.unit.key}" is set to false in the source — refusing to template a disabled enable.`
     );
   }
-  return applyPlugin({
-    pluginKey: request.unit.key,
-    targetProjectPath,
-    conflict: request.conflict,
-    sourceScope: source.kind === "user" ? "user" : "project",
-    dryRun: request.dryRun,
+  const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
+  return withFileLocks([targetFile], async () => {
+    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    return finalizeSnapshots(snaps, await applyPlugin({
+      pluginKey: request.unit.key,
+      targetProjectPath,
+      conflict: request.conflict,
+      sourceScope: source.kind === "user" ? "user" : "project",
+      dryRun: request.dryRun,
+    }));
   });
 }
 

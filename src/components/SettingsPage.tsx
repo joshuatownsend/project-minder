@@ -47,7 +47,12 @@ export function SettingsPage() {
   const { showToast } = useToast();
   const [active, setActive] = useState<SectionKey>("features");
   const [config, setConfig] = useState<MinderConfig | null>(null);
-  const [saving, setSaving] = useState<FeatureFlagKey | null>(null);
+  // Tracks every flag with an in-flight PATCH so overlapping toggles
+  // don't clear each other's saving indicator. A single FeatureFlagKey
+  // would race: toggle A starts → A's setSaving(A); toggle B starts →
+  // setSaving(B); A finishes → setSaving(null) clears B's indicator
+  // even though B's request is still in flight.
+  const [saving, setSaving] = useState<ReadonlySet<FeatureFlagKey>>(() => new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +76,11 @@ export function SettingsPage() {
 
   async function toggleFlag(key: FeatureFlagKey, next: boolean) {
     if (!config) return;
-    setSaving(key);
+    setSaving((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
     // Capture only THIS key's prior value (undefined = unset / default).
     // Reverting just this key on failure preserves any other in-flight
     // toggles — capturing the whole featureFlags map and restoring it
@@ -103,7 +112,11 @@ export function SettingsPage() {
       });
       showToast("Couldn't save setting", e instanceof Error ? e.message : String(e));
     } finally {
-      setSaving(null);
+      setSaving((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }
 
@@ -189,7 +202,7 @@ export function SettingsPage() {
 
 function FeaturesSection(props: {
   config: MinderConfig | null;
-  saving: FeatureFlagKey | null;
+  saving: ReadonlySet<FeatureFlagKey>;
   onToggle: (key: FeatureFlagKey, next: boolean) => void;
 }) {
   const { config, saving, onToggle } = props;
@@ -239,7 +252,7 @@ function FlagGroup(props: {
   subtitle: string;
   flags: typeof FEATURE_FLAG_META;
   currentFlags: MinderConfig["featureFlags"];
-  saving: FeatureFlagKey | null;
+  saving: ReadonlySet<FeatureFlagKey>;
   disabled: boolean;
   onToggle: (key: FeatureFlagKey, next: boolean) => void;
 }) {
@@ -266,7 +279,7 @@ function FlagGroup(props: {
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "1px" }}>
         {flags.map((f) => {
           const value = getFlag(currentFlags, f.key);
-          const isSaving = saving === f.key;
+          const isSaving = saving.has(f.key);
           return (
             <li
               key={f.key}

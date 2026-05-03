@@ -79,31 +79,62 @@ export class DbUnavailableError extends Error {
 // share one in-flight init. Same pattern as `/api/sql/route.ts`'s
 // `ensureSchemaReady`.
 //
-// **Failure recovery**: if `initDb()` reports the schema as unavailable
-// (driver missing, corruption-quarantine rename failed mid-flight,
-// etc.) we DO NOT cache that failure forever. The pre-P2c behavior
-// poisoned every subsequent DB-backed read until process restart;
-// observed in soak as a single transient `EBUSY` on the corruption-
-// quarantine rename silently downgrading every route to file-parse for
-// the rest of the dev session. Now: only cache successful inits; on
-// failure, clear the cached promise so the next call retries
-// `initDb()` from scratch.
+// **Failure handling**: P2c established that we must not cache
+// failures forever (a single transient EBUSY would silently downgrade
+// every route to file-parse for the rest of the dev session). P2c
+// cleared the cache on EVERY failure, which solved that bug but
+// introduced a new one: a real outage (e.g. disk full, missing native
+// binary) makes every subsequent call re-run `initDb()` end-to-end,
+// hammering the DB layer on every dashboard poll.
 //
-// In-flight callers always share the same promise (writes only happen
-// in `then` after resolution), so there's no thundering-herd risk
-// during init itself; the retry only kicks in after the failed promise
-// has resolved.
-let initPromise: Promise<InitResult> | null = null;
+// Wave 1.2 splits the difference with a 30s TTL on failed results:
+// successful inits cache as before (until process exit), failed inits
+// cache for up to 30s before the next caller is allowed to re-attempt.
+// In-flight callers always share the same promise. The retry only
+// kicks in after the failed promise has resolved AND the TTL has
+// expired — concurrent failed callers within the TTL get the cached
+// failure handed back without re-running initDb.
+//
+// Departure from plan: §5.1.2 specifies "schema corrupt → cache
+// forever; init raced → retry up to 3× with 100ms backoff." The
+// rename-retry half is already done by `renameWithRetry` (10× linear
+// backoff on EBUSY/EPERM in `atomicWrite.ts`). The "cache forever"
+// half conflicts with the same plan line that says "the cached
+// failure now has a TTL; after 30s, next call retries." Picking the
+// simpler design — a uniform 30s TTL — because (a) corruption can be
+// repaired externally (operator deletes index.db) and we want to
+// notice on the next retry, (b) categorizing failures to apply
+// different cache policies is brittle (init can fail at multiple
+// stages with similar symptoms), and (c) 30s is short enough that a
+// genuinely permanent failure surfaces in any reasonable diagnostic
+// window. Logged in CHANGELOG.
+const FAILURE_TTL_MS = 30_000;
+type CachedInit = {
+  promise: Promise<InitResult>;
+  /** Wall-clock when initDb() resolved with available=false (or rejected).
+   *  null while in-flight or after a successful resolve. */
+  failedAt: number | null;
+};
+let cached: CachedInit | null = null;
+
 function ensureSchemaReady(): Promise<InitResult> {
-  if (initPromise) return initPromise;
+  if (cached) {
+    if (cached.failedAt === null) return cached.promise;
+    if (Date.now() - cached.failedAt < FAILURE_TTL_MS) return cached.promise;
+    // TTL expired — fall through to a fresh attempt.
+    cached = null;
+  }
   const promise = initDb();
-  initPromise = promise;
+  const slot: CachedInit = { promise, failedAt: null };
+  cached = slot;
   promise
     .then((result) => {
-      if (!result.available && initPromise === promise) initPromise = null;
+      if (!result.available && cached === slot) {
+        slot.failedAt = Date.now();
+      }
     })
     .catch(() => {
-      if (initPromise === promise) initPromise = null;
+      if (cached === slot) slot.failedAt = Date.now();
     });
   return promise;
 }
