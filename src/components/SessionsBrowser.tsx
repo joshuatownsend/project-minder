@@ -346,6 +346,7 @@ function SessionRow({
 interface ProjectGroup {
   projectPath: string;
   projectName: string;
+  projectSlug: string;
   sessions: SessionSummary[];
   totalTokens: number;
   totalCost: number;
@@ -381,6 +382,7 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
     groups.push({
       projectPath,
       projectName: projectSessions[0].projectName,
+      projectSlug: projectSessions[0].projectSlug,
       sessions: projectSessions,
       totalTokens,
       totalCost,
@@ -436,7 +438,7 @@ function SectionHeader({
       </button>
 
       <Link
-        href={`/project/${group.projectName}`}
+        href={`/project/${group.projectSlug}`}
         style={{
           fontSize: "0.78rem", fontWeight: 600, letterSpacing: "0.02em",
           textTransform: "uppercase", color: "var(--text-primary)", textDecoration: "none",

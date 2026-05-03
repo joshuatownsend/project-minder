@@ -163,7 +163,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     project.styling ?? null,
     project.monorepoType ?? null,
     project.database?.type ?? null,
-    project.dockerPorts.length > 0 ? "Docker" : null,
+    (project.dockerPorts?.length ?? 0) > 0 ? "Docker" : null,
   ].filter((t): t is string => t !== null);
 
   return (
