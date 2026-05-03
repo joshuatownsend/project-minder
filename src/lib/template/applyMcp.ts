@@ -28,6 +28,18 @@ export async function applyMcp(args: ApplyMcpArgs): Promise<ApplyResult> {
   const { server, targetProjectPath, conflict, sourceSlug, dryRun } = args;
   const targetMcpPath = path.join(targetProjectPath, ".mcp.json");
   const warnings: string[] = [];
+  // Read-only sources MUST NOT be promoted into a project's .mcp.json.
+  // Why: `local`/`plugin`/`desktop`/`managed` originate from files
+  // Project Minder reads but never writes. Promoting them would either
+  // duplicate state (local/plugin) or escape sandbox boundaries
+  // (desktop/managed). Surface as a typed error rather than a silent
+  // write so a misuse fails loudly at the closest sensible boundary.
+  if (server.source !== "user" && server.source !== "project") {
+    return errorResult(
+      "UNSUPPORTED_MCP_SOURCE_FOR_APPLY",
+      `MCP source "${server.source}" is read-only in Project Minder. Only "user" and "project" sources can be applied.`
+    );
+  }
   if (server.source === "user") {
     warnings.push(
       "user-scope source promoted to project-shared (.mcp.json) — will apply to anyone using this repo"

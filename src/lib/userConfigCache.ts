@@ -3,6 +3,10 @@ import path from "path";
 import os from "os";
 import { extractHookEntries } from "./scanner/claudeHooks";
 import { parseMcpServers } from "./scanner/mcpServers";
+import { readClaudeJsonMcp } from "./scanner/claudeJsonMcp";
+import { readPluginScopeMcp } from "./scanner/pluginMcp";
+import { readDesktopScopeMcp } from "./scanner/desktopMcp";
+import { readManagedScopeMcp } from "./scanner/managedMcp";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { loadInstalledPlugins } from "./indexer/walkPlugins";
 import { RESERVED_SETTINGS_KEYS } from "./template/jsonPath";
@@ -44,16 +48,41 @@ async function readUserConfig(): Promise<UserConfig> {
   const claudeDir = path.join(os.homedir(), ".claude");
   const settingsPath = path.join(claudeDir, "settings.json");
 
-  const settings = await readSettings(settingsPath);
+  // Read all sources in parallel — they touch disjoint files and the
+  // slowest source (plugin scan, ~N file reads) shouldn't be serialized
+  // behind the others.
+  const [settings, claudeJsonMcp, pluginMcp, desktopMcp, managedMcp] =
+    await Promise.all([
+      readSettings(settingsPath),
+      readClaudeJsonMcp(),
+      readPluginScopeMcp(),
+      readDesktopScopeMcp(),
+      readManagedScopeMcp(),
+    ]);
+
   const plugins = await readPluginsInfo(claudeDir, settings);
 
   const hookEntries: HookEntry[] = settings
     ? extractHookEntries(settings.hooks, "user", settingsPath)
     : [];
 
-  const mcpServers: McpServer[] = settings
-    ? parseMcpServers(settings.mcpServers, "user", settingsPath)
-    : [];
+  // Merge MCP servers from every known source. No dedup on name
+  // collisions across sources — both entries surface, and downstream
+  // (apply policy, UI grouping) decides what to do.
+  // Order = source-precedence story shown to the user:
+  // managed (admin policy) → user-from-settings.json → user-from-claude.json
+  // → desktop → plugin. Local-scope per-project servers are surfaced
+  // separately on the project detail page (see readLocalScopeMcpFromClaudeJson)
+  // so they don't leak into the global "user" list.
+  const mcpServers: McpServer[] = [
+    ...managedMcp,
+    ...(settings
+      ? parseMcpServers(settings.mcpServers, "user", settingsPath)
+      : []),
+    ...claudeJsonMcp.user,
+    ...desktopMcp,
+    ...pluginMcp,
+  ];
 
   return {
     plugins,

@@ -379,7 +379,32 @@ export interface HooksInfo {
 }
 
 export type McpTransport = "stdio" | "http" | "sse" | "unknown";
-export type McpSource = "project" | "user";
+
+/**
+ * Where Project Minder read this MCP server from. Per Claude Code's
+ * docs (https://code.claude.com/docs/en/settings):
+ *
+ *  - "project"  — `<project>/.mcp.json`
+ *  - "user"     — top-level `mcpServers` in `~/.claude.json`, OR the
+ *                 `mcpServers` key in `~/.claude/settings.json` (legacy
+ *                 location, preserved because plugin scenarios can still
+ *                 touch it)
+ *  - "local"    — per-project entry in `~/.claude.json`
+ *                 (`projects.<path>.mcpServers`); private to user, scoped
+ *                 to one project
+ *  - "plugin"   — `<plugin-root>/.mcp.json` or inline in
+ *                 `<plugin-root>/plugin.json` of an installed plugin
+ *  - "desktop"  — Claude Desktop's `claude_desktop_config.json` (the
+ *                 separate desktop app; importable via
+ *                 `claude mcp add-from-claude-desktop`)
+ *  - "managed"  — IT-deployed `managed-mcp.json` under the platform's
+ *                 system directory
+ *
+ * Only "project" and "user" are write targets via the apply layer; the
+ * other sources are READ-ONLY in Project Minder. applyMcp rejects
+ * non-write sources explicitly so a misuse is loud.
+ */
+export type McpSource = "project" | "user" | "local" | "plugin" | "desktop" | "managed";
 
 export interface McpServer {
   name: string;
