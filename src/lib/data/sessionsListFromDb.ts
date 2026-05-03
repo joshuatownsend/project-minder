@@ -140,6 +140,7 @@ interface TextPreviewRow {
   session_id: string;
   role: "user" | "assistant";
   text_preview: string;
+  tool_result_preview: string | null;
 }
 
 // File-parse caps `searchableText` at 4000 chars per session
@@ -206,17 +207,22 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 
   // Restore `searchableText` (closes P2b-5 divergence #2). Read each
   // turn's `text_preview` in turn-order so per-session aggregation
-  // mirrors file-parse's append order. The query is scoped to non-empty
-  // previews — a turn whose only content is a tool_result block has
-  // `text_preview` either NULL (no text) or equal to the tool_result
-  // prefix (which file-parse skips for `searchableText`). The 6th
-  // query loads at most ~500 chars × turn_count rows; for the typical
-  // ~150-session corpus that's a few MB total — much smaller than the
-  // ~1 GB JSONL re-parse this read path replaced.
+  // mirrors file-parse's append order. The query also pulls
+  // `tool_result_preview` because for user turns ingest stores
+  // `text_preview = userText || toolResultText` — when there's no
+  // human text, `text_preview` falls back to the tool_result content.
+  // File-parse never folds tool output into `searchableText` (only
+  // human text + assistant text), so `groupSearchable` skips user
+  // turns where `text_preview` is a prefix of `tool_result_preview`
+  // (the tool-result-only signal — same heuristic the detail loader
+  // uses to skip these from the timeline). The 6th query loads at most
+  // ~500 chars × turn_count rows for the typical ~150-session corpus —
+  // a few MB total, much smaller than the ~1 GB JSONL re-parse this
+  // read path replaced.
   const searchableBySession = groupSearchable(
     prepCached(
       db,
-      `SELECT session_id, role, text_preview
+      `SELECT session_id, role, text_preview, tool_result_preview
        FROM turns
        WHERE text_preview IS NOT NULL AND text_preview <> ''
        ORDER BY session_id, turn_index`
@@ -314,6 +320,23 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 function groupSearchable(rows: TextPreviewRow[]): Map<string, string> {
   const builders = new Map<string, { parts: string[]; len: number }>();
   for (const row of rows) {
+    // Skip tool-result-only user turns. Ingest stores
+    // `text_preview = userText || toolResultText` for user turns, so a
+    // turn with no human text gets the tool_result_preview as its
+    // text_preview prefix (text_preview is hard-truncated to 500;
+    // tool_result_preview keeps up to 2000). File-parse's
+    // searchableText accumulator never folds tool output into search
+    // (only humanText + assistant text blocks). The `startsWith`
+    // detection is the same one the detail loader uses to skip these
+    // from the timeline — see `sessionDetailFromDb.ts:268-272`.
+    if (
+      row.role === "user" &&
+      row.tool_result_preview !== null &&
+      row.tool_result_preview.startsWith(row.text_preview)
+    ) {
+      continue;
+    }
+
     let b = builders.get(row.session_id);
     if (!b) {
       b = { parts: [], len: 0 };
