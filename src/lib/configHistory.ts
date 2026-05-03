@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import path from "path";
 import os from "os";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
@@ -55,10 +55,15 @@ async function ensureHistoryRoot(): Promise<void> {
 }
 
 function makeId(timestamp: string, contentSha: string): BackupId {
-  // Filesystem-safe ISO timestamp + 8-char hash prefix.
+  // Filesystem-safe ISO timestamp + 8-char hash prefix + 8-char random.
+  // The random suffix is the only collision guard: two recordPreWrite
+  // calls in the same millisecond on identical bytes (or two missing-file
+  // snapshots) would otherwise produce the same id, leading to ambiguous
+  // restore, React key collisions, and snapshot path aliasing.
   const ts = timestamp.replace(/[:.]/g, "-");
   const shaSlice = contentSha ? contentSha.slice(0, 8) : "missing";
-  return `${ts}_${shaSlice}`;
+  const rand = randomBytes(4).toString("hex");
+  return `${ts}_${shaSlice}_${rand}`;
 }
 
 /**
@@ -157,10 +162,65 @@ export async function restore(id: BackupId): Promise<void> {
   if (!entry.snapshotPath) {
     throw new Error(`Backup ${id} has no snapshot path (manifest corrupt)`);
   }
-  const base64 = await fs.readFile(entry.snapshotPath, "utf-8");
-  const bytes = Buffer.from(base64, "base64");
+  // Read snapshot as raw bytes (the file is base64-encoded text on disk),
+  // decode to a Buffer, and write the Buffer back unchanged. Going via
+  // .toString("utf-8") would mangle any non-UTF-8 or binary content —
+  // restore must be byte-faithful even though Wave 1.2's primary targets
+  // are JSON config files.
+  const encoded = await fs.readFile(entry.snapshotPath, "utf-8");
+  const bytes = Buffer.from(encoded, "base64");
   await fs.mkdir(path.dirname(entry.targetPath), { recursive: true });
-  await writeFileAtomic(entry.targetPath, bytes.toString("utf-8"));
+  await writeFileAtomic(entry.targetPath, bytes);
+}
+
+/** Remove a backup's manifest entry AND its snapshot directory. Used by
+ *  the apply layer to roll back a snapshot when the apply primitive
+ *  turned out to be a no-op (skipped / would-apply / errored). Failure
+ *  is logged and swallowed — a stale manifest line is benign and the
+ *  next prune sweeps it. */
+export async function removeBackup(id: BackupId): Promise<void> {
+  try {
+    await withFileLock(MANIFEST_PATH, async () => {
+      let raw: string;
+      try {
+        raw = await fs.readFile(MANIFEST_PATH, "utf-8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw err;
+      }
+      const lines = raw.split("\n");
+      const kept: string[] = [];
+      let removedSnapshotPath: string | undefined;
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line) as ManifestRecord;
+          if (parsed.id === id) {
+            removedSnapshotPath = parsed.snapshotPath;
+            continue;
+          }
+        } catch {
+          // Preserve malformed lines untouched — they may be an in-flight
+          // partial flush; dropping them would defeat the prune-tolerant
+          // contract pinned in tests/configHistory.test.ts.
+        }
+        kept.push(line);
+      }
+      const next = kept.join("\n") + (kept.length > 0 ? "\n" : "");
+      await writeFileAtomic(MANIFEST_PATH, next);
+      if (removedSnapshotPath) {
+        try {
+          await fs.rm(path.dirname(removedSnapshotPath), { recursive: true, force: true });
+        } catch {
+          // Snapshot dir may already be gone; benign.
+        }
+      }
+    });
+  } catch (err) {
+    console.warn(
+      `[configHistory] Could not remove backup ${id}: ${(err as Error).message}. Manifest line will be reaped on next prune.`,
+    );
+  }
 }
 
 /** List all manifest entries, optionally filtered by project slug. Newest
@@ -195,72 +255,79 @@ export async function list(
 /** Apply the smart-retention policy: keep every entry within 24h, one per
  *  day for 7d, one per week for 30d, drop the rest. Snapshot files
  *  belonging to dropped entries are unlinked. Manifest is rewritten in
- *  place. Safe to call frequently; cheap when nothing's due. */
+ *  place. Safe to call frequently; cheap when nothing's due.
+ *
+ *  Read-modify-write happens entirely inside a single `withFileLock`
+ *  scope so a concurrent `recordPreWrite` append can't be silently
+ *  dropped by a stale-snapshot rewrite. */
 export async function prune(now: number = Date.now()): Promise<{ kept: number; removed: number }> {
-  const all = await list();
-  if (all.length === 0) return { kept: 0, removed: 0 };
+  return withFileLock(MANIFEST_PATH, async () => {
+    const all = await list();
+    if (all.length === 0) {
+      await touchLastPrune(now);
+      return { kept: 0, removed: 0 };
+    }
 
-  const oneDay = 24 * 60 * 60_000;
-  const oneWeek = 7 * oneDay;
-  const thirtyDays = 30 * oneDay;
+    const oneDay = 24 * 60 * 60_000;
+    const oneWeek = 7 * oneDay;
+    const thirtyDays = 30 * oneDay;
 
-  // Group entries into retention buckets keyed per (targetPath, bucket-id)
-  // so we keep the newest in each bucket per file. Different files don't
-  // compete for the same retention slot.
-  const keep = new Set<string>();
-  const byFile = new Map<string, HistoryEntry[]>();
-  for (const e of all) {
-    const arr = byFile.get(e.targetPath) ?? [];
-    arr.push(e);
-    byFile.set(e.targetPath, arr);
-  }
-  for (const fileEntries of byFile.values()) {
-    const seenBuckets = new Set<string>();
-    for (const e of fileEntries) {
-      const age = now - new Date(e.timestamp).getTime();
-      let bucket: string;
-      if (age <= oneDay) {
-        bucket = `recent:${e.id}`; // every entry within 24h
-      } else if (age <= oneWeek + oneDay) {
-        bucket = `daily:${dayKey(e.timestamp)}`;
-      } else if (age <= thirtyDays) {
-        bucket = `weekly:${weekKey(e.timestamp)}`;
-      } else {
-        continue; // older than 30d → drop unconditionally
-      }
-      if (!seenBuckets.has(bucket)) {
-        seenBuckets.add(bucket);
-        keep.add(e.id);
+    // Group entries into retention buckets keyed per (targetPath, bucket-id)
+    // so we keep the newest in each bucket per file. Different files don't
+    // compete for the same retention slot.
+    const keep = new Set<string>();
+    const byFile = new Map<string, HistoryEntry[]>();
+    for (const e of all) {
+      const arr = byFile.get(e.targetPath) ?? [];
+      arr.push(e);
+      byFile.set(e.targetPath, arr);
+    }
+    for (const fileEntries of byFile.values()) {
+      const seenBuckets = new Set<string>();
+      for (const e of fileEntries) {
+        const age = now - new Date(e.timestamp).getTime();
+        let bucket: string;
+        if (age <= oneDay) {
+          bucket = `recent:${e.id}`; // every entry within 24h
+        } else if (age <= oneWeek + oneDay) {
+          bucket = `daily:${dayKey(e.timestamp)}`;
+        } else if (age <= thirtyDays) {
+          bucket = `weekly:${weekKey(e.timestamp)}`;
+        } else {
+          continue; // older than 30d → drop unconditionally
+        }
+        if (!seenBuckets.has(bucket)) {
+          seenBuckets.add(bucket);
+          keep.add(e.id);
+        }
       }
     }
-  }
 
-  const dropped = all.filter((e) => !keep.has(e.id));
-  if (dropped.length === 0) {
-    await touchLastPrune(now);
-    return { kept: all.length, removed: 0 };
-  }
+    const dropped = all.filter((e) => !keep.has(e.id));
+    if (dropped.length === 0) {
+      await touchLastPrune(now);
+      return { kept: all.length, removed: 0 };
+    }
 
-  await withFileLock(MANIFEST_PATH, async () => {
     const kept = all.filter((e) => keep.has(e.id));
     kept.reverse(); // back to oldest-first append order
     const next = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : "");
     await writeFileAtomic(MANIFEST_PATH, next);
-  });
 
-  for (const e of dropped) {
-    if (!e.snapshotPath) continue;
-    try {
-      await fs.rm(path.dirname(e.snapshotPath), { recursive: true, force: true });
-    } catch {
-      // Snapshot directory may already be gone — manifest is the source
-      // of truth, missing snapshot is benign once the manifest line is
-      // dropped.
+    for (const e of dropped) {
+      if (!e.snapshotPath) continue;
+      try {
+        await fs.rm(path.dirname(e.snapshotPath), { recursive: true, force: true });
+      } catch {
+        // Snapshot directory may already be gone — manifest is the source
+        // of truth, missing snapshot is benign once the manifest line is
+        // dropped.
+      }
     }
-  }
 
-  await touchLastPrune(now);
-  return { kept: keep.size, removed: dropped.length };
+    await touchLastPrune(now);
+    return { kept: keep.size, removed: dropped.length };
+  });
 }
 
 async function appendManifest(record: ManifestRecord): Promise<void> {

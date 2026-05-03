@@ -39,6 +39,11 @@ export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: st
   }, [projectSlug]);
 
   async function onRestore(id: string) {
+    // Look up the entry's ISO timestamp for the toast — passing the
+    // BackupId to shortTs would mangle the date because the id format
+    // is "<iso-with-:->_<sha>_<rand>" and the round-trip back to ISO
+    // is fragile (and pointless when the ISO is already in `entries`).
+    const entryTs = entries?.find((e) => e.id === id)?.timestamp;
     setRestoring(id);
     try {
       const res = await fetch("/api/config-history/restore", {
@@ -50,7 +55,8 @@ export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: st
       if (!res.ok) {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      showToast("Restored", `${shortPath(body.restored?.targetPath ?? "", projectPath)} reverted to ${shortTs(id)}`);
+      const tsLabel = entryTs ? shortTs(entryTs) : "snapshot";
+      showToast("Restored", `${shortPath(body.restored?.targetPath ?? "", projectPath)} reverted to ${tsLabel}`);
       await refresh();
     } catch (e: unknown) {
       showToast("Restore failed", e instanceof Error ? e.message : String(e));
@@ -164,11 +170,16 @@ function shortPath(full: string, projectPath: string): string {
   return full;
 }
 
-function shortTs(idOrIso: string): string {
-  const iso = idOrIso.includes("_") ? idOrIso.split("_")[0].replace(/-/g, ":").replace(/^(\d{4}):(\d{2}):(\d{2}):/, "$1-$2-$3T") : idOrIso;
+function shortTs(iso: string): string {
+  // Receives the entry's `timestamp` field (always an ISO string, never
+  // a BackupId). Earlier versions accepted the id and tried to reverse
+  // its `:` → `-` substitution; that was buggy because the id format is
+  // "<iso>_<sha>_<rand>" and the regex didn't account for the trailing
+  // suffix. Now that the only caller passes ISO directly, no conversion
+  // is needed.
   try {
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return idOrIso;
+    if (Number.isNaN(d.getTime())) return iso;
     return d.toLocaleString(undefined, {
       month: "short",
       day: "numeric",
@@ -176,7 +187,7 @@ function shortTs(idOrIso: string): string {
       minute: "2-digit",
     });
   } catch {
-    return idOrIso;
+    return iso;
   }
 }
 

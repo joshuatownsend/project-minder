@@ -33,24 +33,68 @@ import { applySettings } from "./applySettings";
 import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
-import { recordPreWrite } from "../configHistory";
+import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
 
 /** Snapshot every target file before a non-dryRun apply mutates it.
- *  Failure to snapshot is logged inside recordPreWrite and returns
- *  null — never blocks the apply. Bundled-skill applies write whole
- *  directories and are intentionally skipped (per Wave 1.2 scope —
- *  directory backups are a separate retention problem). */
+ *  Returns the recorded BackupIds so callers can roll them back if the
+ *  apply primitive turns out to be a no-op. Failure to snapshot is
+ *  logged inside recordPreWrite and returns null — never blocks the
+ *  apply (a missing backup is unfortunate, an aborted apply is worse).
+ *
+ *  Bundled-skill applies write whole directories and are intentionally
+ *  skipped (per Wave 1.2 scope — directory backups are a separate
+ *  retention problem).
+ *
+ *  Slug resolution: for `target.kind === "existing"` we use the
+ *  existing slug; for `target.kind === "path"` we look it up in the
+ *  cached scan so snapshots from `applyTemplate` (which routes
+ *  bootstrapped projects through the path branch) still surface in
+ *  `/api/config-history?project=<slug>` filtered queries. Returns
+ *  undefined slug for paths that don't match a scanned project — those
+ *  snapshots still record under the global manifest, just unscoped. */
 async function snapshotBeforeApply(
   request: ApplyRequest,
   targetFiles: string[],
-): Promise<void> {
-  if (request.dryRun) return;
-  const projectSlug =
-    request.target.kind === "existing" ? request.target.slug : undefined;
+): Promise<BackupId[]> {
+  if (request.dryRun) return [];
+  const projectSlug = await resolveProjectSlugForSnapshot(request.target);
   const label = `apply-${request.unit.kind}:${request.unit.key}`;
+  const ids: BackupId[] = [];
   for (const f of targetFiles) {
-    await recordPreWrite(f, { projectSlug, label });
+    const id = await recordPreWrite(f, { projectSlug, label });
+    if (id) ids.push(id);
   }
+  return ids;
+}
+
+async function resolveProjectSlugForSnapshot(
+  target: ApplyTarget,
+): Promise<string | undefined> {
+  if (target.kind === "existing") return target.slug;
+  if (target.kind === "path") {
+    const scan = await getOrLoadScan();
+    return scan.projects.find((p) => p.path === target.path)?.slug;
+  }
+  return undefined;
+}
+
+/** Roll back snapshots when an apply primitive turned out to be a
+ *  no-op (skipped, would-apply, or errored). The snapshot was recorded
+ *  before we knew the apply's verdict; without rollback, the manifest
+ *  fills with misleading "restore points" for events that didn't
+ *  change disk — bloating prune work and confusing the Config History
+ *  tab. Rollback failures are swallowed inside removeBackup. */
+async function finalizeSnapshots<T extends ApplyResult>(
+  ids: BackupId[],
+  result: T,
+): Promise<T> {
+  if (ids.length === 0) return result;
+  const wroteToDisk =
+    result.ok && (result.status === "applied" || result.status === "merged");
+  if (!wroteToDisk) {
+    await Promise.all(ids.map((id) => removeBackup(id)));
+  }
+  return result;
 }
 
 /** Resolved source location: either a virtual-project root path (with a slug
@@ -190,13 +234,13 @@ async function dispatchAgent(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "agents", `${entry.slug}.md`);
-  await snapshotBeforeApply(request, [targetFile]);
-  return applySingleFile({
+  const snaps = await snapshotBeforeApply(request, [targetFile]);
+  return finalizeSnapshots(snaps, await applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
     conflict: request.conflict,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchSkill(
@@ -221,13 +265,13 @@ async function dispatchSkill(
   }
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "skills", `${entry.slug}.md`);
-  await snapshotBeforeApply(request, [targetFile]);
-  return applySingleFile({
+  const snaps = await snapshotBeforeApply(request, [targetFile]);
+  return finalizeSnapshots(snaps, await applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
     conflict: request.conflict,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchCommand(
@@ -244,13 +288,13 @@ async function dispatchCommand(
 
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
-  await snapshotBeforeApply(request, [targetFile]);
-  return applySingleFile({
+  const snaps = await snapshotBeforeApply(request, [targetFile]);
+  return finalizeSnapshots(snaps, await applySingleFile({
     sourcePath: sourceFile,
     targetPath: targetFile,
     conflict: request.conflict,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchHook(
@@ -282,17 +326,17 @@ async function dispatchHook(
   const entry = findHookByKey(exploded, request.unit.key);
   if (!entry) return errorResult("UNIT_NOT_FOUND", `Hook "${request.unit.key}" not found in source.`);
 
-  await snapshotBeforeApply(request, [
+  const snaps = await snapshotBeforeApply(request, [
     path.join(targetProjectPath, ".claude", "settings.json"),
   ]);
-  return applyHook({
+  return finalizeSnapshots(snaps, await applyHook({
     entry,
     sourceHooksDir,
     sourceRootForRejection,
     targetProjectPath,
     conflict: request.conflict,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchMcp(
@@ -316,14 +360,14 @@ async function dispatchMcp(
   const server = findMcpByKey(all, request.unit.key);
   if (!server) return errorResult("UNIT_NOT_FOUND", `MCP server "${request.unit.key}" not found in source.`);
 
-  await snapshotBeforeApply(request, [path.join(targetProjectPath, ".mcp.json")]);
-  return applyMcp({
+  const snaps = await snapshotBeforeApply(request, [path.join(targetProjectPath, ".mcp.json")]);
+  return finalizeSnapshots(snaps, await applyMcp({
     server,
     targetProjectPath,
     conflict: request.conflict,
     sourceSlug,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchWorkflow(
@@ -337,16 +381,16 @@ async function dispatchWorkflow(
       "Workflow source must be a project (user-scope workflows don't exist)."
     );
   }
-  await snapshotBeforeApply(request, [
+  const snaps = await snapshotBeforeApply(request, [
     path.join(targetProjectPath, ".github", "workflows", request.unit.key),
   ]);
-  return applyWorkflow({
+  return finalizeSnapshots(snaps, await applyWorkflow({
     sourceProjectPath: source.path,
     workflowKey: request.unit.key,
     targetProjectPath,
     conflict: request.conflict,
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchSettings(
@@ -359,17 +403,17 @@ async function dispatchSettings(
       ? path.join(os.homedir(), ".claude", "settings.json")
       : path.join(source.path, ".claude", "settings.json");
 
-  await snapshotBeforeApply(request, [
+  const snaps = await snapshotBeforeApply(request, [
     path.join(targetProjectPath, ".claude", "settings.json"),
   ]);
-  return applySettings({
+  return finalizeSnapshots(snaps, await applySettings({
     settingsPath: request.unit.key,
     sourceSettingsFile,
     targetProjectPath,
     conflict: request.conflict,
     sourceScope: source.kind === "user" ? "user" : "project",
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function dispatchPlugin(
@@ -411,16 +455,16 @@ async function dispatchPlugin(
       `Plugin "${request.unit.key}" is set to false in the source — refusing to template a disabled enable.`
     );
   }
-  await snapshotBeforeApply(request, [
+  const snaps = await snapshotBeforeApply(request, [
     path.join(targetProjectPath, ".claude", "settings.json"),
   ]);
-  return applyPlugin({
+  return finalizeSnapshots(snaps, await applyPlugin({
     pluginKey: request.unit.key,
     targetProjectPath,
     conflict: request.conflict,
     sourceScope: source.kind === "user" ? "user" : "project",
     dryRun: request.dryRun,
-  });
+  }));
 }
 
 async function findAgent(

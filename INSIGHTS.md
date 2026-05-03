@@ -1,5 +1,50 @@
 # Insights
 
+<!-- insight:5fd2b7e3dae5 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T17:25:15.890Z -->
+## ★ Insight
+- The pre-commit hook (`.git/hooks/pre-commit` from CLAUDE.md) caught the work in flight: typecheck + full vitest run executed before the commit landed. That's the exact safety net the conventions section calls out — and why running `npm test` manually before committing is a habit worth keeping (the hook is local-only and not version-controlled, so a fresh clone could miss it).
+- The path-normalization fix the advisor surfaced is the kind of bug that ships silently: returns `[]` instead of crashing, dashboard renders an empty MCP list for a real project, nobody notices for weeks. Stripping trailing separators *plus* `path.normalize` covers the common Windows variants while leaving drive-letter casing as a documented boundary — pragmatic, not exhaustive.
+
+---
+
+<!-- insight:7da0ba8bff49 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T17:10:20.661Z -->
+## ★ Insight
+- The merge order doesn't matter for correctness (no dedup), but it does matter for UX: when the dashboard renders the list, the *first* hit on a name will be the visually primary one. Listing sources by stability — managed (admin) → user (settings.json) → user (.claude.json) → desktop → plugin — surfaces admin policy first, which is the right precedence story for "where is this server actually coming from?"
+- I'm extending `UserConfig.mcpServers.servers` rather than splitting per-source on the type. Reason: existing UI consumes a flat list. Source attribution lives on each `McpServer.source` already, so per-source filtering is a render-time concern, not a data-shape change.
+
+---
+
+<!-- insight:a0613d85fa38 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T17:05:58.119Z -->
+## ★ Insight
+- `~/.claude.json` is a particularly hazardous file to read: it stores OAuth tokens for Claude.ai, telemetry IDs, and other runtime state. The pattern I'm using — extract-then-discard — is the same boundary discipline used by `parseMcpServers` (which already strips env *values* and keeps only key names). Defense in depth: even if a future caller misuses our function, the parsed root never escapes.
+- `parseMcpServers` is already polymorphic on `source: McpSource` — the wider union just flows through. No refactor needed in the parser; new sources slot in cleanly.
+
+---
+
+<!-- insight:ebe0d6d20ce5 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T17:02:49.628Z -->
+## ★ Insight
+- `applyMcp` doesn't switch exhaustively on `McpSource`, so widening the union didn't break the typecheck — but the advisor's constraint #4 requires us to *explicitly* reject the new read-only sources, otherwise a future bug could quietly write a Desktop-scoped server into a project's `.mcp.json`.
+- The pattern for read-only safety: validate at the entry point, not the writer. Adding an early guard in `applyMcp` plus a parallel guard in the dispatch layer makes misuse loud at the closest sensible boundary.
+
+---
+
+<!-- insight:1631e4c0a9d7 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T16:59:05.927Z -->
+## ★ Insight
+- The advisor pinned the security constraint hard: `~/.claude.json` holds OAuth tokens. Read path must extract ONLY `mcpServers` and `projects.<path>.mcpServers` — never let the parsed root escape. Will write a test that asserts the parsed result is free of any OAuth-token-shaped strings.
+- Same MCP server in multiple sources: surface BOTH entries with their respective source labels (no dedup, no precedence rules). Project Minder's job is to show what's configured where, not enforce Claude Code's runtime precedence.
+- Apply paths get a clean `UNSUPPORTED_MCP_SOURCE_FOR_APPLY` rejection for the new read-only sources — mirrors the existing pattern in `applyMcp`.
+- Managed MCP paths fail-open on both ENOENT and EACCES (no log spam) — same posture as `recordPreWrite`.
+
+---
+
+<!-- insight:040749c9b728 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T16:42:11.100Z -->
+## ★ Insight
+- The biggest decision this session was *not writing code*: discovering Claude Code's actual MCP storage layout (`~/.claude.json`, not `.claude/mcp.json` or `.claude/settings.json`) before adding a third source on top of two already-incorrect read paths. The plan's instruction to "verify before committing" was load-bearing — saved a future cleanup PR.
+- The `ensureSchemaReady` change is a real example of the "fix-the-fix" anti-pattern in practice: P2c solved cache-poisoning with "clear on every failure"; that introduced hot-loop on outage; Wave 1.2 swings back to "cache for 30s." Each generation correct in isolation, only the third design captures both constraints.
+- The COW backup pattern picked the simplest possible format — JSONL manifest + base64 snapshot bytes — instead of a content-addressable store. Smart retention (24h whole, day in week, week in month) is enough policy to bound disk usage without designing a sophisticated dedup scheme.
+
+---
+
 <!-- insight:9e5c9c579956 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T16:20:43.986Z -->
 ## ★ Insight
 - `withFileLock` is a process-local in-memory mutex (not OS-level) — fine for our single-process Next.js dev server, would need `proper-lockfile` or similar for cross-process safety.

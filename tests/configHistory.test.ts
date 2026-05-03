@@ -184,6 +184,111 @@ describe("restore", () => {
   });
 });
 
+describe("makeId uniqueness (post-PR-#59 review)", () => {
+  it("generates distinct BackupIds for concurrent recordPreWrite on identical content", async () => {
+    // Pre-fix the id was `<iso>_<sha8|missing>` with ms-timestamp resolution,
+    // so two recordPreWrite calls in the same millisecond on identical bytes
+    // (or two missing-file snapshots) collided. Random suffix is the only
+    // collision guard — pin it with a concurrent burst.
+    const { recordPreWrite, list } = await reloadModule();
+    const target = path.join(tmpHome, "settings.json");
+    await fs.writeFile(target, '{"x":1}', "utf-8");
+
+    const N = 20;
+    const ids = await Promise.all(
+      Array.from({ length: N }, () => recordPreWrite(target)),
+    );
+    expect(ids.every((id) => id !== null)).toBe(true);
+    expect(new Set(ids).size).toBe(N);
+
+    const entries = await list();
+    expect(entries).toHaveLength(N);
+    expect(new Set(entries.map((e) => e.id)).size).toBe(N);
+  });
+
+  it("generates distinct BackupIds for two missing-file snapshots in the same ms", async () => {
+    const { recordPreWrite } = await reloadModule();
+    const absent = path.join(tmpHome, "absent.json");
+    const [a, b] = await Promise.all([recordPreWrite(absent), recordPreWrite(absent)]);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("restore byte-fidelity (post-PR-#59 review)", () => {
+  it("round-trips non-UTF-8 / binary content unchanged", async () => {
+    // Pre-fix `restore` did `.toString("base64") → Buffer → .toString("utf-8")
+    // → write`. The utf-8 transcoding mangles any byte outside the valid
+    // utf-8 grammar (lone surrogates, raw 0xFF, etc.). Pin byte-faithful
+    // restore by snapshotting raw bytes that don't form valid utf-8 and
+    // asserting bit-exact equality after restore.
+    const { recordPreWrite, restore } = await reloadModule();
+    const target = path.join(tmpHome, "binary.bin");
+    const original = Buffer.from([
+      0x00, 0xff, 0xfe, 0xfd, 0xc0, 0x80, // overlong + invalid utf-8 bytes
+      0xed, 0xa0, 0x80, // unpaired surrogate (invalid utf-8)
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, // PNG header bytes
+    ]);
+    await fs.writeFile(target, original);
+
+    const id = await recordPreWrite(target);
+    expect(id).not.toBeNull();
+    await fs.writeFile(target, "mutated to text");
+
+    await restore(id!);
+    const restored = await fs.readFile(target);
+    expect(restored.equals(original)).toBe(true);
+  });
+});
+
+describe("removeBackup (post-PR-#59 review)", () => {
+  it("removes the manifest entry and the snapshot directory", async () => {
+    const { recordPreWrite, removeBackup, list } = await reloadModule();
+    const target = path.join(tmpHome, "settings.json");
+    await fs.writeFile(target, '{"x":1}', "utf-8");
+
+    const id = await recordPreWrite(target);
+    expect(id).not.toBeNull();
+    const before = await list();
+    expect(before).toHaveLength(1);
+    const snapshotDir = path.join(tmpHome, ".minder", "config-history", id!);
+    await expect(fs.access(snapshotDir)).resolves.toBeUndefined();
+
+    await removeBackup(id!);
+
+    const after = await list();
+    expect(after).toHaveLength(0);
+    await expect(fs.access(snapshotDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves untargeted entries when removing one", async () => {
+    const { recordPreWrite, removeBackup, list } = await reloadModule();
+    const target = path.join(tmpHome, "settings.json");
+    await fs.writeFile(target, '{"x":1}', "utf-8");
+
+    const a = await recordPreWrite(target);
+    const b = await recordPreWrite(target);
+    const c = await recordPreWrite(target);
+    expect(new Set([a, b, c]).size).toBe(3);
+
+    await removeBackup(b!);
+    const remaining = await list();
+    expect(remaining.map((e) => e.id).sort()).toEqual([a!, c!].sort());
+  });
+
+  it("is a no-op (and does not throw) when the id is unknown", async () => {
+    const { recordPreWrite, removeBackup, list } = await reloadModule();
+    const target = path.join(tmpHome, "settings.json");
+    await fs.writeFile(target, '{"x":1}', "utf-8");
+    const id = await recordPreWrite(target);
+
+    await expect(removeBackup("nonexistent-id")).resolves.toBeUndefined();
+    const entries = await list();
+    expect(entries.map((e) => e.id)).toEqual([id]);
+  });
+});
+
 describe("prune", () => {
   it("keeps every entry within 24h", async () => {
     const { recordPreWrite, prune, list } = await reloadModule();

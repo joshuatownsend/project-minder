@@ -36,7 +36,7 @@ export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise
 
 export async function writeFileAtomic(
   filePath: string,
-  content: string,
+  content: string | Buffer,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
   const tmp =
@@ -46,7 +46,14 @@ export async function writeFileAtomic(
     "." +
     Math.random().toString(36).slice(2, 8);
   try {
-    await fs.writeFile(tmp, content, encoding);
+    // Buffer payloads write raw bytes (no transcoding); the encoding arg
+    // only applies when content is a string. Restore-from-snapshot relies
+    // on this for byte-faithful round-trips of non-UTF-8/binary files.
+    if (Buffer.isBuffer(content)) {
+      await fs.writeFile(tmp, content);
+    } else {
+      await fs.writeFile(tmp, content, encoding);
+    }
     await fs.rename(tmp, filePath);
   } catch (err) {
     // If rename failed, the tmp file may still be there — best-effort cleanup.
