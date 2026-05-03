@@ -1,5 +1,118 @@
 # Insights
 
+<!-- insight:b8d3f0032224 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T14:51:56.851Z -->
+## ★ Insight
+- Using a tiny shared `PlaceholderRoute` component instead of three near-duplicate page files keeps each route a 5-line shim that hydrates a server-friendly client component. The component lives in `/src/components/` so it's reusable.
+- Each placeholder names the wave + cluster ref so a future developer can find the spec in the plan without grepping.
+
+---
+
+<!-- insight:bdc2bf0b04d5 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T14:47:20.346Z -->
+## ★ Insight
+- I'm threading `featureFlags` and the new optional fields onto `MinderConfig` with everything optional and no defaults baked into `DEFAULT_CONFIG` — this preserves backwards compatibility with every existing `.minder.json` file users have already saved.
+- `PricingRule` is a placeholder shape this session; later waves will tighten it. Plan §7 reserves the section but doesn't ship it now.
+
+---
+
+<!-- insight:73a9602f4443 | session:78ad2fba-b3ba-4c15-a29a-f5193dda3894 | 2026-05-03T14:41:36.091Z -->
+## ★ Insight
+- The plan emphasizes **foundations first** — this session creates scaffolding (Settings page, feature flags, nav reorg) that subsequent waves fill in. The Settings page sections will be empty placeholders that fill as later waves land.
+- Critical constraint: feature flag gates apply **only at scanner orchestrator level for now** in this session. Watcher singletons get a `dispose()` method but UI hot-toggling is out of scope.
+- AppNav refactor links to *placeholder* pages for Plans/Plugins/SQL (Coming in wave N copy) so the nav shape is final on day one.
+
+---
+
+<!-- insight:d469c0aa76d9 | session:f7e74522-cc1d-4403-a611-4b2519280eb9 | 2026-05-03T14:36:50.026Z -->
+## ★ Insight
+- The biggest force-multiplier in this plan is Wave 1 — three small foundations (Settings page, AppNav sub-menus, COW backups) unblock about 18 downstream items in Waves 2–8. Skipping straight to "high-value features first" would have meant rebuilding settings UI six different times.
+- The hidden coupling between Wave 7's hook server and Wave 9's task dispatcher is worth flagging: the hook server lite (`/api/hooks` + ring buffer) was deliberately scoped to *not* depend on the dispatcher, so it can ship early and provide live activity badges. When the dispatcher arrives in Wave 9, the same hook ingest path feeds the kanban — no rework, just wiring. This is the kind of layering decision that's only obvious after mapping the dependency graph.
+- The P2b SQLite arc you've been running (the `feat/p2b-9-remove-silent-fallback` branch you're on right now) was load-bearing for this plan. Without `prompts_fts`, `catalog_fts`, the `file_edits` projection table, and the `otel_events` skeleton already in place, the 12-wave sequence would have needed at least 3 more pure-foundation waves before any user-visible features could land.
+
+---
+
+<!-- insight:6fba561b431b | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-03T14:36:21.091Z -->
+## ★ Insight
+- The two-step release sequence (commit version bump → tag at HEAD → push tag → cut release) keeps the tag pointing at the bump commit specifically, not at whatever HEAD happens to be. Git tags are independent refs — without `c417479` as the explicit target, `git tag -a v1.0.0` would tag the current HEAD which happens to be the same here, but the explicit form is grep-able later when bisecting.
+- `gh release create --verify-tag` rejects if the tag doesn't exist remotely — a cheap belt-and-suspenders against the "tagged locally, forgot to push" footgun. If the push had silently failed, the release call would have errored instead of creating an orphan release.
+- The CHANGELOG-as-release-notes pattern (`awk` extract `## [1.0.0]` block → `--notes-file`) keeps the on-GitHub release body and the in-repo CHANGELOG in lockstep automatically. The headline blockquote at the top of the section gives readers a TL;DR before the per-slice details.
+
+---
+
+<!-- insight:02b99e65dac3 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-03T13:53:04.205Z -->
+## ★ Insight
+- The P2b arc end-state: the data façade now **fails loud** when DB mode is requested and the DB is unhealthy (typed `DbUnavailableError` → 500), while preserving two intentional fall-throughs (v3-catch-up, empty-index) that are correctness/UX features rather than error masking. Every error path that could escape as a raw `Error` is now wrapped — `ensureSchemaReady`, `callDbLoader` for SQL loads, and `checkV3Gate` for the meta-table SELECT.
+- The two reviewer rounds (Codex P2 + Copilot, then Codex P2 again) caught the same kind of gap twice in quick succession — both spots where an awaited call could throw bypassing the typed-error contract. Worth remembering for future refactors that introduce a typed-error contract: every `await` is a place an unwrapped throw can escape.
+- The bundled UI fix (`SessionsBrowser` slug bug + `useProject` hardening) is unrelated to the façade refactor but was the right thing to fold in — the dev-server crash was real, the fix is small, and PR #57 was already in flight.
+
+---
+
+<!-- insight:203e13db245b | session:f7e74522-cc1d-4403-a611-4b2519280eb9 | 2026-05-03T13:42:54.548Z -->
+## ★ Insight
+- This codebase already uses `.minder.json` for user prefs (`src/lib/config.ts`), so a `featureFlags` key fits naturally — no new persistence layer needed.
+- The interesting design question for this TODO is *enforcement*: scanners like INSIGHTS.md (`src/lib/scanner/insightsMd.ts`) are pure-read passes that can be skipped at the orchestrator level (`src/lib/scanner/index.ts`), but watchers like `manualStepsWatcher.ts` are `globalThis` singletons that need to be torn down/restarted on toggle, not just gated.
+- Worth noting in the TODO: some features (e.g. INSIGHTS.md scanning) are *passive observation* — flipping them off doesn't stop Claude from writing the file, only stops Project Minder from reading it. That distinction matters for messaging in the UI.
+
+---
+
+<!-- insight:c67f6510f432 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-03T13:36:36.668Z -->
+## ★ Insight
+- `fetch()` rejects only on network failure — HTTP 404/500 still resolve. Always gate on `res.ok` before `.json()`.
+- Two fixes are needed: harden the hook (root cause — this kind of error response could come from any 4xx/5xx), and harden the consumer (`ProjectDetail.tsx:166` shouldn't crash on optional fields). I'll fix the hook (root cause) and add a defensive optional chain at the crash site as a belt-and-suspenders against future shape drift.
+
+---
+
+<!-- insight:cde52615b4e4 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-03T12:35:07.256Z -->
+## ★ Insight
+- The refactor's leverage is small in code (496 lines of churn, half net-new) but large in operational signal: every silent-degradation incident the previous shape could mask now produces an obvious 500 with stack trace, and the `DbUnavailableError.reason` discriminator gives ops dashboards something to alert on.
+- The `callDbLoader` wrapper widens "DB unavailable" to "any throw from a load function" — the advisor flagged this as a label-precision concern (a column-rename regression now reads as `load-failed` rather than something more specific), but in practice all such throws still produce a 500, which is the correct outcome. Pattern-matching on `SqliteError` subtypes specifically would tighten the label without changing observable behavior.
+- The two preserved fall-through cases (v3-catch-up and empty-index) are the discipline of the refactor: distinguishing "intentional degradation with operator awareness" from "silent failure" is the whole point — they get logged once per process per scope so they're visible without being noisy.
+
+---
+
+<!-- insight:050c18651f01 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-03T12:26:39.308Z -->
+## ★ Insight
+- The current shape uses `tryDbXxx` helpers that swallow every error and return `null` to signal "fall back to file." That's the silent-fallback pattern we're undoing.
+- The conservative refactor: keep two intentional fall-through cases (v3-catch-up, empty-index) as explicit behaviors with light logging, but turn driver/init/connection failures into `throw DbUnavailableError` so an unhealthy DB surfaces as a 500 instead of degrading silently.
+- The route-side contract stays identical: `meta.backend` is still `"db"|"file"`, so `X-Minder-Backend` headers and ETag salting keep working — the change is invisible when DB is healthy.
+
+---
+
+<!-- insight:ce8ac88638eb | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-02T22:30:56.264Z -->
+## ★ Insight
+- One GROUP BY (agent, project, session) returns rows that fan out cleanly to all three AgentStats fields — `invocations` sums per agent, `projects` sums per (agent, project), `sessions` derives from per-(agent, session) latest ts. This is a much better shape than three separate queries because the join cost is paid once.
+- The "no documented divergences" outcome here vs the seven divergences in P2b-5 is structural: list-view consumes UI-layer fields (`recaps`, `searchableText`) that aren't in the schema; agent-usage consumes pure aggregates that the schema captures perfectly.
+
+---
+
+<!-- insight:345c1a9fea02 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-02T21:47:19.544Z -->
+## ★ Insight
+- I unified the latent shape mismatch between the two routes' `__sessionsCache` slots — both now use the same `{result, cachedAt, maxSessionMs}` shape so they can safely share the global. The previous shape divergence was a latent bug waiting to bite if activity refreshed first.
+- The empty-index fall-through (`if sessions.length === 0 return null`) is critical for the new-install case: if the indexer hasn't run, the DB returns 0 rows, but the JSONL files still exist on disk — file-parse keeps the dashboard populated until the indexer catches up.
+
+---
+
+<!-- insight:19cf8712afc9 | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-02T21:44:49.652Z -->
+## ★ Insight
+- The detail loader's tool-use aggregation pattern (single pass building multiple aggregates) translates almost directly to the list view, just at session-set scale instead of per-session — five queries return flat rows, JS stitches them by `session_id` keys.
+- File-parse's `subagentCount` is just `tools['Agent']` count — so query 2 (per-session tool counts) gives me both `toolUsage` map and `subagentCount` for free, no separate Agent query needed.
+- I confirmed the latent shape mismatch in `__sessionsCache` between the two routes (one declares `maxSessionMs`, the other doesn't) — I'll unify the cache shape during migration so a single TS interface governs both.
+
+---
+
+<!-- insight:4afff1a9582f | session:039ab89b-cbc6-4ff5-9ae6-a44a03224c25 | 2026-05-02T21:03:19.473Z -->
+## ★ Insight
+- The five remaining file-parse routes break naturally into 4 slices because the agents/skills/sessions pairs share a backend function — letting one PR migrate two routes cuts review burden in half without widening blast radius.
+- The biggest hidden cost of P2b-5 isn't the SQL — it's the `searchableText: undefined` divergence silently breaking the `SessionsBrowser` content search. Reading the UI consumer (`SessionsBrowser.tsx:179`) before designing the loader catches this; reading only `SessionSummary` shape would miss it.
+- No migration v5 needed for the entire arc because the indexes built for the detail loader (`tool_uses_by_skill`, `tool_uses_by_agent`, `turns_by_role_ts`) cover every aggregation the list/agents/skills/stats paths need — a non-obvious payoff of P2b-3's index work.
+
+---
+
+<!-- insight:8e7615213d8b | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T17:32:00.721Z -->
+## ★ Insight
+The pre-commit hook caught a real issue but for the wrong reason — `.next/dev/types/routes.d.ts` had a corrupt half-write from an earlier dev-server crash (`xample` instead of `@example`), tripping `tsgo` during typecheck. `tsconfig.json:36` deliberately includes generated route types so route-handler typings get checked, but that means a stale half-write blocks every commit. Clearing `.next/dev/types/` is safe — Turbopack regenerates them on next `npm run dev`. Worth knowing if this pattern recurs.
+
+---
+
 <!-- insight:c1e5b19570ab | session:2e73f20b-ffd4-4b83-b03a-4919799ed2ad | 2026-05-01T17:19:34.515Z -->
 ## ★ Insight
 `.env.local` is a Next.js convention — it's loaded automatically at server start, takes precedence over `.env` and `.env.development`, and is never sent to the browser. Setting `MINDER_INDEXER_WORKER=1` here means every `npm run dev` from now on spawns the worker thread, with no per-shell env juggling.

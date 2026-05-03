@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
-import { ProjectStatus, MinderConfig } from "@/lib/types";
+import { ProjectStatus, MinderConfig, FeatureFlagKey } from "@/lib/types";
+import { isFeatureFlagKey } from "@/lib/featureFlags";
 
 // Derived from the MinderConfig union types — update both together if options change
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
@@ -72,6 +73,33 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "pinnedSlugs must be an array of strings" }, { status: 400 });
     }
     patches.push((c) => { c.pinnedSlugs = body.pinnedSlugs as string[]; });
+  }
+
+  if (body.featureFlags !== undefined) {
+    // Partial-merge: unknown keys or non-boolean values reject the whole
+    // patch rather than silently dropping (matches no-silent-fallbacks posture).
+    if (
+      typeof body.featureFlags !== "object" ||
+      body.featureFlags === null ||
+      Array.isArray(body.featureFlags)
+    ) {
+      return NextResponse.json({ error: "featureFlags must be an object" }, { status: 400 });
+    }
+
+    const sanitized: Partial<Record<FeatureFlagKey, boolean>> = {};
+    for (const [key, value] of Object.entries(body.featureFlags)) {
+      if (!isFeatureFlagKey(key)) {
+        return NextResponse.json({ error: `Unknown feature flag: ${key}` }, { status: 400 });
+      }
+      if (typeof value !== "boolean") {
+        return NextResponse.json({ error: `featureFlags.${key} must be boolean` }, { status: 400 });
+      }
+      sanitized[key] = value;
+    }
+
+    patches.push((c) => {
+      c.featureFlags = { ...(c.featureFlags ?? {}), ...sanitized };
+    });
   }
 
   if (patches.length === 0) {

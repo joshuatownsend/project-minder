@@ -98,6 +98,16 @@ class GitStatusCache {
   get total(): number {
     return this.cache.size;
   }
+
+  /** Drain the queue and forget cached statuses. The processQueue() loop
+   *  observes the empty queue on its next iteration and exits naturally;
+   *  in-flight git subprocesses run to completion. Used by the (future)
+   *  feature-flag hot-toggle path; today no UI calls this. */
+  dispose() {
+    this.queue.length = 0;
+    this.seen.clear();
+    this.cache.clear();
+  }
 }
 
 // Singleton — persist across hot reloads in dev

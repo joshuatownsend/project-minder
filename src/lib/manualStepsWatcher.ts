@@ -204,6 +204,15 @@ class ManualStepsWatcher {
     }
     this.watched.clear();
     if (this.pollTimer) clearInterval(this.pollTimer);
+    this.initialized = false;
+  }
+
+  /** Alias for `destroy()` — matches the vocabulary used by the
+   *  feature-flag plan. No caller wires hot-toggling yet (today, the user
+   *  must restart the dev server for the manualStepsWatcher flag to take
+   *  effect). Calling dispose() on an uninitialized watcher is a no-op. */
+  dispose() {
+    this.destroy();
   }
 }
 

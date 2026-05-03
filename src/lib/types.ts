@@ -188,6 +188,44 @@ export interface PortConflict {
   type: "dev" | "db" | "docker";
 }
 
+/** Keys in MinderConfig.featureFlags. Each flag defaults to ON; `false`
+ *  disables the named subsystem on next scan / next server restart. The
+ *  union is the source of truth — adding a key here automatically widens
+ *  `getFlag()`'s accepted argument, the Settings UI iteration, and the
+ *  /api/config validator. */
+export type FeatureFlagKey =
+  | "scanInsights"
+  | "scanTodos"
+  | "scanManualSteps"
+  | "scanClaudeSessions"
+  | "scanWorktrees"
+  | "scanDockerCompose"
+  | "manualStepsWatcher"
+  | "gitStatusCache"
+  | "usageAnalytics"
+  | "agentSkillIndexer"
+  | "devServerControl"
+  | "liveActivity";
+
+/** Schedule mode used by Wave 8's quota burndown projection. Persisted now
+ *  so the Settings UI can capture it before the burndown chart lands. */
+export type ScheduleMode = "weekdays" | "vibe-coder" | "24x7" | "custom";
+
+/** Pricing override rule. Placeholder shape; Wave 8 (Cluster S) tightens
+ *  the contract and adds the Settings editor. */
+export interface PricingRule {
+  /** Wildcard pattern matched against the model id (e.g. "claude-opus-*"). */
+  pattern: string;
+  /** USD per 1M input tokens. */
+  inputUsdPerMillion?: number;
+  /** USD per 1M output tokens. */
+  outputUsdPerMillion?: number;
+  /** USD per 1M cache-read tokens. */
+  cacheReadUsdPerMillion?: number;
+  /** USD per 1M cache-create tokens. */
+  cacheCreateUsdPerMillion?: number;
+}
+
 export interface MinderConfig {
   statuses: Record<string, ProjectStatus>;
   hidden: string[]; // directory names to skip during scan
@@ -205,6 +243,18 @@ export interface MinderConfig {
     /** Most recently applied template slug — used to seed the modal. */
     lastUsedSlug?: string;
   };
+  /** Subsystem on/off toggles. Missing keys default to ON. See FeatureFlagKey. */
+  featureFlags?: Partial<Record<FeatureFlagKey, boolean>>;
+  /** ISO 4217 currency code (e.g. "USD", "EUR"). Wave 8 (S) honors. */
+  currency?: string;
+  /** Schedule shape used by quota burndown. Wave 8 (S) honors. */
+  scheduleMode?: ScheduleMode;
+  /** Preferred terminal application (e.g. "wt", "iterm"). Wave 7 (P) honors. */
+  terminal?: string;
+  /** Telegram bridge credentials. Wave 7 (P) honors. */
+  telegram?: { botToken?: string; chatId?: string };
+  /** Per-model pricing overrides. Wave 8 (S) honors. */
+  pricingRules?: PricingRule[];
 }
 
 export interface ClaudeUsageStats {

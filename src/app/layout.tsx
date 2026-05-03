@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { HelpProvider } from "@/components/HelpProvider";
@@ -83,8 +84,11 @@ export default async function RootLayout({
                     Project Minder
                   </a>
 
-                  {/* Nav */}
-                  <AppNav />
+                  {/* Nav — Suspense wraps AppNav because it reads
+                      useSearchParams() to compute /config?type= active state. */}
+                  <Suspense fallback={null}>
+                    <AppNav />
+                  </Suspense>
                 </div>
 
                 {/* Right side */}
