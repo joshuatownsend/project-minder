@@ -17,9 +17,14 @@ import type { SkillStats } from "@/lib/usage/types";
 // **No documented divergences** vs the file-parse path: both backends
 // skip sidechain entries (parser.ts:103 for file-parse, ingest for
 // DB), and `skill_name` is extracted identically (`args.skill` —
-// see `src/lib/db/ingest.ts:223` and `skillParser.ts:13`). The
-// invocations / projects / sessions maps should agree exactly when
-// the indexer is up-to-date with the on-disk JSONL.
+// see `src/lib/db/ingest.ts:223` and `skillParser.ts:13`). The SQL
+// filter mirrors `groupSkillCalls`'s string-existence check
+// (`if (typeof skillName !== "string" || !skillName) continue`) — the
+// `tu.skill_name <> ''` predicate matches the falsy-string branch so
+// stray empty skill_name rows don't synthesize a phantom "" skill
+// under DB mode that file-parse would have skipped. The invocations /
+// projects / sessions maps should agree exactly when the indexer is
+// up-to-date with the on-disk JSONL.
 
 interface Row {
   skill_name: string;
@@ -47,13 +52,14 @@ export function loadSkillUsageFromDb(db: DatabaseT.Database): SkillStats[] {
             MAX(tu.ts) AS last_ts
      FROM tool_uses tu
      JOIN sessions s USING (session_id)
-     WHERE tu.tool_name = 'Skill' AND tu.skill_name IS NOT NULL
+     WHERE tu.tool_name = 'Skill' AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
      GROUP BY tu.skill_name, s.project_slug, tu.session_id`
   ).all() as Row[];
 
   if (rows.length === 0) return [];
 
-  // Per-skill aggregation — same shape as agentParser's sessionTimes.
+  // Per-skill aggregation — same shape as `groupSkillCalls`'s
+  // sessionTimes map in `src/lib/usage/skillParser.ts`.
   const bySkill = new Map<string, SkillStats>();
   const sessionMaxTs = new Map<string, Map<string, string>>();
 
