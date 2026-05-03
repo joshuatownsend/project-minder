@@ -72,8 +72,14 @@ export function SettingsPage() {
   async function toggleFlag(key: FeatureFlagKey, next: boolean) {
     if (!config) return;
     setSaving(key);
-    const prev = config.featureFlags ?? {};
-    setConfig({ ...config, featureFlags: { ...prev, [key]: next } });
+    // Capture only THIS key's prior value (undefined = unset / default).
+    // Reverting just this key on failure preserves any other in-flight
+    // toggles — capturing the whole featureFlags map and restoring it
+    // would clobber concurrent successful saves of other keys.
+    const priorValue = config.featureFlags?.[key];
+    setConfig((curr) =>
+      curr ? { ...curr, featureFlags: { ...(curr.featureFlags ?? {}), [key]: next } } : curr
+    );
     try {
       const res = await fetch("/api/config", {
         method: "PATCH",
@@ -85,7 +91,16 @@ export function SettingsPage() {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
     } catch (e: unknown) {
-      setConfig({ ...config, featureFlags: prev });
+      setConfig((curr) => {
+        if (!curr) return curr;
+        const flags = { ...(curr.featureFlags ?? {}) };
+        if (priorValue === undefined) {
+          delete flags[key];
+        } else {
+          flags[key] = priorValue;
+        }
+        return { ...curr, featureFlags: flags };
+      });
       showToast("Couldn't save setting", e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(null);

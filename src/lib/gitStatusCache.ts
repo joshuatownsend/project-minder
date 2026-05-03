@@ -20,6 +20,11 @@ class GitStatusCache {
   private queue: QueueItem[] = [];
   private running = false;
   private seen = new Set<string>(); // prevent duplicate queue entries per cycle
+  // Bumped by dispose(); processQueue() snapshots it at start and drops
+  // any awaited results that landed after a dispose(). Without this, a
+  // dispose() that lands mid-batch silently has its cache.clear() undone
+  // when the in-flight scanGitDirtyStatus resolves.
+  private generation = 0;
 
   enqueue(projects: QueueItem[]) {
     for (const p of projects) {
@@ -39,6 +44,7 @@ class GitStatusCache {
   }
 
   private async processQueue() {
+    const myGen = this.generation;
     while (this.queue.length > 0) {
       const batch = this.queue.splice(0, BATCH_SIZE);
 
@@ -52,6 +58,10 @@ class GitStatusCache {
           }
         })
       );
+
+      // Drop the batch if dispose() ran while we were awaiting — otherwise
+      // these writes would repopulate the cache the user just cleared.
+      if (myGen !== this.generation) return;
 
       for (const { slug, status } of results) {
         this.cache.set(slug, {
@@ -99,14 +109,19 @@ class GitStatusCache {
     return this.cache.size;
   }
 
-  /** Drain the queue and forget cached statuses. The processQueue() loop
-   *  observes the empty queue on its next iteration and exits naturally;
-   *  in-flight git subprocesses run to completion. Used by the (future)
-   *  feature-flag hot-toggle path; today no UI calls this. */
+  /** Drain the queue, forget cached statuses, and invalidate any in-flight
+   *  processQueue() batch. Bumping generation makes processQueue() drop
+   *  results that landed after this call — without that guard the awaited
+   *  scanGitDirtyStatus subprocesses would repopulate the cache we just
+   *  cleared. running=false lets the next enqueue() spin a fresh loop;
+   *  callers can re-enable the cache by enqueueing again. Used by the
+   *  (future) feature-flag hot-toggle path; today no UI calls this. */
   dispose() {
+    this.generation++;
     this.queue.length = 0;
     this.seen.clear();
     this.cache.clear();
+    this.running = false;
   }
 }
 

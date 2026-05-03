@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **Placeholder pages** for `/plans`, `/plugins`, `/sql` so the new nav links don't 404 before Wave 5 lands. Each page reuses a shared `<ComingSoonPage />` component that names the wave, cluster, and TODO refs.
   - **`MinderConfig` extended** with `featureFlags`, `currency`, `scheduleMode`, `terminal`, `telegram`, `pricingRules` — all optional; `DEFAULT_CONFIG` unchanged so existing `.minder.json` files load with zero migration. `PricingRule` and `ScheduleMode` types added as placeholders that later waves (Cluster S, Wave 8) will tighten.
   - **Help docs** — `docs/help/settings.md` (+ `public/help/settings.md` runtime copy) describe the section roster and the per-flag wiring posture; `src/lib/help-mapping.ts` wires `/settings → settings`.
-  - **Tests** — `tests/featureFlags.test.ts` (16 cases) covers default-on semantics, partial-config behavior, the `false-vs-undefined` regression guard (`?? defaultOn` would silently flip `false` to `true`), key uniqueness, group partition completeness, and the `isFeatureFlagKey` validator. 656 tests pass, typecheck clean.
+  - **Tests** — `tests/featureFlags.test.ts` (16 cases) covers default-on semantics, partial-config behavior, the `false-vs-undefined` regression guard (`|| defaultOn` would flip `false` → `true`; `?? defaultOn` is safe), key uniqueness, group partition completeness, and the `isFeatureFlagKey` validator. 656 tests pass, typecheck clean.
 
 ## [1.0.0] - 2026-05-03
 

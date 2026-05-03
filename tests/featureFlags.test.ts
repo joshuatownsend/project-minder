@@ -27,9 +27,10 @@ describe("getFlag", () => {
   });
 
   it("does NOT silently swallow false → defaultOn (regression guard)", () => {
-    // The accessor must distinguish `undefined` from `false`. If someone
-    // refactors getFlag to `flags?.[key] ?? defaultOn`, this fails:
-    // false ?? true === false, but `false || true === true`.
+    // The accessor must distinguish `undefined` from `false`. The bug
+    // refactor to guard against is `flags?.[key] || defaultOn` —
+    // `false || true === true` would flip an explicit-off flag back on.
+    // (`?? defaultOn` is safe — `??` only coalesces null/undefined.)
     expect(getFlag({ scanTodos: false }, "scanTodos", true)).toBe(false);
   });
 });

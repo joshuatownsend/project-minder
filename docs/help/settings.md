@@ -47,4 +47,4 @@ Background work — watchers, ingest, indexers:
 
 ## Persistence
 
-Every change PATCHes `/api/config`, which writes the merged value into `.minder.json` in the Project Minder repo. The change survives restarts. Unknown flag keys or non-boolean values are rejected (no silent fallback) — if a save fails, the toggle reverts and an error appears at the top of the Features section.
+Every change PATCHes `/api/config`, which writes the merged value into `.minder.json` in the Project Minder repo. The change survives restarts. Unknown flag keys or non-boolean values are rejected (no silent fallback) — if a save fails, only that toggle reverts (other in-flight changes are preserved) and a toast surfaces the error.
