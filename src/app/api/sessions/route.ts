@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
-import { scanAllSessions } from "@/lib/scanner/claudeConversations";
+import { getSessionsList, type SessionsListResult } from "@/lib/data";
 import { SessionSummary } from "@/lib/types";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 
 const CACHE_TTL = 30_000; // 30s — kept short so live status badges on the dashboard are timely
 
 interface SessionsCacheSlot {
-  sessions: SessionSummary[];
+  result: SessionsListResult;
   cachedAt: number;
   // Content-derived watermark: max(endTime, startTime) across the cached
   // session set. Captured at refresh time and used as the ETag input so the
@@ -16,7 +16,8 @@ interface SessionsCacheSlot {
   maxSessionMs: number;
 }
 
-// globalThis singleton — survives Next.js module reloads
+// globalThis singleton — survives Next.js module reloads. Shared with
+// /api/sessions/activity which reads `result.sessions` from the same slot.
 const globalForSessions = globalThis as unknown as {
   __sessionsCache?: SessionsCacheSlot;
 };
@@ -35,16 +36,17 @@ function deriveMaxSessionMs(sessions: SessionSummary[]): number {
 export async function GET(request: NextRequest) {
   const project = request.nextUrl.searchParams.get("project");
 
-  // Refresh the in-route cache when stale. scanAllSessions itself is mtime-cached
-  // via claudeStatsCache on disk, so a refresh that finds no JSONL changes is
-  // already cheap — we just don't want to re-do the per-call work.
+  // Refresh the in-route cache when stale. The façade itself layers DB and
+  // file-parse caches under it, so a refresh that finds no JSONL changes is
+  // already cheap — we just don't want to re-do the per-call assembly work
+  // (sessions list assembly + serialization) on every dashboard poll.
   let cache = globalForSessions.__sessionsCache;
   if (!cache || Date.now() - cache.cachedAt > CACHE_TTL) {
-    const sessions = await scanAllSessions();
+    const result = await getSessionsList();
     cache = {
-      sessions,
+      result,
       cachedAt: Date.now(),
-      maxSessionMs: deriveMaxSessionMs(sessions),
+      maxSessionMs: deriveMaxSessionMs(result.sessions),
     };
     globalForSessions.__sessionsCache = cache;
   }
@@ -54,7 +56,7 @@ export async function GET(request: NextRequest) {
   //   - Rotate-too-often (ETag = cachedAt only): clients lose 304s every 30 s
   //     even when nothing actually changed.
   //   - Rotate-too-rarely (ETag = maxSessionMs only): SessionSummary contains
-  //     time-dependent fields (`isActive`, `status`) that scanAllSessions
+  //     time-dependent fields (`isActive`, `status`) that the loader
   //     recomputes on every refresh based on the current clock. Two sessions
   //     could "go inactive" across cache rebuilds without any JSONL editing,
   //     and a content-only ETag would 304 conditional clients into displaying
@@ -65,16 +67,20 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: "sessions-v1",
     maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
-    parts: [project ?? "", cache.sessions.length],
+    parts: [project ?? "", cache.result.sessions.length],
   });
 
   const notModified = ifNoneMatch(request, etag);
   if (notModified) return notModified;
 
-  let results = cache.sessions;
+  let results = cache.result.sessions;
   if (project) {
     results = results.filter((s) => s.projectSlug === project || s.projectName.includes(project));
   }
 
-  return jsonWithETag(results, etag);
+  // jsonWithETag returns a NextResponse; layer the backend header on top so
+  // soak monitoring / curl checks can verify which path served the request.
+  const response = jsonWithETag(results, etag);
+  response.headers.set("X-Minder-Backend", cache.result.meta.backend);
+  return response;
 }
