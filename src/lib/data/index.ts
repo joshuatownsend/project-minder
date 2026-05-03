@@ -19,19 +19,58 @@ import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/type
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
 // Backend selection is `MINDER_USE_DB`; the default is on. Set
-// `MINDER_USE_DB=0` to force the legacy file-parse path (e.g. to debug
-// a regression).
+// `MINDER_USE_DB=0` to force the legacy file-parse path.
 //
-// The DB-backed path falls through to file-parse on any failure (driver
-// missing, init failure, getDb null, thrown error during the load) so a
-// misconfigured indexer never breaks /api/usage. The fall-through is
-// logged once per process so operators can spot a silently-degraded DB
-// mode.
+// **Failure mode (P2b-9 contract)**: when DB mode is requested and the
+// DB is unavailable (driver missing, init failed, connection null,
+// load threw), this layer THROWS `DbUnavailableError`. Routes get a
+// 500 — which is the right answer for "DB is supposed to work and
+// doesn't." The previous behavior (silent fall-through to file-parse,
+// `logFallthroughOnce` masking repeats) hid a single transient EBUSY
+// during soak that downgraded every read for the rest of the dev
+// session.
+//
+// **Two intentional fall-throughs preserved** — these are correctness
+// / UX features, not error masking:
+//   1. v3-readiness gate (`needsReconcileAfterV3`): between migration
+//      apply and reconcile, `cost_usd` is 0 on every existing row.
+//      File-parse keeps numbers honest during the catch-up window.
+//   2. Empty-index gate (sessions/agents/skills/claude usage): a
+//      brand-new install with the indexer still warming up returns
+//      zero rows; falling back keeps the dashboard populated rather
+//      than blank during the first scan.
 
 const FLAG = "MINDER_USE_DB";
 
 export function dbModeRequested(): boolean {
   return process.env[FLAG] !== "0";
+}
+
+/**
+ * Thrown when DB mode is requested but the SQLite backend isn't
+ * usable (driver missing, init failed, connection null, or a load
+ * function threw). Bubbles to the route, which returns 500.
+ *
+ * Distinct from a thrown `Error` so callers (and tests) can pattern-
+ * match on the failure mode if needed; the default route handler
+ * doesn't distinguish — both produce a 500 — but the typed error
+ * keeps the contract grep-able.
+ *
+ * Uses native `Error.cause` (via the `{ cause }` constructor option)
+ * so node's default inspect / stack output includes the chained
+ * underlying error consistently. Same pattern `migrations.ts` uses.
+ */
+export class DbUnavailableError extends Error {
+  readonly reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed";
+  constructor(
+    reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed",
+    message: string,
+    cause?: unknown
+  ) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "DbUnavailableError";
+    this.reason = reason;
+  }
 }
 
 // Schema-readiness gate. `initDb()` runs `quick_check` plus a
@@ -42,13 +81,13 @@ export function dbModeRequested(): boolean {
 //
 // **Failure recovery**: if `initDb()` reports the schema as unavailable
 // (driver missing, corruption-quarantine rename failed mid-flight,
-// etc.) we DO NOT cache that failure forever. The original behavior
+// etc.) we DO NOT cache that failure forever. The pre-P2c behavior
 // poisoned every subsequent DB-backed read until process restart;
 // observed in soak as a single transient `EBUSY` on the corruption-
 // quarantine rename silently downgrading every route to file-parse for
-// the rest of the dev session, with `logFallthroughOnce` masking
-// repeats. Now: only cache successful inits; on failure, clear the
-// cached promise so the next call retries `initDb()` from scratch.
+// the rest of the dev session. Now: only cache successful inits; on
+// failure, clear the cached promise so the next call retries
+// `initDb()` from scratch.
 //
 // In-flight callers always share the same promise (writes only happen
 // in `then` after resolution), so there's no thundering-herd risk
@@ -59,10 +98,6 @@ function ensureSchemaReady(): Promise<InitResult> {
   if (initPromise) return initPromise;
   const promise = initDb();
   initPromise = promise;
-  // Async cleanup: if init resolved with `available: false` OR threw,
-  // clear the cache so the next call retries. Wait for the promise to
-  // settle first — concurrent callers during this init still get the
-  // shared (failed) result, only NEW callers after settlement retry.
   promise
     .then((result) => {
       if (!result.available && initPromise === promise) initPromise = null;
@@ -73,12 +108,21 @@ function ensureSchemaReady(): Promise<InitResult> {
   return promise;
 }
 
-let fallthroughLogged = false;
-function logFallthroughOnce(reason: string): void {
-  if (fallthroughLogged) return;
-  fallthroughLogged = true;
+// Light, throttled logging for the two INTENTIONAL fall-through
+// cases (v3-catch-up, empty-index). These are not bugs — they're
+// expected during migration windows and brand-new installs — but
+// surfacing them once per process helps an operator spot a stuck
+// reconcile or a cold indexer. Distinct map per case so each kind
+// of fall-through gets logged once even if the others fire too.
+const fallthroughLoggedFor = new Set<string>();
+function logIntentionalFallthrough(scope: string, reason: string): void {
+  const key = `${scope}:${reason}`;
+  if (fallthroughLoggedFor.has(key)) return;
+  fallthroughLoggedFor.add(key);
   // eslint-disable-next-line no-console
-  console.warn(`[data] DB-backed path unavailable: ${reason}. Falling back to file-parse. Set ${FLAG}=0 to skip the DB path entirely.`);
+  console.warn(
+    `[data] ${scope}: DB-backed path fell back to file-parse (${reason}). This is expected during migration / cold-indexer windows; a 500 from the route would mean the DB itself is unhealthy.`
+  );
 }
 
 export interface UsageBackendMeta {
@@ -96,83 +140,136 @@ export interface UsageResult {
 type DbHandle = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
 /**
- * Common DB-readiness gate for SQL-backed read paths. Returns the open
- * `db` handle when everything's healthy, or `null` to signal "fall back
- * to file-parse" — same contract every consumer follows. Each callsite
- * still applies its own dimension-specific gates (e.g., the usage path
- * checks `needsReconcileAfterV3` because `cost_usd` is the column at
- * risk during v3 catch-up; session detail doesn't read `cost_usd` so
- * it skips that check).
+ * DB-readiness gate for SQL-backed read paths. Returns the open `db`
+ * handle when everything's healthy; THROWS `DbUnavailableError`
+ * otherwise. Each callsite still applies its own dimension-specific
+ * gates (e.g., the usage path checks `needsReconcileAfterV3` because
+ * `cost_usd` is the column at risk during v3 catch-up; session detail
+ * doesn't read `cost_usd` so it skips that check).
+ *
+ * Not exported — consumers go through the public façade functions
+ * which decide whether to call this (DB mode) or skip straight to
+ * file-parse (`MINDER_USE_DB=0`).
  */
-async function getReadyDb(): Promise<DbHandle | null> {
-  // User explicitly opted out (MINDER_USE_DB=0) — silent fall-through.
-  // Not a degradation case; the operator knows.
-  if (!dbModeRequested()) return null;
-  // Driver missing IS a silent-degradation case — DB mode was requested
-  // (default-on or explicit =1) but better-sqlite3 isn't loadable. Log
-  // once so operators can spot the configuration gap.
+async function getReadyDb(): Promise<DbHandle> {
   if (!isDriverLoaded()) {
-    logFallthroughOnce("better-sqlite3 driver not loaded");
-    return null;
+    throw new DbUnavailableError(
+      "driver-missing",
+      "better-sqlite3 driver not loaded — install the optional dep or set MINDER_USE_DB=0 to force file-parse."
+    );
   }
-  const init = await ensureSchemaReady();
+  // `initDb()` can both resolve `{available:false}` (its documented
+  // failure return) AND reject (e.g. if `quarantineCorruptDb()`
+  // ultimately throws on a Windows EBUSY). Both shapes must surface
+  // as `DbUnavailableError(reason: 'init-failed')` for the contract
+  // to hold; without the try/catch a rejection escapes as a raw
+  // Error and pattern-matching callers / tests miss it.
+  let init: InitResult;
+  try {
+    init = await ensureSchemaReady();
+  } catch (err) {
+    throw new DbUnavailableError(
+      "init-failed",
+      `SQLite schema init threw: ${(err as Error).message}`,
+      err
+    );
+  }
   if (!init.available) {
-    logFallthroughOnce(init.error?.message ?? "schema unavailable");
-    return null;
+    throw new DbUnavailableError(
+      "init-failed",
+      `SQLite schema init failed: ${init.error?.message ?? "unknown"}`,
+      init.error ?? undefined
+    );
   }
   const db = await getDb();
   if (!db) {
-    logFallthroughOnce("getDb returned null after init");
-    return null;
+    throw new DbUnavailableError(
+      "connection-null",
+      "getDb() returned null after successful init — connection pool drained or disposed."
+    );
   }
   return db;
 }
 
 /**
- * Try the SQLite-backed path. Returns `null` (caller falls back to
- * file-parse) on any failure or unmet precondition. Each guard takes
- * a single early-return; the happy path is the unindented bottom.
+ * Wraps a DB load call, converting unexpected throws into
+ * `DbUnavailableError(reason: 'load-failed')` so the route handler's
+ * uniform error path catches them. Lets `DbUnavailableError`
+ * pass through unchanged — those already carry the right shape.
+ *
+ * Also used to gate `needsReconcileAfterV3` checks so its small
+ * `SELECT FROM meta` can't escape as a raw `Error` if the meta
+ * table is partially-migrated or the handle is stale (Codex P2
+ * finding on PR #57). The function accepts both sync and async
+ * loaders.
  */
-async function tryDbBackend(
-  period: "today" | "week" | "month" | "all",
-  project: string | undefined
-): Promise<UsageResult | null> {
+async function callDbLoader<T>(scope: string, loader: () => T | Promise<T>): Promise<T> {
   try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    // v3 readiness gate: between migration apply and reconcile,
-    // `turns.cost_usd` is 0 on every existing row. Without this guard
-    // the SQL aggregate would return totalCost = $0 — a silent wrong
-    // answer. Cleared by `reconcileAllSessions` on success.
-    if (needsReconcileAfterV3(db)) {
-      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)");
-      return null;
-    }
-    const report = loadUsageReportFromSql(db, period, project);
-    return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+    return await loader();
   } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
+    if (err instanceof DbUnavailableError) throw err;
+    throw new DbUnavailableError(
+      "load-failed",
+      `${scope}: SQL load failed — ${(err as Error).message}`,
+      err as Error
+    );
   }
 }
 
 /**
- * Run the usage report through whichever backend is enabled. Always
- * returns a valid `UsageReport` — the DB backend transparently falls
- * back to file-parse on any failure.
+ * Run the v3-readiness gate (`needsReconcileAfterV3`) under
+ * `callDbLoader` so a thrown SELECT (corrupt/partially-migrated
+ * `meta` table, stale handle) surfaces as
+ * `DbUnavailableError(reason: 'load-failed')` instead of a raw
+ * `Error`. Keeps the typed-error contract uniform across the four
+ * façade functions that gate on v3 readiness.
+ */
+async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
+  return callDbLoader(`${scope}:v3-gate`, () => needsReconcileAfterV3(db));
+}
+
+/**
+ * File-parse usage path. Used when `MINDER_USE_DB=0` (explicit
+ * opt-out) or when the v3-readiness gate says the DB rows are mid-
+ * migration.
+ */
+async function runFileUsage(
+  period: "today" | "week" | "month" | "all",
+  project: string | undefined
+): Promise<UsageResult> {
+  // `getJsonlMaxMtime()` is captured AFTER report generation —
+  // `parseAllSessions` warms the FileCache as a side effect, so a
+  // pre-call read returns 0 on a cold process.
+  const report = await generateUsageReport(period, project);
+  return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
+}
+
+/**
+ * Run the usage report through whichever backend is enabled.
+ *
+ * - `MINDER_USE_DB=0`: file-parse, returns immediately.
+ * - DB mode + healthy DB + reconcile complete: SQL-backed.
+ * - DB mode + v3-catch-up window: file-parse fallback (correctness).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
   period: "today" | "week" | "month" | "all",
   project?: string
 ): Promise<UsageResult> {
-  const dbResult = await tryDbBackend(period, project);
-  if (dbResult) return dbResult;
+  if (!dbModeRequested()) return runFileUsage(period, project);
 
-  // File-parse backend. `getJsonlMaxMtime()` is captured AFTER report
-  // generation — `parseAllSessions` warms the FileCache as a side
-  // effect, so a pre-call read returns 0 on a cold process.
-  const report = await generateUsageReport(period, project);
-  return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
+  const db = await getReadyDb();
+  if (await checkV3Gate("getUsage", db)) {
+    logIntentionalFallthrough(
+      "getUsage",
+      "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
+    );
+    return runFileUsage(period, project);
+  }
+  const report = await callDbLoader("getUsage", () =>
+    loadUsageReportFromSql(db, period, project)
+  );
+  return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 
 export interface SessionDetailResult {
@@ -181,44 +278,44 @@ export interface SessionDetailResult {
 }
 
 /**
- * Single-session detail loader. SQL-backed by default when the
- * session has a row in the index; otherwise falls back to the
- * file-parse path. Set `MINDER_USE_DB=0` to force the legacy path.
+ * Single-session detail loader.
  *
- * The v3 readiness gate applies here too: `loadSessionDetailFromDb`
- * reads `sessions.cost_usd` (→ `costEstimate`) and
- * `verified_task_count` / `one_shot_task_count` (→ `oneShotRate`),
- * which are 0 on un-reconciled rows during the v3 catch-up window.
- * Without the gate the DB backend would silently serve $0 and
- * `oneShotRate=undefined` for a half-reconciled corpus while the
- * file-parse path returns the right numbers.
- *
- * The DB path returns `null` when the session isn't indexed (vs.
- * "indexed but not found"). The façade treats `null` as "fall through
- * to file-parse" so a session that exists on disk but hasn't been
- * indexed yet still resolves.
+ * - `MINDER_USE_DB=0`: file-parse, returns immediately.
+ * - DB mode + healthy DB + reconcile complete + session indexed:
+ *   SQL-backed.
+ * - DB mode + v3-catch-up window: file-parse fallback (correctness —
+ *   `cost_usd` and one-shot counts are the at-risk columns).
+ * - DB mode + session not indexed yet: file-parse fallback (a session
+ *   that exists on disk but hasn't been ingested still resolves).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSessionDetail(sessionId: string): Promise<SessionDetailResult> {
-  const dbDetail = await tryDbSessionDetail(sessionId);
+  if (!dbModeRequested()) {
+    const detail = await scanSessionDetail(sessionId);
+    return { detail, meta: { backend: "file" } };
+  }
+
+  const db = await getReadyDb();
+  if (await checkV3Gate("getSessionDetail", db)) {
+    logIntentionalFallthrough(
+      "getSessionDetail",
+      "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
+    );
+    const detail = await scanSessionDetail(sessionId);
+    return { detail, meta: { backend: "file" } };
+  }
+  const dbDetail = await callDbLoader("getSessionDetail", () =>
+    loadSessionDetailFromDb(db, sessionId)
+  );
   if (dbDetail) return { detail: dbDetail, meta: { backend: "db" } };
 
+  // Session not in the index — fall through to file-parse so a
+  // newly-arrived JSONL still resolves before the indexer catches it.
+  // This is a per-session miss, not a DB unavailability — no
+  // `logIntentionalFallthrough` (it'd fire constantly during normal
+  // browsing of un-indexed sessions).
   const detail = await scanSessionDetail(sessionId);
   return { detail, meta: { backend: "file" } };
-}
-
-async function tryDbSessionDetail(sessionId: string): Promise<SessionDetail | null> {
-  try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    if (needsReconcileAfterV3(db)) {
-      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
-      return null;
-    }
-    return loadSessionDetailFromDb(db, sessionId);
-  } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
-  }
 }
 
 export interface SessionsListResult {
@@ -227,25 +324,43 @@ export interface SessionsListResult {
 }
 
 /**
- * Cross-project session list. SQL-backed by default when the index has
- * sessions; falls back to `scanAllSessions` (file-parse) on driver-missing,
- * init-failure, awaiting-v3 reconcile, empty index, or any thrown error.
+ * Cross-project session list.
  *
- * The empty-index case is treated as a fall-through (rather than returning
- * an empty list) so a brand-new install with the indexer still warming up
- * still surfaces sessions on the dashboard. The two backends produce the
- * same SessionSummary shape modulo seven documented divergences listed in
- * `sessionsListFromDb.ts`'s header comment.
+ * - `MINDER_USE_DB=0`: file-parse.
+ * - DB mode + healthy DB + reconcile complete + non-empty index:
+ *   SQL-backed.
+ * - DB mode + v3-catch-up: file-parse (correctness).
+ * - DB mode + empty index: file-parse (UX — brand-new install
+ *   still surfaces sessions while the indexer warms up).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
- * Project filtering is intentionally NOT pushed into this layer — the
- * route caches the unfiltered set so a back-to-back "all projects" then
- * "single project" navigation reuses the same cache. Matches the file-
- * parse route's existing post-cache filter pattern.
+ * Project filtering is intentionally NOT pushed into this layer —
+ * the route caches the unfiltered set so back-to-back "all
+ * projects" then "single project" navigation reuses the cache.
+ * Matches the file-parse route's existing post-cache filter pattern.
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
-  const dbResult = await tryDbSessionsList();
-  if (dbResult) return dbResult;
+  if (!dbModeRequested()) return runFileSessionsList();
 
+  const db = await getReadyDb();
+  if (await checkV3Gate("getSessionsList", db)) {
+    logIntentionalFallthrough(
+      "getSessionsList",
+      "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
+    );
+    return runFileSessionsList();
+  }
+  const sessions = await callDbLoader("getSessionsList", () =>
+    loadSessionsListFromDb(db)
+  );
+  if (sessions.length === 0) {
+    logIntentionalFallthrough("getSessionsList", "DB index empty (indexer warming up?)");
+    return runFileSessionsList();
+  }
+  return { sessions, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+}
+
+async function runFileSessionsList(): Promise<SessionsListResult> {
   const sessions = await scanAllSessions();
   // `getJsonlMaxMtime()` only reflects files parsed by `parseAllSessions`
   // (the usage parser's FileCache); `scanAllSessions` doesn't warm that
@@ -270,83 +385,43 @@ function deriveSessionsMaxMs(sessions: SessionSummary[]): number {
   return max;
 }
 
-async function tryDbSessionsList(): Promise<SessionsListResult | null> {
-  try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    // Apply the v3 readiness gate uniformly with the other DB-backed
-    // paths: `sessions.cost_usd` is `0` until reconcile re-derives it,
-    // and the per-session `costEstimate` shown in cards would silently
-    // collapse to $0 without this check during the catch-up window.
-    if (needsReconcileAfterV3(db)) {
-      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
-      return null;
-    }
-    const sessions = loadSessionsListFromDb(db);
-    if (sessions.length === 0) {
-      // Empty index — likely indexer still warming up on a new install.
-      // Fall through to file-parse so the dashboard isn't blank.
-      return null;
-    }
-    return {
-      sessions,
-      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
-    };
-  } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
-  }
-}
-
 export interface AgentUsageResult {
   stats: AgentStats[];
   meta: { backend: "db" | "file" };
 }
 
 /**
- * Cross-project agent (subagent) usage stats. SQL-backed by default
- * when `tool_uses` carries Agent rows; falls back to the file-parse
- * `parseAllSessions` + `groupAgentCalls` path on driver-missing,
- * init-failure, empty index, or any thrown error.
+ * Cross-project agent (subagent) usage stats.
  *
- * No v3 readiness gate here — this path doesn't read `cost_usd` or
- * one-shot counts; the agent stats derive purely from indexed
- * `tool_uses` rows that are populated at the same time as the rest
- * of the session.
- *
- * Empty-index fall-through (same posture as `getSessionsList`): if
- * the indexer has zero Agent rows but JSONL files exist on disk,
- * file-parse keeps the agents page populated until the indexer
- * catches up. The route caller doesn't need to know which backend
- * served — `meta.backend` and the `X-Minder-Backend` header surface
- * it for soak monitoring.
+ * - `MINDER_USE_DB=0`: file-parse.
+ * - DB mode + healthy DB + non-empty Agent rows: SQL-backed. No v3
+ *   gate — this path doesn't read `cost_usd` or one-shot counts.
+ * - DB mode + zero Agent rows: file-parse fallback (UX — keeps the
+ *   agents page populated until the indexer catches up).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getAgentUsage(): Promise<AgentUsageResult> {
-  const dbResult = await tryDbAgentUsage();
-  if (dbResult) return dbResult;
+  if (!dbModeRequested()) return runFileAgentUsage();
 
-  // File-parse fall-through. Lazy-import the file-parse pipeline to
-  // keep the DB happy-path off the import graph for `parseAllSessions`
-  // / `groupAgentCalls` — under normal operation we never load them.
+  const db = await getReadyDb();
+  const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db));
+  if (stats.length === 0) {
+    logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
+    return runFileAgentUsage();
+  }
+  return { stats, meta: { backend: "db" } };
+}
+
+async function runFileAgentUsage(): Promise<AgentUsageResult> {
+  // Lazy-import the file-parse pipeline to keep the DB happy-path off
+  // the import graph for `parseAllSessions` / `groupAgentCalls` —
+  // under normal operation we never load them.
   const { parseAllSessions } = await import("@/lib/usage/parser");
   const { groupAgentCalls } = await import("@/lib/usage/agentParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
   const stats = groupAgentCalls(allTurns);
   return { stats, meta: { backend: "file" } };
-}
-
-async function tryDbAgentUsage(): Promise<AgentUsageResult | null> {
-  try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    const stats = loadAgentUsageFromDb(db);
-    if (stats.length === 0) return null;
-    return { stats, meta: { backend: "db" } };
-  } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
-  }
 }
 
 export interface SkillUsageResult {
@@ -356,38 +431,33 @@ export interface SkillUsageResult {
 
 /**
  * Cross-project skill usage stats. Mirror of `getAgentUsage` against
- * `tool_uses.skill_name`. SQL-backed by default when Skill rows are
- * present; falls back to the file-parse `parseAllSessions` +
- * `groupSkillCalls` path on driver-missing, init-failure, empty
- * index, or any thrown error. Empty-rows is a fall-through (rather
- * than an empty list) so a brand-new install with the indexer still
- * warming up doesn't show "no skills used" while JSONL files exist.
+ * `tool_uses.skill_name`.
  *
- * No v3 readiness gate — pure tool_uses aggregation, no cost columns.
+ * - `MINDER_USE_DB=0`: file-parse.
+ * - DB mode + healthy DB + non-empty Skill rows: SQL-backed. No v3
+ *   gate — pure tool_uses aggregation, no cost columns.
+ * - DB mode + zero Skill rows: file-parse fallback (UX).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSkillUsage(): Promise<SkillUsageResult> {
-  const dbResult = await tryDbSkillUsage();
-  if (dbResult) return dbResult;
+  if (!dbModeRequested()) return runFileSkillUsage();
 
+  const db = await getReadyDb();
+  const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db));
+  if (stats.length === 0) {
+    logIntentionalFallthrough("getSkillUsage", "DB has zero Skill rows (indexer warming up?)");
+    return runFileSkillUsage();
+  }
+  return { stats, meta: { backend: "db" } };
+}
+
+async function runFileSkillUsage(): Promise<SkillUsageResult> {
   const { parseAllSessions } = await import("@/lib/usage/parser");
   const { groupSkillCalls } = await import("@/lib/usage/skillParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
   const stats = groupSkillCalls(allTurns);
   return { stats, meta: { backend: "file" } };
-}
-
-async function tryDbSkillUsage(): Promise<SkillUsageResult | null> {
-  try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    const stats = loadSkillUsageFromDb(db);
-    if (stats.length === 0) return null;
-    return { stats, meta: { backend: "db" } };
-  } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
-  }
 }
 
 export interface ClaudeUsageResult {
@@ -409,24 +479,40 @@ export interface ClaudeUsageResult {
 
 /**
  * Aggregate Claude conversation stats scoped to the given project
- * paths. SQL-backed by default; falls back to the file-parse
- * `scanClaudeConversationsForProjects` path on driver-missing,
- * init-failure, awaiting-v3 reconcile, zero indexed sessions for
- * the filter set, or any thrown error.
+ * paths.
  *
- * The v3 readiness gate applies because `cost_usd` is read directly
- * — without the gate the DB would return $0 during the v3 catch-up
- * window while file-parse returns the right number.
- *
- * Empty `conversationCount` is treated as a fall-through: a fresh
- * install where the indexer hasn't covered any of the filter's
- * project dirs yet falls back to file-parse so the dashboard's
- * Claude usage section renders something rather than zeros.
+ * - `MINDER_USE_DB=0`: file-parse.
+ * - DB mode + healthy DB + reconcile complete + non-empty conversations:
+ *   SQL-backed.
+ * - DB mode + v3-catch-up: file-parse (correctness — reads `cost_usd`).
+ * - DB mode + zero conversations for the filter set: file-parse (UX).
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult> {
-  const dbResult = await tryDbClaudeUsage(projectPaths);
-  if (dbResult) return dbResult;
+  if (!dbModeRequested()) return runFileClaudeUsage(projectPaths);
 
+  const db = await getReadyDb();
+  if (await checkV3Gate("getClaudeUsage", db)) {
+    logIntentionalFallthrough(
+      "getClaudeUsage",
+      "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
+    );
+    return runFileClaudeUsage(projectPaths);
+  }
+  const stats = await callDbLoader("getClaudeUsage", () =>
+    loadClaudeUsageStatsFromDb(db, projectPaths)
+  );
+  if (stats.conversationCount === 0) {
+    logIntentionalFallthrough(
+      "getClaudeUsage",
+      "DB has zero conversations for the filter set (indexer warming up?)"
+    );
+    return runFileClaudeUsage(projectPaths);
+  }
+  return { stats, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+}
+
+async function runFileClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult> {
   const { scanClaudeConversationsForProjects } = await import(
     "@/lib/scanner/claudeConversations"
   );
@@ -435,21 +521,4 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
   // is expected to fall back to its own freshness signal (see
   // `ClaudeUsageResult.meta.maxMtimeMs` JSDoc).
   return { stats, meta: { backend: "file", maxMtimeMs: 0 } };
-}
-
-async function tryDbClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult | null> {
-  try {
-    const db = await getReadyDb();
-    if (!db) return null;
-    if (needsReconcileAfterV3(db)) {
-      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
-      return null;
-    }
-    const stats = loadClaudeUsageStatsFromDb(db, projectPaths);
-    if (stats.conversationCount === 0) return null;
-    return { stats, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
-  } catch (err) {
-    logFallthroughOnce((err as Error).message);
-    return null;
-  }
 }

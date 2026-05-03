@@ -10,6 +10,12 @@ import { promises as fs } from "fs";
 // cached the failed promise forever; this test pins the new contract
 // that the cache only holds successful inits.
 //
+// **P2b-9 update**: when DB mode is requested and init fails, the
+// façade now THROWS `DbUnavailableError` (no silent fall-through to
+// file-parse). The retry-on-failure contract is still pinned here:
+// the second call must re-attempt `initDb()` rather than returning
+// the cached failure.
+//
 // Skipped when better-sqlite3 isn't loadable.
 
 let driverAvailable: boolean;
@@ -80,9 +86,12 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
       quarantined: null,
     });
 
-    // First façade call: DB path falls through to file (no DB available).
-    const first = await facade.getUsage("all");
-    expect(first.meta.backend).toBe("file");
+    // First façade call: DB mode requested + init fails → throws
+    // `DbUnavailableError` (P2b-9: no silent fall-through to file).
+    await expect(facade.getUsage("all")).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "init-failed",
+    });
 
     // initDb was called exactly once (the failure was cached for that
     // in-flight call, but cleared on resolution).
@@ -91,17 +100,65 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
     // Second façade call: must retry initDb, not return the cached
     // failure. We let the spy call the real initDb this time (no
     // additional mockResolvedValueOnce), which will succeed because the
-    // `~/.minder/` directory is writable.
+    // `~/.minder/` directory is writable. With a fresh tmpHome and no
+    // JSONL files, the index is empty and the façade falls back to
+    // file-parse (intentional empty-index fall-through, NOT silent
+    // failure). What we're asserting here is that the retry happened
+    // and produced a non-throwing result — the fact that the empty
+    // tmpHome makes both backends report empty means either is fine.
     const second = await facade.getUsage("all");
 
     // initDb called again (retry happened).
     expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-
-    // Backend depends on whether the real initDb finds an empty DB —
-    // either way the key assertion is the retry happened. With a fresh
-    // tmpHome and no JSONL files, both backends report empty, so we
-    // just assert the call was retried.
     expect(["db", "file"]).toContain(second.meta.backend);
+  });
+
+  it("rethrows a thrown v3-readiness gate as DbUnavailableError(reason: 'load-failed')", async () => {
+    // Codex P2 finding on PR #57: `needsReconcileAfterV3(db)` runs a
+    // small SELECT and was previously called outside any wrapper. If
+    // that SELECT throws (corrupt/partial meta table, stale handle),
+    // the exception escaped as a raw Error not DbUnavailableError —
+    // breaking the typed-failure contract for getUsage /
+    // getSessionDetail / getSessionsList / getClaudeUsage. Pin the
+    // wrapping here.
+    process.env.MINDER_USE_DB = "1";
+    const { facade, mig } = await reloadModules();
+
+    // Initialize the DB normally so getReadyDb() succeeds.
+    await mig.initDb();
+
+    // Replace `needsReconcileAfterV3` with a throwing stub. The
+    // import path mirrors what `src/lib/data/index.ts` uses, so the
+    // mock applies to the same module instance.
+    const usageFromDb = await import("@/lib/data/usageFromDb");
+    vi.spyOn(usageFromDb, "needsReconcileAfterV3").mockImplementation(() => {
+      throw new Error("simulated stale-handle SELECT failure");
+    });
+
+    await expect(facade.getUsage("all")).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "load-failed",
+    });
+  });
+
+  it("rethrows a rejected initDb() as DbUnavailableError(reason: 'init-failed')", async () => {
+    // Both reviewers (Codex P2 + Copilot) flagged this gap on PR #57:
+    // `initDb()` can both resolve `{available:false}` AND REJECT (e.g.
+    // a `quarantineCorruptDb` throw on Windows EBUSY). The contract says
+    // every DB-unavailability under MINDER_USE_DB=1 surfaces as
+    // `DbUnavailableError`; a rejection escaping as a raw `Error`
+    // breaks pattern-matching callers/tests. Pin the contract here so
+    // the next refactor can't quietly regress it.
+    process.env.MINDER_USE_DB = "1";
+    const { facade, mig } = await reloadModules();
+
+    const initSpy = vi.spyOn(mig, "initDb");
+    initSpy.mockRejectedValueOnce(new Error("simulated quarantineCorruptDb throw"));
+
+    await expect(facade.getUsage("all")).rejects.toMatchObject({
+      name: "DbUnavailableError",
+      reason: "init-failed",
+    });
   });
 
   it("caches the in-flight init promise so concurrent first calls share one initDb invocation", async () => {

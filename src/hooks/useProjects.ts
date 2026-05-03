@@ -88,13 +88,27 @@ export function useProject(slug: string) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // `fetch` resolves on 4xx/5xx — must gate on `res.ok` or the
+    // route's error body (e.g. `{error: "Project not found"}` from a
+    // 404) becomes `project` and the consumer renders against a
+    // malformed shape. ProjectDetail crashed on `dockerPorts.length`
+    // when this hook wasn't checking status.
+    let cancelled = false;
     fetch(`/api/projects/${slug}`)
-      .then((res) => res.json())
-      .then((data) => {
+      .then(async (res) => {
+        const data = res.ok ? ((await res.json()) as ProjectData) : null;
+        if (cancelled) return;
         setProject(data);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        setProject(null);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
 
   return { project, loading };
