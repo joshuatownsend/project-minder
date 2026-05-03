@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { buildSkillAliasMap } from "@/lib/indexer/canonicalize";
-import { parseAllSessions } from "@/lib/usage/parser";
-import { groupSkillCalls } from "@/lib/usage/skillParser";
+import { getSkillUsage } from "@/lib/data";
 import { getCachedScan } from "@/lib/cache";
 import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache } from "@/lib/skillUpdateCache";
@@ -19,24 +18,30 @@ interface SkillRow {
   catalogMissing?: boolean;
 }
 
+interface CacheSlot {
+  data: SkillRow[];
+  backend: "db" | "file";
+  cachedAt: number;
+}
+
 const globalForSkills = globalThis as unknown as {
-  __skillsRouteCache?: Map<string, { data: SkillRow[]; cachedAt: number }>;
+  __skillsRouteCache?: Map<string, CacheSlot>;
 };
 
-function getRouteCache(key: string): SkillRow[] | null {
+function getRouteCache(key: string): CacheSlot | null {
   const cache = globalForSkills.__skillsRouteCache;
   if (!cache) return null;
   const slot = cache.get(key);
   if (!slot) return null;
-  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot.data;
+  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot;
   return null;
 }
 
-function setRouteCache(key: string, data: SkillRow[]) {
+function setRouteCache(key: string, data: SkillRow[], backend: "db" | "file") {
   if (!globalForSkills.__skillsRouteCache) {
     globalForSkills.__skillsRouteCache = new Map();
   }
-  globalForSkills.__skillsRouteCache.set(key, { data, cachedAt: Date.now() });
+  globalForSkills.__skillsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
 }
 
 export function invalidateSkillsRouteCache() {
@@ -65,18 +70,18 @@ export async function GET(request: NextRequest) {
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${query ?? ""}`;
   const cached = getRouteCache(cacheKey);
   if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached));
-    return jsonWithCacheControl(cached);
+    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
+    const response = jsonWithCacheControl(cached.data);
+    response.headers.set("X-Minder-Backend", cached.backend);
+    return response;
   }
 
-  const [catalog, sessionMap] = await Promise.all([
+  const [catalog, skillUsage] = await Promise.all([
     loadCatalog({ includeProjects: true }),
-    parseAllSessions(),
+    getSkillUsage(),
   ]);
 
-  const allTurns = Array.from(sessionMap.values()).flat();
-  const statsArr = groupSkillCalls(allTurns);
-
+  const statsArr = skillUsage.stats;
   const aliasMap = buildSkillAliasMap(catalog.skills);
   const rows: SkillRow[] = [];
   const matchedNames = new Set<string>();
@@ -143,8 +148,10 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  setRouteCache(cacheKey, result);
+  setRouteCache(cacheKey, result, skillUsage.meta.backend);
   skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return jsonWithCacheControl(result);
+  const response = jsonWithCacheControl(result);
+  response.headers.set("X-Minder-Backend", skillUsage.meta.backend);
+  return response;
 }

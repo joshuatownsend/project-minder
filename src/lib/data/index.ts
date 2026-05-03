@@ -12,7 +12,8 @@ import {
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
-import type { UsageReport, AgentStats } from "@/lib/usage/types";
+import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
+import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
 import type { SessionDetail, SessionSummary } from "@/lib/types";
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
@@ -311,6 +312,47 @@ async function tryDbAgentUsage(): Promise<AgentUsageResult | null> {
     const db = await getReadyDb();
     if (!db) return null;
     const stats = loadAgentUsageFromDb(db);
+    if (stats.length === 0) return null;
+    return { stats, meta: { backend: "db" } };
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
+}
+
+export interface SkillUsageResult {
+  stats: SkillStats[];
+  meta: { backend: "db" | "file" };
+}
+
+/**
+ * Cross-project skill usage stats. Mirror of `getAgentUsage` against
+ * `tool_uses.skill_name`. SQL-backed by default when Skill rows are
+ * present; falls back to the file-parse `parseAllSessions` +
+ * `groupSkillCalls` path on driver-missing, init-failure, empty
+ * index, or any thrown error. Empty-rows is a fall-through (rather
+ * than an empty list) so a brand-new install with the indexer still
+ * warming up doesn't show "no skills used" while JSONL files exist.
+ *
+ * No v3 readiness gate — pure tool_uses aggregation, no cost columns.
+ */
+export async function getSkillUsage(): Promise<SkillUsageResult> {
+  const dbResult = await tryDbSkillUsage();
+  if (dbResult) return dbResult;
+
+  const { parseAllSessions } = await import("@/lib/usage/parser");
+  const { groupSkillCalls } = await import("@/lib/usage/skillParser");
+  const sessionMap = await parseAllSessions();
+  const allTurns = Array.from(sessionMap.values()).flat();
+  const stats = groupSkillCalls(allTurns);
+  return { stats, meta: { backend: "file" } };
+}
+
+async function tryDbSkillUsage(): Promise<SkillUsageResult | null> {
+  try {
+    const db = await getReadyDb();
+    if (!db) return null;
+    const stats = loadSkillUsageFromDb(db);
     if (stats.length === 0) return null;
     return { stats, meta: { backend: "db" } };
   } catch (err) {
