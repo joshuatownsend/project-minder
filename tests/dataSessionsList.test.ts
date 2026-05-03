@@ -247,8 +247,22 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
 
       // Documented divergences — assert the DB path's intentional differences.
       expect(d.recaps).toBeUndefined();
-      expect(d.searchableText).toBeUndefined();
       expect(d.status === "working" || d.status === "idle").toBe(true);
+
+      // searchableText restored as of P2c — should be present on both
+      // backends. We don't assert string equality (the file-parse path
+      // appends slightly differently from the per-turn DB path; see
+      // sessionsListFromDb.ts header divergence #2 quirk), but the DB
+      // value should contain the user prompt and at least the prefix
+      // of one assistant text. Empty string is the only failure case.
+      expect(typeof d.searchableText).toBe("string");
+      expect(d.searchableText!.length).toBeGreaterThan(0);
+      expect(typeof f.searchableText).toBe("string");
+      // Both should include the initial prompt text.
+      if (f.initialPrompt) {
+        expect(d.searchableText).toContain(f.initialPrompt);
+        expect(f.searchableText).toContain(f.initialPrompt);
+      }
     }
   });
 

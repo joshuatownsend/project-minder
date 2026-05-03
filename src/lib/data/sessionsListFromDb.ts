@@ -22,14 +22,17 @@ import type { SessionSummary, SessionStatus } from "@/lib/types";
 // 1. `recaps`: `undefined` (was: parsed from `entry.type === "system"
 //    && subtype === "away_summary"`). Ingest skips non-user/non-assistant
 //    entries.
-// 2. `searchableText`: `undefined` (was: human prompts + assistant text
-//    snippets joined to ~4000 chars). **UI consequence**: the content
-//    search in `SessionsBrowser.tsx` (the `searchableText?.toLowerCase()
-//    .includes(...)` branch) silently filters out everything when it's
-//    undefined, so content-text search becomes a no-op for sessions
-//    served from the DB backend. Could be reconstructed from
-//    `prompts_fts` later (the data is already there); deferred until a
-//    follow-up slice.
+// 2. `searchableText`: **restored as of P2c** — built from indexed
+//    `turns.text_preview` rows in turn-order with the same caps and
+//    slicing as file-parse (cap 4000 chars per session, assistant text
+//    sliced to 500 per turn, user text untruncated since ingest already
+//    capped `text_preview` at 500). Closes the silent search regression
+//    in `SessionsBrowser.tsx`. Small remaining quirk: file-parse
+//    iterates BLOCKS (one append per text block) while DB iterates
+//    TURNS (text_preview is the joined-and-truncated text from all
+//    blocks per turn) — for multi-text-block assistant turns the DB
+//    undercounts slightly. Already covered by detail loader divergence
+//    #6; practical impact is negligible.
 // 3. `status`: heuristic from file age — `working` if `isActive`,
 //    `idle` otherwise. The file-parse `inferSessionStatus` (in
 //    `src/lib/scanner/sessionStatus.ts`) walks the last 500 entries
@@ -108,6 +111,19 @@ interface ModelRow {
   model: string;
 }
 
+interface TextPreviewRow {
+  session_id: string;
+  role: "user" | "assistant";
+  text_preview: string;
+}
+
+// File-parse caps `searchableText` at 4000 chars per session
+// (`scanSessionFile` in `claudeConversations.ts`); each assistant text
+// fragment is sliced to 500 chars before append, user text is
+// untruncated (but ingest already capped `text_preview` at 500).
+const SEARCHABLE_TEXT_CAP = 4000;
+const ASSISTANT_TEXT_SLICE = 500;
+
 /**
  * Read every indexed session into the `SessionSummary[]` shape that
  * `scanAllSessions` produces. Returns `[]` when no sessions are indexed
@@ -163,12 +179,32 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as ModelRow[]
   );
 
+  // Restore `searchableText` (closes P2b-5 divergence #2). Read each
+  // turn's `text_preview` in turn-order so per-session aggregation
+  // mirrors file-parse's append order. The query is scoped to non-empty
+  // previews — a turn whose only content is a tool_result block has
+  // `text_preview` either NULL (no text) or equal to the tool_result
+  // prefix (which file-parse skips for `searchableText`). The 6th
+  // query loads at most ~500 chars × turn_count rows; for the typical
+  // ~150-session corpus that's a few MB total — much smaller than the
+  // ~1 GB JSONL re-parse this read path replaced.
+  const searchableBySession = groupSearchable(
+    prepCached(
+      db,
+      `SELECT session_id, role, text_preview
+       FROM turns
+       WHERE text_preview IS NOT NULL AND text_preview <> ''
+       ORDER BY session_id, turn_index`
+    ).all() as TextPreviewRow[]
+  );
+
   const now = Date.now();
   const result: SessionSummary[] = [];
   for (const h of headers) {
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
     const skillsUsed = skillsBySession.get(h.session_id) ?? {};
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];
+    const searchableText = searchableBySession.get(h.session_id);
 
     const isActive = now - h.file_mtime_ms < 2 * 60_000;
     const status: SessionStatus = isActive ? "working" : "idle";
@@ -226,10 +262,50 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       status,
       skillsUsed,
       oneShotRate,
-      searchableText: undefined,
+      searchableText,
     });
   }
 
+  return result;
+}
+
+/**
+ * Build per-session `searchableText` from in-order text_preview rows.
+ * Mirrors file-parse's `searchParts` accumulator in `scanSessionFile`:
+ * stop appending once total length reaches `SEARCHABLE_TEXT_CAP`,
+ * slice assistant fragments to `ASSISTANT_TEXT_SLICE` (user text is
+ * left as-is — it's already truncated to 500 chars at ingest), then
+ * `parts.join(' ').slice(0, SEARCHABLE_TEXT_CAP)`.
+ *
+ * Small remaining divergence: file-parse iterates BLOCKS (one append
+ * per text block) while DB iterates TURNS (one append per turn —
+ * `text_preview` is the joined-and-truncated text from all blocks in
+ * the turn). For multi-text-block assistant turns the DB undercounts
+ * slightly (single 500-char window instead of N). Already covered
+ * conceptually by detail loader divergence #6; the practical impact
+ * for content search is negligible because real prompts almost never
+ * span multiple text blocks anyway.
+ */
+function groupSearchable(rows: TextPreviewRow[]): Map<string, string> {
+  const builders = new Map<string, { parts: string[]; len: number }>();
+  for (const row of rows) {
+    let b = builders.get(row.session_id);
+    if (!b) {
+      b = { parts: [], len: 0 };
+      builders.set(row.session_id, b);
+    }
+    if (b.len >= SEARCHABLE_TEXT_CAP) continue;
+    const text =
+      row.role === "assistant"
+        ? row.text_preview.slice(0, ASSISTANT_TEXT_SLICE)
+        : row.text_preview;
+    b.parts.push(text);
+    b.len += text.length;
+  }
+  const result = new Map<string, string>();
+  for (const [sessionId, b] of builders) {
+    result.set(sessionId, b.parts.join(" ").slice(0, SEARCHABLE_TEXT_CAP));
+  }
   return result;
 }
 

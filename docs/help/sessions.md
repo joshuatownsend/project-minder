@@ -30,7 +30,7 @@ Each session card shows:
 
 ## Search & Sort
 
-- **Search** — filter by prompt text, project name, session ID, or git branch. Message-body content matching falls back to the file-parse path; set `MINDER_USE_DB=0` if you rely on it (a follow-up will restore body-text search under the SQLite path via FTS5).
+- **Search** — filter by prompt text, **message body content**, project name, session ID, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row.
 - **Sort** — by most recent, longest duration, most tokens, or best one-shot rate
 
 ## Session Detail
