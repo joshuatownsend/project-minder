@@ -13,8 +13,9 @@ import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
+import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
-import type { SessionDetail, SessionSummary } from "@/lib/types";
+import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/types";
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
 // Backend selection is `MINDER_USE_DB`; the default is on. Set
@@ -355,6 +356,70 @@ async function tryDbSkillUsage(): Promise<SkillUsageResult | null> {
     const stats = loadSkillUsageFromDb(db);
     if (stats.length === 0) return null;
     return { stats, meta: { backend: "db" } };
+  } catch (err) {
+    logFallthroughOnce((err as Error).message);
+    return null;
+  }
+}
+
+export interface ClaudeUsageResult {
+  stats: ClaudeUsageStats;
+  meta: {
+    backend: "db" | "file";
+    /**
+     * Max content-mtime watermark for ETag computation.
+     * - DB backend: `MAX(file_mtime_ms) FROM sessions` — fresh and
+     *   accurate; advances on every JSONL tail-append the indexer
+     *   processes.
+     * - File backend: `0` (the file-parse pipeline doesn't expose a
+     *   max-mtime cheaply). Caller is expected to fall back to its
+     *   own freshness signal — `/api/stats` uses `result.scannedAt`.
+     */
+    maxMtimeMs: number;
+  };
+}
+
+/**
+ * Aggregate Claude conversation stats scoped to the given project
+ * paths. SQL-backed by default; falls back to the file-parse
+ * `scanClaudeConversationsForProjects` path on driver-missing,
+ * init-failure, awaiting-v3 reconcile, zero indexed sessions for
+ * the filter set, or any thrown error.
+ *
+ * The v3 readiness gate applies because `cost_usd` is read directly
+ * — without the gate the DB would return $0 during the v3 catch-up
+ * window while file-parse returns the right number.
+ *
+ * Empty `conversationCount` is treated as a fall-through: a fresh
+ * install where the indexer hasn't covered any of the filter's
+ * project dirs yet falls back to file-parse so the dashboard's
+ * Claude usage section renders something rather than zeros.
+ */
+export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult> {
+  const dbResult = await tryDbClaudeUsage(projectPaths);
+  if (dbResult) return dbResult;
+
+  const { scanClaudeConversationsForProjects } = await import(
+    "@/lib/scanner/claudeConversations"
+  );
+  const stats = await scanClaudeConversationsForProjects(projectPaths);
+  // File backend doesn't carry a cheap max-mtime watermark; route
+  // is expected to fall back to its own freshness signal (see
+  // `ClaudeUsageResult.meta.maxMtimeMs` JSDoc).
+  return { stats, meta: { backend: "file", maxMtimeMs: 0 } };
+}
+
+async function tryDbClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult | null> {
+  try {
+    const db = await getReadyDb();
+    if (!db) return null;
+    if (needsReconcileAfterV3(db)) {
+      logFallthroughOnce("DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)");
+      return null;
+    }
+    const stats = loadClaudeUsageStatsFromDb(db, projectPaths);
+    if (stats.conversationCount === 0) return null;
+    return { stats, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
   } catch (err) {
     logFallthroughOnce((err as Error).message);
     return null;
