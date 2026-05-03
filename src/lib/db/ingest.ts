@@ -565,10 +565,17 @@ async function readJsonlSession(
 
       // Status inference: walk this user turn's content for
       // tool_result blocks and shrink the pending set. Mirrors the
-      // forward-walk in `inferSessionStatus` (lines 53-63 there).
-      // Only matters when there's a "last assistant" to resolve
-      // against — first-user-turn case has no pendings to clear.
-      if (sawAnyAssistant && lastAssistantPendingIds.size > 0) {
+      // forward-walk in `inferSessionStatus` (lines 53-63 there),
+      // including its `if (!Array.isArray(userContent)) continue`
+      // guard — `entry.message.content` can be a string (the Claude
+      // API allows that), and `messageContent.length > 0` is true for
+      // non-empty strings, so without the array gate `for..of` would
+      // iterate characters and `b?.type` would be undefined for each.
+      if (
+        sawAnyAssistant &&
+        lastAssistantPendingIds.size > 0 &&
+        Array.isArray(textSource)
+      ) {
         for (const b of textSource as any[]) {
           if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
             lastAssistantPendingIds.delete(b.tool_use_id);
@@ -636,11 +643,15 @@ async function readJsonlSession(
   }
 
   // Derive: stored status snapshot. Mirrors `inferSessionStatus`'s
-  // exit conditions:
+  // exit conditions, scoped to the LAST non-sidechain assistant turn
+  // (older assistant turns aren't considered — same as the canonical
+  // algorithm's `walk backward to find the last meaningful assistant
+  // turn`):
   //   - No assistant turn at all → idle (`'inactive'`).
   //   - Last assistant ended with `stop_reason === 'end_turn'` AND
-  //     no pending tool_uses ever existed → idle.
-  //   - Pending set is non-empty after walking forward → waiting.
+  //     its tool_use blocks (if any) are all resolved → idle.
+  //   - Last assistant has pending tool_uses unresolved by subsequent
+  //     non-sidechain user tool_results → waiting.
   //   - Otherwise (every pending was resolved) → idle.
   // Time-gating to working/needs_attention happens at READ time
   // against `file_mtime_ms`, so this snapshot only encodes the
