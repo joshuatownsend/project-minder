@@ -406,16 +406,18 @@ async function readJsonlSession(
     if (!startTs) startTs = timestamp;
     endTs = timestamp;
     if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
-    // Slug appears on every assistant entry but isn't always present on
-    // user-only tails (or older JSONL formats). Capture once on first
-    // sight so we don't allocate per-turn.
-    if (!slug && typeof entry.slug === "string" && entry.slug.length > 0) {
-      slug = entry.slug;
-    }
 
     const turnIndex = startTurnIndex + turns.length;
 
     if (type === "assistant") {
+      // Slug appears on assistant entries only — capture from the first
+      // one we see so a malformed or out-of-band entry with a foreign
+      // slug can't poison the session's stable identifier (and the
+      // `COALESCE(slug, @slug)` write-side ensures that latch holds
+      // across tail-appends).
+      if (!slug && typeof entry.slug === "string" && entry.slug.length > 0) {
+        slug = entry.slug;
+      }
       const model = entry.message?.model;
       if (!model || model === "<synthetic>") continue;
       modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);

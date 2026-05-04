@@ -151,14 +151,6 @@ async function scanSessionFile(
           endTime = entry.timestamp;
         }
         if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
-        // Capture Claude Code's stable session slug — present as a top-
-        // level field on every assistant entry once Claude has assigned
-        // one. Distinct from `recap.slug` (the SessionRecap nickname);
-        // this one persists across `--resume` / `--continue` and is the
-        // basis for the SessionsBrowser "continued from …" linking.
-        if (!sessionSlug && typeof entry.slug === "string" && entry.slug.length > 0) {
-          sessionSlug = entry.slug;
-        }
 
         if (entry.type === "system" && entry.subtype === "away_summary" && typeof entry.content === "string" && entry.timestamp) {
           recaps.push({ content: entry.content, timestamp: entry.timestamp, slug: entry.slug });
@@ -179,6 +171,13 @@ async function scanSessionFile(
         if (entry.type === "assistant" && entry.message) {
           assistantMessageCount++;
           messageCount++;
+          // Capture Claude Code's stable session slug here, restricted
+          // to assistant entries — out-of-band records (system, recap)
+          // can carry slug fields too, and latching from one of those
+          // would permanently poison `sessions.slug` for this session.
+          if (!sessionSlug && typeof entry.slug === "string" && entry.slug.length > 0) {
+            sessionSlug = entry.slug;
+          }
           const msg = entry.message;
           const model = msg.model;
           if (model && model !== "<synthetic>") models.add(model);

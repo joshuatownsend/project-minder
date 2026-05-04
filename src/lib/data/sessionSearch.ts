@@ -27,10 +27,12 @@ export interface SessionSearchHit {
   /** Matching session_id (one entry per session — the loader dedupes). */
   sessionId: string;
   /**
-   * Relevance score in [0, 1]. FTS5 `bm25()` is reflected as `1 / (1 + bm25)`
-   * so smaller bm25 scores (better matches) become larger relevance.
-   * `LIKE` matches use a flat 0.5 to keep mixed-source UNION sortable
-   * without claiming spurious precision.
+   * Relevance score in [0, 1]. SQLite FTS5 returns bm25 as a NEGATIVE
+   * number (more-negative = better match), so we map it via
+   * `-rank / (1 + -rank)` — strong matches asymptote to 1, weak ones
+   * approach 0. `LIKE` matches use a flat 0.5 to keep mixed-source
+   * UNION sortable without claiming spurious precision; titles win
+   * ties via `>=` in the dedup pass.
    */
   score: number;
   /**
@@ -152,8 +154,14 @@ export function searchSessionsInDb(
         );
       }
       for (const r of rows) {
-        // Smaller bm25 = better match. Map onto (0, 1) so higher = better.
-        const score = 1 / (1 + Math.max(0, r.rank));
+        // SQLite FTS5 returns bm25 as a NEGATIVE number (more-negative
+        // = better match). Negate to get a positive magnitude, then
+        // squash with `x / (1 + x)` so very strong matches asymptote
+        // toward 1 while weak ones (rank close to 0) approach 0. The
+        // earlier `Math.max(0, r.rank)` shape was wrong — it clamped
+        // every match to score=1 and lost relative ordering.
+        const magnitude = Math.max(0, -r.rank);
+        const score = magnitude / (1 + magnitude);
         hits.set(r.session_id, { sessionId: r.session_id, score, source: "prompts" });
       }
     }

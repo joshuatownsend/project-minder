@@ -642,9 +642,14 @@ export async function searchSessions(
   }
 
   const db = await getReadyDb();
-  const hits = await callDbLoader("searchSessions", () =>
-    searchSessionsInDb(db, query, scope, limit)
-  );
+  // Direct call (no `callDbLoader` wrap): `SessionSearchError` carries
+  // 4xx-class signals (`fts-parse` → 400) that the route maps to user-
+  // facing errors. `callDbLoader` would convert it to
+  // `DbUnavailableError(reason: 'load-failed')` and the route would
+  // serve a 500 instead. Genuine SQLite failures bubble as raw
+  // `SqliteError` and surface as 500s — the correct outcome for
+  // "DB has a real problem."
+  const hits = searchSessionsInDb(db, query, scope, limit);
   return { hits, meta: { backend: "db" } };
 }
 
