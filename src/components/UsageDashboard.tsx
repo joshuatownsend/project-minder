@@ -724,16 +724,22 @@ export function UsageDashboard() {
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                       {(() => {
                         const max = Math.max(...data.byModel.map((m) => m.cost));
-                        return data.byModel.map((m) => (
-                          <CostRow
-                            key={m.model}
-                            label={m.model.replace(/^claude-/, "")}
-                            cost={m.cost}
-                            maxCost={max}
-                            color="var(--accent)"
-                            detail={`${m.turns}t`}
-                          />
-                        ));
+                        return data.byModel.map((m) => {
+                          const corr =
+                            typeof m.selfCorrectionRate === "number"
+                              ? ` · ${(m.selfCorrectionRate * 100).toFixed(0)}% self-corr`
+                              : "";
+                          return (
+                            <CostRow
+                              key={m.model}
+                              label={m.model.replace(/^claude-/, "")}
+                              cost={m.cost}
+                              maxCost={max}
+                              color="var(--accent)"
+                              detail={`${m.turns}t${corr}`}
+                            />
+                          );
+                        });
                       })()}
                     </div>
                   )}

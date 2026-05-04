@@ -19,6 +19,7 @@ import { ConfigHistoryTab } from "./ConfigHistoryTab";
 import { ProjectConfigTab } from "./ProjectConfigTab";
 import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
 import { ContextBudgetPanel } from "./ContextBudgetPanel";
+import { EfficiencyTab } from "./EfficiencyTab";
 import {
   ArrowLeft,
   ExternalLink,
@@ -36,7 +37,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "config" | "config-history";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "efficiency" | "config" | "config-history";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -138,6 +139,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "memory",      label: "Memory" },
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
+    ...(hasSessions ? [{ key: "efficiency"   as TabKey, label: "Efficiency"   }] : []),
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
     ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
   ];
@@ -540,6 +542,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── SKILLS ───────────────────────────────────────────────── */}
           {activeTab === "skills" && (
             <ProjectSkillsTab slug={project.slug} />
+          )}
+
+          {/* ── EFFICIENCY ───────────────────────────────────────────── */}
+          {activeTab === "efficiency" && (
+            <EfficiencyTab slug={project.slug} />
           )}
 
           {/* ── CONFIG ───────────────────────────────────────────────── */}

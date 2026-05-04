@@ -517,6 +517,11 @@ async function readJsonlSession(
         toolCalls: toolBlocks.map(
           (b: any): ToolCall => ({ name: b.name, arguments: b.input })
         ),
+        // Cap to the same 500-char limit the file-parse path applies via
+        // `extractText`. Without this, DB-ingest produces a longer
+        // projection than file-parse and `selfCorrection.textHasSelfCorrection`
+        // can fire on phrases past char 500 only when MINDER_USE_DB=1.
+        assistantText: text ? text.slice(0, USAGE_USER_TEXT_LIMIT) : undefined,
         isError: !!isError,
       };
 
@@ -1225,6 +1230,7 @@ function loadExistingTurnsAsUsage(
     // the truncated tool result for result-bearing user turns.
     userMessageText: r.role === "user" ? (r.text_preview ?? undefined) : undefined,
     toolResultText: r.role === "user" ? (r.tool_result_preview ?? undefined) : undefined,
+    assistantText: r.role === "assistant" ? (r.text_preview ?? undefined) : undefined,
   }));
 }
 
