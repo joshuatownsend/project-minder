@@ -20,16 +20,40 @@ interface HotFilesPanelProps {
   slug: string;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Primitives ────────────────────────────────────────────────────────────────
 
 function relPath(filePath: string): string {
-  // Strip everything up to and including the project slug dir so the displayed
-  // path is relative (e.g. "src/lib/usage/parser.ts" not the full Windows path).
   const normalized = filePath.replace(/\\/g, "/");
   const srcIdx = normalized.indexOf("/src/");
   if (srcIdx !== -1) return normalized.slice(srcIdx + 1);
   const lastSlash = normalized.lastIndexOf("/");
   return lastSlash !== -1 ? normalized.slice(lastSlash + 1) : normalized;
+}
+
+function Bar({ pct, color, height = 4 }: { pct: number; color: string; height?: number }) {
+  return (
+    <div style={{ height: `${height}px`, background: "var(--bg-elevated)", borderRadius: "2px", overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: "2px" }} />
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <h3
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.72rem",
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        color: "var(--text-muted)",
+        marginBottom: "12px",
+      }}
+    >
+      {children}
+    </h3>
+  );
 }
 
 function BarRow({
@@ -76,23 +100,7 @@ function BarRow({
           )}
         </span>
       </div>
-      <div
-        style={{
-          height: "4px",
-          background: "var(--bg-elevated)",
-          borderRadius: "2px",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: `${pct}%`,
-            background: "var(--accent)",
-            borderRadius: "2px",
-          }}
-        />
-      </div>
+      <Bar pct={pct} color="var(--accent)" />
     </div>
   );
 }
@@ -116,36 +124,23 @@ function HotFileRow({ file, max }: { file: HotFile; max: number }) {
   );
 }
 
+const monoEllipsis = {
+  fontFamily: "var(--font-mono)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap" as const,
+};
+
 function PairRow({ pair, max }: { pair: FilePair; max: number }) {
   const pct = max > 0 ? (pair.coOccurrences / max) * 100 : 0;
   return (
     <div style={{ marginBottom: "10px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
         <div style={{ flex: 1, marginRight: "12px", overflow: "hidden" }}>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.72rem",
-              color: "var(--text-primary)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-            title={pair.fileA}
-          >
+          <div style={{ ...monoEllipsis, fontSize: "0.72rem", color: "var(--text-primary)" }} title={pair.fileA}>
             {relPath(pair.fileA)}
           </div>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.68rem",
-              color: "var(--text-secondary)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-            title={pair.fileB}
-          >
+          <div style={{ ...monoEllipsis, fontSize: "0.68rem", color: "var(--text-secondary)" }} title={pair.fileB}>
             + {relPath(pair.fileB)}
           </div>
         </div>
@@ -158,23 +153,7 @@ function PairRow({ pair, max }: { pair: FilePair; max: number }) {
           </div>
         </div>
       </div>
-      <div
-        style={{
-          height: "3px",
-          background: "var(--bg-elevated)",
-          borderRadius: "2px",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: `${pct}%`,
-            background: "var(--status-active-text)",
-            borderRadius: "2px",
-          }}
-        />
-      </div>
+      <Bar pct={pct} color="var(--status-active-text)" height={3} />
     </div>
   );
 }
@@ -254,19 +233,7 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
 
       {/* Hot files */}
       <section>
-        <h3
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.72rem",
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            color: "var(--text-muted)",
-            marginBottom: "12px",
-          }}
-        >
-          Hot Files — most edited
-        </h3>
+        <SectionLabel>Hot Files — most edited</SectionLabel>
         {hotFiles.length === 0 ? (
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             No file edits recorded yet for this project.
@@ -280,19 +247,7 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
 
       {/* Coupling */}
       <section>
-        <h3
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.72rem",
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            color: "var(--text-muted)",
-            marginBottom: "12px",
-          }}
-        >
-          File Coupling — co-edited pairs
-        </h3>
+        <SectionLabel>File Coupling — co-edited pairs</SectionLabel>
         {pairs.length === 0 ? (
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             No co-edited file pairs found (minimum 2 sessions required).

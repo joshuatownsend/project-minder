@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
 import { buildHotFiles, type HotFilesResult } from "@/lib/usage/fileTracker";
+import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
-import type { UsageTurn } from "@/lib/usage/types";
-
-function encodeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[:\\.]/g, "-");
-}
 
 interface HotFilesResponse {
   slug: string;
@@ -58,14 +54,7 @@ export async function GET(
   }
 
   const sessionMap = await parseAllSessions();
-  const expectedDirName = encodeProjectPath(project.path);
-  const projectTurns: UsageTurn[] = [];
-  for (const turns of sessionMap.values()) {
-    if (turns.length === 0) continue;
-    const head = turns[0];
-    if (head.projectSlug !== slug && head.projectDirName !== expectedDirName) continue;
-    for (const t of turns) projectTurns.push(t);
-  }
+  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
 
   const result = buildHotFiles(projectTurns);
   const data: HotFilesResponse = { slug, result, generatedAt: new Date().toISOString() };

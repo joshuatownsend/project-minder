@@ -9,12 +9,7 @@ export interface FileEdit {
   timestamp: string;
 }
 
-/**
- * Extract all file-touching tool calls from assistant turns.
- * Mirrors `extractFileOp()` in `src/lib/db/ingest.ts` exactly:
- * only `args.file_path` is consulted (not `args.path` or `args.notebook_path`).
- * NotebookEdit uses the same `file_path` key as source-file tools.
- */
+// Must match extractFileOp() in src/lib/db/ingest.ts — only args.file_path, never args.path.
 export function extractFileEdits(turns: UsageTurn[]): FileEdit[] {
   const edits: FileEdit[] = [];
   for (let i = 0; i < turns.length; i++) {

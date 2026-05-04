@@ -26,16 +26,22 @@ export function buildFileCoupling(
 ): FileCouplingResult {
   const edits = extractWriteEdits(turns);
 
-  // Session → ordered set of file paths (insertion order = chronological)
+  // Session → ordered list of unique file paths (chronological insertion order).
+  // Parallel Set per session for O(1) membership testing (vs O(n) Array.includes).
   const sessionFiles = new Map<string, string[]>();
+  const sessionSeen = new Map<string, Set<string>>();
   for (const edit of edits) {
     let files = sessionFiles.get(edit.sessionId);
+    let seen = sessionSeen.get(edit.sessionId);
     if (!files) {
       files = [];
+      seen = new Set();
       sessionFiles.set(edit.sessionId, files);
+      sessionSeen.set(edit.sessionId, seen);
     }
-    if (!files.includes(edit.filePath)) {
-      if (files.length < MAX_FILES_PER_SESSION) files.push(edit.filePath);
+    if (!seen!.has(edit.filePath) && files.length < MAX_FILES_PER_SESSION) {
+      seen!.add(edit.filePath);
+      files.push(edit.filePath);
     }
   }
 

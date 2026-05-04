@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
+import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -258,11 +259,9 @@ function SessionRow({
   search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
-  const totalEdits =
-    (session.toolUsage["Write"] ?? 0) +
-    (session.toolUsage["Edit"] ?? 0) +
-    (session.toolUsage["MultiEdit"] ?? 0) +
-    (session.toolUsage["NotebookEdit"] ?? 0);
+  const totalEdits = Object.entries(FILE_OP_BY_TOOL)
+    .filter(([, op]) => isFileWriteOp(op))
+    .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
   const isContentMatch = trimmedSearch

@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
 import { buildFileCoupling, type FileCouplingResult } from "@/lib/usage/fileCoupling";
+import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
-import type { UsageTurn } from "@/lib/usage/types";
-
-function encodeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[:\\.]/g, "-");
-}
 
 interface FileCouplingResponse {
   slug: string;
@@ -39,9 +35,10 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const minCoOccurrences = Number(request.nextUrl.searchParams.get("min") ?? "2");
+  const raw = Number(request.nextUrl.searchParams.get("min") ?? "2");
+  const minCoOccurrences = Number.isFinite(raw) ? Math.max(1, Math.min(50, Math.trunc(raw))) : 2;
 
-  // Cache key includes the threshold so changing the query param yields fresh data.
+  // Cache key includes the threshold so changing ?min= yields fresh data.
   const cacheKey = `${slug}:${minCoOccurrences}`;
   const cache = getCache();
   const cached = cache.get(cacheKey);
@@ -61,14 +58,7 @@ export async function GET(
   }
 
   const sessionMap = await parseAllSessions();
-  const expectedDirName = encodeProjectPath(project.path);
-  const projectTurns: UsageTurn[] = [];
-  for (const turns of sessionMap.values()) {
-    if (turns.length === 0) continue;
-    const head = turns[0];
-    if (head.projectSlug !== slug && head.projectDirName !== expectedDirName) continue;
-    for (const t of turns) projectTurns.push(t);
-  }
+  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
 
   const result = buildFileCoupling(projectTurns, minCoOccurrences);
   const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };
