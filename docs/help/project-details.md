@@ -81,3 +81,18 @@ Shows your Claude session history for this project:
 - Total number of sessions
 - When the most recent session occurred
 - A preview of the first prompt from the latest session
+
+## Efficiency Tab
+
+Appears when the project has Claude sessions. Shows two analytics panels:
+
+- **Waste Optimizer** — grades the project A–F and lists up to 5 findings: junk-directory reads, duplicate reads, unused MCP servers, ghost agent/skill capabilities, and low read/edit ratio. Each finding includes a severity level and actionable detail.
+- **Session Yield** — classifies sessions as Productive, Reverted, or Abandoned by aligning session intervals with the main-branch commit log. Displays yield rate, total sessions analysed, and cost-per-shipped-commit when session cost data is available.
+
+## Hot Files Tab
+
+Appears when the project has Claude sessions. Shows cross-session file intelligence:
+
+- **Summary strip** — unique files edited, total edit operations, and sessions analysed.
+- **Hot Files** — files ranked by total edit count, with a bar chart and per-file breakdown of write / edit / delete operations and the number of sessions that touched each file.
+- **File Coupling** — pairs of files that are frequently co-edited in the same session, ranked by co-occurrence count. Each pair shows a coupling strength percentage (0 = unrelated, 100 = always edited together).

@@ -158,6 +158,15 @@ function PairRow({ pair, max }: { pair: FilePair; max: number }) {
   );
 }
 
+async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {
+  const r = await fetch(url, { signal });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${r.status}`);
+  }
+  return r.json() as Promise<T>;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function HotFilesPanel({ slug }: HotFilesPanelProps) {
@@ -167,18 +176,23 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     Promise.all([
-      fetch(`/api/projects/${slug}/hot-files`).then((r) => r.json()),
-      fetch(`/api/projects/${slug}/file-coupling`).then((r) => r.json()),
+      fetchJson<HotFilesResponse>(`/api/projects/${slug}/hot-files`, controller.signal),
+      fetchJson<FileCouplingResponse>(`/api/projects/${slug}/file-coupling`, controller.signal),
     ])
       .then(([hot, coupling]) => {
         setHotData(hot);
         setCouplingData(coupling);
       })
-      .catch((e) => setError(String(e)))
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => setLoading(false));
+    return () => controller.abort();
   }, [slug]);
 
   if (loading) {

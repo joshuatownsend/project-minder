@@ -35,29 +35,33 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+  try {
+    const cache = getCache();
+    const cached = cache.get(slug);
+    const currentMtime = getJsonlMaxMtime();
+    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+      return NextResponse.json(cached.data);
+    }
 
-  const cache = getCache();
-  const cached = cache.get(slug);
-  const currentMtime = getJsonlMaxMtime();
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
-    return NextResponse.json(cached.data);
+    let scan = getCachedScan();
+    if (!scan) {
+      scan = await scanAllProjects();
+      setCachedScan(scan);
+    }
+    const project = scan.projects.find((p) => p.slug === slug);
+    if (!project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    const sessionMap = await parseAllSessions();
+    const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
+
+    const result = buildHotFiles(projectTurns);
+    const data: HotFilesResponse = { slug, result, generatedAt: new Date().toISOString() };
+    cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+    return NextResponse.json(data);
+  } catch (err) {
+    console.error(`[hot-files] Error processing slug="${slug}":`, err);
+    return NextResponse.json({ error: "Failed to compute file activity. Check server logs." }, { status: 500 });
   }
-
-  let scan = getCachedScan();
-  if (!scan) {
-    scan = await scanAllProjects();
-    setCachedScan(scan);
-  }
-  const project = scan.projects.find((p) => p.slug === slug);
-  if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
-  }
-
-  const sessionMap = await parseAllSessions();
-  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
-
-  const result = buildHotFiles(projectTurns);
-  const data: HotFilesResponse = { slug, result, generatedAt: new Date().toISOString() };
-  cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
-  return NextResponse.json(data);
 }

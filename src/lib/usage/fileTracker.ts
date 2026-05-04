@@ -2,17 +2,18 @@ import type { UsageTurn } from "./types";
 import { extractWriteEdits } from "./fileActivity";
 
 export interface HotFile {
-  filePath: string;
-  editCount: number;
-  sessionCount: number;
-  lastEditTs: string;
-  ops: { write: number; edit: number; delete: number };
+  readonly filePath: string;
+  readonly editCount: number;
+  readonly sessionCount: number;
+  readonly lastEditTs: string;
+  readonly ops: Readonly<{ write: number; edit: number; delete: number }>;
 }
 
 export interface HotFilesResult {
-  hotFiles: HotFile[];
-  totalFiles: number;
-  totalEdits: number;
+  readonly hotFiles: readonly HotFile[];
+  readonly totalFiles: number;
+  /** Total write-class edits across all files (not just the top-N slice). */
+  readonly totalEdits: number;
 }
 
 export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
@@ -20,7 +21,7 @@ export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
 
   const fileMap = new Map<
     string,
-    { editCount: number; sessions: Set<string>; lastEditTs: string; ops: HotFile["ops"] }
+    { editCount: number; sessions: Set<string>; lastEditTs: string; ops: { write: number; edit: number; delete: number } }
   >();
 
   for (const edit of edits) {
@@ -41,6 +42,7 @@ export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
     .sort(
       (a, b) =>
         b[1].editCount - a[1].editCount ||
+        // ISO-8601 strings are lexicographically chronological, so localeCompare is a valid recency tiebreaker.
         b[1].lastEditTs.localeCompare(a[1].lastEditTs)
     )
     .slice(0, limit)
