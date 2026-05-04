@@ -6,7 +6,7 @@ export interface HotFile {
   readonly editCount: number;
   readonly sessionCount: number;
   readonly lastEditTs: string;
-  readonly ops: Readonly<{ write: number; edit: number; delete: number }>;
+  readonly ops: Readonly<{ write: number; edit: number }>;
 }
 
 export interface HotFilesResult {
@@ -21,13 +21,13 @@ export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
 
   const fileMap = new Map<
     string,
-    { editCount: number; sessions: Set<string>; lastEditTs: string; ops: { write: number; edit: number; delete: number } }
+    { editCount: number; sessions: Set<string>; lastEditTs: string; ops: { write: number; edit: number } }
   >();
 
   for (const edit of edits) {
     let entry = fileMap.get(edit.filePath);
     if (!entry) {
-      entry = { editCount: 0, sessions: new Set(), lastEditTs: edit.timestamp, ops: { write: 0, edit: 0, delete: 0 } };
+      entry = { editCount: 0, sessions: new Set(), lastEditTs: edit.timestamp, ops: { write: 0, edit: 0 } };
       fileMap.set(edit.filePath, entry);
     }
     entry.editCount++;
@@ -35,7 +35,6 @@ export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
     if (edit.timestamp > entry.lastEditTs) entry.lastEditTs = edit.timestamp;
     if (edit.op === "write") entry.ops.write++;
     else if (edit.op === "edit") entry.ops.edit++;
-    else if (edit.op === "delete") entry.ops.delete++;
   }
 
   const hotFiles = [...fileMap.entries()]

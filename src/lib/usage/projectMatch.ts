@@ -3,11 +3,11 @@ import type { UsageTurn } from "./types";
 /**
  * Convert a Windows or POSIX project path to the canonical dirname
  * Claude Code uses under `~/.claude/projects/`. The encoding rule:
- * `:`, `\`, and `.` all become `-`. Used to match parser-produced
- * `projectDirName` exactly to a scanned project.
+ * `:`, `\`, and `/` all become `-` (dots are preserved).
+ * Matches the canonical `encodePath` in claudeConversations.ts.
  */
 export function encodeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[:\\.]/g, "-");
+  return projectPath.replace(/[:\\/]/g, "-");
 }
 
 /**

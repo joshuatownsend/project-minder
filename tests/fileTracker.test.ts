@@ -56,7 +56,7 @@ describe("buildHotFiles", () => {
       ]),
     ];
     const { hotFiles } = buildHotFiles(turns);
-    expect(hotFiles[0].ops).toEqual({ write: 1, edit: 2, delete: 0 });
+    expect(hotFiles[0].ops).toEqual({ write: 1, edit: 2 });
   });
 
   it("excludes Read ops from hot files", () => {

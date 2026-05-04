@@ -110,7 +110,6 @@ function HotFileRow({ file, max }: { file: HotFile; max: number }) {
   const opsLabel = [
     file.ops.write > 0 && `${file.ops.write}w`,
     file.ops.edit > 0 && `${file.ops.edit}e`,
-    file.ops.delete > 0 && `${file.ops.delete}d`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -179,6 +178,8 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setHotData(null);
+    setCouplingData(null);
     Promise.all([
       fetchJson<HotFilesResponse>(`/api/projects/${slug}/hot-files`, controller.signal),
       fetchJson<FileCouplingResponse>(`/api/projects/${slug}/file-coupling`, controller.signal),
@@ -191,7 +192,9 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         setError(e instanceof Error ? e.message : String(e));
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     return () => controller.abort();
   }, [slug]);
 

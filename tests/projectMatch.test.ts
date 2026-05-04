@@ -19,12 +19,12 @@ function makeTurn(sessionId: string, projectSlug: string, projectDirName: string
 }
 
 describe("encodeProjectPath", () => {
-  it("encodes a Windows path with colons, backslashes, and dots", () => {
-    expect(encodeProjectPath("C:\\dev\\my.project")).toBe("C--dev-my-project");
+  it("encodes a Windows path with colons and backslashes (dots preserved)", () => {
+    expect(encodeProjectPath("C:\\dev\\my.project")).toBe("C--dev-my.project");
   });
 
-  it("encodes a POSIX path (only dots transform, no colons or backslashes)", () => {
-    expect(encodeProjectPath("/home/user/my.proj")).toBe("/home/user/my-proj");
+  it("encodes a POSIX path (slashes become dashes, dots preserved)", () => {
+    expect(encodeProjectPath("/home/user/my.proj")).toBe("-home-user-my.proj");
   });
 
   it("leaves a plain slug-like string unchanged", () => {
