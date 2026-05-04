@@ -136,7 +136,12 @@ const MIGRATIONS: Migration[] = [
     up: (db) => {
       // Idempotent ALTER pattern (same as v3): fresh DBs already have the
       // columns from v1's schema.sql; only DBs upgraded from v1–v4 need
-      // the structural change.
+      // the structural change. The slug data lives in JSONL — extracting
+      // it requires a re-parse — so `DERIVED_VERSION` was bumped to 4 in
+      // the same wave; the indexer's mtime+version skip-gate now triggers
+      // a one-time full re-parse on existing sessions, populating slug
+      // and the post-reconcile `refreshContinuationLinks` UPDATE then
+      // wires up `continued_from_session_id`.
       const cols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === "slug")) {
         db.prepare("ALTER TABLE sessions ADD COLUMN slug TEXT").run();

@@ -199,7 +199,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(3);
+    expect(session.derived_version).toBe(4);
 
     const turnRows = db
       .prepare("SELECT role, category FROM turns WHERE session_id = 'abc-session' ORDER BY turn_index")
@@ -1119,6 +1119,48 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].continued_from_session_id).toBeNull();
     expect(rows[1].continued_from_session_id).toBeNull();
+    reloaded.conn.closeDb();
+  });
+
+  it("re-parses existing sessions on schema-v5 upgrade so slug populates", async () => {
+    // Simulates the upgrade path: a v4-shaped DB has existing session
+    // rows from a prior DERIVED_VERSION (3) with NULL slug. The v5
+    // migration adds the slug column; the DERIVED_VERSION bump to 4
+    // forces `reconcileSessionFile` to re-parse despite mtime+size
+    // being unchanged — that's what populates slug from JSONL.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-upgrade", "abc.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "hi"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "ok",
+        [],
+        {},
+        { slug: "graceful-pivoting-ferret", stop_reason: "end_turn" }
+      ),
+    ]);
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Simulate a v4-era pre-upgrade row: clear slug + roll back
+    // derived_version. mtime/size left untouched.
+    db.prepare("UPDATE sessions SET slug = NULL, derived_version = 3 WHERE session_id = 'abc'").run();
+    expect(
+      (db.prepare("SELECT slug FROM sessions WHERE session_id = 'abc'").get() as { slug: string | null })
+        .slug
+    ).toBeNull();
+
+    // Re-running reconcile after the version bump: the file is unchanged
+    // but `derived_version < DERIVED_VERSION` so the skip-gate must
+    // trigger a full re-parse.
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const row = db
+      .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
+      .get() as { slug: string | null; derived_version: number };
+    expect(row.slug).toBe("graceful-pivoting-ferret");
+    expect(row.derived_version).toBe(4);
     reloaded.conn.closeDb();
   });
 });
