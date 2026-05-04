@@ -17,6 +17,8 @@ import { ProjectAgentsTab } from "./ProjectAgentsTab";
 import { ProjectSkillsTab } from "./ProjectSkillsTab";
 import { ConfigHistoryTab } from "./ConfigHistoryTab";
 import { ProjectConfigTab } from "./ProjectConfigTab";
+import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
+import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import {
   ArrowLeft,
   ExternalLink,
@@ -456,13 +458,22 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── CONTEXT ───────────────────────────────────────────────── */}
           {activeTab === "context" && (
-            <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              {project.claudeMdAudit && (
+                <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
+              )}
+              <ContextBudgetPanel slug={project.slug} />
               {project.claude?.claudeMdSummary ? (
-                <MarkdownContent content={project.claude.claudeMdSummary} />
+                <div>
+                  <SectionHeader label="CLAUDE.md preview" />
+                  <MarkdownContent content={project.claude.claudeMdSummary} />
+                </div>
               ) : (
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
-                  No CLAUDE.md found for this project.
-                </p>
+                !project.claudeMdAudit?.hasClaudeMd && (
+                  <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
+                    No CLAUDE.md found for this project.
+                  </p>
+                )
               )}
             </div>
           )}

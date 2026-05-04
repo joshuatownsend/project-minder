@@ -27,7 +27,7 @@ export const helpMapping: Record<string, string> = {
  */
 export const tabHelpMapping: Record<string, string> = {
   overview: 'project-details',
-  context: 'project-details',
+  context: 'claude-md-audit',
   todos: 'project-details',
   sessions: 'sessions',
   'manual-steps': 'manual-steps',
@@ -57,6 +57,7 @@ export const helpSlugs = [
   'usage',
   'status',
   'memory',
+  'claude-md-audit',
   'config',
   'config-history',
   'setup',

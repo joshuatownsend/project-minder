@@ -8,6 +8,14 @@ import type { MemoryData, MemoryFile, MemoryType } from "../types";
 const moduleCache = new Map<string, { data: MemoryData; cachedAt: number }>();
 const CACHE_TTL = 30_000;
 
+/** Drop the cached scan for one project (or all projects when omitted).
+ *  Used by the PATCH route so a fresh save reflects on the dashboard
+ *  without waiting for the 30s TTL. */
+export function invalidateMemoryCache(projectPath?: string): void {
+  if (projectPath === undefined) moduleCache.clear();
+  else moduleCache.delete(projectPath);
+}
+
 function parseFrontmatter(content: string): { type?: MemoryType; description?: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return {};

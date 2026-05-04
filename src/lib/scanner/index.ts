@@ -8,6 +8,7 @@ import { scanEnvFiles } from "./envFile";
 import { scanDockerCompose } from "./dockerCompose";
 import { scanGit } from "./git";
 import { scanClaudeMd } from "./claudeMd";
+import { auditClaudeMd } from "./claudeMdAudit";
 import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
@@ -55,12 +56,22 @@ async function scanProject(
 
   const slug = toSlug(dirName);
 
+  const claudeMdPromise = scanClaudeMd(projectPath);
+  // Audit reuses the buffer scanClaudeMd already read so we don't pay
+  // two readFiles per project on the parallel scan path. `null` from
+  // scanClaudeMd means the file doesn't exist — pass it through so the
+  // audit short-circuits without its own attempt.
+  const claudeMdAuditPromise = claudeMdPromise.then((md) =>
+    auditClaudeMd(projectPath, md ?? null)
+  );
+
   const [
     pkgResult,
     envResult,
     dockerResult,
     gitResult,
     claudeMd,
+    claudeMdAudit,
     todos,
     claudeSessions,
     manualSteps,
@@ -75,7 +86,8 @@ async function scanProject(
       ? scanDockerCompose(projectPath)
       : Promise.resolve(EMPTY_DOCKER),
     scanGit(projectPath),
-    scanClaudeMd(projectPath),
+    claudeMdPromise,
+    claudeMdAuditPromise,
     getFlag(flags, "scanTodos")
       ? scanTodoMd(projectPath)
       : Promise.resolve(undefined),
@@ -138,6 +150,7 @@ async function scanProject(
       mostRecentSessionStatus: claudeSessions.mostRecentSessionStatus,
       mostRecentSessionId: claudeSessions.mostRecentSessionId,
     },
+    claudeMdAudit,
     todos,
     manualSteps,
     insights,

@@ -1,9 +1,54 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useReducer } from "react";
 import { MarkdownContent } from "./MarkdownContent";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, differenceInDays } from "date-fns";
 import type { MemoryData, MemoryFile, MemoryType } from "@/lib/types";
+
+const STALE_AFTER_DAYS = 30;
+
+type EditorState =
+  | { kind: "viewing" }
+  | { kind: "editing"; draft: string }
+  | { kind: "saving"; draft: string }
+  | { kind: "saved" }
+  | { kind: "error"; draft: string; message: string };
+
+type EditorAction =
+  | { type: "start"; from: string }
+  | { type: "change"; draft: string }
+  | { type: "cancel" }
+  | { type: "submit" }
+  | { type: "succeed" }
+  | { type: "fail"; message: string }
+  | { type: "reset" };
+
+function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  switch (action.type) {
+    case "start":
+      return { kind: "editing", draft: action.from };
+    case "change":
+      if (state.kind === "editing" || state.kind === "error") {
+        return { ...state, draft: action.draft };
+      }
+      return state;
+    case "cancel":
+    case "reset":
+      return { kind: "viewing" };
+    case "submit":
+      if (state.kind === "editing" || state.kind === "error") {
+        return { kind: "saving", draft: state.draft };
+      }
+      return state;
+    case "succeed":
+      return { kind: "saved" };
+    case "fail":
+      if (state.kind === "saving") {
+        return { kind: "error", draft: state.draft, message: action.message };
+      }
+      return state;
+  }
+}
 
 const TYPE_COLOR: Record<MemoryType, { bg: string; text: string; border: string }> = {
   user:      { bg: "oklch(25% 0.06 230)",   text: "#60a5fa", border: "oklch(35% 0.1 230)" },
@@ -37,12 +82,14 @@ export function MemoryTab({ slug }: MemoryTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  const [editor, dispatchEditor] = useReducer(editorReducer, { kind: "viewing" });
 
   useEffect(() => {
     setLoading(true);
     setData(null);
     setSelectedFile(null);
     setFileContent(null);
+    dispatchEditor({ type: "reset" });
 
     fetch(`/api/memory/${slug}`)
       .then((r) => r.ok ? r.json() : null)
@@ -55,6 +102,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
     if (selectedFile === name) return;
     setSelectedFile(name);
     setFileContent(null);
+    dispatchEditor({ type: "reset" });
     setFileLoading(true);
     try {
       const res = await fetch(`/api/memory/${slug}?file=${encodeURIComponent(name)}`);
@@ -65,6 +113,33 @@ export function MemoryTab({ slug }: MemoryTabProps) {
       // ignore
     } finally {
       setFileLoading(false);
+    }
+  }
+
+  async function saveDraft(draft: string) {
+    if (!selectedFile) return;
+    dispatchEditor({ type: "submit" });
+    try {
+      const res = await fetch(`/api/memory/${slug}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: selectedFile, content: draft }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const code = (body as { error?: { code?: string } }).error?.code ?? `HTTP ${res.status}`;
+        throw new Error(code);
+      }
+      setFileContent(draft);
+      dispatchEditor({ type: "succeed" });
+      // Refresh the file list so mtime / size / stale badge update.
+      const refreshed = await fetch(`/api/memory/${slug}`).then((r) => r.ok ? r.json() : null);
+      if (refreshed) setData(refreshed as MemoryData);
+    } catch (err) {
+      dispatchEditor({
+        type: "fail",
+        message: err instanceof Error ? err.message : "Save failed",
+      });
     }
   }
 
@@ -130,7 +205,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
               ))}
             </div>
 
-            {/* Right: viewer */}
+            {/* Right: viewer / editor */}
             <div style={{
               flex: 1, minWidth: 0,
               padding: "12px 16px",
@@ -138,6 +213,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
               border: "1px solid var(--border-subtle)",
               borderRadius: "var(--radius)",
               minHeight: "120px",
+              display: "flex", flexDirection: "column", gap: "10px",
             }}>
               {!selectedFile && (
                 <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: 0 }}>
@@ -147,8 +223,39 @@ export function MemoryTab({ slug }: MemoryTabProps) {
               {selectedFile && fileLoading && (
                 <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: 0 }}>Loading…</p>
               )}
-              {selectedFile && !fileLoading && fileContent && (
-                <MarkdownContent content={fileContent} />
+              {selectedFile && !fileLoading && fileContent !== null && (
+                <>
+                  <MemoryEditorToolbar
+                    fileName={selectedFile}
+                    state={editor}
+                    onEdit={() => dispatchEditor({ type: "start", from: fileContent })}
+                    onCancel={() => dispatchEditor({ type: "cancel" })}
+                    onSave={() => {
+                      if (editor.kind === "editing" || editor.kind === "error") {
+                        saveDraft(editor.draft);
+                      }
+                    }}
+                  />
+                  {(editor.kind === "editing" || editor.kind === "saving" || editor.kind === "error") ? (
+                    <textarea
+                      value={editor.draft}
+                      onChange={(e) => dispatchEditor({ type: "change", draft: e.target.value })}
+                      readOnly={editor.kind === "saving"}
+                      style={{
+                        width: "100%", minHeight: "300px",
+                        padding: "10px 12px",
+                        fontFamily: "var(--font-mono)", fontSize: "0.78rem",
+                        color: "var(--text-primary)",
+                        background: "var(--bg-surface)",
+                        border: "1px solid var(--border-default)",
+                        borderRadius: "var(--radius)",
+                        resize: "vertical",
+                      }}
+                    />
+                  ) : (
+                    <MarkdownContent content={fileContent} />
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -175,7 +282,10 @@ function MemorySectionHeader({ label }: { label: string }) {
 
 function FileRow({ file, active, onClick }: { file: MemoryFile; active: boolean; onClick: () => void }) {
   const d = new Date(file.mtime);
-  const relTime = isFinite(d.getTime()) ? formatDistanceToNow(d, { addSuffix: true }) : "";
+  const valid = isFinite(d.getTime());
+  const relTime = valid ? formatDistanceToNow(d, { addSuffix: true }) : "";
+  const ageDays = valid ? differenceInDays(new Date(), d) : 0;
+  const stale = valid && ageDays >= STALE_AFTER_DAYS;
 
   return (
     <button
@@ -199,6 +309,24 @@ function FileRow({ file, active, onClick }: { file: MemoryFile; active: boolean;
         }}>
           {file.name}
         </span>
+        {stale && (
+          <span
+            title={`Last edited ${ageDays} days ago — consider refreshing or removing`}
+            style={{
+              marginLeft: "auto",
+              fontSize: "0.6rem", fontFamily: "var(--font-mono)",
+              color: "var(--accent)",
+              background: "var(--accent-bg)",
+              border: "1px solid var(--accent-border)",
+              borderRadius: "3px",
+              padding: "1px 5px",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+            }}
+          >
+            stale
+          </span>
+        )}
       </div>
       {file.description && (
         <span style={{
@@ -213,5 +341,69 @@ function FileRow({ file, active, onClick }: { file: MemoryFile; active: boolean;
         {relTime}
       </span>
     </button>
+  );
+}
+
+function MemoryEditorToolbar({
+  fileName,
+  state,
+  onEdit,
+  onCancel,
+  onSave,
+}: {
+  fileName: string;
+  state: EditorState;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const btnStyle: React.CSSProperties = {
+    padding: "4px 10px",
+    fontSize: "0.7rem",
+    fontFamily: "var(--font-body)",
+    color: "var(--text-secondary)",
+    background: "var(--bg-surface)",
+    border: "1px solid var(--border-subtle)",
+    borderRadius: "var(--radius)",
+    cursor: "pointer",
+  };
+  const isEditing = state.kind === "editing" || state.kind === "saving" || state.kind === "error";
+  const isSaving = state.kind === "saving";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "8px",
+      paddingBottom: "6px",
+      borderBottom: "1px solid var(--border-subtle)",
+    }}>
+      <span style={{
+        fontFamily: "var(--font-mono)", fontSize: "0.72rem",
+        color: "var(--text-muted)", flex: 1,
+      }}>
+        {fileName}
+      </span>
+      {!isEditing && (
+        <button onClick={onEdit} style={btnStyle}>Edit</button>
+      )}
+      {isEditing && (
+        <>
+          <button onClick={onCancel} style={btnStyle} disabled={isSaving}>Cancel</button>
+          <button
+            onClick={onSave}
+            disabled={isSaving}
+            style={{ ...btnStyle, color: "var(--text-primary)", borderColor: "var(--border-default)" }}
+          >
+            {isSaving ? "Saving…" : "Save"}
+          </button>
+        </>
+      )}
+      {state.kind === "saved" && (
+        <span style={{ fontSize: "0.68rem", color: "var(--status-active-text)" }}>Saved</span>
+      )}
+      {state.kind === "error" && (
+        <span style={{ fontSize: "0.68rem", color: "var(--status-error-text, var(--accent))" }}>
+          {state.message}
+        </span>
+      )}
+    </div>
   );
 }
