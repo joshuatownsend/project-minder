@@ -217,6 +217,25 @@ describe("classifySessionsByYield", () => {
     expect(r.dollarsPerShippedCommit).toBe(0);
   });
 
+  it("counts surviving commits in a reverted-class session toward the shipped denominator", () => {
+    // Reviewer-flagged (Copilot + Codex P1): a session classified
+    // "reverted" (≥50% reverted) can still have surviving commits.
+    // Excluding them from `dollarsPerShippedCommit`'s denominator
+    // would inflate the metric on mixed-outcome sessions.
+    const intervals = [iv("s1", "2026-01-01T10:00:00Z", "2026-01-01T12:00:00Z", 1.00)];
+    const commits = [
+      commit("abc1", "2026-01-01T11:00:00Z", "feat: x"),
+      commit("abc2", "2026-01-01T11:30:00Z", "feat: y"),
+      // 1 of 2 reverted → exactly 50% threshold → session is "reverted"
+      // but abc2 still shipped.
+      commit("abc3", "2026-01-05T00:00:00Z", "Revert \"feat: x\""),
+    ];
+    const r = classifySessionsByYield({ intervals, commits });
+    expect(r.reverted).toBe(1);
+    // abc2 shipped → 1 stuck commit at $1.00 cost → $1/commit.
+    expect(r.dollarsPerShippedCommit).toBeCloseTo(1.0);
+  });
+
   it("majority-revert threshold: 50%+ reverted classifies session as reverted", () => {
     const intervals = [iv("s1", "2026-01-01T10:00:00Z", "2026-01-01T12:00:00Z")];
     const commits = [

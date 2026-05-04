@@ -17,6 +17,16 @@ import type { UsageTurn } from "@/lib/usage/types";
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
 // advances so newly-ingested sessions surface promptly.
 
+/**
+ * Convert a Windows or POSIX project path to the canonical dirname
+ * Claude Code uses under `~/.claude/projects/`. The encoding rule:
+ * `:`, `\`, and `.` all become `-`. Used to match parser-produced
+ * `projectDirName` exactly to a scanned project.
+ */
+function encodeProjectPath(projectPath: string): string {
+  return projectPath.replace(/[:\\.]/g, "-");
+}
+
 interface EfficiencyResponse {
   slug: string;
   waste: WasteOptimizerInfo;
@@ -76,21 +86,26 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  // Slug-mismatch heuristic mirrors /api/sessions: scanner uses
-  // `toSlug("project-minder") = "project-minder"`; parser uses
-  // `toSlug("C--dev-project-minder") = "dev-project-minder"`. Accept
-  // either form. Per-session early-out: every turn in a session shares
-  // the same projectSlug, so check the first turn before walking the
-  // rest — saves walking ~99% of the corpus on large multi-project
-  // installs.
+  // Match turns to this project exactly. Two paths produce different
+  // identifiers for the same directory: scanner uses `toSlug("project-
+  // minder") = "project-minder"`; parser uses `toSlug("C--dev-project-
+  // minder") = "dev-project-minder"` from the encoded dirname. To match
+  // safely without substring false-positives (e.g. slug "api" matching
+  // "my-api-server"), we match on (a) exact slug equality, OR (b) exact
+  // canonical-dirname equality derived from the project's filesystem
+  // path. Reviewer-flagged (Codex P1).
+  //
+  // Per-session early-out: every turn in a session shares the same
+  // projectSlug + projectDirName, so checking the first turn before
+  // walking the rest saves ~99% of the corpus on large installs.
+  const expectedDirName = encodeProjectPath(project.path);
   const projectTurns: UsageTurn[] = [];
-  const slugLower = slug.toLowerCase();
   for (const turns of sessionMap.values()) {
     if (turns.length === 0) continue;
     const head = turns[0];
     const matches =
       head.projectSlug === slug ||
-      head.projectDirName.toLowerCase().includes(slugLower);
+      head.projectDirName === expectedDirName;
     if (!matches) continue;
     for (const t of turns) projectTurns.push(t);
   }
@@ -142,15 +157,20 @@ async function computeYield(
     applyPricing(getModelPricing(t.model), t)
   );
 
-  // Bound the `git log` scan at the earliest session timestamp − 1 day
-  // so long-lived repos don't return decades of history.
+  // `buildSessionIntervals` only emits intervals for sessions with at
+  // least one assistant turn. If every turn in `turns` was a user turn
+  // (rare but possible), `intervals` is empty — without this guard we'd
+  // fall through with `sinceIso = undefined` and `git log` would scan
+  // unbounded history. Reviewer-flagged (Copilot).
+  if (intervals.length === 0) {
+    return { kind: "unavailable", reason: "No assistant turns to align with commits." };
+  }
+
   let earliest = Infinity;
   for (const iv of intervals) {
     if (iv.startMs < earliest) earliest = iv.startMs;
   }
-  const sinceIso = Number.isFinite(earliest)
-    ? new Date(earliest - 24 * 60 * 60 * 1000).toISOString()
-    : undefined;
+  const sinceIso = new Date(earliest - 24 * 60 * 60 * 1000).toISOString();
 
   const commits = await readBranchCommits(projectPath, branch, sinceIso);
   return { kind: "ok", report: classifySessionsByYield({ intervals, commits }) };

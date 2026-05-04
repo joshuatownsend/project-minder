@@ -126,12 +126,14 @@ function detectJunkReads(turns: UsageTurn[]): {
 // severity; we report the top offenders only.
 
 interface DupReadAccum {
-  /** Sessions in which this file was read post-last-edit. */
+  /** Sessions in which this file was read post-last-edit, EXCLUDING the
+   *  session that performed that last edit (otherwise that session's
+   *  re-reads after its own edit would self-flag as duplicates). */
   sessions: Set<string>;
-  /** Whether the file has ever been edited/written. */
-  everEdited: boolean;
   /** Timestamp (ms) of last edit/write, or 0 if never. */
   lastEditMs: number;
+  /** SessionId that performed the last edit/write, or null if never. */
+  lastEditSessionId: string | null;
 }
 
 function detectDuplicateReads(turns: UsageTurn[]): WasteFinding | null {
@@ -161,20 +163,23 @@ function detectDuplicateReads(turns: UsageTurn[]): WasteFinding | null {
 
       let acc = byPath.get(p);
       if (!acc) {
-        acc = { sessions: new Set(), everEdited: false, lastEditMs: 0 };
+        acc = { sessions: new Set(), lastEditMs: 0, lastEditSessionId: null };
         byPath.set(p, acc);
       }
 
       if (tc.name === "Read") {
-        // Only counts as a dup if the file was last touched in a previous
-        // session and has not been edited since then (or has never been
-        // edited at all).
-        if (turnMs >= acc.lastEditMs) acc.sessions.add(t.sessionId);
+        // Skip reads from the same session that just edited the file —
+        // those aren't "duplicate without intervening edit," they're
+        // re-reads by the editor itself. Without this guard, a session
+        // that runs Read → Edit → Read would push itself into
+        // `acc.sessions` after its own edit cleared the set and tip
+        // a clean project over the 3-session threshold.
+        if (turnMs >= acc.lastEditMs && t.sessionId !== acc.lastEditSessionId) {
+          acc.sessions.add(t.sessionId);
+        }
       } else if (tc.name === "Edit" || tc.name === "Write") {
-        acc.everEdited = true;
         acc.lastEditMs = turnMs;
-        // Reset session tracking — sessions reading after an Edit are no
-        // longer "duplicate without intervening edit."
+        acc.lastEditSessionId = t.sessionId;
         acc.sessions.clear();
       }
     }

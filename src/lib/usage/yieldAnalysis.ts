@@ -151,20 +151,57 @@ export function detectRevertedCommits(commits: CommitMeta[]): Set<string> {
  * immediately before the next session starts) is a common pattern —
  * without grace, those commits would be classified as "abandoned"
  * instead of attributed.
+ *
+ * Callers that classify many sessions against the same commit log
+ * should use `prepareCommitIndex` once and pass the result to
+ * `commitsInIntervalIndexed`. The naïve filter below would re-parse
+ * every commit timestamp on every call, costing O(numSessions ×
+ * numCommits) `Date.parse` calls.
  */
 const COMMIT_ATTRIBUTION_GRACE_MS = 5 * 60 * 1000;
 
-function commitsInInterval(
-  commits: CommitMeta[],
+interface IndexedCommit {
+  meta: CommitMeta;
+  ms: number;
+}
+
+/** Parse all commit timestamps once and sort ascending so per-interval
+ *  lookups can binary-search for the interval lower bound. */
+function prepareCommitIndex(commits: CommitMeta[]): IndexedCommit[] {
+  const indexed: IndexedCommit[] = [];
+  for (const c of commits) {
+    const ms = Date.parse(c.date);
+    if (Number.isFinite(ms)) indexed.push({ meta: c, ms });
+  }
+  indexed.sort((a, b) => a.ms - b.ms);
+  return indexed;
+}
+
+/** Lowest index `i` such that `indexed[i].ms >= target`, or `length`. */
+function lowerBound(indexed: IndexedCommit[], target: number): number {
+  let lo = 0;
+  let hi = indexed.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (indexed[mid].ms < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function commitsInIntervalIndexed(
+  indexed: IndexedCommit[],
   interval: SessionInterval
 ): CommitMeta[] {
   const lo = interval.startMs - COMMIT_ATTRIBUTION_GRACE_MS;
   const hi = interval.endMs + COMMIT_ATTRIBUTION_GRACE_MS;
-  return commits.filter((c) => {
-    const t = Date.parse(c.date);
-    if (!Number.isFinite(t)) return false;
-    return t >= lo && t <= hi;
-  });
+  const start = lowerBound(indexed, lo);
+  const out: CommitMeta[] = [];
+  for (let i = start; i < indexed.length; i++) {
+    if (indexed[i].ms > hi) break;
+    out.push(indexed[i].meta);
+  }
+  return out;
 }
 
 export interface YieldAnalysisInput {
@@ -182,6 +219,7 @@ export type YieldResult =
 export function classifySessionsByYield(input: YieldAnalysisInput): YieldReport {
   const { intervals, commits } = input;
   const reverted = detectRevertedCommits(commits);
+  const indexedCommits = prepareCommitIndex(commits);
 
   const perSession: SessionYield[] = [];
   let productive = 0;
@@ -196,7 +234,7 @@ export function classifySessionsByYield(input: YieldAnalysisInput): YieldReport 
   let hasCostData = false;
 
   for (const iv of intervals) {
-    const attributed = commitsInInterval(commits, iv);
+    const attributed = commitsInIntervalIndexed(indexedCommits, iv);
     const attributedShas = attributed.map((c) => c.sha);
     const revertedAttributed = attributedShas.filter((sha) => reverted.has(sha));
 
@@ -210,6 +248,13 @@ export function classifySessionsByYield(input: YieldAnalysisInput): YieldReport 
     } else {
       outcome = "productive";
       productive++;
+    }
+    // Shipped-commit denominator counts non-reverted commits regardless
+    // of session classification: a "reverted" session can still have
+    // surviving commits (≥50% reverted ≠ all reverted), and excluding
+    // them would inflate $/shipped-commit on projects with mixed-outcome
+    // sessions.
+    if (attributedShas.length > 0) {
       stuckCommits += attributedShas.length - revertedAttributed.length;
     }
     if (typeof iv.costUsd === "number") {

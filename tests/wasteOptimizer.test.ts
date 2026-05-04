@@ -146,6 +146,24 @@ describe("detectDuplicateReads", () => {
     const f = _internal.detectDuplicateReads(turns);
     expect(f?.severity).toBe("high");
   });
+
+  it("does not flag the editing session itself as a duplicate read", () => {
+    // Reviewer-flagged (Copilot): a session that runs Read → Edit →
+    // Read on the same file used to push itself into the dup set after
+    // the edit cleared it. That false-positive could tip a clean
+    // project over the 3-session threshold via a single editor session.
+    const turns: UsageTurn[] = [
+      read("src/foo.ts", "s1", "2026-01-01T00:00:00Z"),  // s1 reads
+      read("src/foo.ts", "s2", "2026-01-02T00:00:00Z"),  // s2 reads
+      edit("src/foo.ts", "s2", "2026-01-02T01:00:00Z"),  // s2 edits — clears set
+      read("src/foo.ts", "s2", "2026-01-02T02:00:00Z"),  // s2 reads its own edit
+      read("src/foo.ts", "s2", "2026-01-02T03:00:00Z"),  // s2 reads again
+      read("src/foo.ts", "s2", "2026-01-02T04:00:00Z"),  // s2 reads again
+    ];
+    // Only one session (s2) reading after the edit — and it's the
+    // editing session itself, so it shouldn't count. Result: no finding.
+    expect(_internal.detectDuplicateReads(turns)).toBeNull();
+  });
 });
 
 describe("detectUnusedMcpServers", () => {
