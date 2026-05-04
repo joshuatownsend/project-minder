@@ -117,6 +117,8 @@ interface SessionRow {
   git_branch: string | null;
   initial_prompt: string | null;
   last_prompt: string | null;
+  slug: string | null;
+  continued_from_session_id: string | null;
 }
 
 interface ToolCountRow {
@@ -165,7 +167,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             error_count,
             input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
             cost_usd, verified_task_count, one_shot_task_count,
-            git_branch, initial_prompt, last_prompt
+            git_branch, initial_prompt, last_prompt,
+            slug, continued_from_session_id
      FROM sessions
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
@@ -294,6 +297,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       skillsUsed,
       oneShotRate,
       searchableText,
+      slug: h.slug ?? undefined,
+      continuedFromSessionId: h.continued_from_session_id ?? undefined,
     });
   }
 

@@ -14,6 +14,11 @@ import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
+import { searchSessionsInDb } from "./sessionSearch";
+import type {
+  SessionSearchHit,
+  SessionSearchScope,
+} from "./sessionSearch";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
 import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/types";
 
@@ -320,21 +325,46 @@ export interface SessionDetailResult {
  *   that exists on disk but hasn't been ingested still resolves).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
-export async function getSessionDetail(sessionId: string): Promise<SessionDetailResult> {
+export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailResult> {
   if (!dbModeRequested()) {
-    const detail = await scanSessionDetail(sessionId);
+    const detail = await scanSessionDetail(idOrSlug);
     return { detail, meta: { backend: "file" } };
   }
 
   const db = await getReadyDb();
+
+  // Disambiguate sessionId vs slug by shape. Hex-and-dash matches the
+  // same gate `loadSessionDetailFromDb` and `scanSessionDetail` use
+  // for sessionIds; anything containing letters past `f` is necessarily
+  // a slug. Resolution runs BEFORE the v3-catch-up gate so
+  // /sessions/<slug> URLs still resolve during the migration window
+  // (the v3 gate falls back to file-parse but file-parse rejects
+  // non-hex inputs; pre-resolving slug → canonical sessionId is what
+  // bridges that).
+  //
+  // Edge case: a hex-only slug (e.g. `cafe-faded-deed`) would slip
+  // through as a sessionId and miss the loader rather than resolving
+  // via slug. Claude Code's slug dictionary uses words with letters
+  // past `f`, so this isn't observed in practice; documented for
+  // future generators.
+  const looksLikeSessionId = /^[a-f0-9-]+$/i.test(idOrSlug);
+  const sessionId = looksLikeSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+  const fallbackKey = sessionId ?? idOrSlug;
+
   if (await checkV3Gate("getSessionDetail", db)) {
     logIntentionalFallthrough(
       "getSessionDetail",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
-    const detail = await scanSessionDetail(sessionId);
+    const detail = await scanSessionDetail(fallbackKey);
     return { detail, meta: { backend: "file" } };
   }
+
+  if (!sessionId) {
+    const detail = await scanSessionDetail(idOrSlug);
+    return { detail, meta: { backend: "file" } };
+  }
+
   const dbDetail = await callDbLoader("getSessionDetail", () =>
     loadSessionDetailFromDb(db, sessionId)
   );
@@ -347,6 +377,33 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
   // browsing of un-indexed sessions).
   const detail = await scanSessionDetail(sessionId);
   return { detail, meta: { backend: "file" } };
+}
+
+/**
+ * Look up the most-recent `session_id` for a given slug. Returns `null`
+ * when the slug isn't indexed or doesn't pass the slug-shape gate.
+ *
+ * "Most-recent" matches the rule the SessionsBrowser uses to surface
+ * the head of a continuation chain: `start_ts DESC` with `session_id`
+ * tie-break. The continuation graph is already linked at reconcile
+ * time; this is just the opposite direction (slug → leaf).
+ *
+ * Slug-shape gate: `/^[a-z0-9-]+$/`. Claude Code's generator emits
+ * lowercase already, so mixed-case URLs simply won't match — chosen
+ * over input-normalization to keep the SQL parameter exactly what the
+ * caller sees, which makes debugging URL mismatches simpler.
+ */
+function resolveSlugToSessionId(db: DbHandle, slug: string): string | null {
+  if (!/^[a-z0-9-]+$/.test(slug)) return null;
+  const row = db
+    .prepare(
+      `SELECT session_id FROM sessions
+        WHERE slug = ?
+        ORDER BY start_ts DESC, session_id DESC
+        LIMIT 1`
+    )
+    .get(slug) as { session_id: string } | undefined;
+  return row?.session_id ?? null;
 }
 
 export interface SessionsListResult {
@@ -553,3 +610,47 @@ async function runFileClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageRe
   // `ClaudeUsageResult.meta.maxMtimeMs` JSDoc).
   return { stats, meta: { backend: "file", maxMtimeMs: 0 } };
 }
+
+export interface SessionSearchResult {
+  hits: SessionSearchHit[];
+  meta: { backend: "db" | "file" };
+}
+
+/**
+ * Run a session search through the indexed FTS5 + sessions tables.
+ *
+ * - `MINDER_USE_DB=0`: returns `{ hits: [], meta: { backend: 'file' } }`
+ *   — the file-parse path doesn't ship an FTS index, so the
+ *   SessionsBrowser should fall back to client-side filtering of the
+ *   cached `searchableText` column. Distinct from "DB available but
+ *   no matches" so the UI can detect this case.
+ * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
+ *
+ * The v3-readiness gate is intentionally NOT applied — search hits
+ * read `session_id` (and at most `slug` / `initial_prompt`) which
+ * aren't gated by the cost-reconcile state. A user typing in the
+ * search box during the catch-up window still gets results.
+ */
+export async function searchSessions(
+  query: string,
+  scope: SessionSearchScope = "both",
+  limit?: number
+): Promise<SessionSearchResult> {
+  if (!dbModeRequested()) {
+    return { hits: [], meta: { backend: "file" } };
+  }
+
+  const db = await getReadyDb();
+  // Direct call (no `callDbLoader` wrap): `SessionSearchError` carries
+  // 4xx-class signals (`fts-parse` → 400) that the route maps to user-
+  // facing errors. `callDbLoader` would convert it to
+  // `DbUnavailableError(reason: 'load-failed')` and the route would
+  // serve a 500 instead. Genuine SQLite failures bubble as raw
+  // `SqliteError` and surface as 500s — the correct outcome for
+  // "DB has a real problem."
+  const hits = searchSessionsInDb(db, query, scope, limit);
+  return { hits, meta: { backend: "db" } };
+}
+
+export type { SessionSearchHit, SessionSearchScope } from "./sessionSearch";

@@ -119,6 +119,7 @@ async function scanSessionFile(
     let initialPrompt: string | undefined;
     let lastPrompt: string | undefined;
     let gitBranch: string | undefined;
+    let sessionSlug: string | undefined;
     const recaps: SessionRecap[] = [];
     let messageCount = 0;
     let userMessageCount = 0;
@@ -170,6 +171,13 @@ async function scanSessionFile(
         if (entry.type === "assistant" && entry.message) {
           assistantMessageCount++;
           messageCount++;
+          // Capture Claude Code's stable session slug here, restricted
+          // to assistant entries — out-of-band records (system, recap)
+          // can carry slug fields too, and latching from one of those
+          // would permanently poison `sessions.slug` for this session.
+          if (!sessionSlug && typeof entry.slug === "string" && entry.slug.length > 0) {
+            sessionSlug = entry.slug;
+          }
           const msg = entry.message;
           const model = msg.model;
           if (model && model !== "<synthetic>") models.add(model);
@@ -317,6 +325,13 @@ async function scanSessionFile(
       skillsUsed: skills,
       oneShotRate,
       searchableText: searchParts.join(" ").slice(0, 4000),
+      slug: sessionSlug,
+      // continuedFromSessionId is intentionally omitted on the file-parse
+      // path: linking sessions by slug requires visibility into the rest
+      // of the corpus, which we'd have to second-pass to compute. The DB
+      // path's batched UPDATE is the canonical source. File-parse mode
+      // (`MINDER_USE_DB=0`) just shows the slug without a "continued
+      // from" badge — degraded but never wrong.
     };
   } catch {
     return null;

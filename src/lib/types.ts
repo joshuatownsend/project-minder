@@ -322,6 +322,25 @@ export interface SessionSummary {
   skillsUsed: Record<string, number>; // skill name → invocation count
   oneShotRate?: number;
   searchableText?: string;
+  /**
+   * Claude Code's human-readable session label (e.g. `quirky-scribbling-plum`).
+   * Stable across `--resume`/`--continue` invocations: a continued
+   * session inherits the slug while getting a new `sessionId`. Used by
+   * the SessionsBrowser "continued from …" badge and by the
+   * `/sessions/<slug>` URL resolver. Undefined on legacy sessions whose
+   * JSONL never exposed a slug, and on freshly-written rows that
+   * haven't yet been re-indexed since schema v5 landed.
+   */
+  slug?: string;
+  /**
+   * The previous `sessionId` in the slug-grouped continuation chain,
+   * or `undefined` for the first session of a chain (or when slug is
+   * unknown). Populated by the post-reconcile linking pass in
+   * `refreshContinuationLinks`. The chain is computed from
+   * `(slug, start_ts, session_id)` ordering — see ingest's
+   * `refreshContinuationLinks` for the exact tie-break.
+   */
+  continuedFromSessionId?: string;
 }
 
 export interface TimelineEvent {

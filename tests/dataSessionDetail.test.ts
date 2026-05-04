@@ -285,4 +285,66 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const result = await facade.getSessionDetail("../../../etc/passwd");
     expect(result.detail).toBeNull();
   });
+
+  // ── Slug + sessionId disambiguation (PR #60 review fix) ────────────────
+  //
+  // The shape gate must be hex-and-dash, not strict UUID. A non-canonical
+  // hex sessionId (anything matching `[a-f0-9-]+` that isn't UUID-shaped)
+  // would otherwise route through slug resolution and miss the loader.
+
+  it("DB-resolves a session by its human-readable slug", async () => {
+    const SLUG = "shimmering-quokka-prancing";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      // Slug appears as a top-level field on assistant entries.
+      {
+        type: "assistant",
+        timestamp: "2026-04-15T10:00:01Z",
+        slug: SLUG,
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "hello" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      } as any,
+    ]);
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+
+    const result = await facade.getSessionDetail(SLUG);
+    expect(result.meta.backend).toBe("db");
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(SESSION_ID);
+  });
+
+  it("non-canonical hex sessionIds still hit the DB loader (not slug resolution)", async () => {
+    // 32-char hex without UUID dashes — valid for the loader's hex gate
+    // but rejected by a strict UUID regex. Pre-PR-60-fix this would have
+    // tried slug resolution (miss), then file-parse with the hex string
+    // (which would resolve, but via the slow path). The loader must be
+    // hit directly.
+    const HEX_ID = "abcdef00111122223333444455556666";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${HEX_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      assistantTurn("2026-04-15T10:00:01Z", "claude-sonnet-4-5", "hello", []),
+    ]);
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+
+    const result = await facade.getSessionDetail(HEX_ID);
+    expect(result.meta.backend).toBe("db");
+    expect(result.detail!.sessionId).toBe(HEX_ID);
+  });
 });
