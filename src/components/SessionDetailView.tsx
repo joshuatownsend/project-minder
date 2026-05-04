@@ -6,6 +6,7 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
+import { DiagnosisPanel } from "./DiagnosisPanel";
 import { BarChart } from "./stats/BarChart";
 import {
   ArrowLeft,
@@ -119,7 +120,7 @@ function StatCell({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "diagnosis";
 
 function TabBar({
   tabs, active, onChange,
@@ -200,6 +201,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
       : []),
+    { key: "diagnosis", label: "Diagnosis" },
   ];
 
   const statCells = [
@@ -423,6 +425,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "subagents" && (
             <SessionSubagents subagents={data.subagents} />
+          )}
+
+          {activeTab === "diagnosis" && (
+            <DiagnosisPanel sessionId={data.sessionId} />
           )}
         </div>
       </div>

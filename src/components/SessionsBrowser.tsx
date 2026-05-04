@@ -101,6 +101,73 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
   );
 }
 
+// ── Quality chips (Wave 3.1: cache hit %, compaction loop, tool-failure streak) ─
+
+type QualityChipTone = "good" | "neutral" | "warn" | "error";
+
+function QualityChip({
+  tone,
+  title,
+  children,
+}: {
+  tone: QualityChipTone;
+  title: string;
+  children: React.ReactNode;
+}) {
+  const tokens =
+    tone === "good"
+      ? { color: "var(--status-active-text)", bg: "var(--status-active-bg)", border: "var(--status-active-border)" }
+      : tone === "warn"
+        ? { color: "var(--accent)", bg: "var(--accent-bg)", border: "var(--accent-border)" }
+        : tone === "error"
+          ? { color: "var(--status-error-text)", bg: "var(--status-error-bg)", border: "var(--status-error-border)" }
+          : { color: "var(--text-secondary)", bg: "var(--bg-elevated)", border: "var(--border-subtle)" };
+  return (
+    <span
+      title={title}
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.65rem",
+        color: tokens.color,
+        background: tokens.bg,
+        border: `1px solid ${tokens.border}`,
+        borderRadius: "3px",
+        padding: "1px 5px",
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function CacheHitBadge({ ratio }: { ratio: number }) {
+  // Per Clauditor's >70% benchmark: green at 0.7+ (cache paying back),
+  // amber below 0.5 (rebuilds dominating), neutral in between.
+  const tone: QualityChipTone = ratio >= 0.7 ? "good" : ratio >= 0.5 ? "neutral" : "warn";
+  return (
+    <QualityChip tone={tone} title="Cache hit ratio (cache_read / total cache traffic). >70% is healthy.">
+      {(ratio * 100).toFixed(0)}% cache
+    </QualityChip>
+  );
+}
+
+function CompactionLoopBadge() {
+  return (
+    <QualityChip tone="error" title="Compaction loop detected — Claude was burning tokens cycling on the same context without progress.">
+      compaction loop
+    </QualityChip>
+  );
+}
+
+function ToolFailureStreakBadge() {
+  return (
+    <QualityChip tone="error" title="Tool-failure streak detected — 5+ consecutive tool calls errored at >50% rate.">
+      tool fail streak
+    </QualityChip>
+  );
+}
+
 // ── One-shot rate badge ───────────────────────────────────────────────────────
 function OneShotBadge({ rate }: { rate: number }) {
   const color =
@@ -348,6 +415,11 @@ function SessionRow({
               continued
             </span>
           )}
+          {session.cacheHitRatio !== undefined && (
+            <CacheHitBadge ratio={session.cacheHitRatio} />
+          )}
+          {session.hasCompactionLoop && <CompactionLoopBadge />}
+          {session.hasToolFailureStreak && <ToolFailureStreakBadge />}
           {session.oneShotRate !== undefined && (
             <OneShotBadge rate={session.oneShotRate} />
           )}

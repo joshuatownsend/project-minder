@@ -12,6 +12,7 @@ import {
   SubagentInfo,
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
+import { computeSessionQuality } from "../usage/sessionQuality";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import { loadPricing, getModelPricing } from "../usage/costCalculator";
 import {
@@ -217,8 +218,15 @@ async function scanSessionFile(
           }
         }
 
-        // Build lightweight turn for one-shot detection (same pass, no re-parse)
-        if (entry.timestamp && !entry.isSidechain && !entry.isMeta) {
+        // Build lightweight turn for one-shot detection (same pass, no re-parse).
+        // Skip synthetic-model assistant entries to match `parseSessionTurns`
+        // and DB ingest behavior; without this filter the file-parse path's
+        // sessionQuality output would diverge from the DB path's for any
+        // session containing synthetic turns. Reviewer (Copilot) flagged.
+        const isSyntheticAssistant =
+          entry.type === "assistant" &&
+          (!entry.message?.model || entry.message.model === "<synthetic>");
+        if (entry.timestamp && !entry.isSidechain && !entry.isMeta && !isSyntheticAssistant) {
           const turnToolCalls: UsageToolCall[] = [];
           let toolResultText = "";
 
@@ -245,6 +253,14 @@ async function scanSessionFile(
             }
           }
 
+          // Token fields populated for assistant turns (used by
+          // sessionQuality detectors to compute fill/cache stats). User
+          // turns leave them at 0; the detectors already gate on
+          // role==="assistant" before reading. Keeping the gate
+          // role-based avoids re-walking JSONL for the quality pass.
+          const turnUsage = entry.type === "assistant" ? entry.message?.usage : undefined;
+          const turnIsError =
+            entry.type === "assistant" && entry.isApiErrorMessage === true;
           lightTurns.push({
             timestamp: entry.timestamp,
             sessionId,
@@ -252,9 +268,13 @@ async function scanSessionFile(
             projectDirName,
             model: entry.message?.model || "",
             role: entry.type === "assistant" ? "assistant" : "user",
-            inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0,
+            inputTokens: turnUsage?.input_tokens ?? 0,
+            outputTokens: turnUsage?.output_tokens ?? 0,
+            cacheCreateTokens: turnUsage?.cache_creation_input_tokens ?? 0,
+            cacheReadTokens: turnUsage?.cache_read_input_tokens ?? 0,
             toolCalls: turnToolCalls,
             toolResultText: toolResultText.slice(0, 2000),
+            isError: turnIsError,
           });
         }
       } catch {
@@ -270,6 +290,22 @@ async function scanSessionFile(
       if (oneShotStats.totalVerifiedTasks > 0) {
         oneShotRate = oneShotStats.rate;
       }
+    } catch { /* non-critical */ }
+
+    // Quality detectors (#100/#102/#104) run on the same lightTurns the
+    // one-shot detector already used. Falls back to undefined fields on
+    // failure so the file-parse SessionsBrowser badges simply don't
+    // render rather than poisoning the summary.
+    let qualityCacheHitRatio: number | undefined;
+    let qualityMaxContextFill: number | undefined;
+    let qualityHasCompactionLoop: boolean | undefined;
+    let qualityHasToolFailureStreak: boolean | undefined;
+    try {
+      const quality = computeSessionQuality(lightTurns);
+      if (quality.cache.hitRatio !== null) qualityCacheHitRatio = quality.cache.hitRatio;
+      if (quality.maxContextFill > 0) qualityMaxContextFill = quality.maxContextFill;
+      qualityHasCompactionLoop = quality.compactionLoops.length > 0;
+      qualityHasToolFailureStreak = quality.toolFailureStreaks.length > 0;
     } catch { /* non-critical */ }
 
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
@@ -332,6 +368,10 @@ async function scanSessionFile(
       // path's batched UPDATE is the canonical source. File-parse mode
       // (`MINDER_USE_DB=0`) just shows the slug without a "continued
       // from" badge — degraded but never wrong.
+      cacheHitRatio: qualityCacheHitRatio,
+      maxContextFill: qualityMaxContextFill,
+      hasCompactionLoop: qualityHasCompactionLoop,
+      hasToolFailureStreak: qualityHasToolFailureStreak,
     };
   } catch {
     return null;

@@ -112,6 +112,10 @@ interface SessionRow {
   cache_create_tokens: number;
   cache_read_tokens: number;
   cost_usd: number;
+  cache_hit_ratio: number | null;
+  max_context_fill: number | null;
+  has_compaction_loop: number;
+  has_tool_failure_streak: number;
   verified_task_count: number;
   one_shot_task_count: number;
   git_branch: string | null;
@@ -166,7 +170,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             turn_count, user_turn_count, assistant_turn_count,
             error_count,
             input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-            cost_usd, verified_task_count, one_shot_task_count,
+            cost_usd, cache_hit_ratio, max_context_fill,
+            has_compaction_loop, has_tool_failure_streak,
+            verified_task_count, one_shot_task_count,
             git_branch, initial_prompt, last_prompt,
             slug, continued_from_session_id
      FROM sessions
@@ -299,6 +305,10 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       searchableText,
       slug: h.slug ?? undefined,
       continuedFromSessionId: h.continued_from_session_id ?? undefined,
+      cacheHitRatio: h.cache_hit_ratio ?? undefined,
+      maxContextFill: h.max_context_fill ?? undefined,
+      hasCompactionLoop: h.has_compaction_loop === 1,
+      hasToolFailureStreak: h.has_tool_failure_streak === 1,
     });
   }
 
