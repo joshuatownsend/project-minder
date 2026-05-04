@@ -134,7 +134,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
