@@ -379,6 +379,27 @@ export interface SessionSummary {
    * `refreshContinuationLinks` for the exact tie-break.
    */
   continuedFromSessionId?: string;
+  /**
+   * `cache_read / (cache_read + cache_create)` across assistant turns,
+   * in [0, 1]. Undefined when the session has no cache activity at all.
+   * Populated by both file-parse and DB-ingest paths so the SessionsBrowser
+   * cache-hit chip renders identically regardless of backend.
+   */
+  cacheHitRatio?: number;
+  /**
+   * Peak `input_tokens / context_window` across assistant turns, in
+   * [0, 1]. Undefined when no assistant turn carried `input_tokens`.
+   * Used by SessionsBrowser to flag near-compaction sessions and by the
+   * Diagnosis panel header.
+   */
+  maxContextFill?: number;
+  /**
+   * Quality flags from `sessionQuality` detectors (#102 / #104). True
+   * means at least one finding existed at the last ingest/scan.
+   * Surfaced as chips on session rows.
+   */
+  hasCompactionLoop?: boolean;
+  hasToolFailureStreak?: boolean;
 }
 
 export interface TimelineEvent {

@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:91d5ad5b1ea0 | session:a3d04fe5-06a4-43f9-a904-07b15228d2de | 2026-05-04T17:22:08.904Z -->
+## ★ Insight
+Token-flow architecture pattern: `UsageTurn[]` is the canonical interchange format between three independent paths — file-parse (`parseSessionTurns`), DB ingest (`readJsonlSession` exposes `usageTurn` per turn), and DB rehydrate (`loadExistingTurnsAsUsage`). Building detectors against this single shape keeps the same logic running in all three contexts without duplicate code, and the parity contract is enforced by `tests/dataSessionsList.test.ts`.
+
+---
+
 <!-- insight:d0265006f559 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T15:30:47.667Z -->
 ## ★ Insight
 - One subtle correctness gain: `long-index` was previously triggered on `userExpandedContent + projectExpanded.content`, while `file-size` only counted the project file's bytes. That asymmetry meant a user with a 1000-line `~/.claude/CLAUDE.md` would see every project's score tank with no way to fix it from the project. Aligning `long-index` to project-only matches how `inline-bloat` and `missing-topic-files` already work.

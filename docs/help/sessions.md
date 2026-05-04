@@ -28,6 +28,16 @@ Each session card shows:
 - **Git branch** — the branch active during the session
 - **Model badges** — which Claude models were used
 
+### Quality chips
+
+When a session has been re-indexed under DERIVED_VERSION 5 (or scanned by the file-parse path), the row may surface up to three quality chips:
+
+- **`NN% cache`** — cache hit ratio (`cache_read / (cache_read + cache_create)`). Green at ≥70% (cache paying back the build cost), amber under 50% (rebuilds dominating). Sessions with no cache activity at all simply don't show the chip.
+- **`compaction loop`** (red) — at least one run of consecutive turn pairs where input variance was <10% and context fill was >75%. Signals Claude was burning tokens cycling on the same context without progress.
+- **`tool fail streak`** (red) — at least one window of 5+ consecutive tool results where >50% errored. The first 6 turns are skipped to avoid early-session noise.
+
+Click into a session to see the full breakdown on the **Diagnosis** tab.
+
 ## Search & Sort
 
 - **Search** — filter by prompt text, **message body content** (full-text via SQLite FTS5 when the index is available), project name, session ID, slug, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.
@@ -60,3 +70,19 @@ Table of file operations (read, write, edit, glob, grep) with file paths and too
 
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
+
+### Diagnosis
+Post-hoc 8-category quality analysis of the session, computed on demand from the JSONL:
+
+- **Cache TTL expiry** — inter-turn gaps that exceeded the 5-minute prompt cache lifetime. Long pauses invalidate the cache; the rebuild on the next turn is paid in full.
+- **Cache thrash** — three or more cache_creation spikes (≥5K tokens) within a 5-minute window. Usually means the system message or memory is mutating per turn (timestamps, listings) and forcing repeated rebuilds.
+- **Context bloat** — at least one turn at >60% context fill. Suppressed when **near-compaction** would also fire so advice doesn't double up.
+- **Near-compaction** — at least one turn at >83% fill, within striking distance of Claude Code's auto-compaction threshold.
+- **Compaction loop** — same detector that drives the SessionsBrowser chip.
+- **Tool failure streak** — same detector that drives the SessionsBrowser chip.
+- **High idle** — total inter-turn idle time exceeds 30 minutes. Capped per gap at 12 hours so an overnight pause doesn't drown out genuine in-session idle.
+- **Context-dominated** — ≥30% of assistant turns spent ≥10× more on input than on output. Pay-input-rates-for-repeat-context pattern.
+
+The header strip surfaces outcome (completed / partial / abandoned / stuck), cache hit %, cache rebuild waste in dollars, peak fill, and total idle. The **Top advice** block ranks the three highest-impact fixes by estimated dollar impact.
+
+This view is computed from JSONL on demand and does not require the SQLite index.

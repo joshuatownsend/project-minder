@@ -8,6 +8,7 @@ import { canonicalizeDirName } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
+import { computeSessionQuality, turnContextFill, type SessionQualitySummary } from "@/lib/usage/sessionQuality";
 import { loadPricing, getModelPricing, applyPricing } from "@/lib/usage/costCalculator";
 import { parseMcpTool } from "@/lib/usage/mcpParser";
 import {
@@ -143,6 +144,14 @@ interface ParsedTurn {
    * (day, project, model) without a second classifier pass.
    */
   category: string | null;
+  /**
+   * input_tokens / model context window for assistant turns, null otherwise.
+   * Persisted as `turns.context_fill` so per-turn diagnosis (compaction-
+   * loop runs, near-compaction visualizations) doesn't need to re-derive
+   * the model→window lookup at read time. See `getModelContextWindow` for
+   * the model→window table.
+   */
+  contextFill: number | null;
 }
 
 /**
@@ -195,6 +204,20 @@ interface ParsedSession {
   cacheReadTokens: number;
   costUsd: number;
   cacheHitRatio: number | null;
+  /**
+   * Peak `input_tokens / context_window` across assistant turns, in [0, 1].
+   * Persisted as `sessions.max_context_fill` so the SessionsBrowser badge
+   * and the Diagnosis panel header can read a single column instead of
+   * scanning `turns`. Null when no assistant turn carried `input_tokens`.
+   */
+  maxContextFill: number | null;
+  /**
+   * Quality flag pinned to `(0|1)` to match the schema CHECK constraint
+   * on `sessions.has_compaction_loop` / `has_tool_failure_streak`. The
+   * read-side translates to `boolean` in `sessionsListFromDb`.
+   */
+  hasCompactionLoop: 0 | 1;
+  hasToolFailureStreak: 0 | 1;
   hasOneShot: 0 | 1;
   // detectOneShot's full output, persisted so /api/usage's oneShot
   // aggregate is `SUM(verified_task_count), SUM(one_shot_task_count)
@@ -514,6 +537,7 @@ async function readJsonlSession(
         usageTurn,
         costUsd: 0,
         category: null,
+        contextFill: null,
       });
 
       // Status inference: this assistant turn becomes the new "last
@@ -578,6 +602,7 @@ async function readJsonlSession(
         usageTurn,
         costUsd: 0,
         category: null,
+        contextFill: null,
       });
 
       // Status inference: walk this user turn's content for
@@ -638,9 +663,28 @@ async function readJsonlSession(
   if (PROFILE) tick("detectOneShot", performance.now() - tOneShot);
   const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
 
-  // Derive: cache hit ratio. Undefined when there's no cache activity at all.
-  const cacheTotal = cacheCreateTokens + cacheReadTokens;
-  const cacheHitRatio = cacheTotal > 0 ? cacheReadTokens / cacheTotal : null;
+  // Derive: per-session quality flags (#100/#102/#104) plus cache hit ratio.
+  // Detector output is the source of truth; ingest persists onto `sessions`
+  // so the list view's badges are a single-column read, and per-turn
+  // `context_fill` is stamped onto each assistant turn for the Diagnosis
+  // panel. `safeComputeQuality` keeps a buggy detector from bricking a row.
+  const tQuality = PROFILE ? performance.now() : 0;
+  const { quality, hasCompactionLoop, hasToolFailureStreak, maxContextFill } =
+    safeComputeQuality(allUsageTurns, sessionId, "ingest");
+  if (quality) {
+    for (const t of turns) {
+      t.contextFill = turnContextFill(t.usageTurn);
+    }
+  }
+  // Cache hit ratio: read from the detector when available; otherwise fall
+  // back to the same `cache_read / total` math against the running totals
+  // so a detector failure still leaves a populated column.
+  const cacheHitRatio =
+    quality?.cache.hitRatio ??
+    (cacheCreateTokens + cacheReadTokens > 0
+      ? cacheReadTokens / (cacheCreateTokens + cacheReadTokens)
+      : null);
+  if (PROFILE) tick("sessionQuality", performance.now() - tQuality);
 
   // Derive: affected (day, project, model) tuples for daily_costs.
   const affectedDays = new Set<string>();
@@ -708,6 +752,9 @@ async function readJsonlSession(
       cacheReadTokens,
       costUsd,
       cacheHitRatio,
+      maxContextFill,
+      hasCompactionLoop,
+      hasToolFailureStreak,
       hasOneShot,
       verifiedTaskCount: oneShot.totalVerifiedTasks,
       oneShotTaskCount: oneShot.oneShotTasks,
@@ -719,6 +766,52 @@ async function readJsonlSession(
     },
     safeOffset,
   };
+}
+
+// ── Quality detector wrapper ───────────────────────────────────────────────
+
+interface QualityFlags {
+  quality: SessionQualitySummary | null;
+  hasCompactionLoop: 0 | 1;
+  hasToolFailureStreak: 0 | 1;
+  maxContextFill: number | null;
+}
+
+/**
+ * Run `computeSessionQuality` with a fail-soft fallback. A throw in any
+ * future detector would otherwise abort the session's INSERT/UPDATE,
+ * leaving `byte_offset` and `derived_version` stuck so every subsequent
+ * sweep re-throws on the same file. On failure we log and persist neutral
+ * flags — same shape the file-parse path already adopts. `quality` is
+ * returned as `null` on failure so callers reading `quality.cache.hitRatio`
+ * fall back to their own inline math.
+ */
+function safeComputeQuality(
+  allUsageTurns: UsageTurn[],
+  sessionId: string,
+  label: "ingest" | "ingest tail"
+): QualityFlags {
+  try {
+    const quality = computeSessionQuality(allUsageTurns);
+    return {
+      quality,
+      hasCompactionLoop: quality.compactionLoops.length > 0 ? 1 : 0,
+      hasToolFailureStreak: quality.toolFailureStreaks.length > 0 ? 1 : 0,
+      maxContextFill: quality.maxContextFill > 0 ? quality.maxContextFill : null,
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[${label}] computeSessionQuality threw for session ${sessionId}; persisting neutral flags`,
+      err
+    );
+    return {
+      quality: null,
+      hasCompactionLoop: 0,
+      hasToolFailureStreak: 0,
+      maxContextFill: null,
+    };
+  }
 }
 
 // ── DB writers ─────────────────────────────────────────────────────────────
@@ -760,7 +853,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        turn_count, user_turn_count, assistant_turn_count,
        tool_call_count, error_count,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       cost_usd, cache_hit_ratio,
+       cost_usd, cache_hit_ratio, max_context_fill,
+       has_compaction_loop, has_tool_failure_streak,
        has_one_shot, verified_task_count, one_shot_task_count,
        git_branch, initial_prompt, last_prompt, slug,
        derived_version, indexed_at_ms
@@ -771,7 +865,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @turn_count, @user_turn_count, @assistant_turn_count,
        @tool_call_count, @error_count,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @cost_usd, @cache_hit_ratio,
+       @cost_usd, @cache_hit_ratio, @max_context_fill,
+       @has_compaction_loop, @has_tool_failure_streak,
        @has_one_shot, @verified_task_count, @one_shot_task_count,
        @git_branch, @initial_prompt, @last_prompt, @slug,
        @derived_version, @indexed_at_ms
@@ -803,6 +898,9 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     cache_read_tokens: s.cacheReadTokens,
     cost_usd: s.costUsd,
     cache_hit_ratio: s.cacheHitRatio,
+    max_context_fill: s.maxContextFill,
+    has_compaction_loop: s.hasCompactionLoop,
+    has_tool_failure_streak: s.hasToolFailureStreak,
     has_one_shot: s.hasOneShot,
     verified_task_count: s.verifiedTaskCount,
     one_shot_task_count: s.oneShotTaskCount,
@@ -820,12 +918,12 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, tool_result_preview,
+       context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
+       @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd, @derived_version
      )`
   );
@@ -857,6 +955,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       output_tokens: t.outputTokens,
       cache_create_tokens: t.cacheCreateTokens,
       cache_read_tokens: t.cacheReadTokens,
+      context_fill: t.contextFill,
       is_error: t.isError,
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
@@ -1153,12 +1252,12 @@ function appendSessionTail(
     `INSERT INTO turns (
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
-       is_error, parent_tool_use_id, text_preview, tool_result_preview,
+       context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd, derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
-       @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
+       @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd, @derived_version
      )`
   );
@@ -1189,6 +1288,7 @@ function appendSessionTail(
       output_tokens: t.outputTokens,
       cache_create_tokens: t.cacheCreateTokens,
       cache_read_tokens: t.cacheReadTokens,
+      context_fill: t.contextFill,
       is_error: t.isError,
       parent_tool_use_id: t.parentToolUseId,
       text_preview: t.textPreview,
@@ -1287,8 +1387,23 @@ function appendSessionTail(
   const oneShot = detectOneShot(allUsageTurns);
   const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
 
-  const cacheTotal = aggRow.cache_create_tokens + aggRow.cache_read_tokens;
-  const cacheHitRatio = cacheTotal > 0 ? aggRow.cache_read_tokens / cacheTotal : null;
+  // Quality flags: re-run detectors over the union of old + new turns. New
+  // turns are already inserted at this point so `allUsageTurns` covers them.
+  // Detectors are stateless re-scans; positive flags persist between
+  // appends because the historical evaluable turns don't disappear, but
+  // they can theoretically clear when a streak's center moves out of its
+  // window or a compaction-loop run gets absorbed into a larger one.
+  const tQualityTail = PROFILE ? performance.now() : 0;
+  const { quality: tailQuality, hasCompactionLoop, hasToolFailureStreak, maxContextFill } =
+    safeComputeQuality(allUsageTurns, sessionId, "ingest tail");
+  // Cache hit ratio mirrors the full-INSERT fallback: prefer the
+  // detector's output, otherwise compute from the SUM aggregate.
+  const cacheHitRatio =
+    tailQuality?.cache.hitRatio ??
+    (aggRow.cache_create_tokens + aggRow.cache_read_tokens > 0
+      ? aggRow.cache_read_tokens / (aggRow.cache_create_tokens + aggRow.cache_read_tokens)
+      : null);
+  if (PROFILE) tick("sessionQualityTail", performance.now() - tQualityTail);
 
   // last_prompt: prefer the human prompt parsed from the tail. If the
   // tail was assistant-only (no new human prompt), keep whatever the
@@ -1340,6 +1455,9 @@ function appendSessionTail(
        cache_read_tokens   = @cache_read_tokens,
        cost_usd            = @cost_usd,
        cache_hit_ratio     = @cache_hit_ratio,
+       max_context_fill    = @max_context_fill,
+       has_compaction_loop = @has_compaction_loop,
+       has_tool_failure_streak = @has_tool_failure_streak,
        has_one_shot        = @has_one_shot,
        verified_task_count = @verified_task_count,
        one_shot_task_count = @one_shot_task_count,
@@ -1370,6 +1488,9 @@ function appendSessionTail(
     cache_read_tokens: aggRow.cache_read_tokens,
     cost_usd: costUsd,
     cache_hit_ratio: cacheHitRatio,
+    max_context_fill: maxContextFill,
+    has_compaction_loop: hasCompactionLoop,
+    has_tool_failure_streak: hasToolFailureStreak,
     has_one_shot: hasOneShot,
     verified_task_count: oneShot.totalVerifiedTasks,
     one_shot_task_count: oneShot.oneShotTasks,

@@ -267,3 +267,100 @@ export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
 export function getJsonlMaxMtime(): number {
   return getFileCache().maxMtimeMs();
 }
+
+/**
+ * Sentinel error from `loadSessionTurnsBySessionId` signaling that the
+ * JSONL was found but failed to read or parse. Distinct from a `null`
+ * return (file not found / oversized) so callers can route the two
+ * outcomes to different HTTP statuses — 404 vs 500. Without this split
+ * the diagnosis route would render a green "looks healthy" panel on a
+ * file the parser couldn't actually read, which is the worst-case
+ * failure mode for a quality-diagnosis tool.
+ */
+export class SessionTurnsLoadError extends Error {
+  constructor(
+    message: string,
+    public readonly sessionId: string,
+    public readonly filePath: string,
+    public readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = "SessionTurnsLoadError";
+  }
+}
+
+/**
+ * Locate a single session's JSONL by session id and return its parsed
+ * `UsageTurn[]`. Returns `null` when the session id doesn't resolve to
+ * a file or the file exceeds the size cap. Throws `SessionTurnsLoadError`
+ * when the JSONL was found but failed to read or parse — caller MUST
+ * surface that distinctly from "not found" (see class doc).
+ *
+ * Used by surfaces that need a single session's full turn data
+ * (e.g. the Diagnosis API route) without paying the cost of a full
+ * `parseAllSessions` sweep on cold start.
+ *
+ * Implementation: walks `~/.claude/projects/<dir>/<sessionId>.jsonl`
+ * across project subdirectories, mirroring `scanSessionDetail`'s
+ * fallback. Returns the cached parse via `FileCache` on warm hits,
+ * but read/parse failures bypass the cache so a transient EBUSY or
+ * corrupt mid-stream line doesn't poison subsequent calls.
+ */
+export async function loadSessionTurnsBySessionId(
+  sessionId: string
+): Promise<UsageTurn[] | null> {
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  let dirs: string[];
+  try {
+    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (err) {
+    // ENOENT is legitimate (no Claude Code on this machine, or fresh
+    // install before any session); anything else (EACCES, EIO) is a
+    // misconfiguration we want visible rather than masquerading as 404.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[loadSessionTurnsBySessionId] readdir failed on ${projectsDir}`,
+        err
+      );
+    }
+    return null;
+  }
+
+  for (const dir of dirs) {
+    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+    let stat;
+    try {
+      stat = await fs.stat(candidate);
+    } catch {
+      continue;
+    }
+    // Oversized files return null (treated as "not found" by the route's
+    // 404 path). Per-turn diagnosis on a 50MB+ JSONL would also stress
+    // the parser — bailing here is consistent with the buildAllSessions
+    // sweep behavior.
+    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+    // Parse with explicit error propagation. We don't use the FileCache's
+    // factory pattern here because that pattern swallows throws as `[]`
+    // (correct for sweep, wrong for diagnosis — see SessionTurnsLoadError).
+    // Diagnosis is single-session and infrequent, so skipping the cache
+    // costs a re-parse on tab-revisit but never produces a misleading
+    // healthy verdict on a broken file.
+    let turns: UsageTurn[];
+    try {
+      turns = await parseSessionTurns(candidate, dir);
+    } catch (err) {
+      throw new SessionTurnsLoadError(
+        `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
+        sessionId,
+        candidate,
+        err
+      );
+    }
+    return turns;
+  }
+  return null;
+}

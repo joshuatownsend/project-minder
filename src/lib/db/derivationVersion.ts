@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 4;
+export const DERIVED_VERSION = 5;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -36,3 +36,13 @@ export const DERIVED_VERSION = 4;
 //     then derives the chain. No read-side gate — slug=NULL during
 //     catch-up is degraded UX (no "continued" badge, no
 //     /sessions/<slug> resolution) but never wrong.
+// 5 — Wave 3.1 populated the long-pre-allocated quality columns:
+//     `sessions.has_compaction_loop`, `sessions.has_tool_failure_streak`,
+//     `sessions.max_context_fill`, and `turns.context_fill`. These were
+//     added to schema.sql at v1 in anticipation of this wave but never
+//     written until now. Existing rows have them defaulted to 0/NULL;
+//     bumping drives a re-parse so SessionsBrowser badges and the
+//     Diagnosis tab agree across the corpus. No read-side gate — pre-
+//     reconcile, badges simply don't render and Diagnosis is computed on
+//     demand from the JSONL (file-parse path), so degraded UX never
+//     produces wrong numbers.
