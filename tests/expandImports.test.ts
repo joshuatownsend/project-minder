@@ -79,25 +79,28 @@ describe("expandImports", () => {
       if (f.endsWith("shared.md")) return "SHARED content";
       return "";
     });
-    const result = await expandImports("C:\\dev\\proj\\root.md");
+    const result = await expandImports("/dev/proj/root.md");
     const sharedHits = (result.content.match(/SHARED content/g) ?? []).length;
     expect(sharedHits).toBe(2);
     expect(result.circular).toHaveLength(0);
   });
 
   it("detects circular imports without infinite recursion", async () => {
-    // a.md imports b.md which imports a.md
+    // a.md imports b.md which imports a.md.
+    // Use POSIX-style absolute path so the entry's `path.resolve` and the
+    // recursive `path.resolve(parentDir, "./a.md")` produce the same
+    // canonical key on both Linux (CI) and Windows (dev).
     mockReadFile.mockImplementation(async (file) => {
       const f = String(file);
       if (f.endsWith("a.md")) return "A body\n@import ./b.md";
       if (f.endsWith("b.md")) return "B body\n@import ./a.md";
       return "";
     });
-    const result = await expandImports("C:\\dev\\proj\\a.md");
+    const result = await expandImports("/dev/proj/a.md");
     expect(result.content).toContain("A body");
     expect(result.content).toContain("B body");
     expect(result.circular.length).toBeGreaterThan(0);
-    // Must not appear twice
+    // A body must not appear twice — the cycle should short-circuit.
     const aMatches = result.content.match(/A body/g) ?? [];
     expect(aMatches.length).toBe(1);
   });
