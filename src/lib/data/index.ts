@@ -332,27 +332,33 @@ export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailR
   }
 
   const db = await getReadyDb();
+
+  // Disambiguate sessionId vs slug by shape. Hex-and-dash matches the
+  // same gate `loadSessionDetailFromDb` and `scanSessionDetail` use
+  // for sessionIds; anything containing letters past `f` is necessarily
+  // a slug. Resolution runs BEFORE the v3-catch-up gate so
+  // /sessions/<slug> URLs still resolve during the migration window
+  // (the v3 gate falls back to file-parse but file-parse rejects
+  // non-hex inputs; pre-resolving slug → canonical sessionId is what
+  // bridges that).
+  //
+  // Edge case: a hex-only slug (e.g. `cafe-faded-deed`) would slip
+  // through as a sessionId and miss the loader rather than resolving
+  // via slug. Claude Code's slug dictionary uses words with letters
+  // past `f`, so this isn't observed in practice; documented for
+  // future generators.
+  const looksLikeSessionId = /^[a-f0-9-]+$/i.test(idOrSlug);
+  const sessionId = looksLikeSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+  const fallbackKey = sessionId ?? idOrSlug;
+
   if (await checkV3Gate("getSessionDetail", db)) {
     logIntentionalFallthrough(
       "getSessionDetail",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
-    const detail = await scanSessionDetail(idOrSlug);
+    const detail = await scanSessionDetail(fallbackKey);
     return { detail, meta: { backend: "file" } };
   }
-
-  // Slug → most-recent sessionId resolution. UUIDs slip through unchanged;
-  // anything else gets a DB lookup against the v5 `sessions.slug` index
-  // before we hand off to the loader. NULL result on miss falls through
-  // to file-parse with the original input — which `scanSessionDetail`
-  // will reject for non-hex IDs (slugs contain letters past `f`). That
-  // means slug URLs require the session to be indexed; a freshly-
-  // created session that hasn't been reconciled yet will 404 via slug
-  // even though it would resolve via UUID. Acceptable trade-off — the
-  // race is bounded by the indexer's sweep interval and the UUID URL
-  // remains as a fallback for the user. Documented in
-  // docs/help/sessions.md.
-  const sessionId = isUuidShape(idOrSlug) ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
 
   if (!sessionId) {
     const detail = await scanSessionDetail(idOrSlug);
@@ -373,30 +379,19 @@ export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailR
   return { detail, meta: { backend: "file" } };
 }
 
-const UUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-
-/**
- * Strict UUID-shape check used by the slug resolver. Anything matching
- * passes through to the loader untouched; anything else gets routed to
- * `resolveSlugToSessionId` for a DB lookup. The `loadSessionDetailFromDb`
- * loader uses a looser hex-and-dash gate (`/^[a-f0-9-]+$/i`), but for
- * the slug-vs-id branch we need precise UUID detection — a slug like
- * `a-b-c` is technically hex-and-dash and would slip past the loose
- * gate.
- */
-function isUuidShape(s: string): boolean {
-  return UUID_RE.test(s);
-}
-
 /**
  * Look up the most-recent `session_id` for a given slug. Returns `null`
- * when the slug isn't indexed or doesn't pass the slug-shape gate
- * (`[a-z0-9-]+`, lowercased, no path separators).
+ * when the slug isn't indexed or doesn't pass the slug-shape gate.
  *
  * "Most-recent" matches the rule the SessionsBrowser uses to surface
  * the head of a continuation chain: `start_ts DESC` with `session_id`
  * tie-break. The continuation graph is already linked at reconcile
  * time; this is just the opposite direction (slug → leaf).
+ *
+ * Slug-shape gate: `/^[a-z0-9-]+$/`. Claude Code's generator emits
+ * lowercase already, so mixed-case URLs simply won't match — chosen
+ * over input-normalization to keep the SQL parameter exactly what the
+ * caller sees, which makes debugging URL mismatches simpler.
  */
 function resolveSlugToSessionId(db: DbHandle, slug: string): string | null {
   if (!/^[a-z0-9-]+$/.test(slug)) return null;
@@ -624,11 +619,11 @@ export interface SessionSearchResult {
 /**
  * Run a session search through the indexed FTS5 + sessions tables.
  *
- * - `MINDER_USE_DB=0`: returns `{ hits: [], backend: 'file' }` — the
- *   file-parse path doesn't ship an FTS index, so the SessionsBrowser
- *   should fall back to client-side filtering of the cached
- *   `searchableText` column. Distinct from "DB available but no
- *   matches" so the UI can detect this case.
+ * - `MINDER_USE_DB=0`: returns `{ hits: [], meta: { backend: 'file' } }`
+ *   — the file-parse path doesn't ship an FTS index, so the
+ *   SessionsBrowser should fall back to client-side filtering of the
+ *   cached `searchableText` column. Distinct from "DB available but
+ *   no matches" so the UI can detect this case.
  * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *

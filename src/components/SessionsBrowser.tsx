@@ -190,8 +190,9 @@ function SessionRow({
   search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
-  const searchLower = search.toLowerCase();
-  const isContentMatch = search
+  const trimmedSearch = search.trim();
+  const searchLower = trimmedSearch.toLowerCase();
+  const isContentMatch = trimmedSearch
     ? !!(session.searchableText?.toLowerCase().includes(searchLower)) &&
       !matchesTitleScope(session, searchLower)
     : false;
@@ -262,7 +263,7 @@ function SessionRow({
             }}
           >
             {isContentMatch && session.searchableText
-              ? <MatchSnippet text={session.searchableText} query={search} />
+              ? <MatchSnippet text={session.searchableText} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
               : session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
@@ -574,8 +575,9 @@ export function SessionsBrowser() {
 
   const filtered = useMemo(() => {
     let result = data;
-    if (search) {
-      const q = search.toLowerCase();
+    const trimmed = search.trim();
+    if (trimmed) {
+      const q = trimmed.toLowerCase();
       const ftsIds = searchState.kind === "db" ? searchState.ids : null;
       result = result.filter(
         (s) =>
@@ -601,7 +603,7 @@ export function SessionsBrowser() {
         }
       }
     });
-  }, [data, search, sortBy]);
+  }, [data, search, sortBy, searchState]);
 
   const projectGroups = useMemo(
     () => groupByProject ? buildProjectGroups(filtered) : [],

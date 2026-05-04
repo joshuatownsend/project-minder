@@ -17,11 +17,11 @@ import { prepCached } from "@/lib/db/connection";
 //     `session_id`, retaining the higher of the two relevance scores
 //     for ranking.
 //
-// The route layer applies the project filter and ETag, so this module
-// returns a flat ranked-by-score list of `(sessionId, score)` pairs.
-// Callers join against the cached SessionSummary list to compose the
-// response — keeping search separate from the much-heavier full-list
-// assembly avoids re-walking 6 queries on every keystroke.
+// Returns a flat ranked-by-score list of `(sessionId, score)` pairs.
+// Callers (the route + the SessionsBrowser client filter) join against
+// the cached full SessionSummary list to compose responses — keeping
+// search separate from the much-heavier list assembly avoids re-walking
+// the 6 queries that loader does on every keystroke.
 
 export interface SessionSearchHit {
   /** Matching session_id (one entry per session — the loader dedupes). */
@@ -179,10 +179,11 @@ export function searchSessionsInDb(
     for (const r of rows) {
       const existing = hits.get(r.session_id);
       const titleScore = 0.5;
-      // UNION-mode dedup: keep the higher score, but prefer 'titles' as
-      // the source when scores tie since column-specific matches are
-      // more user-meaningful than generic preview hits.
-      if (!existing || titleScore > existing.score) {
+      // UNION-mode dedup: keep the higher score, and prefer 'titles' as
+      // the source when scores tie — column-specific matches are more
+      // user-meaningful than generic preview hits. Using `>=` rather
+      // than `>` is what enforces the tie-break direction.
+      if (!existing || titleScore >= existing.score) {
         hits.set(r.session_id, { sessionId: r.session_id, score: titleScore, source: "titles" });
       }
     }
