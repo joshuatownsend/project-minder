@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { expandImports } from "./expandImports";
 import { walkMdTree } from "./mdTreeWalk";
-import { readUserClaudeMdContent } from "./userClaudeMd";
+import { formatKB } from "../utils";
 import type {
   ClaudeMdAuditCode,
   ClaudeMdAuditFinding,
@@ -16,10 +16,20 @@ export type { ClaudeMdAuditCode, ClaudeMdAuditFinding, ClaudeMdAuditInfo, AuditF
  * 0–100 workspace health score for a project's CLAUDE.md ecosystem.
  *
  * Formula (TODO #118):
- *   - Visibility cap: Claude Code truncates CLAUDE.md/MEMORY.md at 200 lines.
- *     visibility% = min(lines, 200) / total_lines × 100.
- *     Penalty = (100 - visibility%) × 0.5
- *   - File size:     any index file >25 KB → -10
+ *   - Long index: tiered penalty for project CLAUDE.md (post-@import-expand)
+ *     length. There is **no hard truncation** — Claude Code reads the whole
+ *     file. The penalty captures practitioner heuristics: rule adherence
+ *     starts degrading past ~150 lines, the practical instruction-following
+ *     budget is ~200–300, and ~500 lines is the upper bound where latency
+ *     and "lost in the middle" effects become severe.
+ *       >150 lines → -3 (P2)
+ *       >300 lines → -8 (P1)
+ *       >500 lines → -15 (P0)
+ *   - File size: tiered penalty for the on-disk CLAUDE.md byte count.
+ *     Claude Code itself surfaces a warning at 40 KB because the file is
+ *     re-injected into context every turn.
+ *       >40 KB → -10 (P1)
+ *       >80 KB → -20 (P0)
  *   - Inline bloat:  sections (`#`-headed) with >5 non-empty content lines
  *                    → -3 to -15 (scaled by section count)
  *   - Missing topic files: index >50 lines and no sibling `.md` files → -10
@@ -27,15 +37,26 @@ export type { ClaudeMdAuditCode, ClaudeMdAuditFinding, ClaudeMdAuditInfo, AuditF
  *   - Reference tiering: rules files matching reference/guide/template/...
  *                        and >50 lines should be on-demand → -2 to -10
  *
- * Counts are computed from the @import-expanded, comment-stripped content
- * so the score reflects on-load token cost, not the raw index byte count.
+ * Line/section counts use the @import-expanded, comment-stripped content
+ * so the score reflects on-load cost, not the raw index byte count.
+ * `long-index` and `file-size` are scoped to the **project** CLAUDE.md
+ * (the user-scope `~/.claude/CLAUDE.md` is the same across every project
+ * and shouldn't drag per-project scores down).
  */
 
-const MAX_VISIBILITY_LINES = 200;
-const MAX_INDEX_FILE_BYTES = 25 * 1024;
+const LONG_INDEX_LIGHT_LINES = 150;
+const LONG_INDEX_HEAVY_LINES = 300;
+const LONG_INDEX_SEVERE_LINES = 500;
+const FILE_SIZE_WARN_BYTES = 40 * 1024;   // Claude Code's own warn threshold
+const FILE_SIZE_SEVERE_BYTES = 80 * 1024; // 2× warn — severe per-turn cost
 const SECTION_BLOAT_LINE_THRESHOLD = 5;
 const RULES_VOLUME_LINE_THRESHOLD = 2000;
 const ON_DEMAND_FILENAME_RE = /(reference|guide|template|example|sql|database|api|schema|migration)/i;
+
+const LONG_INDEX_FIX =
+  "Move detail to topic-scoped `.claude/rules/` files. Use `@import` only for content that must load every turn — reference the rest by name and let Claude open them on demand.";
+const FILE_SIZE_FIX =
+  "Split CLAUDE.md into a small high-signal index plus topic files in `.claude/rules/`. Avoid `@import`-ing large files since their content is inlined into every turn.";
 
 const SEVERITY_ORDER: Record<AuditFindingSeverity, number> = { P0: 0, P1: 1, P2: 2 };
 
@@ -134,8 +155,7 @@ export async function auditClaudeMd(
   if (!raw) {
     return {
       score: 0,
-      totalLines: 0,
-      visibleLines: 0,
+      projectLines: 0,
       importCount: 0,
       fileBytes: 0,
       rulesLines: 0,
@@ -153,45 +173,70 @@ export async function auditClaudeMd(
     };
   }
 
-  // Independent IO branches: project @imports, user-scope CLAUDE.md (cached
-  // per-mtime), sibling-md sniff for the missing-topic-files heuristic, and
-  // the rules tree. Fan out so a 60-project scan doesn't serialize them.
+  // Independent IO branches: project @imports, sibling-md sniff for the
+  // missing-topic-files heuristic, and the rules tree. Fan out so a
+  // 60-project scan doesn't serialize them. (User-scope CLAUDE.md is no
+  // longer aggregated here — long-index is project-only and the user file
+  // is the same across every project.)
   const rulesRoot = path.join(projectPath, ".claude", "rules");
-  const [projectExpanded, userExpandedContent, siblingMd, rulesFiles] = await Promise.all([
+  const [projectExpanded, siblingMd, rulesFiles] = await Promise.all([
     expandImports(claudeMdPath, raw),
-    readUserClaudeMdContent(),
     hasSiblingMd(projectPath),
     walkMdTree(rulesRoot),
   ]);
 
-  const fullContent = userExpandedContent
-    ? `${userExpandedContent}\n${projectExpanded.content}`
-    : projectExpanded.content;
-  const lines = fullContent.split(/\r?\n/);
-  const totalLines = lines.length;
-  const visibleLines = Math.min(totalLines, MAX_VISIBILITY_LINES);
+  const projectLines = projectExpanded.content.split(/\r?\n/).length;
 
   const findings: ClaudeMdAuditFinding[] = [];
 
-  if (totalLines > MAX_VISIBILITY_LINES) {
-    const visibilityPct = (visibleLines / totalLines) * 100;
-    const penalty = Math.round((100 - visibilityPct) * 0.5);
+  // Long-index — tiered, project-only. NOT a hard truncation; the penalty
+  // tracks practitioner heuristics about instruction-following degradation.
+  if (projectLines > LONG_INDEX_SEVERE_LINES) {
     findings.push({
-      code: "visibility-cap",
+      code: "long-index",
       severity: "P0",
-      title: `${totalLines} lines — only first ${MAX_VISIBILITY_LINES} are loaded by Claude Code`,
-      fix: "Move detail into separate .claude/rules/ files and @import only what's always relevant.",
-      penalty,
+      title: `${projectLines} lines — past the practical instruction-following budget; expect rule drop and slower responses`,
+      fix: LONG_INDEX_FIX,
+      penalty: 15,
+      file: claudeMdPath,
+    });
+  } else if (projectLines > LONG_INDEX_HEAVY_LINES) {
+    findings.push({
+      code: "long-index",
+      severity: "P1",
+      title: `${projectLines} lines — past the soft heuristic where rule adherence starts degrading`,
+      fix: LONG_INDEX_FIX,
+      penalty: 8,
+      file: claudeMdPath,
+    });
+  } else if (projectLines > LONG_INDEX_LIGHT_LINES) {
+    findings.push({
+      code: "long-index",
+      severity: "P2",
+      title: `${projectLines} lines — large CLAUDE.md; trimming usually helps response quality`,
+      fix: LONG_INDEX_FIX,
+      penalty: 3,
       file: claudeMdPath,
     });
   }
 
-  if (fileBytes > MAX_INDEX_FILE_BYTES) {
+  // File size — Claude Code itself surfaces a warning at the warn threshold.
+  const warnKB = FILE_SIZE_WARN_BYTES / 1024;
+  if (fileBytes > FILE_SIZE_SEVERE_BYTES) {
+    findings.push({
+      code: "file-size",
+      severity: "P0",
+      title: `CLAUDE.md is ${formatKB(fileBytes)} — well past Claude Code's ${warnKB} KB warn threshold; severe per-turn token cost`,
+      fix: FILE_SIZE_FIX,
+      penalty: 20,
+      file: claudeMdPath,
+    });
+  } else if (fileBytes > FILE_SIZE_WARN_BYTES) {
     findings.push({
       code: "file-size",
       severity: "P1",
-      title: `CLAUDE.md is ${(fileBytes / 1024).toFixed(1)} KB (>${MAX_INDEX_FILE_BYTES / 1024} KB threshold)`,
-      fix: "Split out long sections into topic-scoped .md files referenced by @import.",
+      title: `CLAUDE.md is ${formatKB(fileBytes)} — Claude Code warns at ${warnKB} KB; CLAUDE.md is injected every turn`,
+      fix: FILE_SIZE_FIX,
       penalty: 10,
       file: claudeMdPath,
     });
@@ -210,8 +255,7 @@ export async function auditClaudeMd(
     });
   }
 
-  const projectRawLines = projectExpanded.content.split(/\r?\n/).length;
-  if (projectRawLines > 50 && projectExpanded.imports.length === 0 && !siblingMd) {
+  if (projectLines > 50 && projectExpanded.imports.length === 0 && !siblingMd) {
     findings.push({
       code: "missing-topic-files",
       severity: "P2",
@@ -256,8 +300,7 @@ export async function auditClaudeMd(
   const totalPenalty = findings.reduce((acc, f) => acc + f.penalty, 0);
   return {
     score: clampScore(100 - totalPenalty),
-    totalLines,
-    visibleLines,
+    projectLines,
     importCount: projectExpanded.imports.length,
     fileBytes,
     rulesLines,

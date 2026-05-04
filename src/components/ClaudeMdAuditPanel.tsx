@@ -1,6 +1,7 @@
 "use client";
 
 import type { ClaudeMdAuditInfo, ClaudeMdAuditFinding, AuditFindingSeverity } from "@/lib/types";
+import { formatKB } from "@/lib/utils";
 
 interface Props {
   audit: ClaudeMdAuditInfo;
@@ -137,16 +138,8 @@ export function ClaudeMdAuditPanel({ audit }: Props) {
             fontSize: "0.78rem", color: "var(--text-secondary)",
             fontFamily: "var(--font-body)",
           }}>
-            {audit.totalLines} loaded lines · {audit.importCount} @import{audit.importCount === 1 ? "" : "s"} · {(audit.fileBytes / 1024).toFixed(1)} KB · {audit.rulesFileCount} rules file{audit.rulesFileCount === 1 ? "" : "s"} ({audit.rulesLines} lines)
+            {audit.projectLines} project lines · {audit.importCount} @import{audit.importCount === 1 ? "" : "s"} · {formatKB(audit.fileBytes)} on disk · {audit.rulesFileCount} rules file{audit.rulesFileCount === 1 ? "" : "s"} ({audit.rulesLines} lines)
           </div>
-          {audit.totalLines > audit.visibleLines && (
-            <div style={{
-              fontSize: "0.7rem", color: "var(--accent)",
-              fontFamily: "var(--font-body)",
-            }}>
-              Only the first {audit.visibleLines} of {audit.totalLines} lines are loaded — Claude Code truncates at 200.
-            </div>
-          )}
         </div>
       </div>
 

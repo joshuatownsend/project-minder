@@ -1,5 +1,19 @@
 # Insights
 
+<!-- insight:d0265006f559 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T15:30:47.667Z -->
+## ★ Insight
+- One subtle correctness gain: `long-index` was previously triggered on `userExpandedContent + projectExpanded.content`, while `file-size` only counted the project file's bytes. That asymmetry meant a user with a 1000-line `~/.claude/CLAUDE.md` would see every project's score tank with no way to fix it from the project. Aligning `long-index` to project-only matches how `inline-bloat` and `missing-topic-files` already work.
+- The 40 KB number is the only platform-stated threshold in the audit. Everything else (150/300/500 lines, 80 KB severe tier) is heuristic — the help doc and finding titles preserve that distinction so we don't trade one falsehood for another.
+
+---
+
+<!-- insight:8359e1f5cee2 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T15:24:16.082Z -->
+## ★ Insight
+- The honest framing matters: the 40 KB threshold IS a platform-stated warning point (Claude Code itself surfaces it), so we can cite it. The 150/300/500-line thresholds are practitioner heuristics about *instruction-following* — phrasing like "soft heuristic" / "practical budget" preserves that distinction.
+- Scoping `long-index` to the project's own `CLAUDE.md` (not combined with `~/.claude/CLAUDE.md`) prevents a bloated user-scope file from dragging every project's score down. `inline-bloat` and `missing-topic-files` already do this; we're aligning `long-index` with them.
+
+---
+
 <!-- insight:2f932b79c048 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T14:35:33.987Z -->
 ## ★ Insight
 - A single `state` discriminated union (`viewing | editing | saving | saved | error`) eliminates the impossible combos of independent `editing/saveState/saveError/draft` state. The reducer also makes the toolbar's branching trivial (`switch (state.kind)`), removing the four sequential `&&` predicates over the same data.
@@ -26,7 +40,7 @@
 
 <!-- insight:c00770f80ce5 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T13:58:28.173Z -->
 ## ★ Insight
-- The 200-line "visibility cap" is the single biggest signal: Claude Code silently truncates CLAUDE.md/MEMORY.md at 200 lines, so a 600-line file is effectively 33% loaded. Penalising `(100 − visibility%) × 0.5` makes the score scale correctly with severity.
+- ~~The 200-line "visibility cap" is the single biggest signal: Claude Code silently truncates CLAUDE.md/MEMORY.md at 200 lines, so a 600-line file is effectively 33% loaded. Penalising `(100 − visibility%) × 0.5` makes the score scale correctly with severity.~~ **Corrected (2026-05-04):** Claude Code does *not* truncate at 200 lines — the 150–200 line "limit" is a practitioner heuristic for instruction-following budget and rule adherence, not a platform cap. The replacement `long-index` finding tiers penalties at 150/300/500 lines, and `file-size` uses the 40 KB warn threshold Claude Code itself surfaces. Size matters because the file is re-injected every turn (not because of truncation): long files crowd out working memory, slow responses, and produce more rule conflicts.
 - Computing penalties on the **expanded** content (post-`@import`, post-comment-strip) — not the raw bytes — is what makes the audit honest for projects following the three-layer memory pattern. A 50-line index that pulls in 1500 lines of imports should look as bloated as a 1550-line monolith.
 - P0/P1/P2 prioritisation (instead of one flat list) gives the user a quick "what matters most" cue when there are 6+ findings; without it the panel is just a wall of red text.
 
@@ -34,7 +48,7 @@
 
 <!-- insight:95e5d97042be | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T13:56:38.030Z -->
 ## ★ Insight
-- `@import` directives in CLAUDE.md mean a "small" CLAUDE.md can secretly pull in megabytes. Without import expansion, audit penalties (visibility cap, file size) would be misleading on projects following the three-layer memory pattern.
+- `@import` directives in CLAUDE.md mean a "small" CLAUDE.md can secretly pull in megabytes. Without import expansion, audit penalties (long-index, inline-bloat) would be misleading on projects following the three-layer memory pattern.
 - Circular-import detection by canonicalized absolute path matters because two different relative paths (`./foo.md` and `./bar/../foo.md`) resolve to the same file but appear different to a naive Set — `path.resolve` plus `fs.realpath` (or just `path.resolve` for non-symlink files) collapses them.
 - HTML block comments (`<!-- ... -->`) get stripped at Claude Code load time, so token-cost estimates that count comment bytes are inflated. Stripping them in the same pass keeps the audit and budget consistent.
 

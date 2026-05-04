@@ -9,6 +9,10 @@ export function pluralize(count: number, word: string): string {
   return `${count} ${word}${count !== 1 ? "s" : ""}`;
 }
 
+export function formatKB(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
 export function formatRelativeTime(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
