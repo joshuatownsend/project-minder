@@ -89,6 +89,7 @@ describe("auditClaudeMd", () => {
     expect(size?.severity).toBe("P1");
     expect(size?.penalty).toBe(10);
     expect(size?.title).toMatch(/40 KB/);
+    expect(size?.title).not.toMatch(/truncat|first \d+ lines|only.*loaded/i);
   });
 
   it("escalates file size past 80 KB (severe, P0)", async () => {
@@ -98,6 +99,70 @@ describe("auditClaudeMd", () => {
     const size = result.findings.find((f) => f.code === "file-size");
     expect(size?.severity).toBe("P0");
     expect(size?.penalty).toBe(20);
+    expect(size?.title).not.toMatch(/truncat|first \d+ lines|only.*loaded/i);
+  });
+
+  // Boundary tests — pin the `>` (strictly-greater-than) semantics of every
+  // tier threshold. A future refactor could silently flip `>` to `>=` and the
+  // tier tests above would still pass; these lock in the contract.
+  it.each([
+    [150, undefined as undefined | "P2" | "P1" | "P0"], // exactly at threshold — must NOT fire
+    [151, "P2" as const],                                // just past — P2 fires
+    [300, "P2" as const],                                // upper edge of P2 tier — still P2
+    [301, "P1" as const],                                // just past P2/P1 boundary — P1
+    [500, "P1" as const],                                // upper edge of P1 tier — still P1
+    [501, "P0" as const],                                // just past P1/P0 boundary — P0
+  ])("long-index boundary: %i lines → %s", async (lines, expected) => {
+    const content = Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n");
+    mockReadFile.mockResolvedValueOnce(content as never);
+    mockReaddir.mockResolvedValueOnce(["ARCHITECTURE.md"] as never);
+    const result = await auditClaudeMd("C:\\dev\\proj-boundary");
+    const longIndex = result.findings.find((f) => f.code === "long-index");
+    if (expected === undefined) {
+      expect(longIndex).toBeUndefined();
+    } else {
+      expect(longIndex?.severity).toBe(expected);
+    }
+  });
+
+  it.each([
+    [40 * 1024, undefined as undefined | "P1" | "P0"],   // exactly 40 KB — must NOT fire
+    [40 * 1024 + 1, "P1" as const],                       // just past warn — P1
+    [80 * 1024, "P1" as const],                           // upper edge of P1 tier — still P1
+    [80 * 1024 + 1, "P0" as const],                       // just past severe — P0
+  ])("file-size boundary: %i bytes → %s", async (bytes, expected) => {
+    mockReadFile.mockResolvedValueOnce("x".repeat(bytes) as never);
+    const result = await auditClaudeMd("C:\\dev\\proj-bytes-boundary");
+    const size = result.findings.find((f) => f.code === "file-size");
+    if (expected === undefined) {
+      expect(size).toBeUndefined();
+    } else {
+      expect(size?.severity).toBe(expected);
+    }
+  });
+
+  // Future-regression guard: the audit must NOT re-aggregate user-scope
+  // ~/.claude/CLAUDE.md into projectLines / long-index. (The Wave 2.2 audit
+  // did; this PR scopes the finding to project-only because the user file
+  // is the same across every project.) Today this passes trivially because
+  // auditClaudeMd no longer calls readUserClaudeMdContent — that's the
+  // point: if a refactor re-introduces it, projectLines would jump to 2100
+  // and the assertion below would catch it.
+  it("excludes user-scope ~/.claude/CLAUDE.md from projectLines", async () => {
+    const projectMd = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
+    const userMd = Array.from({ length: 2000 }, (_, i) => `user line ${i}`).join("\n");
+    mockStat.mockResolvedValue({ mtimeMs: 1, size: userMd.length } as never);
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const f = String(p);
+      // Discriminate by `.claude/` segment in the user-scope path.
+      if (f.includes(".claude") && f.endsWith("CLAUDE.md")) return userMd;
+      if (f.endsWith("CLAUDE.md")) return projectMd;
+      throw new Error("ENOENT");
+    });
+    mockReaddir.mockResolvedValueOnce(["ARCHITECTURE.md"] as never);
+    const result = await auditClaudeMd("C:\\dev\\proj-userscope");
+    expect(result.projectLines).toBe(100);
+    expect(result.findings.find((f) => f.code === "long-index")).toBeUndefined();
   });
 
   it("flags inline bloat when sections exceed 5 content lines", async () => {
