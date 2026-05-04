@@ -23,6 +23,7 @@ const slugTitles: Record<HelpSlug, string> = {
   usage: "Usage Dashboard",
   status: "System Status",
   memory: "Memory Browser",
+  "claude-md-audit": "CLAUDE.md Audit & Context",
   config: "Configuration",
   "config-history": "Config History",
   setup: "Setup Guide",

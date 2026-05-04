@@ -54,11 +54,14 @@ export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise
   };
   const next = prev.then(runWithHeld, runWithHeld);
   fileLocks.set(normalized, next);
+  // The cleanup promise's rejection is uninteresting — the caller's await
+  // on `next` already sees the error. Swallow it here so it doesn't
+  // surface as an unhandled rejection.
   next.finally(() => {
     if (fileLocks.get(normalized) === next) {
       fileLocks.delete(normalized);
     }
-  });
+  }).catch(() => {});
   return next;
 }
 

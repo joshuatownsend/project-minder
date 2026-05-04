@@ -19,6 +19,7 @@ import {
 import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers } from "lucide-react";
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { StatusDot } from "./ui/StatusDot";
+import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
 
 interface ProjectCardProps {
   project: ProjectData;
@@ -306,8 +307,14 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
         </div>
 
         {/* ── Row 2 (conditional): attention signals ────────────────────── */}
-        {(hasAttention || insightsTotal > 0) && (
+        {(hasAttention || insightsTotal > 0 || (project.claudeMdAudit && project.claudeMdAudit.score < 80)) && (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            {project.claudeMdAudit && project.claudeMdAudit.hasClaudeMd && project.claudeMdAudit.score < 80 && (
+              <ClaudeMdHealthBadge
+                score={project.claudeMdAudit.score}
+                hasClaudeMd={project.claudeMdAudit.hasClaudeMd}
+              />
+            )}
             {pendingTodos > 0 && (
               <span
                 style={{

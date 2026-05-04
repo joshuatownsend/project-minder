@@ -33,6 +33,14 @@ Below the index, all other `.md` memory files are listed in a panel on the left.
 
 Click any file in the list to load and render its full contents in the right panel. File contents are fetched on demand so the initial tab load is fast even for large memory directories.
 
+## Editing
+
+Each loaded file has an **Edit** button that switches the viewer into a textarea-based editor. Type your changes and click **Save** to write them back to disk. The dashboard validates the file name against path traversal and rejects anything other than `.md`. The PATCH endpoint backing the editor is `/api/memory/[slug]` with body `{ file, content }`.
+
+## Stale warnings
+
+Memory files that haven't been modified in **30 days** are marked with a small `STALE` badge in the file list. Stale memories are often a hint that a remembered fact has gone out of date — open the file and refresh, prune, or remove it.
+
 ## Memory file format
 
 Memory files use YAML frontmatter:

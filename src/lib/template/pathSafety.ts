@@ -55,7 +55,7 @@ export function ensureInsideDevRoots(target: string, config: MinderConfig): stri
  * its own segment — i.e. the entire rel OR the first segment terminated
  * by a path separator. Match that exactly.
  */
-function isInside(child: string, parent: string): boolean {
+export function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
   if (rel === "") return true;
   if (rel === ".." || rel.startsWith(".." + path.sep)) return false;

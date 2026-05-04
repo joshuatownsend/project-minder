@@ -29,6 +29,11 @@ export interface ProjectData {
   // Claude
   claude?: ClaudeInfo;
 
+  // CLAUDE.md health audit (TODO #118 / #119) — surfaced as a badge on
+  // ProjectCard and full panel on ProjectDetail. Always present; the
+  // info object encodes whether CLAUDE.md exists via `hasClaudeMd`.
+  claudeMdAudit?: ClaudeMdAuditInfo;
+
   // TODOs
   todos?: TodoInfo;
 
@@ -104,6 +109,38 @@ export interface GitInfo {
   isDirty: boolean;
   uncommittedCount: number;
   remoteUrl?: string;
+}
+
+export type AuditFindingSeverity = "P0" | "P1" | "P2";
+
+export type ClaudeMdAuditCode =
+  | "no-claude-md"
+  | "visibility-cap"
+  | "file-size"
+  | "inline-bloat"
+  | "missing-topic-files"
+  | "rules-volume"
+  | "reference-tiering";
+
+export interface ClaudeMdAuditFinding {
+  code: ClaudeMdAuditCode;
+  severity: AuditFindingSeverity;
+  title: string;
+  fix: string;
+  penalty: number;
+  file?: string;
+}
+
+export interface ClaudeMdAuditInfo {
+  score: number;            // 0-100, 100 = healthy
+  totalLines: number;       // post @import-expand, post comment-strip
+  visibleLines: number;     // min(totalLines, 200)
+  importCount: number;
+  fileBytes: number;
+  rulesLines: number;
+  rulesFileCount: number;
+  hasClaudeMd: boolean;
+  findings: ClaudeMdAuditFinding[];
 }
 
 export interface ClaudeInfo {

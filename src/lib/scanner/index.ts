@@ -8,6 +8,7 @@ import { scanEnvFiles } from "./envFile";
 import { scanDockerCompose } from "./dockerCompose";
 import { scanGit } from "./git";
 import { scanClaudeMd } from "./claudeMd";
+import { auditClaudeMd } from "./claudeMdAudit";
 import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
@@ -61,6 +62,7 @@ async function scanProject(
     dockerResult,
     gitResult,
     claudeMd,
+    claudeMdAudit,
     todos,
     claudeSessions,
     manualSteps,
@@ -76,6 +78,7 @@ async function scanProject(
       : Promise.resolve(EMPTY_DOCKER),
     scanGit(projectPath),
     scanClaudeMd(projectPath),
+    auditClaudeMd(projectPath),
     getFlag(flags, "scanTodos")
       ? scanTodoMd(projectPath)
       : Promise.resolve(undefined),
@@ -138,6 +141,7 @@ async function scanProject(
       mostRecentSessionStatus: claudeSessions.mostRecentSessionStatus,
       mostRecentSessionId: claudeSessions.mostRecentSessionId,
     },
+    claudeMdAudit,
     todos,
     manualSteps,
     insights,
