@@ -130,6 +130,25 @@ const MIGRATIONS: Migration[] = [
       db.exec("DROP TRIGGER IF EXISTS turns_ad");
     },
   },
+  {
+    version: 5,
+    name: "sessions: slug + continued_from_session_id",
+    up: (db) => {
+      // Idempotent ALTER pattern (same as v3): fresh DBs already have the
+      // columns from v1's schema.sql; only DBs upgraded from v1–v4 need
+      // the structural change.
+      const cols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "slug")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN slug TEXT").run();
+      }
+      if (!cols.some((c) => c.name === "continued_from_session_id")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN continued_from_session_id TEXT").run();
+      }
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS sessions_by_slug ON sessions(slug) WHERE slug IS NOT NULL"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

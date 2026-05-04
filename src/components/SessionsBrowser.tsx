@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAllSessions } from "@/hooks/useSessions";
 import { SessionSummary } from "@/lib/types";
@@ -163,6 +163,22 @@ function MatchSnippet({ text, query }: { text: string; query: string }) {
   );
 }
 
+// Title-class match: any of the fields a user typically searches BY name
+// rather than BY content. Single source of truth for both the row's
+// "show snippet vs. show prompt" decision and the outer filter — they
+// were drifting (slug was added to one but not the other).
+function matchesTitleScope(s: SessionSummary, q: string): boolean {
+  return (
+    s.initialPrompt?.toLowerCase().includes(q) === true ||
+    s.lastPrompt?.toLowerCase().includes(q) === true ||
+    s.projectName.toLowerCase().includes(q) ||
+    s.projectPath.toLowerCase().includes(q) ||
+    s.sessionId.includes(q) ||
+    s.gitBranch?.toLowerCase().includes(q) === true ||
+    s.slug?.toLowerCase().includes(q) === true
+  );
+}
+
 // ── Session row ───────────────────────────────────────────────────────────────
 function SessionRow({
   session,
@@ -176,11 +192,8 @@ function SessionRow({
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
   const searchLower = search.toLowerCase();
   const isContentMatch = search
-    ? !!(session.searchableText?.toLowerCase().includes(searchLower))
-      && !session.initialPrompt?.toLowerCase().includes(searchLower)
-      && !session.lastPrompt?.toLowerCase().includes(searchLower)
-      && !session.projectName.toLowerCase().includes(searchLower)
-      && !session.gitBranch?.toLowerCase().includes(searchLower)
+    ? !!(session.searchableText?.toLowerCase().includes(searchLower)) &&
+      !matchesTitleScope(session, searchLower)
     : false;
 
   return (
@@ -315,6 +328,23 @@ function SessionRow({
             <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
               <GitBranch style={{ width: "10px", height: "10px" }} />
               {session.gitBranch}
+            </span>
+          )}
+          {session.continuedFromSessionId && (
+            <span
+              title={`Continued from session ${session.continuedFromSessionId}`}
+              style={{
+                fontSize: "0.65rem",
+                fontFamily: "var(--font-mono)",
+                color: "var(--accent)",
+                background: "var(--accent-bg)",
+                border: "1px solid var(--accent-border)",
+                borderRadius: "3px",
+                padding: "1px 5px",
+                flexShrink: 0,
+              }}
+            >
+              continued
             </span>
           )}
           {session.oneShotRate !== undefined && (
@@ -478,25 +508,79 @@ type FlatItem =
   | { kind: "row"; session: SessionSummary; showProject: boolean };
 
 // ── Main browser ──────────────────────────────────────────────────────────────
+const SEARCH_DEBOUNCE_MS = 250;
+
+interface SearchApiResponse {
+  hits: Array<{ sessionId: string; score: number; source: "titles" | "prompts" }>;
+  backend: "db" | "file";
+}
+
+// Single source of truth for the FTS-backed search state. Replacing
+// the prior split (`serverHitIds: Set | null` + `searchBackend:
+// "db"|"file"|"unknown"`) which could disagree on error paths — a
+// network failure marked the backend "file" while a pending fetch
+// could still flip it back to "db", or vice-versa, leaving the FTS
+// badge stuck on or off.
+type SearchState =
+  | { kind: "idle" } //  query under the 2-char gate
+  | { kind: "pending" } //  fetch in flight
+  | { kind: "db"; ids: Set<string> } //  FTS-backed hits
+  | { kind: "file" }; //  MINDER_USE_DB=0 OR fetch failed
+
 export function SessionsBrowser() {
   const { data, loading } = useAllSessions();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [groupByProject, setGroupByProject] = useState(true);
   const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
+  const [searchState, setSearchState] = useState<SearchState>({ kind: "idle" });
+
+  useEffect(() => {
+    const trimmed = search.trim();
+    if (trimmed.length < 2) {
+      setSearchState({ kind: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setSearchState({ kind: "pending" });
+      try {
+        const params = new URLSearchParams({ q: trimmed, scope: "both", limit: "200" });
+        const res = await fetch(`/api/sessions/search?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setSearchState({ kind: "file" });
+          return;
+        }
+        const json = (await res.json()) as SearchApiResponse;
+        if (controller.signal.aborted) return;
+        if (json.backend === "file") {
+          setSearchState({ kind: "file" });
+        } else {
+          setSearchState({ kind: "db", ids: new Set(json.hits.map((h) => h.sessionId)) });
+        }
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        setSearchState({ kind: "file" });
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [search]);
 
   const filtered = useMemo(() => {
     let result = data;
     if (search) {
       const q = search.toLowerCase();
+      const ftsIds = searchState.kind === "db" ? searchState.ids : null;
       result = result.filter(
         (s) =>
-          s.initialPrompt?.toLowerCase().includes(q) ||
-          s.lastPrompt?.toLowerCase().includes(q) ||
-          s.projectName.toLowerCase().includes(q) ||
-          s.projectPath.toLowerCase().includes(q) ||
-          s.sessionId.includes(q) ||
-          s.gitBranch?.toLowerCase().includes(q) ||
+          ftsIds?.has(s.sessionId) ||
+          matchesTitleScope(s, q) ||
           s.searchableText?.toLowerCase().includes(q)
       );
     }
@@ -607,8 +691,29 @@ export function SessionsBrowser() {
             placeholder="Search sessions…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
+            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: searchState.kind === "db" ? "60px" : "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
           />
+          {searchState.kind === "db" && (
+            <span
+              title="Full-text search is querying the SQLite FTS5 index (matches session content beyond the cached preview)."
+              style={{
+                position: "absolute",
+                right: "9px",
+                top: "50%",
+                transform: "translateY(-50%)",
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6rem",
+                color: "var(--accent)",
+                background: "var(--accent-bg)",
+                border: "1px solid var(--accent-border)",
+                borderRadius: "3px",
+                padding: "1px 5px",
+                pointerEvents: "none",
+              }}
+            >
+              FTS
+            </span>
+          )}
         </div>
 
         {/* Sort */}

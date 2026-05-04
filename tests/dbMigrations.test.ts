@@ -81,8 +81,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // but each still bumps the schema_version stamp. Note that v3
     // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
     // that's harmless because the indexer's first reconcile clears it.
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4]);
-    expect(result.schemaVersion).toBe(4);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5]);
+    expect(result.schemaVersion).toBe(5);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -104,7 +104,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(4);
+    expect(result.schemaVersion).toBe(5);
     second.conn.closeDb();
   });
 
@@ -164,7 +164,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(4);
+    expect(result.schemaVersion).toBe(5);
     second.conn.closeDb();
   });
 
@@ -218,8 +218,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2, 3, 4]);
-    expect(result.schemaVersion).toBe(4);
+    expect(result.appliedMigrations).toEqual([2, 3, 4, 5]);
+    expect(result.schemaVersion).toBe(5);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
@@ -254,8 +254,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([3, 4]);
-    expect(result.schemaVersion).toBe(4);
+    expect(result.appliedMigrations).toEqual([3, 4, 5]);
+    expect(result.schemaVersion).toBe(5);
 
     const db2 = await second.conn.getDb();
     expect(db2).not.toBeNull();

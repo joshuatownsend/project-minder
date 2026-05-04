@@ -30,8 +30,20 @@ Each session card shows:
 
 ## Search & Sort
 
-- **Search** — filter by prompt text, **message body content**, project name, session ID, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row.
+- **Search** — filter by prompt text, **message body content** (full-text via SQLite FTS5 when the index is available), project name, session ID, slug, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.
 - **Sort** — by most recent, longest duration, most tokens, or best one-shot rate
+
+## Slugs and Continuations
+
+Claude Code assigns each session a stable human-readable slug (e.g. `quirky-scribbling-plum`). When a session is `--resume`'d or `--continue`'d, the new session inherits the same slug while getting a new UUID — so we can group continuations into a single chain.
+
+- A session row shows a small **continued** badge when it descends from a previous session in its slug chain. Hover for the predecessor's UUID.
+- The slug chain orders strictly by start time; ties break on session ID for determinism.
+- `/sessions/<slug>` resolves to the most recent session in the chain — useful as a stable bookmark that always points to the latest continuation.
+
+Continuation linking requires the SQLite index. Under `MINDER_USE_DB=0` the slug still appears but the "continued" badge does not.
+
+Note: a session created seconds before you visit `/sessions/<slug>` may 404 until the indexer's next sweep picks it up. Use the UUID URL (`/sessions/<sessionId>`) as a fallback during that window — UUIDs always resolve via direct file-parse even when un-indexed.
 
 ## Session Detail
 

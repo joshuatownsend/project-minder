@@ -211,6 +211,14 @@ interface ParsedSession {
    * `file_mtime_ms` — see `loadSessionsListFromDb`.
    */
   storedStatus: StoredStatus;
+  /**
+   * Claude Code's human-readable slug (e.g. `quirky-scribbling-plum`),
+   * surfaced as a top-level `"slug"` field on assistant entries in JSONL.
+   * Captured as the first non-empty value seen during the parse. Null
+   * when no entry exposed one (older Claude Code, very short sessions
+   * that never spawned an assistant turn).
+   */
+  slug: string | null;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -377,6 +385,7 @@ async function readJsonlSession(
   let sawAnyAssistant = false;
   let userTurnCount = 0;
   let assistantTurnCount = 0;
+  let slug: string | null = null;
 
   const tParse = PROFILE ? performance.now() : 0;
   for (const line of raw.split("\n")) {
@@ -397,6 +406,12 @@ async function readJsonlSession(
     if (!startTs) startTs = timestamp;
     endTs = timestamp;
     if (entry.gitBranch && !gitBranch) gitBranch = entry.gitBranch;
+    // Slug appears on every assistant entry but isn't always present on
+    // user-only tails (or older JSONL formats). Capture once on first
+    // sight so we don't allocate per-turn.
+    if (!slug && typeof entry.slug === "string" && entry.slug.length > 0) {
+      slug = entry.slug;
+    }
 
     const turnIndex = startTurnIndex + turns.length;
 
@@ -695,6 +710,7 @@ async function readJsonlSession(
       verifiedTaskCount: oneShot.totalVerifiedTasks,
       oneShotTaskCount: oneShot.oneShotTasks,
       storedStatus,
+      slug,
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -744,7 +760,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        cost_usd, cache_hit_ratio,
        has_one_shot, verified_task_count, one_shot_task_count,
-       git_branch, initial_prompt, last_prompt,
+       git_branch, initial_prompt, last_prompt, slug,
        derived_version, indexed_at_ms
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
@@ -755,7 +771,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @cost_usd, @cache_hit_ratio,
        @has_one_shot, @verified_task_count, @one_shot_task_count,
-       @git_branch, @initial_prompt, @last_prompt,
+       @git_branch, @initial_prompt, @last_prompt, @slug,
        @derived_version, @indexed_at_ms
      )`
   ).run({
@@ -791,6 +807,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     git_branch: s.gitBranch,
     initial_prompt: s.initialPrompt,
     last_prompt: s.lastPrompt,
+    slug: s.slug,
     derived_version: DERIVED_VERSION,
     indexed_at_ms: Date.now(),
   });
@@ -1309,6 +1326,7 @@ function appendSessionTail(
        start_ts            = @start_ts,
        end_ts              = @end_ts,
        primary_model       = @primary_model,
+       slug                = COALESCE(slug, @slug),
        ${statusUpdateClause}turn_count          = @turn_count,
        user_turn_count     = @user_turn_count,
        assistant_turn_count = @assistant_turn_count,
@@ -1328,6 +1346,7 @@ function appendSessionTail(
      WHERE session_id = @session_id`
   ).run({
     ...statusUpdateParam,
+    slug: parsed.slug,
     session_id: sessionId,
     file_path: parsed.filePath,
     file_mtime_ms: fileMtimeMs,
@@ -1682,6 +1701,21 @@ export async function reconcileAllSessions(
     refreshCategoryCosts(db, affectedCategoryTuples);
   }
 
+  // Continuation linking: after sessions have been ingested with their
+  // slugs stamped, walk the slug index and point each session's
+  // `continued_from_session_id` at the most-recent prior session sharing
+  // the same slug. One UPDATE for the whole corpus — per-session linking
+  // wouldn't see the full graph (a freshly-written session might be the
+  // continuation, OR the predecessor of one not yet read).
+  //
+  // Skip when no file changed: nothing in the slug graph could have
+  // moved, so the UPDATE would be a pure no-op. Watcher reconciles
+  // fire frequently and most are no-ops; this gate keeps that path
+  // free of incidental work.
+  if (stats.filesChanged > 0 || stalePruned.size > 0) {
+    refreshContinuationLinks(db);
+  }
+
   // Clear the v3 readiness gate ONLY when the reconcile pass is
   // known-good. Per-file failures land in `stats.errors` without
   // failing the whole pass, so clearing unconditionally would drop the
@@ -1694,4 +1728,32 @@ export async function reconcileAllSessions(
   }
 
   return stats;
+}
+
+/**
+ * Re-derive `continued_from_session_id` for every session with a known
+ * slug. One correlated UPDATE — bounded by the number of slugged
+ * sessions, which is small relative to the turns/tool_uses scale this
+ * indexer normally moves. Idempotent: re-running produces the same links.
+ *
+ * Exported for tests; in production it's only called at the tail of
+ * `reconcileAllSessions`.
+ */
+export function refreshContinuationLinks(db: DatabaseT.Database): void {
+  db.prepare(
+    `UPDATE sessions
+        SET continued_from_session_id = (
+          SELECT prev.session_id
+          FROM sessions prev
+          WHERE prev.slug = sessions.slug
+            AND prev.session_id <> sessions.session_id
+            AND (
+              prev.start_ts < sessions.start_ts
+              OR (prev.start_ts = sessions.start_ts AND prev.session_id < sessions.session_id)
+            )
+          ORDER BY prev.start_ts DESC, prev.session_id DESC
+          LIMIT 1
+        )
+      WHERE slug IS NOT NULL`
+  ).run();
 }

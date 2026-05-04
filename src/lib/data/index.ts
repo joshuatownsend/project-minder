@@ -14,6 +14,11 @@ import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
+import { searchSessionsInDb } from "./sessionSearch";
+import type {
+  SessionSearchHit,
+  SessionSearchScope,
+} from "./sessionSearch";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
 import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/types";
 
@@ -320,9 +325,9 @@ export interface SessionDetailResult {
  *   that exists on disk but hasn't been ingested still resolves).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
-export async function getSessionDetail(sessionId: string): Promise<SessionDetailResult> {
+export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailResult> {
   if (!dbModeRequested()) {
-    const detail = await scanSessionDetail(sessionId);
+    const detail = await scanSessionDetail(idOrSlug);
     return { detail, meta: { backend: "file" } };
   }
 
@@ -332,9 +337,28 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
       "getSessionDetail",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
-    const detail = await scanSessionDetail(sessionId);
+    const detail = await scanSessionDetail(idOrSlug);
     return { detail, meta: { backend: "file" } };
   }
+
+  // Slug → most-recent sessionId resolution. UUIDs slip through unchanged;
+  // anything else gets a DB lookup against the v5 `sessions.slug` index
+  // before we hand off to the loader. NULL result on miss falls through
+  // to file-parse with the original input — which `scanSessionDetail`
+  // will reject for non-hex IDs (slugs contain letters past `f`). That
+  // means slug URLs require the session to be indexed; a freshly-
+  // created session that hasn't been reconciled yet will 404 via slug
+  // even though it would resolve via UUID. Acceptable trade-off — the
+  // race is bounded by the indexer's sweep interval and the UUID URL
+  // remains as a fallback for the user. Documented in
+  // docs/help/sessions.md.
+  const sessionId = isUuidShape(idOrSlug) ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+
+  if (!sessionId) {
+    const detail = await scanSessionDetail(idOrSlug);
+    return { detail, meta: { backend: "file" } };
+  }
+
   const dbDetail = await callDbLoader("getSessionDetail", () =>
     loadSessionDetailFromDb(db, sessionId)
   );
@@ -347,6 +371,44 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
   // browsing of un-indexed sessions).
   const detail = await scanSessionDetail(sessionId);
   return { detail, meta: { backend: "file" } };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+/**
+ * Strict UUID-shape check used by the slug resolver. Anything matching
+ * passes through to the loader untouched; anything else gets routed to
+ * `resolveSlugToSessionId` for a DB lookup. The `loadSessionDetailFromDb`
+ * loader uses a looser hex-and-dash gate (`/^[a-f0-9-]+$/i`), but for
+ * the slug-vs-id branch we need precise UUID detection — a slug like
+ * `a-b-c` is technically hex-and-dash and would slip past the loose
+ * gate.
+ */
+function isUuidShape(s: string): boolean {
+  return UUID_RE.test(s);
+}
+
+/**
+ * Look up the most-recent `session_id` for a given slug. Returns `null`
+ * when the slug isn't indexed or doesn't pass the slug-shape gate
+ * (`[a-z0-9-]+`, lowercased, no path separators).
+ *
+ * "Most-recent" matches the rule the SessionsBrowser uses to surface
+ * the head of a continuation chain: `start_ts DESC` with `session_id`
+ * tie-break. The continuation graph is already linked at reconcile
+ * time; this is just the opposite direction (slug → leaf).
+ */
+function resolveSlugToSessionId(db: DbHandle, slug: string): string | null {
+  if (!/^[a-z0-9-]+$/.test(slug)) return null;
+  const row = db
+    .prepare(
+      `SELECT session_id FROM sessions
+        WHERE slug = ?
+        ORDER BY start_ts DESC, session_id DESC
+        LIMIT 1`
+    )
+    .get(slug) as { session_id: string } | undefined;
+  return row?.session_id ?? null;
 }
 
 export interface SessionsListResult {
@@ -553,3 +615,42 @@ async function runFileClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageRe
   // `ClaudeUsageResult.meta.maxMtimeMs` JSDoc).
   return { stats, meta: { backend: "file", maxMtimeMs: 0 } };
 }
+
+export interface SessionSearchResult {
+  hits: SessionSearchHit[];
+  meta: { backend: "db" | "file" };
+}
+
+/**
+ * Run a session search through the indexed FTS5 + sessions tables.
+ *
+ * - `MINDER_USE_DB=0`: returns `{ hits: [], backend: 'file' }` — the
+ *   file-parse path doesn't ship an FTS index, so the SessionsBrowser
+ *   should fall back to client-side filtering of the cached
+ *   `searchableText` column. Distinct from "DB available but no
+ *   matches" so the UI can detect this case.
+ * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
+ *
+ * The v3-readiness gate is intentionally NOT applied — search hits
+ * read `session_id` (and at most `slug` / `initial_prompt`) which
+ * aren't gated by the cost-reconcile state. A user typing in the
+ * search box during the catch-up window still gets results.
+ */
+export async function searchSessions(
+  query: string,
+  scope: SessionSearchScope = "both",
+  limit?: number
+): Promise<SessionSearchResult> {
+  if (!dbModeRequested()) {
+    return { hits: [], meta: { backend: "file" } };
+  }
+
+  const db = await getReadyDb();
+  const hits = await callDbLoader("searchSessions", () =>
+    searchSessionsInDb(db, query, scope, limit)
+  );
+  return { hits, meta: { backend: "db" } };
+}
+
+export type { SessionSearchHit, SessionSearchScope } from "./sessionSearch";

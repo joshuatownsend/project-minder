@@ -51,6 +51,7 @@ interface JsonlEntry {
   isSidechain?: boolean;
   isMeta?: boolean;
   gitBranch?: string;
+  slug?: string;
 }
 
 async function writeJsonl(filePath: string, entries: JsonlEntry[]): Promise<void> {
@@ -77,25 +78,44 @@ function assistantTurn(
     output_tokens: number;
     cache_creation_input_tokens: number;
     cache_read_input_tokens: number;
-  }> = {}
+  }> = {},
+  extra: Partial<{ slug: string; stop_reason: string }> = {}
 ): JsonlEntry {
   const content: any[] = [];
   if (text) content.push({ type: "text", text });
   for (const t of toolCalls) {
     content.push({ type: "tool_use", id: t.id, name: t.name, input: t.input });
   }
-  return {
+  const entry: JsonlEntry = {
     type: "assistant",
     timestamp,
     message: {
       model,
       content,
+      stop_reason: extra.stop_reason,
       usage: {
         input_tokens: usage.input_tokens ?? 100,
         output_tokens: usage.output_tokens ?? 50,
         cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
         cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
       },
+    },
+  };
+  if (extra.slug) entry.slug = extra.slug;
+  return entry;
+}
+
+/**
+ * Build a user turn carrying a tool_result block — the shape Claude Code
+ * uses to feed tool output back into the conversation. Used by the
+ * pending-pair status tests below.
+ */
+function userToolResultTurn(timestamp: string, toolUseId: string, output: string): JsonlEntry {
+  return {
+    type: "user",
+    timestamp,
+    message: {
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: output }],
     },
   };
 }
@@ -892,6 +912,213 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
         .get() as { n: number }).n
     ).toBe(1);
 
+    reloaded.conn.closeDb();
+  });
+
+  // ── Status snapshot at ingest (P2c contract reinforced in Wave 2) ──────
+  //
+  // The schema's `sessions.status` CHECK constraint allows seven values
+  // but ingest only writes two — `'waiting'` (last assistant turn has
+  // unresolved tool_uses) or `'inactive'` (no pendings). The read-side
+  // loader time-gates `'waiting'` against `file_mtime_ms` to derive the
+  // `working / needs_attention / idle` triplet the UI consumes. These
+  // tests cover the ingest snapshot side; loader-side gating is covered
+  // by the dataSessionsList parity test.
+
+  it("status snapshot: 'inactive' when last assistant ended with end_turn and no pending tools", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-status", "clean-end.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "say hello"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "hello!",
+        [],
+        {},
+        { stop_reason: "end_turn" }
+      ),
+    ]);
+    const stats = await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    expect(stats.errors).toBe(0);
+    const db = (await reloaded.conn.getDb())!;
+    const row = db
+      .prepare("SELECT status FROM sessions WHERE session_id = 'clean-end'")
+      .get() as { status: string };
+    expect(row.status).toBe("inactive");
+    reloaded.conn.closeDb();
+  });
+
+  it("status snapshot: 'waiting' when last assistant has unresolved tool_use", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-status", "pending.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "do the thing"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "running",
+        [{ id: "tu_unfinished", name: "Bash", input: { command: "sleep 1" } }],
+        {},
+        { stop_reason: "tool_use" }
+      ),
+      // No matching tool_result — the last assistant turn's pending stays
+      // unresolved. Ingest should record `'waiting'`.
+    ]);
+    await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    const db = (await reloaded.conn.getDb())!;
+    const row = db
+      .prepare("SELECT status FROM sessions WHERE session_id = 'pending'")
+      .get() as { status: string };
+    expect(row.status).toBe("waiting");
+    reloaded.conn.closeDb();
+  });
+
+  it("status snapshot: 'inactive' when pending tools were resolved by a later user turn", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-status", "resolved.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "do the thing"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "running",
+        [{ id: "tu_resolved", name: "Bash", input: { command: "echo hi" } }],
+        {},
+        { stop_reason: "tool_use" }
+      ),
+      userToolResultTurn("2026-04-30T10:00:02Z", "tu_resolved", "hi"),
+    ]);
+    await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    const db = (await reloaded.conn.getDb())!;
+    const row = db
+      .prepare("SELECT status FROM sessions WHERE session_id = 'resolved'")
+      .get() as { status: string };
+    expect(row.status).toBe("inactive");
+    reloaded.conn.closeDb();
+  });
+
+  // ── Slug + continuation tracking (Wave 2 / TODO #150) ──────────────────
+
+  it("captures the per-session slug from any assistant entry", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-slug", "with-slug.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "hello"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "hi",
+        [],
+        {},
+        { slug: "quirky-scribbling-plum", stop_reason: "end_turn" }
+      ),
+    ]);
+    await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    const db = (await reloaded.conn.getDb())!;
+    const row = db
+      .prepare("SELECT slug FROM sessions WHERE session_id = 'with-slug'")
+      .get() as { slug: string | null };
+    expect(row.slug).toBe("quirky-scribbling-plum");
+    reloaded.conn.closeDb();
+  });
+
+  it("links continuations: oldest session has no parent; later one points to the previous", async () => {
+    // Two synthetic sessions sharing the same slug — the only way to
+    // verify continuation linking, per advisor note, since the user's
+    // PM corpus has zero duplicates today.
+    const { reloaded, projectsDir } = await setup();
+    const projectDir = path.join(projectsDir, "C--dev-cont");
+    await writeJsonl(path.join(projectDir, "first-uuid.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "begin"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "starting",
+        [],
+        {},
+        { slug: "shared-pondering-otter", stop_reason: "end_turn" }
+      ),
+    ]);
+    // Second session: same slug, later start_ts. Should be linked to the
+    // first via `continued_from_session_id`.
+    await writeJsonl(path.join(projectDir, "second-uuid.jsonl"), [
+      userTurn("2026-04-30T11:00:00Z", "continuing"),
+      assistantTurn(
+        "2026-04-30T11:00:01Z",
+        "claude-sonnet-4-5",
+        "resuming",
+        [],
+        {},
+        { slug: "shared-pondering-otter", stop_reason: "end_turn" }
+      ),
+    ]);
+    await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    const db = (await reloaded.conn.getDb())!;
+    const rows = db
+      .prepare(
+        "SELECT session_id, slug, continued_from_session_id FROM sessions ORDER BY start_ts"
+      )
+      .all() as Array<{ session_id: string; slug: string; continued_from_session_id: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].continued_from_session_id).toBeNull(); // oldest
+    expect(rows[1].continued_from_session_id).toBe("first-uuid");
+    reloaded.conn.closeDb();
+  });
+
+  it("does NOT link sessions with different slugs even within the same project", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const projectDir = path.join(projectsDir, "C--dev-cont2");
+    await writeJsonl(path.join(projectDir, "alpha.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "alpha"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "ok",
+        [],
+        {},
+        { slug: "first-slug", stop_reason: "end_turn" }
+      ),
+    ]);
+    await writeJsonl(path.join(projectDir, "beta.jsonl"), [
+      userTurn("2026-04-30T11:00:00Z", "beta"),
+      assistantTurn(
+        "2026-04-30T11:00:01Z",
+        "claude-sonnet-4-5",
+        "ok",
+        [],
+        {},
+        { slug: "second-slug", stop_reason: "end_turn" }
+      ),
+    ]);
+    await reloaded.ingest.reconcileAllSessions(
+      (await reloaded.conn.getDb())!,
+      { projectsDir }
+    );
+    const db = (await reloaded.conn.getDb())!;
+    const rows = db
+      .prepare(
+        "SELECT session_id, continued_from_session_id FROM sessions ORDER BY start_ts"
+      )
+      .all() as Array<{ session_id: string; continued_from_session_id: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].continued_from_session_id).toBeNull();
+    expect(rows[1].continued_from_session_id).toBeNull();
     reloaded.conn.closeDb();
   });
 });

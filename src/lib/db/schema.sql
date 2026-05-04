@@ -84,6 +84,21 @@ CREATE TABLE sessions (
   git_branch            TEXT,
   initial_prompt        TEXT,
   last_prompt           TEXT,
+  -- Claude Code's human-readable session label (e.g. `quirky-scribbling-plum`).
+  -- Surfaces as a top-level `"slug"` field on assistant entries in JSONL.
+  -- When a session is `--resume`'d or `--continue`'d, the new file inherits
+  -- the same slug while getting a new `session_id`. We use this to (a)
+  -- group resumed sessions in the browser, (b) populate
+  -- `continued_from_session_id` via a post-reconcile batched UPDATE,
+  -- and (c) route `/sessions/<slug>` to the most-recent session row.
+  slug                       TEXT,
+  -- The previous session_id in the slug-grouped continuation chain (most-
+  -- recent prior session sharing the same slug). NULL on the first session
+  -- of a chain or on sessions whose slug is unknown. Populated by the
+  -- post-reconcile UPDATE in `reconcileAllSessions`, NOT at per-session
+  -- write time — the prior session may not yet have been ingested when
+  -- this one writes.
+  continued_from_session_id  TEXT,
   derived_version       INTEGER NOT NULL DEFAULT 0,
   indexed_at_ms         INTEGER NOT NULL
 );
@@ -91,6 +106,7 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_by_project_end ON sessions(project_slug, end_ts DESC);
 CREATE INDEX sessions_by_end_ts      ON sessions(end_ts DESC);
 CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);
+CREATE INDEX sessions_by_slug        ON sessions(slug) WHERE slug IS NOT NULL;
 
 -- ─── turns ───────────────────────────────────────────────────────────────
 -- One row per assistant or user turn. `text_offset` points back into the
