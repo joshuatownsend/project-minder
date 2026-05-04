@@ -153,6 +153,28 @@ describe("diagnoseSession", () => {
     expect(report.topAdvice.length).toBeLessThanOrEqual(3);
   });
 
+  it("topAdvice orders by severity first, impact within tier (lexicographic)", () => {
+    // Construct findings where a P0 has zero impact and a P2 has high
+    // impact. The lexicographic ordering puts P0 before P2 regardless
+    // of dollar value — matches what users expect on the panel. Earlier
+    // additive scoring made severity dominate impact almost entirely
+    // anyway; this test pins the honest contract.
+    const turns = [
+      // Sets cache-thrash (P0) without big estimated impact.
+      assistantTurn({ cacheCreateTokens: 10_000, offsetSec: 0 }),
+      assistantTurn({ cacheCreateTokens: 10_000, offsetSec: 60 }),
+      assistantTurn({ cacheCreateTokens: 10_000, offsetSec: 120 }),
+      // Long inter-turn gap → cache-ttl-expiry (P2) and high-idle (P2).
+      assistantTurn({ inputTokens: 1_000, offsetSec: 5_000 }),
+    ];
+    const report = diagnoseSession("s", turns);
+    const cats = report.findings.map((f) => f.category);
+    expect(cats).toContain("cache-thrash");
+    const thrashIdx = report.findings.findIndex((f) => f.category === "cache-thrash");
+    const thrashAdvice = report.findings[thrashIdx].advice;
+    expect(report.topAdvice[0]).toBe(thrashAdvice);
+  });
+
   it("infers outcome=abandoned when last turn is a user turn", () => {
     const turns = [
       assistantTurn({ inputTokens: 10_000, offsetSec: 0 }),

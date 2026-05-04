@@ -71,9 +71,26 @@ export function canonicalizeDirName(dirName: string): string {
 
 // ── Single-file parser ────────────────────────────────────────────────────────
 
+export interface ParseSessionTurnsOptions {
+  /**
+   * When true, propagate `fs.readFile` errors instead of swallowing them
+   * as `[]`. Used by single-session callers (the diagnosis route) that
+   * need to distinguish "found but unreadable" (→ HTTP 500) from "found
+   * and parsed empty" (→ HTTP 200 with empty findings). The default
+   * (`false`) preserves the legacy sweep behavior in `buildAllSessions`
+   * where one bad file shouldn't kill the whole sweep.
+   *
+   * Per-line `JSON.parse` failures are still soft-skipped regardless of
+   * this flag — partial reads of a corrupted JSONL are still useful for
+   * diagnosis (the valid lines yield meaningful data).
+   */
+  strict?: boolean;
+}
+
 export async function parseSessionTurns(
   filePath: string,
-  projectDirName: string
+  projectDirName: string,
+  options: ParseSessionTurnsOptions = {}
 ): Promise<UsageTurn[]> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
@@ -82,7 +99,8 @@ export async function parseSessionTurns(
   let raw: string;
   try {
     raw = await fs.readFile(filePath, "utf8");
-  } catch {
+  } catch (err) {
+    if (options.strict) throw err;
     return [];
   }
 
@@ -318,16 +336,20 @@ export async function loadSessionTurnsBySessionId(
     dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch (err) {
     // ENOENT is legitimate (no Claude Code on this machine, or fresh
-    // install before any session); anything else (EACCES, EIO) is a
-    // misconfiguration we want visible rather than masquerading as 404.
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[loadSessionTurnsBySessionId] readdir failed on ${projectsDir}`,
-        err
-      );
+    // install before any session) — return null so the route 404s.
+    // Anything else (EACCES, EIO, EPERM) is a real misconfiguration:
+    // throw `SessionTurnsLoadError` so the route surfaces a 500 instead
+    // of masquerading as "Session not found." Reviewer (Codex P2 +
+    // Copilot) flagged the prior `console.warn + return null` shape.
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return null;
     }
-    return null;
+    throw new SessionTurnsLoadError(
+      `Failed to list ${projectsDir}: ${err instanceof Error ? err.message : String(err)}`,
+      sessionId,
+      projectsDir,
+      err
+    );
   }
 
   for (const dir of dirs) {
@@ -343,15 +365,21 @@ export async function loadSessionTurnsBySessionId(
     // the parser — bailing here is consistent with the buildAllSessions
     // sweep behavior.
     if (stat.size > MAX_SESSION_FILE_SIZE) return null;
-    // Parse with explicit error propagation. We don't use the FileCache's
-    // factory pattern here because that pattern swallows throws as `[]`
-    // (correct for sweep, wrong for diagnosis — see SessionTurnsLoadError).
-    // Diagnosis is single-session and infrequent, so skipping the cache
-    // costs a re-parse on tab-revisit but never produces a misleading
-    // healthy verdict on a broken file.
+    // Parse in strict mode so `fs.readFile` failures (EACCES, EIO,
+    // mid-stream EBUSY from a writer) propagate as throws instead of
+    // being swallowed as `[]`. Without `strict: true`, a permissions
+    // error on a real session file would render a misleading green
+    // "looks healthy" panel — reviewer-flagged (Codex P1 + Copilot).
+    // Per-line JSON parse errors still soft-skip; a session with a few
+    // mangled lines is still diagnosable from its valid lines.
+    //
+    // We don't use the FileCache's factory pattern here because that
+    // pattern swallows throws as `[]`. Diagnosis is single-session and
+    // infrequent, so skipping the cache costs a re-parse on tab-revisit
+    // but never produces a misleading healthy verdict on a broken file.
     let turns: UsageTurn[];
     try {
-      turns = await parseSessionTurns(candidate, dir);
+      turns = await parseSessionTurns(candidate, dir, { strict: true });
     } catch (err) {
       throw new SessionTurnsLoadError(
         `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,

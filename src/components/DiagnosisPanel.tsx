@@ -345,7 +345,7 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
         />
         <HeaderStat
           label="Peak fill"
-          value={formatPct(report.maxContextFill || null)}
+          value={formatPct(report.maxContextFill)}
         />
         <HeaderStat
           label="Idle"

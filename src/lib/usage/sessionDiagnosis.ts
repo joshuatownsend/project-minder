@@ -378,15 +378,25 @@ function inferOutcome(
 }
 
 function pickTopAdvice(findings: DiagnosisFinding[], max: number): string[] {
-  const scored = findings
-    .map((f, i) => ({
-      f,
-      i,
-      // Score: estimated impact (clamped at 0), tie-broken by severity rank.
-      score: Math.max(f.estimatedImpactUsd ?? 0, 0) + SEVERITY_RANK[f.severity],
-    }))
-    .sort((a, b) => b.score - a.score || a.i - b.i);
-  return scored.slice(0, max).map((s) => s.f.advice);
+  // Lexicographic ordering: severity first (P0 → P1 → P2), then estimated
+  // impact within tier, then declaration order. Reviewer-flagged (Copilot)
+  // the prior additive scoring as severity-dominates-with-impact-as-noise:
+  // a $0 P1 finding outranked a $300 P2 finding because severity contribs
+  // (1000 / 100) dwarfed realistic impact magnitudes ($0–$50). Honest
+  // ordering matches what the user actually wants on the panel — see all
+  // P0 findings first regardless of dollar value, then P1, then P2.
+  return [...findings]
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => {
+      const sevDelta = SEVERITY_RANK[b.f.severity] - SEVERITY_RANK[a.f.severity];
+      if (sevDelta !== 0) return sevDelta;
+      const impactA = Math.max(a.f.estimatedImpactUsd ?? 0, 0);
+      const impactB = Math.max(b.f.estimatedImpactUsd ?? 0, 0);
+      if (impactA !== impactB) return impactB - impactA;
+      return a.i - b.i;
+    })
+    .slice(0, max)
+    .map((s) => s.f.advice);
 }
 
 function formatDuration(seconds: number): string {

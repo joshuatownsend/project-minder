@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { canonicalizeDirName } from "@/lib/usage/parser";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { promises as fs } from "fs";
+import path from "path";
+import os from "os";
+import {
+  canonicalizeDirName,
+  parseSessionTurns,
+  loadSessionTurnsBySessionId,
+  SessionTurnsLoadError,
+} from "@/lib/usage/parser";
 
 describe("canonicalizeDirName", () => {
   it("leaves a normal project path unchanged", () => {
@@ -63,5 +71,82 @@ describe("canonicalizeDirName", () => {
 
   it("returns unchanged for unrecognized format", () => {
     expect(canonicalizeDirName("some-random-thing")).toBe("some-random-thing");
+  });
+});
+
+// ── parseSessionTurns strict mode (Wave 3.1 PR #63 review fix) ───────────────
+
+describe("parseSessionTurns strict mode", () => {
+  it("returns [] on read failure when strict is unset (legacy sweep behavior)", async () => {
+    const missing = path.join(os.tmpdir(), `nonexistent-${Date.now()}.jsonl`);
+    const turns = await parseSessionTurns(missing, "fake-dir");
+    expect(turns).toEqual([]);
+  });
+
+  it("propagates the readFile error when strict=true", async () => {
+    const missing = path.join(os.tmpdir(), `nonexistent-${Date.now()}.jsonl`);
+    await expect(
+      parseSessionTurns(missing, "fake-dir", { strict: true })
+    ).rejects.toThrow();
+  });
+
+  it("strict mode still soft-skips per-line JSON parse errors", async () => {
+    // A file with one valid assistant line + one malformed line should
+    // still parse the valid line. Strict mode propagates only file-level
+    // failures, not per-line corruption.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "minder-test-"));
+    const file = path.join(dir, "test-session.jsonl");
+    const valid = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-05-04T12:00:00Z",
+      message: { model: "claude-sonnet-4-6", usage: { input_tokens: 100 } },
+    });
+    const malformed = "{not valid json";
+    try {
+      await fs.writeFile(file, `${valid}\n${malformed}\n`);
+      const turns = await parseSessionTurns(file, "fake-dir", { strict: true });
+      expect(turns.length).toBe(1);
+      expect(turns[0].role).toBe("assistant");
+      expect(turns[0].inputTokens).toBe(100);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── loadSessionTurnsBySessionId 404/500 distinction (Wave 3.1 PR #63 review fix) ─
+
+describe("loadSessionTurnsBySessionId", () => {
+  it("returns null for non-UUID-shaped session ids", async () => {
+    expect(await loadSessionTurnsBySessionId("not-a-uuid-shape")).toBeNull();
+  });
+
+  it("returns null when projects dir is missing (ENOENT path → 404 at route)", async () => {
+    // Standard runtime: real ~/.claude/projects exists. If a test machine
+    // has no such dir, the function returns null. Either outcome (null
+    // for unknown id, null for missing dir) is the legitimate 404 path.
+    const result = await loadSessionTurnsBySessionId(
+      "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    );
+    // Real machines have ~/.claude/projects; either null (id not found)
+    // or null (dir missing) is acceptable. The contract being pinned is
+    // "no throw on a well-formed id that doesn't resolve."
+    expect(result).toBeNull();
+  });
+
+  it("SessionTurnsLoadError class round-trips its fields", () => {
+    const cause = new Error("permission denied");
+    const err = new SessionTurnsLoadError(
+      "Failed to parse",
+      "abc-123",
+      "/path/to/file.jsonl",
+      cause
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe("SessionTurnsLoadError");
+    expect(err.message).toBe("Failed to parse");
+    expect(err.sessionId).toBe("abc-123");
+    expect(err.filePath).toBe("/path/to/file.jsonl");
+    expect(err.cause).toBe(cause);
   });
 });

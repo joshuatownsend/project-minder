@@ -218,8 +218,15 @@ async function scanSessionFile(
           }
         }
 
-        // Build lightweight turn for one-shot detection (same pass, no re-parse)
-        if (entry.timestamp && !entry.isSidechain && !entry.isMeta) {
+        // Build lightweight turn for one-shot detection (same pass, no re-parse).
+        // Skip synthetic-model assistant entries to match `parseSessionTurns`
+        // and DB ingest behavior; without this filter the file-parse path's
+        // sessionQuality output would diverge from the DB path's for any
+        // session containing synthetic turns. Reviewer (Copilot) flagged.
+        const isSyntheticAssistant =
+          entry.type === "assistant" &&
+          (!entry.message?.model || entry.message.model === "<synthetic>");
+        if (entry.timestamp && !entry.isSidechain && !entry.isMeta && !isSyntheticAssistant) {
           const turnToolCalls: UsageToolCall[] = [];
           let toolResultText = "";
 
