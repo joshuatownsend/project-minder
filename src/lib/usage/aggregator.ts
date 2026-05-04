@@ -5,6 +5,7 @@ import { groupByBinary } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
 import { getPeriodStart } from "./periods";
+import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import type {
   UsageTurn,
   UsageReport,
@@ -212,6 +213,21 @@ export async function aggregateUsage(
     ? totalCacheRead / (totalCacheRead + totalInput) : 0;
   const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
   const totalCost = [...modelMap.values()].reduce((s, m) => s + m.cost, 0);
+
+  // Self-correction rate per primary model. The detector groups by
+  // sessionId internally and attaches to byModel so the /usage table
+  // can render the column without a second join.
+  const selfCorrection = detectSelfCorrectionPerModel(turns);
+  const selfCorrectionByModel = new Map(
+    selfCorrection.byModel.map((s) => [s.model, s] as const)
+  );
+  for (const m of modelMap.values()) {
+    const stats = selfCorrectionByModel.get(m.model);
+    if (stats && stats.total > 0) {
+      m.selfCorrectionRate = stats.rate;
+      m.sessionsAsPrimary = stats.total;
+    }
+  }
 
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]

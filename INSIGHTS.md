@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:4f848c1c57d7 | session:1d3042ad-8f0a-4d03-99ea-7ace129a0e0f | 2026-05-04T19:24:50.076Z -->
+## ★ Insight
+- `git switch -c` is the modern replacement for `git checkout -b` — same effect, clearer intent (switch = move HEAD, `-c` = create new branch).
+- Following the wave-numbered branch convention from Wave 3.1 (PR #63), keeping each wave's work isolated for review and clean merge to main.
+- Since Wave 3.1 was just squash-merged, `main` is the correct base — `wave3.2` now points at commit `04f7029` and is ready for the next set of changes.
+
+---
+
 <!-- insight:91d5ad5b1ea0 | session:a3d04fe5-06a4-43f9-a904-07b15228d2de | 2026-05-04T17:22:08.904Z -->
 ## ★ Insight
 Token-flow architecture pattern: `UsageTurn[]` is the canonical interchange format between three independent paths — file-parse (`parseSessionTurns`), DB ingest (`readJsonlSession` exposes `usageTurn` per turn), and DB rehydrate (`loadExistingTurnsAsUsage`). Building detectors against this single shape keeps the same logic running in all three contexts without duplicate code, and the parity contract is enforced by `tests/dataSessionsList.test.ts`.

@@ -17,6 +17,14 @@ export interface UsageTurn {
   toolCalls: ToolCall[];
   userMessageText?: string;
   toolResultText?: string;
+  /**
+   * Extracted assistant text content, sliced to the same per-turn cap as
+   * `userMessageText` (500 chars). Only populated on assistant turns.
+   * Used by `selfCorrection.ts` to detect correction phrases without
+   * re-reading JSONL. Both parser paths populate it identically so the
+   * detector behaves the same under MINDER_USE_DB=0/1.
+   */
+  assistantText?: string;
   isError?: boolean;
 }
 
@@ -51,6 +59,21 @@ export interface ModelCost {
   cacheCreateTokens: number;
   cost: number;
   turns: number;
+  /**
+   * Self-correction rate: correctedSessions / sessionsForModel for
+   * sessions whose primary model (most assistant turns) is this one.
+   * Range [0, 1]. Undefined when the model has no sessions attributed
+   * to it.
+   *
+   * Caveat: "primary model" is most-turn-wins; a 90%-Opus session whose
+   * single corrected turn ran on Haiku still attributes to Opus. The
+   * metric tracks first-pass reliability of the model the user ran the
+   * session on — not which model emitted the apology phrase.
+   */
+  selfCorrectionRate?: number;
+  /** Number of sessions whose primary model was this one — denominator
+   *  for `selfCorrectionRate`. Surfaced for tooltip context. */
+  sessionsAsPrimary?: number;
 }
 
 export interface ShellStats {

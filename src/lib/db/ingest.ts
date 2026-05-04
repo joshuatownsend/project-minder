@@ -517,6 +517,7 @@ async function readJsonlSession(
         toolCalls: toolBlocks.map(
           (b: any): ToolCall => ({ name: b.name, arguments: b.input })
         ),
+        assistantText: text || undefined,
         isError: !!isError,
       };
 
@@ -1225,6 +1226,7 @@ function loadExistingTurnsAsUsage(
     // the truncated tool result for result-bearing user turns.
     userMessageText: r.role === "user" ? (r.text_preview ?? undefined) : undefined,
     toolResultText: r.role === "user" ? (r.tool_result_preview ?? undefined) : undefined,
+    assistantText: r.role === "assistant" ? (r.text_preview ?? undefined) : undefined,
   }));
 }
 

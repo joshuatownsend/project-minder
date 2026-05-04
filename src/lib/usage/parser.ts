@@ -134,9 +134,12 @@ export async function parseSessionTurns(
       const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
-      const toolCalls = (entry.message?.content ?? [])
+      const content = entry.message?.content ?? [];
+      const toolCalls = content
         .filter((b: any) => b.type === "tool_use")
         .map((b: any) => ({ name: b.name, arguments: b.input }));
+
+      const assistantText = extractText(content) || undefined;
 
       const isError = entry.isApiErrorMessage === true;
 
@@ -152,6 +155,7 @@ export async function parseSessionTurns(
         cacheCreateTokens,
         cacheReadTokens,
         toolCalls,
+        assistantText,
         isError,
       });
     } else if (type === "user") {
