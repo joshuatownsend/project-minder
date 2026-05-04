@@ -3,8 +3,18 @@ import { promises as fs } from "fs";
 import path from "path";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
-import { scanMemory } from "@/lib/scanner/memory";
+import { scanMemory, invalidateMemoryCache } from "@/lib/scanner/memory";
 import { memoryDirFor, writeMemoryFile } from "@/lib/scanner/memoryWriter";
+
+/** Single shape for every error response in this route — matches the
+ *  writer's `{code, message?}` envelope so MemoryTab's `error.code`
+ *  display works for every failure path. */
+function errorResponse(code: string, status: number, message?: string) {
+  return NextResponse.json(
+    { error: message !== undefined ? { code, message } : { code } },
+    { status }
+  );
+}
 
 async function resolveProject(slug: string) {
   let result = getCachedScan();
@@ -24,7 +34,7 @@ export async function GET(
 
   const project = await resolveProject(slug);
   if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    return errorResponse("PROJECT_NOT_FOUND", 404, `No project "${slug}".`);
   }
 
   if (file) {
@@ -35,7 +45,7 @@ export async function GET(
       const content = await fs.readFile(filePath, "utf-8");
       return NextResponse.json({ content });
     } catch {
-      return NextResponse.json({ error: "File not found" }, { status: 404 });
+      return errorResponse("FILE_NOT_FOUND", 404, `No memory file "${file}".`);
     }
   }
 
@@ -50,9 +60,9 @@ export async function GET(
  * The writer enforces extension + traversal safety. Memory dir is created
  * lazily so the user can save the very first memory file from the UI.
  *
- * On success the dashboard's MemoryTab refetches; we don't need to invalidate
- * any cross-route cache because `scanMemory` already has a 30s in-module TTL
- * that will pick up the new content on the next read.
+ * After a successful write we drop the project's `scanMemory` entry so
+ * the dashboard's immediate refetch sees the new mtime/size — the 30s
+ * in-module TTL would otherwise mask the change.
  */
 export async function PATCH(
   request: NextRequest,
@@ -62,20 +72,21 @@ export async function PATCH(
 
   const project = await resolveProject(slug);
   if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    return errorResponse("PROJECT_NOT_FOUND", 404, `No project "${slug}".`);
   }
 
   let body: { file?: unknown; content?: unknown };
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return errorResponse("INVALID_JSON", 400, "Request body is not valid JSON.");
   }
 
   if (typeof body.file !== "string" || typeof body.content !== "string") {
-    return NextResponse.json(
-      { error: "Body must include `file: string` and `content: string`." },
-      { status: 400 }
+    return errorResponse(
+      "INVALID_BODY",
+      400,
+      "Body must include `file: string` and `content: string`."
     );
   }
 
@@ -86,7 +97,10 @@ export async function PATCH(
       code === "TRAVERSAL" || code === "NOT_MARKDOWN" || code === "INVALID_NAME"
         ? 400
         : 500;
-    return NextResponse.json({ error: result.error }, { status });
+    const message =
+      result.error && "message" in result.error ? result.error.message : undefined;
+    return errorResponse(code, status, message);
   }
+  invalidateMemoryCache(project.path);
   return NextResponse.json({ ok: true, bytesWritten: result.bytesWritten });
 }

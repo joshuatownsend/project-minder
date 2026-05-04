@@ -307,12 +307,16 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
         </div>
 
         {/* ── Row 2 (conditional): attention signals ────────────────────── */}
-        {(hasAttention || insightsTotal > 0 || (project.claudeMdAudit && project.claudeMdAudit.score < 80)) && (
+        {(() => {
+          const auditChip =
+            project.claudeMdAudit?.hasClaudeMd && project.claudeMdAudit.score < 80;
+          if (!hasAttention && insightsTotal === 0 && !auditChip) return null;
+          return (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            {project.claudeMdAudit && project.claudeMdAudit.hasClaudeMd && project.claudeMdAudit.score < 80 && (
+            {auditChip && (
               <ClaudeMdHealthBadge
-                score={project.claudeMdAudit.score}
-                hasClaudeMd={project.claudeMdAudit.hasClaudeMd}
+                score={project.claudeMdAudit!.score}
+                hasClaudeMd={true}
               />
             )}
             {pendingTodos > 0 && (
@@ -352,7 +356,8 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
               </span>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* ── Row 3: git status ─────────────────────────────────────────── */}
         {project.git && <GitStatusCompact git={project.git} />}

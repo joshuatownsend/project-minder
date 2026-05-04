@@ -56,6 +56,15 @@ async function scanProject(
 
   const slug = toSlug(dirName);
 
+  const claudeMdPromise = scanClaudeMd(projectPath);
+  // Audit reuses the buffer scanClaudeMd already read so we don't pay
+  // two readFiles per project on the parallel scan path. `null` from
+  // scanClaudeMd means the file doesn't exist — pass it through so the
+  // audit short-circuits without its own attempt.
+  const claudeMdAuditPromise = claudeMdPromise.then((md) =>
+    auditClaudeMd(projectPath, md ?? null)
+  );
+
   const [
     pkgResult,
     envResult,
@@ -77,8 +86,8 @@ async function scanProject(
       ? scanDockerCompose(projectPath)
       : Promise.resolve(EMPTY_DOCKER),
     scanGit(projectPath),
-    scanClaudeMd(projectPath),
-    auditClaudeMd(projectPath),
+    claudeMdPromise,
+    claudeMdAuditPromise,
     getFlag(flags, "scanTodos")
       ? scanTodoMd(projectPath)
       : Promise.resolve(undefined),

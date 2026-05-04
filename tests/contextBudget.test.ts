@@ -33,15 +33,18 @@ vi.mock("@/lib/usage/costCalculator", () => ({
 }));
 
 import { promises as fs } from "fs";
-import { computeContextBudget, SYSTEM_BASE_TOKENS, MCP_SERVER_TOKENS_EACH, SKILL_TOKENS_EACH, CHARS_PER_TOKEN } from "@/lib/scanner/contextBudget";
+import { computeContextBudget, SYSTEM_BASE_TOKENS, MCP_SERVER_TOKENS_EACH, SKILL_TOKENS_EACH, BYTES_PER_TOKEN } from "@/lib/scanner/contextBudget";
 import { scanMcpServers } from "@/lib/scanner/mcpServers";
 import { loadCatalog } from "@/lib/indexer/catalog";
 
 const mockReadFile = vi.mocked(fs.readFile);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockReaddir = vi.mocked(fs.readdir) as any;
+const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
 const mockScanMcp = vi.mocked(scanMcpServers);
 const mockLoadCatalog = vi.mocked(loadCatalog);
+
+// Helper: minimal SkillEntry-shaped fixture for catalog-mocking tests.
+type SkillFixture = { source: string; projectSlug?: string; pluginName?: string };
+function asSkill(f: SkillFixture): unknown { return f; }
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -76,22 +79,15 @@ describe("computeContextBudget", () => {
   });
 
   it("counts user + plugin + this-project skills", async () => {
-    mockLoadCatalog.mockResolvedValue({
-      agents: [],
-      skills: [
-        // 2 user-scope, 1 plugin, 1 this-project, 1 different-project (excluded)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { source: "user", projectSlug: undefined } as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { source: "user", projectSlug: undefined } as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { source: "plugin", pluginName: "p1" } as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { source: "project", projectSlug: "myproj" } as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { source: "project", projectSlug: "other" } as any,
-      ],
-    });
+    // 2 user-scope, 1 plugin, 1 this-project, 1 different-project (excluded)
+    const skills = [
+      asSkill({ source: "user", projectSlug: undefined }),
+      asSkill({ source: "user", projectSlug: undefined }),
+      asSkill({ source: "plugin", pluginName: "p1" }),
+      asSkill({ source: "project", projectSlug: "myproj" }),
+      asSkill({ source: "project", projectSlug: "other" }),
+    ] as Parameters<typeof mockLoadCatalog.mockResolvedValue>[0]["skills"];
+    mockLoadCatalog.mockResolvedValue({ agents: [], skills });
     const result = await computeContextBudget("C:\\dev\\myproj", "myproj");
     expect(result.skillCount).toBe(4);
     expect(result.skillTokens).toBe(4 * SKILL_TOKENS_EACH);
@@ -108,8 +104,8 @@ describe("computeContextBudget", () => {
       throw new Error("ENOENT");
     });
     const result = await computeContextBudget("C:\\dev\\mem", "mem");
-    expect(result.memoryChars).toBeGreaterThan(0);
-    expect(result.memoryTokens).toBe(Math.round(result.memoryChars / CHARS_PER_TOKEN));
+    expect(result.memoryBytes).toBeGreaterThan(0);
+    expect(result.memoryTokens).toBe(Math.round(result.memoryBytes / BYTES_PER_TOKEN));
   });
 
   it("computes a USD estimate when pricing is available", async () => {
@@ -124,11 +120,9 @@ describe("computeContextBudget", () => {
     mockScanMcp.mockResolvedValue({
       servers: [{ name: "x", transport: "stdio", source: "user", sourcePath: "" }],
     });
-    mockLoadCatalog.mockResolvedValue({
-      agents: [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      skills: [{ source: "user" } as any, { source: "plugin" } as any],
-    });
+    const skills = [asSkill({ source: "user" }), asSkill({ source: "plugin" })] as
+      Parameters<typeof mockLoadCatalog.mockResolvedValue>[0]["skills"];
+    mockLoadCatalog.mockResolvedValue({ agents: [], skills });
     const claudeMd = "x".repeat(800);
     mockReadFile.mockImplementation(async (p: unknown) => {
       const f = String(p);
@@ -140,7 +134,7 @@ describe("computeContextBudget", () => {
       SYSTEM_BASE_TOKENS +
       1 * MCP_SERVER_TOKENS_EACH +
       2 * SKILL_TOKENS_EACH +
-      Math.round(claudeMd.length / CHARS_PER_TOKEN);
+      Math.round(claudeMd.length / BYTES_PER_TOKEN);
     expect(result.totalTokens).toBe(expected);
   });
 });

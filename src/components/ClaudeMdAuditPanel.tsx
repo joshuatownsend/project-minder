@@ -93,7 +93,7 @@ export function ClaudeMdAuditPanel({ audit }: Props) {
       }}>
         <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", margin: 0 }}>
           No CLAUDE.md found in this project. Adding one helps Claude Code understand the
-          project's stack, conventions, and house rules.
+          project&apos;s stack, conventions, and house rules.
         </p>
       </div>
     );

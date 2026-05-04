@@ -40,7 +40,7 @@ The **Context overhead** panel adds up the tokens Claude Code consumes before it
 | System base | 10 400 tokens (fixed Claude Code overhead) |
 | MCP servers | 400 tokens × number of servers in scope (project + local + user + plugin + desktop + managed) |
 | Skills in scope | 80 tokens × (user + plugin + this-project's project-local skills) |
-| Memory files | `char_count ÷ 4` for `CLAUDE.md` (with imports expanded), user-scope `~/.claude/CLAUDE.md`, and all `.claude/rules/**.md` files |
+| Memory files | UTF-8 `byte_count ÷ 4` for `CLAUDE.md` (with imports expanded), user-scope `~/.claude/CLAUDE.md`, and all `.claude/rules/**.md` files |
 
 A USD estimate is computed using the input-token rate from your active pricing model (default: `claude-sonnet-4-5`).
 

@@ -9,14 +9,14 @@ interface BudgetBreakdown {
   mcpServerTokens: number;
   skillCount: number;
   skillTokens: number;
-  memoryChars: number;
+  memoryBytes: number;
   memoryTokens: number;
   totalTokens: number;
   estimatedUsd: number | null;
   pricingModel?: string;
   detail: {
     mcpServers: Array<{ name: string; source: string; transport: string }>;
-    memoryFiles: Array<{ path: string; chars: number }>;
+    memoryFiles: Array<{ path: string; bytes: number }>;
     skillsBySource: { user: number; plugin: number; project: number };
   };
 }
@@ -43,6 +43,13 @@ export function ContextBudgetPanel({ slug, defaultExpanded = false }: Props) {
   const [data, setData] = useState<BudgetBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Reset when slug changes so we don't show another project's numbers if
+  // the panel is reused without unmounting.
+  useEffect(() => {
+    setData(null);
+    setError(null);
+  }, [slug]);
 
   useEffect(() => {
     if (!expanded || data || loading) return;
@@ -111,7 +118,7 @@ export function ContextBudgetPanel({ slug, defaultExpanded = false }: Props) {
       {expanded && data && (
         <>
           <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", margin: 0 }}>
-            Tokens consumed by Claude Code's infrastructure (system prompt, MCP server descriptors,
+            Tokens consumed by Claude Code&apos;s infrastructure (system prompt, MCP server descriptors,
             skill metadata, memory files) before any of your code is read.
           </p>
           <BudgetTable data={data} />
@@ -145,7 +152,7 @@ function BudgetTable({ data }: { data: BudgetBreakdown }) {
     {
       label: "Memory files",
       tokens: data.memoryTokens,
-      sub: data.memoryChars > 0 ? `${data.memoryChars.toLocaleString()} chars / 4` : "none",
+      sub: data.memoryBytes > 0 ? `${data.memoryBytes.toLocaleString()} bytes / 4` : "none",
     },
   ];
 

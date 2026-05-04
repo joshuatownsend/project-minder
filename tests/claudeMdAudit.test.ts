@@ -17,8 +17,7 @@ import { promises as fs } from "fs";
 import { auditClaudeMd } from "@/lib/scanner/claudeMdAudit";
 
 const mockReadFile = vi.mocked(fs.readFile);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockReaddir = vi.mocked(fs.readdir) as any;
+const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
 const mockStat = vi.mocked(fs.stat);
 
 beforeEach(() => {

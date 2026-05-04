@@ -15,7 +15,11 @@ import type { McpServer } from "../types";
  *   - System base (Claude Code's fixed CLI overhead): 10,400 tokens
  *   - MCP servers in scope: 400 tokens each
  *   - Skills in scope: 80 tokens each (one SKILL.md descriptor)
- *   - Memory files (CLAUDE.md + rules): char_count / 4
+ *   - Memory files (CLAUDE.md + rules): UTF-8 byte_count / 4
+ *
+ * Memory cost is measured in UTF-8 bytes — that's what Claude Code's
+ * tokenizer ultimately ingests, and it's a closer approximation to
+ * tokens than JavaScript string `.length` (UTF-16 units) for non-ASCII.
  *
  * Skills in scope = user-scope + plugin + this-project's project-local skills.
  *
@@ -27,7 +31,11 @@ import type { McpServer } from "../types";
 export const SYSTEM_BASE_TOKENS = 10_400;
 export const MCP_SERVER_TOKENS_EACH = 400;
 export const SKILL_TOKENS_EACH = 80;
-export const CHARS_PER_TOKEN = 4;
+export const BYTES_PER_TOKEN = 4;
+
+/** Backwards-compatible alias kept temporarily for callers that imported
+ *  `CHARS_PER_TOKEN` before the rename. Prefer `BYTES_PER_TOKEN`. */
+export const CHARS_PER_TOKEN = BYTES_PER_TOKEN;
 
 export interface ContextBudgetBreakdown {
   systemBaseTokens: number;
@@ -35,21 +43,23 @@ export interface ContextBudgetBreakdown {
   mcpServerTokens: number;
   skillCount: number;
   skillTokens: number;
-  memoryChars: number;
+  /** Total UTF-8 bytes across all memory files counted. */
+  memoryBytes: number;
   memoryTokens: number;
   totalTokens: number;
   estimatedUsd: number | null;
   pricingModel?: string;
   detail: {
     mcpServers: Array<Pick<McpServer, "name" | "source" | "transport">>;
-    memoryFiles: Array<{ path: string; chars: number }>;
+    /** UTF-8 bytes per memory file. */
+    memoryFiles: Array<{ path: string; bytes: number }>;
     skillsBySource: { user: number; plugin: number; project: number };
   };
 }
 
 interface MemoryFileResult {
   path: string;
-  chars: number;
+  bytes: number;
 }
 
 async function memoryCharCount(projectPath: string): Promise<MemoryFileResult[]> {
@@ -70,19 +80,19 @@ async function memoryCharCount(projectPath: string): Promise<MemoryFileResult[]>
   if (projectExp.content.length > 0) {
     out.push({
       path: projectClaudeMd,
-      chars: Buffer.byteLength(projectExp.content, "utf-8"),
+      bytes: Buffer.byteLength(projectExp.content, "utf-8"),
     });
   }
 
   if (userContent.length > 0) {
     out.push({
       path: path.join(os.homedir(), ".claude", "CLAUDE.md"),
-      chars: Buffer.byteLength(userContent, "utf-8"),
+      bytes: Buffer.byteLength(userContent, "utf-8"),
     });
   }
 
   for (const file of ruleFilesArrays.flat()) {
-    if (file.bytes > 0) out.push({ path: file.file, chars: file.bytes });
+    if (file.bytes > 0) out.push({ path: file.file, bytes: file.bytes });
   }
 
   return out;
@@ -126,8 +136,8 @@ export async function computeContextBudget(
   const skillCount = skillsBySource.user + skillsBySource.plugin + skillsBySource.project;
   const skillTokens = skillCount * SKILL_TOKENS_EACH;
 
-  const memoryChars = memoryFiles.reduce((acc, f) => acc + f.chars, 0);
-  const memoryTokens = Math.round(memoryChars / CHARS_PER_TOKEN);
+  const memoryBytes = memoryFiles.reduce((acc, f) => acc + f.bytes, 0);
+  const memoryTokens = Math.round(memoryBytes / BYTES_PER_TOKEN);
 
   const totalTokens =
     SYSTEM_BASE_TOKENS + mcpServerTokens + skillTokens + memoryTokens;
@@ -140,7 +150,7 @@ export async function computeContextBudget(
     mcpServerTokens,
     skillCount,
     skillTokens,
-    memoryChars,
+    memoryBytes,
     memoryTokens,
     totalTokens,
     estimatedUsd,
@@ -151,7 +161,7 @@ export async function computeContextBudget(
         source: s.source,
         transport: s.transport,
       })),
-      memoryFiles: memoryFiles.map((f) => ({ path: f.path, chars: f.chars })),
+      memoryFiles: memoryFiles.map((f) => ({ path: f.path, bytes: f.bytes })),
       skillsBySource,
     },
   };

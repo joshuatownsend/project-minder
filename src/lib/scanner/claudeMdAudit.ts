@@ -104,16 +104,31 @@ async function hasSiblingMd(projectPath: string): Promise<boolean> {
   }
 }
 
-export async function auditClaudeMd(projectPath: string): Promise<ClaudeMdAuditInfo> {
+export async function auditClaudeMd(
+  projectPath: string,
+  /** Pre-read CLAUDE.md content so the orchestrator can avoid a second
+   *  read when it already grabbed it via `scanClaudeMd`. Passing
+   *  `undefined` (the default) keeps the standalone signature working
+   *  for tests and ad-hoc callers. */
+  preread?: string | null
+): Promise<ClaudeMdAuditInfo> {
   const claudeMdPath = path.join(projectPath, "CLAUDE.md");
 
   let raw: string | undefined;
   let fileBytes = 0;
-  try {
-    raw = await fs.readFile(claudeMdPath, "utf-8");
+  if (typeof preread === "string") {
+    raw = preread;
     fileBytes = Buffer.byteLength(raw, "utf-8");
-  } catch {
+  } else if (preread === null) {
+    // Caller already determined CLAUDE.md is missing — skip the read.
     raw = undefined;
+  } else {
+    try {
+      raw = await fs.readFile(claudeMdPath, "utf-8");
+      fileBytes = Buffer.byteLength(raw, "utf-8");
+    } catch {
+      raw = undefined;
+    }
   }
 
   if (!raw) {

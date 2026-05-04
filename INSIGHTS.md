@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:2f932b79c048 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T14:35:33.987Z -->
+## ★ Insight
+- A single `state` discriminated union (`viewing | editing | saving | saved | error`) eliminates the impossible combos of independent `editing/saveState/saveError/draft` state. The reducer also makes the toolbar's branching trivial (`switch (state.kind)`), removing the four sequential `&&` predicates over the same data.
+- After this collapse, `selectedFile` and `fileContent` stay as their own state because they're orthogonal to the editor lifecycle (you can be `viewing` with `fileContent === null` while a fetch is in flight).
+- The reducer's `kind` lives outside the rendered file — i.e., switching files always resets back to `viewing`, which `useEffect([slug])` already does.
+
+---
+
 <!-- insight:068fee3e5c20 | session:07ff0f35-0550-481c-8225-604ae704b207 | 2026-05-04T14:09:43.210Z -->
 ## ★ Insight
 - The audit panel and context budget belong together visually because both answer "what is Claude actually loading?" — one structural, one quantitative. Putting them in the existing "Context" tab keeps tabs uncluttered (the plan called the audit "a new tab" but the existing Context tab is currently just the CLAUDE.md preview, which is a perfect home for both).

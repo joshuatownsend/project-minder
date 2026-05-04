@@ -30,8 +30,10 @@ export interface ProjectData {
   claude?: ClaudeInfo;
 
   // CLAUDE.md health audit (TODO #118 / #119) — surfaced as a badge on
-  // ProjectCard and full panel on ProjectDetail. Always present; the
-  // info object encodes whether CLAUDE.md exists via `hasClaudeMd`.
+  // ProjectCard and full panel on ProjectDetail. Optional because older
+  // cached scans (and any non-orchestrator caller) may not populate it;
+  // when present, the info object encodes whether the file exists via
+  // `hasClaudeMd` so consumers don't need a second flag.
   claudeMdAudit?: ClaudeMdAuditInfo;
 
   // TODOs

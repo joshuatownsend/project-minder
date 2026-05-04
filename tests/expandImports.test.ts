@@ -67,6 +67,24 @@ describe("expandImports", () => {
     expect(result.content).not.toContain("L6 body");
   });
 
+  it("expands diamond imports twice (not treated as cycles)", async () => {
+    // root imports A and B; both A and B import shared.md.
+    // shared content should appear twice in the expanded output —
+    // diamond imports are NOT cycles.
+    mockReadFile.mockImplementation(async (file) => {
+      const f = String(file);
+      if (f.endsWith("root.md")) return "@import ./a.md\n@import ./b.md";
+      if (f.endsWith("a.md")) return "A body\n@import ./shared.md";
+      if (f.endsWith("b.md")) return "B body\n@import ./shared.md";
+      if (f.endsWith("shared.md")) return "SHARED content";
+      return "";
+    });
+    const result = await expandImports("C:\\dev\\proj\\root.md");
+    const sharedHits = (result.content.match(/SHARED content/g) ?? []).length;
+    expect(sharedHits).toBe(2);
+    expect(result.circular).toHaveLength(0);
+  });
+
   it("detects circular imports without infinite recursion", async () => {
     // a.md imports b.md which imports a.md
     mockReadFile.mockImplementation(async (file) => {
