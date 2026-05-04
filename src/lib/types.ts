@@ -117,7 +117,7 @@ export type AuditFindingSeverity = "P0" | "P1" | "P2";
 
 export type ClaudeMdAuditCode =
   | "no-claude-md"
-  | "visibility-cap"
+  | "long-index"
   | "file-size"
   | "inline-bloat"
   | "missing-topic-files"
@@ -135,8 +135,7 @@ export interface ClaudeMdAuditFinding {
 
 export interface ClaudeMdAuditInfo {
   score: number;            // 0-100, 100 = healthy
-  totalLines: number;       // post @import-expand, post comment-strip
-  visibleLines: number;     // min(totalLines, 200)
+  projectLines: number;     // project CLAUDE.md only (post @import-expand) — what `long-index` trips on
   importCount: number;
   fileBytes: number;
   rulesLines: number;

@@ -11,12 +11,14 @@ The score starts at 100 and accumulates penalties for each issue Project Minder 
 
 | Penalty | Trigger |
 |---------|---------|
-| `(100 − visibility%) × 0.5` | CLAUDE.md exceeds 200 lines (Claude Code silently truncates the rest). |
-| −10 | CLAUDE.md is larger than 25 KB on disk. |
+| −3 / −8 / −15 | Project `CLAUDE.md` (with `@import`s expanded) exceeds **150 / 300 / 500 lines**. Claude Code reads the whole file — there is no hard truncation — but rule adherence and response speed degrade as the file grows. The thresholds map to practitioner heuristics: ~150 = trim point, ~200–300 = practical instruction-following budget, >500 = upper bound where "lost in the middle" effects bite. |
+| −10 / −20 | CLAUDE.md is larger than **40 KB / 80 KB** on disk. 40 KB is Claude Code's own warn point — the file is re-injected into context every turn, so its bytes come out of your working memory budget. |
 | −3 to −15 | Sections (`#`-headed) with more than 5 content lines (inline bloat). |
 | −10 | Index file >50 lines, no `@import` directives, no sibling `.md` files. |
 | −5 to −20 | `.claude/rules/` total exceeds 2 000 lines. |
 | −2 to −10 | Rules files named like reference/guide/template/api/schema docs (>50 lines) that should be on-demand, not always-loaded. |
+
+> **Why size matters even though Claude Code doesn't truncate:** the file is injected into context every turn. Long files compete with your code, errors, and recent conversation for the working-memory budget; produce more rule conflicts that the model has to resolve (and some lose); and slow every response. Practitioners report measurable quality regressions past ~200 lines and significant ones past ~500.
 
 Findings are grouped **P0 → P1 → P2** so the most impactful issues land at the top. Each finding includes a one-line fix suggestion.
 
