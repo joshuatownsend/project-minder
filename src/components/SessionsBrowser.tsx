@@ -18,6 +18,7 @@ import {
   DollarSign,
   Terminal,
   Check,
+  Pencil,
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
@@ -257,6 +258,11 @@ function SessionRow({
   search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+  const totalEdits =
+    (session.toolUsage["Write"] ?? 0) +
+    (session.toolUsage["Edit"] ?? 0) +
+    (session.toolUsage["MultiEdit"] ?? 0) +
+    (session.toolUsage["NotebookEdit"] ?? 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
   const isContentMatch = trimmedSearch
@@ -380,6 +386,12 @@ function SessionRow({
             <Wrench style={{ width: "10px", height: "10px" }} />
             {totalTools}
           </span>
+          {totalEdits > 0 && (
+            <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              <Pencil style={{ width: "10px", height: "10px" }} />
+              {totalEdits} edits
+            </span>
+          )}
           {session.subagentCount > 0 && (
             <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
               <Bot style={{ width: "10px", height: "10px" }} />

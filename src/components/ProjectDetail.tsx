@@ -20,6 +20,7 @@ import { ProjectConfigTab } from "./ProjectConfigTab";
 import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
 import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import { EfficiencyTab } from "./EfficiencyTab";
+import { HotFilesPanel } from "./HotFilesPanel";
 import {
   ArrowLeft,
   ExternalLink,
@@ -37,7 +38,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "efficiency" | "config" | "config-history";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "efficiency" | "hot-files" | "config" | "config-history";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -140,6 +141,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
     ...(hasSessions ? [{ key: "efficiency"   as TabKey, label: "Efficiency"   }] : []),
+    ...(hasSessions ? [{ key: "hot-files"   as TabKey, label: "Hot Files"    }] : []),
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
     ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
   ];
@@ -547,6 +549,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── EFFICIENCY ───────────────────────────────────────────── */}
           {activeTab === "efficiency" && (
             <EfficiencyTab slug={project.slug} />
+          )}
+
+          {/* ── HOT FILES ────────────────────────────────────────────── */}
+          {activeTab === "hot-files" && (
+            <HotFilesPanel slug={project.slug} />
           )}
 
           {/* ── CONFIG ───────────────────────────────────────────────── */}
