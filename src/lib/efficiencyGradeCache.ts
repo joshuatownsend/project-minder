@@ -22,6 +22,7 @@ class EfficiencyGradeCache {
   private cache = new Map<string, GradeEntry>();
   private queue: QueueItem[] = [];
   private running = false;
+  private inFlight = 0; // items spliced out of queue but not yet stored
   private seen = new Set<string>();
   private generation = 0;
 
@@ -53,6 +54,8 @@ class EfficiencyGradeCache {
         loadCatalog({ includeProjects: true }),
       ]);
     } catch {
+      // Clear queue so stale items don't block future enqueue cycles.
+      this.queue.length = 0;
       this.running = false;
       this.seen.clear();
       return;
@@ -69,8 +72,12 @@ class EfficiencyGradeCache {
     // Drain queue: CPU-only per project after shared I/O is done.
     while (this.queue.length > 0) {
       const batch = this.queue.splice(0, 5);
+      this.inFlight += batch.length;
 
-      if (myGen !== this.generation) return;
+      if (myGen !== this.generation) {
+        this.inFlight -= batch.length;
+        return;
+      }
 
       for (const item of batch) {
         try {
@@ -90,6 +97,7 @@ class EfficiencyGradeCache {
         } catch {
           // Skip this project; it'll be retried on the next enqueue cycle.
         }
+        this.inFlight--;
       }
 
       // Yield the event loop between batches so we don't starve route handlers.
@@ -100,6 +108,11 @@ class EfficiencyGradeCache {
 
     this.running = false;
     this.seen.clear();
+    // Restart if enqueue() raced in while we were running the last batch.
+    if (this.queue.length > 0) {
+      this.running = true;
+      void this.processQueue();
+    }
   }
 
   get(slug: string): EfficiencyGrade | null {
@@ -120,7 +133,7 @@ class EfficiencyGradeCache {
   }
 
   get pending(): number {
-    return this.queue.length;
+    return this.queue.length + this.inFlight;
   }
 
   get total(): number {
@@ -130,6 +143,7 @@ class EfficiencyGradeCache {
   dispose() {
     this.generation++;
     this.queue.length = 0;
+    this.inFlight = 0;
     this.seen.clear();
     this.cache.clear();
     this.running = false;

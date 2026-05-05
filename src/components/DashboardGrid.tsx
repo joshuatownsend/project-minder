@@ -17,6 +17,7 @@ import {
 import { useHelp } from "./HelpProvider";
 import { usePathname } from "next/navigation";
 import { formatRelativeTime } from "@/lib/utils";
+import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
 type SortOption = "activity" | "name" | "claude";
 type ViewMode = "full" | "compact" | "list";
@@ -34,7 +35,7 @@ interface DashboardGridProps {
   onUnarchive: (slug: string, status?: ProjectStatus) => void;
   scannedAt?: string;
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
-  efficiencyGrades?: Record<string, string>;
+  efficiencyGrades?: Record<string, EfficiencyGrade>;
 }
 
 const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };

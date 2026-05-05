@@ -54,9 +54,7 @@ describe("efficiencyGradeCache", () => {
     expect(efficiencyGradeCache.pending).toBe(1);
   });
 
-  it("getAll returns only fresh entries", async () => {
-    // Manually poke a stale entry via internal cache (simulate TTL expiry)
-    // We can't do that directly, so verify that getAll returns {} when cache is empty.
+  it("getAll returns empty when no grades have been computed", () => {
     expect(efficiencyGradeCache.getAll()).toEqual({});
   });
 
@@ -68,15 +66,15 @@ describe("efficiencyGradeCache", () => {
     expect(efficiencyGradeCache.total).toBe(0);
   });
 
-  it("grades are valid enum values", async () => {
-    // After processQueue completes (mocked), the grade should be one of the valid grades.
-    efficiencyGradeCache.enqueue([{ slug: "p2", path: "/p2", hasSessions: true }]);
-    // Wait for the async processQueue to run
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-    const grade = efficiencyGradeCache.get("p2");
+  it("grades are valid enum values after processing", async () => {
     const validGrades: EfficiencyGrade[] = ["A", "B", "C", "D", "F"];
-    if (grade !== null) {
-      expect(validGrades).toContain(grade);
-    }
+    efficiencyGradeCache.enqueue([{ slug: "p2", path: "/p2", hasSessions: true }]);
+    // Wait until the background worker drains (pending reaches 0).
+    await vi.waitFor(() => {
+      expect(efficiencyGradeCache.pending).toBe(0);
+    }, { timeout: 2000 });
+    const grade = efficiencyGradeCache.get("p2");
+    expect(grade).not.toBeNull();
+    expect(validGrades).toContain(grade);
   });
 });

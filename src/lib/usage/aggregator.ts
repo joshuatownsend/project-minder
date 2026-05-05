@@ -73,10 +73,13 @@ export async function generateUsageReport(
  * loading the SQL report — the augmentation is identical regardless of
  * which backend produced the base report.
  *
- * Calls parseAllSessions() internally (2-min globalThis cache) so it
- * doesn't require the caller to have a sessionMap handy. On the
- * file-parse path the cache is already warm; on the DB path it adds a
- * small one-time parse per 2-min window.
+ * Calls parseAllSessions() internally (mtime-keyed FileCache; cold call
+ * sweeps ~/.claude/projects/). On the file-parse path the cache is already
+ * warm; on the DB path it adds one sweep per cold cache hit.
+ *
+ * Yield is computed from full session history regardless of the report's
+ * period filter — by design, matching the Activity section. Yield is a
+ * long-term productivity signal, not a point-in-time metric.
  *
  * No-ops when getCachedScan() returns null (scan cache cold) or when
  * the report has no project details.
@@ -90,19 +93,28 @@ export async function augmentPortfolioYield(report: UsageReport): Promise<void> 
   // pd.projectDirName from the usage parser, not the scanner's short slug.
   const projectPathMap = new Map(scan.projects.map((p) => [encodeProjectPath(p.path), p.path]));
 
-  const results = await Promise.all(
-    report.projectDetails.map(async (pd) => {
-      const path = projectPathMap.get(pd.projectDirName);
-      if (!path) return null;
-      const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path);
-      try {
-        const result = await computeProjectYield(path, projectTurns);
-        return { detail: pd, result };
-      } catch {
-        return null;
-      }
-    })
-  );
+  // Run in batches of 5 to avoid spawning too many concurrent git processes
+  // on large portfolios (each computeProjectYield runs git log per project).
+  const YIELD_BATCH = 5;
+  type YieldResult = { detail: ProjectDetail; result: Awaited<ReturnType<typeof computeProjectYield>> } | null;
+  const results: YieldResult[] = [];
+  for (let i = 0; i < report.projectDetails.length; i += YIELD_BATCH) {
+    const batch = report.projectDetails.slice(i, i + YIELD_BATCH);
+    const batchResults = await Promise.all(
+      batch.map(async (pd) => {
+        const path = projectPathMap.get(pd.projectDirName);
+        if (!path) return null;
+        const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path);
+        try {
+          const result = await computeProjectYield(path, projectTurns);
+          return { detail: pd, result };
+        } catch {
+          return null;
+        }
+      })
+    );
+    results.push(...batchResults);
+  }
 
   let totalSessions = 0;
   let productive = 0;

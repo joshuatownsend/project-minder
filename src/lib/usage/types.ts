@@ -135,7 +135,7 @@ export interface ProjectDetail {
   topTools: [string, number][];
   mcpServers: string[];
   mcpCalls: number;
-  /** Yield classification for this project. Populated by the file-parse path only. */
+  /** Yield classification for this project. Populated by augmentPortfolioYield() on both backends. */
   yield?: import("./yieldAnalysis").YieldReport;
 }
 
@@ -205,6 +205,6 @@ export interface UsageReport {
   byHourDay: ActivityBucket[][];
   streak: StreakStats;
   contributionCalendar: ContributionCell[];
-  /** Portfolio-level yield aggregate. Populated by the file-parse path only. */
+  /** Portfolio-level yield aggregate. Populated by augmentPortfolioYield() on both backends. */
   portfolioYield?: PortfolioYield;
 }

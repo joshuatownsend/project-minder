@@ -20,6 +20,7 @@ import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb,
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { StatusDot } from "./ui/StatusDot";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
+import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
 interface ProjectCardProps {
   project: ProjectData;
@@ -27,7 +28,7 @@ interface ProjectCardProps {
   compact?: boolean;
   pinned?: boolean;
   onTogglePin?: (slug: string) => void;
-  efficiencyGrade?: string;
+  efficiencyGrade?: EfficiencyGrade;
 }
 
 const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }> = {
