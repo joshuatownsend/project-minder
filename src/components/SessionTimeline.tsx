@@ -25,6 +25,19 @@ function formatOffset(timestamp: string | undefined, sessionStart: string | unde
   return `+${minutes}m${seconds % 60}s`;
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const totalSec = Math.round(s);
+  const m = Math.floor(totalSec / 60);
+  const rs = totalSec % 60;
+  if (m < 60) return `${m}m${rs}s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}h${rm}m`;
+}
+
 // One-shot intersection observer: returns true once the element has entered
 // the viewport (or come within `rootMargin`) and stays true. Disconnects after
 // the first hit so we don't keep observers alive for off-screen items the user
@@ -111,7 +124,76 @@ const RenderedContent = memo(function RenderedContent({ text }: { text: string }
   );
 });
 
-function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionStart?: string }) {
+function ThinkingContent({ sessionId, turnIndex, staticContent }: {
+  sessionId: string | undefined;
+  turnIndex: number | undefined;
+  staticContent: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [fetchedContent, setFetchedContent] = useState<string | null>(null);
+
+  // Empty static content = DB mode placeholder — content must be fetched on expand.
+  const needsFetch = !staticContent && sessionId && turnIndex !== undefined;
+
+  async function handleExpand() {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (needsFetch && !loaded) {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/thinking?turnId=${turnIndex}`);
+        if (res.ok) {
+          const data = await res.json() as { content: string };
+          setFetchedContent(data.content);
+        } else {
+          setFetchedContent(null);
+        }
+      } catch {
+        setFetchedContent(null);
+      } finally {
+        setLoaded(true);
+        setLoading(false);
+      }
+    }
+  }
+
+  const content = fetchedContent ?? staticContent;
+
+  function displayContent(): string {
+    if (loading) return "Loading thinking content…";
+    if (loaded && fetchedContent === null) return "Thinking content unavailable for this turn.";
+    return content || "Thinking content unavailable for this turn.";
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+      <button
+        onClick={handleExpand}
+        style={{ display: "inline-flex", alignItems: "center", gap: "3px", background: "none", border: "none", padding: 0, fontSize: "0.68rem", color: "var(--text-muted)", cursor: "pointer", width: "fit-content" }}
+      >
+        {expanded
+          ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> hide thinking</>
+          : <><ChevronRight style={{ width: "10px", height: "10px" }} /> show thinking</>}
+      </button>
+      {expanded && (
+        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", lineHeight: 1.5, fontStyle: "italic", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {displayContent()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimelineItem({ event, sessionStart, sessionId }: {
+  event: TimelineEvent;
+  sessionStart?: string;
+  sessionId?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const cfg = EVENT_CONFIG[event.type];
   const Icon = cfg.icon;
@@ -144,47 +226,71 @@ function TimelineItem({ event, sessionStart }: { event: TimelineEvent; sessionSt
           <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--text-muted)" }}>
             {formatOffset(event.timestamp, sessionStart)}
           </span>
+          {event.durationMs !== undefined && event.durationMs > 0 && (
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--text-muted)" }}
+              title="Turn duration">
+              ⏱ {formatDuration(event.durationMs)}
+            </span>
+          )}
           {event.tokenCount && (
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--text-muted)" }}>
               {event.tokenCount} tokens
             </span>
           )}
         </div>
-        <div style={{ fontSize: "0.78rem", color: "var(--text-primary)", lineHeight: 1.5 }}>
-          {inView ? (
-            <RenderedContent text={displayText} />
-          ) : (
-            // Off-screen placeholder: plain whitespace-preserving text. Same
-            // line-wrap behavior as the parsed output for non-code content, so
-            // the swap is layout-stable for the common case.
-            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{displayText}</span>
-          )}
-        </div>
-        {isLong && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            style={{ display: "inline-flex", alignItems: "center", gap: "3px", background: "none", border: "none", padding: 0, fontSize: "0.68rem", color: "var(--text-muted)", cursor: "pointer", width: "fit-content", transition: "color 0.1s" }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-secondary)")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-muted)")}
-          >
-            {expanded
-              ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> less</>
-              : <><ChevronRight style={{ width: "10px", height: "10px" }} /> more</>}
-          </button>
+        {event.type === "thinking" ? (
+          <ThinkingContent
+            sessionId={sessionId}
+            turnIndex={event.turnIndex}
+            staticContent={event.content}
+          />
+        ) : (
+          <>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-primary)", lineHeight: 1.5 }}>
+              {inView ? (
+                <RenderedContent text={displayText} />
+              ) : (
+                // Off-screen placeholder: plain whitespace-preserving text. Same
+                // line-wrap behavior as the parsed output for non-code content, so
+                // the swap is layout-stable for the common case.
+                <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{displayText}</span>
+              )}
+            </div>
+            {isLong && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                style={{ display: "inline-flex", alignItems: "center", gap: "3px", background: "none", border: "none", padding: 0, fontSize: "0.68rem", color: "var(--text-muted)", cursor: "pointer", width: "fit-content", transition: "color 0.1s" }}
+                onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-secondary)")}
+                onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.color = "var(--text-muted)")}
+              >
+                {expanded
+                  ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> less</>
+                  : <><ChevronRight style={{ width: "10px", height: "10px" }} /> more</>}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
 
-export function SessionTimeline({ timeline, sessionStart }: { timeline: TimelineEvent[]; sessionStart?: string }) {
+export function SessionTimeline({
+  timeline,
+  sessionStart,
+  sessionId,
+}: {
+  timeline: TimelineEvent[];
+  sessionStart?: string;
+  sessionId?: string;
+}) {
   if (timeline.length === 0) {
     return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "32px 0" }}>No timeline events.</p>;
   }
   return (
     <div>
       {timeline.map((event, i) => (
-        <TimelineItem key={i} event={event} sessionStart={sessionStart} />
+        <TimelineItem key={i} event={event} sessionStart={sessionStart} sessionId={sessionId} />
       ))}
     </div>
   );

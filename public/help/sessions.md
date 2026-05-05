@@ -30,11 +30,13 @@ Each session card shows:
 
 ### Quality chips
 
-When a session has been re-indexed under DERIVED_VERSION 5 (or scanned by the file-parse path), the row may surface up to three quality chips:
+When a session has been re-indexed under DERIVED_VERSION 6 (or scanned by the file-parse path), the row may surface up to five quality chips:
 
 - **`NN% cache`** — cache hit ratio (`cache_read / (cache_read + cache_create)`). Green at ≥70% (cache paying back the build cost), amber under 50% (rebuilds dominating). Sessions with no cache activity at all simply don't show the chip.
 - **`compaction loop`** (red) — at least one run of consecutive turn pairs where input variance was <10% and context fill was >75%. Signals Claude was burning tokens cycling on the same context without progress.
 - **`tool fail streak`** (red) — at least one window of 5+ consecutive tool results where >50% errored. The first 6 turns are skipped to avoid early-session noise.
+- **`resume anomaly`** (amber) — post-compaction output token spike detected. After a `compact_boundary` event, at least one assistant turn produced more than 10× the pre-boundary median output tokens — a known side-effect of the prompt cache bug present in CLI versions 2.1.69–2.1.89, or a context-confusion artefact in other versions.
+- **`thinking`** (muted) — the session contains at least one extended thinking block from a Sonnet or Opus model.
 
 Click into a session to see the full breakdown on the **Diagnosis** tab.
 
@@ -62,6 +64,10 @@ Click a session to see the full detail view with tabs:
 ### Timeline
 Chronological list of all events: user prompts, assistant responses, tool calls, thinking blocks, and errors. Each event shows a time offset from the session start. Assistant and user messages render **markdown formatting** — fenced code blocks appear in a monospace code box, and inline `code` spans are styled distinctly.
 
+**Turn-duration badges** appear on assistant events when the session data includes `turn_duration` system entries — a wall-clock measurement Claude Code records at the end of each assistant turn. Durations format as `2.3s` for sub-minute turns and `4m12s` for longer ones.
+
+**Thinking blocks** are collapsible. Click to expand an extended-thinking event and read the full reasoning trace (up to ~3000 characters). When the SQLite index is active (the default), thinking content is not stored in the database — it is fetched on demand from the original JSONL at the recorded byte offset. If the file has been moved or deleted, the block shows "Thinking content unavailable for this turn." rather than silently hiding the section.
+
 ### Tools
 Bar chart showing which tools were used and how many times.
 
@@ -84,6 +90,10 @@ Post-hoc 8-category quality analysis of the session, computed on demand from the
 - **Context-dominated** — ≥30% of assistant turns spent ≥10× more on input than on output. Pay-input-rates-for-repeat-context pattern.
 
 The header strip surfaces outcome (completed / partial / abandoned / stuck), cache hit %, cache rebuild waste in dollars, peak fill, and total idle. The **Top advice** block ranks the three highest-impact fixes by estimated dollar impact.
+
+Two additional finding categories appear when relevant:
+- **Buggy CLI version** (P1) — the session ran on CLI 2.1.69–2.1.89, a range with a known prompt-cache bug that causes cache rebuilds after compaction. Upgraded to P0 when a resume anomaly is also present.
+- **Resume anomaly** (P1) — post-compaction output token spike detected (≥10× pre-boundary median). May indicate context confusion following `--resume` or `--continue` under a buggy CLI version.
 
 This view is computed from JSONL on demand and does not require the SQLite index.
 
@@ -111,3 +121,16 @@ A copyable markdown brief for resuming the session, available at four verbosity 
 | **Full** | Entire transcript + every fact + every commit body + per-tool call counts |
 
 Use the **Copy** button to copy the markdown to your clipboard, or **Download .md** to save the file. Switching verbosity re-fetches the document immediately.
+
+### Feedback
+
+Available when Claude Code has recorded a qualitative self-rating for the session (stored in `~/.claude/usage-data/facets/<sessionId>.json`). Shows:
+
+- **Underlying goal** — what Claude interpreted the task to be
+- **Outcome** — how the session resolved (success, partial, blocked, etc.)
+- **Helpfulness** — Claude's self-assessment of how helpful it was
+- **Satisfaction** — user-satisfaction rating (if recorded)
+- **Friction** — friction points and their counts
+- **Summary** — one-sentence narrative summary
+
+Not all sessions have feedback data. When absent, the Feedback tab shows "No feedback recorded for this session."

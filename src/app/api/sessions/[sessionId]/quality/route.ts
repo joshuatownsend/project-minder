@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  loadSessionTurnsBySessionId,
+  loadSessionWithMetaBySessionId,
   SessionTurnsLoadError,
 } from "@/lib/usage/parser";
 import { diagnoseSession } from "@/lib/usage/sessionDiagnosis";
@@ -30,9 +30,9 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const { sessionId } = await params;
-  let turns;
+  let result;
   try {
-    turns = await loadSessionTurnsBySessionId(sessionId);
+    result = await loadSessionWithMetaBySessionId(sessionId);
   } catch (err) {
     if (err instanceof SessionTurnsLoadError) {
       // Log the underlying cause for the operator; clients see only the
@@ -46,9 +46,13 @@ export async function GET(
     }
     throw err;
   }
-  if (turns === null) {
+  if (result === null) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  const report = diagnoseSession(sessionId, turns);
+  const { turns, meta } = result;
+  const report = diagnoseSession(sessionId, turns, {
+    compactBoundaries: meta.compactBoundaries,
+    cliVersion: meta.cliVersion,
+  });
   return NextResponse.json(report);
 }

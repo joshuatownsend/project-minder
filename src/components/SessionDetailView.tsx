@@ -9,6 +9,7 @@ import { SessionSubagents } from "./SessionSubagents";
 import { DiagnosisPanel } from "./DiagnosisPanel";
 import { HandoffPanel } from "./HandoffPanel";
 import { HandoffDocModal } from "./HandoffDocModal";
+import { FeedbackPanel } from "./FeedbackPanel";
 import { BarChart } from "./stats/BarChart";
 import {
   ArrowLeft,
@@ -122,7 +123,7 @@ function StatCell({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "handoff" | "diagnosis";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "handoff" | "diagnosis" | "feedback";
 
 function TabBar({
   tabs, active, onChange,
@@ -206,6 +207,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       : []),
     { key: "handoff",   label: "Handoff"   },
     { key: "diagnosis", label: "Diagnosis" },
+    { key: "feedback",  label: "Feedback"  },
   ];
 
   const statCells = [
@@ -396,7 +398,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
               minHeight: "300px",
               overflowY: "auto",
             }}>
-              <SessionTimeline timeline={data.timeline} sessionStart={data.startTime} />
+              <SessionTimeline timeline={data.timeline} sessionStart={data.startTime} sessionId={data.sessionId} />
             </div>
           )}
 
@@ -440,6 +442,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "diagnosis" && (
             <DiagnosisPanel sessionId={data.sessionId} />
+          )}
+
+          {activeTab === "feedback" && (
+            <FeedbackPanel sessionId={data.sessionId} />
           )}
         </div>
       </div>

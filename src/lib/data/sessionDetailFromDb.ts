@@ -53,18 +53,19 @@ import type {
 //    'bash', so we don't write them there — the read query reads
 //    everything from `tool_uses` for parity with file-parse's
 //    per-tool-use emission semantics.
-// 6. **No `thinking` events in `timeline`**: file-parse emits a
+// 6. **Thinking blocks not inlined in `timeline`**: file-parse emits a
 //    `thinking` event for each `block.type === "thinking"` block on an
-//    assistant message. Ingest doesn't persist content blocks, so the
-//    DB path can't reconstruct them. Same applies to the
-//    "one-`assistant`-event-per-text-block" semantic — file-parse emits
-//    N events for an assistant turn with N text blocks (interleaved
-//    with tool_use events in original order); the DB path emits at
-//    most one `assistant` event per turn followed by a flat run of
-//    `tool_use` events, because `text_preview` collapses all text
-//    blocks into a single 500-char prefix. Sessions with multi-block
-//    assistant content or thinking will therefore have shorter
-//    timelines and a different event-type sequence under MINDER_USE_DB.
+//    assistant message. Ingest doesn't persist content blocks inline,
+//    but `turns.text_offset` records the byte position of each
+//    assistant turn in the JSONL file — the UI can request thinking
+//    content on-demand via `/api/sessions/[id]/thinking?turnId=N`
+//    (lazy fetch on expand), which reads from that offset. Same applies
+//    to the "one-`assistant`-event-per-text-block" semantic — file-parse
+//    emits N events for an assistant turn with N text blocks (interleaved
+//    with tool_use events); the DB path emits at most one `assistant`
+//    event per turn followed by a flat run of `tool_use` events.
+//    `sessions.has_thinking` signals whether the session had any
+//    thinking blocks so the UI can show the expand affordance.
 // 7. **Sidechain entries skipped at ingest**: `scanSessionFile` counts
 //    sidechain assistant entries toward `messageCount`, token totals,
 //    `toolUsage`, `modelsUsed`, and `costEstimate`. The DB indexer
@@ -105,6 +106,8 @@ interface SessionRow {
   git_branch: string | null;
   initial_prompt: string | null;
   last_prompt: string | null;
+  has_thinking: number;
+  cli_version: string | null;
 }
 
 interface TurnRow {
@@ -116,6 +119,8 @@ interface TurnRow {
   text_preview: string | null;
   tool_result_preview: string | null;
   output_tokens: number;
+  turn_duration_ms: number | null;
+  has_thinking: number;
 }
 
 interface ToolRow {
@@ -164,7 +169,8 @@ export function loadSessionDetailFromDb(
               tool_call_count, error_count,
               input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
               cost_usd, has_one_shot, verified_task_count, one_shot_task_count,
-              git_branch, initial_prompt, last_prompt
+              git_branch, initial_prompt, last_prompt,
+              has_thinking, cli_version
        FROM sessions
        WHERE session_id = ?`
     )
@@ -178,7 +184,7 @@ export function loadSessionDetailFromDb(
   // (file-parse skips them; see `buildTimeline`).
   const turns = prepCached(db,
       `SELECT turn_index, ts, role, model, is_error,
-              text_preview, tool_result_preview, output_tokens
+              text_preview, tool_result_preview, output_tokens, turn_duration_ms, has_thinking
        FROM turns
        WHERE session_id = ?
        ORDER BY turn_index`
@@ -253,6 +259,8 @@ export function loadSessionDetailFromDb(
     skillsUsed: aggregates.skillsUsed,
     oneShotRate,
     searchableText: undefined,
+    hasThinking: session.has_thinking === 1 || undefined,
+    cliVersion: session.cli_version ?? undefined,
     timeline,
     fileOperations: aggregates.fileOperations,
     subagents: aggregates.subagents,
@@ -294,12 +302,22 @@ function buildTimeline(turns: TurnRow[], toolsByTurn: Map<number, ToolRow[]>): T
       });
       continue;
     }
+    if (turn.has_thinking === 1) {
+      events.push({
+        type: "thinking",
+        timestamp: turn.ts,
+        content: "",
+        turnIndex: turn.turn_index,
+      });
+    }
     if (turn.text_preview) {
       events.push({
         type: "assistant",
         timestamp: turn.ts,
         content: turn.text_preview.slice(0, TIMELINE_TEXT_LIMIT),
         tokenCount: turn.output_tokens > 0 ? turn.output_tokens : undefined,
+        durationMs: turn.turn_duration_ms ?? undefined,
+        turnIndex: turn.turn_index,
       });
     }
     const toolList = toolsByTurn.get(turn.turn_index);

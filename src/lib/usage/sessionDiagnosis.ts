@@ -6,6 +6,8 @@ import {
   type CompactionFinding,
   type StreakFinding,
 } from "./sessionQuality";
+import { detectResumeAnomaly } from "./resumeAnomaly";
+import { isBuggyVersion } from "./versionDetector";
 
 // ── 8-category post-hoc diagnosis (#106) ──────────────────────────────────────
 //
@@ -22,7 +24,9 @@ export type DiagnosisCategory =
   | "compaction-loop"
   | "tool-failure-streak"
   | "high-idle"
-  | "context-dominated";
+  | "context-dominated"
+  | "resume-anomaly"
+  | "buggy-cli-version";
 
 export type DiagnosisSeverity = "P0" | "P1" | "P2";
 
@@ -95,7 +99,16 @@ const LOOP_IMPACT_RATE_PER_TOKEN = 0.0000003;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export function diagnoseSession(sessionId: string, turns: UsageTurn[]): DiagnosisReport {
+export interface DiagnosisExtras {
+  compactBoundaries: string[];
+  cliVersion?: string | null;
+}
+
+export function diagnoseSession(
+  sessionId: string,
+  turns: UsageTurn[],
+  extras?: DiagnosisExtras
+): DiagnosisReport {
   const quality = computeSessionQuality(turns);
   const findings: DiagnosisFinding[] = [];
 
@@ -198,6 +211,40 @@ export function diagnoseSession(sessionId: string, turns: UsageTurn[]): Diagnosi
       advice:
         "When the model rereads more than it writes, you're paying input rates for repeat context. Lean on prompt caching by reusing the same system message and bring file contents in via Read tool calls only when needed.",
     });
+  }
+
+  // (9) Resume anomaly + buggy CLI version — requires extras from parser meta.
+  if (extras && (extras.compactBoundaries.length > 0 || extras.cliVersion)) {
+    const resumeResult = detectResumeAnomaly(turns, {
+      compactBoundaries: extras.compactBoundaries,
+      cliVersion: extras.cliVersion,
+    });
+
+    const hasBuggy = isBuggyVersion(extras.cliVersion ?? undefined);
+    // buggy-cli-version is P1; escalate to P0 if a resume anomaly also fired.
+    if (hasBuggy) {
+      findings.push({
+        category: "buggy-cli-version",
+        severity: resumeResult.hasAnomaly ? "P0" : "P1",
+        finding: `CLI version ${extras.cliVersion} has a known prompt cache bug (2.1.69–2.1.89)`,
+        advice:
+          "Upgrade Claude Code to 2.1.90 or later. Sessions run on these versions may have inflated cache_creation costs due to incorrect cache invalidation.",
+      });
+    }
+
+    if (resumeResult.hasAnomaly) {
+      const tokenReasons = resumeResult.reasons.filter(
+        (r) => r.kind === "output-spike" || r.kind === "cache-spike"
+      );
+      const displayReason = (tokenReasons[0] ?? resumeResult.reasons[0]).message;
+      findings.push({
+        category: "resume-anomaly",
+        severity: "P1",
+        finding: `Resume anomaly detected after compact boundary: ${displayReason}`,
+        advice:
+          "Large output spikes immediately after a compact boundary can indicate the model reconstructing lost context. Review what was compacted and consider a more targeted `/compact` summary.",
+      });
+    }
   }
 
   // ── Outcome inference ──────────────────────────────────────────────────────

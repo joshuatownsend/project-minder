@@ -24,6 +24,7 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
+import { mostFrequent } from "../usage/parser";
 
 export interface ConversationEntry {
   type?: string;
@@ -35,6 +36,12 @@ export interface ConversationEntry {
   isApiErrorMessage?: boolean;
   isMeta?: boolean;
   slug?: string; // present on away_summary entries
+  /** Top-level UUID for every JSONL entry (cc-lens schema). */
+  uuid?: string;
+  /** UUID of the entry this one is replying to. */
+  parentUuid?: string;
+  /** Claude Code CLI version that wrote this entry. */
+  version?: string;
   message?: {
     model?: string;
     stop_reason?: string;
@@ -49,6 +56,8 @@ export interface ConversationEntry {
   };
   // For tool_result user messages and away_summary system entries
   content?: any;
+  /** Duration in ms from system.subtype:turn_duration entries. */
+  durationMs?: number;
 }
 
 export function encodePath(projectPath: string): string {
@@ -504,6 +513,13 @@ export async function scanSessionDetail(
   const subagentMap = new Map<string, SubagentInfo>();
   const subagentMetaMap = await readSubagentMeta(filePath);
 
+  let hasThinking = false;
+  const versionCounts = new Map<string, number>();
+  // Index into timeline[] of the most recently pushed assistant event.
+  // Used to attach turn_duration without following parentUuid (which points
+  // at stop_hook_summary, not the assistant turn).
+  let lastAssistantTimelineIdx = -1;
+
   try {
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.split("\n").filter(Boolean);
@@ -511,6 +527,22 @@ export async function scanSessionDetail(
     for (const line of lines) {
       try {
         const entry: ConversationEntry = JSON.parse(line);
+
+        // Collect CLI version for every entry that carries it.
+        if (typeof entry.version === "string" && entry.version) {
+          versionCounts.set(entry.version, (versionCounts.get(entry.version) ?? 0) + 1);
+        }
+
+        // turn_duration system entry: attach to the nearest preceding assistant event.
+        if (
+          entry.type === "system" &&
+          entry.subtype === "turn_duration" &&
+          typeof (entry as any).duration === "number" &&
+          lastAssistantTimelineIdx >= 0
+        ) {
+          timeline[lastAssistantTimelineIdx].durationMs = (entry as any).duration;
+          continue;
+        }
 
         if (entry.type === "user" && !entry.isMeta && !entry.isSidechain) {
           const text = entry.message?.content
@@ -547,6 +579,7 @@ export async function scanSessionDetail(
 
         if (entry.type === "assistant" && entry.message && !entry.isSidechain) {
           const msg = entry.message;
+          lastAssistantTimelineIdx = -1;
 
           if (entry.isApiErrorMessage) {
             const errorText = extractTextContent(msg.content || []);
@@ -561,12 +594,14 @@ export async function scanSessionDetail(
           if (Array.isArray(msg.content)) {
             for (const block of msg.content) {
               if (block.type === "thinking" && block.thinking) {
+                hasThinking = true;
                 timeline.push({
                   type: "thinking",
                   timestamp: entry.timestamp,
-                  content: String(block.thinking).slice(0, 300),
+                  content: String(block.thinking).slice(0, 3000),
                 });
               } else if (block.type === "text" && block.text) {
+                lastAssistantTimelineIdx = timeline.length;
                 timeline.push({
                   type: "assistant",
                   timestamp: entry.timestamp,
@@ -643,11 +678,15 @@ export async function scanSessionDetail(
     return null;
   }
 
+  const cliVersion = mostFrequent(versionCounts) ?? undefined;
+
   return {
     ...summary,
     timeline,
     fileOperations,
     subagents: Array.from(subagentMap.values()),
+    hasThinking: hasThinking || undefined,
+    cliVersion,
   };
 }
 

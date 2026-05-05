@@ -170,6 +170,22 @@ function ToolFailureStreakBadge() {
   );
 }
 
+function ResumeAnomalyBadge() {
+  return (
+    <QualityChip tone="warn" title="Resume anomaly detected — large output token spike after a compact boundary, suggesting context reconstruction.">
+      resume anomaly
+    </QualityChip>
+  );
+}
+
+function ThinkingBadge() {
+  return (
+    <QualityChip tone="neutral" title="Session contained thinking blocks (extended reasoning).">
+      thinking
+    </QualityChip>
+  );
+}
+
 // ── One-shot rate badge ───────────────────────────────────────────────────────
 function OneShotBadge({ rate }: { rate: number }) {
   const color =
@@ -431,6 +447,8 @@ function SessionRow({
           )}
           {session.hasCompactionLoop && <CompactionLoopBadge />}
           {session.hasToolFailureStreak && <ToolFailureStreakBadge />}
+          {session.hasResumeAnomaly && <ResumeAnomalyBadge />}
+          {session.hasThinking && <ThinkingBadge />}
           {session.oneShotRate !== undefined && (
             <OneShotBadge rate={session.oneShotRate} />
           )}

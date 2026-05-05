@@ -154,6 +154,46 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 6,
+    name: "sessions: thinking/version/anomaly/compact; turns: duration/thinking",
+    up: (db) => {
+      // Idempotent ALTER pattern (same as v5): fresh DBs have all columns
+      // already; only DBs upgraded from v1–v5 need structural changes.
+      const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      if (!sessionCols.some((c) => c.name === "has_thinking")) {
+        db.prepare(
+          "ALTER TABLE sessions ADD COLUMN has_thinking INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1))"
+        ).run();
+      }
+      if (!sessionCols.some((c) => c.name === "cli_version")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN cli_version TEXT").run();
+      }
+      if (!sessionCols.some((c) => c.name === "has_resume_anomaly")) {
+        db.prepare(
+          "ALTER TABLE sessions ADD COLUMN has_resume_anomaly INTEGER NOT NULL DEFAULT 0 CHECK (has_resume_anomaly IN (0,1))"
+        ).run();
+      }
+      if (!sessionCols.some((c) => c.name === "compact_boundary_count")) {
+        db.prepare(
+          "ALTER TABLE sessions ADD COLUMN compact_boundary_count INTEGER NOT NULL DEFAULT 0"
+        ).run();
+      }
+
+      const turnCols = db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+      if (!turnCols.some((c) => c.name === "text_offset")) {
+        db.prepare("ALTER TABLE turns ADD COLUMN text_offset INTEGER").run();
+      }
+      if (!turnCols.some((c) => c.name === "turn_duration_ms")) {
+        db.prepare("ALTER TABLE turns ADD COLUMN turn_duration_ms INTEGER").run();
+      }
+      if (!turnCols.some((c) => c.name === "has_thinking")) {
+        db.prepare(
+          "ALTER TABLE turns ADD COLUMN has_thinking INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1))"
+        ).run();
+      }
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {
