@@ -44,7 +44,7 @@ describe("detectResumeAnomaly", () => {
       compactBoundaries: [boundary],
     });
     expect(result.hasAnomaly).toBe(true);
-    expect(result.reasons.some((r) => r.includes("output token spike"))).toBe(true);
+    expect(result.reasons.some((r) => r.kind === "output-spike")).toBe(true);
   });
 
   it("does NOT flag a post-boundary turn at 5× pre-boundary median (below threshold)", () => {
@@ -66,7 +66,7 @@ describe("detectResumeAnomaly", () => {
       cliVersion: "2.1.75",
     });
     expect(result.hasAnomaly).toBe(true);
-    expect(result.reasons.some((r) => r.includes("buggy CLI version"))).toBe(true);
+    expect(result.reasons.some((r) => r.kind === "buggy-version")).toBe(true);
   });
 
   it("does not flag buggy version for 2.1.90", () => {
@@ -87,7 +87,7 @@ describe("detectResumeAnomaly", () => {
       compactBoundaries: [boundary],
     });
     expect(result.hasAnomaly).toBe(true);
-    expect(result.reasons.some((r) => r.includes("cache rebuild spike"))).toBe(true);
+    expect(result.reasons.some((r) => r.kind === "cache-spike")).toBe(true);
   });
 
   it("ignores user turns when computing spike ratio", () => {

@@ -24,6 +24,7 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
+import { mostFrequent } from "../usage/parser";
 
 export interface ConversationEntry {
   type?: string;
@@ -676,14 +677,7 @@ export async function scanSessionDetail(
     return null;
   }
 
-  // Most-frequent version wins (mirrors primary_model precedent in ingest.ts).
-  let cliVersion: string | undefined;
-  if (versionCounts.size > 0) {
-    let maxCount = 0;
-    for (const [v, count] of versionCounts) {
-      if (count > maxCount) { maxCount = count; cliVersion = v; }
-    }
-  }
+  const cliVersion = mostFrequent(versionCounts) ?? undefined;
 
   return {
     ...summary,

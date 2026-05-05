@@ -1,6 +1,7 @@
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import { FileCache } from "@/lib/usage/cache";
 
 export interface FacetData {
   session_id?: string;
@@ -26,9 +27,18 @@ export interface FacetsAggregate {
 }
 
 const FACETS_DIR = path.join(os.homedir(), ".claude", "usage-data", "facets");
+const BATCH_SIZE = 20;
 
-// mtime-based per-file cache: Map<sessionId, { mtime: number; data: FacetData }>
-const _cache = new Map<string, { mtime: number; data: FacetData }>();
+const globalForFacets = globalThis as unknown as {
+  __facetsCache?: FileCache<FacetData>;
+};
+
+function getCache(): FileCache<FacetData> {
+  if (!globalForFacets.__facetsCache) {
+    globalForFacets.__facetsCache = new FileCache<FacetData>({ maxEntries: 2000 });
+  }
+  return globalForFacets.__facetsCache;
+}
 
 /**
  * Read the facets JSON for a single session. Returns null when the file
@@ -37,23 +47,11 @@ const _cache = new Map<string, { mtime: number; data: FacetData }>();
  */
 export async function getSessionFacets(sessionId: string): Promise<FacetData | null> {
   const filePath = path.join(FACETS_DIR, `${sessionId}.json`);
-
-  let stat: { mtimeMs: number };
-  try {
-    stat = await fs.stat(filePath);
-  } catch {
-    return null;
-  }
-
-  const cached = _cache.get(sessionId);
-  if (cached && cached.mtime === stat.mtimeMs) {
-    return cached.data;
-  }
-
-  const raw = await fs.readFile(filePath, "utf8");
-  const data = JSON.parse(raw) as FacetData;
-  _cache.set(sessionId, { mtime: stat.mtimeMs, data });
-  return data;
+  const result = await getCache().getOrCompute(filePath, async (fp) => {
+    const raw = await fs.readFile(fp, "utf8");
+    return JSON.parse(raw) as FacetData;
+  });
+  return result ?? null;
 }
 
 /**
@@ -63,8 +61,6 @@ export async function getSessionFacets(sessionId: string): Promise<FacetData | n
  * shouldn't silently be dropped from aggregates).
  */
 export async function getFacetsAggregate(sessionIds: string[]): Promise<FacetsAggregate> {
-  const results = await Promise.allSettled(sessionIds.map(getSessionFacets));
-
   const agg: FacetsAggregate = {
     sessionCount: 0,
     outcomeCounts: {},
@@ -74,30 +70,35 @@ export async function getFacetsAggregate(sessionIds: string[]): Promise<FacetsAg
     sessionTypeCounts: {},
   };
 
-  for (const r of results) {
-    if (r.status === "rejected") throw r.reason;
-    if (r.value === null) continue;
+  for (let i = 0; i < sessionIds.length; i += BATCH_SIZE) {
+    const batch = sessionIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map(getSessionFacets));
 
-    agg.sessionCount++;
-    const f = r.value;
+    for (const r of results) {
+      if (r.status === "rejected") throw r.reason;
+      if (r.value === null) continue;
 
-    if (f.outcome) agg.outcomeCounts[f.outcome] = (agg.outcomeCounts[f.outcome] ?? 0) + 1;
-    if (f.claude_helpfulness) {
-      agg.helpfulnessCounts[f.claude_helpfulness] =
-        (agg.helpfulnessCounts[f.claude_helpfulness] ?? 0) + 1;
-    }
-    if (f.user_satisfaction_counts) {
-      for (const [k, v] of Object.entries(f.user_satisfaction_counts)) {
-        agg.satisfactionCounts[k] = (agg.satisfactionCounts[k] ?? 0) + v;
+      agg.sessionCount++;
+      const f = r.value;
+
+      if (f.outcome) agg.outcomeCounts[f.outcome] = (agg.outcomeCounts[f.outcome] ?? 0) + 1;
+      if (f.claude_helpfulness) {
+        agg.helpfulnessCounts[f.claude_helpfulness] =
+          (agg.helpfulnessCounts[f.claude_helpfulness] ?? 0) + 1;
       }
-    }
-    if (f.friction_counts) {
-      for (const [k, v] of Object.entries(f.friction_counts)) {
-        agg.frictionCounts[k] = (agg.frictionCounts[k] ?? 0) + v;
+      if (f.user_satisfaction_counts) {
+        for (const [k, v] of Object.entries(f.user_satisfaction_counts)) {
+          agg.satisfactionCounts[k] = (agg.satisfactionCounts[k] ?? 0) + v;
+        }
       }
-    }
-    if (f.session_type) {
-      agg.sessionTypeCounts[f.session_type] = (agg.sessionTypeCounts[f.session_type] ?? 0) + 1;
+      if (f.friction_counts) {
+        for (const [k, v] of Object.entries(f.friction_counts)) {
+          agg.frictionCounts[k] = (agg.frictionCounts[k] ?? 0) + v;
+        }
+      }
+      if (f.session_type) {
+        agg.sessionTypeCounts[f.session_type] = (agg.sessionTypeCounts[f.session_type] ?? 0) + 1;
+      }
     }
   }
 

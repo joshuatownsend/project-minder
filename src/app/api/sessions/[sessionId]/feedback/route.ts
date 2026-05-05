@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFacets } from "@/lib/scanner/claudeFacets";
+import { isValidSessionId } from "@/lib/usage/parser";
 
 // `GET /api/sessions/[sessionId]/feedback` — per-session Claude qualitative
 // feedback (facets). Reads `~/.claude/usage-data/facets/<sessionId>.json`.
@@ -14,7 +15,7 @@ export async function GET(
 ) {
   const { sessionId } = await params;
 
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+  if (!isValidSessionId(sessionId)) {
     return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
   }
 

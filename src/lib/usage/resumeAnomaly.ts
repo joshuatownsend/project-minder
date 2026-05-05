@@ -4,9 +4,14 @@ import { isBuggyVersion } from "@/lib/usage/versionDetector";
 export const RESUME_OUTPUT_SPIKE_RATIO = 10;
 const WINDOW_SIZE = 20;
 
+export interface AnomalyReason {
+  kind: "output-spike" | "cache-spike" | "buggy-version";
+  message: string;
+}
+
 export interface ResumeAnomalyResult {
   hasAnomaly: boolean;
-  reasons: string[];
+  reasons: AnomalyReason[];
 }
 
 /**
@@ -22,22 +27,29 @@ export function detectResumeAnomaly(
   turns: UsageTurn[],
   extras: { compactBoundaries: string[]; cliVersion?: string | null }
 ): ResumeAnomalyResult {
-  const reasons: string[] = [];
+  const reasons: AnomalyReason[] = [];
 
   if (isBuggyVersion(extras.cliVersion ?? undefined)) {
-    reasons.push(`buggy CLI version (${extras.cliVersion} — 2.1.69–2.1.89 prompt cache bug)`);
+    reasons.push({
+      kind: "buggy-version",
+      message: `buggy CLI version (${extras.cliVersion} — 2.1.69–2.1.89 prompt cache bug)`,
+    });
   }
 
   const assistantTurns = turns.filter((t) => t.role === "assistant");
+  const assistantWithMs = assistantTurns.map((t) => ({
+    ...t,
+    tsMs: new Date(t.timestamp).getTime(),
+  }));
 
   for (const boundary of extras.compactBoundaries) {
     const boundaryTs = new Date(boundary).getTime();
 
-    const pre = assistantTurns
-      .filter((t) => new Date(t.timestamp).getTime() < boundaryTs)
+    const pre = assistantWithMs
+      .filter((t) => t.tsMs < boundaryTs)
       .slice(-WINDOW_SIZE);
-    const post = assistantTurns
-      .filter((t) => new Date(t.timestamp).getTime() >= boundaryTs)
+    const post = assistantWithMs
+      .filter((t) => t.tsMs >= boundaryTs)
       .slice(0, WINDOW_SIZE);
 
     if (pre.length === 0 || post.length === 0) continue;
@@ -55,21 +67,24 @@ export function detectResumeAnomaly(
       (t) => t.outputTokens > RESUME_OUTPUT_SPIKE_RATIO * preMedian
     );
     if (spike) {
-      reasons.push(
-        `output token spike after compact boundary at ${boundary}: ` +
-        `${spike.outputTokens} tokens (${Math.round(spike.outputTokens / preMedian)}× pre-boundary median)`
-      );
+      reasons.push({
+        kind: "output-spike",
+        message:
+          `output token spike after compact boundary at ${boundary}: ` +
+          `${spike.outputTokens} tokens (${Math.round(spike.outputTokens / preMedian)}× pre-boundary median)`,
+      });
     }
 
-    // Cache spike: high cacheCreateTokens with flat cacheReadTokens
     const cacheSpike = post.find(
       (t) => t.cacheCreateTokens > 5000 && t.cacheReadTokens < 100
     );
     if (cacheSpike) {
-      reasons.push(
-        `cache rebuild spike after compact boundary at ${boundary}: ` +
-        `${cacheSpike.cacheCreateTokens} cache_create tokens with near-zero cache reads`
-      );
+      reasons.push({
+        kind: "cache-spike",
+        message:
+          `cache rebuild spike after compact boundary at ${boundary}: ` +
+          `${cacheSpike.cacheCreateTokens} cache_create tokens with near-zero cache reads`,
+      });
     }
   }
 

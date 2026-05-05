@@ -159,6 +159,12 @@ function ThinkingContent({ sessionId, turnIndex, staticContent }: {
 
   const content = fetchedContent ?? staticContent;
 
+  function displayContent(): string {
+    if (loading) return "Loading thinking content…";
+    if (loaded && fetchedContent === null) return "Thinking content unavailable for this turn.";
+    return content || "Thinking content unavailable for this turn.";
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
       <button
@@ -171,11 +177,7 @@ function ThinkingContent({ sessionId, turnIndex, staticContent }: {
       </button>
       {expanded && (
         <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", lineHeight: 1.5, fontStyle: "italic", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {loading
-            ? "Loading thinking content…"
-            : loaded && fetchedContent === null
-              ? "Thinking content unavailable for this turn."
-              : content || "Thinking content unavailable for this turn."}
+          {displayContent()}
         </div>
       )}
     </div>

@@ -448,8 +448,6 @@ export interface SessionDetail extends SessionSummary {
   timeline: TimelineEvent[];
   fileOperations: FileOperation[];
   subagents: SubagentInfo[];
-  hasThinking?: boolean;
-  cliVersion?: string;
 }
 
 // ─── Claude config: hooks, MCP servers, plugins ──────────────────────────────

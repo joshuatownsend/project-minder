@@ -181,6 +181,9 @@ const MIGRATIONS: Migration[] = [
       }
 
       const turnCols = db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+      if (!turnCols.some((c) => c.name === "text_offset")) {
+        db.prepare("ALTER TABLE turns ADD COLUMN text_offset INTEGER").run();
+      }
       if (!turnCols.some((c) => c.name === "turn_duration_ms")) {
         db.prepare("ALTER TABLE turns ADD COLUMN turn_duration_ms INTEGER").run();
       }

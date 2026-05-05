@@ -233,13 +233,14 @@ export function diagnoseSession(
     }
 
     if (resumeResult.hasAnomaly) {
-      const tokenReasons = resumeResult.reasons.filter((r) =>
-        r.startsWith("output token spike") || r.startsWith("cache rebuild spike")
+      const tokenReasons = resumeResult.reasons.filter(
+        (r) => r.kind === "output-spike" || r.kind === "cache-spike"
       );
+      const displayReason = (tokenReasons[0] ?? resumeResult.reasons[0]).message;
       findings.push({
         category: "resume-anomaly",
         severity: "P1",
-        finding: `Resume anomaly detected after compact boundary: ${tokenReasons[0] ?? resumeResult.reasons[0]}`,
+        finding: `Resume anomaly detected after compact boundary: ${displayReason}`,
         advice:
           "Large output spikes immediately after a compact boundary can indicate the model reconstructing lost context. Review what was compacted and consider a more targeted `/compact` summary.",
       });

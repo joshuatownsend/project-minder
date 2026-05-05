@@ -4,7 +4,7 @@ import os from "os";
 import { performance } from "perf_hooks";
 import { promises as fs, createReadStream } from "fs";
 import type DatabaseT from "better-sqlite3";
-import { canonicalizeDirName } from "@/lib/usage/parser";
+import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
@@ -691,24 +691,8 @@ async function readJsonlSession(
   if (PROFILE) tick("parseTurns", performance.now() - tParse);
   if (turns.length === 0) return { parsed: null, safeOffset };
 
-  // Derive: primary model = most-frequent assistant model.
-  let primaryModel: string | null = null;
-  let bestCount = 0;
-  for (const [model, count] of modelCounts) {
-    if (count > bestCount) {
-      primaryModel = model;
-      bestCount = count;
-    }
-  }
-
-  // Derive: most-frequent CLI version (mirrors primary_model precedent).
-  let cliVersion: string | null = null;
-  if (versionCounts.size > 0) {
-    let maxVCount = 0;
-    for (const [v, count] of versionCounts) {
-      if (count > maxVCount) { maxVCount = count; cliVersion = v; }
-    }
-  }
+  const primaryModel = mostFrequent(modelCounts);
+  const cliVersion = mostFrequent(versionCounts);
 
   // Derive: per-turn cost + classifier category. Stamp on the ParsedTurn
   // so writers can persist directly without redoing the work. Sum to the

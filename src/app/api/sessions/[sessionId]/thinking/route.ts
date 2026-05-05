@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/connection";
 import { readThinkingFromJsonl } from "@/lib/data/thinkingContent";
+import { isValidSessionId } from "@/lib/usage/parser";
 
 // `GET /api/sessions/[sessionId]/thinking?turnId=<N>` — on-demand thinking
 // content for a single assistant turn. Reads the turn's byte offset from the
@@ -20,7 +21,7 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const { sessionId } = await params;
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+  if (!isValidSessionId(sessionId)) {
     return NextResponse.json({ error: "Invalid session ID" }, { status: 400 });
   }
 

@@ -39,10 +39,11 @@ function buildVersionRows(sessions: SessionSummary[]): VersionRow[] {
 
 export function VersionHistoryPanel({ period, projectSlug }: { period: string; projectSlug?: string | null }) {
   const [rows, setRows] = useState<VersionRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
+    if (collapsed) return;
     setLoading(true);
     const url = `/api/sessions${projectSlug ? `?project=${projectSlug}` : ""}`;
     fetch(url)
@@ -63,7 +64,7 @@ export function VersionHistoryPanel({ period, projectSlug }: { period: string; p
       })
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
-  }, [period, projectSlug]);
+  }, [period, projectSlug, collapsed]);
 
   return (
     <div>

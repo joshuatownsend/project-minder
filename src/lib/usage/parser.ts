@@ -69,6 +69,23 @@ export function canonicalizeDirName(dirName: string): string {
   return dirName;
 }
 
+// ── Shared utilities ─────────────────────────────────────────────────────────
+
+/** Returns the key with the highest count, or null if the map is empty. */
+export function mostFrequent<K>(m: Map<K, number>): K | null {
+  let best: K | null = null;
+  let max = 0;
+  for (const [k, v] of m) {
+    if (v > max) { max = v; best = k; }
+  }
+  return best;
+}
+
+/** Validates a session ID string — UUID hex characters and hyphens only. */
+export function isValidSessionId(id: string): boolean {
+  return /^[a-f0-9-]+$/i.test(id);
+}
+
 // ── Single-file parser ────────────────────────────────────────────────────────
 
 export interface ParseSessionTurnsOptions {
@@ -329,14 +346,7 @@ export async function parseSessionTurnsWithMeta(
     }
   }
 
-  // Most-frequent version wins (mirrors primary_model precedent).
-  let cliVersion: string | null = null;
-  if (versionCounts.size > 0) {
-    let maxCount = 0;
-    for (const [v, count] of versionCounts) {
-      if (count > maxCount) { maxCount = count; cliVersion = v; }
-    }
-  }
+  const cliVersion = mostFrequent(versionCounts);
 
   return { turns, meta: { compactBoundaries, cliVersion, hasThinking } };
 }
