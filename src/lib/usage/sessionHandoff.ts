@@ -1,7 +1,7 @@
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
 import path from "path";
-import { extractFileEdits, extractWriteEdits } from "./fileActivity";
+import { extractFileEdits } from "./fileActivity";
 import { extractBashCommands, extractBinary } from "./shellParser";
 import type { UsageTurn } from "./types";
 
@@ -40,16 +40,12 @@ const SKIP_BINARIES = new Set([
 // ─── Fact extraction ──────────────────────────────────────────────────────────
 
 export function extractHandoffFacts(turns: UsageTurn[]): HandoffFacts {
-  // Files modified (write/edit ops)
+  // Single pass over file edits: split into modified vs read-only
   const modifiedSet = new Set<string>();
-  for (const edit of extractWriteEdits(turns)) {
-    modifiedSet.add(edit.filePath);
-  }
-
-  // Files read (read ops only)
   const readSet = new Set<string>();
   for (const edit of extractFileEdits(turns)) {
     if (edit.op === "read") readSet.add(edit.filePath);
+    else modifiedSet.add(edit.filePath);
   }
   // A file that was both read and modified belongs only in modified
   for (const p of modifiedSet) readSet.delete(p);
@@ -83,10 +79,13 @@ export function extractHandoffFacts(turns: UsageTurn[]): HandoffFacts {
   }
 
   const firstUserTurn = turns.find((t) => t.role === "user");
-  const lastAssistantTurns = [...turns].reverse();
-  const lastAssistantTurn = lastAssistantTurns.find(
-    (t) => t.role === "assistant" && t.assistantText
-  );
+  let lastAssistantTurn: UsageTurn | undefined;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].role === "assistant" && turns[i].assistantText) {
+      lastAssistantTurn = turns[i];
+      break;
+    }
+  }
 
   return {
     filesModified: [...modifiedSet],
@@ -164,10 +163,8 @@ export function readCompactionSummary(
   sessionJsonlPath: string
 ): Promise<string | null> {
   return new Promise((resolve) => {
-    const rl = createInterface({
-      input: createReadStream(sessionJsonlPath, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
+    const stream = createReadStream(sessionJsonlPath, { encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
     let found = false;
 
@@ -191,7 +188,7 @@ export function readCompactionSummary(
               : null;
         if (summary) {
           found = true;
-          rl.close();
+          rl.close(); stream.destroy();
           resolve(summary);
           return;
         }
@@ -281,15 +278,17 @@ export function scoreCompactionFidelity(
     };
   }
 
+  // Pre-compile all regexes before the loop to avoid repeated allocation.
+  // \b doesn't work with dots in filenames, so we match surrounding non-word chars.
+  const compiled = needles.map((needle) => {
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return { needle, re: new RegExp(`(?:^|[^a-z0-9_])${escaped}(?:[^a-z0-9_]|$)`) };
+  });
+
   const mentioned: string[] = [];
   const missing: string[] = [];
 
-  for (const needle of needles) {
-    // Whole-word match: \b doesn't work well with dots in filenames, so we
-    // check that the needle appears with surrounding non-word characters or
-    // at string boundaries.
-    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(?:^|[^a-z0-9_])${escaped}(?:[^a-z0-9_]|$)`);
+  for (const { needle, re } of compiled) {
     if (re.test(summaryLower)) {
       mentioned.push(needle);
     } else {

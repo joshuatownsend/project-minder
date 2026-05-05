@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { HandoffFacts, CompactionFidelity } from "@/lib/usage/sessionHandoff";
+import { SectionLabel } from "@/components/ui/section-label";
 
 interface HandoffResponse {
   sessionId: string;
@@ -14,26 +15,6 @@ interface HandoffResponse {
 interface HandoffPanelProps {
   sessionId: string;
   onOpenDocModal?: () => void;
-}
-
-// ── Primitives ─────────────────────────────────────────────────────────────────
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <h3
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.72rem",
-        fontWeight: 600,
-        textTransform: "uppercase" as const,
-        letterSpacing: "0.06em",
-        color: "var(--text-muted)",
-        marginBottom: "10px",
-      }}
-    >
-      {children}
-    </h3>
-  );
 }
 
 function FactList({ items }: { items: string[] }) {
@@ -181,15 +162,15 @@ export function HandoffPanel({ sessionId, onOpenDocModal }: HandoffPanelProps) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "24px", marginBottom: "24px" }}>
         <div>
-          <SectionLabel>Files Modified ({facts.filesModified.length})</SectionLabel>
+          <SectionLabel marginBottom="10px">Files Modified ({facts.filesModified.length})</SectionLabel>
           <FactList items={filePaths} />
         </div>
         <div>
-          <SectionLabel>Git Commits ({facts.gitCommits.length})</SectionLabel>
+          <SectionLabel marginBottom="10px">Git Commits ({facts.gitCommits.length})</SectionLabel>
           <FactList items={commitLines} />
         </div>
         <div>
-          <SectionLabel>Key Commands ({facts.keyCommands.length})</SectionLabel>
+          <SectionLabel marginBottom="10px">Key Commands ({facts.keyCommands.length})</SectionLabel>
           <FactList items={facts.keyCommands} />
         </div>
       </div>

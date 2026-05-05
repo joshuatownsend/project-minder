@@ -47,13 +47,13 @@ export function generateHandoffDoc(input: HandoffDocInput): string {
 
   // ─── Original task ───────────────────────────────────────────────────────
   lines.push("## Original Task");
-  lines.push(
-    facts.firstUserPrompt
-      ? verbosity === "minimal"
-        ? facts.firstUserPrompt.split(/\r?\n/)[0].slice(0, 300)
-        : facts.firstUserPrompt
-      : "_No user prompt found_"
-  );
+  let taskText = "_No user prompt found_";
+  if (facts.firstUserPrompt) {
+    taskText = verbosity === "minimal"
+      ? facts.firstUserPrompt.split(/\r?\n/)[0].slice(0, 300)
+      : facts.firstUserPrompt;
+  }
+  lines.push(taskText);
   lines.push("");
 
   // ─── Current state ───────────────────────────────────────────────────────

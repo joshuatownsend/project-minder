@@ -39,118 +39,88 @@ export function categorize(description: string | undefined): SubagentCategory {
  * input.description). Meta files without a description field are skipped
  * since there is no reliable way to match them to parent Agent tool calls.
  */
+function parseMetaFile(raw: string): SubagentMeta | null {
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const description =
+    typeof data.description === "string" ? data.description : undefined;
+  if (!description) return null;
+  return {
+    description,
+    agentType: typeof data.agentType === "string" ? data.agentType : undefined,
+    turnCount: typeof data.turnCount === "number" ? data.turnCount : undefined,
+    category: categorize(description),
+    metaSourced: true,
+  };
+}
+
+function subagentsDir(sessionJsonlPath: string): string {
+  const sessionId = path.basename(sessionJsonlPath, ".jsonl");
+  return path.join(path.dirname(sessionJsonlPath), sessionId, "subagents");
+}
+
 export async function readSubagentMeta(
   sessionJsonlPath: string
 ): Promise<Map<string, SubagentMeta>> {
-  const sessionId = path.basename(sessionJsonlPath, ".jsonl");
-  const subagentsDir = path.join(
-    path.dirname(sessionJsonlPath),
-    sessionId,
-    "subagents"
-  );
-
+  const dir = subagentsDir(sessionJsonlPath);
   const result = new Map<string, SubagentMeta>();
 
   let files: string[];
   try {
-    files = await fs.readdir(subagentsDir);
+    files = await fs.readdir(dir);
   } catch {
     return result;
   }
 
-  const metaFiles = files.filter(
-    (f) => f.startsWith("agent-") && f.endsWith(".meta.json")
-  );
-
   await Promise.all(
-    metaFiles.map(async (filename) => {
-      const filePath = path.join(subagentsDir, filename);
-      let raw: string;
-      try {
-        raw = await fs.readFile(filePath, "utf-8");
-      } catch {
-        return;
-      }
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      const description =
-        typeof data.description === "string" ? data.description : undefined;
-      const agentType =
-        typeof data.agentType === "string" ? data.agentType : undefined;
-      const turnCount =
-        typeof data.turnCount === "number" ? data.turnCount : undefined;
-
-      if (!description) return; // can't key without description
-
-      const meta: SubagentMeta = {
-        description,
-        agentType,
-        turnCount,
-        category: categorize(description),
-        metaSourced: true,
-      };
-      result.set(description, meta);
-    })
+    files
+      .filter((f) => f.startsWith("agent-") && f.endsWith(".meta.json"))
+      .map(async (filename) => {
+        let raw: string;
+        try {
+          raw = await fs.readFile(path.join(dir, filename), "utf-8");
+        } catch {
+          return;
+        }
+        const meta = parseMetaFile(raw);
+        if (meta?.description) result.set(meta.description, meta);
+      })
   );
 
   return result;
 }
 
 /**
- * Synchronous variant of `readSubagentMeta` for use in sync contexts
- * (e.g. the better-sqlite3 DB path in `sessionDetailFromDb.ts`).
+ * Synchronous variant for use in sync contexts (better-sqlite3 DB path).
  * Same matching contract: keyed by full description string.
  */
 export function readSubagentMetaSync(
   sessionJsonlPath: string
 ): Map<string, SubagentMeta> {
-  const sessionId = path.basename(sessionJsonlPath, ".jsonl");
-  const subagentsDir = path.join(
-    path.dirname(sessionJsonlPath),
-    sessionId,
-    "subagents"
-  );
-
+  const dir = subagentsDir(sessionJsonlPath);
   const result = new Map<string, SubagentMeta>();
 
   let files: string[];
   try {
-    files = readdirSync(subagentsDir);
+    files = readdirSync(dir);
   } catch {
     return result;
   }
 
   for (const filename of files) {
-    if (!filename.startsWith("agent-") || !filename.endsWith(".meta.json")) {
-      continue;
-    }
+    if (!filename.startsWith("agent-") || !filename.endsWith(".meta.json")) continue;
     let raw: string;
     try {
-      raw = readFileSync(path.join(subagentsDir, filename), "utf-8");
+      raw = readFileSync(path.join(dir, filename), "utf-8");
     } catch {
       continue;
     }
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    const description =
-      typeof data.description === "string" ? data.description : undefined;
-    if (!description) continue;
-
-    result.set(description, {
-      description,
-      agentType: typeof data.agentType === "string" ? data.agentType : undefined,
-      turnCount: typeof data.turnCount === "number" ? data.turnCount : undefined,
-      category: categorize(description),
-      metaSourced: true,
-    });
+    const meta = parseMetaFile(raw);
+    if (meta?.description) result.set(meta.description, meta);
   }
 
   return result;

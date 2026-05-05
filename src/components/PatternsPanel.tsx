@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { WorkflowPattern } from "@/lib/usage/workflowPatterns";
+import { SectionLabel } from "@/components/ui/section-label";
 
 interface PatternsResponse {
   patterns: WorkflowPattern[];
@@ -12,26 +13,6 @@ interface PatternsResponse {
 
 interface PatternsPanelProps {
   slug: string;
-}
-
-// ── Primitives ─────────────────────────────────────────────────────────────────
-
-function SectionLabel({ children }: { children: string }) {
-  return (
-    <h3
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.72rem",
-        fontWeight: 600,
-        textTransform: "uppercase" as const,
-        letterSpacing: "0.06em",
-        color: "var(--text-muted)",
-        marginBottom: "12px",
-      }}
-    >
-      {children}
-    </h3>
-  );
 }
 
 function BinaryChip({ label }: { label: string }) {

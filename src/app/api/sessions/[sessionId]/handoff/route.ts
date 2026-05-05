@@ -14,9 +14,6 @@ import type { HandoffFacts, CompactionFidelity } from "@/lib/usage/sessionHandof
 import { generateHandoffDoc } from "@/lib/usage/sessionHandoffDoc";
 import type { HandoffVerbosity } from "@/lib/usage/sessionHandoffDoc";
 
-// Per-session handoff document API. Caches per (sessionId, verbosity) with a
-// 5-min TTL + jsonlMtime invalidation matching the project-scoped route pattern.
-
 const VALID_VERBOSITIES = new Set<HandoffVerbosity>([
   "minimal",
   "standard",
@@ -113,13 +110,14 @@ export async function GET(
     verbosity,
   });
 
+  const now = Date.now();
   const data: HandoffResponse = {
     sessionId,
     facts,
     fidelity,
     doc,
-    meta: { durationMs: Date.now() - start },
+    meta: { durationMs: now - start },
   };
-  cache.set(cacheKey, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+  cache.set(cacheKey, { data, cachedAt: now, jsonlMtime: currentMtime });
   return NextResponse.json(data);
 }
