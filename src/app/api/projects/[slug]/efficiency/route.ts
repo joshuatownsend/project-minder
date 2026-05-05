@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
 import { runWasteOptimizer, type WasteOptimizerInfo } from "@/lib/scanner/wasteOptimizer";
-import {
-  classifySessionsByYield,
-  buildSessionIntervals,
-  type YieldResult,
-} from "@/lib/usage/yieldAnalysis";
-import { detectMainBranch, readBranchCommits } from "@/lib/scanner/git";
+import type { YieldResult } from "@/lib/usage/yieldAnalysis";
+import { computeProjectYield } from "@/lib/usage/computeProjectYield";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { loadCatalog } from "@/lib/indexer/catalog";
-import { applyPricing, getModelPricing, loadPricing } from "@/lib/usage/costCalculator";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
-import type { UsageTurn } from "@/lib/usage/types";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
@@ -88,7 +82,7 @@ export async function GET(
 
   let yieldReport: YieldResult;
   try {
-    yieldReport = await computeYield(project.path, projectTurns);
+    yieldReport = await computeProjectYield(project.path, projectTurns);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`[/api/projects/${slug}/efficiency] yield computation failed`, err);
@@ -106,41 +100,4 @@ export async function GET(
   };
   cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
   return NextResponse.json(data);
-}
-
-async function computeYield(
-  projectPath: string,
-  turns: UsageTurn[]
-): Promise<YieldResult> {
-  if (turns.length === 0) {
-    return { kind: "unavailable", reason: "No session turns for this project." };
-  }
-
-  const branch = await detectMainBranch(projectPath);
-  if (!branch) {
-    return { kind: "unavailable", reason: "No main/master branch detected on this repo." };
-  }
-
-  await loadPricing();
-  const intervals = buildSessionIntervals(turns, (t) =>
-    applyPricing(getModelPricing(t.model), t)
-  );
-
-  // `buildSessionIntervals` only emits intervals for sessions with at
-  // least one assistant turn. If every turn in `turns` was a user turn
-  // (rare but possible), `intervals` is empty — without this guard we'd
-  // fall through with `sinceIso = undefined` and `git log` would scan
-  // unbounded history. Reviewer-flagged (Copilot).
-  if (intervals.length === 0) {
-    return { kind: "unavailable", reason: "No assistant turns to align with commits." };
-  }
-
-  let earliest = Infinity;
-  for (const iv of intervals) {
-    if (iv.startMs < earliest) earliest = iv.startMs;
-  }
-  const sinceIso = new Date(earliest - 24 * 60 * 60 * 1000).toISOString();
-
-  const commits = await readBranchCommits(projectPath, branch, sinceIso);
-  return { kind: "ok", report: classifySessionsByYield({ intervals, commits }) };
 }
