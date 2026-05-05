@@ -175,6 +175,8 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     expect(result.detail!.timeline.length).toBeGreaterThanOrEqual(8);
     expect(result.detail!.subagents.length).toBe(1);
     expect(result.detail!.subagents[0].type).toBe("Explore");
+    // No .meta.json files in fixture — metaSourced must be false on both paths.
+    expect(result.detail!.subagents[0].metaSourced).toBe(false);
   });
 
   it("falls back to file-parse when the session isn't indexed", async () => {
@@ -264,6 +266,9 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
       const fSub = fByType.get(dSub.type);
       expect(fSub, `subagent type ${dSub.type} missing in file path`).toBeDefined();
       expect(dSub.description).toBe(fSub!.description);
+      // No .meta.json files in test fixture — both paths produce same meta fields.
+      expect(dSub.metaSourced).toBe(fSub!.metaSourced);
+      expect(dSub.category).toBe(fSub!.category);
       // Documented divergence — DB path leaves these zeroed.
       expect(dSub.messageCount).toBe(0);
       expect(dSub.toolUsage).toEqual({});

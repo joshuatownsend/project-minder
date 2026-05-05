@@ -1,7 +1,7 @@
 import { parseAllSessions } from "./parser";
 import { classifyTurn } from "./classifier";
 import { computeTurnCost, loadPricing } from "./costCalculator";
-import { groupByBinary } from "./shellParser";
+import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
 import { getPeriodStart } from "./periods";
@@ -140,10 +140,8 @@ export async function aggregateUsage(
     // Tools
     for (const tc of turn.toolCalls) {
       allToolCalls.push(tc);
-      if ((tc.name === "Bash" || tc.name === "PowerShell") && tc.arguments?.command) {
-        bashCommands.push(tc.arguments.command as string);
-      }
     }
+    bashCommands.push(...extractBashCommands(turn));
 
     // Per-project detail (category + tool + MCP breakdown)
     const detail = projectDetailAccum.get(turn.projectSlug) ?? {

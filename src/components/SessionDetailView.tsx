@@ -7,6 +7,8 @@ import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
 import { DiagnosisPanel } from "./DiagnosisPanel";
+import { HandoffPanel } from "./HandoffPanel";
+import { HandoffDocModal } from "./HandoffDocModal";
 import { BarChart } from "./stats/BarChart";
 import {
   ArrowLeft,
@@ -120,7 +122,7 @@ function StatCell({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "diagnosis";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "handoff" | "diagnosis";
 
 function TabBar({
   tabs, active, onChange,
@@ -164,6 +166,7 @@ function TabBar({
 export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  const [docModalOpen, setDocModalOpen] = useState(false);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   if (loading) {
@@ -201,6 +204,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
       : []),
+    { key: "handoff",   label: "Handoff"   },
     { key: "diagnosis", label: "Diagnosis" },
   ];
 
@@ -427,11 +431,24 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
             <SessionSubagents subagents={data.subagents} />
           )}
 
+          {activeTab === "handoff" && (
+            <HandoffPanel
+              sessionId={data.sessionId}
+              onOpenDocModal={() => setDocModalOpen(true)}
+            />
+          )}
+
           {activeTab === "diagnosis" && (
             <DiagnosisPanel sessionId={data.sessionId} />
           )}
         </div>
       </div>
+
+      <HandoffDocModal
+        sessionId={data.sessionId}
+        open={docModalOpen}
+        onClose={() => setDocModalOpen(false)}
+      />
     </div>
   );
 }

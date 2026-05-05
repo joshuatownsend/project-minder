@@ -89,6 +89,21 @@ Appears when the project has Claude sessions. Shows two analytics panels:
 - **Waste Optimizer** — grades the project A–F and lists up to 5 findings: junk-directory reads, duplicate reads, unused MCP servers, ghost agent/skill capabilities, and low read/edit ratio. Each finding includes a severity level and actionable detail.
 - **Session Yield** — classifies sessions as Productive, Reverted, or Abandoned by aligning session intervals with the main-branch commit log. Displays yield rate, total sessions analysed, and cost-per-shipped-commit when session cost data is available.
 
+## Patterns Tab
+
+Appears when the project has Claude sessions. Detects recurring Bash sequences across sessions and surfaces them as candidate workflow automations.
+
+Each pattern shows:
+
+- **Binary sequence** — the ordered list of command-line binaries (e.g., `git` → `npm test` → `git`).
+- **Sessions** — how many distinct sessions ran this sequence.
+- **Runs** — total occurrences across all sessions.
+- **Suggested skill** (or **Matched skill**) — a kebab-case name derived from the binary sequence (e.g., `git-test-commit-flow`). When a skill in your catalog already matches the pattern, the tab shows the existing skill name and its invocation count instead of a suggestion.
+
+Patterns only appear after a sequence recurs in at least **3 sessions**. All-identical sequences (e.g., `git → git → git`) are filtered out as noise. Sequences of length 2, 3, and 4 are detected.
+
+Use the suggestions to decide which workflow automations are worth turning into Claude Code skills.
+
 ## Hot Files Tab
 
 Appears when the project has Claude sessions. Shows cross-session file intelligence:

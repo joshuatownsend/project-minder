@@ -37,6 +37,8 @@ export const tabHelpMapping: Record<string, string> = {
   memory: 'memory',
   efficiency: 'project-details',
   'hot-files': 'project-details',
+  patterns: 'project-details',
+  handoff: 'sessions',
   'config-history': 'config-history',
 }
 

@@ -1,4 +1,4 @@
-import type { ShellStats } from "@/lib/usage/types";
+import type { ShellStats, UsageTurn } from "@/lib/usage/types";
 
 /**
  * Extracts the binary name from a shell command string.
@@ -113,4 +113,20 @@ export function groupByBinary(commands: string[]): ShellStats[] {
   return Array.from(map.entries())
     .map(([binary, count]) => ({ binary, count }))
     .sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Extracts raw command strings from Bash and PowerShell tool calls in a turn.
+ */
+export function extractBashCommands(turn: UsageTurn): string[] {
+  const commands: string[] = [];
+  for (const tc of turn.toolCalls) {
+    if (
+      (tc.name === "Bash" || tc.name === "PowerShell") &&
+      typeof tc.arguments?.command === "string"
+    ) {
+      commands.push(tc.arguments.command);
+    }
+  }
+  return commands;
 }

@@ -86,3 +86,28 @@ Post-hoc 8-category quality analysis of the session, computed on demand from the
 The header strip surfaces outcome (completed / partial / abandoned / stuck), cache hit %, cache rebuild waste in dollars, peak fill, and total idle. The **Top advice** block ranks the three highest-impact fixes by estimated dollar impact.
 
 This view is computed from JSONL on demand and does not require the SQLite index.
+
+### Handoff
+
+Structured mechanical extraction of everything that happened in the session, grouped into three columns:
+
+- **Files Modified** — every file written, edited, or deleted (deduplicated, basename only for readability).
+- **Git Commits** — commit messages extracted from `git commit -m` and HEREDOC forms. Basenames are parsed conservatively; when the message form is ambiguous the entry falls back to `<commit message unparsed>`.
+- **Key Commands** — non-trivial Bash commands (length > 4 tokens, excluding common noisy one-liners).
+
+When the session was auto-compacted by Claude Code, a **Compaction Fidelity** card appears below the columns. It scores what percentage of the mechanical facts above appear in the LLM-generated compaction summary. A score below 60% is flagged as **low fidelity** — the Size–Fidelity Paradox: the transcript was compressed but verifiable details were dropped. The card lists up to 10 missing facts so you can see exactly what was omitted.
+
+Click **Generate handoff doc** in the Handoff tab header to open the handoff doc modal.
+
+### Generate Handoff Doc
+
+A copyable markdown brief for resuming the session, available at four verbosity levels:
+
+| Level | Contents |
+|---|---|
+| **Minimal** | Original task + current state (500-char excerpt) + fact counts only |
+| **Standard** | Minimal + last 10 turns + full fact lists (capped at 25 each) |
+| **Verbose** | Standard extended to last 20 turns + uncapped facts + commit bodies + compaction fidelity callout |
+| **Full** | Entire transcript + every fact + every commit body + per-tool call counts |
+
+Use the **Copy** button to copy the markdown to your clipboard, or **Download .md** to save the file. Switching verbosity re-fetches the document immediately.
