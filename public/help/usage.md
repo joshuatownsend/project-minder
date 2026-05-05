@@ -63,9 +63,25 @@ Two charts showing:
 - **Top Tools** — most-used Claude Code tools (Read, Edit, Bash, Write, etc.)
 - **Shell Commands** — most-used CLI commands extracted from Bash/PowerShell invocations (git, npm, docker, etc.)
 
+## Feedback
+
+If Claude Code has recorded qualitative session feedback (stored in `~/.claude/usage-data/facets/`), the Feedback section shows cross-session distributions for:
+
+- **Outcome** — how sessions resolved (success, partial, blocked, etc.)
+- **Helpfulness** — Claude's self-assessed helpfulness rating
+- **Satisfaction** — user-satisfaction distribution
+- **Friction** — friction point types and their occurrence counts
+- **Session type** — what kind of task each session was (coding, debugging, planning, etc.)
+
+Each distribution is shown as a horizontal bar chart proportional to the maximum value in that category. The section header shows how many sessions contributed feedback data. The section is hidden when no feedback exists for the selected period and project filter.
+
 ## MCP Servers
 
 If any MCP (Model Context Protocol) servers were used, their tool invocations are shown grouped by server name with per-tool counts.
+
+## CLI Version History
+
+A collapsible table at the bottom of the page showing which Claude Code CLI versions were used across the selected sessions. Columns: **Version**, **Sessions**, **First seen**, **Last seen**. Versions in the 2.1.69–2.1.89 range are tagged `buggy` — this range contains a known prompt-cache bug that causes cache rebuilds after compaction or resume. Click the "CLI Version History" header to expand the table.
 
 ## Project Filter
 

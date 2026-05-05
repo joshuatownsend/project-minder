@@ -400,6 +400,10 @@ export interface SessionSummary {
    */
   hasCompactionLoop?: boolean;
   hasToolFailureStreak?: boolean;
+  hasThinking?: boolean;
+  cliVersion?: string;
+  hasResumeAnomaly?: boolean;
+  compactBoundaryCount?: number;
 }
 
 export interface TimelineEvent {
@@ -408,6 +412,9 @@ export interface TimelineEvent {
   content: string;
   toolName?: string;
   tokenCount?: number;
+  durationMs?: number;
+  /** DB-path turn index; used to lazy-fetch thinking content on expand. */
+  turnIndex?: number;
 }
 
 export interface FileOperation {
@@ -441,6 +448,8 @@ export interface SessionDetail extends SessionSummary {
   timeline: TimelineEvent[];
   fileOperations: FileOperation[];
   subagents: SubagentInfo[];
+  hasThinking?: boolean;
+  cliVersion?: string;
 }
 
 // ─── Claude config: hooks, MCP servers, plugins ──────────────────────────────

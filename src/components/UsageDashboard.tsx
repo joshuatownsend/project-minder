@@ -5,6 +5,8 @@ import { useUsage } from "@/hooks/useUsage";
 import { VALID_PERIODS } from "@/lib/usage/constants";
 import type { CategoryType, ProjectDetail } from "@/lib/usage/types";
 import { Download, Layers, AlignJustify } from "lucide-react";
+import { FeedbackAggregate } from "./FeedbackAggregate";
+import { VersionHistoryPanel } from "./VersionHistoryPanel";
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 
@@ -713,6 +715,12 @@ export function UsageDashboard() {
             <DailyCostChart daily={data.daily} />
           </div>
 
+          {/* Feedback aggregate */}
+          <div>
+            <SectionHeader label="Feedback" />
+            <FeedbackAggregate period={period} projectSlug={project} />
+          </div>
+
           {/* ── Aggregate mode ──────────────────────────────────────────── */}
           {(breakdownMode === "aggregate" || !!project) && (
             <>
@@ -899,6 +907,9 @@ export function UsageDashboard() {
                   </div>
                 </div>
               )}
+
+              {/* Version history */}
+              <VersionHistoryPanel period={period} projectSlug={project} />
             </>
           )}
 

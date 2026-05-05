@@ -99,6 +99,11 @@ CREATE TABLE sessions (
   -- write time — the prior session may not yet have been ingested when
   -- this one writes.
   continued_from_session_id  TEXT,
+  -- Wave 4.2 columns (schema v6 / DERIVED_VERSION 6):
+  has_thinking          INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1)),
+  cli_version           TEXT,
+  has_resume_anomaly    INTEGER NOT NULL DEFAULT 0 CHECK (has_resume_anomaly IN (0,1)),
+  compact_boundary_count INTEGER NOT NULL DEFAULT 0,
   derived_version       INTEGER NOT NULL DEFAULT 0,
   indexed_at_ms         INTEGER NOT NULL
 );
@@ -143,6 +148,9 @@ CREATE TABLE turns (
   -- would be invisible and one-shot stats would drift on tail.
   tool_result_preview  TEXT,
   category             TEXT,
+  -- Wave 4.2 columns (schema v6 / DERIVED_VERSION 6):
+  turn_duration_ms     INTEGER,
+  has_thinking         INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1)),
   -- Same `derived_version` semantics as on sessions/agents/skills/commands:
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.

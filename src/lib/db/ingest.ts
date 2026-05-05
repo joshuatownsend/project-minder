@@ -26,6 +26,7 @@ import {
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
 import { parseStoredArgs } from "./storedArgs";
+import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -152,6 +153,12 @@ interface ParsedTurn {
    * the model→window table.
    */
   contextFill: number | null;
+  /** Duration in ms from turn_duration system events, attached by stream walk-back. */
+  turnDurationMs: number | null;
+  /** Whether this assistant turn has thinking blocks in its content. */
+  hasThinking: 0 | 1;
+  /** Absolute byte offset of this JSONL line in the session file. Enables on-demand content reads. */
+  textOffset: number | null;
 }
 
 /**
@@ -242,6 +249,14 @@ interface ParsedSession {
    * that never spawned an assistant turn).
    */
   slug: string | null;
+  /** Whether any assistant turn in this session had thinking blocks. */
+  hasThinking: 0 | 1;
+  /** Most-frequent CLI version seen across all entries. Null when absent. */
+  cliVersion: string | null;
+  /** Number of compact_boundary system events (denominator for post-reconcile anomaly detector). */
+  compactBoundaryCount: number;
+  /** Whether the resume-anomaly detector fired. Populated by Phase 3 detector; 0 here. */
+  hasResumeAnomaly: 0 | 1;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -387,6 +402,13 @@ async function readJsonlSession(
   let initialPrompt: string | null = null;
   let lastPrompt: string | null = null;
   const modelCounts = new Map<string, number>();
+  const versionCounts = new Map<string, number>();
+  const compactBoundaries: string[] = [];
+  let hasThinkingSession = false;
+  // Walk-back attachment for turn_duration: index of the last assistant turn pushed.
+  let lastAssistantTurnIdx = -1;
+  // Running byte offset within `raw` (relative to fromOffset).
+  let relativeBytePos = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheCreateTokens = 0;
@@ -412,6 +434,11 @@ async function readJsonlSession(
 
   const tParse = PROFILE ? performance.now() : 0;
   for (const line of raw.split("\n")) {
+    // Advance byte cursor BEFORE any continues so the offset is correct
+    // for every line, including blank and sidechain lines.
+    const thisLineOffset = relativeBytePos;
+    relativeBytePos += Buffer.byteLength(line + "\n", "utf8");
+
     const trimmed = line.trim();
     if (!trimmed) continue;
 
@@ -419,6 +446,25 @@ async function readJsonlSession(
     try {
       entry = JSON.parse(trimmed);
     } catch {
+      continue;
+    }
+
+    // Collect CLI version from every entry that carries it.
+    if (typeof entry.version === "string" && entry.version) {
+      versionCounts.set(entry.version, (versionCounts.get(entry.version) ?? 0) + 1);
+    }
+
+    // Handle system entries for meta extraction before the role-gated block.
+    if (entry.type === "system") {
+      if (entry.subtype === "compact_boundary" && entry.timestamp) {
+        compactBoundaries.push(entry.timestamp);
+      } else if (
+        entry.subtype === "turn_duration" &&
+        typeof (entry as any).duration === "number" &&
+        lastAssistantTurnIdx >= 0
+      ) {
+        turns[lastAssistantTurnIdx].turnDurationMs = (entry as any).duration;
+      }
       continue;
     }
 
@@ -460,9 +506,9 @@ async function readJsonlSession(
       assistantTurnCount++;
 
       const content = entry.message?.content ?? [];
-      // Single pass: extract text and tool_use blocks together rather
-      // than filtering the array twice.
+      // Single pass: extract text, tool_use blocks, and thinking flag together.
       let text = "";
+      let hasTurnThinking = false;
       const toolBlocks: Array<{ id?: string; name?: string; input?: unknown }> = [];
       if (Array.isArray(content)) {
         for (const b of content as any[]) {
@@ -471,6 +517,9 @@ async function readJsonlSession(
             text += b.text;
           } else if (b?.type === "tool_use") {
             toolBlocks.push(b);
+          } else if (b?.type === "thinking") {
+            hasTurnThinking = true;
+            hasThinkingSession = true;
           }
         }
       }
@@ -525,6 +574,7 @@ async function readJsonlSession(
         isError: !!isError,
       };
 
+      lastAssistantTurnIdx = turns.length;
       turns.push({
         turnIndex,
         ts: timestamp,
@@ -543,6 +593,9 @@ async function readJsonlSession(
         costUsd: 0,
         category: null,
         contextFill: null,
+        turnDurationMs: null,
+        hasThinking: hasTurnThinking ? 1 : 0,
+        textOffset: fromOffset + thisLineOffset,
       });
 
       // Status inference: this assistant turn becomes the new "last
@@ -608,6 +661,9 @@ async function readJsonlSession(
         costUsd: 0,
         category: null,
         contextFill: null,
+        turnDurationMs: null,
+        hasThinking: 0,
+        textOffset: null,
       });
 
       // Status inference: walk this user turn's content for
@@ -642,6 +698,15 @@ async function readJsonlSession(
     if (count > bestCount) {
       primaryModel = model;
       bestCount = count;
+    }
+  }
+
+  // Derive: most-frequent CLI version (mirrors primary_model precedent).
+  let cliVersion: string | null = null;
+  if (versionCounts.size > 0) {
+    let maxVCount = 0;
+    for (const [v, count] of versionCounts) {
+      if (count > maxVCount) { maxVCount = count; cliVersion = v; }
     }
   }
 
@@ -690,6 +755,17 @@ async function readJsonlSession(
       ? cacheReadTokens / (cacheCreateTokens + cacheReadTokens)
       : null);
   if (PROFILE) tick("sessionQuality", performance.now() - tQuality);
+
+  // Derive: resume anomaly — run after turns are collected with full token data.
+  let hasResumeAnomaly: 0 | 1 = 0;
+  if (compactBoundaries.length > 0 || cliVersion) {
+    try {
+      const anomaly = detectResumeAnomaly(allUsageTurns, { compactBoundaries, cliVersion });
+      if (anomaly.hasAnomaly) hasResumeAnomaly = 1;
+    } catch {
+      // fail-soft: leave hasResumeAnomaly = 0
+    }
+  }
 
   // Derive: affected (day, project, model) tuples for daily_costs.
   const affectedDays = new Set<string>();
@@ -765,6 +841,10 @@ async function readJsonlSession(
       oneShotTaskCount: oneShot.oneShotTasks,
       storedStatus,
       slug,
+      hasThinking: hasThinkingSession ? 1 : 0,
+      cliVersion,
+      compactBoundaryCount: compactBoundaries.length,
+      hasResumeAnomaly,
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -862,6 +942,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        has_compaction_loop, has_tool_failure_streak,
        has_one_shot, verified_task_count, one_shot_task_count,
        git_branch, initial_prompt, last_prompt, slug,
+       has_thinking, cli_version, has_resume_anomaly, compact_boundary_count,
        derived_version, indexed_at_ms
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
@@ -874,6 +955,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @has_compaction_loop, @has_tool_failure_streak,
        @has_one_shot, @verified_task_count, @one_shot_task_count,
        @git_branch, @initial_prompt, @last_prompt, @slug,
+       @has_thinking, @cli_version, @has_resume_anomaly, @compact_boundary_count,
        @derived_version, @indexed_at_ms
      )`
   ).run({
@@ -913,6 +995,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     initial_prompt: s.initialPrompt,
     last_prompt: s.lastPrompt,
     slug: s.slug,
+    has_thinking: s.hasThinking,
+    cli_version: s.cliVersion,
+    has_resume_anomaly: s.hasResumeAnomaly,
+    compact_boundary_count: s.compactBoundaryCount,
     derived_version: DERIVED_VERSION,
     indexed_at_ms: Date.now(),
   });
@@ -924,12 +1010,16 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
-       category, cost_usd, derived_version
+       category, cost_usd,
+       turn_duration_ms, has_thinking, text_offset,
+       derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
-       @category, @cost_usd, @derived_version
+       @category, @cost_usd,
+       @turn_duration_ms, @has_thinking, @text_offset,
+       @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -967,6 +1057,9 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       tool_result_preview: t.toolResultPreview,
       category: t.category,
       cost_usd: t.costUsd,
+      turn_duration_ms: t.turnDurationMs,
+      has_thinking: t.hasThinking,
+      text_offset: t.textOffset,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -1259,12 +1352,16 @@ function appendSessionTail(
        session_id, turn_index, ts, role, model,
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
-       category, cost_usd, derived_version
+       category, cost_usd,
+       turn_duration_ms, has_thinking, text_offset,
+       derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
-       @category, @cost_usd, @derived_version
+       @category, @cost_usd,
+       @turn_duration_ms, @has_thinking, @text_offset,
+       @derived_version
      )`
   );
   const insertToolUse = db.prepare(
@@ -1301,6 +1398,9 @@ function appendSessionTail(
       tool_result_preview: t.toolResultPreview,
       category: t.category,
       cost_usd: t.costUsd,
+      turn_duration_ms: t.turnDurationMs,
+      has_thinking: t.hasThinking,
+      text_offset: t.textOffset,
       derived_version: DERIVED_VERSION,
     });
     rows++;

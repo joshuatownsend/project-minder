@@ -189,6 +189,158 @@ export async function parseSessionTurns(
   return turns;
 }
 
+export interface SessionTurnsMeta {
+  compactBoundaries: string[];
+  cliVersion: string | null;
+  hasThinking: boolean;
+}
+
+/**
+ * Like `parseSessionTurns` but also extracts session-level metadata that
+ * system entries carry: compact_boundary timestamps, CLI version, and whether
+ * any assistant turn had thinking blocks. Used by ingest.ts and the diagnosis
+ * route; the main sweep cache uses `parseSessionTurns` directly to avoid
+ * changing its cached shape.
+ */
+export async function parseSessionTurnsWithMeta(
+  filePath: string,
+  projectDirName: string,
+  options: ParseSessionTurnsOptions = {}
+): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
+  const sessionId = path.basename(filePath, ".jsonl");
+  const canonicalDir = canonicalizeDirName(projectDirName);
+  const projectSlug = toSlug(canonicalDir);
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if (options.strict) throw err;
+    return { turns: [], meta: { compactBoundaries: [], cliVersion: null, hasThinking: false } };
+  }
+
+  const turns: UsageTurn[] = [];
+  const compactBoundaries: string[] = [];
+  const versionCounts = new Map<string, number>();
+  let hasThinking = false;
+  // Index into turns[] of the last pushed assistant turn (for turn_duration attachment).
+  let lastAssistantTurnIdx = -1;
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let entry: ConversationEntry;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+
+    // Collect version from every entry.
+    if (typeof entry.version === "string" && entry.version) {
+      versionCounts.set(entry.version, (versionCounts.get(entry.version) ?? 0) + 1);
+    }
+
+    // Handle system entries for meta extraction before the normal skip.
+    if (entry.type === "system") {
+      if (entry.subtype === "compact_boundary" && entry.timestamp) {
+        compactBoundaries.push(entry.timestamp);
+      } else if (
+        entry.subtype === "turn_duration" &&
+        typeof (entry as any).duration === "number" &&
+        lastAssistantTurnIdx >= 0
+      ) {
+        turns[lastAssistantTurnIdx].turnDurationMs = (entry as any).duration;
+      }
+      continue;
+    }
+
+    if (entry.isSidechain) continue;
+    if (entry.isMeta) continue;
+    if (!entry.timestamp) continue;
+
+    const { type, timestamp } = entry;
+
+    if (type === "assistant") {
+      const model = entry.message?.model;
+      if (!model || model === "<synthetic>") continue;
+
+      const usage = entry.message?.usage ?? {};
+      const inputTokens = usage.input_tokens ?? 0;
+      const outputTokens = usage.output_tokens ?? 0;
+      const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
+      const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+
+      const content = entry.message?.content ?? [];
+      const toolCalls = (content as any[])
+        .filter((b: any) => b.type === "tool_use")
+        .map((b: any) => ({ name: b.name, arguments: b.input }));
+
+      const assistantText = extractText(content) || undefined;
+      const isError = entry.isApiErrorMessage === true;
+
+      // Check for thinking blocks.
+      if (!hasThinking && Array.isArray(content)) {
+        for (const b of content as any[]) {
+          if (b?.type === "thinking") { hasThinking = true; break; }
+        }
+      }
+
+      lastAssistantTurnIdx = turns.length;
+      turns.push({
+        timestamp,
+        sessionId,
+        projectSlug,
+        projectDirName: canonicalDir,
+        model,
+        role: "assistant",
+        inputTokens,
+        outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        toolCalls,
+        assistantText,
+        isError,
+      });
+    } else if (type === "user") {
+      const messageContent = entry.message?.content ?? [];
+      const topLevelContent = entry.content ?? [];
+      const textSource =
+        messageContent.length > 0 ? messageContent : topLevelContent;
+      const userMessageText = extractText(textSource) || undefined;
+      const toolResultText = extractToolResults(textSource) || undefined;
+
+      turns.push({
+        timestamp,
+        sessionId,
+        projectSlug,
+        projectDirName: canonicalDir,
+        model: "",
+        role: "user",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreateTokens: 0,
+        cacheReadTokens: 0,
+        toolCalls: [],
+        userMessageText,
+        toolResultText,
+      });
+    }
+  }
+
+  // Most-frequent version wins (mirrors primary_model precedent).
+  let cliVersion: string | null = null;
+  if (versionCounts.size > 0) {
+    let maxCount = 0;
+    for (const [v, count] of versionCounts) {
+      if (count > maxCount) { maxCount = count; cliVersion = v; }
+    }
+  }
+
+  return { turns, meta: { compactBoundaries, cliVersion, hasThinking } };
+}
+
 // ── All-sessions parser with mtime caching ───────────────────────────────────
 
 async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
@@ -393,6 +545,55 @@ export async function loadSessionTurnsBySessionId(
       );
     }
     return turns;
+  }
+  return null;
+}
+
+/**
+ * Like `loadSessionTurnsBySessionId` but also returns the `SessionTurnsMeta`
+ * (compact boundaries, CLI version, thinking flag) needed by the diagnosis
+ * route's `extras` parameter. Returns `null` when the session id can't be
+ * resolved (same contract as `loadSessionTurnsBySessionId`).
+ */
+export async function loadSessionWithMetaBySessionId(
+  sessionId: string
+): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta } | null> {
+  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  let dirs: string[];
+  try {
+    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw new SessionTurnsLoadError(
+      `Failed to list ${projectsDir}: ${err instanceof Error ? err.message : String(err)}`,
+      sessionId,
+      projectsDir,
+      err
+    );
+  }
+
+  for (const dir of dirs) {
+    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+    let stat;
+    try {
+      stat = await fs.stat(candidate);
+    } catch {
+      continue;
+    }
+    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+    try {
+      return await parseSessionTurnsWithMeta(candidate, dir, { strict: true });
+    } catch (err) {
+      throw new SessionTurnsLoadError(
+        `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
+        sessionId,
+        candidate,
+        err
+      );
+    }
   }
   return null;
 }

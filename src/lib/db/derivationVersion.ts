@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 5;
+export const DERIVED_VERSION = 6;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -46,3 +46,11 @@ export const DERIVED_VERSION = 5;
 //     reconcile, badges simply don't render and Diagnosis is computed on
 //     demand from the JSONL (file-parse path), so degraded UX never
 //     produces wrong numbers.
+// 6 — Wave 4.2 added `sessions.{has_thinking, cli_version,
+//     has_resume_anomaly, compact_boundary_count}` and
+//     `turns.{turn_duration_ms, has_thinking, text_offset}`.
+//     text_offset is populated by ingest for the on-demand thinking
+//     content reader. Bumping drives a full re-parse so all sessions
+//     get the new fields. No read-side gate needed — missing values
+//     degrade to "thinking content unavailable" / no duration badge,
+//     both of which are explicit non-silent UX states.

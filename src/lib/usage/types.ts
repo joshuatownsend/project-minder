@@ -26,6 +26,7 @@ export interface UsageTurn {
    */
   assistantText?: string;
   isError?: boolean;
+  turnDurationMs?: number;
 }
 
 export type CategoryType =

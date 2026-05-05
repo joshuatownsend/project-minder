@@ -123,6 +123,10 @@ interface SessionRow {
   last_prompt: string | null;
   slug: string | null;
   continued_from_session_id: string | null;
+  has_thinking: number;
+  cli_version: string | null;
+  has_resume_anomaly: number;
+  compact_boundary_count: number;
 }
 
 interface ToolCountRow {
@@ -174,7 +178,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             has_compaction_loop, has_tool_failure_streak,
             verified_task_count, one_shot_task_count,
             git_branch, initial_prompt, last_prompt,
-            slug, continued_from_session_id
+            slug, continued_from_session_id,
+            has_thinking, cli_version, has_resume_anomaly, compact_boundary_count
      FROM sessions
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
@@ -309,6 +314,10 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       maxContextFill: h.max_context_fill ?? undefined,
       hasCompactionLoop: h.has_compaction_loop === 1,
       hasToolFailureStreak: h.has_tool_failure_streak === 1,
+      hasThinking: h.has_thinking === 1 || undefined,
+      cliVersion: h.cli_version ?? undefined,
+      hasResumeAnomaly: h.has_resume_anomaly === 1 || undefined,
+      compactBoundaryCount: h.compact_boundary_count || undefined,
     });
   }
 
