@@ -14,6 +14,9 @@ import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { getPeriodStart } from "@/lib/usage/periods";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
+import { bucketByHourDay } from "@/lib/usage/activityBuckets";
+import { computeStreaks } from "@/lib/usage/streaks";
+import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -107,6 +110,10 @@ export function loadUsageReportFromSql(
   const shellStats = queryShellStats(db, filter);
   const oneShot = queryOneShot(db, filter);
   const projectDetails = queryProjectDetails(db, filter);
+  const activityTurns = queryActivityTurns(db, filter);
+  const { byHourOfDay, byDayOfWeek, byHourDay } = bucketByHourDay(activityTurns);
+  const streak = computeStreaks(activityTurns);
+  const contributionCalendar = computeContributionCalendar(activityTurns);
 
   const totalTokens =
     totals.input_tokens + totals.output_tokens + totals.cache_create_tokens + totals.cache_read_tokens;
@@ -136,6 +143,11 @@ export function loadUsageReportFromSql(
     mcpStats,
     projectDetails,
     generatedAt: new Date().toISOString(),
+    byHourOfDay,
+    byDayOfWeek,
+    byHourDay,
+    streak,
+    contributionCalendar,
   };
 }
 
@@ -306,6 +318,25 @@ function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[
       totalCalls: Object.values(tools).reduce((s, n) => s + n, 0),
     }))
     .sort((a, b) => b.totalCalls - a.totalCalls);
+}
+
+function queryActivityTurns(
+  db: DatabaseT.Database,
+  f: FilterParams
+): Array<{ timestamp: string; cost?: number }> {
+  // Full-history (no period filter) assistant turns for activity aggregates.
+  // Only the project filter is applied so per-project activity is correct.
+  // Scalability note: this is a full table scan on large DBs. The /api/usage
+  // route has a 2-min globalThis cache (keyed by backend:period:project) that
+  // absorbs repeated calls; the cold-start cost is the only concern.
+  const rows = prepCached(
+    db,
+    `SELECT t.ts AS timestamp, t.cost_usd AS cost
+       FROM turns t JOIN sessions s USING (session_id)
+      WHERE t.role = 'assistant'
+        AND (@project IS NULL OR s.project_slug = @project)`
+  ).all({ project: f.project }) as Array<{ timestamp: string; cost: number }>;
+  return rows;
 }
 
 function queryShellStats(db: DatabaseT.Database, f: FilterParams) {

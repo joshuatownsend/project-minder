@@ -63,6 +63,29 @@ Two charts showing:
 - **Top Tools** — most-used Claude Code tools (Read, Edit, Bash, Write, etc.)
 - **Shell Commands** — most-used CLI commands extracted from Bash/PowerShell invocations (git, npm, docker, etc.)
 
+## Activity Patterns
+
+The **Activity** section surfaces temporal patterns across all of your recorded sessions. Unlike the summary cards and charts above, this section always covers full history — the period switcher (Today / Week / Month / All) doesn't apply. If a project filter is active, patterns are scoped to that project.
+
+A caption below the section header reads "Streak, hourly, and heatmap use all sessions. Calendar shows the past 52 weeks. Period filter doesn't apply." as a reminder.
+
+### Streak Cards
+
+- **Current Streak** — how many consecutive calendar days you've had at least one Claude Code session, counting backward from today (or yesterday if today has no activity yet). Resets after a two-or-more day gap.
+- **Longest Streak** — your all-time longest consecutive-day run, with a detail line showing your total number of active days.
+
+### Hourly Distribution
+
+A 24-bar chart showing turn volume by local hour of day. Use this to identify your peak working hours. Bars are colored with a 5-tier quantile scale so that relative intensity is visible even when one hour dominates.
+
+### Day × Hour Heatmap
+
+A 7×24 grid (rows = Sun→Sat, columns = 0–23) showing turn density at each day-of-week / hour-of-day combination. Quantile-binned coloring. Hover any cell for the exact turn count and cost.
+
+### 52-Week Activity Calendar
+
+A GitHub-style contribution calendar showing the past 52 weeks of activity. Oldest week is at the left; the current week is at the right. Month labels appear above the calendar when a new month begins. Hover any cell to see the date, turn count, and cost.
+
 ## Feedback
 
 If Claude Code has recorded qualitative session feedback (stored in `~/.claude/usage-data/facets/`), the Feedback section shows cross-session distributions for:

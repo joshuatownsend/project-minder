@@ -146,6 +146,26 @@ export interface SkillStats {
   sessions: string[];
 }
 
+export interface ActivityBucket {
+  turns: number;
+  cost: number;
+}
+
+export interface StreakStats {
+  currentDays: number;
+  longestDays: number;
+  lastActiveDate: string | null;
+  totalActiveDays: number;
+}
+
+export interface ContributionCell {
+  date: string;
+  turns: number;
+  cost: number;
+  weekIndex: number;
+  dayOfWeek: number;
+}
+
 export interface UsageReport {
   period: string;
   totalCost: number;
@@ -169,4 +189,9 @@ export interface UsageReport {
   mcpStats: McpServerStats[];
   projectDetails: ProjectDetail[];
   generatedAt: string;
+  byHourOfDay: ActivityBucket[];
+  byDayOfWeek: ActivityBucket[];
+  byHourDay: ActivityBucket[][];
+  streak: StreakStats;
+  contributionCalendar: ContributionCell[];
 }

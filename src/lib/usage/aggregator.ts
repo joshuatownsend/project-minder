@@ -6,6 +6,9 @@ import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
+import { bucketByHourDay, type ActivityData } from "./activityBuckets";
+import { computeStreaks } from "./streaks";
+import { computeContributionCalendar } from "./contributionCalendar";
 import type {
   UsageTurn,
   UsageReport,
@@ -31,15 +34,25 @@ export async function generateUsageReport(
     turns.push(...sessionTurns);
   }
 
-  const periodStart = getPeriodStart(period);
-  if (periodStart !== null) {
-    turns = turns.filter((t) => new Date(t.timestamp) >= periodStart);
-  }
+  // Project filter first (before period) — activity aggregates are project-scoped
+  // but use full history (not period-filtered).
   if (project) {
     turns = turns.filter((t) => t.projectSlug === project);
   }
 
-  return aggregateUsage(turns, period);
+  const assistantTurnsFullHistory = turns.filter((t) => t.role === "assistant");
+  const activity: ActivityData = {
+    ...bucketByHourDay(assistantTurnsFullHistory),
+    streak: computeStreaks(assistantTurnsFullHistory),
+    contributionCalendar: computeContributionCalendar(assistantTurnsFullHistory),
+  };
+
+  const periodStart = getPeriodStart(period);
+  if (periodStart !== null) {
+    turns = turns.filter((t) => new Date(t.timestamp) >= periodStart);
+  }
+
+  return aggregateUsage(turns, period, activity);
 }
 
 /**
@@ -47,10 +60,17 @@ export async function generateUsageReport(
  * façade can hand in turns rehydrated from SQLite (P2b-2) without
  * re-parsing the JSONL corpus. The aggregation logic itself is identical
  * across backends — what changes is only how `turns` was assembled.
+ *
+ * `activity` carries the five full-history aggregates (hourly, day-of-week,
+ * hour×day, streak, contribution calendar). The caller is responsible for
+ * computing these from the correct (full-history, project-scoped) turn set
+ * before applying the period filter. Use `emptyActivity()` from
+ * `activityBuckets.ts` in tests that don't exercise the activity fields.
  */
 export async function aggregateUsage(
   turns: UsageTurn[],
-  period: Period
+  period: Period,
+  activity: ActivityData
 ): Promise<UsageReport> {
   // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
   // and seeds a 24-h FileCache; subsequent calls return immediately.
@@ -267,5 +287,10 @@ export async function aggregateUsage(
     mcpStats: groupMcpCalls(allToolCalls),
     projectDetails,
     generatedAt: new Date().toISOString(),
+    byHourOfDay: activity.byHourOfDay,
+    byDayOfWeek: activity.byDayOfWeek,
+    byHourDay: activity.byHourDay,
+    streak: activity.streak,
+    contributionCalendar: activity.contributionCalendar,
   };
 }

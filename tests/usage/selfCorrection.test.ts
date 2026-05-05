@@ -134,7 +134,8 @@ describe("aggregator integration", () => {
       turn({ role: "assistant", sessionId: "s2", text: "ok" }),
     ];
     const { aggregateUsage } = await import("@/lib/usage/aggregator");
-    const report = await aggregateUsage(turns, "all");
+    const { emptyActivity } = await import("@/lib/usage/activityBuckets");
+    const report = await aggregateUsage(turns, "all", emptyActivity());
     const sonnet = report.byModel.find((m) => m.model === "claude-sonnet-4-6");
     expect(sonnet?.selfCorrectionRate).toBeCloseTo(0.5);
     expect(sonnet?.sessionsAsPrimary).toBe(2);

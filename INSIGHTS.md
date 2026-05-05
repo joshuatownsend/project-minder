@@ -1,5 +1,171 @@
 # Insights
 
+<!-- insight:f91676dfa8df | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:03:55.179Z -->
+## ★ Insight
+- The quantile-based color tier approach solves the "one outlier flattens everything" problem: instead of mapping cells linearly to max, we sort all non-zero values and divide into quintiles. Every chart independently computes its own tiers from its own data distribution.
+- The tooltip uses `getBoundingClientRect()` + `pointer-events: none` fixed overlay (matching `ActivitySparkline.tsx`) — browser native `title` tooltips are inconsistent across OS and can't be styled.
+
+---
+
+<!-- insight:111865948638 | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:00:51.608Z -->
+## ★ Insight
+- The `ActivityTurnInput` minimal interface decouples all three algorithm modules from the full `UsageTurn` shape. This pattern — accepting a structural subset — lets both the JSONL-parsed path (fat `UsageTurn[]`) and the DB path (thin `{ts, cost_usd}[]`) share one algorithm without any runtime casting.
+- Building the computation as pure functions with a `today?: Date` parameter makes the streak and calendar logic trivially testable in isolation — no filesystem mocking needed.
+
+---
+
+<!-- insight:b2788029e685 | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T15:47:59.215Z -->
+## ★ Insight
+- The DB façade is structurally independent from `aggregateUsage` — it builds `UsageReport` shape from SQL aggregates, not from `UsageTurn[]`. Any new field on `UsageReport` requires a parallel implementation in both `aggregator.ts` and `usageFromDb.ts`.
+- For streak/calendar parity, the cheapest path is to extract pure logic modules that take `UsageTurn[]`, then have the DB path do a single small `SELECT ts, cost_usd FROM turns` (no aggregation, just raw timestamps for the project filter) and call the same modules. Keeps algorithm in one place.
+- Local-time bucketing in SQLite is fragile (depends on server TZ at query time). Pulling timestamps and converting in JS keeps the bucketing rule co-located with the logic that asserts it.
+
+---
+
+<!-- insight:aae817fbfa30 | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T15:42:16.629Z -->
+## ★ Insight
+Two key design choices the plan must lock down before execution:
+1. **Local time vs UTC bucketing** — the existing aggregator uses `turn.timestamp.slice(0,10)` which is implicitly UTC, but `getPeriodStart()` uses local time. For "I work at 9pm" patterns to show up correctly, the new hour-of-day/day-of-week aggregations must use local time. This is a deliberate departure from `daily`'s UTC bucketing — worth flagging.
+2. **Streak & calendar must NOT respect the period filter** — they're inherently long-window concepts (streak = longest run of activity over all time; calendar = always 52 weeks). They should still respect the `?project=` filter. This means routing them differently in `generateUsageReport`: compute from unfiltered turns, then attach to the report alongside the period-filtered aggregates.
+
+---
+
+<!-- insight:e7c763a4498a | session:0768be8a-4833-4afb-8d4c-54575b1596f6 | 2026-05-05T04:57:37.034Z -->
+## ★ Insight
+Cluster I bundles 5 TODOs (#177 facets, #181a thinking blocks, #181b turn latency, #127 resume anomalies, #187 version history) that all share the same data spine: the JSONL parser in `src/lib/scanner/claudeConversations.ts` and the analytics surface in `/usage` + session detail. Wave 3.1 already shipped the Diagnosis panel — anomaly detection extends it rather than building a new surface.
+
+---
+
+<!-- insight:4c3229757765 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T04:52:06.058Z -->
+## ★ Insight
+**Token deduplication in overlap scoring:** The bug at #1 is a subtle false-positive amplification — if a skill's description says "build" 5 times, it counts as 5 overlapping tokens against a candidate that contains "build" once. Using a `Set` on the entry side makes the score reflect *unique* shared vocabulary, which is the correct intent.
+
+---
+
+<!-- insight:838ce8eb604c | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T04:21:07.166Z -->
+## ★ Insight
+For testing streaming code like `readCompactionSummary`, `Readable.from([content])` is the cleanest approach — it creates a real readable stream from an array, so the real `readline.createInterface` works correctly against it, avoiding complex readline mocking. The `vi.mock("fs")` partial mock (via `importOriginal` spread) keeps all other fs functions intact and only overrides `createReadStream`.
+
+---
+
+<!-- insight:7b6be4d3ce6b | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T03:55:43.874Z -->
+## ★ Insight
+The quality route pattern is the canonical template here: `try/catch` wrapping `loadSessionTurnsBySessionId` with `instanceof SessionTurnsLoadError` → 500, then `null` → 404 after the try block. The handoff route skips the try/catch entirely, so a parse failure would bubble as an unhandled 500 with no log trace — hard to debug.
+
+---
+
+<!-- insight:98e82478c734 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T02:31:10.603Z -->
+## ★ Insight
+The `parseMetaFile` extraction is a good example of the sync/async split pattern: when you have a pure transformation (string → structured data), extract it as a sync pure function and let both the async and sync I/O wrappers call it. This keeps the logic in one place even when the I/O layer must fork.
+
+---
+
+<!-- insight:97998c3ff6f5 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T02:05:48.315Z -->
+## ★ Insight
+The Patterns tab is revealing something genuinely useful: `git → gh` in 20 out of 30 sessions with 101 runs is the strongest workflow candidate. That's a PR submission flow (`git commit` + `gh pr create`) running in 2/3 of all sessions. This is exactly the kind of data-driven evidence the feature was designed to surface — not a guess, but a measurement.
+
+---
+
+<!-- insight:6a95bae2de1f | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:59:39.420Z -->
+## ★ Insight
+The CHANGELOG entry deliberately includes the test counts and the module names — this serves as a fast "did it ship?" audit trail. Future waves can grep `sessionHandoff` in CHANGELOG to instantly locate when this feature landed without needing git log.
+
+---
+
+<!-- insight:aaeb05cdfbde | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:53:38.787Z -->
+## ★ Insight
+Using CSS custom properties (design tokens) for chip colors rather than hardcoded hex values ensures the chips stay consistent with the rest of the design system's dark mode — the tokens are defined in `globals.css` and apply the right hue for the current theme.
+
+---
+
+<!-- insight:1720a94b0889 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:47:19.312Z -->
+## ★ Insight
+A focus trap in a modal requires `tabIndex` management and keyboard event interception. The minimal approach: wrap content in a container, intercept Tab/Shift+Tab at the document level via `useEffect`, and enumerate focusable elements with a querySelector. This avoids any dependency like `focus-trap-react`.
+
+---
+
+<!-- insight:3cd4c876e2ae | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:40:26.175Z -->
+## ★ Insight
+`better-sqlite3` is explicitly designed as a synchronous library — its entire value proposition is zero-callback DB access. Mixing async file I/O into a sync DB function by adding a sync `fs` variant is the correct pattern here, not converting the function to async.
+
+---
+
+<!-- insight:bb1fc2acf95b | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:33:38.075Z -->
+## ★ Insight
+The `SkillEntry` type extends `CatalogEntryBase` which has many required fields (`slug`, `filePath`, `bodyExcerpt`, `frontmatter`, `mtime`, `ctime`, `provenance`). For test fixtures, providing all of them keeps TypeScript happy without casts — cleaner than `as unknown as SkillEntry`.
+
+---
+
+<!-- insight:5407efafb905 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:23:06.252Z -->
+## ★ Insight
+- The fidelity scoring uses whole-word regex matching rather than substring matching — "src/auth.ts" shouldn't match "authentication.ts". `\b` anchors handle this cleanly for file basenames and command binaries.
+- `compact_boundary` record formats vary by Claude Code version, so the reader tries four detection patterns in priority order and takes the first match.
+
+---
+
+<!-- insight:91ea566898f8 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:15:40.672Z -->
+## ★ Insight
+- Claude Code's subagent hex IDs (`agent-a4160e1e125348341`) are internal to the spawned child process and have no derivable relationship to the parent session's `toolu_01...` tool_use IDs. **Description-based matching** is the correct correlation strategy — the `description` field in `.meta.json` is always the same string passed as `input.description` in the parent's Agent tool call.
+- Meta files without a `description` field (only `agentType`) can't be matched to a parent block, but that's fine: those subagents were spawned without a description, so `agentType: "general-purpose"` from the parent's `input.subagent_type` is equivalent.
+
+---
+
+<!-- insight:ab7e7fad25ec | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:10:55.048Z -->
+## ★ Insight
+- Defining `SubagentCategory` in `types.ts` (not in `subagentMeta.ts`) avoids circular imports — scanner modules import from `types.ts`, not the other way around. The plan's "re-export from subagentMeta.ts" is actually a re-export *of* a `types.ts` type, which is the correct direction.
+
+---
+
+<!-- insight:5d53f81a345a | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T01:02:16.851Z -->
+## ★ Insight
+- The aggregator pattern: cross-session detectors (`detectOneShot`, `detectSelfCorrectionPerModel`) plug into the global aggregator; project-scoped detectors (`wasteOptimizer`, `yieldAnalysis`) live behind project-API routes with 5-min caches. `workflowPatterns` is project-scoped → API-route pattern, NOT aggregator wedge.
+- Two-path consistency: enriching subagents needs to land in *both* `claudeConversations.ts:618-624` (file path) and `sessionDetailFromDb.ts:417-423` (DB path), reading from a shared `subagentMeta.ts` so `MINDER_USE_DB=0/1` produces identical output.
+
+---
+
+<!-- insight:ab7201143711 | session:3d4b16aa-2bd1-476d-9b46-aaa559f1c26c | 2026-05-05T00:57:22.542Z -->
+## ★ Insight
+- Cluster H has four artifacts but two distinct knowledge bases: parser-side (subagents, handoff facts) and aggregator-side (workflow fingerprinting across sessions). They share the JSONL turn iterator but write to different read shapes.
+- TODO #170 (handoff doc) and TODO #129 (mechanical handoff) are intentionally paired — #129 produces the *structured facts*, #170 produces the *prose document*. Building #129 first means #170 is just a templating layer.
+
+---
+
+<!-- insight:407f7ead392c | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T23:29:29.130Z -->
+## ★ Insight
+The encoding bug (`/[:\\.]/g` vs `/[:\\/]/g`) is a classic "escaping confusion" trap — inside a character class `[]`, the backslash `\` is a literal, so `\\.` matches `\` and `.`. The intent was to match backslash and dot, but the canonical Claude Code encoding only replaces `:`, `\`, and `/`. The dot preservation matters for paths like `my.project` — the real directory on disk keeps the dot.
+
+---
+
+<!-- insight:e596b8317f9b | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T22:20:03.314Z -->
+## ★ Insight
+The `Bar` extraction here is a composition pattern: `BarRow` becomes a thin data-mapping wrapper that delegates rendering to `Bar`, while `PairRow` can use `Bar` directly. This is the right direction — you don't need `BarRow` and `PairRow` to converge further because they have different data shapes.
+
+---
+
+<!-- insight:7024d507dc20 | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T22:18:15.015Z -->
+## ★ Insight
+Extracting `gatherProjectTurns` to a shared module catches a subtle difference between the two new routes and the efficiency route: efficiency uses `||` (OR), while the new routes used `&&` (AND with negation via `continue`). They're logically equivalent (De Morgan), but normalizing to one form in one place eliminates any future confusion about which is right.
+
+---
+
+<!-- insight:9098124e2fa6 | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T21:23:46.226Z -->
+## ★ Insight
+The `MAX_FILES_PER_SESSION = 200` cap in `fileCoupling.ts` prevents O(n²) pair explosion: a refactor touching 500 files would generate ~125k pairs from a single session. The cap also enforces "most recently touched" semantics since edits are chronological in JSONL order.
+
+---
+
+<!-- insight:aaec9200017f | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T21:23:05.060Z -->
+## ★ Insight
+`FILE_OP_BY_TOOL` includes `Read` ("read") but `file_edits` only stores write-class ops. Hot files should use `extractWriteEdits` (write/edit/delete only); coupling will also use write-class since co-reading config files in every session isn't meaningful coupling.
+
+---
+
+<!-- insight:2cc8df1d8a2c | session:285e725b-021d-45cc-998c-43d440e060bf | 2026-05-04T21:20:49.702Z -->
+## ★ Insight
+The `file_edits` table was designed for this exact purpose (comment in schema.sql: "Drives the hot-file detector and file-coupling diagrams from the TODO") — the schema was pre-planned to support Cluster G. We just need to wire the business logic on top.
+
+---
+
 <!-- insight:4f848c1c57d7 | session:1d3042ad-8f0a-4d03-99ea-7ace129a0e0f | 2026-05-04T19:24:50.076Z -->
 ## ★ Insight
 - `git switch -c` is the modern replacement for `git checkout -b` — same effect, clearer intent (switch = move HEAD, `-c` = create new branch).
