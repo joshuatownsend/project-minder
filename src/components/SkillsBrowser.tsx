@@ -8,6 +8,7 @@ import { Wrench, Search, ChevronDown, ChevronRight, ExternalLink } from "lucide-
 import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
+import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { formatRelativeTime } from "@/lib/utils";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
@@ -133,6 +134,9 @@ function SkillRowItem({
               >
                 standalone
               </span>
+            )}
+            {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
+              <CatalogLintChip warnings={row.entry.parseWarnings} />
             )}
           </div>
           {truncDesc && (

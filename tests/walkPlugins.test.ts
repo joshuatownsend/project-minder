@@ -141,4 +141,45 @@ describe("loadInstalledPlugins", () => {
     const result = await loadInstalledPlugins();
     expect(result).toHaveLength(1);
   });
+
+  it("picks highest semver version when multiple installs exist for same key", async () => {
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const filePath = p as string;
+      if (filePath.endsWith("installed_plugins.json")) {
+        return makePluginsFile({
+          "myplugin@marketplace": [
+            { installPath: "/fake/plugins/myplugin/1.0.0", version: "1.0.0" },
+            { installPath: "/fake/plugins/myplugin/1.2.0", version: "1.2.0" },
+            { installPath: "/fake/plugins/myplugin/1.1.0", version: "1.1.0" },
+          ],
+        });
+      }
+      throw NO_PLUGIN_JSON;
+    });
+
+    const result = await loadInstalledPlugins();
+    expect(result).toHaveLength(1);
+    expect(result[0].version).toBe("1.2.0");
+    expect(result[0].installPath).toContain("1.2.0");
+  });
+
+  it("handles non-semver version strings without crashing (string-compare fallback)", async () => {
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const filePath = p as string;
+      if (filePath.endsWith("installed_plugins.json")) {
+        return makePluginsFile({
+          "myplugin@marketplace": [
+            { installPath: "/fake/plugins/myplugin/a", version: "0.0.1-alpha" },
+            { installPath: "/fake/plugins/myplugin/b", version: "0.0.1-beta" },
+          ],
+        });
+      }
+      throw NO_PLUGIN_JSON;
+    });
+
+    const result = await loadInstalledPlugins();
+    expect(result).toHaveLength(1);
+    // Should not throw; picks one deterministically
+    expect(result[0].version).toBeTruthy();
+  });
 });

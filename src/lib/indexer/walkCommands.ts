@@ -2,7 +2,9 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { parseFrontmatter } from "./parseFrontmatter";
+import { resolveProvenance } from "./provenance";
 import type { CommandEntry } from "../types";
+import type { ProvenanceContext } from "./types";
 
 type CommandSource = "user" | "plugin" | "project";
 
@@ -19,9 +21,10 @@ function makeCommandEntry(
     ctime: Date;
     isSymlink?: boolean;
     realPath?: string;
+    ctx?: ProvenanceContext;
   }
 ): CommandEntry {
-  const { fm, body } = parseFrontmatter(text);
+  const { fm, body, warnings } = parseFrontmatter(text);
 
   const slug = path.basename(filePath, ".md");
   const rawName = fm.name;
@@ -37,6 +40,19 @@ function makeCommandEntry(
 
   const prefix = opts.pluginName ?? opts.projectSlug ?? "user";
   const id = `command:${source}:${prefix}:${opts.relPath}`;
+
+  const provenance = opts.ctx
+    ? resolveProvenance({
+        source,
+        entryKind: "agent",
+        slug,
+        isSymlink: opts.isSymlink,
+        realPath: opts.realPath,
+        pluginName: opts.pluginName,
+        projectSlug: opts.projectSlug,
+        ctx: opts.ctx,
+      })
+    : undefined;
 
   return {
     id,
@@ -57,6 +73,8 @@ function makeCommandEntry(
       typeof fm["argument-hint"] === "string" ? fm["argument-hint"] : undefined,
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
+    provenance,
+    parseWarnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 
@@ -70,6 +88,7 @@ async function readCommand(
     relPath: string;
     isSymlink?: boolean;
     realPath?: string;
+    ctx?: ProvenanceContext;
   }
 ): Promise<CommandEntry | null> {
   try {
@@ -91,7 +110,7 @@ async function walkDir(
   dir: string,
   root: string,
   source: CommandSource,
-  opts: { pluginName?: string; projectSlug?: string },
+  opts: { pluginName?: string; projectSlug?: string; ctx?: ProvenanceContext },
   depth = 0
 ): Promise<CommandEntry[]> {
   if (depth > 4) return [];
@@ -158,13 +177,14 @@ async function walkDir(
   return results;
 }
 
-export async function walkUserCommands(): Promise<CommandEntry[]> {
+export async function walkUserCommands(ctx?: ProvenanceContext): Promise<CommandEntry[]> {
   const root = path.join(os.homedir(), ".claude", "commands");
-  return walkDir(root, root, "user", {});
+  return walkDir(root, root, "user", { ctx });
 }
 
 export async function walkPluginCommands(
-  installedPlugins: { pluginName: string; installPath: string }[]
+  installedPlugins: { pluginName: string; installPath: string }[],
+  ctx?: ProvenanceContext
 ): Promise<CommandEntry[]> {
   const all: CommandEntry[] = [];
 
@@ -176,7 +196,7 @@ export async function walkPluginCommands(
       } catch {
         return;
       }
-      const entries = await walkDir(commandsDir, commandsDir, "plugin", { pluginName });
+      const entries = await walkDir(commandsDir, commandsDir, "plugin", { pluginName, ctx });
       all.push(...entries);
     })
   );
@@ -186,7 +206,8 @@ export async function walkPluginCommands(
 
 export async function walkProjectCommands(
   projectPath: string,
-  projectSlug: string
+  projectSlug: string,
+  ctx?: ProvenanceContext
 ): Promise<CommandEntry[]> {
   const commandsDir = path.join(projectPath, ".claude", "commands");
   try {
@@ -194,5 +215,5 @@ export async function walkProjectCommands(
   } catch {
     return [];
   }
-  return walkDir(commandsDir, commandsDir, "project", { projectSlug });
+  return walkDir(commandsDir, commandsDir, "project", { projectSlug, ctx });
 }

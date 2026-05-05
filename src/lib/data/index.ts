@@ -488,17 +488,41 @@ export interface AgentUsageResult {
  * - DB mode + zero Agent rows: file-parse fallback (UX — keeps the
  *   agents page populated until the indexer catches up).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
+ *
+ * In both backends, per-agent cost is computed via a parallel sidechain
+ * file-parse (no schema migration required) and merged into the stats.
  */
 export async function getAgentUsage(): Promise<AgentUsageResult> {
-  if (!dbModeRequested()) return runFileAgentUsage();
+  const { computeAgentCostFromFiles } = await import("@/lib/usage/agentCost");
+
+  if (!dbModeRequested()) {
+    const result = await runFileAgentUsage();
+    const costMap = await computeAgentCostFromFiles();
+    return { stats: mergeAgentCost(result.stats, costMap), meta: result.meta };
+  }
 
   const db = await getReadyDb();
   const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db));
   if (stats.length === 0) {
     logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
-    return runFileAgentUsage();
+    const result = await runFileAgentUsage();
+    const costMap = await computeAgentCostFromFiles();
+    return { stats: mergeAgentCost(result.stats, costMap), meta: result.meta };
   }
-  return { stats, meta: { backend: "db" } };
+  const costMap = await computeAgentCostFromFiles();
+  return { stats: mergeAgentCost(stats, costMap), meta: { backend: "db" } };
+}
+
+function mergeAgentCost(
+  stats: AgentStats[],
+  costMap: Map<string, { costUsd: number; inputTokens: number; outputTokens: number }>
+): AgentStats[] {
+  if (costMap.size === 0) return stats;
+  return stats.map((s) => {
+    const cost = costMap.get(s.name.toLowerCase()) ?? costMap.get(s.name);
+    if (!cost || cost.costUsd === 0) return s;
+    return { ...s, costUsd: cost.costUsd, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens };
+  });
 }
 
 async function runFileAgentUsage(): Promise<AgentUsageResult> {

@@ -25,6 +25,7 @@ export interface AgentRow {
     provenance: Provenance;
     isSymlink?: boolean;
     realPath?: string;
+    parseWarnings?: string[];
   };
   usage?: {
     name: string;
@@ -33,6 +34,9 @@ export interface AgentRow {
     lastUsed?: string;
     projects: Record<string, number>;
     sessions: string[];
+    costUsd?: number;
+    inputTokens?: number;
+    outputTokens?: number;
   };
   catalogMissing?: boolean;
 }

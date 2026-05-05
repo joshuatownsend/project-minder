@@ -21,6 +21,21 @@ interface PluginManifest {
   repository?: string;
 }
 
+function parseSemverParts(v: string): [number, number, number] {
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return [-1, -1, -1];
+  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+}
+
+function compareSemver(a: string, b: string): number {
+  const [amaj, amin, apatch] = parseSemverParts(a);
+  const [bmaj, bmin, bpatch] = parseSemverParts(b);
+  if (amaj !== bmaj) return amaj - bmaj;
+  if (amin !== bmin) return amin - bmin;
+  if (apatch !== bpatch) return apatch - bpatch;
+  return a.localeCompare(b); // fallback for pre-release suffixes / non-semver
+}
+
 async function readPluginRepoUrl(installPath: string): Promise<string | undefined> {
   try {
     const raw = await fs.readFile(
@@ -59,7 +74,11 @@ export async function loadInstalledPlugins(): Promise<InstalledPlugin[]> {
         const pluginName = lastAt > 0 ? key.slice(0, lastAt) : key;
         const marketplace = lastAt > 0 ? key.slice(lastAt + 1) : "";
 
-        const install = installs[0];
+        // Pick the highest semver when multiple installs exist for the same key.
+        const sorted = [...installs].sort((a, b) =>
+          compareSemver(b.version ?? "", a.version ?? "")
+        );
+        const install = sorted[0];
         if (!install.installPath) return;
 
         const installPath = path.normalize(install.installPath);

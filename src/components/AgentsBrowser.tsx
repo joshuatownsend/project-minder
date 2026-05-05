@@ -9,6 +9,7 @@ import { Bot, Search, ChevronDown, ChevronRight, ExternalLink } from "lucide-rea
 import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
+import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { formatRelativeTime } from "@/lib/utils";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
@@ -126,6 +127,26 @@ function AgentRowItem({
                 {row.entry.model}
               </span>
             )}
+            {row.entry?.provenance?.kind === "marketplace-plugin" &&
+              row.entry.provenance.pluginVersion &&
+              row.entry.provenance.pluginVersion !== "unknown" && (
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.6rem",
+                    color: "var(--text-muted)",
+                    background: "var(--bg-surface)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "3px",
+                    padding: "1px 5px",
+                  }}
+                >
+                  v{row.entry.provenance.pluginVersion}
+                </span>
+              )}
+            {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
+              <CatalogLintChip warnings={row.entry.parseWarnings} />
+            )}
           </div>
           {truncDesc && (
             <p
@@ -151,6 +172,17 @@ function AgentRowItem({
             flexShrink: 0,
           }}
         >
+          {row.usage?.costUsd != null && row.usage.costUsd > 0 && (
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6rem",
+                color: "var(--text-muted)",
+              }}
+            >
+              ${row.usage.costUsd.toFixed(2)}
+            </span>
+          )}
           {row.usage && row.usage.invocations > 0 && (
             <span
               style={{

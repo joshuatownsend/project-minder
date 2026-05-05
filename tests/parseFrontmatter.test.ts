@@ -51,4 +51,30 @@ describe("parseFrontmatter", () => {
     const result = parseFrontmatter(text);
     expect(result.fm).toEqual({});
   });
+
+  it("returns empty warnings on valid frontmatter", () => {
+    const text = `---\nname: my-agent\n---\nBody.`;
+    const result = parseFrontmatter(text);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("captures YAML parse error in warnings", () => {
+    const text = `---\nname: test\ndescription: Use when user asks: <example>foo</example>\n---\nBody.`;
+    const result = parseFrontmatter(text);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toContain("YAML parse error");
+    expect(result.fm).toEqual({});
+  });
+
+  it("warns when --- prefix is present but no closing ---", () => {
+    const text = `---\nname: broken`;
+    const result = parseFrontmatter(text);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toContain("no closing ---");
+  });
+
+  it("returns empty warnings when there is no frontmatter at all", () => {
+    const result = parseFrontmatter("plain text, no frontmatter");
+    expect(result.warnings).toEqual([]);
+  });
 });

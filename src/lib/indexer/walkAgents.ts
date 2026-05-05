@@ -21,7 +21,7 @@ function makeAgentEntry(
     ctx: ProvenanceContext;
   }
 ): AgentEntry {
-  const { fm, body } = parseFrontmatter(text);
+  const { fm, body, warnings } = parseFrontmatter(text);
 
   const rawName = fm.name;
   const slug = path.basename(filePath, ".md");
@@ -74,6 +74,7 @@ function makeAgentEntry(
     provenance,
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
+    parseWarnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 

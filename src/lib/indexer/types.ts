@@ -71,6 +71,7 @@ interface CatalogEntryBase {
   provenance: Provenance;
   isSymlink?: boolean;
   realPath?: string;
+  parseWarnings?: string[];
 }
 
 export interface AgentEntry extends CatalogEntryBase {

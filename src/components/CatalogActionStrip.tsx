@@ -3,6 +3,7 @@
 import type { Provenance } from "@/lib/indexer/types";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 import { ApplyUnitButton } from "@/components/ApplyUnitButton";
+import { CopyInvocationButton } from "@/components/CopyInvocationButton";
 import type { ApplySource, UnitRef } from "@/lib/types";
 
 interface CatalogEntryLike {
@@ -14,7 +15,9 @@ interface CatalogEntryLike {
   source?: "user" | "plugin" | "project";
   projectSlug?: string;
   slug?: string;
+  name?: string;
   layout?: "bundled" | "standalone";
+  userInvocable?: boolean;
 }
 
 export function CatalogActionStrip({
@@ -92,6 +95,7 @@ export function CatalogActionStrip({
           update: {updateStatus.currentRef} → {updateStatus.upstreamRef}
         </span>
       )}
+      <InvocationButton entry={entry} />
       {sourceUrl && (
         <a
           href={sourceUrl.startsWith("http") ? sourceUrl : `https://${sourceUrl}`}
@@ -128,6 +132,22 @@ export function CatalogActionStrip({
       <ApplySlot entry={entry} />
     </div>
   );
+}
+
+function InvocationButton({ entry }: { entry: CatalogEntryLike }) {
+  if (!entry.kind || !entry.slug) return null;
+  const name = entry.name ?? entry.slug;
+  if (entry.kind === "agent") {
+    return <CopyInvocationButton text={`@${name}`} title={`Copy agent invocation: @${name}`} />;
+  }
+  if (entry.kind === "skill") {
+    const text = entry.userInvocable ? `/${name}` : `Skill: ${name}`;
+    const hint = entry.userInvocable
+      ? `Copy skill invocation: /${name}`
+      : `Copy skill reference: Skill: ${name}`;
+    return <CopyInvocationButton text={text} title={hint} />;
+  }
+  return null;
 }
 
 /** Renders the "↗ copy to project" action when the entry has enough metadata

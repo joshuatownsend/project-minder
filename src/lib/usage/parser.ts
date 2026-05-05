@@ -102,6 +102,13 @@ export interface ParseSessionTurnsOptions {
    * diagnosis (the valid lines yield meaningful data).
    */
   strict?: boolean;
+  /**
+   * When true, include sidechain (subagent) turns instead of skipping them.
+   * Turns are tagged with `isSidechain: true` and `parentToolUseId` when
+   * available. Used by per-agent cost aggregation; NOT used by the main
+   * usage reporting path (default: false preserves existing behavior).
+   */
+  includeSidechains?: boolean;
 }
 
 export async function parseSessionTurns(
@@ -135,7 +142,7 @@ export async function parseSessionTurns(
     }
 
     // Skip internal entries
-    if (entry.isSidechain) continue;
+    if (entry.isSidechain && !options.includeSidechains) continue;
     if (entry.isMeta) continue;
     if (!entry.timestamp) continue;
 
@@ -174,6 +181,8 @@ export async function parseSessionTurns(
         toolCalls,
         assistantText,
         isError,
+        isSidechain: entry.isSidechain ? true : undefined,
+        parentToolUseId: entry.parentToolUseID ?? undefined,
       });
     } else if (type === "user") {
       const messageContent = entry.message?.content ?? [];
@@ -273,7 +282,7 @@ export async function parseSessionTurnsWithMeta(
       continue;
     }
 
-    if (entry.isSidechain) continue;
+    if (entry.isSidechain && !options.includeSidechains) continue;
     if (entry.isMeta) continue;
     if (!entry.timestamp) continue;
 
@@ -319,6 +328,8 @@ export async function parseSessionTurnsWithMeta(
         toolCalls,
         assistantText,
         isError,
+        isSidechain: entry.isSidechain ? true : undefined,
+        parentToolUseId: entry.parentToolUseID ?? undefined,
       });
     } else if (type === "user") {
       const messageContent = entry.message?.content ?? [];

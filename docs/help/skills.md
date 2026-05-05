@@ -44,7 +44,8 @@ An **amber dot** on the provenance badge indicates an update is available. The e
 - **Source filter** — narrow to user / plugin / project skills
 - **Updates filter** — show only skills with detected updates; `…` appears while the background check is still running
 - **Sort** — by most invoked, recently used, or name A–Z
-- **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator
+- **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator, amber `!` lint chip (on parse warnings — hover to see the error)
+- **Copy button** — copies the invocation string to clipboard: `/<name>` for user-invocable skills, `Skill: <name>` for programmatic-only skills
 - **Expand row** — shows provenance details, action buttons, body excerpt, and recent sessions
 
 ## Per-Row Actions (Expanded View)

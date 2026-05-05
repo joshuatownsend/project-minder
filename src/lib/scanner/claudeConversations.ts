@@ -42,6 +42,8 @@ export interface ConversationEntry {
   parentUuid?: string;
   /** Claude Code CLI version that wrote this entry. */
   version?: string;
+  /** On sidechain entries: the tool_use_id of the Task call that spawned this sidechain. */
+  parentToolUseID?: string;
   message?: {
     model?: string;
     stop_reason?: string;
