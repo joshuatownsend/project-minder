@@ -7,6 +7,9 @@ import type { CategoryType, ProjectDetail } from "@/lib/usage/types";
 import { Download, Layers, AlignJustify } from "lucide-react";
 import { FeedbackAggregate } from "./FeedbackAggregate";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
+import { HourlyDistributionChart } from "./HourlyDistributionChart";
+import { Heatmap2D } from "./Heatmap2D";
+import { ContributionCalendar } from "./ContributionCalendar";
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 
@@ -713,6 +716,51 @@ export function UsageDashboard() {
           <div>
             <SectionHeader label="Daily Cost" />
             <DailyCostChart daily={data.daily} />
+          </div>
+
+          {/* Activity patterns — always full history, project-scoped if ?project */}
+          <div>
+            <SectionHeader label="Activity" />
+            <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "14px", fontFamily: "var(--font-body)" }}>
+              Patterns based on all sessions; period filter doesn&apos;t apply.
+            </div>
+            {/* Streak stat cards */}
+            <div style={{ display: "flex", border: "1px solid var(--border-subtle)", borderRadius: "8px", overflow: "hidden", marginBottom: "16px" }}>
+              <StatCell
+                label="Current Streak"
+                value={`${data.streak.currentDays} d`}
+                detail={data.streak.lastActiveDate ? `Last active ${data.streak.lastActiveDate}` : "No recent activity"}
+                accent={data.streak.currentDays > 0 ? "good" : undefined}
+              />
+              <StatCell
+                label="Longest Streak"
+                value={`${data.streak.longestDays} d`}
+                detail={`${data.streak.totalActiveDays} total active days`}
+                last
+              />
+            </div>
+            {/* Hourly + heatmap side by side */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
+                  Hourly Distribution
+                </div>
+                <HourlyDistributionChart byHourOfDay={data.byHourOfDay} />
+              </div>
+              <div>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
+                  Day × Hour Heatmap
+                </div>
+                <Heatmap2D byHourDay={data.byHourDay} />
+              </div>
+            </div>
+            {/* 52-week calendar */}
+            <div>
+              <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
+                52-Week Activity
+              </div>
+              <ContributionCalendar cells={data.contributionCalendar} />
+            </div>
           </div>
 
           {/* Feedback aggregate */}
