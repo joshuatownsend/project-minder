@@ -16,15 +16,28 @@ export async function countProjectCatalog(
 }
 
 async function countAgents(projectPath: string): Promise<number> {
-  const agentsDir = path.join(projectPath, ".claude", "agents");
+  return countAgentsDir(path.join(projectPath, ".claude", "agents"));
+}
+
+async function countAgentsDir(dir: string): Promise<number> {
+  let entries;
   try {
-    const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-    return entries.filter(
-      (e) => e.isFile() && e.name.endsWith(".md") && !e.name.endsWith(".tmpl")
-    ).length;
+    entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return 0;
   }
+  let count = 0;
+  await Promise.all(
+    entries.map(async (e) => {
+      if (e.name.startsWith(".")) return;
+      if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md") && !e.name.endsWith(".tmpl")) {
+        count++;
+      } else if (e.isDirectory()) {
+        count += await countAgentsDir(path.join(dir, e.name));
+      }
+    })
+  );
+  return count;
 }
 
 async function countSkills(projectPath: string): Promise<number> {

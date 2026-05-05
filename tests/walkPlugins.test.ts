@@ -163,6 +163,25 @@ describe("loadInstalledPlugins", () => {
     expect(result[0].installPath).toContain("1.2.0");
   });
 
+  it("prefers stable version over prerelease with same numeric core", async () => {
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const filePath = p as string;
+      if (filePath.endsWith("installed_plugins.json")) {
+        return makePluginsFile({
+          "myplugin@marketplace": [
+            { installPath: "/fake/plugins/myplugin/stable", version: "1.2.3" },
+            { installPath: "/fake/plugins/myplugin/pre", version: "1.2.3-beta" },
+          ],
+        });
+      }
+      throw NO_PLUGIN_JSON;
+    });
+
+    const result = await loadInstalledPlugins();
+    expect(result).toHaveLength(1);
+    expect(result[0].version).toBe("1.2.3");
+  });
+
   it("handles non-semver version strings without crashing (string-compare fallback)", async () => {
     mockReadFile.mockImplementation(async (p: unknown) => {
       const filePath = p as string;

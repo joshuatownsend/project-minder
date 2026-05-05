@@ -103,4 +103,34 @@ describe("countProjectCatalog", () => {
     const result = await countProjectCatalog("/fake/project");
     expect(result.agentCount).toBe(0);
   });
+
+  it("counts symlinked .md files in agents dir", async () => {
+    mockReaddir.mockImplementation(async (p: unknown) => {
+      const dir = p as string;
+      if (dir.endsWith(path.join(".claude", "agents"))) {
+        return [makeEntry("linked-agent.md", "symlink")] as any;
+      }
+      throw new Error("ENOENT");
+    });
+
+    const result = await countProjectCatalog("/fake/project");
+    expect(result.agentCount).toBe(1);
+  });
+
+  it("counts agents in nested subdirectories", async () => {
+    mockReaddir.mockImplementation(async (p: unknown) => {
+      const dir = p as string;
+      if (dir.endsWith(path.join(".claude", "agents"))) {
+        return [
+          makeEntry("top-level.md", "file"),
+          makeEntry("category", "directory"),
+        ] as any;
+      }
+      // Subdirectory
+      return [makeEntry("nested-agent.md", "file")] as any;
+    });
+
+    const result = await countProjectCatalog("/fake/project");
+    expect(result.agentCount).toBe(2);
+  });
 });

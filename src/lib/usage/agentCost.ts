@@ -24,7 +24,7 @@ interface RawEntry {
       type?: string;
       name?: string;
       id?: string;
-      input?: Record<string, unknown>;
+      input?: { subagent_type?: string; agent?: string; [key: string]: unknown };
     }>;
     usage?: {
       input_tokens?: number;
@@ -102,13 +102,9 @@ export async function computeAgentCostFromFiles(): Promise<Map<string, AgentCost
               if (entry.isSidechain || entry.isMeta) continue;
               if (entry.type !== "assistant" || !entry.message) continue;
               for (const block of entry.message.content ?? []) {
-                if (
-                  block.type === "tool_use" &&
-                  block.name === "Agent" &&
-                  block.id &&
-                  typeof block.input?.subagent_type === "string"
-                ) {
-                  taskMap.set(block.id, block.input.subagent_type as string);
+                if (block.type === "tool_use" && block.name === "Agent" && block.id) {
+                  const agentName = block.input?.subagent_type ?? block.input?.agent;
+                  if (typeof agentName === "string") taskMap.set(block.id, agentName);
                 }
               }
             }

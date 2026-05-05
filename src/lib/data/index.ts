@@ -521,7 +521,7 @@ function mergeAgentCost(
 ): AgentStats[] {
   if (costMap.size === 0) return stats;
   return stats.map((s) => {
-    const cost = costMap.get(s.name.toLowerCase()) ?? costMap.get(s.name);
+    const cost = costMap.get(s.name) ?? costMap.get(s.name.toLowerCase());
     if (!cost || cost.costUsd === 0) return s;
     return { ...s, costUsd: cost.costUsd, inputTokens: cost.inputTokens, outputTokens: cost.outputTokens };
   });

@@ -180,7 +180,7 @@ function AgentRowItem({
                 color: "var(--text-muted)",
               }}
             >
-              ${row.usage.costUsd.toFixed(2)}
+              ${row.usage.costUsd < 0.01 ? row.usage.costUsd.toFixed(4) : row.usage.costUsd.toFixed(2)}
             </span>
           )}
           {row.usage && row.usage.invocations > 0 && (

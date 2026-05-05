@@ -62,6 +62,9 @@ vi.mock("@/lib/scanner/cicd", () => ({
 vi.mock("@/lib/scanner/worktrees", () => ({
   attachWorktreeOverlays: vi.fn(),
 }));
+vi.mock("@/lib/scanner/projectCatalogCounts", () => ({
+  countProjectCatalog: vi.fn().mockResolvedValue({ agentCount: 0, skillCount: 0 }),
+}));
 
 import { promises as fs } from "fs";
 import { readConfig } from "@/lib/config";

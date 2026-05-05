@@ -1,5 +1,35 @@
 # Insights
 
+<!-- insight:ddbe99e4f51f | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:55:27.896Z -->
+## ★ Insight
+The `globalThis` pattern solves a specific Next.js dev-mode problem: module-level singletons get re-initialized on HMR restarts, but `globalThis` survives them. The tradeoff is that tests running in the same Node.js process share the same `globalThis`, so caches must be explicitly reset in `beforeEach`. This is why the test fix is a `(globalThis as Record<string, unknown>).__agentCostCache = undefined` — casting through `Record<string, unknown>` avoids the typed interface that only `agentCost.ts` knows about.
+
+---
+
+<!-- insight:26fe66592ccb | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:53:03.396Z -->
+## ★ Insight
+The `globalThis` singleton pattern is the idiomatic Next.js way to persist state across hot-module reloads in dev mode. Without it, Next.js recreates module-level variables on each HMR cycle, so every `/api/agents` request triggers a full JSONL scan. The pattern casts `globalThis` to a typed interface so TypeScript accepts the property.
+
+---
+
+<!-- insight:85a82d94b604 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:38:08.208Z -->
+## ★ Insight
+Tailwind CSS v4's oxide scanner extracts ALL strings starting with `--` from scanned source files as potential CSS variable references. If it reads a binary file or a file with unusual Unicode in an identifier-like position, it can produce candidates with invalid CSS escape sequences. Adding `@source` restrictions is the idiomatic v4 fix — it's also faster since you exclude node_modules, screenshots, .codegraph, etc.
+
+---
+
+<!-- insight:bf197bfe00a4 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:33:24.095Z -->
+## ★ Insight
+Tailwind CSS v4's candidate extractor scans CSS file content for potential variable/class candidates. A known issue in 4.x is that non-ASCII characters in CSS (even inside comments) can trigger the `String.fromCodePoint` error when the internal UTF-16 code unit representation is misread as a hex escape sequence. The fix is simply: keep CSS files ASCII-clean.
+
+---
+
+<!-- insight:44488411aae9 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:18:31.357Z -->
+## ★ Insight
+The help docs follow a descriptive pattern — they describe existing UI state, not future plans. Updating them now keeps the runtime-fetchable `/help/agents` page accurate for the new chips, copy button, and cost display that shipped this wave.
+
+---
+
 <!-- insight:d1c1d533f027 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:04:07.424Z -->
 ## ★ Insight
 The per-agent cost computation uses a two-pass approach: (1) scan main-conversation tool_uses to build a `tool_use_id → agent_name` map, then (2) iterate sidechain turns and accumulate cost by matching `parentToolUseId`. This avoids modifying the DB schema while still providing cost attribution.

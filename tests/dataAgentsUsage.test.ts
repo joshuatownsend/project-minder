@@ -125,6 +125,7 @@ async function reloadModules() {
   delete (globalThis as { __usageFileCache?: unknown }).__usageFileCache;
   delete (globalThis as { __sessionIndex?: unknown }).__sessionIndex;
   delete (globalThis as { __sessionsCache?: unknown }).__sessionsCache;
+  delete (globalThis as { __agentCostCache?: unknown }).__agentCostCache;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   return {
     facade: await import("@/lib/data"),

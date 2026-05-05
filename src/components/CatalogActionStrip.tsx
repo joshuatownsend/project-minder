@@ -141,9 +141,10 @@ function InvocationButton({ entry }: { entry: CatalogEntryLike }) {
     return <CopyInvocationButton text={`@${name}`} title={`Copy agent invocation: @${name}`} />;
   }
   if (entry.kind === "skill") {
-    const text = entry.userInvocable ? `/${name}` : `Skill: ${name}`;
+    const slug = entry.slug;
+    const text = entry.userInvocable ? `/${slug}` : `Skill: ${name}`;
     const hint = entry.userInvocable
-      ? `Copy skill invocation: /${name}`
+      ? `Copy skill invocation: /${slug}`
       : `Copy skill reference: Skill: ${name}`;
     return <CopyInvocationButton text={text} title={hint} />;
   }

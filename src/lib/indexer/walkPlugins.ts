@@ -33,7 +33,11 @@ function compareSemver(a: string, b: string): number {
   if (amaj !== bmaj) return amaj - bmaj;
   if (amin !== bmin) return amin - bmin;
   if (apatch !== bpatch) return apatch - bpatch;
-  return a.localeCompare(b); // fallback for pre-release suffixes / non-semver
+  // Stable beats pre-release: "1.2.3" > "1.2.3-beta"
+  const aPrerelease = /^\d+\.\d+\.\d+-./.test(a);
+  const bPrerelease = /^\d+\.\d+\.\d+-./.test(b);
+  if (aPrerelease !== bPrerelease) return aPrerelease ? -1 : 1;
+  return a.localeCompare(b);
 }
 
 async function readPluginRepoUrl(installPath: string): Promise<string | undefined> {
