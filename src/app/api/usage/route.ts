@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
   // toggles MINDER_USE_DB between server starts) invalidates client caches
   // — backends could differ on edge cases until the schema is fully aligned.
   const etag = computeETag({
-    salt: `usage-v2-${slot.backend}`,
+    salt: `usage-v3-${slot.backend}`,
     maxMtimeMs: slot.maxMtime,
     parts: [safePeriod, project ?? ""],
   });
