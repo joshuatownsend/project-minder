@@ -11,21 +11,12 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { applyPricing, getModelPricing, loadPricing } from "@/lib/usage/costCalculator";
+import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import type { UsageTurn } from "@/lib/usage/types";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
 // advances so newly-ingested sessions surface promptly.
-
-/**
- * Convert a Windows or POSIX project path to the canonical dirname
- * Claude Code uses under `~/.claude/projects/`. The encoding rule:
- * `:`, `\`, and `.` all become `-`. Used to match parser-produced
- * `projectDirName` exactly to a scanned project.
- */
-function encodeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[:\\.]/g, "-");
-}
 
 interface EfficiencyResponse {
   slug: string;
@@ -86,29 +77,7 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  // Match turns to this project exactly. Two paths produce different
-  // identifiers for the same directory: scanner uses `toSlug("project-
-  // minder") = "project-minder"`; parser uses `toSlug("C--dev-project-
-  // minder") = "dev-project-minder"` from the encoded dirname. To match
-  // safely without substring false-positives (e.g. slug "api" matching
-  // "my-api-server"), we match on (a) exact slug equality, OR (b) exact
-  // canonical-dirname equality derived from the project's filesystem
-  // path. Reviewer-flagged (Codex P1).
-  //
-  // Per-session early-out: every turn in a session shares the same
-  // projectSlug + projectDirName, so checking the first turn before
-  // walking the rest saves ~99% of the corpus on large installs.
-  const expectedDirName = encodeProjectPath(project.path);
-  const projectTurns: UsageTurn[] = [];
-  for (const turns of sessionMap.values()) {
-    if (turns.length === 0) continue;
-    const head = turns[0];
-    const matches =
-      head.projectSlug === slug ||
-      head.projectDirName === expectedDirName;
-    if (!matches) continue;
-    for (const t of turns) projectTurns.push(t);
-  }
+  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
 
   const waste = runWasteOptimizer({
     turns: projectTurns,

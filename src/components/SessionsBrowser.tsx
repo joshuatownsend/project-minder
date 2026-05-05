@@ -18,9 +18,11 @@ import {
   DollarSign,
   Terminal,
   Check,
+  Pencil,
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
+import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -257,6 +259,9 @@ function SessionRow({
   search?: string;
 }) {
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+  const totalEdits = Object.entries(FILE_OP_BY_TOOL)
+    .filter(([, op]) => isFileWriteOp(op))
+    .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
   const isContentMatch = trimmedSearch
@@ -380,6 +385,12 @@ function SessionRow({
             <Wrench style={{ width: "10px", height: "10px" }} />
             {totalTools}
           </span>
+          {totalEdits > 0 && (
+            <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              <Pencil style={{ width: "10px", height: "10px" }} />
+              {totalEdits} edits
+            </span>
+          )}
           {session.subagentCount > 0 && (
             <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
               <Bot style={{ width: "10px", height: "10px" }} />

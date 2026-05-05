@@ -35,6 +35,8 @@ export const tabHelpMapping: Record<string, string> = {
   agents: 'agents',
   skills: 'skills',
   memory: 'memory',
+  efficiency: 'project-details',
+  'hot-files': 'project-details',
   'config-history': 'config-history',
 }
 
