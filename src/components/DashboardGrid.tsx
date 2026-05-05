@@ -34,6 +34,7 @@ interface DashboardGridProps {
   onUnarchive: (slug: string, status?: ProjectStatus) => void;
   scannedAt?: string;
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
+  efficiencyGrades?: Record<string, string>;
 }
 
 const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };
@@ -65,6 +66,7 @@ export function DashboardGrid({
   onUnarchive,
   scannedAt,
   gitDirtyOverrides,
+  efficiencyGrades,
 }: DashboardGridProps) {
   const [search, setSearch]               = useState("");
   const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
@@ -514,6 +516,7 @@ export function DashboardGrid({
               compact={viewMode === "compact"}
               pinned={pinnedSlugs.includes(project.slug)}
               onTogglePin={onTogglePin}
+              efficiencyGrade={efficiencyGrades?.[project.slug]}
             />
           ))}
           {filtered.length === 0 && (

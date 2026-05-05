@@ -27,9 +27,18 @@ interface ProjectCardProps {
   compact?: boolean;
   pinned?: boolean;
   onTogglePin?: (slug: string) => void;
+  efficiencyGrade?: string;
 }
 
-export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin }: ProjectCardProps) {
+const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }> = {
+  A: { color: "var(--status-active-text)", bg: "var(--status-active-bg)", border: "var(--status-active-border)" },
+  B: { color: "var(--info)",               bg: "var(--info-bg)",          border: "var(--info-border)"           },
+  C: { color: "var(--text-secondary)",     bg: "var(--bg-elevated)",      border: "var(--border-subtle)"         },
+  D: { color: "var(--accent)",             bg: "var(--accent-bg)",        border: "var(--accent-border)"         },
+  F: { color: "var(--status-error-text)",  bg: "var(--status-error-bg)",  border: "var(--status-error-border)"  },
+};
+
+export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const router = useRouter();
@@ -137,6 +146,18 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
               >
                 {pendingTodos + pendingSteps}<span aria-hidden="true">▲</span>
                 <span className="sr-only"> pending items</span>
+              </span>
+            )}
+            {efficiencyGrade && GRADE_STYLE[efficiencyGrade] && (
+              <span
+                title={`Efficiency grade: ${efficiencyGrade}`}
+                style={{
+                  fontSize: "0.6rem", fontFamily: "var(--font-mono)", fontWeight: 700,
+                  color: GRADE_STYLE[efficiencyGrade].color,
+                  cursor: "default",
+                }}
+              >
+                {efficiencyGrade}
               </span>
             )}
             <StatusBadge status={project.status} />
@@ -310,7 +331,8 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
         {(() => {
           const auditChip =
             project.claudeMdAudit?.hasClaudeMd && project.claudeMdAudit.score < 80;
-          if (!hasAttention && insightsTotal === 0 && !auditChip) return null;
+          const gradeStyle = efficiencyGrade ? GRADE_STYLE[efficiencyGrade] : null;
+          if (!hasAttention && insightsTotal === 0 && !auditChip && !gradeStyle) return null;
           return (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             {auditChip && (
@@ -318,6 +340,21 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 score={project.claudeMdAudit!.score}
                 hasClaudeMd={true}
               />
+            )}
+            {gradeStyle && efficiencyGrade && (
+              <span
+                title={`Efficiency grade: ${efficiencyGrade} — view Efficiency tab for details`}
+                style={{
+                  display: "inline-flex", alignItems: "center",
+                  fontSize: "0.72rem", fontWeight: 700, fontFamily: "var(--font-mono)",
+                  color: gradeStyle.color, background: gradeStyle.bg,
+                  border: `1px solid ${gradeStyle.border}`,
+                  borderRadius: "3px", padding: "1px 5px",
+                  cursor: "default",
+                }}
+              >
+                {efficiencyGrade}
+              </span>
             )}
             {pendingTodos > 0 && (
               <span

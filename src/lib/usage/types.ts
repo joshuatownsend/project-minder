@@ -117,6 +117,15 @@ export interface ModelPricing {
   cacheReadCostPerToken: number;
 }
 
+export interface PortfolioYield {
+  totalSessions: number;
+  productive: number;
+  reverted: number;
+  abandoned: number;
+  /** productive / totalSessions across all projects with yield data. */
+  yieldRate: number;
+}
+
 export interface ProjectDetail {
   projectSlug: string;
   projectDirName: string;
@@ -126,6 +135,8 @@ export interface ProjectDetail {
   topTools: [string, number][];
   mcpServers: string[];
   mcpCalls: number;
+  /** Yield classification for this project. Populated by the file-parse path only. */
+  yield?: import("./yieldAnalysis").YieldReport;
 }
 
 export interface AgentStats {
@@ -194,4 +205,6 @@ export interface UsageReport {
   byHourDay: ActivityBucket[][];
   streak: StreakStats;
   contributionCalendar: ContributionCell[];
+  /** Portfolio-level yield aggregate. Populated by the file-parse path only. */
+  portfolioYield?: PortfolioYield;
 }

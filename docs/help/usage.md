@@ -63,6 +63,24 @@ Two charts showing:
 - **Top Tools** — most-used Claude Code tools (Read, Edit, Bash, Write, etc.)
 - **Shell Commands** — most-used CLI commands extracted from Bash/PowerShell invocations (git, npm, docker, etc.)
 
+## Portfolio Yield
+
+The **Portfolio Yield** section appears above the "By Project" breakdown when viewing aggregate data (no project filter active). It summarises how productive your Claude Code sessions have been across all projects, measured by correlating session time-windows with commits on each project's main branch.
+
+- **Yield rate** — percentage of sessions that produced at least one non-reverted commit. Color-coded: green ≥ 70%, amber 40–70%, red < 40%.
+- **Productive** — sessions that overlapped with one or more commits that were not subsequently reverted.
+- **Reverted** — sessions whose commits were later reverted (standard `Revert "<subject>"` form).
+- **Abandoned** — sessions with no matching commits in their time window.
+- **Total sessions** — total sessions with enough data for yield classification.
+
+The section is hidden when no projects have both session data and a detectable main branch (`main` or `master`). It only appears when you are not filtering by a single project — per-project yield is shown on that project's **Efficiency** tab instead.
+
+### Per-project yield chips
+
+In the **By Project** breakdown (toggle at the top of the section), each project row shows a small `NN%↑` yield chip when yield data is available. This lets you quickly compare productivity across projects.
+
+> **Note:** Yield computation runs `git log` per project in parallel when you load `/usage`. On a large portfolio this may take a few seconds the first time. Subsequent loads within the same scan TTL (5 minutes) are instant.
+
 ## Activity Patterns
 
 The **Activity** section surfaces temporal patterns across all of your recorded sessions. Unlike the summary cards and charts above, this section always covers full history — the period switcher (Today / Week / Month / All) doesn't apply. If a project filter is active, patterns are scoped to that project.

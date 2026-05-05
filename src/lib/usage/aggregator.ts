@@ -9,6 +9,9 @@ import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import { bucketByHourDay, type ActivityData } from "./activityBuckets";
 import { computeStreaks } from "./streaks";
 import { computeContributionCalendar } from "./contributionCalendar";
+import { computeProjectYield } from "./computeProjectYield";
+import { gatherProjectTurns } from "./projectMatch";
+import { getCachedScan } from "@/lib/cache";
 import type {
   UsageTurn,
   UsageReport,
@@ -19,6 +22,7 @@ import type {
   CategoryType,
   DailyBucket,
   ToolCall,
+  PortfolioYield,
 } from "./types";
 
 type Period = "today" | "week" | "month" | "all";
@@ -52,7 +56,66 @@ export async function generateUsageReport(
     turns = turns.filter((t) => new Date(t.timestamp) >= periodStart);
   }
 
-  return aggregateUsage(turns, period, activity);
+  const report = await aggregateUsage(turns, period, activity);
+
+  // Augment with portfolio yield — file-parse path only, best-effort.
+  // Uses getCachedScan() (no fresh scan triggered) so this is a no-op
+  // when the dashboard hasn't loaded yet.
+  if (!project) {
+    await augmentPortfolioYield(report, sessionMap);
+  }
+
+  return report;
+}
+
+async function augmentPortfolioYield(
+  report: UsageReport,
+  sessionMap: Map<string, UsageTurn[]>
+): Promise<void> {
+  const scan = getCachedScan();
+  if (!scan || report.projectDetails.length === 0) return;
+
+  const projectPathMap = new Map(scan.projects.map((p) => [p.slug, p.path]));
+
+  const results = await Promise.all(
+    report.projectDetails.map(async (pd) => {
+      const path = projectPathMap.get(pd.projectSlug);
+      if (!path) return null;
+      const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path);
+      try {
+        const result = await computeProjectYield(path, projectTurns);
+        return { detail: pd, result };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  let totalSessions = 0;
+  let productive = 0;
+  let reverted = 0;
+  let abandoned = 0;
+
+  for (const r of results) {
+    if (!r || r.result.kind !== "ok") continue;
+    const yr = r.result.report;
+    r.detail.yield = yr;
+    totalSessions += yr.totalSessions;
+    productive += yr.productive;
+    reverted += yr.reverted;
+    abandoned += yr.abandoned;
+  }
+
+  if (totalSessions > 0) {
+    const portfolioYield: PortfolioYield = {
+      totalSessions,
+      productive,
+      reverted,
+      abandoned,
+      yieldRate: productive / totalSessions,
+    };
+    report.portfolioYield = portfolioYield;
+  }
 }
 
 /**

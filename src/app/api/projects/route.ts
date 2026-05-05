@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { gitStatusCache } from "@/lib/gitStatusCache";
+import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 
 let scanInProgress: Promise<void> | null = null;
 
@@ -39,22 +40,34 @@ export async function GET() {
 }
 
 function enrichAndEnqueue(
-  projects: { slug: string; path: string; git?: { isDirty: boolean; uncommittedCount: number } }[]
+  projects: {
+    slug: string;
+    path: string;
+    git?: { isDirty: boolean; uncommittedCount: number };
+    claude?: { sessionCount: number };
+  }[]
 ) {
-  const toEnqueue: { slug: string; path: string }[] = [];
+  const toEnqueueGit: { slug: string; path: string }[] = [];
+  const toEnqueueGrade: { slug: string; path: string; hasSessions: boolean }[] = [];
 
   for (const p of projects) {
-    if (!p.git) continue;
-    const cached = gitStatusCache.get(p.slug);
-    if (cached) {
-      p.git.isDirty = cached.isDirty;
-      p.git.uncommittedCount = cached.uncommittedCount;
-    } else {
-      toEnqueue.push({ slug: p.slug, path: p.path });
+    if (p.git) {
+      const cached = gitStatusCache.get(p.slug);
+      if (cached) {
+        p.git.isDirty = cached.isDirty;
+        p.git.uncommittedCount = cached.uncommittedCount;
+      } else {
+        toEnqueueGit.push({ slug: p.slug, path: p.path });
+      }
     }
+
+    toEnqueueGrade.push({
+      slug: p.slug,
+      path: p.path,
+      hasSessions: (p.claude?.sessionCount ?? 0) > 0,
+    });
   }
 
-  if (toEnqueue.length > 0) {
-    gitStatusCache.enqueue(toEnqueue);
-  }
+  if (toEnqueueGit.length > 0) gitStatusCache.enqueue(toEnqueueGit);
+  if (toEnqueueGrade.length > 0) efficiencyGradeCache.enqueue(toEnqueueGrade);
 }

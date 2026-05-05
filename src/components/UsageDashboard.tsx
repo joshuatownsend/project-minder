@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useUsage } from "@/hooks/useUsage";
 import { VALID_PERIODS } from "@/lib/usage/constants";
-import type { CategoryType, ProjectDetail } from "@/lib/usage/types";
+import type { CategoryType, ProjectDetail, PortfolioYield } from "@/lib/usage/types";
 import { Download, Layers, AlignJustify } from "lucide-react";
 import { FeedbackAggregate } from "./FeedbackAggregate";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
@@ -260,6 +260,55 @@ const ALL_CATEGORIES: CategoryType[] = [
   "Exploration", "Delegation", "Conversation", "General",
 ];
 
+function PortfolioYieldPanel({ yield: yr }: { yield: PortfolioYield }) {
+  const pct = Math.round(yr.yieldRate * 100);
+  const yieldColor = pct >= 70
+    ? "var(--status-active-text)"
+    : pct >= 40
+      ? "var(--accent)"
+      : "var(--status-error-text)";
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
+      padding: "10px 14px",
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border-subtle)",
+      borderRadius: "var(--radius)",
+    }}>
+      {/* Yield rate */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+        <span style={{ fontSize: "1.5rem", fontWeight: 700, fontFamily: "var(--font-mono)", color: yieldColor }}>
+          {pct}%
+        </span>
+        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>yield rate</span>
+      </div>
+
+      {/* Divider */}
+      <div style={{ width: "1px", height: "28px", background: "var(--border-subtle)", flexShrink: 0 }} />
+
+      {/* Session breakdown */}
+      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+        {([
+          { label: "productive", count: yr.productive, color: "var(--status-active-text)" },
+          { label: "reverted",   count: yr.reverted,   color: "var(--accent)"             },
+          { label: "abandoned",  count: yr.abandoned,  color: "var(--text-muted)"         },
+        ] as const).map(({ label, count, color }) => (
+          <div key={label} style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
+            <span style={{ fontSize: "0.95rem", fontWeight: 600, fontFamily: "var(--font-mono)", color }}>{count}</span>
+            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>{label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Total sessions */}
+      <div style={{ marginLeft: "auto", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+        {yr.totalSessions} sessions analysed
+      </div>
+    </div>
+  );
+}
+
 function ProjectBreakdownView({
   projectDetails,
 }: {
@@ -437,6 +486,23 @@ function ProjectBreakdownView({
                   </span>
                 )}
               </div>
+
+              {/* Per-project yield chip */}
+              {p.yield && (
+                <span
+                  title={`Yield rate: ${Math.round(p.yield.yieldRate * 100)}% (${p.yield.productive} productive, ${p.yield.reverted} reverted, ${p.yield.abandoned} abandoned)`}
+                  style={{
+                    fontSize: "0.62rem", fontFamily: "var(--font-mono)", flexShrink: 0,
+                    color: p.yield.yieldRate >= 0.7
+                      ? "var(--status-active-text)"
+                      : p.yield.yieldRate >= 0.4
+                        ? "var(--accent)"
+                        : "var(--text-muted)",
+                  }}
+                >
+                  {Math.round(p.yield.yieldRate * 100)}%↑
+                </span>
+              )}
             </div>
           );
         })}
@@ -826,6 +892,14 @@ export function UsageDashboard() {
                   )}
                 </div>
               </div>
+
+              {/* Portfolio yield (when not scoped and yield data is available) */}
+              {!project && data.portfolioYield && data.portfolioYield.totalSessions > 0 && (
+                <div>
+                  <SectionHeader label="Portfolio Yield" />
+                  <PortfolioYieldPanel yield={data.portfolioYield} />
+                </div>
+              )}
 
               {/* By project (when not scoped) */}
               {!project && data.byProject.length > 1 && (
