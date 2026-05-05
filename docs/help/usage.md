@@ -67,7 +67,7 @@ Two charts showing:
 
 The **Activity** section surfaces temporal patterns across all of your recorded sessions. Unlike the summary cards and charts above, this section always covers full history — the period switcher (Today / Week / Month / All) doesn't apply. If a project filter is active, patterns are scoped to that project.
 
-A caption below the section header reads "Patterns based on all sessions; period filter doesn't apply" as a reminder.
+A caption below the section header reads "Streak, hourly, and heatmap use all sessions. Calendar shows the past 52 weeks. Period filter doesn't apply." as a reminder.
 
 ### Streak Cards
 

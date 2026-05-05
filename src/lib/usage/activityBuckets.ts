@@ -19,7 +19,7 @@ export interface ActivityData {
 }
 
 function zeroBucket(): ActivityBucket {
-  return { turns: 0, tokens: 0, cost: 0 };
+  return { turns: 0, cost: 0 };
 }
 
 export function emptyActivity(): ActivityData {

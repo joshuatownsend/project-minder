@@ -18,7 +18,7 @@ export function ContributionCalendar({ cells }: Props) {
   if (!hasData) {
     return (
       <div style={{ color: "var(--text-muted)", fontSize: "13px", padding: "24px 0", textAlign: "center" }}>
-        Not enough activity yet
+        No activity in the past 52 weeks
       </div>
     );
   }

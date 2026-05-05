@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Wave 4.3 — Activity heatmaps + streaks (Cluster J).** TODOs #123, #160, #183, #185 from `~/.claude/plans/our-to-do-list-has-gentle-cookie.md`. New "Activity" section on `/usage` showing full-history temporal patterns (project-scoped if `?project=slug`; period switcher doesn't apply — explained by in-section caption).
   - **Hourly distribution chart** (`HourlyDistributionChart.tsx`). Hand-rolled SVG 24-bar chart showing turn volume by local hour. 5-tier quantile-binned `--accent` color scale. Hover tooltips show hour, turn count, and cost.
-  - **Day × hour heatmap** (`Heatmap2D.tsx`). 7×24 grid (Sun→Sat rows, 0→23 columns). Same quantile-binned color scale. Per-cell tooltip. `computeQuantileTiers` helper exported for reuse.
+  - **Day × hour heatmap** (`Heatmap2D.tsx`). 7×24 grid (Sun→Sat rows, 0→23 columns). Same quantile-binned color scale. Per-cell tooltip. `computeActivityTiers` helper in `chartTiers.ts` shared by all three chart components.
   - **52-week contribution calendar** (`ContributionCalendar.tsx`). GitHub-style grid, oldest week left, today right. Month labels above on month transitions. Per-cell tooltip with date + turns + cost.
   - **Streak stat cards** (inline in `UsageDashboard.tsx`). Two `StatCell` items: "Current Streak" (days active without a >1-day gap through today or yesterday) and "Longest Streak" (longest historical run).
   - **Pure logic modules**: `activityBuckets.ts` (`bucketByHourDay`, `emptyActivity`), `streaks.ts` (`computeStreaks`), `contributionCalendar.ts` (`computeContributionCalendar`). All accept `ActivityTurnInput` minimal interface, usable from both file-parse and DB paths.

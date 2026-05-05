@@ -730,7 +730,7 @@ export function UsageDashboard() {
           <div>
             <SectionHeader label="Activity" />
             <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", marginBottom: "14px", fontFamily: "var(--font-body)" }}>
-              Patterns based on all sessions; period filter doesn&apos;t apply.
+              Streak, hourly, and heatmap use all sessions. Calendar shows the past 52 weeks. Period filter doesn&apos;t apply.
             </div>
             {/* Streak stat cards */}
             <div style={{ display: "flex", border: "1px solid var(--border-subtle)", borderRadius: "8px", overflow: "hidden", marginBottom: "16px" }}>

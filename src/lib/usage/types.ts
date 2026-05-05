@@ -148,7 +148,6 @@ export interface SkillStats {
 
 export interface ActivityBucket {
   turns: number;
-  tokens: number;
   cost: number;
 }
 
