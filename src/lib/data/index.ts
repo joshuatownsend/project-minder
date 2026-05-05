@@ -1,5 +1,5 @@
 import "server-only";
-import { generateUsageReport } from "@/lib/usage/aggregator";
+import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
@@ -305,6 +305,7 @@ export async function getUsage(
   const report = await callDbLoader("getUsage", () =>
     loadUsageReportFromSql(db, period, project)
   );
+  if (!project) await augmentPortfolioYield(report);
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 

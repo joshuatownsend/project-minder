@@ -58,23 +58,34 @@ export async function generateUsageReport(
 
   const report = await aggregateUsage(turns, period, activity);
 
-  // Augment with portfolio yield — file-parse path only, best-effort.
-  // Uses getCachedScan() (no fresh scan triggered) so this is a no-op
-  // when the dashboard hasn't loaded yet.
+  // Augment with portfolio yield — uses getCachedScan() (no fresh scan
+  // triggered) so this is a no-op when the dashboard hasn't loaded yet.
   if (!project) {
-    await augmentPortfolioYield(report, sessionMap);
+    await augmentPortfolioYield(report);
   }
 
   return report;
 }
 
-async function augmentPortfolioYield(
-  report: UsageReport,
-  sessionMap: Map<string, UsageTurn[]>
-): Promise<void> {
+/**
+ * Augment a UsageReport with portfolio-level yield data in-place.
+ * Exported so the DB-backed path in `data/index.ts` can call it after
+ * loading the SQL report — the augmentation is identical regardless of
+ * which backend produced the base report.
+ *
+ * Calls parseAllSessions() internally (2-min globalThis cache) so it
+ * doesn't require the caller to have a sessionMap handy. On the
+ * file-parse path the cache is already warm; on the DB path it adds a
+ * small one-time parse per 2-min window.
+ *
+ * No-ops when getCachedScan() returns null (scan cache cold) or when
+ * the report has no project details.
+ */
+export async function augmentPortfolioYield(report: UsageReport): Promise<void> {
   const scan = getCachedScan();
   if (!scan || report.projectDetails.length === 0) return;
 
+  const sessionMap = await parseAllSessions();
   const projectPathMap = new Map(scan.projects.map((p) => [p.slug, p.path]));
 
   const results = await Promise.all(
