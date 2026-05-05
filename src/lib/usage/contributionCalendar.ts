@@ -1,11 +1,6 @@
 import { startOfWeek, subWeeks, addDays, format } from "date-fns";
 import type { ContributionCell } from "./types";
-import type { ActivityTurnInput } from "./activityBuckets";
-
-function toLocalDateStr(ts: string): string {
-  const d = new Date(ts);
-  return format(d, "yyyy-MM-dd");
-}
+import { type ActivityTurnInput, toLocalDateStr } from "./activityBuckets";
 
 export function computeContributionCalendar(
   turns: ActivityTurnInput[],

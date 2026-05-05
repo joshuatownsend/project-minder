@@ -475,6 +475,14 @@ function EmptyNote() {
   );
 }
 
+function ChartLabel({ children }: { children: import("react").ReactNode }) {
+  return (
+    <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
+      {children}
+    </div>
+  );
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export function UsageDashboard() {
@@ -742,23 +750,16 @@ export function UsageDashboard() {
             {/* Hourly + heatmap side by side */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
               <div>
-                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
-                  Hourly Distribution
-                </div>
+                <ChartLabel>Hourly Distribution</ChartLabel>
                 <HourlyDistributionChart byHourOfDay={data.byHourOfDay} />
               </div>
               <div>
-                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
-                  Day × Hour Heatmap
-                </div>
+                <ChartLabel>Day × Hour Heatmap</ChartLabel>
                 <Heatmap2D byHourDay={data.byHourDay} />
               </div>
             </div>
-            {/* 52-week calendar */}
             <div>
-              <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.08em", fontFamily: "var(--font-body)" }}>
-                52-Week Activity
-              </div>
+              <ChartLabel>52-Week Activity</ChartLabel>
               <ContributionCalendar cells={data.contributionCalendar} />
             </div>
           </div>

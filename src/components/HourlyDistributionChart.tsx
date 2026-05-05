@@ -2,25 +2,11 @@
 
 import { useState } from "react";
 import type { ActivityBucket } from "@/lib/usage/types";
+import { computeActivityTiers, tierColor } from "@/lib/usage/chartTiers";
+import { ChartTooltip } from "./ui/ChartTooltip";
 
 interface Props {
   byHourOfDay: ActivityBucket[];
-}
-
-function computeTiers(buckets: ActivityBucket[]): number[] {
-  const nonZero = buckets.map((b) => b.turns).filter((v) => v > 0).sort((a, b) => a - b);
-  if (nonZero.length === 0) return [0, 0, 0, 0, 0];
-  const q = (p: number) => nonZero[Math.floor(p * (nonZero.length - 1))];
-  return [q(0.2), q(0.4), q(0.6), q(0.8), nonZero[nonZero.length - 1]];
-}
-
-function tierColor(turns: number, tiers: number[]): string {
-  if (turns === 0) return "var(--bg-elevated)";
-  if (turns <= tiers[0]) return "color-mix(in oklch, var(--accent) 30%, transparent)";
-  if (turns <= tiers[1]) return "color-mix(in oklch, var(--accent) 50%, transparent)";
-  if (turns <= tiers[2]) return "color-mix(in oklch, var(--accent) 65%, transparent)";
-  if (turns <= tiers[3]) return "color-mix(in oklch, var(--accent) 80%, transparent)";
-  return "var(--accent)";
 }
 
 export function HourlyDistributionChart({ byHourOfDay }: Props) {
@@ -35,7 +21,7 @@ export function HourlyDistributionChart({ byHourOfDay }: Props) {
     );
   }
 
-  const tiers = computeTiers(byHourOfDay);
+  const tiers = computeActivityTiers(byHourOfDay.map((b) => b.turns));
   const maxTurns = Math.max(...byHourOfDay.map((b) => b.turns));
   const svgH = 80;
   const barW = 10;
@@ -85,27 +71,7 @@ export function HourlyDistributionChart({ byHourOfDay }: Props) {
           );
         })}
       </svg>
-      {tooltip && (
-        <div
-          style={{
-            position: "fixed",
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: "translate(-50%, -100%)",
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "6px",
-            padding: "5px 9px",
-            fontSize: "11px",
-            color: "var(--text-primary)",
-            pointerEvents: "none",
-            whiteSpace: "nowrap",
-            zIndex: 9999,
-          }}
-        >
-          {tooltip.content}
-        </div>
-      )}
+      {tooltip && <ChartTooltip x={tooltip.x} y={tooltip.y} content={tooltip.content} />}
     </div>
   );
 }

@@ -1,13 +1,5 @@
 import type { StreakStats } from "./types";
-import type { ActivityTurnInput } from "./activityBuckets";
-
-function toLocalDateStr(ts: string): string {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
+import { type ActivityTurnInput, toLocalDateStr } from "./activityBuckets";
 
 export function computeStreaks(turns: ActivityTurnInput[], today?: Date): StreakStats {
   if (turns.length === 0) {
