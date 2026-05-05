@@ -10,7 +10,7 @@ import { bucketByHourDay, type ActivityData } from "./activityBuckets";
 import { computeStreaks } from "./streaks";
 import { computeContributionCalendar } from "./contributionCalendar";
 import { computeProjectYield } from "./computeProjectYield";
-import { gatherProjectTurns } from "./projectMatch";
+import { gatherProjectTurns, encodeProjectPath } from "./projectMatch";
 import { getCachedScan } from "@/lib/cache";
 import type {
   UsageTurn,
@@ -86,11 +86,13 @@ export async function augmentPortfolioYield(report: UsageReport): Promise<void> 
   if (!scan || report.projectDetails.length === 0) return;
 
   const sessionMap = await parseAllSessions();
-  const projectPathMap = new Map(scan.projects.map((p) => [p.slug, p.path]));
+  // Key by encoded path (e.g. "C--dev-project-minder") so it matches
+  // pd.projectDirName from the usage parser, not the scanner's short slug.
+  const projectPathMap = new Map(scan.projects.map((p) => [encodeProjectPath(p.path), p.path]));
 
   const results = await Promise.all(
     report.projectDetails.map(async (pd) => {
-      const path = projectPathMap.get(pd.projectSlug);
+      const path = projectPathMap.get(pd.projectDirName);
       if (!path) return null;
       const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path);
       try {
