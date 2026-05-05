@@ -495,22 +495,24 @@ export interface AgentUsageResult {
 export async function getAgentUsage(): Promise<AgentUsageResult> {
   const { computeAgentCostFromFiles } = await import("@/lib/usage/agentCost");
 
-  if (!dbModeRequested()) {
-    const result = await runFileAgentUsage();
+  async function withCost(stats: AgentStats[], meta: AgentUsageResult["meta"]): Promise<AgentUsageResult> {
     const costMap = await computeAgentCostFromFiles();
-    return { stats: mergeAgentCost(result.stats, costMap), meta: result.meta };
+    return { stats: mergeAgentCost(stats, costMap), meta };
+  }
+
+  if (!dbModeRequested()) {
+    const { stats, meta } = await runFileAgentUsage();
+    return withCost(stats, meta);
   }
 
   const db = await getReadyDb();
   const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db));
   if (stats.length === 0) {
     logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
-    const result = await runFileAgentUsage();
-    const costMap = await computeAgentCostFromFiles();
-    return { stats: mergeAgentCost(result.stats, costMap), meta: result.meta };
+    const { stats: fileStats, meta } = await runFileAgentUsage();
+    return withCost(fileStats, meta);
   }
-  const costMap = await computeAgentCostFromFiles();
-  return { stats: mergeAgentCost(stats, costMap), meta: { backend: "db" } };
+  return withCost(stats, { backend: "db" });
 }
 
 function mergeAgentCost(

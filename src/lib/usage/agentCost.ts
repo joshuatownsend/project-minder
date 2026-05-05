@@ -9,6 +9,10 @@ export interface AgentCostEntry {
   outputTokens: number;
 }
 
+const globalForAgentCost = globalThis as unknown as {
+  __agentCostCache?: { map: Map<string, AgentCostEntry>; expiresAt: number };
+};
+
 interface RawEntry {
   type?: string;
   isSidechain?: boolean;
@@ -44,6 +48,10 @@ interface RawEntry {
  * Called on-demand from /api/agents. Returns a Map from agent_name → costs.
  */
 export async function computeAgentCostFromFiles(): Promise<Map<string, AgentCostEntry>> {
+  const now = Date.now();
+  const cached = globalForAgentCost.__agentCostCache;
+  if (cached && now < cached.expiresAt) return cached.map;
+
   const projectsRoot = path.join(os.homedir(), ".claude", "projects");
 
   let projectDirs: string[];
@@ -143,5 +151,6 @@ export async function computeAgentCostFromFiles(): Promise<Map<string, AgentCost
     })
   );
 
+  globalForAgentCost.__agentCostCache = { map: result, expiresAt: now + 120_000 };
   return result;
 }

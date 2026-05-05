@@ -1,5 +1,65 @@
 # Insights
 
+<!-- insight:d1c1d533f027 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:04:07.424Z -->
+## ★ Insight
+The per-agent cost computation uses a two-pass approach: (1) scan main-conversation tool_uses to build a `tool_use_id → agent_name` map, then (2) iterate sidechain turns and accumulate cost by matching `parentToolUseId`. This avoids modifying the DB schema while still providing cost attribution.
+
+---
+
+<!-- insight:f4e8c02aa369 | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T19:56:35.522Z -->
+## ★ Insight
+The codebase uses a clear separation between the indexer types (`CatalogEntryBase` for agents/skills) and `CommandEntry` in `lib/types.ts`. Adding `parseWarnings` to both while respecting this asymmetry maintains the existing pattern without forcing premature unification.
+
+---
+
+<!-- insight:d968134ea62e | session:0a72b71d-2396-4ef9-b120-e57a875da277 | 2026-05-05T19:36:37.255Z -->
+## ★ Insight
+The `pending` counter bug is a classic "items removed from tracking before work completes" pattern — common in any queue system. The fix (tracking `inFlight` separately) mirrors how HTTP connection pools and job queues count "in-progress" separately from "queued". The race condition fix (re-check after `running=false`) is the standard drain-loop pattern used in libuv and similar event loops to handle the "work arrived while we were finishing" window.
+
+---
+
+<!-- insight:900768959dc3 | session:0a72b71d-2396-4ef9-b120-e57a875da277 | 2026-05-05T19:30:05.467Z -->
+## ★ Insight
+The core race condition in `processQueue` is subtle but real: JavaScript is single-threaded so there's no true data race, but the issue is temporal — between the `while` loop exiting (queue empty) and the synchronous `this.running = false` assignment, no await happens, so no new `enqueue()` can run. But after `running=false` is set, new work CAN be enqueued by the next I/O tick. The fix is simply: after setting `running=false`, re-check and restart. This is the same pattern Redis's event loop uses for deferred queue draining.
+
+---
+
+<!-- insight:0064f008b9cf | session:0a72b71d-2396-4ef9-b120-e57a875da277 | 2026-05-05T17:49:44.540Z -->
+## ★ Insight
+This is a classic "two backends, partial implementation" bug. The feature was wired into `generateUsageReport` (file path) but `getUsage` in `data/index.ts` routes to `loadUsageReportFromSql` by default — a different code path that knows nothing about `augmentPortfolioYield`.
+
+---
+
+<!-- insight:d81cc953ebb8 | session:0a72b71d-2396-4ef9-b120-e57a875da277 | 2026-05-05T17:34:47.966Z -->
+## ★ Insight
+The pre-commit hook acts as a safety net here: even though we already ran tests manually, the hook re-runs them atomically with the commit, so if a last-minute file edit had broken something, the commit would have been blocked before any bad state entered the history.
+
+---
+
+<!-- insight:f98a764827cb | session:0a72b71d-2396-4ef9-b120-e57a875da277 | 2026-05-05T17:31:57.083Z -->
+## ★ Insight
+The CHANGELOG.md uses Keep a Changelog format with `[Unreleased]` as the top section — new entries always go under `[Unreleased]` so they're easy to batch-release. The docs policy in CLAUDE.md requires copying updated help files to both `docs/help/` and `public/help/` (the latter is runtime-fetchable by the help panel).
+
+---
+
+<!-- insight:2a9b61ccd3bb | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:33:39.721Z -->
+## ★ Insight
+The UTC-midnight trap (`new Date("YYYY-MM-DD")`) is insidious because it only manifests in UTC-negative timezones and only on the first day of a month that falls on a Sunday. Pure string parsing (`slice(5,7)`) sidesteps the entire timezone system — always prefer it for extracting date components from known-format strings.
+
+---
+
+<!-- insight:a4f8550af4db | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:29:42.488Z -->
+## ★ Insight
+The three duplication clusters (tierColor/computeTiers, tooltip JSX, toLocalDateStr) are a classic sign that code was written component-by-component rather than extracted-then-composed. The rule of three applies: the first copy is fine, the second is a flag, the third mandates extraction.
+
+---
+
+<!-- insight:b0591c9f657f | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:23:03.979Z -->
+## ★ Insight
+The UTC-midnight trap (`new Date("YYYY-MM-DD")`) is the most common source of off-by-one day bugs in streak/calendar code. The fix — constructing dates at local noon (`new Date(y, m-1, d, 12, 0, 0)`) — ensures the date string parsed back will always land on the correct calendar date regardless of the host's UTC offset, because a 12-hour buffer absorbs any timezone up to UTC±11.
+
+---
+
 <!-- insight:f91676dfa8df | session:b7147f37-7abd-4f01-b0b7-20eacfe1a6d4 | 2026-05-05T16:03:55.179Z -->
 ## ★ Insight
 - The quantile-based color tier approach solves the "one outlier flattens everything" problem: instead of mapping cells linearly to max, we sort all non-zero values and divide into quintiles. Every chart independently computes its own tiers from its own data distribution.

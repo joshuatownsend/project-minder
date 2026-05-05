@@ -33,7 +33,11 @@ import { computeAgentCostFromFiles } from "@/lib/usage/agentCost";
 const mockReaddir = vi.mocked(fs.readdir);
 const mockReadFile = vi.mocked(fs.readFile);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Reset the globalThis TTL cache so each test starts from a clean slate
+  (globalThis as Record<string, unknown>).__agentCostCache = undefined;
+});
 
 function buildJsonl(entries: object[]): string {
   return entries.map((e) => JSON.stringify(e)).join("\n");

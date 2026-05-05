@@ -213,19 +213,7 @@ function CommandRow({
             {e.provenance?.kind === "marketplace-plugin" &&
               e.provenance.pluginVersion &&
               e.provenance.pluginVersion !== "unknown" && (
-                <span
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.6rem",
-                    color: "var(--text-muted)",
-                    background: "var(--bg-surface)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "3px",
-                    padding: "1px 5px",
-                  }}
-                >
-                  v{e.provenance.pluginVersion}
-                </span>
+                <Pill filled>v{e.provenance.pluginVersion}</Pill>
               )}
             {e.parseWarnings && e.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={e.parseWarnings} />
@@ -301,14 +289,22 @@ function SourceBadge({ entry }: { entry: CommandEntry }) {
   );
 }
 
-function Pill({ children, tone = "default" }: { children: React.ReactNode; tone?: "default" | "info" }) {
+function Pill({
+  children,
+  tone = "default",
+  filled = false,
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "info";
+  filled?: boolean;
+}) {
   return (
     <span
       style={{
         fontFamily: "var(--font-mono)",
         fontSize: "0.6rem",
         color: tone === "info" ? "var(--info)" : "var(--text-muted)",
-        background: tone === "info" ? "var(--info-bg)" : "transparent",
+        background: filled ? "var(--bg-surface)" : tone === "info" ? "var(--info-bg)" : "transparent",
         border: "1px solid var(--border-subtle)",
         borderRadius: "3px",
         padding: "1px 5px",

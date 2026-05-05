@@ -44,7 +44,7 @@ function makeCommandEntry(
   const provenance = opts.ctx
     ? resolveProvenance({
         source,
-        entryKind: "agent",
+        entryKind: "command",
         slug,
         isSymlink: opts.isSymlink,
         realPath: opts.realPath,
