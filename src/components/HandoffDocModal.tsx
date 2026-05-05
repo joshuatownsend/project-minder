@@ -53,6 +53,9 @@ export function HandoffDocModal({ sessionId, open, onClose }: HandoffDocModalPro
     navigator.clipboard.writeText(doc).then(() => {
       setCopyLabel("Copied!");
       setTimeout(() => setCopyLabel("Copy"), 2000);
+    }).catch(() => {
+      setCopyLabel("Failed");
+      setTimeout(() => setCopyLabel("Copy"), 2000);
     });
   };
 

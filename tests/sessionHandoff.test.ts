@@ -1,10 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Readable } from "stream";
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return { ...actual, createReadStream: vi.fn() };
+});
+
+import { createReadStream } from "fs";
 import {
   extractHandoffFacts,
+  readCompactionSummary,
   scoreCompactionFidelity,
   type HandoffFacts,
 } from "@/lib/usage/sessionHandoff";
 import type { UsageTurn } from "@/lib/usage/types";
+
+const mockCreateReadStream = vi.mocked(createReadStream);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -209,12 +224,10 @@ describe("scoreCompactionFidelity", () => {
   });
 
   it("flags isLowFidelity=true when score < 0.6", () => {
-    // Single fact mentioned out of many → score well below 0.6
     const summary = "Touched auth.ts only.";
     const result = scoreCompactionFidelity(baseFacts, summary);
-    if (result.factsTotal > 2) {
-      expect(result.isLowFidelity).toBe(true);
-    }
+    expect(result.factsTotal).toBe(5);
+    expect(result.isLowFidelity).toBe(true);
   });
 
   it("returns isLowFidelity=false when score >= 0.6", () => {
@@ -241,5 +254,134 @@ describe("scoreCompactionFidelity", () => {
     const summary = "The LLM compaction summary text.";
     const result = scoreCompactionFidelity(baseFacts, summary);
     expect(result.summary).toBe(summary);
+  });
+
+  it("isLowFidelity is false when score is exactly 0.6", () => {
+    // 5 facts, 3 mentioned → 3/5 = 0.6, which is NOT < 0.6
+    const facts: HandoffFacts = {
+      filesModified: ["alpha.ts", "beta.ts", "gamma.ts"],
+      filesRead: ["delta.ts", "epsilon.ts"],
+      gitCommits: [],
+      keyCommands: [],
+    };
+    const summary = "Modified alpha.ts, beta.ts, and gamma.ts.";
+    const result = scoreCompactionFidelity(facts, summary);
+    expect(result.factsTotal).toBe(5);
+    expect(result.factsMentioned).toBe(3);
+    expect(result.score).toBe(0.6);
+    expect(result.isLowFidelity).toBe(false);
+  });
+
+  it("isLowFidelity is true just below 0.6 (2/5 mentioned)", () => {
+    const facts: HandoffFacts = {
+      filesModified: ["alpha.ts", "beta.ts", "gamma.ts"],
+      filesRead: ["delta.ts", "epsilon.ts"],
+      gitCommits: [],
+      keyCommands: [],
+    };
+    const summary = "Modified alpha.ts and beta.ts.";
+    const result = scoreCompactionFidelity(facts, summary);
+    expect(result.factsTotal).toBe(5);
+    expect(result.factsMentioned).toBe(2);
+    expect(result.score).toBe(0.4);
+    expect(result.isLowFidelity).toBe(true);
+  });
+});
+
+// ─── readCompactionSummary ────────────────────────────────────────────────────
+
+function makeStream(content: string): Readable {
+  return Readable.from([content]);
+}
+
+function makeErrorStream(code: string): Readable {
+  return new Readable({
+    read() {
+      this.destroy(Object.assign(new Error(code), { code }));
+    },
+  });
+}
+
+describe("readCompactionSummary", () => {
+  const PATH = "/fake/session.jsonl";
+
+  it("returns null when file does not exist (ENOENT)", async () => {
+    mockCreateReadStream.mockReturnValue(makeErrorStream("ENOENT") as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBeNull();
+  });
+
+  it("rejects when a non-ENOENT stream error occurs", async () => {
+    mockCreateReadStream.mockReturnValue(makeErrorStream("EACCES") as never);
+    await expect(readCompactionSummary(PATH)).rejects.toThrow();
+  });
+
+  it("returns null when no compact record is found", async () => {
+    const jsonl = [
+      JSON.stringify({ type: "human", text: "hello" }),
+      JSON.stringify({ type: "assistant", text: "hi" }),
+    ].join("\n");
+    mockCreateReadStream.mockReturnValue(makeStream(jsonl) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBeNull();
+  });
+
+  it("reads Shape 1: system + compact_boundary with summary field", async () => {
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "compact_boundary",
+      summary: "Shape 1 summary text",
+    });
+    mockCreateReadStream.mockReturnValue(makeStream(line) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("Shape 1 summary text");
+  });
+
+  it("reads Shape 1 variant: system + compact_boundary with text field", async () => {
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "compact_boundary",
+      text: "Shape 1b summary text",
+    });
+    mockCreateReadStream.mockReturnValue(makeStream(line) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("Shape 1b summary text");
+  });
+
+  it("reads Shape 2: compact_summary type with text field", async () => {
+    const line = JSON.stringify({ type: "compact_summary", text: "Shape 2 summary" });
+    mockCreateReadStream.mockReturnValue(makeStream(line) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("Shape 2 summary");
+  });
+
+  it("reads Shape 3: top-level compactSummary field", async () => {
+    const line = JSON.stringify({ compactSummary: "Shape 3 summary" });
+    mockCreateReadStream.mockReturnValue(makeStream(line) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("Shape 3 summary");
+  });
+
+  it("reads Shape 4: system content with [compact summary] marker", async () => {
+    const line = JSON.stringify({
+      type: "system",
+      content: "Session: [compact summary] The user worked on feature X.",
+    });
+    mockCreateReadStream.mockReturnValue(makeStream(line) as never);
+    const result = await readCompactionSummary(PATH);
+    expect(result).toContain("[compact summary]");
+  });
+
+  it("returns the first match when multiple compact records exist", async () => {
+    const jsonl = [
+      JSON.stringify({ type: "human", text: "question" }),
+      JSON.stringify({ type: "compact_summary", text: "First summary" }),
+      JSON.stringify({ type: "compact_summary", text: "Second summary" }),
+    ].join("\n");
+    mockCreateReadStream.mockReturnValue(makeStream(jsonl) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("First summary");
+  });
+
+  it("skips malformed JSON lines without throwing", async () => {
+    const jsonl = [
+      "{ invalid json !!",
+      JSON.stringify({ type: "compact_summary", text: "Valid after bad line" }),
+    ].join("\n");
+    mockCreateReadStream.mockReturnValue(makeStream(jsonl) as never);
+    await expect(readCompactionSummary(PATH)).resolves.toBe("Valid after bad line");
   });
 });

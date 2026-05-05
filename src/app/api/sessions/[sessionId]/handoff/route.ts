@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   loadSessionTurnsBySessionId,
   getJsonlMaxMtime,
+  SessionTurnsLoadError,
 } from "@/lib/usage/parser";
 import {
   extractHandoffFacts,
@@ -78,7 +79,20 @@ export async function GET(
     return NextResponse.json(cached.data);
   }
 
-  const turns = await loadSessionTurnsBySessionId(sessionId);
+  let turns;
+  try {
+    turns = await loadSessionTurnsBySessionId(sessionId);
+  } catch (err) {
+    if (err instanceof SessionTurnsLoadError) {
+      // eslint-disable-next-line no-console
+      console.error(`[/api/sessions/${sessionId}/handoff]`, err);
+      return NextResponse.json(
+        { error: `Could not parse session JSONL: ${err.message}` },
+        { status: 500 }
+      );
+    }
+    throw err;
+  }
   if (!turns) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }

@@ -162,7 +162,7 @@ function normalizeCommand(command: string): string {
 export function readCompactionSummary(
   sessionJsonlPath: string
 ): Promise<string | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const stream = createReadStream(sessionJsonlPath, { encoding: "utf-8" });
     const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -199,7 +199,7 @@ export function readCompactionSummary(
         const text = typeof obj.text === "string" ? obj.text : null;
         if (text) {
           found = true;
-          rl.close();
+          rl.close(); stream.destroy();
           resolve(text);
           return;
         }
@@ -208,7 +208,7 @@ export function readCompactionSummary(
       // Shape 3: top-level compactSummary field
       if (typeof obj.compactSummary === "string" && obj.compactSummary) {
         found = true;
-        rl.close();
+        rl.close(); stream.destroy();
         resolve(obj.compactSummary);
         return;
       }
@@ -222,7 +222,7 @@ export function readCompactionSummary(
           content.includes("compact_boundary")
         ) {
           found = true;
-          rl.close();
+          rl.close(); stream.destroy();
           resolve(content);
           return;
         }
@@ -233,9 +233,20 @@ export function readCompactionSummary(
       if (!found) resolve(null);
     });
 
-    rl.on("error", () => {
-      if (!found) resolve(null);
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      found = true; // prevent rl "close" from resolving null after we settle
+      rl.close();
+      stream.destroy();
+      if (err.code === "ENOENT") {
+        resolve(null);
+      } else {
+        reject(err);
+      }
     });
+
+    // readline re-emits stream errors on the interface; absorb them here
+    // since the underlying stream error is already handled above.
+    rl.on("error", () => {});
   });
 }
 

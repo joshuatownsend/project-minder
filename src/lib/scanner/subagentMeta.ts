@@ -72,7 +72,11 @@ export async function readSubagentMeta(
   let files: string[];
   try {
     files = await fs.readdir(dir);
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      // eslint-disable-next-line no-console
+      console.error("[subagentMeta] readdir failed:", err);
+    }
     return result;
   }
 
@@ -83,7 +87,9 @@ export async function readSubagentMeta(
         let raw: string;
         try {
           raw = await fs.readFile(path.join(dir, filename), "utf-8");
-        } catch {
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[subagentMeta] readFile failed:", filename, err);
           return;
         }
         const meta = parseMetaFile(raw);
@@ -107,7 +113,11 @@ export function readSubagentMetaSync(
   let files: string[];
   try {
     files = readdirSync(dir);
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      // eslint-disable-next-line no-console
+      console.error("[subagentMeta] readdirSync failed:", err);
+    }
     return result;
   }
 
@@ -116,7 +126,9 @@ export function readSubagentMetaSync(
     let raw: string;
     try {
       raw = readFileSync(path.join(dir, filename), "utf-8");
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[subagentMeta] readFileSync failed:", filename, err);
       continue;
     }
     const meta = parseMetaFile(raw);
