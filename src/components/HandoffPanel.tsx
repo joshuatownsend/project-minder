@@ -17,7 +17,9 @@ interface HandoffPanelProps {
   onOpenDocModal?: () => void;
 }
 
-function FactList({ items }: { items: string[] }) {
+type FactItem = string | { label: string; title: string };
+
+function FactList({ items }: { items: FactItem[] }) {
   if (items.length === 0) {
     return (
       <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -27,23 +29,27 @@ function FactList({ items }: { items: string[] }) {
   }
   return (
     <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-      {items.map((item, i) => (
-        <li
-          key={i}
-          title={item}
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.72rem",
-            color: "var(--text-primary)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            marginBottom: "4px",
-          }}
-        >
-          {item}
-        </li>
-      ))}
+      {items.map((item, i) => {
+        const label = typeof item === "string" ? item : item.label;
+        const title = typeof item === "string" ? item : item.title;
+        return (
+          <li
+            key={i}
+            title={title}
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.72rem",
+              color: "var(--text-primary)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              marginBottom: "4px",
+            }}
+          >
+            {label}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -136,7 +142,8 @@ export function HandoffPanel({ sessionId, onOpenDocModal }: HandoffPanelProps) {
 
   const { facts, fidelity } = data;
   const commitLines = facts.gitCommits.map((c) => c.message);
-  const filePaths = facts.filesModified.map((f) => f.split(/[/\\]/).pop() ?? f);
+  const toFileItems = (paths: string[]): FactItem[] =>
+    paths.map((f) => ({ label: f.split(/[/\\]/).pop() ?? f, title: f }));
 
   return (
     <div style={{ padding: "24px" }}>
@@ -160,10 +167,14 @@ export function HandoffPanel({ sessionId, onOpenDocModal }: HandoffPanelProps) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "24px", marginBottom: "24px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "24px", marginBottom: "24px" }}>
         <div>
           <SectionLabel marginBottom="10px">Files Modified ({facts.filesModified.length})</SectionLabel>
-          <FactList items={filePaths} />
+          <FactList items={toFileItems(facts.filesModified)} />
+        </div>
+        <div>
+          <SectionLabel marginBottom="10px">Files Read ({facts.filesRead.length})</SectionLabel>
+          <FactList items={toFileItems(facts.filesRead)} />
         </div>
         <div>
           <SectionLabel marginBottom="10px">Git Commits ({facts.gitCommits.length})</SectionLabel>

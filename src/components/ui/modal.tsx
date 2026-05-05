@@ -75,7 +75,7 @@ export function Modal({
       className="fixed inset-0 z-50 flex items-center justify-center"
       aria-modal="true"
       role="dialog"
-      aria-label={title}
+      aria-labelledby={title ? "modal-title" : undefined}
     >
       {/* Backdrop */}
       <div
@@ -96,7 +96,7 @@ export function Modal({
       >
         {title && (
           <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <h2 id="modal-title" className="text-sm font-semibold">{title}</h2>
             <button
               onClick={onClose}
               className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-lg leading-none"

@@ -71,7 +71,7 @@ export function extractHandoffFacts(turns: UsageTurn[]): HandoffFacts {
       // Key commands: skip trivial binaries and short commands
       const tokens = trimmed.split(/\s+/).filter(Boolean);
       const binary = extractBinary(trimmed);
-      if (tokens.length > 4 && !SKIP_BINARIES.has(binary)) {
+      if (tokens.length > 4 && binary && binary !== "unknown" && !SKIP_BINARIES.has(binary)) {
         // Normalise: strip dynamic args (paths, SHAs) for dedup
         keyCommandSet.add(normalizeCommand(trimmed));
       }

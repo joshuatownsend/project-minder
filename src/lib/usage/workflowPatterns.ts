@@ -196,15 +196,17 @@ function matchSkill(
   let bestScore = 1; // require at least 2 overlapping tokens
 
   for (const [key, entry] of catalog) {
-    const entryTokens = [
-      ...key.split(/[\s\-_]+/),
-      ...(entry.description ?? "")
-        .toLowerCase()
-        .split(/\s+/)
-        .slice(0, 20),
-    ].filter(Boolean);
+    const entryTokenSet = new Set(
+      [
+        ...key.split(/[\s\-_]+/),
+        ...(entry.description ?? "")
+          .toLowerCase()
+          .split(/\s+/)
+          .slice(0, 20),
+      ].filter(Boolean)
+    );
     let overlap = 0;
-    for (const token of entryTokens) {
+    for (const token of entryTokenSet) {
       if (searchTokens.has(token)) overlap++;
     }
     if (overlap > bestScore) {

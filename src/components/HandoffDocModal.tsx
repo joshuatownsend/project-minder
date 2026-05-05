@@ -66,7 +66,7 @@ export function HandoffDocModal({ sessionId, open, onClose }: HandoffDocModalPro
     a.href = url;
     a.download = `handoff-${sessionId.slice(0, 8)}-${verbosity}.md`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   return (
