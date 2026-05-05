@@ -40,18 +40,31 @@ export async function readThinkingFromJsonl(
   if (!row) return null;
   if (row.text_offset == null) return null;
 
-  // Read the JSONL at the known byte offset. A file handle + positioned read
-  // avoids loading the entire (potentially 50MB) file into memory.
+  // Read the JSONL at the known byte offset. Read in 64KB chunks until a
+  // newline is found so lines larger than one chunk (e.g. very long thinking
+  // blocks) are handled correctly without loading the whole file.
   let line: string;
   try {
-    const buf = Buffer.alloc(65536); // 64KB — larger than any single JSONL line in practice
+    const CHUNK = 65536;
     const fh = await fs.open(row.file_path, "r");
     try {
-      const { bytesRead } = await fh.read(buf, 0, buf.length, row.text_offset);
-      const raw = buf.subarray(0, bytesRead).toString("utf8");
-      // Trim to the first newline — we want exactly one JSONL entry.
-      const nlIdx = raw.indexOf("\n");
-      line = nlIdx >= 0 ? raw.slice(0, nlIdx) : raw;
+      const chunks: Buffer[] = [];
+      let pos = row.text_offset;
+      for (;;) {
+        const buf = Buffer.alloc(CHUNK);
+        const { bytesRead } = await fh.read(buf, 0, CHUNK, pos);
+        if (bytesRead === 0) break;
+        const chunk = buf.subarray(0, bytesRead);
+        const nlIdx = chunk.indexOf(0x0a);
+        if (nlIdx >= 0) {
+          chunks.push(chunk.subarray(0, nlIdx));
+          break;
+        }
+        chunks.push(chunk);
+        pos += bytesRead;
+        if (bytesRead < CHUNK) break;
+      }
+      line = Buffer.concat(chunks).toString("utf8");
     } finally {
       await fh.close();
     }

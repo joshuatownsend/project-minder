@@ -47,9 +47,9 @@ export function VersionHistoryPanel({ period, projectSlug }: { period: string; p
     setLoading(true);
     const url = `/api/sessions${projectSlug ? `?project=${projectSlug}` : ""}`;
     fetch(url)
-      .then((r) => r.json() as Promise<{ sessions: SessionSummary[] }>)
-      .then((d) => {
-        const filtered = d.sessions.filter((s) => {
+      .then((r) => r.json() as Promise<SessionSummary[]>)
+      .then((sessions) => {
+        const filtered = sessions.filter((s) => {
           if (period === "all") return true;
           const ts = s.startTime ?? s.endTime;
           if (!ts) return false;
