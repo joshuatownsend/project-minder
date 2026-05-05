@@ -13,6 +13,8 @@ import {
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
+import { readSubagentMeta } from "./subagentMeta";
+import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import { loadPricing, getModelPricing } from "../usage/costCalculator";
 import {
@@ -500,6 +502,7 @@ export async function scanSessionDetail(
   const timeline: TimelineEvent[] = [];
   const fileOperations: FileOperation[] = [];
   const subagentMap = new Map<string, SubagentInfo>();
+  const subagentMetaMap = await readSubagentMeta(filePath);
 
   try {
     const content = await fs.readFile(filePath, "utf-8");
@@ -615,12 +618,17 @@ export async function scanSessionDetail(
                 // Subagent tracking
                 if (toolName === "Agent" && input.prompt) {
                   const agentId = block.id || "unknown";
+                  const fullDesc = String(input.description || input.prompt);
+                  const meta: SubagentMeta | undefined = subagentMetaMap.get(fullDesc);
                   subagentMap.set(agentId, {
                     agentId,
-                    type: input.subagent_type || "general-purpose",
-                    description: String(input.description || input.prompt).slice(0, 200),
+                    type: meta?.agentType ?? String(input.subagent_type || "general-purpose"),
+                    description: (meta?.description ?? fullDesc).slice(0, 200),
                     messageCount: 0,
                     toolUsage: {},
+                    category: meta?.category,
+                    metaTurnCount: meta?.turnCount,
+                    metaSourced: meta?.metaSourced ?? false,
                   });
                 }
               }

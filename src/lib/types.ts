@@ -417,12 +417,24 @@ export interface FileOperation {
   toolName: string;
 }
 
+export type SubagentCategory =
+  | "fix"
+  | "query"
+  | "research"
+  | "find"
+  | "check"
+  | "create"
+  | "other";
+
 export interface SubagentInfo {
   agentId: string;
   type: string;
   description: string;
   messageCount: number;
   toolUsage: Record<string, number>;
+  category?: SubagentCategory;
+  metaTurnCount?: number;
+  metaSourced?: boolean;
 }
 
 export interface SessionDetail extends SessionSummary {

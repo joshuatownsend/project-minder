@@ -87,6 +87,7 @@ export interface SkillEntry extends CatalogEntryBase {
   version?: string;
   userInvocable?: boolean;
   argumentHint?: string;
+  description?: string;
 }
 
 export type CatalogEntry = AgentEntry | SkillEntry;

@@ -154,6 +154,22 @@ export async function scanGit(projectPath: string): Promise<GitInfo | undefined>
  * Fetch dirty status for a single project (too slow for bulk scan).
  * Call this only on detail pages.
  */
+/**
+ * Filters a CommitMeta array to commits whose author date falls within
+ * [startMs, endMs] (inclusive). Filters in-memory — callers should pass
+ * a pre-bounded result from readBranchCommits to avoid re-shelling.
+ */
+export function filterCommitsInInterval(
+  commits: CommitMeta[],
+  startMs: number,
+  endMs: number
+): CommitMeta[] {
+  return commits.filter((c) => {
+    const ms = new Date(c.date).getTime();
+    return ms >= startMs && ms <= endMs;
+  });
+}
+
 export async function scanGitDirtyStatus(
   projectPath: string
 ): Promise<{ isDirty: boolean; uncommittedCount: number }> {

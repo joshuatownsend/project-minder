@@ -1,8 +1,12 @@
 import "server-only";
+import path from "path";
+import os from "os";
 import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { prepCached } from "@/lib/db/connection";
+import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
+import type { SubagentMeta } from "@/lib/scanner/subagentMeta";
 import type {
   SessionDetail,
   TimelineEvent,
@@ -190,7 +194,11 @@ export function loadSessionDetailFromDb(
     )
     .all(sessionId) as ToolRow[];
 
-  const aggregates = aggregateTools(tools);
+  const jsonlPath = path.join(
+    os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
+  );
+  const subagentMetaMap = readSubagentMetaSync(jsonlPath);
+  const aggregates = aggregateTools(tools, subagentMetaMap);
   const timeline = buildTimeline(turns, aggregates.toolsByTurn);
   const modelsUsed = collectModelsUsed(turns);
 
@@ -357,7 +365,10 @@ interface ToolAggregates {
  * file-parse's `FILE_TOOL_OPERATIONS` map exactly. MultiEdit and
  * NotebookEdit are deliberately excluded so the two backends agree.
  */
-function aggregateTools(tools: ToolRow[]): ToolAggregates {
+function aggregateTools(
+  tools: ToolRow[],
+  metaByDesc?: Map<string, SubagentMeta>
+): ToolAggregates {
   const toolsByTurn = new Map<number, ToolRow[]>();
   const toolUsage: Record<string, number> = {};
   const skillsUsed: Record<string, number> = {};
@@ -410,16 +421,20 @@ function aggregateTools(tools: ToolRow[]): ToolAggregates {
     if (tu.tool_name === "Agent") {
       const args = parseStoredArgs(tu.arguments_json) ?? {};
       if (typeof args.prompt === "string") {
-        const description =
+        const fullDesc =
           typeof args.description === "string"
-            ? args.description.slice(0, 200)
-            : String(args.prompt).slice(0, 200);
+            ? args.description
+            : String(args.prompt);
+        const meta = metaByDesc?.get(fullDesc);
         subagents.push({
           agentId: tu.tool_use_id ?? `tu_${tu.turn_index}_${tu.sequence_in_turn}`,
-          type: tu.agent_name ?? "general-purpose",
-          description,
+          type: meta?.agentType ?? (tu.agent_name ?? "general-purpose"),
+          description: (meta?.description ?? fullDesc).slice(0, 200),
           messageCount: 0,
           toolUsage: {},
+          category: meta?.category,
+          metaTurnCount: meta?.turnCount,
+          metaSourced: meta?.metaSourced ?? false,
         });
       }
     }
