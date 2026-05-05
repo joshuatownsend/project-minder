@@ -120,6 +120,7 @@ interface TurnRow {
   tool_result_preview: string | null;
   output_tokens: number;
   turn_duration_ms: number | null;
+  has_thinking: number;
 }
 
 interface ToolRow {
@@ -183,7 +184,7 @@ export function loadSessionDetailFromDb(
   // (file-parse skips them; see `buildTimeline`).
   const turns = prepCached(db,
       `SELECT turn_index, ts, role, model, is_error,
-              text_preview, tool_result_preview, output_tokens, turn_duration_ms
+              text_preview, tool_result_preview, output_tokens, turn_duration_ms, has_thinking
        FROM turns
        WHERE session_id = ?
        ORDER BY turn_index`
@@ -300,6 +301,14 @@ function buildTimeline(turns: TurnRow[], toolsByTurn: Map<number, ToolRow[]>): T
         content: turn.text_preview ?? "API error",
       });
       continue;
+    }
+    if (turn.has_thinking === 1) {
+      events.push({
+        type: "thinking",
+        timestamp: turn.ts,
+        content: "",
+        turnIndex: turn.turn_index,
+      });
     }
     if (turn.text_preview) {
       events.push({

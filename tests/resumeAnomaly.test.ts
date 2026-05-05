@@ -60,12 +60,12 @@ describe("detectResumeAnomaly", () => {
     expect(result.hasAnomaly).toBe(false);
   });
 
-  it("flags buggy CLI version 2.1.75 as a reason", () => {
+  it("flags buggy CLI version 2.1.75 as a reason but not as an anomaly", () => {
     const result = detectResumeAnomaly([], {
       compactBoundaries: [],
       cliVersion: "2.1.75",
     });
-    expect(result.hasAnomaly).toBe(true);
+    expect(result.hasAnomaly).toBe(false);
     expect(result.reasons.some((r) => r.kind === "buggy-version")).toBe(true);
   });
 

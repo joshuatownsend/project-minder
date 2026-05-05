@@ -88,5 +88,8 @@ export function detectResumeAnomaly(
     }
   }
 
-  return { hasAnomaly: reasons.length > 0, reasons };
+  return {
+    hasAnomaly: reasons.some((r) => r.kind !== "buggy-version"),
+    reasons,
+  };
 }

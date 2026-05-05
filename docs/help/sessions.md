@@ -133,4 +133,4 @@ Available when Claude Code has recorded a qualitative self-rating for the sessio
 - **Friction** — friction points and their counts
 - **Summary** — one-sentence narrative summary
 
-Not all sessions have feedback data. When absent, the tab is hidden.
+Not all sessions have feedback data. When absent, the Feedback tab shows "No feedback recorded for this session."

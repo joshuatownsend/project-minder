@@ -579,6 +579,7 @@ export async function scanSessionDetail(
 
         if (entry.type === "assistant" && entry.message && !entry.isSidechain) {
           const msg = entry.message;
+          lastAssistantTimelineIdx = -1;
 
           if (entry.isApiErrorMessage) {
             const errorText = extractTextContent(msg.content || []);

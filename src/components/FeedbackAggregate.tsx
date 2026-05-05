@@ -45,19 +45,25 @@ function Section({ title, counts }: { title: string; counts: Record<string, numb
 
 export function FeedbackAggregate({ period, projectSlug }: { period: string; projectSlug?: string | null }) {
   const [data, setData] = useState<FeedbackAggResult | null>(null);
+  const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
+    setError(false);
     const url = `/api/feedback?period=${period}${projectSlug ? `&project=${projectSlug}` : ""}`;
     fetch(url)
-      .then((r) => r.json() as Promise<FeedbackAggResult>)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.statusText);
+        return r.json() as Promise<FeedbackAggResult>;
+      })
       .then(setData)
-      .catch(() => setData(null))
+      .catch(() => { setData(null); setError(true); })
       .finally(() => setLoading(false));
   }, [period, projectSlug]);
 
   if (loading) return <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Loading…</p>;
+  if (error) return <p style={{ fontSize: "0.72rem", color: "var(--status-error-text)" }}>Failed to load feedback data.</p>;
   if (!data || data.sessionCount === 0) {
     return <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>No feedback recorded for this period.</p>;
   }

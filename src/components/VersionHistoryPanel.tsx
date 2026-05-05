@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { isBuggyVersion } from "@/lib/usage/versionDetector";
+import { getPeriodStart } from "@/lib/usage/periods";
 import type { SessionSummary } from "@/lib/types";
 
 interface VersionRow {
@@ -49,16 +50,13 @@ export function VersionHistoryPanel({ period, projectSlug }: { period: string; p
     fetch(url)
       .then((r) => r.json() as Promise<SessionSummary[]>)
       .then((sessions) => {
+        const startDate = getPeriodStart(period);
+        const startMs = startDate ? startDate.getTime() : null;
         const filtered = sessions.filter((s) => {
-          if (period === "all") return true;
+          if (startMs === null) return true;
           const ts = s.startTime ?? s.endTime;
           if (!ts) return false;
-          const now = Date.now();
-          const t = new Date(ts).getTime();
-          if (period === "today") return now - t < 86400_000;
-          if (period === "week") return now - t < 7 * 86400_000;
-          if (period === "month") return now - t < 30 * 86400_000;
-          return true;
+          return new Date(ts).getTime() >= startMs;
         });
         setRows(buildVersionRows(filtered));
       })

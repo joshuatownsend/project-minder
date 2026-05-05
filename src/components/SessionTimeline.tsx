@@ -29,8 +29,9 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  const rs = Math.round(s % 60);
+  const totalSec = Math.round(s);
+  const m = Math.floor(totalSec / 60);
+  const rs = totalSec % 60;
   if (m < 60) return `${m}m${rs}s`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
@@ -137,7 +138,12 @@ function ThinkingContent({ sessionId, turnIndex, staticContent }: {
   const needsFetch = !staticContent && sessionId && turnIndex !== undefined;
 
   async function handleExpand() {
-    if (!expanded && needsFetch && !loaded) {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (needsFetch && !loaded) {
       setLoading(true);
       try {
         const res = await fetch(`/api/sessions/${sessionId}/thinking?turnId=${turnIndex}`);
@@ -154,7 +160,6 @@ function ThinkingContent({ sessionId, turnIndex, staticContent }: {
         setLoading(false);
       }
     }
-    setExpanded((v) => !v);
   }
 
   const content = fetchedContent ?? staticContent;
