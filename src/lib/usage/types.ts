@@ -1,5 +1,6 @@
 export interface ToolCall {
   name: string;
+  id?: string;
   arguments?: Record<string, any>;
 }
 
@@ -83,6 +84,17 @@ export interface ModelCost {
 
 export interface ShellStats {
   binary: string;
+  count: number;
+}
+
+export interface ToolTransition {
+  from: string;
+  to: string;
+  count: number;
+}
+
+export interface ToolSelfLoop {
+  tool: string;
   count: number;
 }
 
@@ -204,6 +216,8 @@ export interface UsageReport {
   byProject: ProjectBreakdown[];
   byCategory: CategoryBreakdown[];
   topTools: [string, number][];
+  toolTransitions: ToolTransition[];
+  toolSelfLoops: ToolSelfLoop[];
   shellStats: ShellStats[];
   mcpStats: McpServerStats[];
   projectDetails: ProjectDetail[];

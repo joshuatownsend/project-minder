@@ -2,9 +2,10 @@ import { NextRequest } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
-import { getClaudeUsage } from "@/lib/data";
+import { getClaudeUsage, getSessionsList } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import { ClaudeUsageStats } from "@/lib/types";
+import { projectScatter } from "@/lib/usage/sessionScatter";
 
 const CLAUDE_USAGE_TTL = 10 * 60_000; // 10 minutes
 
@@ -66,7 +67,18 @@ export async function GET(request: NextRequest) {
   if (notModified) return notModified;
 
   const stats = computeStats(result.projects, result.hiddenCount, cache.usage);
-  const response = jsonWithETag(stats, etag);
+
+  // Attach scatter data for the SessionComplexityChart on /stats.
+  // getSessionsList() has its own 2-min cache; no additional TTL needed here.
+  let sessions: ReturnType<typeof projectScatter>[] = [];
+  try {
+    const sessionsList = await getSessionsList();
+    sessions = sessionsList.sessions.map(projectScatter);
+  } catch {
+    // non-fatal — scatter chart just shows empty state
+  }
+
+  const response = jsonWithETag({ ...stats, sessions }, etag);
   response.headers.set("X-Minder-Backend", cache.backend);
   return response;
 }

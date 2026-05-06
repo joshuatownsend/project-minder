@@ -34,3 +34,13 @@ Segmented bars showing:
 - **Activity Recency** — when projects were last active (today, this week, this month, older)
 - **TODO Completion** — completed vs pending across portfolio
 - **Manual Steps** — completed vs pending across portfolio
+
+## Session Complexity
+
+Interactive scatter plot showing all Claude Code sessions across three configurable views:
+
+- **Complexity vs Cost** — duration (log ms) vs cost (USD); dot size = tool count; color = session status
+- **Context Pressure** — message count vs peak context fill; dot size = cost; color = compaction loop indicator
+- **Reliability** — message count vs 1-shot rate; dot size = cost; color = tool failure streak indicator
+
+Switch presets with the segmented control. Toggle **log x / log y** for long-tail distributions. Hover a dot for a tooltip; click to navigate to the full session detail page.

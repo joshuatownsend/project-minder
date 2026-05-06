@@ -1,5 +1,6 @@
 import { parseAllSessions } from "./parser";
 import { classifyTurn } from "./classifier";
+import { computeToolTransitions } from "./toolTransitions";
 import { computeTurnCost, loadPricing } from "./costCalculator";
 import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
@@ -335,6 +336,8 @@ export async function aggregateUsage(
     }
   }
 
+  const toolTransitionData = computeToolTransitions(assistantTurns);
+
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
     .sort((a, b) => b.cost - a.cost)
@@ -371,6 +374,8 @@ export async function aggregateUsage(
     byProject: [...projectMap.values()].sort((a, b) => b.cost - a.cost),
     byCategory: [...categoryMap.values()].sort((a, b) => b.cost - a.cost),
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
+    toolTransitions: toolTransitionData.transitions,
+    toolSelfLoops: toolTransitionData.selfLoops,
     shellStats: groupByBinary(bashCommands),
     mcpStats: groupMcpCalls(allToolCalls),
     projectDetails,

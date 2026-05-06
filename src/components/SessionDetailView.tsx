@@ -1,7 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { useSessionDetail } from "@/hooks/useSessions";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const OrchestrationDAG = dynamic(
+  () => import("./viz/OrchestrationDAG").then((m) => m.OrchestrationDAG),
+  { ssr: false, loading: () => <Skeleton className="h-96" /> }
+);
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
@@ -123,7 +130,7 @@ function StatCell({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "handoff" | "diagnosis" | "feedback";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "handoff" | "diagnosis" | "feedback";
 
 function TabBar({
   tabs, active, onChange,
@@ -204,6 +211,9 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       : []),
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
+      : []),
+    ...(data.subagentCount > 0
+      ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
       : []),
     { key: "handoff",   label: "Handoff"   },
     { key: "diagnosis", label: "Diagnosis" },
@@ -431,6 +441,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "subagents" && (
             <SessionSubagents subagents={data.subagents} />
+          )}
+
+          {activeTab === "orchestration" && (
+            <OrchestrationDAG sessionId={data.sessionId} />
           )}
 
           {activeTab === "handoff" && (

@@ -77,6 +77,9 @@ Table of file operations (read, write, edit, glob, grep) with file paths and too
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
 
+### Orchestration
+D3-powered DAG (directed acyclic graph) showing how subagents were spawned during the session. Each node is a spawned agent; edges show parent→child delegation. Node colors identify the agent type; hover for a tooltip with agent name and depth. Only appears when the session spawned at least one subagent (`subagentCount > 0`). Deep nesting beyond level 6 is collapsed into a `+N more` placeholder. Computed on demand from the original JSONL.
+
 ### Diagnosis
 Post-hoc 8-category quality analysis of the session, computed on demand from the JSONL:
 

@@ -327,6 +327,7 @@ export interface StatsData {
   manualStepsHealth: { total: number; completed: number; pending: number };
   claudeSessions: { total: number; projectsWithSessions: number };
   claudeUsage?: ClaudeUsageStats;
+  sessions?: import("@/lib/usage/sessionScatter").SessionScatterPoint[];
 }
 
 export interface SessionRecap {
