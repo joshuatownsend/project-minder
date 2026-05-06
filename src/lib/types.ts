@@ -55,6 +55,10 @@ export interface ProjectData {
   // CI/CD
   cicd?: CiCdInfo;
 
+  // Catalog counts (project-local agents/skills)
+  agentCount?: number;
+  skillCount?: number;
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
@@ -802,4 +806,6 @@ export interface CommandEntry {
   argumentHint?: string;
   isSymlink?: boolean;
   realPath?: string;
+  provenance?: import("./indexer/types").Provenance;
+  parseWarnings?: string[];
 }

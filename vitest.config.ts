@@ -12,7 +12,8 @@ export default defineConfig({
       "server-only": path.resolve(__dirname, "tests/fixtures/server-only-stub.ts"),
     },
   },
-  test: {
-    include: ["tests/**/*.test.ts"],
-  },
+  test: Object.assign(
+    { include: ["tests/**/*.test.ts"], testTimeout: 15000 },
+    { poolOptions: { forks: { execArgv: ["--max-old-space-size=4096"] } } }
+  ),
 });

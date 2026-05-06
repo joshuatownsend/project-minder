@@ -27,6 +27,10 @@ export interface UsageTurn {
   assistantText?: string;
   isError?: boolean;
   turnDurationMs?: number;
+  /** Set when parsed with includeSidechains:true. Maps to the Task tool_use_id that spawned this sidechain. */
+  parentToolUseId?: string;
+  /** True when this turn belongs to a sidechain (subagent) session. */
+  isSidechain?: boolean;
 }
 
 export type CategoryType =
@@ -146,6 +150,10 @@ export interface AgentStats {
   lastUsed?: string;
   projects: Record<string, number>;
   sessions: string[];
+  /** Per-agent cost derived from sidechain file-parse (populated on demand). */
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface SkillStats {

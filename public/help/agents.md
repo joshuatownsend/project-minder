@@ -22,6 +22,14 @@ Each row shows a badge indicating the agent's origin:
 
 An **amber dot** on the badge means an update is available upstream (currently supported for marketplace plugin agents only).
 
+Plugin agents also show a **version chip** (e.g. `v1.2.3`) next to the badge. If multiple versions of the same plugin are installed, Project Minder surfaces only the highest semver.
+
+## Row Indicators
+
+- **`!` chip (amber)** — the agent's frontmatter has a parse warning (e.g. invalid YAML). Hover the chip to see the error message. The row still renders with the name and description that could be recovered.
+- **`$N.NN` chip** — estimated cost of all sidechain (subagent) turns spawned by this agent across your session history. Computed on demand from JSONL files; appears when the agent has attributable cost.
+- **Copy button** — click the copy icon next to `@<name>` to copy the invocation string to the clipboard. Use this string as the `subagent_type` argument when invoking the agent programmatically.
+
 ## Update Detection
 
 Project Minder runs background update checks (24-hour TTL) for marketplace plugin agents. See the [Skills help page](/help/skills) for full details on how checks work.

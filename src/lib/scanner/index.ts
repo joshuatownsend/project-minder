@@ -17,6 +17,7 @@ import { scanClaudeHooks } from "./claudeHooks";
 import { scanMcpServers } from "./mcpServers";
 import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
+import { countProjectCatalog } from "./projectCatalogCounts";
 
 // Neutral substitutes typed against the real scanner returns so downstream
 // code reads the same shape whether the scanner ran or was gated off.
@@ -79,6 +80,7 @@ async function scanProject(
     hooks,
     mcpServers,
     cicd,
+    catalogCounts,
   ] = await Promise.all([
     scanPackageJson(projectPath),
     scanEnvFiles(projectPath),
@@ -103,6 +105,7 @@ async function scanProject(
     scanClaudeHooks(projectPath),
     scanMcpServers(projectPath),
     scanCiCd(projectPath),
+    countProjectCatalog(projectPath),
   ]);
 
   // Determine DB port from env or docker
@@ -157,6 +160,8 @@ async function scanProject(
     hooks,
     mcpServers,
     cicd,
+    agentCount: catalogCounts.agentCount > 0 ? catalogCounts.agentCount : undefined,
+    skillCount: catalogCounts.skillCount > 0 ? catalogCounts.skillCount : undefined,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

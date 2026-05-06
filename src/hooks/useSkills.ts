@@ -25,6 +25,7 @@ export interface SkillRow {
     provenance: Provenance;
     isSymlink?: boolean;
     realPath?: string;
+    parseWarnings?: string[];
   };
   usage?: {
     name: string;

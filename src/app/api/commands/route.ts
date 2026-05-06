@@ -3,8 +3,10 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import {
   walkUserCommands,
+  walkPluginCommands,
   walkProjectCommands,
 } from "@/lib/indexer/walkCommands";
+import { loadProvenanceContext } from "@/lib/indexer/provenance";
 import type { CommandEntry } from "@/lib/types";
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -53,12 +55,15 @@ export async function GET(request: NextRequest) {
     setCachedScan(scan);
   }
 
-  const [userCommands, ...projectCommandSets] = await Promise.all([
-    walkUserCommands(),
-    ...scan.projects.map((p) => walkProjectCommands(p.path, p.slug)),
+  const ctx = await loadProvenanceContext();
+
+  const [userCommands, pluginCommandSets, ...projectCommandSets] = await Promise.all([
+    walkUserCommands(ctx),
+    walkPluginCommands(ctx.installedPlugins, ctx),
+    ...scan.projects.map((p) => walkProjectCommands(p.path, p.slug, ctx)),
   ]);
 
-  let entries: CommandEntry[] = [...userCommands, ...projectCommandSets.flat()];
+  let entries: CommandEntry[] = [...userCommands, ...pluginCommandSets, ...projectCommandSets.flat()];
 
   if (source) {
     entries = entries.filter((e) => e.source === source);

@@ -6,7 +6,7 @@ import { loadKnownMarketplaces } from "./marketplaces";
 
 export function resolveProvenance(opts: {
   source: "user" | "plugin" | "project";
-  entryKind: "skill" | "agent";
+  entryKind: "skill" | "agent" | "command";
   slug: string;
   isSymlink?: boolean;
   realPath?: string;

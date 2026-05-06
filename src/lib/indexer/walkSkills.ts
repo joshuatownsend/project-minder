@@ -21,7 +21,7 @@ function makeSkillEntry(
     ctx: ProvenanceContext;
   }
 ): SkillEntry {
-  const { fm, body } = parseFrontmatter(text);
+  const { fm, body, warnings } = parseFrontmatter(text);
 
   const slug =
     layout === "bundled"
@@ -76,6 +76,7 @@ function makeSkillEntry(
     provenance,
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
+    parseWarnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 

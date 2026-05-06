@@ -9,6 +9,7 @@ import { CONFIG_TYPES, type ConfigType, type PluginEntry, type Workflow } from "
 import { ConfigDashboard } from "./ConfigDashboard";
 import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
+import { CopyInvocationButton } from "@/components/CopyInvocationButton";
 
 type TabKey = ConfigType | "settings";
 
@@ -361,6 +362,10 @@ function McpList({ rows }: { rows: McpRow[] }) {
             {m.name}
           </span>
           <Pill>{m.transport}</Pill>
+          <CopyInvocationButton
+            text={`mcp__${m.name}__`}
+            title={`Copy MCP prefix: mcp__${m.name}__  (append the tool name, e.g. mcp__${m.name}__list_files)`}
+          />
           <span style={{ flex: 1, minWidth: 0, fontSize: "0.68rem", color: "var(--text-secondary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {m.command ? `${m.command}${m.args ? " " + m.args.join(" ") : ""}` : m.url ?? ""}
           </span>

@@ -467,6 +467,36 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   wt {worktreeCount}
                 </span>
               )}
+              {project.agentCount != null && project.agentCount > 0 && (
+                <span
+                  title={pluralize(project.agentCount, "agent")}
+                  style={{
+                    fontSize: "0.68rem",
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--text-muted)",
+                    border: "1px solid var(--border-subtle)",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                  }}
+                >
+                  ag {project.agentCount}
+                </span>
+              )}
+              {project.skillCount != null && project.skillCount > 0 && (
+                <span
+                  title={pluralize(project.skillCount, "skill")}
+                  style={{
+                    fontSize: "0.68rem",
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--text-muted)",
+                    border: "1px solid var(--border-subtle)",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                  }}
+                >
+                  sk {project.skillCount}
+                </span>
+              )}
               {workflowCount > 0 && (
                 // Rendered as a span (not <Link>) because the entire card is
                 // already wrapped in a <Link> — nesting <a> inside <a> is
