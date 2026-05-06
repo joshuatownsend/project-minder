@@ -49,10 +49,7 @@ function normalizeSize(values: number[]): number[] {
   return values.map((v) => Math.max(4, (v / max) * 20));
 }
 
-/**
- * Project scatter points into plottable arrays for a given preset.
- * All returned arrays share the same length as `points`.
- */
+// All returned arrays share the same length as `points`.
 export function prepareScatterData(
   points: SessionScatterPoint[],
   preset: ScatterPreset
@@ -78,32 +75,31 @@ export function prepareScatterData(
         ),
       };
     }
-    case "context-pressure": {
-      return {
-        x: points.map((p) => p.messageCount),
-        y: points.map((p) => p.maxContextFill),
-        xLabel: "Messages",
-        yLabel: "Peak context fill",
-        size: normalizeSize(points.map((p) => p.costEstimate * 1000)),
-        color: points.map((p) =>
-          p.hasCompactionLoop ? "var(--status-error-text)" : "var(--info)"
-        ),
-        tooltips: points.map(
-          (p) =>
-            `${p.sessionId.slice(0, 8)} · ${p.messageCount} msgs · ${(p.maxContextFill * 100).toFixed(0)}% fill${p.hasCompactionLoop ? " · compacted" : ""}`
-        ),
-      };
-    }
+    case "context-pressure":
     case "reliability": {
+      const x = points.map((p) => p.messageCount);
+      const size = normalizeSize(points.map((p) => p.costEstimate * 1000));
+      if (preset === "context-pressure") {
+        return {
+          x,
+          y: points.map((p) => p.maxContextFill),
+          xLabel: "Messages",
+          yLabel: "Peak context fill",
+          size,
+          color: points.map((p) => p.hasCompactionLoop ? "var(--status-error-text)" : "var(--info)"),
+          tooltips: points.map(
+            (p) =>
+              `${p.sessionId.slice(0, 8)} · ${p.messageCount} msgs · ${(p.maxContextFill * 100).toFixed(0)}% fill${p.hasCompactionLoop ? " · compacted" : ""}`
+          ),
+        };
+      }
       return {
-        x: points.map((p) => p.messageCount),
+        x,
         y: points.map((p) => p.oneShotRate),
         xLabel: "Messages",
         yLabel: "1-shot rate",
-        size: normalizeSize(points.map((p) => p.costEstimate * 1000)),
-        color: points.map((p) =>
-          p.hasToolFailureStreak ? "var(--status-error-text)" : "var(--accent)"
-        ),
+        size,
+        color: points.map((p) => p.hasToolFailureStreak ? "var(--status-error-text)" : "var(--accent)"),
         tooltips: points.map(
           (p) =>
             `${p.sessionId.slice(0, 8)} · ${p.messageCount} msgs · ${(p.oneShotRate * 100).toFixed(0)}% 1-shot${p.hasToolFailureStreak ? " · tool failures" : ""}`

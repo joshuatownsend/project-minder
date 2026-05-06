@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
-import { parseSessionTurns } from "./parser";
+import { parseSessionTurns, isValidSessionId } from "./parser";
 import type { UsageTurn } from "./types";
 
 export interface OrchNode {
@@ -25,11 +25,6 @@ export interface OrchestrationGraph {
 
 const MAX_DEPTH = 6;
 
-/**
- * Pure function. Builds an orchestration DAG from turns that include sidechains.
- * Pass 1: map tool_use_id → agentName from main-conversation Agent() calls.
- * Pass 2: each distinct parentToolUseId in sidechain turns becomes a node.
- */
 export function buildGraph(turns: UsageTurn[]): OrchestrationGraph {
   // Pass 1: tool_use_id → agentName (from non-sidechain Agent tool calls)
   const agentByToolUseId = new Map<string, string>();
@@ -113,6 +108,16 @@ export function buildGraph(turns: UsageTurn[]): OrchestrationGraph {
     if (parentNode) accum.parentNodeId = parentNode;
   }
 
+  // Pre-build children lookup to avoid O(n²) BFS scan
+  const childrenByParentId = new Map<string, string[]>();
+  for (const [id, accum] of nodeAccum) {
+    if (accum.parentNodeId) {
+      const arr = childrenByParentId.get(accum.parentNodeId);
+      if (arr) arr.push(id);
+      else childrenByParentId.set(accum.parentNodeId, [id]);
+    }
+  }
+
   // BFS to assign depths, capped at MAX_DEPTH
   const depthMap = new Map<string, number>();
   const roots = [...nodeAccum.keys()].filter((id) => !nodeAccum.get(id)!.parentNodeId);
@@ -120,11 +125,8 @@ export function buildGraph(turns: UsageTurn[]): OrchestrationGraph {
   while (queue.length > 0) {
     const { id, depth } = queue.shift()!;
     depthMap.set(id, depth);
-    // Enqueue children
-    for (const [childId, accum] of nodeAccum) {
-      if (accum.parentNodeId === id && !depthMap.has(childId)) {
-        queue.push({ id: childId, depth: depth + 1 });
-      }
+    for (const childId of childrenByParentId.get(id) ?? []) {
+      if (!depthMap.has(childId)) queue.push({ id: childId, depth: depth + 1 });
     }
   }
 
@@ -178,14 +180,10 @@ export function buildGraph(turns: UsageTurn[]): OrchestrationGraph {
   return { nodes, edges, rootCount: roots.length };
 }
 
-/**
- * Locate and parse a session JSONL, then build its orchestration graph.
- * Returns null if the session file cannot be found.
- */
 export async function loadOrchestrationGraph(
   sessionId: string
 ): Promise<OrchestrationGraph | null> {
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+  if (!isValidSessionId(sessionId)) return null;
 
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
 

@@ -122,10 +122,12 @@ function ScatterInner({
   const xs = prepared.x;
   const ys = prepared.y;
 
-  const xMin = Math.min(...xs.filter(isFinite));
-  const xMax = Math.max(...xs.filter(isFinite));
-  const yMin = Math.min(...ys.filter(isFinite));
-  const yMax = Math.max(...ys.filter(isFinite));
+  const xFinite = xs.filter(isFinite);
+  const yFinite = ys.filter(isFinite);
+  const xMin = Math.min(...xFinite);
+  const xMax = Math.max(...xFinite);
+  const yMin = Math.min(...yFinite);
+  const yMax = Math.max(...yFinite);
 
   const safeXDomain: [number, number] = [
     Math.max(xMin === xMax ? 0 : xMin, logX ? 0.001 : -Infinity),

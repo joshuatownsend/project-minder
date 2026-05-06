@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import * as d3 from "d3";
 import { D3Container } from "./D3Container";
 import type { OrchestrationGraph, OrchNode } from "@/lib/usage/orchestrationGraph";
@@ -19,6 +19,12 @@ function agentColor(agentName: string | undefined, index: number): string {
   if (!agentName) return "var(--text-secondary)";
   return AGENT_COLORS[index % AGENT_COLORS.length];
 }
+
+// Stateless path generator — created once at module scope
+type TreeNodeData = { id: string; node: OrchNode; children: TreeNodeData[] };
+const dagLinkGen = d3.linkHorizontal<unknown, d3.HierarchyPointNode<TreeNodeData>>()
+  .x((d) => d.y)
+  .y((d) => d.x);
 
 interface Props {
   sessionId: string;
@@ -98,62 +104,55 @@ function OrchDAGInner({
   showTooltip: (x: number, y: number, content: string) => void;
   hideTooltip: () => void;
 }) {
-  // Build a hierarchy from edges
-  type TreeNodeData = { id: string; node: OrchNode; children: TreeNodeData[] };
-
-  const nodeMap = new Map<string, OrchNode>(graph.nodes.map((n) => [n.id, n]));
-  const edgeMap = new Map<string, string[]>(); // parentId → childIds
-  for (const edge of graph.edges) {
-    const arr = edgeMap.get(edge.from) ?? [];
-    arr.push(edge.to);
-    edgeMap.set(edge.from, arr);
-  }
-
-  // Find roots (nodes with no incoming edges)
-  const hasParent = new Set(graph.edges.map((e) => e.to));
-  const roots = graph.nodes.filter((n) => !hasParent.has(n.id));
-
-  function buildTree(nodeId: string): TreeNodeData {
-    const node = nodeMap.get(nodeId)!;
-    const childIds = edgeMap.get(nodeId) ?? [];
-    return { id: nodeId, node, children: childIds.map(buildTree) };
-  }
-
-  // Virtual root to hold multiple roots
-  const virtualRoot: TreeNodeData = {
-    id: "__root__",
-    node: { id: "__root__", toolName: "Session", depth: -1 },
-    children: roots.map((r) => buildTree(r.id)),
-  };
-
-  const hierarchy = d3.hierarchy(virtualRoot, (d) => d.children);
-  const treeLayout = d3.tree<TreeNodeData>().size([height, width - 60]);
-  const treeRoot = treeLayout(hierarchy);
-
-  const nodes = treeRoot.descendants().filter((d) => d.data.id !== "__root__");
-  const links = treeRoot.links().filter(
-    (l) => l.source.data.id !== "__root__" && l.target.data.id !== "__root__"
-  );
-
-  // Also add links from virtual root children (the roots themselves have no drawn parent)
-  const agentColorMap = new Map<string, string>();
-  let colorIdx = 0;
-  for (const n of graph.nodes) {
-    if (n.agentName && !agentColorMap.has(n.agentName)) {
-      agentColorMap.set(n.agentName, agentColor(n.agentName, colorIdx++));
+  const { nodes, links, agentColorMap } = useMemo(() => {
+    const nodeMap = new Map<string, OrchNode>(graph.nodes.map((n) => [n.id, n]));
+    const edgeMap = new Map<string, string[]>();
+    for (const edge of graph.edges) {
+      const arr = edgeMap.get(edge.from) ?? [];
+      arr.push(edge.to);
+      edgeMap.set(edge.from, arr);
     }
-  }
 
-  const linkGen = d3.linkHorizontal<unknown, d3.HierarchyPointNode<TreeNodeData>>()
-    .x((d) => d.y)
-    .y((d) => d.x);
+    const hasParent = new Set(graph.edges.map((e) => e.to));
+    const roots = graph.nodes.filter((n) => !hasParent.has(n.id));
+
+    function buildTree(nodeId: string): TreeNodeData {
+      const node = nodeMap.get(nodeId)!;
+      const childIds = edgeMap.get(nodeId) ?? [];
+      return { id: nodeId, node, children: childIds.map(buildTree) };
+    }
+
+    const virtualRoot: TreeNodeData = {
+      id: "__root__",
+      node: { id: "__root__", toolName: "Session", depth: -1 },
+      children: roots.map((r) => buildTree(r.id)),
+    };
+
+    const hierarchy = d3.hierarchy(virtualRoot, (d) => d.children);
+    const treeRoot = d3.tree<TreeNodeData>().size([height, width - 60])(hierarchy);
+
+    const nodes = treeRoot.descendants().filter((d) => d.data.id !== "__root__");
+    const links = treeRoot.links().filter(
+      (l) => l.source.data.id !== "__root__" && l.target.data.id !== "__root__"
+    );
+
+    const agentColorMap = new Map<string, string>();
+    let colorIdx = 0;
+    for (const n of graph.nodes) {
+      if (n.agentName && !agentColorMap.has(n.agentName)) {
+        agentColorMap.set(n.agentName, agentColor(n.agentName, colorIdx++));
+      }
+    }
+
+    return { nodes, links, agentColorMap };
+  }, [graph, width, height]);
 
   return (
     <g>
-      {links.map((link, i) => (
+      {links.map((link) => (
         <path
-          key={i}
-          d={linkGen(link as any) ?? ""}
+          key={`${link.source.data.id}→${link.target.data.id}`}
+          d={dagLinkGen(link as any) ?? ""}
           fill="none"
           stroke="var(--border-default)"
           strokeWidth={1.5}

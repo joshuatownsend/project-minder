@@ -32,5 +32,9 @@ export async function GET(
   }
 
   cache.set(sessionId, { graph, expiresAt: now + 60_000 });
+  // Evict expired entries to bound cache size
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
   return NextResponse.json(graph);
 }

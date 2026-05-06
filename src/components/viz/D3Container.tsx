@@ -33,15 +33,6 @@ interface TooltipState {
   visible: boolean;
 }
 
-/**
- * Shared chrome for D3 visualizations. Owns:
- * - A ResizeObserver that tracks container width
- * - The <svg> root
- * - A sibling <ChartTooltip> driven by showTooltip/hideTooltip callbacks
- *
- * Children receive width/height after margin subtraction, plus tooltip callbacks.
- * Lazy-loaded by each viz component (ssr:false).
- */
 export function D3Container({
   height = 360,
   margin = DEFAULT_MARGIN,
@@ -114,11 +105,6 @@ type d3ScaleAny = {
   (value: any): number;
 };
 
-/**
- * Renders SVG axes + gridlines from caller-supplied d3 scale objects.
- * Mount inside the D3Container SVG <g> (already translated by margin).
- * Uses CSS custom properties for colors — see plan §2 for token list.
- */
 export function Axes({
   xScale,
   yScale,
@@ -140,7 +126,6 @@ export function Axes({
 
   return (
     <g>
-      {/* Horizontal gridlines */}
       {yTicks.map((t) => (
         <line
           key={t}
@@ -153,7 +138,6 @@ export function Axes({
         />
       ))}
 
-      {/* X axis */}
       <line x1={0} x2={width} y1={height} y2={height} stroke={borderDefault} strokeWidth={1} />
       {xTicks.map((t) => (
         <g key={t} transform={`translate(${xScale(t)},${height})`}>
@@ -180,7 +164,6 @@ export function Axes({
         </text>
       )}
 
-      {/* Y axis */}
       <line x1={0} x2={0} y1={0} y2={height} stroke={borderDefault} strokeWidth={1} />
       {yTicks.map((t) => (
         <g key={t} transform={`translate(0,${yScale(t)})`}>
