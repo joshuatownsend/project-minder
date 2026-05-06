@@ -1,5 +1,64 @@
 # Insights
 
+<!-- insight:1373ca6b3ecc | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T11:46:38.999Z -->
+## ★ Insight
+The `SqlResultsTable` architecture issue is a classic virtualizer gotcha: splitting the header and body into separate `overflow: auto` containers means horizontal scrolling is independent. The fix is to make the header `position: sticky; top: 0` inside the same scroll container that the virtualizer uses — sticky elements scroll horizontally with the container but pin vertically.
+
+---
+
+<!-- insight:846879024d2a | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T02:20:08.156Z -->
+## ★ Insight
+The UUID regex `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}` is high-precision enough for session cross-linking. Using the global flag `g` on the regex with `matchAll` is safer than `exec` in a loop — no risk of forgetting to reset `lastIndex`.
+
+---
+
+<!-- insight:a77c44eb2736 | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T02:17:46.784Z -->
+## ★ Insight
+RFC-4180 has only four escaping triggers: `,`, `"`, `\n`, `\r`. The critical one developers miss is that a `"` inside a quoted field must be doubled — `"` → `""` — NOT backslash-escaped.
+
+---
+
+<!-- insight:390f1b047ed9 | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T02:13:15.528Z -->
+## ★ Insight
+The build order follows a key principle: start with the highest-certainty, lowest-risk items. `csv.ts` is pure logic with zero dependencies — if tests pass, the foundation is solid before we touch the UI.
+
+---
+
+<!-- insight:08ed8f932f98 | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T01:47:19.453Z -->
+## ★ Insight
+- Cluster L is wider than other 5.x sessions because it stands up four new top-level pages, but each follows the established `*Browser.tsx` template. The leverage is high: scanner + API + browser is a known shape, and three of the four routes already have placeholder pages from Wave 1.
+- The `/sql` browser is the outlier — it's a power-user interface against SQLite, not another catalog. It needs its own validation strategy (SELECT-only via regex + `EXPLAIN`) that doesn't exist anywhere else in the codebase yet.
+- Wave 5.1's `walkPlugins.ts` semver dedup work is a building block for `/plugins`; we should reuse, not redo.
+
+---
+
+<!-- insight:825d4579e69b | session:2ec11a17-6d55-42e1-9319-38fa6b4917d9 | 2026-05-06T01:31:38.419Z -->
+## ★ Insight
+**Fix once, debug many times** — applying original fixes on every retry is counterproductive. Claude Code sees already-edited files and makes conflicting changes. The right shape is: apply fixes once, then run a debug-only loop that accumulates patches without resetting.
+**Haiku for classification, Sonnet for implementation** — classification is a simple routing decision (P0/P1/P2); Haiku handles it near-instantly at ~30× lower cost than Opus. Sonnet gets the file-editing task where reasoning quality matters.
+
+---
+
+<!-- insight:97b2af94b315 | session:2ec11a17-6d55-42e1-9319-38fa6b4917d9 | 2026-05-06T01:31:04.571Z -->
+## ★ Insight
+**Claude Code in headless CI hangs without `--dangerously-skip-permissions`** — every `applyFix` call would silently timeout waiting for a permission prompt that never comes.
+**Fetch-then-checkout order matters** — `npm ci` must run against the PR branch's deps, not the base branch. We use `gh pr view` to get the head ref *before* `checkout@v4`.
+**GraphQL over REST for review threads** — `gh pr view --json` gives REST-shape data where `databaseId` (the integer ID needed for reply-to) may be absent; the GraphQL API guarantees it.
+
+---
+
+<!-- insight:d36d395559bc | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-06T01:10:37.161Z -->
+## ★ Insight
+Vitest 4 moved pool-specific options (`execArgv`, `maxForks`, etc.) to the top-level `test` block — the old `poolOptions.forks.*` nesting was a Vitest 3 API. The `Object.assign` workaround avoided a TypeScript error but meant the option was silently ignored when Vitest 4 dropped the key. Using `execArgv` directly at `test` level is both correct for V4 and type-safe.
+
+---
+
+<!-- insight:67f41dfcc2ec | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T23:41:23.403Z -->
+## ★ Insight
+The recursive directory walker uses the same mocked `readdir` that always returns a directory-type dirent, creating an infinite recursion. This is a classic mock completeness bug: when you add a new module to an orchestrator, all tests that mock the orchestrator's dependencies must also mock the new one.
+
+---
+
 <!-- insight:ddbe99e4f51f | session:a923dbd6-5aa8-48a6-80f6-48e11bdecc25 | 2026-05-05T20:55:27.896Z -->
 ## ★ Insight
 The `globalThis` pattern solves a specific Next.js dev-mode problem: module-level singletons get re-initialized on HMR restarts, but `globalThis` survives them. The tradeoff is that tests running in the same Node.js process share the same `globalThis`, so caches must be explicitly reset in `beforeEach`. This is why the test fix is a `(globalThis as Record<string, unknown>).__agentCostCache = undefined` — casting through `Record<string, unknown>` avoids the typed interface that only `agentCost.ts` knows about.

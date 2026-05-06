@@ -19,6 +19,10 @@ export const helpMapping: Record<string, string> = {
   '/config': 'config',
   '/setup': 'setup',
   '/settings': 'settings',
+  '/plans': 'plans',
+  '/hooks': 'hooks',
+  '/plugins': 'plugins',
+  '/sql': 'sql',
 }
 
 /**
@@ -67,6 +71,10 @@ export const helpSlugs = [
   'setup',
   'settings',
   'templates',
+  'plans',
+  'hooks',
+  'plugins',
+  'sql',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

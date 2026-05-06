@@ -1,0 +1,114 @@
+name: Autonomous PR Review Responder
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# Serialize per-PR to avoid concurrent fix races
+concurrency:
+  group: pr-review-responder-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Guard ─────────────────────────────────────────────────────────────────
+  # Filters to: changes_requested reviews, or /auto-fix from trusted collaborators
+  guard:
+    name: Evaluate trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.eval.outputs.should_run }}
+      pr_number: ${{ steps.eval.outputs.pr_number }}
+    steps:
+      - name: Check conditions
+        id: eval
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEW_ASSOCIATION: ${{ github.event.review.author_association }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+          PR_NUMBER_REVIEW: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          TRUSTED="OWNER COLLABORATOR MEMBER"
+
+          if [[ "$EVENT_NAME" == "pull_request_review" \
+            && "$REVIEW_STATE" == "changes_requested" \
+            && $(echo "$TRUSTED" | grep -cw "$REVIEW_ASSOCIATION") -gt 0 ]]; then
+            echo "should_run=true"  >> "$GITHUB_OUTPUT"
+            echo "pr_number=$PR_NUMBER_REVIEW" >> "$GITHUB_OUTPUT"
+
+          elif [[ "$EVENT_NAME" == "issue_comment" \
+            && -n "$ISSUE_PR_URL" \
+            && $(echo "$TRUSTED" | grep -cw "$COMMENT_ASSOCIATION") -gt 0 \
+            && $(echo "$COMMENT_BODY" | grep -cF '/auto-fix') -gt 0 ]]; then
+            echo "should_run=true"  >> "$GITHUB_OUTPUT"
+            echo "pr_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Respond ───────────────────────────────────────────────────────────────
+  respond:
+    name: Fix review comments
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
+    runs-on: ubuntu-latest   # matches CI workflow OS
+    timeout-minutes: 45
+
+    steps:
+      # Resolve PR head ref before checkout so we get the right branch+deps
+      - name: Resolve PR head ref
+        id: pr_ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.guard.outputs.pr_number }}
+        run: |
+          HEAD_REF=$(gh pr view "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --json headRefName --jq '.headRefName')
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr_ref.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'   # pin to match CI
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Embed token in remote URL so push works without a PAT
+          git remote set-url origin \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+      - name: Run PR Review Responder
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.guard.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/pr-review-responder.mjs

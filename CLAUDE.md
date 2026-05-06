@@ -124,6 +124,18 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - All pages are client components (`"use client"`) — data fetched via API routes
 - Keyboard shortcut: `/` focuses search bar
 
+## Git Workflow
+- NEVER push directly to main. Always create a feature branch (e.g., `wave3.3`), push to that branch, and open a PR.
+- Use squash-merge for PRs. Admin override is acceptable when CI passes but branch protection blocks (e.g., `gh pr merge --squash --admin`).
+- After merging, verify post-merge state with typecheck and full test suite.
+## Verification Gates
+Before committing or opening a PR, ALWAYS run: (1) `npm run typecheck`, (2) full test suite. Report exact pass counts (e.g., '934 tests passing'). Do not mark a task complete until both pass.
+
+## Context Management
+- For long sessions, prefer `Grep` and targeted `Read` with offset/limit over re-reading whole large files.
+- When observing another session's tool-output files, read incrementally and summarize early — do not accumulate full file contents in context.
+- If approaching context limits, checkpoint progress to a file before continuing.
+
 ## TODO
 - If I give you a TODO, save it to TODO.md in our repo.
 - Consider our TODO list when planning new features. If something on the list can be accomplished during a plan or implement run, suggest it.

@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 5.2 — Cluster L: four new top-level browsers.** TODOs #152, #154, #156, #237 from `~/.claude/plans/our-to-do-list-has-gentle-cookie.md`.
+  - **`/sql` — interactive SQL workbench** (#237). Read-only SELECT editor against `~/.minder/index.db`. Schema sidebar with expand/collapse and one-click template insert. Virtualized results table with truncation banner at 10,000 rows. CSV (RFC-4180) and JSON export. localStorage query history (max 20, dedup adjacent). Read-only enforcement by `stmt.readonly` bytecode introspection in `better-sqlite3` — catches `WITH … INSERT RETURNING` CTEs that pass a regex.
+  - **`/hooks` — cross-project hook coverage matrix** (#154). Coverage summary cards (project/local/user scope counts + unique event count); click a card to filter. Virtualised hook list reusing `Pill`, `LocalScopeBadge`, `SourceBadge`, `commandPreview`, and `ApplyUnitButton` from `ConfigBrowser`. 300ms-debounced search, source filter, sort by event or project. AppNav Hooks entry now points to `/hooks` instead of `/config?type=hooks`; the `/config` Hooks tab continues to exist for project deep-links.
+  - **`/plans` — plan catalog browser** (#152). Scans `~/.claude/plans/*.md` via new `claudePlans.ts` scanner. Extracts title from front-matter or first `# ` heading; tags from front-matter; related session IDs by UUID regex in body. Tag filter, 300ms-debounced search, sort by mtime/title. Expand row → full plan body + clickable related-session chips.
+  - **`/plugins` — installed-plugin catalog** (#156). New `pluginRollup.ts` JOIN helper: `loadInstalledPlugins()` × `loadCatalog()` × `getAgentUsage()` × `getSkillUsage()` × `readPluginScopeMcp()`. Per-plugin agent/skill/MCP counts + total invocations. 2-min cache. Expand row → links to `/agents?source=plugin`, `/skills?source=plugin`, `/config?type=mcp`. Status badge (enabled/disabled/blocked).
+  - **`src/lib/csv.ts`** — RFC-4180 CSV escaper (`escapeCell`, `toCsv`). Used by `/sql` export. Future CSV writers should use this rather than ad-hoc concatenation.
+  - **`src/lib/sqlSchemaSnapshot.ts`** — hardcoded schema-version-6 table/column list (13 tables + 2 FTS5 virtual). Validated by `tests/sqlSchemaSnapshot.test.ts` via live `PRAGMA table_info` when DB is available.
+  - **`PlanEntry`** type added to `src/lib/types.ts`.
+  - **Help docs** added for all four routes: `docs/help/{plans,hooks,plugins,sql}.md` + `public/help/` copies.
+  - **Tests** (44 new): `csv.test.ts` (18), `claudePlans.test.ts` (10), `pluginRollup.test.ts` (7), `sqlSchemaSnapshot.test.ts` (5 + 1 conditional live check). 1195 tests pass; typecheck clean.
+
+### Changed
+- AppNav **Hooks** entry now links to `/hooks` (top-level browser) instead of `/config?type=hooks`. The `/config` Hooks tab is unchanged.
+
+### Added
 - **Wave 5.1 — Catalog UX polish (Cluster K).** TODOs #34, #35, #37, #33 (badges + cost) from `~/.claude/plans/our-to-do-list-has-gentle-cookie.md`. No schema migration; no new third-party deps.
   - **Frontmatter lint warnings (#34).** `parseFrontmatter` now returns `warnings: string[]` capturing YAML parse errors and unclosed `---` blocks. `parseWarnings?: string[]` added to `CatalogEntryBase` (agents + skills) and `CommandEntry`. All walkers (`walkAgents`, `walkSkills`, `walkCommands`) propagate warnings from the parser. A small amber `!` chip (`CatalogLintChip.tsx`) renders in the badge cluster of each catalog row (agents, skills, commands); hovering shows the full warning text via native `title=""`.
   - **Copy-invocation button (#35).** New `CopyInvocationButton.tsx` (mirrors `code-block.tsx` icon-swap pattern, 1.8s revert). Agents copy `@<name>`, user-invocable skills copy `/<name>`, non-invocable skills copy `Skill: <name>`, commands copy `/<slug>`. MCP server rows in ConfigBrowser copy `mcp__<server>__` with a title hint to append the tool name. For agents and skills the button is placed inside `CatalogActionStrip`; for commands and MCP it is inline in the row.
