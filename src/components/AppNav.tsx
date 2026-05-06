@@ -59,7 +59,7 @@ const GROUPS: Group[] = [
   {
     label: "Config",
     children: [
-      item("/config?type=hooks", "Hooks", { matchType: "hooks" }),
+      item("/hooks", "Hooks"),
       item("/config?type=mcp",   "MCP",   { matchType: "mcp" }),
       item("/settings",          "Settings"),
       item("/setup",             "Setup"),

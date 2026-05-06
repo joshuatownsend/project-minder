@@ -542,6 +542,23 @@ export interface PluginsInfo {
   plugins: PluginEntry[];
 }
 
+// ─── Plans ───────────────────────────────────────────────────────────────────
+
+export interface PlanEntry {
+  /** Filename without .md extension — stable identifier. */
+  slug: string;
+  /** Absolute path to the plan file. */
+  path: string;
+  /** Title from front-matter `title:` or first `# ` heading, else the slug. */
+  title: string;
+  /** Tags from front-matter `tags:` array. Empty when absent. */
+  tags: string[];
+  /** Session UUIDs found by regex in the plan body (heuristic). */
+  relatedSessionIds: string[];
+  mtime: string;
+  sizeBytes: number;
+}
+
 // ─── CI/CD ───────────────────────────────────────────────────────────────────
 
 export interface WorkflowJob {
