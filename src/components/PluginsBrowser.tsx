@@ -329,7 +329,7 @@ function PluginRow({
           {agentCount > 0 && (
             <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
               <Link
-                href={`/agents?source=plugin`}
+                href={`/agents?source=plugin&q=${encodeURIComponent(plugin.name)}`}
                 style={{ color: "var(--info)", textDecoration: "none" }}
               >
                 {agentCount} agent{agentCount !== 1 ? "s" : ""}
@@ -339,7 +339,7 @@ function PluginRow({
           {skillCount > 0 && (
             <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
               <Link
-                href={`/skills?source=plugin`}
+                href={`/skills?source=plugin&q=${encodeURIComponent(plugin.name)}`}
                 style={{ color: "var(--info)", textDecoration: "none" }}
               >
                 {skillCount} skill{skillCount !== 1 ? "s" : ""}

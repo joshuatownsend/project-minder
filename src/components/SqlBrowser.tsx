@@ -5,6 +5,7 @@ import { Play, Download, Clock } from "lucide-react";
 import { SqlSchemaSidebar } from "./SqlSchemaSidebar";
 import { SqlResultsTable } from "./SqlResultsTable";
 import { useSqlHistory } from "@/hooks/useSqlHistory";
+import Link from "next/link";
 import { toCsv } from "@/lib/csv";
 import { downloadBlob } from "@/lib/downloadBlob";
 
@@ -273,9 +274,17 @@ export function SqlBrowser() {
               color: "var(--error, #f87171)",
             }}
           >
-            {error === "db unavailable"
-              ? "Database not initialized — visit Setup to enable the SQLite index."
-              : `Error: ${error}`}
+            {error === "db unavailable" ? (
+              <>
+                Database not initialized —{" "}
+                <Link href="/setup" style={{ color: "var(--info)" }}>
+                  visit Setup
+                </Link>{" "}
+                to enable the SQLite index.
+              </>
+            ) : (
+              `Error: ${error}`
+            )}
           </div>
         )}
 

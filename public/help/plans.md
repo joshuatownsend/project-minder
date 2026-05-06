@@ -6,7 +6,7 @@ The Plans browser surfaces every file in `~/.claude/plans/` as a searchable, fil
 
 Each row shows:
 - **Title** — extracted from the plan's front-matter `title:` field, or the first `# ` heading, or the filename.
-- **Tags** — from the front-matter `tags:` array (click a tag to filter).
+- **Tags** — from the front-matter `tags:` array; use the tag dropdown to filter.
 - **Modified** — relative timestamp for the file's last modification.
 - **Related sessions** — sessions linked by UUID found anywhere in the plan body.
 

@@ -35,4 +35,4 @@ Your last 20 queries are stored in `localStorage` under the key `pm:sql-history`
 
 ## Database availability
 
-The SQL workbench requires the optional `better-sqlite3` dependency to be installed. If the database is unavailable, a 503 error is shown with a link to the Setup page.
+The SQL workbench requires the optional `better-sqlite3` dependency to be installed. If the database is unavailable, a 503 error is shown with a link to [the Setup page](/setup).

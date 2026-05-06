@@ -23,7 +23,7 @@ Each row shows:
 - **Command preview** — the first 60 characters of the command
 - **local** badge — shown when the hook lives in `settings.local.json`; copying it via Template Mode auto-promotes it to `settings.json` (project-shared)
 - **Source badge** — project name (links to the project detail page) or "user" for global hooks
-- **↗ apply** button — for user-scope and project-scope hooks, copies the hook definition to another project
+- **↗ apply** button — appears for project-scope hooks (including local-scope) and user-scope hooks; copies the hook definition to another project
 
 ## The `/config` Hooks tab
 
