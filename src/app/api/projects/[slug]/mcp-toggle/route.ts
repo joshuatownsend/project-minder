@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCachedScan } from "@/lib/cache";
+import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { toggleProjectMcpServer } from "@/lib/mcpToggle";
+import { scanAllProjects } from "@/lib/scanner";
 
 export async function POST(
   request: NextRequest,
@@ -26,17 +27,27 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const scan = getCachedScan();
-  const project = scan?.projects.find((p) => p.slug === slug);
+  let scan = getCachedScan();
+  if (!scan) {
+    scan = await scanAllProjects();
+    setCachedScan(scan);
+  }
+  const project = scan.projects.find((p) => p.slug === slug);
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  // Only allow toggling project-scope servers (defined in .mcp.json)
+  // Only allow toggling project-scope servers (defined in .mcp.json).
+  // Reject if server is missing from the project's MCP list, or is not project-scope —
+  // otherwise arbitrary names could be written into disabledMcpjsonServers.
   const server = project.mcpServers?.servers.find((s) => s.name === serverName);
-  if (server && server.source !== "project") {
+  if (!server || server.source !== "project") {
     return NextResponse.json(
-      { error: `Only project-scope MCP servers can be toggled (this server is ${server.source}-scope)` },
+      {
+        error: server
+          ? `Only project-scope MCP servers can be toggled (this server is ${server.source}-scope)`
+          : "Server not found in project MCP configuration",
+      },
       { status: 400 },
     );
   }

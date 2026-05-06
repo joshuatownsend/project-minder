@@ -131,6 +131,16 @@ describe("computeEffectiveMcp", () => {
     ]);
     expect(states.get("github")).toBe("conflict");
   });
+
+  it("disabled + same-name non-disabled → conflict (not active)", () => {
+    // Regression: old code skipped disabled entries before adding to `seen`,
+    // allowing the later non-disabled entry to be marked "active" instead of "conflict".
+    const states = computeEffectiveMcp([
+      mcpServer("github", "project", true),  // disabled
+      mcpServer("github", "user"),            // non-disabled same name
+    ]);
+    expect(states.get("github")).toBe("conflict");
+  });
 });
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────

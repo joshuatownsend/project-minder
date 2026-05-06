@@ -194,11 +194,15 @@ export function ConfigBrowser() {
           effectiveMcp={effectiveMcp}
           effectiveHooks={effectiveHooks}
           onMcpToggle={async (projectSlug, serverName, enabled) => {
-            await fetch(`/api/projects/${encodeURIComponent(projectSlug)}/mcp-toggle`, {
+            const res = await fetch(`/api/projects/${encodeURIComponent(projectSlug)}/mcp-toggle`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ serverName, enabled }),
             });
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}));
+              throw new Error((body as { error?: string }).error ?? `Toggle failed (${res.status})`);
+            }
             await refresh();
           }}
         />
@@ -436,10 +440,16 @@ function McpList({
   onToggle: (projectSlug: string, serverName: string, enabled: boolean) => Promise<void>;
 }) {
   const [pending, setPending] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   if (rows.length === 0) return <Empty label="No MCP servers configured." />;
   return (
     <div>
+      {toggleError && (
+        <div style={{ color: "var(--destructive, #ef4444)", fontSize: "0.75rem", padding: "4px 0 8px" }}>
+          {toggleError}
+        </div>
+      )}
       {rows.map((m, i) => {
         // effectiveStates is keyed by server name. Same-named servers across scopes
         // intentionally share the same effective state: duplicates → "conflict" on every row.
@@ -451,8 +461,11 @@ function McpList({
           e.stopPropagation();
           if (!canToggle || !m.projectSlug || pending) return;
           setPending(toggleKey);
+          setToggleError(null);
           try {
             await onToggle(m.projectSlug, m.name, !!m.disabled);
+          } catch (err) {
+            setToggleError(err instanceof Error ? err.message : "Toggle failed");
           } finally {
             setPending(null);
           }

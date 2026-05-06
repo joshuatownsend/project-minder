@@ -75,29 +75,24 @@ export function computeEffectiveMcp(servers: McpServer[]): Map<string, Effective
   const states = new Map<string, EffectiveState>();
   const hasManagedScope = servers.some((s) => s.source === "managed");
 
-  // Track names to detect conflicts
-  const seen = new Map<string, McpServer>();
+  // Group by name first so conflict detection works regardless of order or disabled state.
+  // Without this, a disabled entry that `continue`s before being added to `seen` would
+  // allow a later same-named entry to be marked "active" instead of "conflict".
+  const countByName = new Map<string, number>();
+  for (const s of servers) {
+    countByName.set(s.name, (countByName.get(s.name) ?? 0) + 1);
+  }
 
   for (const s of servers) {
     if (hasManagedScope && s.source !== "managed") {
       states.set(s.name, "shadowed");
       continue;
     }
-
-    if (s.disabled) {
-      states.set(s.name, "disabled");
-      continue;
-    }
-
-    const prev = seen.get(s.name);
-    if (prev) {
-      // Same name, different entry → conflict
+    if ((countByName.get(s.name) ?? 0) > 1) {
       states.set(s.name, "conflict");
-      // Also mark the first occurrence as conflict
-      const prevKey = `${prev.source}:${prev.name}`;
-      if (!states.has(prevKey)) states.set(prevKey, "conflict");
+    } else if (s.disabled) {
+      states.set(s.name, "disabled");
     } else {
-      seen.set(s.name, s);
       states.set(s.name, "active");
     }
   }
