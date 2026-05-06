@@ -29,6 +29,7 @@ function SkillRowItem({
   bodyFull,
   bodyFetched,
   onFetchBody,
+  onToggleDisabled,
 }: {
   row: SkillRow;
   updateStatus?: SkillUpdateStatus;
@@ -38,8 +39,10 @@ function SkillRowItem({
   // Distinguishes "not fetched yet" from "fetched and the body is empty."
   bodyFetched: boolean;
   onFetchBody: () => Promise<void>;
+  onToggleDisabled?: (enabled: boolean) => Promise<void>;
 }) {
   const [bodyLoading, setBodyLoading] = useState(false);
+  const [togglePending, setTogglePending] = useState(false);
 
   async function fetchBody() {
     if (bodyFetched || !row.entry?.id) return;
@@ -51,13 +54,26 @@ function SkillRowItem({
     }
   }
 
+  async function handleToggle(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!onToggleDisabled || togglePending) return;
+    setTogglePending(true);
+    try {
+      await onToggleDisabled(!row.entry?.disabled);
+    } finally {
+      setTogglePending(false);
+    }
+  }
+
   const name = row.entry?.name ?? row.usage?.name ?? "Unknown";
   const description = row.entry?.description ?? "";
   const truncDesc =
     description.length > 160 ? description.slice(0, 160) + "…" : description;
 
+  const isDisabled = row.entry?.disabled === true;
+
   return (
-    <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
+    <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)", opacity: isDisabled ? 0.55 : 1 }}>
       <div
         style={{ display: "flex", alignItems: "flex-start", gap: "8px", cursor: "pointer" }}
         onClick={onToggle}
@@ -138,6 +154,21 @@ function SkillRowItem({
             {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={row.entry.parseWarnings} />
             )}
+            {isDisabled && (
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6rem",
+                  color: "var(--warning, #f59e0b)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "3px",
+                  padding: "1px 5px",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                disabled
+              </span>
+            )}
           </div>
           {truncDesc && (
             <p
@@ -185,6 +216,27 @@ function SkillRowItem({
             >
               {formatRelativeTime(row.usage.lastUsed)}
             </span>
+          )}
+          {onToggleDisabled && row.entry?.source === "user" && (
+            <button
+              onClick={handleToggle}
+              disabled={togglePending}
+              title={isDisabled ? "Re-enable skill" : "Disable skill"}
+              style={{
+                marginTop: "2px",
+                padding: "2px 7px",
+                fontSize: "0.6rem",
+                fontFamily: "var(--font-body)",
+                background: isDisabled ? "var(--warning-bg, rgba(245,158,11,0.12))" : "var(--bg-surface)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                color: isDisabled ? "var(--warning, #f59e0b)" : "var(--text-muted)",
+                cursor: togglePending ? "wait" : "pointer",
+                opacity: togglePending ? 0.5 : 1,
+              }}
+            >
+              {togglePending ? "…" : isDisabled ? "enable" : "disable"}
+            </button>
           )}
         </div>
       </div>
@@ -318,7 +370,7 @@ export function SkillsBrowser() {
     return () => clearTimeout(t);
   }, [rawQuery]);
 
-  const { data, loading } = useSkills();
+  const { data, loading, refresh } = useSkills();
   const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
@@ -391,6 +443,19 @@ export function SkillsBrowser() {
       return next;
     });
   }, []);
+
+  const toggleDisabledFor = useCallback(async (id: string, enabled: boolean) => {
+    const res = await fetch(`/api/skills/${encodeURIComponent(id)}/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? "Toggle failed");
+    }
+    await refresh();
+  }, [refresh]);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const virtualizer = useVirtualizer({
@@ -614,6 +679,11 @@ export function SkillsBrowser() {
                       bodyFull={bodyFull}
                       bodyFetched={bodyFetched}
                       onFetchBody={() => (bodyId ? fetchBodyFor(bodyId) : Promise.resolve())}
+                      onToggleDisabled={
+                        row.entry?.source === "user"
+                          ? (enabled) => toggleDisabledFor(row.entry!.id, enabled)
+                          : undefined
+                      }
                     />
                   </div>
                 );

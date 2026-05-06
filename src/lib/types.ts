@@ -519,6 +519,8 @@ export interface McpServer {
   envKeys?: string[];
   source: McpSource;
   sourcePath: string;
+  /** True when this server appears in `disabledMcpjsonServers` in the project's settings files. */
+  disabled?: boolean;
 }
 
 export interface McpServersInfo {

@@ -26,6 +26,7 @@ export interface SkillRow {
     isSymlink?: boolean;
     realPath?: string;
     parseWarnings?: string[];
+    disabled?: boolean;
   };
   usage?: {
     name: string;

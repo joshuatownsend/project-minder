@@ -19,6 +19,7 @@ function makeSkillEntry(
     isSymlink?: boolean;
     realPath?: string;
     ctx: ProvenanceContext;
+    disabled?: boolean;
   }
 ): SkillEntry {
   const { fm, body, warnings } = parseFrontmatter(text);
@@ -77,13 +78,14 @@ function makeSkillEntry(
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
+    disabled: opts.disabled || undefined,
   };
 }
 
 async function walkSkillsRoot(
   root: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext }
+  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext; disabled?: boolean }
 ): Promise<SkillEntry[]> {
   let entries;
   try {
@@ -176,8 +178,13 @@ async function walkSkillsRoot(
 }
 
 export async function walkUserSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {
-  const root = path.join(os.homedir(), ".claude", "skills");
-  return walkSkillsRoot(root, "user", { ctx });
+  const activeRoot = path.join(os.homedir(), ".claude", "skills");
+  const disabledRoot = path.join(os.homedir(), ".claude", "skills-disabled");
+  const [active, disabled] = await Promise.all([
+    walkSkillsRoot(activeRoot, "user", { ctx }),
+    walkSkillsRoot(disabledRoot, "user", { ctx, disabled: true }),
+  ]);
+  return [...active, ...disabled];
 }
 
 export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {

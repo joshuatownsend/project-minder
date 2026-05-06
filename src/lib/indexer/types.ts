@@ -89,6 +89,8 @@ export interface SkillEntry extends CatalogEntryBase {
   userInvocable?: boolean;
   argumentHint?: string;
   description?: string;
+  /** True when the skill lives in ~/.claude/skills-disabled/ and is excluded from Claude Code. */
+  disabled?: boolean;
 }
 
 export type CatalogEntry = AgentEntry | SkillEntry;
