@@ -11,26 +11,63 @@ import { readLocalScopeMcpFromClaudeJson } from "./claudeJsonMcp";
  *
  *  Local-scope entries are tagged `source: "local"` and carry the
  *  `~/.claude.json` path as their sourcePath — `applyMcp` rejects
- *  applies of `local` source (read-only), so this is purely visibility. */
+ *  applies of `local` source (read-only), so this is purely visibility.
+ *
+ *  Project-scope servers are tagged `disabled: true` when they appear in
+ *  `disabledMcpjsonServers` from the project's settings files (checked in
+ *  precedence order: local > project). */
 export async function scanMcpServers(
   projectPath: string
 ): Promise<McpServersInfo | undefined> {
-  const file = path.join(projectPath, ".mcp.json");
+  const mcpFile = path.join(projectPath, ".mcp.json");
   let projectScope: McpServer[] = [];
   try {
-    const raw = await fs.readFile(file, "utf-8");
+    const raw = await fs.readFile(mcpFile, "utf-8");
     const doc = tryParseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
     if (doc?.mcpServers) {
-      projectScope = parseMcpServers(doc.mcpServers, "project", file);
+      projectScope = parseMcpServers(doc.mcpServers, "project", mcpFile);
     }
   } catch {
     // No project-level .mcp.json — fall through to local-scope check.
   }
 
   const localScope = await readLocalScopeMcpFromClaudeJson(projectPath);
+
+  // Read disabledMcpjsonServers from settings files (local-scope wins over project-scope).
+  const disabledNames = await readDisabledMcpNames(projectPath);
+  if (disabledNames.size > 0) {
+    for (const s of projectScope) {
+      if (disabledNames.has(s.name)) s.disabled = true;
+    }
+  }
+
   const servers = [...projectScope, ...localScope];
   if (servers.length === 0) return undefined;
   return { servers };
+}
+
+async function readDisabledMcpNames(projectPath: string): Promise<Set<string>> {
+  const localPath = path.join(projectPath, ".claude", "settings.local.json");
+  const projectSettingsPath = path.join(projectPath, ".claude", "settings.json");
+
+  // Use first-found semantics (local > project): if settings.local.json defines
+  // disabledMcpjsonServers (even as []), that list is authoritative and project-scope
+  // settings.json is not consulted. This lets a user personally re-enable a server
+  // that a team-level settings.json has disabled.
+  for (const p of [localPath, projectSettingsPath]) {
+    try {
+      const raw = await fs.readFile(p, "utf-8");
+      const doc = tryParseJsonc<{ disabledMcpjsonServers?: unknown }>(raw);
+      const list = doc?.disabledMcpjsonServers;
+      if (Array.isArray(list)) {
+        return new Set(list.filter((n): n is string => typeof n === "string"));
+      }
+    } catch {
+      // File doesn't exist or is malformed — try next.
+    }
+  }
+
+  return new Set<string>();
 }
 
 export function parseMcpServers(
