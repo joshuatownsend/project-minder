@@ -323,8 +323,11 @@ function commitAndPush(actionable) {
 
   const sha = git('rev-parse', '--short', 'HEAD').trim();
   // NEVER --force — hard guardrail against overwriting shared history
-  spawnSync('git', ['push'],
+  const pushResult = spawnSync('git', ['push'],
     { encoding: 'utf-8', stdio: 'inherit', env: process.env });
+  if (pushResult.status !== 0) {
+    throw new Error(`git push failed with exit code ${pushResult.status ?? 'null'}`);
+  }
   console.log(`  Pushed ${sha}`);
   return sha;
 }
