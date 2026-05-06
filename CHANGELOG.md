@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 6.1 — Cluster N: D3 Visualizations.** TODOs #201, #203, #205.
+  - **D3 framework (`D3Container`, `Axes`).** Shared `ResizeObserver`-backed SVG wrapper with render-prop API and reusable axis components. Establishes the `next/dynamic` + `ssr:false` lazy-load convention (first D3 usage in the codebase).
+  - **Orchestration DAG (#201).** New "Orchestration" tab on session detail pages (visible when `subagentCount > 0`). D3 hierarchy tree showing parent→child subagent delegation, colored by agent type. Computed on demand from JSONL via `GET /api/sessions/[sessionId]/orchestration` (60s cache).
+  - **Tool Execution Flow — Sankey (#203).** Portfolio-wide tool transition Sankey on `/usage`. Shows the most common tool→tool sequences with top-N slider (5–30). Self-loop repetitions (same tool consecutively) shown as `×N` badge instead of a self-referential edge (d3-sankey limitation). Data from new `computeToolTransitions()` in `aggregator.ts`.
+  - **Session Complexity scatter (#205).** Three-preset scatter plot on `/stats`. Presets: Complexity vs Cost, Context Pressure, Reliability. Log-scale toggles. Click a dot to navigate to session detail.
+- `d3`, `d3-sankey`, `@types/d3`, `@types/d3-sankey` added as dependencies.
+
 - **Wave 5.3 — Cluster M: Toggle UX.** TODOs #39, #54, #55 from `~/.claude/plans/our-to-do-list-has-gentle-cookie.md`. TODO #40 (hook enable/disable) deferred — see Notes below.
   - **Skill enable/disable toggle (#39).** User-scope skills can be toggled from the `/skills` browser. Toggle moves the skill directory (or `.md` file for standalone layout) between `~/.claude/skills/` and `~/.claude/skills-disabled/`. Claude Code's live change detection picks up the removal/restoration within the active session without restart. Disabled rows are shown at 55% opacity with an amber "disabled" badge. New `src/lib/skillToggle.ts` + `POST /api/skills/[id]/toggle`. Walker (`walkSkills.ts`) now traverses both roots in parallel and tags disabled entries.
   - **MCP server enable/disable toggle (#55).** Project-scope MCP servers can be toggled from the Config browser's MCP tab. Toggle writes `disabledMcpjsonServers` to `.claude/settings.local.json` (gitignored, personal preference — teammates unaffected). Non-project-scope servers (user/desktop/managed/plugin) show a tooltip explaining why the toggle is absent. New `src/lib/mcpToggle.ts` + `POST /api/projects/[slug]/mcp-toggle`. Scanner reads `disabledMcpjsonServers` from both `settings.local.json` and `settings.json` and tags servers accordingly.

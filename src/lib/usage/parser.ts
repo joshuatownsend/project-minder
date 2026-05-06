@@ -161,7 +161,7 @@ export async function parseSessionTurns(
       const content = entry.message?.content ?? [];
       const toolCalls = content
         .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => ({ name: b.name, arguments: b.input }));
+        .map((b: any) => ({ name: b.name, id: b.id as string | undefined, arguments: b.input }));
 
       const assistantText = extractText(content) || undefined;
 
@@ -301,7 +301,7 @@ export async function parseSessionTurnsWithMeta(
       const content = entry.message?.content ?? [];
       const toolCalls = (content as any[])
         .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => ({ name: b.name, arguments: b.input }));
+        .map((b: any) => ({ name: b.name, id: b.id as string | undefined, arguments: b.input }));
 
       const assistantText = extractText(content) || undefined;
       const isError = entry.isApiErrorMessage === true;

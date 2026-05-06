@@ -29,6 +29,10 @@ const slugTitles: Record<HelpSlug, string> = {
   setup: "Setup Guide",
   settings: "Settings",
   templates: "Templates",
+  plans: "Plans Browser",
+  hooks: "Hooks Browser",
+  plugins: "Plugins Browser",
+  sql: "SQL Explorer",
 };
 
 const iconBtnBase: React.CSSProperties = {

@@ -1,9 +1,15 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useStats } from "@/hooks/useStats";
 import { BarChart } from "./stats/BarChart";
 import { HealthBar } from "./stats/HealthBar";
 import { Skeleton } from "./ui/skeleton";
+
+const SessionComplexityChart = dynamic(
+  () => import("./viz/SessionComplexityChart").then((m) => m.SessionComplexityChart),
+  { ssr: false, loading: () => <Skeleton className="h-96" /> }
+);
 import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -316,6 +322,14 @@ export function StatsDashboard() {
           </ChartBlock>
         </div>
       </section>
+
+      {/* Session Complexity */}
+      {data.sessions && data.sessions.length > 0 && (
+        <section>
+          <SectionHeader label="Session Complexity" />
+          <SessionComplexityChart sessions={data.sessions} />
+        </section>
+      )}
 
       {/* Databases */}
       {Object.keys(data.databases).length > 0 && (

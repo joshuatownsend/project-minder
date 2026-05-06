@@ -43,6 +43,7 @@ export const tabHelpMapping: Record<string, string> = {
   'hot-files': 'project-details',
   patterns: 'project-details',
   handoff: 'sessions',
+  orchestration: 'sessions',
   'config-history': 'config-history',
 }
 

@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useUsage } from "@/hooks/useUsage";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const ToolExecutionFlow = dynamic(
+  () => import("./viz/ToolExecutionFlow").then((m) => m.ToolExecutionFlow),
+  { ssr: false, loading: () => <Skeleton className="h-72" /> }
+);
 import { VALID_PERIODS } from "@/lib/usage/constants";
 import type { CategoryType, ProjectDetail, PortfolioYield } from "@/lib/usage/types";
 import { Download, Layers, AlignJustify } from "lucide-react";
@@ -1028,6 +1035,17 @@ export function UsageDashboard() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Tool Execution Flow (Sankey) */}
+              {data.toolTransitions.length > 0 && (
+                <div>
+                  <SectionHeader label="Tool Execution Flow" />
+                  <ToolExecutionFlow
+                    transitions={data.toolTransitions}
+                    selfLoops={data.toolSelfLoops}
+                  />
                 </div>
               )}
 

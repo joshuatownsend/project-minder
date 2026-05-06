@@ -139,6 +139,8 @@ export function loadUsageReportFromSql(
     byProject,
     byCategory,
     topTools,
+    toolTransitions: [],
+    toolSelfLoops: [],
     shellStats,
     mcpStats,
     projectDetails,
