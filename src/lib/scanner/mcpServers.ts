@@ -48,25 +48,26 @@ export async function scanMcpServers(
 
 async function readDisabledMcpNames(projectPath: string): Promise<Set<string>> {
   const localPath = path.join(projectPath, ".claude", "settings.local.json");
-  const projectPath2 = path.join(projectPath, ".claude", "settings.json");
-  const names = new Set<string>();
+  const projectSettingsPath = path.join(projectPath, ".claude", "settings.json");
 
-  for (const p of [localPath, projectPath2]) {
+  // Use first-found semantics (local > project): if settings.local.json defines
+  // disabledMcpjsonServers (even as []), that list is authoritative and project-scope
+  // settings.json is not consulted. This lets a user personally re-enable a server
+  // that a team-level settings.json has disabled.
+  for (const p of [localPath, projectSettingsPath]) {
     try {
       const raw = await fs.readFile(p, "utf-8");
       const doc = tryParseJsonc<{ disabledMcpjsonServers?: unknown }>(raw);
       const list = doc?.disabledMcpjsonServers;
       if (Array.isArray(list)) {
-        for (const n of list) {
-          if (typeof n === "string") names.add(n);
-        }
+        return new Set(list.filter((n): n is string => typeof n === "string"));
       }
     } catch {
-      // File doesn't exist or is malformed — skip.
+      // File doesn't exist or is malformed — try next.
     }
   }
 
-  return names;
+  return new Set<string>();
 }
 
 export function parseMcpServers(

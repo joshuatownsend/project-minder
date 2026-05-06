@@ -441,6 +441,8 @@ function McpList({
   return (
     <div>
       {rows.map((m, i) => {
+        // effectiveStates is keyed by server name. Same-named servers across scopes
+        // intentionally share the same effective state: duplicates → "conflict" on every row.
         const mcpState = effectiveStates?.get(m.name) ?? (m.disabled ? "disabled" : null);
         const canToggle = m.source === "project" && !!m.projectSlug;
         const toggleKey = `${m.projectSlug}:${m.name}`;
