@@ -293,8 +293,16 @@ export interface MinderConfig {
   scheduleMode?: ScheduleMode;
   /** Preferred terminal application (e.g. "wt", "iterm"). Wave 7 (P) honors. */
   terminal?: string;
-  /** Telegram bridge credentials. Wave 7 (P) honors. */
-  telegram?: { botToken?: string; chatId?: string };
+  /** Telegram bridge config. Bot token is stored in secrets.json, not here. Wave 7 (P) honors. */
+  telegram?: { chatId?: string };
+  /** Notification preferences. Wave 7 (P) honors. */
+  notificationPrefs?: {
+    events: {
+      "manual-step-added"?: { push?: boolean; telegram?: boolean; os?: boolean };
+    };
+  };
+  /** LLM auto-title config. API key stored in secrets.json, not here. Wave 7 (P) honors. */
+  autoTitle?: { endpoint?: string; model?: string };
   /** Per-model pricing overrides. Wave 8 (S) honors. */
   pricingRules?: PricingRule[];
 }
