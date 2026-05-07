@@ -325,8 +325,6 @@ export interface MinderConfig {
   };
   /** OTEL ingest config. Wave 8 (R) honors. */
   otel?: {
-    /** Whether the OTEL env vars are installed in ~/.claude/settings.json. Computed at status-check time; not written to .minder.json. */
-    enabled?: boolean;
     /** OTLP base endpoint written into OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4100/api/otel). */
     endpoint?: string;
   };

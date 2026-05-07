@@ -49,8 +49,8 @@ export function OtelSection({
     setBusy(true); setMsg(null);
     try {
       const next = await callApi("install");
-      setStatus(next);
       await onConfigChange({ otel: { endpoint } });
+      setStatus(next);
       setMsg({ text: "OTEL env vars written to ~/.claude/settings.json. Restart Claude Code for them to take effect.", ok: true });
     } catch (err) {
       setMsg({ text: (err as Error).message, ok: false });
@@ -74,6 +74,8 @@ export function OtelSection({
 
   const installedElsewhere =
     status?.installed && status.endpoint !== null && status.endpoint !== endpoint;
+  const alreadyInstalled = !!status?.installed && !installedElsewhere;
+  const installLabel = busy ? "Working…" : installedElsewhere ? "Reinstall" : "Install";
 
   return (
     <div style={S.card}>
@@ -134,12 +136,12 @@ export function OtelSection({
           style={{
             ...S.btn,
             background: "var(--info)", color: "#fff", borderColor: "var(--info)",
-            opacity: (status?.installed && !installedElsewhere) || busy ? 0.4 : 1,
+            opacity: alreadyInstalled || busy ? 0.4 : 1,
           }}
-          disabled={(status?.installed && !installedElsewhere) || busy}
+          disabled={alreadyInstalled || busy}
           onClick={handleInstall}
         >
-          {busy ? "Working…" : status?.installed && installedElsewhere ? "Reinstall" : "Install"}
+          {installLabel}
         </button>
         <button
           style={{

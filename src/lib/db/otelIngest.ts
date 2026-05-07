@@ -178,6 +178,63 @@ export async function ingestMetric(
   txn();
 }
 
+// ─── Batch log ingest ─────────────────────────────────────────────────────
+
+/**
+ * Persist a batch of OTLP log records to `otel_events` in a single transaction.
+ *
+ * Validates each record independently and collects errors; valid records are
+ * committed together (one fsync per batch instead of one per record).  Returns
+ * the per-record error messages so the route can build a partial-success response.
+ */
+export async function ingestLogBatch(
+  records: OtlpLogRecord[],
+  resource: OtlpResource | undefined,
+): Promise<{ errors: string[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const defaultSessionId = sessionFromResource(resource);
+  const stmt = prepCached(
+    db,
+    `INSERT INTO otel_events (ts, session_id, event_name, payload_json)
+     VALUES (?, ?, ?, ?)`,
+  );
+
+  const rows: [string, string | null, string, string][] = [];
+  const errors: string[] = [];
+
+  for (const record of records) {
+    try {
+      const ts = nanoToMs(record.timeUnixNano ?? record.observedTimeUnixNano);
+      if (ts === null) throw new Error("Missing or invalid timeUnixNano");
+
+      const attrs = attrMap(record.attributes);
+      const eventName =
+        (attrs.get("event.name") as string | undefined) ??
+        record.body?.stringValue ??
+        "unknown";
+      const sessionId = (attrs.get("session.id") as string | undefined) ?? defaultSessionId;
+
+      const payloadAttrs: Record<string, unknown> = {};
+      for (const [k, v] of attrs) payloadAttrs[k] = v;
+      const payloadJson = JSON.stringify({ ts, body: record.body?.stringValue, attrs: payloadAttrs });
+
+      rows.push([new Date(ts).toISOString(), sessionId, eventName, payloadJson]);
+    } catch (err) {
+      errors.push((err as Error).message);
+    }
+  }
+
+  if (rows.length > 0) {
+    db.transaction(() => {
+      for (const row of rows) stmt.run(...row);
+    })();
+  }
+
+  return { errors };
+}
+
 // ─── Guard helper ─────────────────────────────────────────────────────────
 
 export function isOtelDbReady(): boolean {

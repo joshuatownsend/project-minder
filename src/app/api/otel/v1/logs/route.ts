@@ -1,6 +1,6 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { ingestLog, isOtelDbReady } from "@/lib/db/otelIngest";
+import { ingestLogBatch, isOtelDbReady } from "@/lib/db/otelIngest";
 import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 
 // OTLP/HTTP JSON logs receiver.
@@ -61,14 +61,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (typeof sl !== "object" || sl === null) continue;
       const logRecords = (sl as { logRecords?: unknown[] }).logRecords ?? [];
 
-      for (const lr of logRecords) {
-        try {
-          await ingestLog(lr as OtlpLogRecord, resource);
-        } catch (err) {
-          rejected++;
-          errors.push((err as Error).message);
-        }
-      }
+      const { errors: batchErrors } = await ingestLogBatch(logRecords as OtlpLogRecord[], resource);
+      rejected += batchErrors.length;
+      errors.push(...batchErrors);
     }
   }
 
