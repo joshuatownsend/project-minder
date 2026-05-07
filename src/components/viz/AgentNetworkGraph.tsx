@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useId } from "react";
 import * as d3 from "d3";
 import { AGENT_COLORS } from "./agentPalette";
+import { useReportFetch } from "@/hooks/useReportFetch";
 import type { NetworkReport, NetworkNode, NetworkEdge } from "@/lib/usage/agentNetwork";
 
 interface Props {
@@ -13,17 +14,9 @@ const HEIGHT = 480;
 const MARGIN = { top: 20, right: 20, bottom: 20, left: 20 };
 
 export function AgentNetworkGraph({ sessionId }: Props) {
-  const [data, setData] = useState<NetworkReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/sessions/${sessionId}/agent-network`)
-      .then((r) => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
-      .then((d: NetworkReport) => { setData(d); setLoading(false); })
-      .catch((e: string) => { setError(String(e)); setLoading(false); });
-  }, [sessionId]);
+  const { data, loading, error } = useReportFetch<NetworkReport>(
+    `/api/sessions/${sessionId}/agent-network`
+  );
 
   if (loading) {
     return <div style={{ height: `${HEIGHT}px`, background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;
@@ -49,6 +42,7 @@ function ForceGraph({ data }: { data: NetworkReport }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null);
+  const markerId = useId().replace(/:/g, "");
 
   const showTooltip = useCallback((x: number, y: number, content: string) => {
     setTooltip({ x, y, content });
@@ -92,9 +86,9 @@ function ForceGraph({ data }: { data: NetworkReport }) {
       .append("g")
       .attr("transform", `translate(${MARGIN.left},${MARGIN.top})`);
 
-    // Arrow marker
+    // Arrow marker — markerId from useId() ensures uniqueness across concurrent instances
     svg.append("defs").append("marker")
-      .attr("id", `arrow-${sessionIdHash(data)}`)
+      .attr("id", `arrow-${markerId}`)
       .attr("viewBox", "0 -4 8 8")
       .attr("refX", 18)
       .attr("refY", 0)
@@ -112,7 +106,7 @@ function ForceGraph({ data }: { data: NetworkReport }) {
       .attr("stroke", "var(--border-default)")
       .attr("stroke-width", (d) => Math.sqrt(d.weight) + 0.5)
       .attr("stroke-opacity", 0.6)
-      .attr("marker-end", `url(#arrow-${sessionIdHash(data)})`);
+      .attr("marker-end", `url(#arrow-${markerId})`);
 
     const node = g.selectAll("g.node")
       .data(nodes)
@@ -182,9 +176,4 @@ function ForceGraph({ data }: { data: NetworkReport }) {
       )}
     </div>
   );
-}
-
-// Stable hash of node count to make marker IDs unique per graph instance
-function sessionIdHash(data: NetworkReport): string {
-  return String(data.nodes.length);
 }

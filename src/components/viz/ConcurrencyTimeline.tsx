@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { D3Container } from "./D3Container";
 import { AGENT_COLORS } from "./agentPalette";
+import { useReportFetch } from "@/hooks/useReportFetch";
 import type { TimelineReport, TimelineBar } from "@/lib/usage/concurrencyTimeline";
 
 interface Props {
@@ -18,17 +18,9 @@ function barColor(index: number): string {
 }
 
 export function ConcurrencyTimeline({ sessionId }: Props) {
-  const [data, setData] = useState<TimelineReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/sessions/${sessionId}/concurrency-timeline`)
-      .then((r) => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
-      .then((d: TimelineReport) => { setData(d); setLoading(false); })
-      .catch((e: string) => { setError(String(e)); setLoading(false); });
-  }, [sessionId]);
+  const { data, loading, error } = useReportFetch<TimelineReport>(
+    `/api/sessions/${sessionId}/concurrency-timeline`
+  );
 
   if (loading) {
     return <div style={{ height: "120px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;

@@ -228,13 +228,11 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
       : []),
     ...(data.subagents.length > 0
-      ? [{ key: "concurrency" as TabKey, label: "Concurrency" }]
-      : []),
-    ...(data.subagents.length > 0
-      ? [{ key: "delegation" as TabKey, label: "Delegation" }]
-      : []),
-    ...(data.subagents.length > 0
-      ? [{ key: "network" as TabKey, label: "Network" }]
+      ? ([
+          { key: "concurrency", label: "Concurrency" },
+          { key: "delegation",  label: "Delegation"  },
+          { key: "network",     label: "Network"     },
+        ] as { key: TabKey; label: string }[])
       : []),
     { key: "handoff",   label: "Handoff"   },
     { key: "diagnosis", label: "Diagnosis" },

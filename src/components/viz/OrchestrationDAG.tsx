@@ -3,22 +3,8 @@
 import { useEffect, useState, useMemo } from "react";
 import * as d3 from "d3";
 import { D3Container } from "./D3Container";
+import { agentColor } from "./agentPalette";
 import type { OrchestrationGraph, OrchNode } from "@/lib/usage/orchestrationGraph";
-
-// 6 desaturated hues cycling for agent names
-const AGENT_COLORS = [
-  "var(--accent)",
-  "var(--info)",
-  "var(--status-active-text)",
-  "var(--status-error-text)",
-  "var(--accent-strong)",
-  "var(--info-strong)",
-];
-
-function agentColor(agentName: string | undefined, index: number): string {
-  if (!agentName) return "var(--text-secondary)";
-  return AGENT_COLORS[index % AGENT_COLORS.length];
-}
 
 // Stateless path generator — created once at module scope
 type TreeNodeData = { id: string; node: OrchNode; children: TreeNodeData[] };

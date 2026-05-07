@@ -40,6 +40,7 @@ export function buildConcurrencyTimeline(turns: UsageTurn[]): TimelineReport {
   }
 
   const groups = new Map<string, Group>();
+  const turnIndex = new Map(turns.map((t, i) => [t, i]));
   const mainTurns = turns.filter((t) => !t.isSidechain);
 
   for (let i = 0; i < turns.length; i++) {
@@ -93,7 +94,6 @@ export function buildConcurrencyTimeline(turns: UsageTurn[]): TimelineReport {
     globalMin = Math.min(mainMinTs, ...allMin);
     globalMax = Math.max(mainMaxTs, ...allMax);
   } else {
-    // Fall back to turn-index proportional positions
     globalMin = 0;
     globalMax = turns.length - 1;
   }
@@ -114,7 +114,7 @@ export function buildConcurrencyTimeline(turns: UsageTurn[]): TimelineReport {
       endPct: pct(mainMaxTs),
     });
   } else {
-    const mainIdxs = mainTurns.map((t) => turns.indexOf(t)).filter((i) => i >= 0);
+    const mainIdxs = mainTurns.map((t) => turnIndex.get(t) ?? -1).filter((i) => i >= 0);
     const minIdx = mainIdxs.length ? Math.min(...mainIdxs) : 0;
     const maxIdx = mainIdxs.length ? Math.max(...mainIdxs) : turns.length - 1;
     bars.push({

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import * as d3 from "d3";
 import { D3Container, Axes } from "./D3Container";
 import { depthColor } from "./agentPalette";
+import { useReportFetch } from "@/hooks/useReportFetch";
 import type { ErrorReport, DepthBucket } from "@/lib/usage/errorPropagation";
 
 interface Props {
@@ -11,17 +11,9 @@ interface Props {
 }
 
 export function ErrorPropagationMap({ slug }: Props) {
-  const [data, setData] = useState<ErrorReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/projects/${slug}/error-propagation`)
-      .then((r) => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
-      .then((d: ErrorReport) => { setData(d); setLoading(false); })
-      .catch((e: string) => { setError(String(e)); setLoading(false); });
-  }, [slug]);
+  const { data, loading, error } = useReportFetch<ErrorReport>(
+    `/api/projects/${slug}/error-propagation`
+  );
 
   if (loading) {
     return <div style={{ height: "240px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;

@@ -1,7 +1,4 @@
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import { parseSessionTurns, isValidSessionId } from "./parser";
+import { findSessionFile, parseSessionTurns } from "./parser";
 import type { UsageTurn } from "./types";
 
 export interface OrchNode {
@@ -183,32 +180,8 @@ export function buildGraph(turns: UsageTurn[]): OrchestrationGraph {
 export async function loadOrchestrationGraph(
   sessionId: string
 ): Promise<OrchestrationGraph | null> {
-  if (!isValidSessionId(sessionId)) return null;
-
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-
-  let filePath: string | null = null;
-  let projectDirName = "";
-
-  try {
-    const dirs = await fs.readdir(projectsDir);
-    for (const dir of dirs) {
-      const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-      try {
-        await fs.access(candidate);
-        filePath = candidate;
-        projectDirName = dir;
-        break;
-      } catch {
-        // not here
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  if (!filePath) return null;
-
-  const turns = await parseSessionTurns(filePath, projectDirName, { includeSidechains: true });
+  const found = await findSessionFile(sessionId);
+  if (!found) return null;
+  const turns = await parseSessionTurns(found.filePath, found.projectDirName, { includeSidechains: true });
   return buildGraph(turns);
 }

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import * as d3 from "d3";
 import { D3Container } from "./D3Container";
 import { MODEL_FAMILY_COLORS } from "./agentPalette";
 import { modelFamily, shortModelName } from "@/lib/usage/modelHelpers";
+import { useReportFetch } from "@/hooks/useReportFetch";
 import type { DelegationReport, DelegationEdge } from "@/lib/usage/modelDelegation";
 
 interface Props {
@@ -16,17 +16,9 @@ const NODE_HEIGHT_MAX = 60;
 const NODE_HEIGHT_MIN = 20;
 
 export function ModelDelegationFlow({ sessionId }: Props) {
-  const [data, setData] = useState<DelegationReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/sessions/${sessionId}/model-delegation`)
-      .then((r) => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
-      .then((d: DelegationReport) => { setData(d); setLoading(false); })
-      .catch((e: string) => { setError(String(e)); setLoading(false); });
-  }, [sessionId]);
+  const { data, loading, error } = useReportFetch<DelegationReport>(
+    `/api/sessions/${sessionId}/model-delegation`
+  );
 
   if (loading) {
     return <div style={{ height: "200px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;

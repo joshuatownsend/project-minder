@@ -61,51 +61,54 @@ export async function buildErrorPropagation(
   const toolErrors = new Map<string, { errors: number; total: number }>();
   let sessionCount = 0;
 
-  for (const filePath of files) {
-    try {
-      const turns = await parseSessionTurns(filePath, projectDirName, {
-        includeSidechains: true,
-      });
-      if (turns.length === 0) continue;
-      sessionCount++;
+  const BATCH = 10;
+  for (let i = 0; i < files.length; i += BATCH) {
+    await Promise.all(
+      files.slice(i, i + BATCH).map(async (filePath) => {
+        try {
+          const turns = await parseSessionTurns(filePath, projectDirName, {
+            includeSidechains: true,
+          });
+          if (turns.length === 0) return;
+          sessionCount++;
 
-      const graph = buildGraph(turns);
+          const graph = buildGraph(turns);
 
-      for (const node of graph.nodes) {
-        if (node.id.startsWith("__overflow__")) continue;
-        const depth = node.depth;
+          for (const node of graph.nodes) {
+            if (node.id.startsWith("__overflow__")) continue;
+            const depth = node.depth;
 
-        const bucket = depthErrors.get(depth) ?? { errors: 0, total: 0 };
-        bucket.total++;
-        if (node.status === "error") bucket.errors++;
-        depthErrors.set(depth, bucket);
+            const bucket = depthErrors.get(depth) ?? { errors: 0, total: 0 };
+            bucket.total++;
+            if (node.status === "error") bucket.errors++;
+            depthErrors.set(depth, bucket);
 
-        const agentName = node.agentName ?? "unknown";
-        const aBucket = agentErrors.get(agentName) ?? { errors: 0, total: 0 };
-        aBucket.total++;
-        if (node.status === "error") aBucket.errors++;
-        agentErrors.set(agentName, aBucket);
-      }
-
-      // Tool error breakdown from sidechain turns
-      for (const turn of turns) {
-        if (!turn.isSidechain) continue;
-        for (const tc of turn.toolCalls) {
-          const tBucket = toolErrors.get(tc.name) ?? { errors: 0, total: 0 };
-          tBucket.total++;
-          toolErrors.set(tc.name, tBucket);
-        }
-        // Count tool_result errors — isError flag on the turn level
-        if (turn.isError) {
-          for (const tc of turn.toolCalls) {
-            const tBucket = toolErrors.get(tc.name)!;
-            if (tBucket) tBucket.errors++;
+            const agentName = node.agentName ?? "unknown";
+            const aBucket = agentErrors.get(agentName) ?? { errors: 0, total: 0 };
+            aBucket.total++;
+            if (node.status === "error") aBucket.errors++;
+            agentErrors.set(agentName, aBucket);
           }
+
+          for (const turn of turns) {
+            if (!turn.isSidechain) continue;
+            for (const tc of turn.toolCalls) {
+              const tBucket = toolErrors.get(tc.name) ?? { errors: 0, total: 0 };
+              tBucket.total++;
+              toolErrors.set(tc.name, tBucket);
+            }
+            if (turn.isError) {
+              for (const tc of turn.toolCalls) {
+                const tBucket = toolErrors.get(tc.name)!;
+                if (tBucket) tBucket.errors++;
+              }
+            }
+          }
+        } catch {
+          // Skip unreadable sessions
         }
-      }
-    } catch {
-      // Skip unreadable sessions
-    }
+      })
+    );
   }
 
   const byDepth: DepthBucket[] = [...depthErrors.entries()]

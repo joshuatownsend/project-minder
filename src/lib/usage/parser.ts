@@ -571,6 +571,37 @@ export async function loadSessionTurnsBySessionId(
 }
 
 /**
+ * Locate the JSONL file for a session across all `~/.claude/projects/` subdirs.
+ * Returns `{ filePath, projectDirName }` when found, or `null` when not found.
+ * Used by session-detail API routes that need to call `parseSessionTurns` with
+ * custom options (e.g. `{ includeSidechains: true }`) before the higher-level
+ * `loadSessionTurnsBySessionId` helper applies its own defaults.
+ */
+export async function findSessionFile(
+  sessionId: string
+): Promise<{ filePath: string; projectDirName: string } | null> {
+  if (!isValidSessionId(sessionId)) return null;
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  let dirs: string[];
+  try {
+    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
+    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return null;
+  }
+  for (const dir of dirs) {
+    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+    try {
+      await fs.access(candidate);
+      return { filePath: candidate, projectDirName: dir };
+    } catch {
+      // not in this dir
+    }
+  }
+  return null;
+}
+
+/**
  * Like `loadSessionTurnsBySessionId` but also returns the `SessionTurnsMeta`
  * (compact boundaries, CLI version, thinking flag) needed by the diagnosis
  * route's `extras` parameter. Returns `null` when the session id can't be
