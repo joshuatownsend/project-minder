@@ -43,6 +43,22 @@ export async function setSecret(key: string, value: string): Promise<void> {
   delete g.__minderSecrets;
 }
 
+export async function deleteSecret(key: string): Promise<void> {
+  await withFileLock(SECRETS_PATH, async () => {
+    let secrets: SecretsMap = {};
+    try {
+      const raw = await fs.readFile(SECRETS_PATH, "utf8");
+      secrets = JSON.parse(raw) as SecretsMap;
+    } catch {
+      // File missing or corrupt — nothing to delete.
+    }
+    delete secrets[key];
+    await writeFileAtomic(SECRETS_PATH, JSON.stringify(secrets, null, 2));
+    await chmodSecure(SECRETS_PATH);
+  });
+  delete g.__minderSecrets;
+}
+
 export async function listSecretMetadata(): Promise<{ keys: string[]; mtime: string | null }> {
   try {
     const [stat, secrets] = await Promise.all([fs.stat(SECRETS_PATH), readSecrets()]);

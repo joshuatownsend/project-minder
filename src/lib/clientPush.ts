@@ -48,7 +48,7 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
 }
 
 export async function unsubscribeFromPush(): Promise<void> {
-  const reg = await navigator.serviceWorker?.getRegistration("/sw.js");
+  const reg = await navigator.serviceWorker?.getRegistration("/");
   if (!reg) return;
   const sub = await reg.pushManager.getSubscription();
   if (!sub) return;
@@ -62,7 +62,7 @@ export async function unsubscribeFromPush(): Promise<void> {
 }
 
 export async function getCurrentPushSubscription(): Promise<PushSubscription | null> {
-  const reg = await navigator.serviceWorker?.getRegistration("/sw.js");
+  const reg = await navigator.serviceWorker?.getRegistration("/");
   if (!reg) return null;
   return reg.pushManager.getSubscription();
 }

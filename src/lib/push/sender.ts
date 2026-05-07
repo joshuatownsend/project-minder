@@ -9,7 +9,7 @@ import {
   touchLastSeen,
   FAILURE_THRESHOLD,
 } from "./store";
-import { logNotification } from "./dedup";
+import { shouldSend, logNotification } from "./dedup";
 
 export interface PushPayload {
   title: string;
@@ -42,6 +42,11 @@ export async function sendPushAll(
   eventKey: string
 ): Promise<SendSummary> {
   await ensureVapidConfigured();
+
+  if (!(await shouldSend("push", eventKey, payload))) {
+    return { sent: 0, failed: 0, removed: 0 };
+  }
+
   const subs = await listSubscriptions();
   const db = await getDb();
   if (!db || subs.length === 0) return { sent: 0, failed: 0, removed: 0 };

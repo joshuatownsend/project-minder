@@ -35,7 +35,7 @@ export async function POST(
 
     const db = await getDb();
     if (db) {
-      db.prepare("UPDATE sessions SET generated_title = ? WHERE session_id = ?").run(title, sessionId);
+      db.prepare("UPDATE sessions SET generated_title = ? WHERE session_id = ?").run(title, detail.sessionId);
     }
 
     return NextResponse.json({ title, cached: false });

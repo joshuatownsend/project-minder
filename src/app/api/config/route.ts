@@ -187,9 +187,12 @@ export async function PATCH(request: NextRequest) {
       }
       try {
         const u = new URL(endpoint as string);
-        if (u.protocol !== "https:") throw new Error("not https");
+        const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+        if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) {
+          throw new Error("not https");
+        }
       } catch {
-        return NextResponse.json({ error: "autoTitle.endpoint must be an HTTPS URL" }, { status: 400 });
+        return NextResponse.json({ error: "autoTitle.endpoint must be an HTTPS URL (or http://localhost)" }, { status: 400 });
       }
     }
     if (model !== undefined && (typeof model !== "string" || (model as string).length > 128)) {

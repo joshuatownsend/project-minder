@@ -20,7 +20,7 @@ export async function dispatchManualStepAdded(change: ManualStepChange): Promise
 
   if (!prefs) return;
 
-  const eventKey = `manual-step-added:${change.slug}:${Date.now()}`;
+  const eventKey = `manual-step-added:${change.slug}`;
   const payload = {
     title: "New manual step",
     body: `${change.projectName}: ${change.title}`,

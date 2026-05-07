@@ -55,9 +55,11 @@ export async function detectTerminal(): Promise<TerminalDef> {
     return {
       binary: "osascript",
       buildArgs: (cwd, command) => {
+        // Escape single quotes inside the AppleScript string literal.
+        const safeCwd = cwd.replace(/'/g, "'\\''");
         const script = command
-          ? `tell application "Terminal" to do script "cd '${cwd}' && ${command}"`
-          : `tell application "Terminal" to do script "cd '${cwd}'"`;
+          ? `tell application "Terminal" to do script "cd '${safeCwd}' && ${command}"`
+          : `tell application "Terminal" to do script "cd '${safeCwd}'"`;
         return ["-e", script];
       },
     };
@@ -81,8 +83,12 @@ export async function detectTerminal(): Promise<TerminalDef> {
     },
     {
       cmd: "xterm",
-      buildArgs: (cwd, command) =>
-        command ? ["-e", `bash -c "cd '${cwd}' && ${command}; exec bash"`] : ["-e", `bash -c "cd '${cwd}'; exec bash"`],
+      buildArgs: (cwd, command) => {
+        const safeCwd = cwd.replace(/'/g, "'\\''");
+        return command
+          ? ["-e", `bash -c "cd '${safeCwd}' && ${command}; exec bash"`]
+          : ["-e", `bash -c "cd '${safeCwd}'; exec bash"`];
+      },
     },
   ];
   for (const t of linuxTerminals) {
@@ -90,5 +96,11 @@ export async function detectTerminal(): Promise<TerminalDef> {
       return { binary: t.cmd, buildArgs: t.buildArgs };
     }
   }
-  return { binary: "xterm", buildArgs: (cwd) => ["-e", `bash -c "cd '${cwd}'; exec bash"`] };
+  return {
+    binary: "xterm",
+    buildArgs: (cwd) => {
+      const safeCwd = cwd.replace(/'/g, "'\\''");
+      return ["-e", `bash -c "cd '${safeCwd}'; exec bash"`];
+    },
+  };
 }

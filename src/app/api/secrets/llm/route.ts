@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setSecret, listSecretMetadata } from "@/lib/llm/secretsStore";
+import { setSecret, deleteSecret, getSecret, listSecretMetadata } from "@/lib/llm/secretsStore";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -14,14 +14,14 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE() {
-  await setSecret("llm.api_key", "");
+  await deleteSecret("llm.api_key");
   return NextResponse.json({ ok: true });
 }
 
 export async function GET() {
-  const meta = await listSecretMetadata();
+  const [meta, value] = await Promise.all([listSecretMetadata(), getSecret("llm.api_key")]);
   return NextResponse.json({
-    configured: meta.keys.includes("llm.api_key"),
+    configured: meta.keys.includes("llm.api_key") && !!value,
     mtime: meta.mtime,
   });
 }
