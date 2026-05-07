@@ -354,7 +354,7 @@ function SessionRow({
               ? <MatchSnippet text={session.searchableText} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
-              : session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+              : session.generatedTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
               )}
           </span>

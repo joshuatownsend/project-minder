@@ -5,6 +5,10 @@ import { Settings as SettingsIcon } from "lucide-react";
 import type { FeatureFlagKey, MinderConfig } from "@/lib/types";
 import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { useToast } from "@/components/ToastProvider";
+import { NotificationsSection } from "@/components/settings/NotificationsSection";
+import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
+import { TerminalSection } from "@/components/settings/TerminalSection";
+import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
 const FLAG_GROUPS = {
@@ -122,6 +126,21 @@ export function SettingsPage() {
 
   const activeSection = SECTIONS.find((s) => s.key === active);
 
+  async function patchConfig(patch: Partial<MinderConfig>): Promise<void> {
+    const res = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast("Couldn't save setting", body.error || `HTTP ${res.status}`);
+      return;
+    }
+    const updated = await res.json().catch(() => null);
+    if (updated?.config) setConfig(updated.config as MinderConfig);
+  }
+
   return (
     <div style={{ display: "flex", gap: "24px", padding: "20px 0", minHeight: "60vh" }}>
       <aside style={{ width: "180px", flexShrink: 0 }}>
@@ -188,7 +207,19 @@ export function SettingsPage() {
         {active === "features" && (
           <FeaturesSection config={config} saving={saving} onToggle={toggleFlag} />
         )}
-        {active !== "features" && activeSection && (
+        {active === "notifications" && (
+          <NotificationsSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active === "integrations" && (
+          <IntegrationsSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active === "terminal" && (
+          <TerminalSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active === "auto-title" && (
+          <AutoTitleSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && activeSection && (
           <PlaceholderSection
             label={activeSection.label}
             wave={activeSection.shipsInWave}
