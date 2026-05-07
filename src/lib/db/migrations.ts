@@ -258,6 +258,33 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 9,
+    name: "wave8.1a: otel_metrics table",
+    up: (db) => {
+      // CREATE TABLE IF NOT EXISTS is idempotent: fresh DBs that ran the
+      // full schema.sql in v1 (which already includes otel_metrics) will
+      // silently no-op here.
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS otel_metrics (
+          id           INTEGER PRIMARY KEY,
+          ts           INTEGER NOT NULL,
+          session_id   TEXT,
+          metric_name  TEXT NOT NULL,
+          metric_type  TEXT NOT NULL CHECK (metric_type IN ('counter', 'gauge')),
+          value        REAL NOT NULL,
+          model        TEXT,
+          attrs_json   TEXT
+        )
+      `).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS otel_metrics_by_name ON otel_metrics(metric_name, ts)"
+      ).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS otel_metrics_by_session ON otel_metrics(session_id) WHERE session_id IS NOT NULL"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

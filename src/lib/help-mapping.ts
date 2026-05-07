@@ -85,6 +85,7 @@ export const helpSlugs = [
   'telegram',
   'terminal',
   'auto-title',
+  'otel',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

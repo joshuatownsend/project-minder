@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 8.1a — Cluster R: OTEL ingest + setup wizard.** TODO #94.
+  - **`POST /api/otel/v1/logs`** — OTLP/HTTP JSON logs receiver. Parses `resourceLogs → scopeLogs → logRecords`, persists events to `otel_events`. Per-record try/catch for partial-success semantics; returns `{ partialSuccess: { rejectedLogRecords, errorMessage } }` per OTLP spec.
+  - **`POST /api/otel/v1/metrics`** — OTLP/HTTP JSON metrics receiver. Parses `resourceMetrics → scopeMetrics → metrics`, persists to new `otel_metrics` table. Returns `{ partialSuccess: { rejectedDataPoints } }`.
+  - **`GET/POST /api/integrations/otel`** — Install/remove OTEL env vars in `~/.claude/settings.json`. Writes `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_LOG_TOOL_DETAILS=1`. Atomic COW write with configHistory snapshot.
+  - **Settings → Integrations → OpenTelemetry card.** Endpoint field, Install / Remove buttons, live status indicator. Restart Claude Code after install for env vars to take effect.
+  - **Schema v9.** New `otel_metrics` table: `metric_name`, `metric_type` (counter/gauge), `value`, `session_id`, `model`, `attrs_json`. Indexes on `(metric_name, ts)` and `(session_id)`. `CREATE TABLE IF NOT EXISTS` for idempotency on existing DBs.
+  - **`MinderConfig.otel`** sub-object: `endpoint?: string`. Not a feature flag — configuration, not a subsystem on/off.
+  - Help documentation at **Settings → Integrations → OpenTelemetry** (`/help/otel`).
 - **Wave 7.2 — Cluster Q: Hook Server Lite.** TODO #86.
   - **`POST /api/hooks`** receives Claude Code lifecycle event payloads (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `PreCompact`, `SessionEnd`). Validates required fields, resolves `cwd` → project slug via scan cache with subdirectory matching, pushes to an in-memory ring buffer (50-event cap per slug) on a `globalThis` singleton.
   - **Live activity badges on project cards.** A green **live** pulse dot appears on cards whose project has had a hook event in the last 30 seconds. An amber **input** badge appears when Claude is awaiting permission (`Notification` hook). Both update within the existing 5-second pulse poll cycle — no additional polling interval.

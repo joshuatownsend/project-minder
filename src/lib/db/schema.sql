@@ -407,6 +407,26 @@ CREATE TABLE otel_events (
 CREATE INDEX otel_events_by_session ON otel_events(session_id, ts);
 CREATE INDEX otel_events_by_name_ts ON otel_events(event_name, ts);
 
+-- ─── otel_metrics ─────────────────────────────────────────────────────────
+-- Normalized metric data points from the OTEL metrics pipeline.  One row per
+-- data point — counters and gauges share the table, distinguished by
+-- metric_type.  `attrs_json` holds any additional attributes not promoted to
+-- a top-level column (e.g. token type, billing category).
+
+CREATE TABLE IF NOT EXISTS otel_metrics (
+  id           INTEGER PRIMARY KEY,
+  ts           INTEGER NOT NULL,
+  session_id   TEXT,
+  metric_name  TEXT NOT NULL,
+  metric_type  TEXT NOT NULL CHECK (metric_type IN ('counter', 'gauge')),
+  value        REAL NOT NULL,
+  model        TEXT,
+  attrs_json   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS otel_metrics_by_name ON otel_metrics(metric_name, ts);
+CREATE INDEX IF NOT EXISTS otel_metrics_by_session ON otel_metrics(session_id) WHERE session_id IS NOT NULL;
+
 -- ─── indexer_runs ─────────────────────────────────────────────────────────
 -- Heartbeat / audit trail for the indexer worker. Lets the read-side
 -- answer "is the indexer alive? when did it last run? what failed?"

@@ -323,6 +323,11 @@ export interface MinderConfig {
     /** Hook event names to register. Defaults to SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop. */
     events?: HookEventName[];
   };
+  /** OTEL ingest config. Wave 8 (R) honors. */
+  otel?: {
+    /** OTLP base endpoint written into OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4100/api/otel). */
+    endpoint?: string;
+  };
   /** Per-model pricing overrides. Wave 8 (S) honors. */
   pricingRules?: PricingRule[];
 }
