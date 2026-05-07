@@ -33,6 +33,10 @@ const slugTitles: Record<HelpSlug, string> = {
   hooks: "Hooks Browser",
   plugins: "Plugins Browser",
   sql: "SQL Explorer",
+  notifications: "Notifications",
+  telegram: "Telegram Integration",
+  terminal: "Terminal Launch",
+  "auto-title": "Auto-title",
 };
 
 const iconBtnBase: React.CSSProperties = {

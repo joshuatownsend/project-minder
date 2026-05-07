@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import { renameWithRetry } from "../atomicWrite";
+import { pruneNotificationLog } from "./maintenance";
 
 // Migration runner for the local SQLite index.
 //
@@ -192,6 +193,49 @@ const MIGRATIONS: Migration[] = [
           "ALTER TABLE turns ADD COLUMN has_thinking INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1))"
         ).run();
       }
+    },
+  },
+  {
+    version: 7,
+    name: "wave7.1: generated_title + push_subscriptions + notification_log",
+    up: (db) => {
+      // Idempotent ALTER for sessions.generated_title (same pattern as v5/v6).
+      const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      if (!sessionCols.some((c) => c.name === "generated_title")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN generated_title TEXT").run();
+      }
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS sessions_by_generated_title ON sessions(generated_title) WHERE generated_title IS NOT NULL"
+      ).run();
+
+      // New tables: CREATE IF NOT EXISTS is inherently idempotent.
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          endpoint      TEXT NOT NULL UNIQUE,
+          p256dh        TEXT NOT NULL,
+          auth          TEXT NOT NULL,
+          user_agent    TEXT,
+          created_at    TEXT NOT NULL,
+          last_seen_at  TEXT NOT NULL,
+          failure_count INTEGER NOT NULL DEFAULT 0
+        )
+      `).run();
+
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS notification_log (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          channel      TEXT NOT NULL,
+          event_key    TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          sent_at      TEXT NOT NULL,
+          status       TEXT NOT NULL,
+          error        TEXT
+        )
+      `).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS notification_log_dedup ON notification_log(channel, event_key, payload_hash, sent_at)"
+      ).run();
     },
   },
 ];
@@ -450,6 +494,7 @@ export async function initDb(): Promise<InitResult> {
     result.available = true;
     result.appliedMigrations = applied;
     result.schemaVersion = current;
+    pruneNotificationLog(db);
     return result;
   } catch (err) {
     // Path 3: SchemaVersionMissingError — meta table exists but stamp is

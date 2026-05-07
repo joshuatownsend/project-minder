@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useSessionDetail } from "@/hooks/useSessions";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ToastProvider";
 
 const OrchestrationDAG = dynamic(
   () => import("./viz/OrchestrationDAG").then((m) => m.OrchestrationDAG),
@@ -39,6 +40,17 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
+const resumeBtnBase: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: "5px",
+  padding: "5px 11px",
+  fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em",
+  background: "var(--bg-surface)",
+  border: "1px solid var(--border-subtle)",
+  cursor: "pointer",
+  transition: "color 0.15s, background 0.15s",
+  lineHeight: 1, flexShrink: 0,
+};
+
 function formatDuration(ms?: number): string {
   if (!ms) return "—";
   const s = Math.floor(ms / 1000);
@@ -60,37 +72,152 @@ function formatCost(n: number): string {
   return `$${n.toFixed(4)}`;
 }
 
-// ── Resume button ─────────────────────────────────────────────────────────────
+// ── Resume / terminal split button ───────────────────────────────────────────
 function ResumeButton({ sessionId }: { sessionId: string }) {
+  const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
+  const [launching, setLaunching] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const copyCommand = () => {
     if (!navigator.clipboard) return;
     navigator.clipboard.writeText(`claude --resume ${sessionId}`).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    }).catch(() => {
-      // Clipboard write failed (permissions or insecure context) — ignore silently
-    });
+    }).catch(() => {});
   };
+
+  const openInTerminal = async () => {
+    setLaunching(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/resume-terminal`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok || !d.ok) {
+        const fallback: string = d.fallback ?? `claude --resume ${sessionId}`;
+        showToast("Terminal launch failed", `Run manually: ${fallback}`);
+      }
+    } catch {
+      showToast("Terminal launch failed", "Check terminal settings.");
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+      {/* Primary: open in terminal */}
+      <button
+        onClick={openInTerminal}
+        disabled={launching}
+        title={`Open in terminal: claude --resume ${sessionId}`}
+        style={{
+          ...resumeBtnBase,
+          color: "var(--text-secondary)",
+          borderRadius: "var(--radius) 0 0 var(--radius)",
+          borderRight: "none",
+          opacity: launching ? 0.6 : 1,
+        }}
+      >
+        <Terminal style={{ width: "11px", height: "11px" }} />
+        {launching ? "Opening…" : "Resume"}
+      </button>
+      {/* Dropdown chevron */}
+      <button
+        onClick={() => setDropdownOpen((v) => !v)}
+        title="More options"
+        style={{
+          ...resumeBtnBase,
+          padding: "5px 7px",
+          color: "var(--text-muted)",
+          borderRadius: "0 var(--radius) var(--radius) 0",
+        }}
+      >
+        <span style={{ fontSize: "0.6rem" }}>▾</span>
+      </button>
+      {dropdownOpen && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            background: "var(--bg-surface)", border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)", padding: "4px",
+            zIndex: 50, minWidth: "160px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          }}
+          onMouseLeave={() => setDropdownOpen(false)}
+        >
+          <button
+            onClick={() => { copyCommand(); setDropdownOpen(false); }}
+            style={{
+              display: "flex", alignItems: "center", gap: "6px",
+              width: "100%", padding: "6px 10px",
+              fontSize: "0.72rem", fontFamily: "var(--font-body)",
+              color: copied ? "var(--status-active-text)" : "var(--text-secondary)",
+              background: "transparent", border: "none", borderRadius: "3px",
+              cursor: "pointer", textAlign: "left",
+            }}
+          >
+            {copied
+              ? <><Check style={{ width: "11px", height: "11px" }} /> Copied!</>
+              : <><Check style={{ width: "11px", height: "11px", opacity: 0 }} /> Copy command</>}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Generate title button ─────────────────────────────────────────────────────
+function GenerateTitleButton({
+  sessionId,
+  hasTitle,
+  onTitleGenerated,
+}: {
+  sessionId: string;
+  hasTitle: boolean;
+  onTitleGenerated: (title: string) => void;
+}) {
+  const { showToast } = useToast();
+  const [loading, setLoading] = useState(false);
+
+  async function handleGenerate() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/title`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regenerate: hasTitle }),
+      });
+      const d = await res.json();
+      if (res.ok && d.title) {
+        onTitleGenerated(d.title as string);
+      } else {
+        showToast("Title generation failed", d.error ?? res.statusText);
+      }
+    } catch (e: unknown) {
+      showToast("Title generation failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <button
-      onClick={handleCopy}
-      title={copied ? "Copied!" : `Copy: claude --resume ${sessionId}`}
+      onClick={handleGenerate}
+      disabled={loading}
+      title={hasTitle ? "Regenerate title" : "Generate title with LLM"}
       style={{
         display: "inline-flex", alignItems: "center", gap: "5px",
         padding: "5px 11px",
-        fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-        color: copied ? "var(--status-active-text)" : "var(--text-secondary)",
-        background: copied ? "var(--status-active-bg)" : "var(--bg-surface)",
-        border: `1px solid ${copied ? "var(--status-active-border)" : "var(--border-subtle)"}`,
-        borderRadius: "var(--radius)", cursor: "pointer",
-        transition: "color 0.15s, background 0.15s, border-color 0.15s",
+        fontSize: "0.72rem", fontFamily: "var(--font-body)",
+        color: "var(--text-muted)",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)", cursor: loading ? "not-allowed" : "pointer",
+        opacity: loading ? 0.6 : 1,
         lineHeight: 1, flexShrink: 0,
       }}
     >
-      {copied
-        ? <><Check style={{ width: "11px", height: "11px" }} /> Copied</>
-        : <><Terminal style={{ width: "11px", height: "11px" }} /> Resume</>}
+      <Zap style={{ width: "11px", height: "11px" }} />
+      {loading ? "Generating…" : hasTitle ? "Regenerate" : "Generate title"}
     </button>
   );
 }
@@ -187,7 +314,14 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
   const [docModalOpen, setDocModalOpen] = useState(false);
+  const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
+
+  useEffect(() => {
+    if (data?.generatedTitle) setGeneratedTitle(data.generatedTitle);
+  }, [data?.generatedTitle]);
+
+  const handleTitleGenerated = useCallback((title: string) => setGeneratedTitle(title), []);
 
   if (loading) {
     return (
@@ -271,6 +405,11 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           {data.sessionId.slice(0, 16)}…
         </span>
         <div style={{ flex: 1 }} />
+        <GenerateTitleButton
+          sessionId={sessionId}
+          hasTitle={!!generatedTitle}
+          onTitleGenerated={handleTitleGenerated}
+        />
         <ResumeButton sessionId={sessionId} />
       </div>
 
@@ -310,6 +449,17 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
             </span>
           ))}
         </div>
+
+        {/* Generated title — shown as a subtitle when present */}
+        {generatedTitle && (
+          <p style={{
+            fontSize: "0.82rem", color: "var(--accent)",
+            margin: 0, lineHeight: 1.4,
+            fontFamily: "var(--font-body)", fontWeight: 500,
+          }}>
+            {generatedTitle}
+          </p>
+        )}
 
         {/* Initial prompt — shown only when there's no recap (recap takes priority in the header) */}
         {data.initialPrompt && !data.recaps?.length && (

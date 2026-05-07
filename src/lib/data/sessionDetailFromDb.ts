@@ -108,6 +108,7 @@ interface SessionRow {
   last_prompt: string | null;
   has_thinking: number;
   cli_version: string | null;
+  generated_title: string | null;
 }
 
 interface TurnRow {
@@ -170,7 +171,7 @@ export function loadSessionDetailFromDb(
               input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
               cost_usd, has_one_shot, verified_task_count, one_shot_task_count,
               git_branch, initial_prompt, last_prompt,
-              has_thinking, cli_version
+              has_thinking, cli_version, generated_title
        FROM sessions
        WHERE session_id = ?`
     )
@@ -261,6 +262,7 @@ export function loadSessionDetailFromDb(
     searchableText: undefined,
     hasThinking: session.has_thinking === 1 || undefined,
     cliVersion: session.cli_version ?? undefined,
+    generatedTitle: session.generated_title ?? undefined,
     timeline,
     fileOperations: aggregates.fileOperations,
     subagents: aggregates.subagents,

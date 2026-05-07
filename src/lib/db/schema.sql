@@ -105,13 +105,45 @@ CREATE TABLE sessions (
   has_resume_anomaly    INTEGER NOT NULL DEFAULT 0 CHECK (has_resume_anomaly IN (0,1)),
   compact_boundary_count INTEGER NOT NULL DEFAULT 0,
   derived_version       INTEGER NOT NULL DEFAULT 0,
-  indexed_at_ms         INTEGER NOT NULL
+  indexed_at_ms         INTEGER NOT NULL,
+  -- Wave 7.1 columns (schema v7):
+  generated_title       TEXT
 );
 
-CREATE INDEX sessions_by_project_end ON sessions(project_slug, end_ts DESC);
+CREATE INDEX sessions_by_project_end      ON sessions(project_slug, end_ts DESC);
 CREATE INDEX sessions_by_end_ts      ON sessions(end_ts DESC);
 CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);
 CREATE INDEX sessions_by_slug        ON sessions(slug) WHERE slug IS NOT NULL;
+CREATE INDEX sessions_by_generated_title ON sessions(generated_title) WHERE generated_title IS NOT NULL;
+
+-- ─── push_subscriptions ──────────────────────────────────────────────────
+-- Web push endpoint registrations. One row per browser subscription.
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint      TEXT NOT NULL UNIQUE,
+  p256dh        TEXT NOT NULL,
+  auth          TEXT NOT NULL,
+  user_agent    TEXT,
+  created_at    TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- ─── notification_log ────────────────────────────────────────────────────
+-- Per-dispatch audit log for all notification channels. Used for 5-minute
+-- deduplication and 30-day automatic retention sweep.
+
+CREATE TABLE IF NOT EXISTS notification_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel      TEXT NOT NULL,
+  event_key    TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  sent_at      TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  error        TEXT
+);
+CREATE INDEX notification_log_dedup ON notification_log(channel, event_key, payload_hash, sent_at);
 
 -- ─── turns ───────────────────────────────────────────────────────────────
 -- One row per assistant or user turn. `text_offset` points back into the

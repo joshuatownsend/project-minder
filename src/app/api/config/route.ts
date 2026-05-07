@@ -102,6 +102,111 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
+  if (body.telegram !== undefined) {
+    if (typeof body.telegram !== "object" || body.telegram === null || Array.isArray(body.telegram)) {
+      return NextResponse.json({ error: "telegram must be an object" }, { status: 400 });
+    }
+    // botToken is NOT accepted here — it must go through POST /api/secrets/telegram.
+    // Any botToken in the body is silently dropped for forward-compat with stale clients.
+    const { chatId } = body.telegram as Record<string, unknown>;
+    if (chatId !== undefined) {
+      if (typeof chatId !== "string" || chatId.length > 256) {
+        return NextResponse.json({ error: "telegram.chatId must be a string ≤ 256 chars" }, { status: 400 });
+      }
+    }
+    patches.push((c) => {
+      c.telegram = { ...(c.telegram ?? {}), chatId: typeof chatId === "string" ? chatId : c.telegram?.chatId };
+    });
+  }
+
+  if (body.terminal !== undefined) {
+    if (typeof body.terminal !== "string" || body.terminal.length > 64) {
+      return NextResponse.json({ error: "terminal must be a string ≤ 64 chars" }, { status: 400 });
+    }
+    if (body.terminal !== "" && !/^[a-zA-Z0-9._\-]+$/.test(body.terminal)) {
+      return NextResponse.json({ error: "terminal contains invalid characters" }, { status: 400 });
+    }
+    patches.push((c) => { c.terminal = body.terminal as string; });
+  }
+
+  if (body.notificationPrefs !== undefined) {
+    if (
+      typeof body.notificationPrefs !== "object" ||
+      body.notificationPrefs === null ||
+      Array.isArray(body.notificationPrefs)
+    ) {
+      return NextResponse.json({ error: "notificationPrefs must be an object" }, { status: 400 });
+    }
+    const events = (body.notificationPrefs as Record<string, unknown>).events;
+    if (events !== undefined) {
+      if (typeof events !== "object" || events === null || Array.isArray(events)) {
+        return NextResponse.json({ error: "notificationPrefs.events must be an object" }, { status: 400 });
+      }
+      // Only manual-step-added has a real fire path this session.
+      const LIVE_EVENT_KEYS = ["manual-step-added"] as const;
+      const FUTURE_EVENT_KEYS = ["session-errored", "awaiting-permission", "dispatcher-emergency-stop"];
+      for (const [key, val] of Object.entries(events as Record<string, unknown>)) {
+        if (FUTURE_EVENT_KEYS.includes(key)) {
+          return NextResponse.json({
+            error: `notificationPrefs.events.${key} is not yet wired — it will be enabled in a future wave`,
+          }, { status: 400 });
+        }
+        if (!(LIVE_EVENT_KEYS as readonly string[]).includes(key)) {
+          return NextResponse.json({ error: `Unknown notification event key: ${key}` }, { status: 400 });
+        }
+        if (typeof val !== "object" || val === null || Array.isArray(val)) {
+          return NextResponse.json({ error: `notificationPrefs.events.${key} must be an object` }, { status: 400 });
+        }
+        for (const channel of ["push", "telegram", "os"] as const) {
+          const v = (val as Record<string, unknown>)[channel];
+          if (v !== undefined && typeof v !== "boolean") {
+            return NextResponse.json({
+              error: `notificationPrefs.events.${key}.${channel} must be boolean`,
+            }, { status: 400 });
+          }
+        }
+      }
+    }
+    patches.push((c) => {
+      c.notificationPrefs = body.notificationPrefs as typeof c.notificationPrefs;
+    });
+  }
+
+  if (body.autoTitle !== undefined) {
+    if (
+      typeof body.autoTitle !== "object" ||
+      body.autoTitle === null ||
+      Array.isArray(body.autoTitle)
+    ) {
+      return NextResponse.json({ error: "autoTitle must be an object" }, { status: 400 });
+    }
+    const { endpoint, model } = body.autoTitle as Record<string, unknown>;
+    if (endpoint !== undefined) {
+      if (typeof endpoint !== "string") {
+        return NextResponse.json({ error: "autoTitle.endpoint must be a string" }, { status: 400 });
+      }
+      try {
+        const u = new URL(endpoint as string);
+        const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+        if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) {
+          throw new Error("not https");
+        }
+      } catch {
+        return NextResponse.json({ error: "autoTitle.endpoint must be an HTTPS URL (or http://localhost)" }, { status: 400 });
+      }
+    }
+    if (model !== undefined && (typeof model !== "string" || (model as string).length > 128)) {
+      return NextResponse.json({ error: "autoTitle.model must be a string ≤ 128 chars" }, { status: 400 });
+    }
+    patches.push((c) => {
+      c.autoTitle = {
+        ...(c.autoTitle ?? {}),
+        ...(endpoint !== undefined ? { endpoint: endpoint as string } : {}),
+        ...(model !== undefined ? { model: model as string } : {}),
+      };
+    });
+  }
+
   if (patches.length === 0) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }

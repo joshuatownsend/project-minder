@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useToast } from "./ToastProvider";
 import { usePulse, type PulseChange } from "./PulseProvider";
+import type { MinderConfig } from "@/lib/types";
 
 // Module-level singleton — reused across every notification so we don't
 // leak a fresh HTMLAudioElement (and its associated network handle + media
@@ -25,13 +26,14 @@ function playNotificationSound() {
 export function NotificationListener() {
   const { showToast } = useToast();
   const { subscribeChanges } = usePulse();
+  const prefsRef = useRef<MinderConfig["notificationPrefs"]>(undefined);
 
-  // Request OS notification permission once on mount.
+  // Load notification prefs (no permission prompt — that's in Settings → Notifications)
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
-    }
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d: MinderConfig) => { prefsRef.current = d.notificationPrefs; })
+      .catch(() => {});
   }, []);
 
   // Subscribe to fresh change events from the shared pulse stream. The
@@ -41,8 +43,12 @@ export function NotificationListener() {
       for (const change of changes) {
         showToast(`New manual step: ${change.projectName}`, change.title);
 
-        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-          new Notification(`Manual Step: ${change.projectName}`, { body: change.title });
+        const osEnabled = prefsRef.current?.events?.["manual-step-added"]?.os;
+        if (osEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          new Notification(`Manual Step: ${change.projectName}`, {
+            body: change.title,
+            tag: `manual-step-added:${change.slug}`,
+          });
         }
 
         playNotificationSound();

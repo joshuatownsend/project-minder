@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 7.1a — Cluster P (partial): notifications + terminal + auto-title.** TODOs #92, #93, #171, #168.
+  - **Web push notifications (#92).** VAPID keys lazy-generated on first `/api/notifications/push/vapid-public-key` request and stored in `~/.minder/vapid-keys.json`. Browser subscriptions stored in new `push_subscriptions` SQLite table. Settings → Notifications: permission button, subscribe/unsubscribe, per-device revoke, send-test-push button. 410 Gone responses automatically remove expired subscriptions. Dedup window: 5 minutes per channel+event+payload hash in `notification_log` table.
+  - **Telegram notification bridge (#93).** Bot setup wizard in Settings → Integrations (bot token saved to `~/.minder/secrets.json`, chat ID in config). Plain-text messages truncated at 4000 chars. Test connection button. Dedup via shared `notification_log` table.
+  - **Terminal launch (#171).** **Resume** button on session detail becomes a split button: primary "Open in terminal" spawns `claude --resume <id>` in the project's directory; dropdown secondary "Copy command" copies to clipboard. Cross-platform: `wt.exe`/`cmd.exe` on Windows, `osascript` (Terminal.app) on macOS, `gnome-terminal`/`konsole`/`xterm` on Linux. On spawn failure, toast shows the command with copy fallback. Settings → Terminal: platform-default display, binary override, test-launch button.
+  - **LLM-powered session title generation (#168).** "Generate title" button on session detail calls the configured LLM endpoint (default: Anthropic Haiku 4.5) and stores a 4–8 word title in `sessions.generated_title`. "Regenerate" re-calls on demand. Sessions list prefers `generatedTitle` over raw first prompt when present. Settings → Auto-title: endpoint, model, API key (saved to `~/.minder/secrets.json`), test button.
+  - **`manual-step-added` notification fan-out.** When a new `## ` entry is appended to any project's `MANUAL_STEPS.md`, the configured subset of `push` / `telegram` / `os` channels fires. Checkbox toggles do not fire. `os` channel handled browser-side in `NotificationListener`; `push` and `telegram` dispatched server-side from `manualStepsWatcher` via lazy-imported `dispatcher.ts`.
+  - **Schema v7.** `sessions.generated_title TEXT`, new `push_subscriptions` table, new `notification_log` table. Automatic 30-day prune of `notification_log` on each server boot. `DERIVED_VERSION` stays at 6 (no JSONL re-derivation needed).
+
+### Changed
+- Settings → Notifications, Integrations, Terminal, and Auto-title sections now ship with real controls; Wave-1 placeholder cards removed for these four sections.
+- `NotificationListener` no longer requests browser notification permission silently on mount. Permission is now requested explicitly via the "Enable browser notifications" button in Settings → Notifications.
+- `MinderConfig.telegram` no longer stores `botToken`. Bot tokens now live in `~/.minder/secrets.json` (key: `telegram.bot_token`). Only `chatId` remains in the public config.
+
+### Security
+- `~/.minder/secrets.json` written with mode `0o600` on POSIX. On Windows, file inherits the `~/.minder/` directory NTFS ACL; manual `icacls` hardening documented in help/terminal.md.
+- Telegram bot token moved from public config to `secrets.json` exclusively (was a Wave-1 placeholder; no setter existed before this wave).
+
 - **Wave 6.2 — Cluster O + G remainder: 5 D3 visualizations.** TODOs #207, #209, #211, #212, #213.
   - **Concurrency Timeline (#207).** New "Concurrency" tab on session detail (visible when session has subagents). Gantt-style horizontal bars showing main agent + each subagent over session duration. Bar width = active time span; falls back to turn-index proportions when wall-clock timestamps are missing. `GET /api/sessions/[sessionId]/concurrency-timeline` (60s cache).
   - **Error Propagation Map (#209).** New "Errors" tab on project detail (visible when project has sessions). Cross-session bar chart of error rates by subagent hierarchy depth (red → purple gradient), top error-prone agents, and tool error breakdown. `GET /api/projects/[slug]/error-propagation` (5-min cache + mtime key).
