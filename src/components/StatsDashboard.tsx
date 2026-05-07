@@ -12,6 +12,13 @@ const SessionComplexityChart = dynamic(
 );
 import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu } from "lucide-react";
 import type { ReactNode } from "react";
+import { ChartBlock } from "./stats/ChartBlock";
+import { EditAcceptanceCard } from "./stats/EditAcceptanceCard";
+import { ToolLatencyCard } from "./stats/ToolLatencyCard";
+import { TokenUsageCard } from "./stats/TokenUsageCard";
+import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
+import { HookActivityCard } from "./stats/HookActivityCard";
+import { PressurePanel } from "./stats/PressurePanel";
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -83,32 +90,6 @@ function StatCell({ label, value, detail, icon, last }: StatCellProps) {
           {detail}
         </div>
       )}
-    </div>
-  );
-}
-
-function ChartBlock({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div style={{
-      padding: "14px 16px",
-      background: "var(--bg-surface)",
-      border: "1px solid var(--border-subtle)",
-      borderRadius: "var(--radius)",
-      display: "flex",
-      flexDirection: "column",
-      gap: "12px",
-    }}>
-      <span style={{
-        fontSize: "0.65rem",
-        fontFamily: "var(--font-mono)",
-        fontWeight: 600,
-        letterSpacing: "0.1em",
-        textTransform: "uppercase",
-        color: "var(--text-muted)",
-      }}>
-        {title}
-      </span>
-      {children}
     </div>
   );
 }
@@ -342,6 +323,34 @@ export function StatsDashboard() {
           </div>
         </section>
       )}
+
+      {/* Telemetry */}
+      <section id="telemetry">
+        <SectionHeader label="Telemetry" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+          <ChartBlock title="Edit Acceptance">
+            <EditAcceptanceCard />
+          </ChartBlock>
+          <ChartBlock title="Tool Latency">
+            <ToolLatencyCard />
+          </ChartBlock>
+          <ChartBlock title="Token Usage">
+            <TokenUsageCard />
+          </ChartBlock>
+          <ChartBlock title="Cache Efficiency">
+            <CacheEfficiencyCard />
+          </ChartBlock>
+          <ChartBlock title="Hook Activity">
+            <HookActivityCard />
+          </ChartBlock>
+          <div /> {/* spacer */}
+        </div>
+        <div style={{ marginTop: "16px" }}>
+          <ChartBlock title="Pressure">
+            <PressurePanel />
+          </ChartBlock>
+        </div>
+      </section>
     </div>
   );
 }

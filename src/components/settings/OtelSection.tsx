@@ -87,7 +87,8 @@ export function OtelSection({
 
       <div style={{ ...S.muted, marginBottom: "16px" }}>
         Receive real-time tool events and cost metrics from Claude Code via the OTEL pipeline.
-        Enables edit-acceptance tracking and per-tool latency dashboards in a future update.
+        Powers the Telemetry section on the Stats page: edit acceptance, tool latency, token usage,
+        cache efficiency, hook activity, and pressure panels.
       </div>
 
       {/* Status indicator */}
@@ -174,9 +175,11 @@ export function OtelSection({
         color: "var(--text-muted)", lineHeight: 1.6,
       }}>
         <strong style={{ color: "var(--text-secondary)" }}>Setup:</strong>{" "}
-        Click Install to write four env vars into{" "}
+        Click Install to write six env vars into{" "}
         <code style={{ fontFamily: "var(--font-mono)" }}>~/.claude/settings.json</code>:
         {" "}<code style={{ fontFamily: "var(--font-mono)" }}>CLAUDE_CODE_ENABLE_TELEMETRY=1</code>,
+        {" "}<code style={{ fontFamily: "var(--font-mono)" }}>OTEL_METRICS_EXPORTER=otlp</code>,
+        {" "}<code style={{ fontFamily: "var(--font-mono)" }}>OTEL_LOGS_EXPORTER=otlp</code>,
         {" "}<code style={{ fontFamily: "var(--font-mono)" }}>OTEL_EXPORTER_OTLP_ENDPOINT</code>,
         {" "}<code style={{ fontFamily: "var(--font-mono)" }}>OTEL_EXPORTER_OTLP_PROTOCOL=http/json</code>, and
         {" "}<code style={{ fontFamily: "var(--font-mono)" }}>OTEL_LOG_TOOL_DETAILS=1</code>.{" "}

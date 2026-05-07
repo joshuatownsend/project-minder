@@ -1,3 +1,32 @@
+## 2026-05-07 | wave8.1b | Phase 0 — Capture real OTEL data (reinstall required — wizard was broken)
+
+**Context**: The wizard was missing OTEL_METRICS_EXPORTER=otlp and OTEL_LOGS_EXPORTER=otlp.
+Without those the SDK exports nothing. If you already installed via the wizard, click Remove first,
+then Install again to pick up the fix.
+
+- [x] Root cause identified: wizard missing OTEL_METRICS_EXPORTER and OTEL_LOGS_EXPORTER (fixed in code)
+- [ ] With Project Minder running (`npm run dev`):
+  1. Open http://localhost:4100/settings (or Settings → Integrations → OTEL)
+  2. If OTEL shows as **Installed**, click **Remove** first
+  3. Click **Install** — this now writes all 6 required env vars:
+     CLAUDE_CODE_ENABLE_TELEMETRY=1, OTEL_METRICS_EXPORTER=otlp, OTEL_LOGS_EXPORTER=otlp,
+     OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL=http/json, OTEL_LOG_TOOL_DETAILS=1
+- [ ] Verify ~/.claude/settings.json contains all 6 vars (especially the two new ones):
+  `node -e "const s=require('fs').readFileSync(require('os').homedir()+'/.claude/settings.json','utf8'); console.log(JSON.stringify(JSON.parse(s).env,null,2))"`
+- [ ] **Fully restart Claude Code** — close all windows, reopen from Start menu / taskbar
+- [ ] Confirm Project Minder is running on port 4100 (OTEL needs to reach localhost:4100)
+- [ ] Run a Claude Code session in ANY project that exercises:
+  - At least 5 different tools (Read, Edit, Write, Bash, mcp__*)
+  - At least 3 Edit/Write proposals with mixed accept/reject decisions
+  - Long enough for one full API call cycle (>1 minute total)
+- [ ] Run the Phase 0 probe script:
+  `node scripts/probe-otel.mjs`
+  Confirm the "Request log" section shows ≥1 request (proves endpoint is being hit)
+  Confirm it reports ≥1 row for tool_result, tool_decision, api_request, and ≥1 metric data point
+- [ ] Share the probe output so otelQueries.ts can be written against the verified attribute schema
+
+---
+
 ## 2026-05-05 | pr-review-responder | GitHub Action secrets + permissions setup
 
 - [ ] Add `ANTHROPIC_API_KEY` to repository secrets

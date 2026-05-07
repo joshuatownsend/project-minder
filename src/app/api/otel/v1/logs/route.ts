@@ -1,6 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLogBatch, isOtelDbReady } from "@/lib/db/otelIngest";
+import { initDb } from "@/lib/db/migrations";
 import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 
 // OTLP/HTTP JSON logs receiver.
@@ -19,8 +20,17 @@ import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 // A 200 with rejectedLogRecords>0 means partial success.
 // Non-200 means the entire batch was rejected (e.g. DB unavailable).
 
+let initPromise: Promise<{ available: boolean }> | null = null;
+
+async function ensureReady(): Promise<boolean> {
+  if (!isOtelDbReady()) return false;
+  if (!initPromise) initPromise = initDb();
+  const { available } = await initPromise;
+  return available;
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (!isOtelDbReady()) {
+  if (!(await ensureReady())) {
     return NextResponse.json(
       { error: "OTEL storage not available" },
       { status: 503 },
