@@ -28,7 +28,7 @@ export class LLMError extends Error {
   }
 }
 
-function isAnthropic(endpoint: string): boolean {
+export function isAnthropic(endpoint: string): boolean {
   return endpoint.includes("anthropic.com");
 }
 

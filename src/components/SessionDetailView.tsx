@@ -43,6 +43,13 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
+import { downloadBlob } from "@/lib/downloadBlob";
+
+const checkboxRowStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: "8px",
+  fontSize: "0.8rem", color: "var(--text-primary)", cursor: "pointer",
+  padding: "6px 0",
+};
 
 const resumeBtnBase: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: "5px",
@@ -264,15 +271,11 @@ function DistillButton({
       disabled={loading}
       title={hasDistillation ? "Re-distill session" : "Distill session with LLM"}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "5px",
-        padding: "5px 11px",
-        fontSize: "0.72rem", fontFamily: "var(--font-body)",
+        ...resumeBtnBase,
         color: "var(--text-muted)",
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "var(--radius)", cursor: loading ? "not-allowed" : "pointer",
+        borderRadius: "var(--radius)",
+        cursor: loading ? "not-allowed" : "pointer",
         opacity: loading ? 0.6 : 1,
-        lineHeight: 1, flexShrink: 0,
       }}
     >
       <BookOpen style={{ width: "11px", height: "11px" }} />
@@ -318,23 +321,18 @@ function ExportModal({
       `**Date:** ${date}`,
       data.gitBranch ? `**Branch:** ${data.gitBranch}` : "",
       `**Duration:** ${data.durationMs ? formatDuration(data.durationMs) : "—"}`,
-      `**Cost:** ${data.costEstimate >= 0.01 ? `$${data.costEstimate.toFixed(3)}` : `$${data.costEstimate.toFixed(4)}`}`,
+      `**Cost:** ${formatCost(data.costEstimate)}`,
       `**Session ID:** \`${data.sessionId}\``,
       "",
-    ].filter((l) => l !== undefined);
+    ].filter(Boolean);
 
     if (sections.has("timeline")) {
       const limit = parseInt(turnLimit, 10);
       const events = isNaN(limit) || limit <= 0 ? data.timeline : data.timeline.slice(0, limit);
       lines.push("---", "", "## Conversation", "");
+      const roleLabels: Record<string, string> = { user: "User", assistant: "Assistant", error: "Error", thinking: "Thinking" };
       for (const ev of events) {
-        const role =
-          ev.type === "user" ? "User"
-          : ev.type === "assistant" ? "Assistant"
-          : ev.type === "error" ? "Error"
-          : ev.type === "thinking" ? "Thinking"
-          : ev.type === "tool_use" ? `Tool: ${ev.toolName ?? "unknown"}`
-          : ev.type;
+        const role = ev.type === "tool_use" ? `Tool: ${ev.toolName ?? "unknown"}` : (roleLabels[ev.type] ?? ev.type);
         const ts = ev.timestamp ? ` _(${new Date(ev.timestamp).toLocaleTimeString()})_` : "";
         lines.push(`### ${role}${ts}`, "", ev.content, "");
       }
@@ -360,22 +358,9 @@ function ExportModal({
   }
 
   function handleDownload() {
-    const md = buildMarkdown();
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `session-${data.sessionId.slice(0, 8)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(buildMarkdown(), `session-${data.sessionId.slice(0, 8)}.md`, "text/markdown;charset=utf-8");
     onClose();
   }
-
-  const checkboxStyle: React.CSSProperties = {
-    display: "flex", alignItems: "center", gap: "8px",
-    fontSize: "0.8rem", color: "var(--text-primary)", cursor: "pointer",
-    padding: "6px 0",
-  };
 
   return (
     <Modal open={open} onClose={onClose} title="Export session as Markdown" maxWidthClass="max-w-sm">
@@ -383,7 +368,7 @@ function ExportModal({
         <div>
           <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Sections to include</div>
           {(["timeline", "files", "subagents"] as ExportSection[]).map((s) => (
-            <label key={s} style={checkboxStyle}>
+            <label key={s} style={checkboxRowStyle}>
               <input
                 type="checkbox"
                 checked={sections.has(s)}
@@ -469,15 +454,11 @@ function GenerateTitleButton({
       disabled={loading}
       title={hasTitle ? "Regenerate title" : "Generate title with LLM"}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "5px",
-        padding: "5px 11px",
-        fontSize: "0.72rem", fontFamily: "var(--font-body)",
+        ...resumeBtnBase,
         color: "var(--text-muted)",
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "var(--radius)", cursor: loading ? "not-allowed" : "pointer",
+        borderRadius: "var(--radius)",
+        cursor: loading ? "not-allowed" : "pointer",
         opacity: loading ? 0.6 : 1,
-        lineHeight: 1, flexShrink: 0,
       }}
     >
       <Zap style={{ width: "11px", height: "11px" }} />
@@ -586,10 +567,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   useEffect(() => {
-    if (data?.generatedTitle) setGeneratedTitle(data.generatedTitle);
-    if (data?.starredAt) setStarredAt(data.starredAt);
-    if (data?.distilledText) setDistilledText(data.distilledText);
-    if (data?.distilledAt) setDistilledAt(data.distilledAt);
+    setGeneratedTitle(data?.generatedTitle);
+    setStarredAt(data?.starredAt);
+    setDistilledText(data?.distilledText);
+    setDistilledAt(data?.distilledAt);
   }, [data?.generatedTitle, data?.starredAt, data?.distilledText, data?.distilledAt]);
 
   const handleTitleGenerated = useCallback((title: string) => setGeneratedTitle(title), []);
@@ -679,7 +660,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         <StarButton
           sessionId={sessionId}
           starredAt={starredAt}
-          onToggle={(newStarredAt) => setStarredAt(newStarredAt)}
+          onToggle={setStarredAt}
         />
         <DistillButton
           sessionId={sessionId}
@@ -694,16 +675,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         <button
           onClick={() => setExportModalOpen(true)}
           title="Export session as Markdown"
-          style={{
-            display: "inline-flex", alignItems: "center", gap: "5px",
-            padding: "5px 11px",
-            fontSize: "0.72rem", fontFamily: "var(--font-body)",
-            color: "var(--text-muted)",
-            background: "var(--bg-surface)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius)", cursor: "pointer",
-            lineHeight: 1, flexShrink: 0,
-          }}
+          style={{ ...resumeBtnBase, color: "var(--text-muted)", borderRadius: "var(--radius)", cursor: "pointer" }}
         >
           <FileDown style={{ width: "11px", height: "11px" }} />
           Export

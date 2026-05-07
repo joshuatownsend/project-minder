@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/connection";
-import { getSessionDetail } from "@/lib/data";
 
 export async function POST(
   _request: NextRequest,
@@ -13,12 +12,14 @@ export async function POST(
     return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
   }
 
-  const { detail } = await getSessionDetail(sessionId);
-  if (!detail) {
+  const row = db
+    .prepare("SELECT starred_at FROM sessions WHERE session_id = ?")
+    .get(sessionId) as { starred_at: string | null } | undefined;
+  if (!row) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const nowStarred = !detail.starredAt;
+  const nowStarred = !row.starred_at;
   const starredAt = nowStarred ? new Date().toISOString() : null;
   db.prepare("UPDATE sessions SET starred_at = ? WHERE session_id = ?").run(starredAt, sessionId);
 
@@ -30,9 +31,18 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const { sessionId } = await params;
-  const { detail } = await getSessionDetail(sessionId);
-  if (!detail) {
+
+  const db = await getDb();
+  if (!db) {
+    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
+  }
+
+  const row = db
+    .prepare("SELECT starred_at FROM sessions WHERE session_id = ?")
+    .get(sessionId) as { starred_at: string | null } | undefined;
+  if (!row) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  return NextResponse.json({ starred: !!detail.starredAt, starredAt: detail.starredAt ?? null });
+
+  return NextResponse.json({ starred: !!row.starred_at, starredAt: row.starred_at ?? null });
 }

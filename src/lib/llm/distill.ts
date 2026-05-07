@@ -1,7 +1,7 @@
 import "server-only";
 import { getSecret } from "./secretsStore";
 import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from "./defaults";
-import { LLMError } from "./autoTitle";
+import { LLMError, isAnthropic } from "./autoTitle";
 import type { TitleTurn } from "./autoTitle";
 
 const MAX_TURN_CHARS = 800;
@@ -20,10 +20,6 @@ export interface DistillOpts {
   endpoint?: string;
   model?: string;
   turns: TitleTurn[];
-}
-
-function isAnthropic(endpoint: string): boolean {
-  return endpoint.includes("anthropic.com");
 }
 
 function buildUserMessage(turns: TitleTurn[]): string {

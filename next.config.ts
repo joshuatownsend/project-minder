@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react", "date-fns"],
   },
+  // Native addons and packages with dynamic requires must not be bundled.
+  // better-sqlite3 uses a .node binary; web-push is pulled into the same
+  // module graph via dispatcher → sender → connection.
+  serverExternalPackages: ["better-sqlite3", "web-push"],
 };
 
 export default nextConfig;

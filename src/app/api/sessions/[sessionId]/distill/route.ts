@@ -13,7 +13,7 @@ export async function POST(
   const body = await request.json().catch(() => ({}));
   const regenerate = body?.regenerate === true;
 
-  const { detail } = await getSessionDetail(sessionId);
+  const [{ detail }, config] = await Promise.all([getSessionDetail(sessionId), readConfig()]);
   if (!detail) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
@@ -21,8 +21,6 @@ export async function POST(
   if (detail.distilledText && !regenerate) {
     return NextResponse.json({ text: detail.distilledText, distilledAt: detail.distilledAt, cached: true });
   }
-
-  const config = await readConfig();
   const turns = (detail.timeline ?? [])
     .filter((e) => e.type === "user" || e.type === "assistant")
     .map((e) => ({ role: e.type as "user" | "assistant", content: e.content }));
