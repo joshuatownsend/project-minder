@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 7.2 — Cluster Q: Hook Server Lite.** TODO #86.
+  - **`POST /api/hooks`** receives Claude Code lifecycle event payloads (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SubagentStop`, `PreCompact`, `SessionEnd`). Validates required fields, resolves `cwd` → project slug via scan cache with subdirectory matching, pushes to an in-memory ring buffer (50-event cap per slug) on a `globalThis` singleton.
+  - **Live activity badges on project cards.** A green **live** pulse dot appears on cards whose project has had a hook event in the last 30 seconds. An amber **input** badge appears when Claude is awaiting permission (`Notification` hook). Both update within the existing 5-second pulse poll cycle — no additional polling interval.
+  - **Awaiting-permission notifications.** When Claude Code fires a `Notification` hook, `dispatchAwaitingPermission` fans out to configured push / Telegram / browser-notification channels. Deduplication via 8-second bucket key prevents flooding. Configurable per-channel in Settings → Live Activity.
+  - **Settings → Live Activity section.** Toggle to enable the feature flag, Install / Remove buttons that write / remove six curl hook entries in `~/.claude/settings.json` atomically (COW snapshot via `configHistory`). Reinstall button appears when the registered URL differs from the current origin. Per-channel awaiting-permission alert toggles.
+  - **`GET/POST/DELETE /api/live-activity/install`** manages hook installation status, validates `hookUrl` (localhost / https only), persists `hookUrl` to `MinderConfig`.
+  - **`liveActivity` feature flag** flipped to wired. Hook receiver returns `{ok:true, ignored:"flag-off"}` when disabled; no buffer mutation occurs.
+  - Help documentation at **Settings → Live Activity**.
 - **Wave 7.1b — Cluster P (partial): starring, distillation, Markdown export.** TODOs #169, #195, #233.
   - **Session starring (#169).** Star button on session detail nav row (amber toggle); POST `/api/sessions/[sessionId]/star` toggles `starred_at` (timestamp-as-presence). Starred sessions show a gold star indicator in the sessions list. "Starred" filter toggle in SessionsBrowser toolbar filters to starred sessions only. `starred_at TEXT` column added in schema v8.
   - **JSONL distillation (#195).** "Distill" button on session detail calls the configured LLM endpoint with a structured prompt (Goal / Approach / Outcome / Key files). Distillation text and timestamp persisted to `sessions.distilled_text` + `sessions.distilled_at` (schema v8). Distillation panel renders below the stats strip when present. "Re-distill" regenerates on demand. Reuses the same secretsStore + autoTitle LLM pattern.

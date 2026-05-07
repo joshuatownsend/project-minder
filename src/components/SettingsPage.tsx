@@ -9,6 +9,8 @@ import { NotificationsSection } from "@/components/settings/NotificationsSection
 import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
 import { TerminalSection } from "@/components/settings/TerminalSection";
 import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
+import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
+import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
 const FLAG_GROUPS = {
@@ -24,7 +26,8 @@ type SectionKey =
   | "integrations"
   | "data"
   | "terminal"
-  | "auto-title";
+  | "auto-title"
+  | "live-activity";
 
 interface SectionDef {
   key: SectionKey;
@@ -43,8 +46,9 @@ const SECTIONS: SectionDef[] = [
   { key: "notifications", label: "Notifications", shipsInWave: 7,  description: "Push and Telegram event toggles." },
   { key: "integrations",  label: "Integrations",  shipsInWave: 8,  description: "OTEL, Anthropic OAuth, currency API status." },
   { key: "data",          label: "Data & Privacy", shipsInWave: 7, description: "History retention, distillation defaults, export shortcuts." },
-  { key: "terminal",      label: "Terminal",      shipsInWave: 7,  description: "Preferred terminal application for resume." },
-  { key: "auto-title",    label: "Auto-title",    shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
+  { key: "terminal",       label: "Terminal",       shipsInWave: 7,  description: "Preferred terminal application for resume." },
+  { key: "auto-title",    label: "Auto-title",     shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
+  { key: "live-activity", label: "Live Activity",  shipsInWave: 7,  description: "Hook server install/remove + awaiting-permission alerts." },
 ];
 
 export function SettingsPage() {
@@ -219,7 +223,10 @@ export function SettingsPage() {
         {active === "auto-title" && (
           <AutoTitleSection config={config} onConfigChange={patchConfig} />
         )}
-        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && activeSection && (
+        {active === "live-activity" && (
+          <LiveActivitySection config={config} onConfigChange={patchConfig} />
+        )}
+        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && activeSection && (
           <PlaceholderSection
             label={activeSection.label}
             wave={activeSection.shipsInWave}
@@ -354,59 +361,13 @@ function FlagGroup(props: {
                 value={value}
                 disabled={disabled || isSaving}
                 onChange={(v) => onToggle(f.key, v)}
-                ariaLabel={f.label}
+                label={f.label}
               />
             </li>
           );
         })}
       </ul>
     </div>
-  );
-}
-
-function Toggle(props: {
-  value: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-  ariaLabel: string;
-}) {
-  const { value, disabled, onChange, ariaLabel } = props;
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={value}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onChange(!value)}
-      style={{
-        width: "34px",
-        height: "18px",
-        borderRadius: "9999px",
-        position: "relative",
-        background: value ? "var(--info)" : "var(--border-default)",
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "background 0.15s",
-        border: "none",
-        padding: 0,
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          top: "2px",
-          left: value ? "18px" : "2px",
-          width: "14px",
-          height: "14px",
-          borderRadius: "50%",
-          background: "var(--bg-primary, #fff)",
-          transition: "left 0.15s",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-        }}
-      />
-    </button>
   );
 }
 

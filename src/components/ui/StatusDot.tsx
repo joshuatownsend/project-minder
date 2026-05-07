@@ -2,8 +2,11 @@
 
 import type { SessionStatus } from "@/lib/types";
 
+// Superset of SessionStatus for live-activity overlay dots
+export type StatusDotStatus = SessionStatus | "live" | "awaiting";
+
 interface StatusDotProps {
-  status?: SessionStatus;
+  status?: StatusDotStatus;
   size?: number;
 }
 
@@ -15,7 +18,7 @@ export function StatusDot({ status, size = 8 }: StatusDotProps) {
   if (!status || status === "idle") return null;
 
   const color =
-    status === "working"
+    status === "working" || status === "live"
       ? "var(--status-active-text)"
       : "var(--accent)";
 

@@ -23,6 +23,7 @@ export const helpMapping: Record<string, string> = {
   '/settings/integrations': 'telegram',
   '/settings/terminal': 'terminal',
   '/settings/auto-title': 'auto-title',
+  '/settings/live-activity': 'live-activity',
   '/plans': 'plans',
   '/hooks': 'hooks',
   '/plugins': 'plugins',

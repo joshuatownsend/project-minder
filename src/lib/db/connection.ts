@@ -34,11 +34,11 @@ import type DatabaseT from "better-sqlite3";
 let Database: typeof DatabaseT | null = null;
 let loadError: Error | null = null;
 try {
-  // Use a computed name to prevent webpack/Turbopack from statically tracing
-  // this require — they can't follow a non-literal argument. The try/catch
-  // handles the runtime case when the native binary isn't available (e.g. no
-  // prebuilt for the current Node version).
-  Database = require(["better", "sqlite3"].join("-"));
+  // Static string so Turbopack can match it against `serverExternalPackages`
+  // in next.config.ts — the dynamic-join trick prevented that match and caused
+  // Turbopack to bundle the native .node binary instead of leaving it external.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Database = require("better-sqlite3");
 } catch (err) {
   loadError = err as Error;
 }

@@ -17,11 +17,14 @@ export interface PulseChange {
   projectName: string;
   title: string;
   changedAt: string;
+  kind?: string;
 }
 
 export interface PulseSnapshot {
   pendingSteps: number;
   approvalCount: number;
+  liveSlugs: string[];
+  awaitingSlugs: string[];
   generatedAt: string | null;
 }
 
@@ -45,6 +48,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<PulseSnapshot>({
     pendingSteps: 0,
     approvalCount: 0,
+    liveSlugs: [],
+    awaitingSlugs: [],
     generatedAt: null,
   });
   const lastCheckedRef = useRef<string>(new Date().toISOString());
@@ -78,15 +83,26 @@ export function PulseProvider({ children }: { children: ReactNode }) {
           pendingSteps: number;
           approvalCount: number;
           changes: PulseChange[];
+          liveSlugs?: string[];
+          awaitingSlugs?: string[];
           generatedAt: string;
         };
 
         lastCheckedRef.current = data.generatedAt;
 
-        setSnapshot({
-          pendingSteps: data.pendingSteps,
-          approvalCount: data.approvalCount,
-          generatedAt: data.generatedAt,
+        const liveSlugs = data.liveSlugs ?? [];
+        const awaitingSlugs = data.awaitingSlugs ?? [];
+        setSnapshot((prev) => {
+          if (
+            prev.pendingSteps === data.pendingSteps &&
+            prev.approvalCount === data.approvalCount &&
+            prev.generatedAt === data.generatedAt &&
+            prev.liveSlugs.length === liveSlugs.length &&
+            prev.awaitingSlugs.length === awaitingSlugs.length &&
+            prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&
+            prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i])
+          ) return prev;
+          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
         });
 
         if (data.changes && data.changes.length > 0) {

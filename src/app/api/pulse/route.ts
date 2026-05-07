@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCachedScan } from "@/lib/cache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
+import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffer";
 
 // Single endpoint that bundles every signal the dashboard chrome polls for.
 // Replaces three independent client-side intervals (5s + 10s + 30s) with one
@@ -46,10 +47,28 @@ export async function GET(request: NextRequest) {
   const status = await getLiveStatusPayload();
   const approvalCount = status.sessions.filter((s) => s.status === "approval").length;
 
+  // Hook-server live activity — stale-sweep is cheap (bounded by session count)
+  const { liveSlugs, awaitingSlugs } = sweepAndGetState();
+
+  // Synthesize awaiting-permission change events for edge-triggered toast/sound.
+  // drainNewAwaitingTransitions() returns only slugs that entered awaiting since
+  // the last poll, so re-polling does not re-fire the toast (level vs. edge).
+  const newAwaitingSlugs = since ? drainNewAwaitingTransitions() : [];
+  const slugToName = new Map(scan?.projects.map((p) => [p.slug, p.name]) ?? []);
+  const awaitingChanges = newAwaitingSlugs.map((slug) => ({
+    slug,
+    projectName: slugToName.get(slug) ?? slug,
+    title: "Claude Code is awaiting permission",
+    changedAt: new Date().toISOString(),
+    kind: "awaiting-permission" as const,
+  }));
+
   return NextResponse.json({
     pendingSteps,
     approvalCount,
-    changes,
+    changes: [...changes, ...awaitingChanges],
+    liveSlugs,
+    awaitingSlugs,
     generatedAt: new Date().toISOString(),
   });
 }
@@ -57,6 +76,8 @@ export async function GET(request: NextRequest) {
 export type PulsePayload = {
   pendingSteps: number;
   approvalCount: number;
-  changes: { slug: string; projectName: string; title: string; changedAt: string }[];
+  changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
+  liveSlugs: string[];
+  awaitingSlugs: string[];
   generatedAt: string;
 };

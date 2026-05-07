@@ -1,4 +1,4 @@
-// Last verified: schema version 6 (src/lib/db/schema.sql + migrations v1-v6)
+// Last verified: schema version 8 (src/lib/db/schema.sql + migrations v1-v8)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 
 export interface TableSchema {
@@ -26,7 +26,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "one_shot_task_count", "git_branch", "initial_prompt", "last_prompt",
       "slug", "continued_from_session_id", "has_thinking", "cli_version",
       "has_resume_anomaly", "compact_boundary_count", "derived_version",
-      "indexed_at_ms",
+      "indexed_at_ms", "generated_title", "starred_at", "distilled_at",
+      "distilled_text",
     ],
   },
   {
