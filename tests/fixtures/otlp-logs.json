@@ -10,51 +10,62 @@
       },
       "scopeLogs": [
         {
-          "scope": { "name": "claude-code", "version": "1.0.0" },
+          "scope": { "name": "com.anthropic.claude_code", "version": "1.0.0" },
           "logRecords": [
             {
               "timeUnixNano": "1746000000000000000",
               "observedTimeUnixNano": "1746000000100000000",
-              "body": { "stringValue": "tool_result" },
+              "body": { "stringValue": "claude_code.tool_result" },
               "attributes": [
                 { "key": "event.name", "value": { "stringValue": "tool_result" } },
                 { "key": "tool_name", "value": { "stringValue": "Read" } },
                 { "key": "tool_use_id", "value": { "stringValue": "toolu_read_001" } },
-                { "key": "tool_result.is_error", "value": { "boolValue": false } },
-                { "key": "tool_parameters", "value": { "stringValue": "{\"file_path\": \"/foo/bar.ts\"}" } }
+                { "key": "success", "value": { "stringValue": "true" } },
+                { "key": "duration_ms", "value": { "stringValue": "42" } },
+                { "key": "decision_type", "value": { "stringValue": "accept" } },
+                { "key": "decision_source", "value": { "stringValue": "config" } }
               ]
             },
             {
               "timeUnixNano": "1746000001000000000",
               "observedTimeUnixNano": "1746000001100000000",
-              "body": { "stringValue": "tool_decision" },
+              "body": { "stringValue": "claude_code.tool_decision" },
               "attributes": [
                 { "key": "event.name", "value": { "stringValue": "tool_decision" } },
                 { "key": "tool_name", "value": { "stringValue": "Edit" } },
                 { "key": "tool_use_id", "value": { "stringValue": "toolu_edit_001" } },
-                { "key": "tool_decision.was_accepted", "value": { "boolValue": true } }
+                { "key": "decision", "value": { "stringValue": "accept" } },
+                { "key": "source", "value": { "stringValue": "config" } }
               ]
             },
             {
               "timeUnixNano": "1746000002000000000",
               "observedTimeUnixNano": "1746000002100000000",
-              "body": { "stringValue": "api_request" },
+              "body": { "stringValue": "claude_code.api_request" },
               "attributes": [
                 { "key": "event.name", "value": { "stringValue": "api_request" } },
-                { "key": "model", "value": { "stringValue": "claude-opus-4-7" } },
+                { "key": "model", "value": { "stringValue": "claude-sonnet-4-6" } },
                 { "key": "input_tokens", "value": { "intValue": "1000" } },
-                { "key": "output_tokens", "value": { "intValue": "500" } }
+                { "key": "output_tokens", "value": { "intValue": "500" } },
+                { "key": "cache_read_tokens", "value": { "intValue": "200" } },
+                { "key": "cache_creation_tokens", "value": { "intValue": "50" } },
+                { "key": "cost_usd", "value": { "doubleValue": 0.0045 } },
+                { "key": "duration_ms", "value": { "intValue": "1200" } },
+                { "key": "speed", "value": { "stringValue": "normal" } },
+                { "key": "query_source", "value": { "stringValue": "repl_main_thread" } }
               ]
             },
             {
               "timeUnixNano": "1746000003000000000",
-              "body": { "stringValue": "tool_result" },
+              "body": { "stringValue": "claude_code.tool_result" },
               "attributes": [
                 { "key": "event.name", "value": { "stringValue": "tool_result" } },
                 { "key": "tool_name", "value": { "stringValue": "mcp_tool" } },
                 { "key": "tool_use_id", "value": { "stringValue": "toolu_mcp_001" } },
-                { "key": "tool_result.is_error", "value": { "boolValue": false } },
-                { "key": "tool_parameters", "value": { "stringValue": "{\"mcp_server_name\": \"context7\", \"mcp_tool_name\": \"resolve-library-id\", \"query\": \"react\"}" } }
+                { "key": "success", "value": { "stringValue": "false" } },
+                { "key": "duration_ms", "value": { "stringValue": "88" } },
+                { "key": "error_type", "value": { "stringValue": "Error:TIMEOUT" } },
+                { "key": "tool_parameters", "value": { "stringValue": "{\"mcp_server_name\": \"context7\", \"mcp_tool_name\": \"resolve-library-id\"}" } }
               ]
             },
             {
