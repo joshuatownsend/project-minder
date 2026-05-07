@@ -893,10 +893,16 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                 <ChartBlock title="Edit Acceptance">
-                  <EditAcceptanceCard sessionId={data.sessionId} />
+                  <EditAcceptanceCard
+                    sessionId={data.sessionId}
+                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                  />
                 </ChartBlock>
                 <ChartBlock title="Tool Latency">
-                  <ToolLatencyCard sessionId={data.sessionId} />
+                  <ToolLatencyCard
+                    sessionId={data.sessionId}
+                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                  />
                 </ChartBlock>
               </div>
               <BarChart data={data.toolUsage} color="var(--accent)" maxItems={20} />

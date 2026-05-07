@@ -70,7 +70,7 @@ Navigate to **Stats → Telemetry** (or scroll to the bottom of `/stats`).
 | **Token Usage** | Today / 7d / 30d toggle. Shows daily input, output, cache-read, and cache-creation totals as stacked mini-bars. | `claude_code.token.usage` metrics |
 | **Cache Efficiency** | Large hit-rate percentage with a daily sparkline and a dashed 70% target line. Hit rate = cacheRead ÷ (input + output + cacheCreation). | `claude_code.token.usage` metrics |
 | **Hook Activity** | Fire counts per hook with proportional bars, plus p50 / p95 execution durations. | `hook_execution_complete` events |
-| **Pressure** | API error count, retry-exhaustion count, and context-compaction count. Expands to a list of the 10 most recent errors with timestamp, retry attempt, and message preview. | `api_error`, `retry_exhausted`, `context_compaction` events |
+| **Pressure** | API error count, retry-exhaustion count, and context-compaction count. Expands to a list of the 10 most recent errors with timestamp, retry attempt, and message preview. | `api_error`, `api_retries_exhausted`, `compaction` events |
 
 All cards default to the last 7 days. The window is not yet configurable in
 the UI; use the `/api/telemetry/*` endpoints directly if you need a custom

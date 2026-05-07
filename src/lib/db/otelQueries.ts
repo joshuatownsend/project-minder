@@ -62,8 +62,12 @@ export type Period = "today" | "7d" | "30d";
 
 function periodToMs(period: Period): number {
   const now = Date.now();
-  if (period === "today") return now - 24 * 60 * 60 * 1000;
-  if (period === "7d")    return now - 7 * 24 * 60 * 60 * 1000;
+  if (period === "today") {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  if (period === "7d")  return now - 7 * 24 * 60 * 60 * 1000;
   return now - 30 * 24 * 60 * 60 * 1000;
 }
 

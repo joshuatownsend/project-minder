@@ -41,7 +41,7 @@ export interface OtelInstallStatus {
 
 /**
  * Returns the current OTEL install status by reading ~/.claude/settings.json.
- * "Installed" means all four env vars are present.
+ * "Installed" means all six env vars are present.
  */
 export async function getOtelInstallStatus(): Promise<OtelInstallStatus> {
   const doc = await readUserSettings(USER_SETTINGS_PATH);
