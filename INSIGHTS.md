@@ -1,5 +1,225 @@
 # Insights
 
+<!-- insight:a1b2c3d4e5f6 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T22:00:00.000Z -->
+## ★ Wave 8.1b Phase 0 — OTEL Root Cause & Verified Schema (docs-verified 2026-05-07)
+
+**Root cause of zero OTEL rows**: The wizard (`otelSettings.ts`) was missing `OTEL_METRICS_EXPORTER=otlp` and `OTEL_LOGS_EXPORTER=otlp`. The OTEL SDK treats these as independent from the endpoint: without them, the exporter type defaults to no-op and nothing is sent regardless of what endpoint is configured. Fixed in this session.
+
+**Verified attribute schema** (from official docs at code.claude.com/docs/en/monitoring-usage — not fixture-derived):
+
+Event names stored in `otel_events.event_name` (short name, `event.name` attribute, no `claude_code.` prefix):
+- `tool_result` — `tool_name`, `tool_use_id`, `success` (string "true"/"false"), `duration_ms` (ms integer), `error_type`, `decision_type`, `decision_source`
+- `tool_decision` — `tool_name`, `tool_use_id`, `decision` ("accept"|"reject"), `source` ("config"|"hook"|"user_permanent"|"user_temporary"|"user_abort"|"user_reject")
+- `api_request` — `model`, `cost_usd`, `duration_ms`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `request_id`, `speed`, `query_source`
+- `api_error` — `model`, `error`, `status_code`, `duration_ms`, `attempt`, `request_id`, `speed`, `query_source`
+- `api_retries_exhausted` — `model`, `error`, `status_code`, `total_attempts`, `total_retry_duration_ms`, `speed`
+- `hook_execution_start` — `hook_event`, `hook_name`, `num_hooks`
+- `hook_execution_complete` — `hook_event`, `hook_name`, `num_hooks`, `num_success`, `num_blocking`, `num_non_blocking_error`, `num_cancelled`, `total_duration_ms`
+- `compaction` — `trigger`, `success`, `duration_ms`, `pre_tokens`, `post_tokens`
+- `user_prompt` — `prompt_length`, `prompt` (if `OTEL_LOG_USER_PROMPTS=1`)
+
+**Schema corrections vs. Wave 8.1a plan**:
+- `tool_decision.was_accepted` (boolean) ❌ → `decision: "accept"|"reject"` (string) ✓
+- `tool_result.is_error` (boolean) ❌ → `success: "true"|"false"` (string, inverse semantics) ✓
+- `duration_ms` IS present on `tool_result` — ToolLatencyCard is viable ✓
+- `hook_execution_complete` has `total_duration_ms` directly — no start/complete pairing needed in SQL ✓
+
+Metric names in `otel_metrics.metric_name` (confirmed correct from plan):
+- `claude_code.token.usage` — attrs: `type` ("input"|"output"|"cacheRead"|"cacheCreation"), `model`, `query_source`
+- `claude_code.cost.usage` — attrs: `model`, `query_source`
+- `claude_code.session.count` — attrs: `start_type` ("fresh"|"resume"|"continue")
+- `claude_code.code_edit_tool.decision` — attrs: `tool_name`, `decision`, `source`, `language`
+
+---
+
+<!-- insight:d456d122fdd4 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T20:46:58.127Z -->
+## ★ Insight
+Adding temporary `console.log` to Next.js API routes is the fastest way to distinguish "no requests arriving" from "requests arriving but failing silently" — the logs appear in the `npm run dev` terminal in real time, before any DB operations happen.
+
+---
+
+<!-- insight:7b828fac60d9 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T20:28:07.953Z -->
+## ★ Insight
+**Why Claude Code filters `OTEL_*` from settings.json**: The `env` section in settings.json is designed to let users pass custom vars to **subprocess tools** (Bash, MCP servers). Claude Code also injects them into its own process, but specifically excludes `OTEL_*` — likely to prevent user-controlled settings from redirecting its internal telemetry to arbitrary endpoints. Vars at the **Windows user env level** (registry `HKCU:\Environment`) are part of the process's initial env at launch time and bypass this filtering entirely.
+
+---
+
+<!-- insight:9fd458f84700 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T18:03:26.475Z -->
+## ★ Insight
+The probe script uses `createRequire` from Node's `module` package to import `better-sqlite3` (CJS) from an ESM `.mjs` context — the same trick avoids needing to rename to `.cjs` while keeping the `.mjs` convention of the other scripts in the folder.
+
+---
+
+<!-- insight:3f19ecae09b0 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T18:02:50.912Z -->
+## ★ Insight
+Phase 0's probe script is the only deliverable I can ship before you install OTEL and restart Claude Code. It's deliberately written as a standalone CJS script (not a test) so it reads your live DB and prints the actual attribute schema Claude Code emits — the ground truth that all subsequent query code will be built against.
+
+---
+
+<!-- insight:12d52ee79e5e | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T17:55:52.238Z -->
+## ★ Insight
+The plan is split into three phases: Phase 0 (verify real OTEL data) is a hard gate because the fixtures from 8.1a are sparse and likely don't reflect the actual Claude Code attribute schema. Phase 1 builds a pure read layer (`otelQueries.ts` + 6 API routes) that's testable against in-memory SQLite. Phase 2 builds the UI cards on verified contracts. This sequencing means the highest-uncertainty work happens first and informs everything downstream.
+
+---
+
+<!-- insight:7a5777915a29 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T17:44:54.889Z -->
+## ★ Insight
+The fixtures used in 8.1a have NO `duration_ms` on `tool_result` events — only `tool_name`, `tool_use_id`, `tool_result.is_error`, `tool_parameters`. This means ToolLatencyCard either needs to (a) pair `tool_use_id` across separate events and compute deltas from `ts`, or (b) verify Claude Code emits a `duration_ms` field in real traffic that just wasn't in the synthetic fixture. INSIGHTS.md explicitly calls this out: "no graceful JSONL fallback for tool-latency UI."
+
+---
+
+<!-- insight:2c18dd92c00c | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T17:40:42.595Z -->
+## ★ Insight
+Wave 8.1a is shipped (PR #78 merged). The plan now needs to evolve to 8.1b — building UI cards on top of the OTEL data that's been accumulating in `otel_events` and `otel_metrics`. Since 8.1a built the ingest pipeline, 8.1b is the consumer side of the same pipe.
+
+---
+
+<!-- insight:0bcecc6d613e | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T17:22:06.478Z -->
+## ★ Insight
+The `isDbAvailable()` vs `isDriverLoaded()` distinction matters: `isDbAvailable()` is "is a connection open right now?" while `isDriverLoaded()` is "can this platform ever open a DB?" Using the former as a guard causes false 503s on cold start when no prior request has touched the DB yet.
+
+---
+
+<!-- insight:ffe06309630b | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:56:01.029Z -->
+## ★ Insight
+The `handleInstall` bug was subtle: `setStatus(next)` before `onConfigChange` meant the UI showed "Configured" even when the config write failed. The fix moves `setStatus` after both async operations succeed — the UI state now reflects actual committed state, not optimistic state.
+
+---
+
+<!-- insight:67f14644f427 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:54:28.279Z -->
+## ★ Insight
+The batch transaction fix here is a classic "validate-then-commit" pattern: validate each record independently (collecting errors without aborting), then write all valid rows in one atomic transaction. This preserves the OTLP partial-success contract while reducing WAL fsyncs from N (one per record) to 1 per scopeLog.
+
+---
+
+<!-- insight:62618ca9b42d | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:52:27.227Z -->
+## ★ Insight
+The `readUserSettings` function is verbatim in both `applyLiveActivity.ts` and `otelSettings.ts` — this is a classic copy-paste drift risk. The efficiency agent caught that the logs route lacks the same `db.transaction` wrapping that the metrics route correctly uses, which means each of the 20+ tool events per batch gets its own WAL fsync.
+
+---
+
+<!-- insight:aca978d5107f | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:44:57.217Z -->
+## ★ Insight
+- **Why the migration test updates were mechanical**: `dbMigrations.test.ts` hardcodes the expected version array and final schema version. Every new migration requires updating these assertions — this is intentional (the tests are a regression guard that the full migration chain runs in order), but it means adding a migration always touches both `migrations.ts` and the migration test.
+- **`db.transaction()` for metric batches**: wrapping all data points for one metric in a single transaction means partial data point writes are impossible. If the `otel_metrics` table is ever unavailable mid-batch, all data points for that metric roll back together — cleaner than per-data-point transactions which would let partial metric state persist.
+- **Partial-success vs total failure**: the OTLP spec distinguishes "whole batch rejected" (non-200) from "some records rejected" (200 + `partialSuccess.rejectedLogRecords > 0`). Returning 503 when the DB is unavailable (whole batch) vs 200 with rejected count (individual bad records) matches the spec and tells the SDK whether to retry the entire batch or just log the rejection.
+
+---
+
+<!-- insight:e6fbe495e943 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:34:05.219Z -->
+## ★ Insight
+- **`schema.sql` + migration duality**: fresh DBs get `otel_metrics` via the full schema applied in v1; existing DBs get it via migration v9. Both paths must be `CREATE TABLE IF NOT EXISTS` to be idempotent.
+- **OTLP attribute encoding**: OTel JSON uses `{"key": "...", "value": {"stringValue": "..."}}` — each attribute has a typed value wrapper. Extracting `event.name` requires walking this structure, not reading a flat key.
+
+---
+
+<!-- insight:24daf2748bfa | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T16:29:49.331Z -->
+## ★ Insight
+- **Why split 8.1a/8.1b**: cards like ToolLatencyCard need ≥10 samples for p95 to be meaningful. Shipping ingest first lets real Claude Code traffic accumulate naturally between sessions — synthetic test data would mask real-world payload quirks.
+- **JSON-only ingest is a deliberate simplification**: OTel SDK defaults to protobuf, so `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` is mandatory in the wizard. One code path, no protobuf dependency, smaller attack surface.
+- **The unwritten `tool_uses.duration_ms` is load-bearing context**: confirms there's no graceful JSONL fallback for tool-latency UI. Treat "no OTEL" as a genuine empty state in 8.1b, not a degraded one.
+
+---
+
+<!-- insight:d323fe9994f2 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T15:48:51.894Z -->
+## ★ Insight
+The dynamic-join trick (`["better","sqlite3"].join("-")`) was designed to block webpack's static dependency analysis. But Turbopack's `serverExternalPackages` works by matching literal package names — it can't match the computed string, so it bundles the native `.node` file instead of leaving it external, which causes the silent init failure.
+
+---
+
+<!-- insight:9591526d3143 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T15:31:22.333Z -->
+## ★ Insight
+The hookUrl lives in two places: `~/.claude/settings.json` (embedded in the curl command) and `.minder.json` (in `config.liveActivity.hookUrl`). The settings file is write-only from the app's perspective — the app reads it only to check install status via the sentinel string. For display purposes, the app reads the stored hookUrl from its own config, not from settings.json.
+
+---
+
+<!-- insight:1ba654e5905c | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T15:30:42.624Z -->
+## ★ Insight
+The stale eviction bug in `buffer.ts` is a classic "shadow state" problem: two data structures (`__minderAwaiting` and `__minderAwaitingReported`) must stay in sync, but only one was being cleaned up on eviction. When the second set isn't cleared, the edge-triggered drain function permanently suppresses future toasts for that slug.
+
+---
+
+<!-- insight:ae116c1e2b06 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T14:29:33.922Z -->
+## ★ Insight
+The `recordPreWrite` bug is a subtle "lease before check" anti-pattern: acquiring a resource (writing a snapshot) before knowing whether you'll use it. The correct pattern is always to check necessity first, then acquire — matching how `removeLiveActivityHooks` was already written in the same file.
+
+---
+
+<!-- insight:300d30c73ae1 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T14:23:52.916Z -->
+## ★ Insight
+The PulseProvider re-render issue is a classic React "fresh object on every render" trap. `setSnapshot({...})` always produces a new object reference, so React always sees it as changed, even when all values are identical. The fix is to pass a functional updater and return `prev` unchanged when values match — React skips the re-render when identity is preserved.
+
+---
+
+<!-- insight:0d8ffef8ea9c | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:42:15.791Z -->
+## ★ Insight
+The globalThis singleton pattern used in `buffer.ts` is the standard way to share mutable state across Next.js Hot Module Replacement reloads and across concurrent API route invocations in the same process. HMR re-imports modules but doesn't replace `globalThis`, so the ring buffer and live-session Map survive code changes during development without resetting all tracked state.
+
+---
+
+<!-- insight:7e9af6fd6e0a | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:38:30.227Z -->
+## ★ Insight
+Edge vs. level signals: `awaitingSlugs` is a *level* (badge shows while set is non-empty). Toasts are *edge* — they should fire once when a slug enters the set. The shadow `__minderAwaitingReported` set tracks what the pulse route has already converted to toast events, so re-polling doesn't re-fire the toast.
+
+---
+
+<!-- insight:520f1aca36b7 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:36:02.951Z -->
+## ★ Insight
+This is a classic "edge vs. level" signal problem. Badge state is a level signal (is the set currently non-empty?). The change event for toasts should be an edge signal (did the set just gain a new member?). Mixing these requires a "reported" shadow set to track which transitions have already been delivered — the same pattern used in edge-detection circuits.
+
+---
+
+<!-- insight:bc5328954ca5 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:28:16.555Z -->
+## ★ Insight
+The Settings section pattern here is: the component receives the full `config` + an `onConfigChange` patch function from `SettingsPage`. Local UI state (install status, busy flags) is managed internally. The flag toggle goes through `onConfigChange` (which calls `PATCH /api/config`), while install/remove go directly to their own endpoint — keeping the two concerns separate.
+
+---
+
+<!-- insight:058579952718 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:26:08.212Z -->
+## ★ Insight
+Two distinct live-status signals coexist on a card: (1) the existing `sessionBadge` derived from historical scan data (5-min staleness), and (2) the new pulse-derived `isLive`/`isAwaiting` from real-time hook events (5s freshness). They complement each other — scan status tells you about the *last* session; pulse tells you about *right now*. The awaiting state supersedes live (it implies live), so we only show one dot at a time.
+
+---
+
+<!-- insight:93d8279ad7bf | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:25:38.399Z -->
+## ★ Insight
+The existing `StatusDot` uses CSS variables for color — `--status-active-text` for "working" (green) and `--accent` (amber) for everything else. We can extend this pattern cleanly: `"live"` maps to green, `"awaiting"` to amber, without changing the existing `SessionStatus` type in `types.ts`.
+
+---
+
+<!-- insight:77de1c1e64bc | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:20:19.407Z -->
+## ★ Insight
+- **Type-first approach.** I'm extending `types.ts` before writing the implementation, so TypeScript will catch any mismatch at the type-check step rather than at runtime. The `HookEventName` literal union becomes the single source of truth — the buffer, the curl command, and the UI all import it, so typos in event names are impossible.
+- **`StatusDotStatus` superset trick.** Rather than adding "live" and "awaiting" to the shared `SessionStatus` union (which would require updates in many scanner/JSONL modules), I'm declaring a local `StatusDotStatus = SessionStatus | "live" | "awaiting"` inside `StatusDot.tsx`. Any call site passing `SessionStatus` still type-checks because it's a subset.
+
+---
+
+<!-- insight:d52708dce802 | session:ef9af96d-0c4f-44e3-9d83-b3804c67f67a | 2026-05-07T13:13:13.270Z -->
+## ★ Insight
+- **Wave 7.1a precedent shapes Wave 7.2.** The notification dispatcher pattern (`dispatchManualStepAdded` → prefs lookup → `Promise.allSettled` fan-out → `notification_log` dedup) is reused verbatim for `dispatchAwaitingPermission`. New event types in this codebase don't invent new pipelines — they slot into the existing one.
+- **`window.location.origin` solves the port-mismatch problem elegantly.** Rather than hard-coding 4100 or asking the user to configure it, the Settings page captures the *current* dashboard origin at install time. If the user runs on a different port, the registered hook URL automatically matches.
+- **Identity-via-sentinel is simpler than identity-via-key.** `applyHook` uses sha256 hashes of commands as identity (`makeHookKey`). For Wave 7.2's 6-events-1-command install/remove pair, an embedded `# project-minder live-activity v1` sentinel comment is more robust: it survives JSON normalization, doesn't depend on hash stability across versions, and supports a future "v2" upgrade path.
+
+---
+
+<!-- insight:090561f99e36 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T12:51:27.995Z -->
+## ★ Insight
+This is a classic "snapshot assertion" drift — the test hard-codes the migration count from when it was written. CI on the CI runner actually runs the full migration suite against a real SQLite DB (since `better-sqlite3` is available on Linux), which exposes the mismatch locally masked by the Node 26 prebuilt issue.
+
+---
+
+<!-- insight:049b4c30799e | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T12:33:38.797Z -->
+## ★ Insight
+SQLite's `UPDATE ... RETURNING` (added in v3.35, 2021) lets you do a read-modify-write in one atomic statement. The CASE WHEN toggle sets `starred_at` based on its own current value — no separate SELECT needed. If the WHERE clause matches nothing, RETURNING returns no rows, so `undefined` means 404. Clean, safe, and race-free.
+
+---
+
+<!-- insight:dd862c5e03e6 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T11:57:06.685Z -->
+## ★ Insight
+Both webpack and Turbopack follow string-literal `require("pkg")` during static analysis. Using a computed expression (`require(name)`) or magic comments breaks that trace entirely. The `try/catch` already handles the runtime case — we just need to also stop the build-time resolution attempt. This is the standard approach for optional native addons that may not have prebuilts for every Node version.
+
+---
+
 <!-- insight:51d0d0244c19 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T11:43:17.528Z -->
 ## ★ Insight
 `serverExternalPackages` (formerly `experimental.serverComponentsExternalPackages` in Next.js <15) tells the bundler to skip packaging a module and instead emit a runtime `require()`. Native addons like `better-sqlite3` must always be listed here — webpack has no way to cross-compile `.node` binaries. The same applies to `web-push` which webpack also can't resolve cleanly in some environments.

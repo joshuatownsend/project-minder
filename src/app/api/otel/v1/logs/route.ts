@@ -1,7 +1,12 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { appendFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import { ingestLogBatch, isOtelDbReady } from "@/lib/db/otelIngest";
 import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
+
+const OTEL_LOG = join(homedir(), ".minder", "otel-requests.log");
 
 // OTLP/HTTP JSON logs receiver.
 //
@@ -20,6 +25,9 @@ import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 // Non-200 means the entire batch was rejected (e.g. DB unavailable).
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const ts = new Date().toISOString();
+  console.log("[otel/logs] POST received", ts);
+  try { appendFileSync(OTEL_LOG, `logs ${ts}\n`); } catch { /* ignore */ }
   if (!isOtelDbReady()) {
     return NextResponse.json(
       { error: "OTEL storage not available" },

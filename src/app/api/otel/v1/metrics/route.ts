@@ -15,6 +15,7 @@ import type { OtlpMetric, OtlpResource } from "@/lib/db/otelIngest";
 //   { partialSuccess: { rejectedDataPoints: N, errorMessage: "..." } }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  console.log("[otel/metrics] POST received", new Date().toISOString());
   if (!isOtelDbReady()) {
     return NextResponse.json(
       { error: "OTEL storage not available" },

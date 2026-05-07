@@ -8,11 +8,15 @@ import { tryParseJsonc } from "@/lib/scanner/util/jsonc";
 
 const USER_SETTINGS_PATH = path.join(os.homedir(), ".claude", "settings.json");
 
-// The four env vars that constitute a Project Minder OTEL installation.
-// Absence of OTEL_EXPORTER_OTLP_PROTOCOL=http/json causes the SDK to default
-// to protobuf, which our ingest endpoint does not support.
+// The six env vars that constitute a Project Minder OTEL installation.
+// OTEL_METRICS_EXPORTER and OTEL_LOGS_EXPORTER must be set to "otlp" — without
+// them the SDK defaults to no-op exporters and sends nothing regardless of the
+// endpoint configuration. OTEL_EXPORTER_OTLP_PROTOCOL must be "http/json"
+// because our ingest endpoint does not support gRPC or protobuf.
 const OTEL_ENV_KEYS = [
   "CLAUDE_CODE_ENABLE_TELEMETRY",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_PROTOCOL",
   "OTEL_LOG_TOOL_DETAILS",
@@ -60,6 +64,8 @@ export async function installOtelEnv(endpoint: string): Promise<void> {
     if (!doc.env || typeof doc.env !== "object") doc.env = {};
     const env = doc.env as Record<string, string>;
     env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1";
+    env["OTEL_METRICS_EXPORTER"] = "otlp";
+    env["OTEL_LOGS_EXPORTER"] = "otlp";
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint;
     env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/json";
     env["OTEL_LOG_TOOL_DETAILS"] = "1";
