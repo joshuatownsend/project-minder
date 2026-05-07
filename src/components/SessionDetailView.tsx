@@ -40,6 +40,17 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
+const resumeBtnBase: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: "5px",
+  padding: "5px 11px",
+  fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em",
+  background: "var(--bg-surface)",
+  border: "1px solid var(--border-subtle)",
+  cursor: "pointer",
+  transition: "color 0.15s, background 0.15s",
+  lineHeight: 1, flexShrink: 0,
+};
+
 function formatDuration(ms?: number): string {
   if (!ms) return "—";
   const s = Math.floor(ms / 1000);
@@ -92,17 +103,6 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
     }
   };
 
-  const btnBase: React.CSSProperties = {
-    display: "inline-flex", alignItems: "center", gap: "5px",
-    padding: "5px 11px",
-    fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em",
-    background: "var(--bg-surface)",
-    border: "1px solid var(--border-subtle)",
-    cursor: "pointer",
-    transition: "color 0.15s, background 0.15s",
-    lineHeight: 1, flexShrink: 0,
-  };
-
   return (
     <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
       {/* Primary: open in terminal */}
@@ -111,7 +111,7 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
         disabled={launching}
         title={`Open in terminal: claude --resume ${sessionId}`}
         style={{
-          ...btnBase,
+          ...resumeBtnBase,
           color: "var(--text-secondary)",
           borderRadius: "var(--radius) 0 0 var(--radius)",
           borderRight: "none",
@@ -126,7 +126,7 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
         onClick={() => setDropdownOpen((v) => !v)}
         title="More options"
         style={{
-          ...btnBase,
+          ...resumeBtnBase,
           padding: "5px 7px",
           color: "var(--text-muted)",
           borderRadius: "0 var(--radius) var(--radius) 0",

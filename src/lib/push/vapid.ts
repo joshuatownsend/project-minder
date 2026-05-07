@@ -3,7 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import webpush from "web-push";
 import { DB_DIR } from "@/lib/db/connection";
-import { withFileLock, writeFileAtomic } from "@/lib/atomicWrite";
+import { withFileLock, writeFileAtomic, chmodSecure } from "@/lib/atomicWrite";
 
 const VAPID_KEYS_PATH = path.join(DB_DIR, "vapid-keys.json");
 
@@ -32,11 +32,7 @@ export async function getOrCreateVapidKeys(): Promise<VapidKeys> {
       privateKey: generated.privateKey,
     };
     await writeFileAtomic(VAPID_KEYS_PATH, JSON.stringify(data, null, 2));
-    try {
-      await fs.chmod(VAPID_KEYS_PATH, 0o600);
-    } catch {
-      // No-op on Windows — NTFS ACL cannot be set via fs.chmod.
-    }
+    await chmodSecure(VAPID_KEYS_PATH);
     return data;
   });
 

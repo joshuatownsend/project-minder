@@ -14,8 +14,7 @@ export async function sendTelegram(
   text: string,
   eventKey?: string
 ): Promise<{ ok: boolean; status: number; error?: string }> {
-  const token = await getSecret("telegram.bot_token");
-  const config = await readConfig();
+  const [token, config] = await Promise.all([getSecret("telegram.bot_token"), readConfig()]);
   const chatId = config.telegram?.chatId;
 
   if (!token || !chatId) {

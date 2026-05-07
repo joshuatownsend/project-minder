@@ -2,23 +2,23 @@ import "server-only";
 import path from "path";
 import { promises as fs } from "fs";
 import { DB_DIR } from "@/lib/db/connection";
-import { withFileLock, writeFileAtomic } from "@/lib/atomicWrite";
+import { withFileLock, writeFileAtomic, chmodSecure } from "@/lib/atomicWrite";
 
 const SECRETS_PATH = path.join(DB_DIR, "secrets.json");
 
 type SecretsMap = Record<string, string>;
 
-let cachedSecrets: SecretsMap | null = null;
+const g = globalThis as unknown as { __minderSecrets?: SecretsMap };
 
 async function readSecrets(): Promise<SecretsMap> {
-  if (cachedSecrets) return cachedSecrets;
+  if (g.__minderSecrets) return g.__minderSecrets;
   try {
     const raw = await fs.readFile(SECRETS_PATH, "utf8");
-    cachedSecrets = JSON.parse(raw) as SecretsMap;
+    g.__minderSecrets = JSON.parse(raw) as SecretsMap;
   } catch {
-    cachedSecrets = {};
+    g.__minderSecrets = {};
   }
-  return cachedSecrets;
+  return g.__minderSecrets;
 }
 
 export async function getSecret(key: string): Promise<string | undefined> {
@@ -37,20 +37,15 @@ export async function setSecret(key: string, value: string): Promise<void> {
     }
     secrets[key] = value;
     await writeFileAtomic(SECRETS_PATH, JSON.stringify(secrets, null, 2));
-    try {
-      await fs.chmod(SECRETS_PATH, 0o600);
-    } catch {
-      // No-op on Windows — inherits parent dir NTFS ACL.
-    }
+    await chmodSecure(SECRETS_PATH);
   });
   // Invalidate cache so next read reflects the write.
-  cachedSecrets = null;
+  delete g.__minderSecrets;
 }
 
 export async function listSecretMetadata(): Promise<{ keys: string[]; mtime: string | null }> {
   try {
-    const stat = await fs.stat(SECRETS_PATH);
-    const secrets = await readSecrets();
+    const [stat, secrets] = await Promise.all([fs.stat(SECRETS_PATH), readSecrets()]);
     return { keys: Object.keys(secrets), mtime: stat.mtime.toISOString() };
   } catch {
     return { keys: [], mtime: null };

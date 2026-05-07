@@ -24,20 +24,24 @@ export interface SendSummary {
   removed: number;
 }
 
-async function configurePush(): Promise<void> {
+let vapidConfigured = false;
+
+async function ensureVapidConfigured(): Promise<void> {
+  if (vapidConfigured) return;
   const keys = await getOrCreateVapidKeys();
   webpush.setVapidDetails(
     "mailto:noreply@project-minder.local",
     keys.publicKey,
     keys.privateKey
   );
+  vapidConfigured = true;
 }
 
 export async function sendPushAll(
   payload: PushPayload,
   eventKey: string
 ): Promise<SendSummary> {
-  await configurePush();
+  await ensureVapidConfigured();
   const subs = await listSubscriptions();
   const db = await getDb();
   if (!db || subs.length === 0) return { sent: 0, failed: 0, removed: 0 };

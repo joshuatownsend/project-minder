@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { isWindows } from "@/lib/platform";
 
 export interface TerminalDef {
   binary: string;
@@ -15,7 +16,7 @@ async function whichExists(cmd: string): Promise<boolean> {
       return true;
     } catch {
       // Try with .exe on Windows.
-      if (process.platform === "win32") {
+      if (isWindows) {
         try {
           await fs.access(path.join(dir, `${cmd}.exe`));
           return true;
@@ -29,7 +30,7 @@ async function whichExists(cmd: string): Promise<boolean> {
 }
 
 export async function detectTerminal(): Promise<TerminalDef> {
-  if (process.platform === "win32") {
+  if (isWindows) {
     const hasWt = await whichExists("wt");
     if (hasWt) {
       return {

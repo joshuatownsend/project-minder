@@ -1,8 +1,6 @@
 import "server-only";
 import { getSecret } from "./secretsStore";
-
-const DEFAULT_ENDPOINT = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from "./defaults";
 const MAX_PROMPT_CHARS = 500;
 const MAX_TITLE_TOKENS = 64;
 

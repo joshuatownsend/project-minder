@@ -126,3 +126,15 @@ export async function renameWithRetry(
   }
   throw lastErr;
 }
+
+/**
+ * chmod 600 for secrets files. No-op on Windows — the file inherits the
+ * parent directory's NTFS ACL; document this limitation in help/terminal.md.
+ */
+export async function chmodSecure(filePath: string): Promise<void> {
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // No-op on Windows.
+  }
+}

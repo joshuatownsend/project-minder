@@ -158,7 +158,9 @@ class ManualStepsWatcher {
             .then(({ dispatchManualStepAdded }) =>
               dispatchManualStepAdded({ slug: entry.slug, projectName: entry.name, title: e.title })
             )
-            .catch(() => {});
+            .catch((err: unknown) => {
+              console.warn("[manualStepsWatcher] dispatch failed:", err);
+            });
         }
         // New entries added — invalidate scan cache so counts update
         invalidateCache();

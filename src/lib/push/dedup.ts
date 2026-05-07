@@ -48,10 +48,6 @@ export async function shouldSend(
   return true;
 }
 
-export function hashPayload(payload: unknown): string {
-  return payloadHash(payload);
-}
-
 export async function logNotification(
   channel: "push" | "telegram" | "os",
   eventKey: string,

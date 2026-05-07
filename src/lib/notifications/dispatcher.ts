@@ -28,11 +28,11 @@ export async function dispatchManualStepAdded(change: ManualStepChange): Promise
     tag: `manual-step-added:${change.slug}`,
   };
 
-  const jobs: Promise<void>[] = [];
+  const jobs: Promise<unknown>[] = [];
 
   if (prefs["push"]) {
     jobs.push(
-      sendPushAll(payload, eventKey).then(() => {}).catch((err: unknown) => {
+      sendPushAll(payload, eventKey).catch((err: unknown) => {
         console.warn("[dispatcher] push failed:", err);
       })
     );
@@ -43,7 +43,7 @@ export async function dispatchManualStepAdded(change: ManualStepChange): Promise
       sendTelegram(
         `New manual step — ${change.projectName}: ${change.title}`,
         eventKey
-      ).then(() => {}).catch((err: unknown) => {
+      ).catch((err: unknown) => {
         console.warn("[dispatcher] telegram failed:", err);
       })
     );
