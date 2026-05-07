@@ -1,47 +1,37 @@
 import "server-only";
 import { getSecret } from "./secretsStore";
 import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from "./defaults";
-const MAX_PROMPT_CHARS = 500;
-const MAX_TITLE_TOKENS = 64;
+import { LLMError, isAnthropic } from "./autoTitle";
+import type { TitleTurn } from "./autoTitle";
 
-const SYSTEM_PROMPT =
-  "Generate a concise 4-8 word title for this Claude Code session. Focus on what was attempted, not the outcome. Reply with only the title, no quotes.";
+const MAX_TURN_CHARS = 800;
+const MAX_DISTILL_TOKENS = 512;
 
-export interface TitleTurn {
-  role: "user" | "assistant";
-  content: string;
-}
+const SYSTEM_PROMPT = `You are summarizing a Claude Code session. Produce a structured distillation with these sections:
 
-export interface GenerateTitleOpts {
+**Goal** — 1-2 sentences: what was being attempted.
+**Approach** — 2-4 bullet points: how it was tackled.
+**Outcome** — 1-2 sentences: what was achieved or left incomplete.
+**Key files** — bullet list of files created or significantly modified (if any).
+
+Be concise and factual. Focus on what happened, not general observations about coding.`;
+
+export interface DistillOpts {
   endpoint?: string;
   model?: string;
   turns: TitleTurn[];
 }
 
-export class LLMError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number
-  ) {
-    super(message);
-    this.name = "LLMError";
-  }
-}
-
-export function isAnthropic(endpoint: string): boolean {
-  return endpoint.includes("anthropic.com");
-}
-
 function buildUserMessage(turns: TitleTurn[]): string {
-  const samples = turns
-    .filter((t) => t.role === "user")
-    .slice(0, 3)
-    .map((t) => t.content.slice(0, MAX_PROMPT_CHARS));
+  const samples = turns.slice(0, 20).map((t) => {
+    const label = t.role === "user" ? "User" : "Assistant";
+    return `${label}: ${t.content.slice(0, MAX_TURN_CHARS)}`;
+  });
   if (samples.length === 0) return "Empty session.";
-  return "Session messages:\n" + samples.join("\n\n");
+  return "Session transcript:\n\n" + samples.join("\n\n");
 }
 
-export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: string }> {
+export async function distillSession(opts: DistillOpts): Promise<{ text: string }> {
   const endpoint = opts.endpoint ?? DEFAULT_ENDPOINT;
   const model = opts.model ?? DEFAULT_MODEL;
   const apiKey = await getSecret("llm.api_key");
@@ -59,7 +49,7 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
       },
       body: JSON.stringify({
         model,
-        max_tokens: MAX_TITLE_TOKENS,
+        max_tokens: MAX_DISTILL_TOKENS,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userContent }],
       }),
@@ -69,12 +59,11 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
       throw new LLMError(`Anthropic API error: ${err}`, res.status);
     }
     const data = await res.json();
-    const title = (data.content?.[0]?.text ?? "").trim();
-    if (!title) throw new LLMError("Empty title from Anthropic", 502);
-    return { title };
+    const text = (data.content?.[0]?.text ?? "").trim();
+    if (!text) throw new LLMError("Empty distillation from Anthropic", 502);
+    return { text };
   }
 
-  // OpenAI-compatible shape.
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -83,7 +72,7 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
     },
     body: JSON.stringify({
       model,
-      max_tokens: MAX_TITLE_TOKENS,
+      max_tokens: MAX_DISTILL_TOKENS,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent },
@@ -95,7 +84,7 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
     throw new LLMError(`LLM API error: ${err}`, res.status);
   }
   const data = await res.json();
-  const title = (data.choices?.[0]?.message?.content ?? "").trim();
-  if (!title) throw new LLMError("Empty title from LLM", 502);
-  return { title };
+  const text = (data.choices?.[0]?.message?.content ?? "").trim();
+  if (!text) throw new LLMError("Empty distillation from LLM", 502);
+  return { text };
 }

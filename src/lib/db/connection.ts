@@ -34,9 +34,11 @@ import type DatabaseT from "better-sqlite3";
 let Database: typeof DatabaseT | null = null;
 let loadError: Error | null = null;
 try {
-  // Dynamic require so the import can fail without breaking the module graph.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  Database = require("better-sqlite3");
+  // Use a computed name to prevent webpack/Turbopack from statically tracing
+  // this require — they can't follow a non-literal argument. The try/catch
+  // handles the runtime case when the native binary isn't available (e.g. no
+  // prebuilt for the current Node version).
+  Database = require(["better", "sqlite3"].join("-"));
 } catch (err) {
   loadError = err as Error;
 }

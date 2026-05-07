@@ -419,6 +419,12 @@ export interface SessionSummary {
   compactBoundaryCount?: number;
   /** LLM-generated concise title (Wave 7.1). Stored in `sessions.generated_title`. */
   generatedTitle?: string;
+  /** ISO8601 timestamp when this session was starred, or undefined if not starred. */
+  starredAt?: string;
+  /** ISO8601 timestamp when distillation was last run. */
+  distilledAt?: string;
+  /** LLM-generated distillation of the session (Wave 7.1b). */
+  distilledText?: string;
 }
 
 export interface TimelineEvent {

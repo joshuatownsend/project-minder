@@ -37,8 +37,19 @@ import {
   Zap,
   Terminal,
   Check,
+  Star,
+  FileDown,
+  BookOpen,
 } from "lucide-react";
 import Link from "next/link";
+import { Modal } from "@/components/ui/modal";
+import { downloadBlob } from "@/lib/downloadBlob";
+
+const checkboxRowStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: "8px",
+  fontSize: "0.8rem", color: "var(--text-primary)", cursor: "pointer",
+  padding: "6px 0",
+};
 
 const resumeBtnBase: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: "5px",
@@ -165,6 +176,244 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
   );
 }
 
+// ── Star button ───────────────────────────────────────────────────────────────
+function StarButton({
+  sessionId,
+  starredAt,
+  onToggle,
+}: {
+  sessionId: string;
+  starredAt: string | undefined;
+  onToggle: (newStarredAt: string | undefined) => void;
+}) {
+  const { showToast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const isStarred = !!starredAt;
+
+  async function handleToggle() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/star`, { method: "POST" });
+      const d = await res.json();
+      if (res.ok) {
+        onToggle(d.starredAt as string | undefined);
+      } else {
+        showToast("Star failed", d.error ?? res.statusText);
+      }
+    } catch (e: unknown) {
+      showToast("Star failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleToggle}
+      disabled={busy}
+      title={isStarred ? "Unstar session" : "Star session"}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: "5px",
+        padding: "5px 11px",
+        fontSize: "0.72rem", fontFamily: "var(--font-body)",
+        color: isStarred ? "var(--accent)" : "var(--text-muted)",
+        background: isStarred ? "var(--accent-bg)" : "var(--bg-surface)",
+        border: `1px solid ${isStarred ? "var(--accent-border)" : "var(--border-subtle)"}`,
+        borderRadius: "var(--radius)", cursor: busy ? "not-allowed" : "pointer",
+        opacity: busy ? 0.6 : 1,
+        lineHeight: 1, flexShrink: 0,
+        transition: "color 0.15s, background 0.15s, border-color 0.15s",
+      }}
+    >
+      <Star style={{ width: "11px", height: "11px", fill: isStarred ? "currentColor" : "none" }} />
+      {isStarred ? "Starred" : "Star"}
+    </button>
+  );
+}
+
+// ── Distill button ────────────────────────────────────────────────────────────
+function DistillButton({
+  sessionId,
+  hasDistillation,
+  onDistilled,
+}: {
+  sessionId: string;
+  hasDistillation: boolean;
+  onDistilled: (text: string, distilledAt: string) => void;
+}) {
+  const { showToast } = useToast();
+  const [loading, setLoading] = useState(false);
+
+  async function handleDistill() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/distill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regenerate: hasDistillation }),
+      });
+      const d = await res.json();
+      if (res.ok && d.text) {
+        onDistilled(d.text as string, d.distilledAt as string);
+      } else {
+        showToast("Distillation failed", d.error ?? res.statusText);
+      }
+    } catch (e: unknown) {
+      showToast("Distillation failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleDistill}
+      disabled={loading}
+      title={hasDistillation ? "Re-distill session" : "Distill session with LLM"}
+      style={{
+        ...resumeBtnBase,
+        color: "var(--text-muted)",
+        borderRadius: "var(--radius)",
+        cursor: loading ? "not-allowed" : "pointer",
+        opacity: loading ? 0.6 : 1,
+      }}
+    >
+      <BookOpen style={{ width: "11px", height: "11px" }} />
+      {loading ? "Distilling…" : hasDistillation ? "Re-distill" : "Distill"}
+    </button>
+  );
+}
+
+// ── Export modal ──────────────────────────────────────────────────────────────
+type ExportSection = "timeline" | "files" | "subagents";
+
+function ExportModal({
+  open,
+  onClose,
+  data,
+  generatedTitle,
+}: {
+  open: boolean;
+  onClose: () => void;
+  data: import("@/lib/types").SessionDetail;
+  generatedTitle: string | undefined;
+}) {
+  const [sections, setSections] = useState<Set<ExportSection>>(
+    new Set(["timeline", "files", "subagents"])
+  );
+  const [turnLimit, setTurnLimit] = useState<string>("");
+
+  function toggleSection(s: ExportSection) {
+    setSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s); else next.add(s);
+      return next;
+    });
+  }
+
+  function buildMarkdown(): string {
+    const title = generatedTitle ?? data.sessionId.slice(0, 16);
+    const date = data.startTime ? new Date(data.startTime).toLocaleString() : "Unknown date";
+    const lines: string[] = [
+      `# Session: ${title}`,
+      "",
+      `**Project:** ${data.projectName}`,
+      `**Date:** ${date}`,
+      data.gitBranch ? `**Branch:** ${data.gitBranch}` : "",
+      `**Duration:** ${data.durationMs ? formatDuration(data.durationMs) : "—"}`,
+      `**Cost:** ${formatCost(data.costEstimate)}`,
+      `**Session ID:** \`${data.sessionId}\``,
+      "",
+    ].filter(Boolean);
+
+    if (sections.has("timeline")) {
+      const limit = parseInt(turnLimit, 10);
+      const events = isNaN(limit) || limit <= 0 ? data.timeline : data.timeline.slice(0, limit);
+      lines.push("---", "", "## Conversation", "");
+      const roleLabels: Record<string, string> = { user: "User", assistant: "Assistant", error: "Error", thinking: "Thinking" };
+      for (const ev of events) {
+        const role = ev.type === "tool_use" ? `Tool: ${ev.toolName ?? "unknown"}` : (roleLabels[ev.type] ?? ev.type);
+        const ts = ev.timestamp ? ` _(${new Date(ev.timestamp).toLocaleTimeString()})_` : "";
+        lines.push(`### ${role}${ts}`, "", ev.content, "");
+      }
+    }
+
+    if (sections.has("files") && data.fileOperations.length > 0) {
+      lines.push("---", "", "## File Operations", "");
+      for (const op of data.fileOperations) {
+        lines.push(`- **${op.operation}**: \`${op.path}\``);
+      }
+      lines.push("");
+    }
+
+    if (sections.has("subagents") && data.subagents.length > 0) {
+      lines.push("---", "", "## Subagents", "");
+      for (const sub of data.subagents) {
+        lines.push(`- **${sub.type}** — ${sub.description ?? "—"}`);
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }
+
+  function handleDownload() {
+    downloadBlob(buildMarkdown(), `session-${data.sessionId.slice(0, 8)}.md`, "text/markdown;charset=utf-8");
+    onClose();
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Export session as Markdown" maxWidthClass="max-w-sm">
+      <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div>
+          <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Sections to include</div>
+          {(["timeline", "files", "subagents"] as ExportSection[]).map((s) => (
+            <label key={s} style={checkboxRowStyle}>
+              <input
+                type="checkbox"
+                checked={sections.has(s)}
+                onChange={() => toggleSection(s)}
+                style={{ width: "14px", height: "14px", accentColor: "var(--accent)" }}
+              />
+              {s === "timeline" ? "Conversation timeline" : s === "files" ? "File operations" : "Subagents"}
+            </label>
+          ))}
+        </div>
+        {sections.has("timeline") && (
+          <div>
+            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "6px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Turn limit</div>
+            <input
+              type="number"
+              min={1}
+              value={turnLimit}
+              onChange={(e) => setTurnLimit(e.target.value)}
+              placeholder={`All (${data.timeline.length} events)`}
+              style={{
+                width: "100%", boxSizing: "border-box", padding: "6px 10px",
+                borderRadius: "var(--radius)", border: "1px solid var(--border-default)",
+                background: "var(--surface-2, transparent)", color: "var(--text-primary)",
+                fontSize: "0.82rem", fontFamily: "var(--font-body)",
+              }}
+            />
+          </div>
+        )}
+        <button
+          onClick={handleDownload}
+          disabled={sections.size === 0}
+          style={{
+            padding: "8px 16px", fontSize: "0.8rem", fontWeight: 600,
+            background: sections.size === 0 ? "var(--surface-2)" : "var(--accent)",
+            color: sections.size === 0 ? "var(--text-muted)" : "#fff",
+            border: "none", borderRadius: "var(--radius)", cursor: sections.size === 0 ? "not-allowed" : "pointer",
+          }}
+        >
+          Download .md
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Generate title button ─────────────────────────────────────────────────────
 function GenerateTitleButton({
   sessionId,
@@ -205,15 +454,11 @@ function GenerateTitleButton({
       disabled={loading}
       title={hasTitle ? "Regenerate title" : "Generate title with LLM"}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "5px",
-        padding: "5px 11px",
-        fontSize: "0.72rem", fontFamily: "var(--font-body)",
+        ...resumeBtnBase,
         color: "var(--text-muted)",
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "var(--radius)", cursor: loading ? "not-allowed" : "pointer",
+        borderRadius: "var(--radius)",
+        cursor: loading ? "not-allowed" : "pointer",
         opacity: loading ? 0.6 : 1,
-        lineHeight: 1, flexShrink: 0,
       }}
     >
       <Zap style={{ width: "11px", height: "11px" }} />
@@ -314,12 +559,19 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
   const [docModalOpen, setDocModalOpen] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
+  const [starredAt, setStarredAt] = useState<string | undefined>(undefined);
+  const [distilledText, setDistilledText] = useState<string | undefined>(undefined);
+  const [distilledAt, setDistilledAt] = useState<string | undefined>(undefined);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   useEffect(() => {
-    if (data?.generatedTitle) setGeneratedTitle(data.generatedTitle);
-  }, [data?.generatedTitle]);
+    setGeneratedTitle(data?.generatedTitle);
+    setStarredAt(data?.starredAt);
+    setDistilledText(data?.distilledText);
+    setDistilledAt(data?.distilledAt);
+  }, [data?.generatedTitle, data?.starredAt, data?.distilledText, data?.distilledAt]);
 
   const handleTitleGenerated = useCallback((title: string) => setGeneratedTitle(title), []);
 
@@ -405,13 +657,37 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           {data.sessionId.slice(0, 16)}…
         </span>
         <div style={{ flex: 1 }} />
+        <StarButton
+          sessionId={sessionId}
+          starredAt={starredAt}
+          onToggle={setStarredAt}
+        />
+        <DistillButton
+          sessionId={sessionId}
+          hasDistillation={!!distilledText}
+          onDistilled={(text, at) => { setDistilledText(text); setDistilledAt(at); }}
+        />
         <GenerateTitleButton
           sessionId={sessionId}
           hasTitle={!!generatedTitle}
           onTitleGenerated={handleTitleGenerated}
         />
+        <button
+          onClick={() => setExportModalOpen(true)}
+          title="Export session as Markdown"
+          style={{ ...resumeBtnBase, color: "var(--text-muted)", borderRadius: "var(--radius)", cursor: "pointer" }}
+        >
+          <FileDown style={{ width: "11px", height: "11px" }} />
+          Export
+        </button>
         <ResumeButton sessionId={sessionId} />
       </div>
+      <ExportModal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        data={data}
+        generatedTitle={generatedTitle}
+      />
 
       {/* ── Header block ────────────────────────────────────────────────────── */}
       <div style={{
@@ -556,6 +832,35 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           />
         ))}
       </div>
+
+      {/* ── Distillation panel ──────────────────────────────────────────────── */}
+      {distilledText && (
+        <div style={{
+          padding: "16px 20px",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border-subtle)",
+          borderTop: "none",
+          display: "flex", flexDirection: "column", gap: "8px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <BookOpen style={{ width: "12px", height: "12px", color: "var(--text-muted)" }} />
+            <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Distillation
+            </span>
+            {distilledAt && (
+              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginLeft: "auto" }}>
+                {new Date(distilledAt).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+          <pre style={{
+            fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.65,
+            fontFamily: "var(--font-body)", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {distilledText}
+          </pre>
+        </div>
+      )}
 
       {/* ── Tab section ─────────────────────────────────────────────────────── */}
       <div style={{

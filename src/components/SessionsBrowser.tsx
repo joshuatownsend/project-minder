@@ -19,6 +19,7 @@ import {
   Terminal,
   Check,
   Pencil,
+  Star,
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
@@ -328,6 +329,11 @@ function SessionRow({
             </span>
           )}
           <StatusDot status={session.status} size={8} />
+          {session.starredAt && (
+            <span title={`Starred ${new Date(session.starredAt).toLocaleDateString()}`} style={{ display: "inline-flex", flexShrink: 0, marginTop: "2px" }}>
+              <Star style={{ width: "10px", height: "10px", color: "var(--accent)", fill: "var(--accent)" }} />
+            </span>
+          )}
           {session.recaps && session.recaps.length > 0 && (
             <span style={{
               fontSize: "0.6rem", fontFamily: "var(--font-mono)",
@@ -634,6 +640,7 @@ export function SessionsBrowser() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [groupByProject, setGroupByProject] = useState(true);
+  const [starredOnly, setStarredOnly] = useState(false);
   const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
   const [searchState, setSearchState] = useState<SearchState>({ kind: "idle" });
 
@@ -676,6 +683,9 @@ export function SessionsBrowser() {
 
   const filtered = useMemo(() => {
     let result = data;
+    if (starredOnly) {
+      result = result.filter((s) => !!s.starredAt);
+    }
     const trimmed = search.trim();
     if (trimmed) {
       const q = trimmed.toLowerCase();
@@ -704,7 +714,7 @@ export function SessionsBrowser() {
         }
       }
     });
-  }, [data, search, sortBy, searchState]);
+  }, [data, search, sortBy, searchState, starredOnly]);
 
   const projectGroups = useMemo(
     () => groupByProject ? buildProjectGroups(filtered) : [],
@@ -831,6 +841,16 @@ export function SessionsBrowser() {
             </button>
           ))}
         </div>
+
+        {/* Starred filter */}
+        <button
+          onClick={() => setStarredOnly((v) => !v)}
+          title={starredOnly ? "Show all sessions" : "Show starred only"}
+          style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "5px 11px", fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: starredOnly ? "var(--accent)" : "var(--text-secondary)", background: starredOnly ? "var(--accent-bg)" : "var(--bg-surface)", border: `1px solid ${starredOnly ? "var(--accent-border)" : "var(--border-subtle)"}`, borderRadius: "var(--radius)", cursor: "pointer", transition: "background 0.1s, color 0.1s, border-color 0.1s", lineHeight: 1, flexShrink: 0 }}
+        >
+          <Star style={{ width: "10px", height: "10px", fill: starredOnly ? "currentColor" : "none" }} />
+          Starred
+        </button>
 
         {/* Group by project toggle */}
         <button

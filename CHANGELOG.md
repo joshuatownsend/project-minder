@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 7.1b — Cluster P (partial): starring, distillation, Markdown export.** TODOs #169, #195, #233.
+  - **Session starring (#169).** Star button on session detail nav row (amber toggle); POST `/api/sessions/[sessionId]/star` toggles `starred_at` (timestamp-as-presence). Starred sessions show a gold star indicator in the sessions list. "Starred" filter toggle in SessionsBrowser toolbar filters to starred sessions only. `starred_at TEXT` column added in schema v8.
+  - **JSONL distillation (#195).** "Distill" button on session detail calls the configured LLM endpoint with a structured prompt (Goal / Approach / Outcome / Key files). Distillation text and timestamp persisted to `sessions.distilled_text` + `sessions.distilled_at` (schema v8). Distillation panel renders below the stats strip when present. "Re-distill" regenerates on demand. Reuses the same secretsStore + autoTitle LLM pattern.
+  - **Markdown export (#233).** "Export" button opens a modal with section checkboxes (Conversation timeline, File operations, Subagents) and an optional turn-limit input. Client-side Markdown generation triggers a `.md` download via `URL.createObjectURL`; no new API route needed.
+  - **Schema v8.** `sessions.starred_at TEXT`, `sessions.distilled_at TEXT`, `sessions.distilled_text TEXT`. Idempotent ALTER TABLE + `CREATE INDEX IF NOT EXISTS sessions_starred`. `DERIVED_VERSION` stays at 6.
 - **Wave 7.1a — Cluster P (partial): notifications + terminal + auto-title.** TODOs #92, #93, #171, #168.
   - **Web push notifications (#92).** VAPID keys lazy-generated on first `/api/notifications/push/vapid-public-key` request and stored in `~/.minder/vapid-keys.json`. Browser subscriptions stored in new `push_subscriptions` SQLite table. Settings → Notifications: permission button, subscribe/unsubscribe, per-device revoke, send-test-push button. 410 Gone responses automatically remove expired subscriptions. Dedup window: 5 minutes per channel+event+payload hash in `notification_log` table.
   - **Telegram notification bridge (#93).** Bot setup wizard in Settings → Integrations (bot token saved to `~/.minder/secrets.json`, chat ID in config). Plain-text messages truncated at 4000 chars. Test connection button. Dedup via shared `notification_log` table.

@@ -1,5 +1,154 @@
 # Insights
 
+<!-- insight:51d0d0244c19 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T11:43:17.528Z -->
+## ★ Insight
+`serverExternalPackages` (formerly `experimental.serverComponentsExternalPackages` in Next.js <15) tells the bundler to skip packaging a module and instead emit a runtime `require()`. Native addons like `better-sqlite3` must always be listed here — webpack has no way to cross-compile `.node` binaries. The same applies to `web-push` which webpack also can't resolve cleanly in some environments.
+
+---
+
+<!-- insight:75c9b503e130 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T11:41:41.910Z -->
+## ★ Insight
+All 8 simplify fixes applied: single-pass SQL in star route (eliminates double DB open + full session load), Promise.all parallelization in distill route, de-duped `isAnthropic` via re-export, correct unconditional useEffect assignments (unstar now clears state), `downloadBlob` reuse (fixes detached anchor + synchronous revoke), `formatCost` in export, `filter(Boolean)` + lookup object for role labels, `resumeBtnBase` spread on 3 buttons, `checkboxRowStyle` at module scope, and `onToggle={setStarredAt}` direct pass.
+
+---
+
+<!-- insight:d9c3c58702c7 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T11:38:48.452Z -->
+## ★ Insight
+The distill route's structure means `readConfig()` can be parallelized with `getSessionDetail()` via `Promise.all` — wasting one cheap config read on cache hits is far better than paying the sequential latency on every real LLM call. The star route has a more serious issue: it opens the DB twice (directly + via `getSessionDetail`) and loads the entire session JSONL just to check one nullable column.
+
+---
+
+<!-- insight:f6c846ac909c | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T04:09:45.960Z -->
+## ★ Insight
+The `title` route pattern (POST = mutate + return, GET = read-only) is exactly right for the star route too. Toggle semantics (set if null, clear if set) means a single POST does everything without separate set/unset endpoints.
+
+---
+
+<!-- insight:a9623c144afd | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T04:07:40.602Z -->
+## ★ Insight
+Timestamp-as-presence is a clean boolean alternative for nullable user-action timestamps: a NULL `starred_at` means "not starred," an ISO8601 value means "starred at this time." No separate boolean column needed, and you get the star date for free.
+
+---
+
+<!-- insight:d02df508b537 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T04:06:24.257Z -->
+## ★ Insight
+The data layer follows a strict "SELECT columns explicitly → typed interface → push() call" pattern. Adding new columns means updating 4 places in lockstep: the SQL SELECT, the `SessionRow` interface, the `result.push()` call, and `SessionSummary` type. This rigidity makes column additions safe — the TypeScript compiler will catch any gaps.
+
+---
+
+<!-- insight:ee20a0c4d774 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T03:57:05.029Z -->
+## ★ Insight
+The `S` object acts as a shared style token map — a micro design-system that avoids duplicating the same inline style objects across 4 sibling components. Rather than a CSS module (which Next.js supports natively), the team chose a plain TS object for co-location and easy spreading (`{ ...S.btn, color: "red" }`).
+
+---
+
+<!-- insight:1008b23b7a32 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T03:24:34.992Z -->
+## ★ Insight
+These bugs cluster into three categories: dedup correctness (eventKey stability, shouldSend gate), credential lifecycle (deleteSecret vs empty-string), and surface-area reduction (filter sensitive DB columns, scope vs URL in SW registration). The fix for maintenance.ts is subtle — SQLite's `datetime()` function normalizes both sides to the same format before comparison, making ISO8601 vs SQLite datetime lexicographic comparison reliable.
+
+---
+
+<!-- insight:a84f3bd87c96 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T02:17:56.018Z -->
+## ★ Insight
+The dispatcher uses fire-and-forget per channel (`void dispatchManualStepAdded(change)`) to ensure one channel failing (e.g. Telegram rate limit) doesn't block the watcher's core responsibility — recording the change in-memory. This is the "bulkhead" pattern applied to notification delivery.
+
+---
+
+<!-- insight:d4e6c2d52800 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T02:12:45.801Z -->
+## ★ Insight
+The split-button pattern (primary action + dropdown secondary) is a UX pattern that promotes the most common action while keeping alternatives discoverable. Here we're making "Open in terminal" primary since it's the Wave 7 feature, but keeping "Copy command" accessible for users in environments where terminal launch fails (WSL, SSH, etc.).
+
+---
+
+<!-- insight:48d519949d04 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T02:05:16.937Z -->
+## ★ Insight
+The SettingsPage uses a render-switch pattern: each section key maps to a `<SectionComponent>`. This is the right pattern for settings pages with heterogeneous sections — each section component owns its own state, fetch hooks, and mutation calls. The pattern means new sections can be added without touching any existing ones. The learning moment here: the "swap a placeholder for a real component" motion is fast because the slot was reserved in advance (the IA was final from Wave 5).
+
+---
+
+<!-- insight:468f62a73cee | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:55:53.301Z -->
+## ★ Insight
+The secrets store pattern here isolates all credential I/O into one module: `getSecret` caches at module scope (reloads on next server restart but not on every request), `setSecret` always flushes to disk via the atomic-write helper (preventing partial writes), and `listSecretMetadata` returns only key names without values. This means the Settings UI can show "API key configured" without the server ever serializing the actual token into a JSON response.
+
+---
+
+<!-- insight:4ce695deee1e | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:52:46.404Z -->
+## ★ Insight
+Web push works through a 3-party handshake: (1) the browser subscribes to a push service using your VAPID public key, (2) the push service returns an endpoint URL + encryption keys specific to that browser, (3) your server uses the VAPID private key to sign push messages sent to those endpoints. The VAPID keys are long-lived (months/years) while push subscriptions are ephemeral — they expire or get 410 Gone when users clear browser data. This is why the 410 cleanup path matters: without it, your `push_subscriptions` table accumulates dead rows that waste work on every send.
+
+---
+
+<!-- insight:77e437ab7eed | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:49:23.372Z -->
+## ★ Insight
+The v5 migration pattern is the cleanest model: read `PRAGMA table_info(sessions)` into an array, check `cols.some(c => c.name === "…")` before each `ALTER TABLE`. This makes migrations idempotent — they can run on both fresh DBs (where schema.sql already has the column) and upgraded DBs (where it doesn't). The new v7 follows the same pattern for `generated_title`, then uses `CREATE TABLE IF NOT EXISTS` for the two brand-new tables, which is inherently idempotent.
+
+---
+
+<!-- insight:67dd580f8762 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:40:59.830Z -->
+## ★ Insight
+Two design decisions worth flagging here: (1) Splitting Telegram credentials so that `chatId` lives in `MinderConfig` (returned by `GET /api/config`) but `botToken` lives in `~/.minder/secrets.json` mirrors how the auto-title key is stored. The unifying principle: anything a `GET` of the public-facing config endpoint should never echo goes into `secrets.json`. (2) The "manual-step-added end-to-end wiring" is small (~30 min) but turns this session from "infrastructure ships, no real fire path" into a usable feature on day one. Without it, users would only have test-buttons to validate that anything works.
+
+---
+
+<!-- insight:e73d7a33f6aa | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:32:22.427Z -->
+## ★ Insight
+One simplification I'm folding in: terminal launch (#171) can **skip `node-pty` entirely**. The plan said "node-pty or platform-specific spawning" — `node-pty` is for *attaching to* a PTY, but the goal is "open a new terminal window with `claude --resume <id>`". The terminal *is* the PTY. Platform-specific spawn (`wt.exe -d` on Windows, `osascript` on macOS, `gnome-terminal --` on Linux) is far lighter than adding a native-binding dep with Windows-prebuild headaches. Project Minder already has `better-sqlite3` as the one native dep — keeping it that way is worth the small platform-detection cost.
+
+---
+
+<!-- insight:2be368e48319 | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:26:49.452Z -->
+## ★ Insight
+Three load-bearing findings to share before scope decision: (1) the plan's `MinderConfig` placeholders for `telegram`, `terminal`, `pricingRules`, etc. are **already on the type** (Wave 1 added them) — but PATCH `/api/config` doesn't validate them yet; (2) Project Minder has **never made a server-side LLM call** — auto-title would be the first; the only precedent is the GitHub Actions PR responder script using naked `fetch` to api.anthropic.com (no SDK); (3) Project Minder has **no interactive process spawn** anywhere — `processManager.ts` is non-interactive `["ignore","pipe","pipe"]` stdio. Terminal launch is greenfield and would likely add `node-pty` to `optionalDependencies` (same shape as `better-sqlite3`).
+
+---
+
+<!-- insight:bcb297306e7c | session:9ba38536-655d-48e7-a0ee-9251b042e956 | 2026-05-07T01:22:05.973Z -->
+## ★ Insight
+Cluster P spans 8 distinct features that touch very different subsystems: push notifications (new VAPID flow + service worker), Telegram (HTTP bot + SQLite dedup table), terminal launch (Windows-specific spawn), auto-title (LLM HTTP call + DB column), starring (localStorage + JSON file), export (Markdown serializer), distillation (JSONL backup + rewrite), and screenshot-to-react (bundled MCP). The thread connecting them is the **Settings page sections** that ship empty since Wave 1 and the **session detail surface** that exposes per-session buttons.
+
+---
+
+<!-- insight:4a179f47df13 | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-07T01:06:10.629Z -->
+## ★ Insight
+The nested-subagent name bug is a classic graph traversal gap: the two-pass pattern only crawls the "main thread" (depth 0 turns), so any Agent call spawned from a sidechain (depth 1+) never adds its `tool_use_id → name` mapping to the lookup table. The fix for `concurrencyTimeline` and `modelDelegation` is simply removing the `isSidechain` guard from Pass 1. For `agentNetwork`, the cleaner fix is to use `buildGraph()`'s already-traversed node map — it already handles all depths.
+
+---
+
+<!-- insight:5df2572caf89 | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-06T23:28:14.921Z -->
+## ★ Insight
+D3 force simulations are stateful — calling `simulation.stop()` in the `useEffect` cleanup is critical. Under React 18 Strict Mode, effects fire twice in development; without cleanup, you'd end up with two running simulations, both mutating the same node/link objects, causing double-speed animation and potential re-mount crashes.
+
+---
+
+<!-- insight:991cab18113b | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-06T23:27:40.953Z -->
+## ★ Insight
+The Bezier delegation flow doesn't use `D3Container`'s `Axes` — it's a manual layout. Each "column" of model nodes is positioned at fixed x coordinates (left = parent models, right = child models), with node heights proportional to total tokens delegated through them. This is a functional pattern common in Sankey-adjacent viz: **separate layout computation from rendering** so you can compute all positions in a single pass before drawing anything.
+
+---
+
+<!-- insight:51fd5ac511d1 | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-06T23:26:34.791Z -->
+## ★ Insight
+For the Gantt-style bars, we're computing `startPct`/`endPct` on the server so the component gets clean 0-100 percentages — separating the "time math" from the "pixel math". This means `D3Container`'s `width` scales naturally with no extra transforms needed in the SVG.
+
+---
+
+<!-- insight:87eb907cea9c | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-06T23:24:09.018Z -->
+## ★ Insight
+Three key patterns from Wave 6.1 to carry into all 5 components:
+1. **Two-pass graph** — first build `agentByToolUseId` from main-thread `Agent` tool calls, then group sidechain turns by `parentToolUseId`. Reusing `buildGraph()` from `orchestrationGraph.ts` avoids reimplementing this for 3 of the 5 viz.
+2. **`globalThis` cache singletons** — all API routes share the same in-memory cache across hot reloads via `globalThis.__xyzCache`. 60s TTL for per-session routes, 5-min + mtime-key for per-project routes.
+3. **`next/dynamic({ ssr: false })`** — the 150KB d3 bundle is already a separate Turbopack chunk; every new viz gets its own dynamic import so they don't all land in the same chunk boundary.
+
+---
+
+<!-- insight:6b910670a915 | session:fe5d826a-7afe-43fb-9298-c47d98dee2c6 | 2026-05-06T23:19:01.371Z -->
+## ★ Insight
+- **Render-prop D3 wrappers are the pattern**: Wave 6.1's `D3Container` exposes `{width, height, showTooltip, hideTooltip}` via children-as-function. This separates SVG chrome (sizing, tooltip portal, ResizeObserver) from chart-specific logic. Every new viz inherits responsive behavior for free.
+- **Two-pass `parentToolUseID` walks**: `orchestrationGraph.ts` builds `agentByToolUseId` first from main-thread Agent calls, then walks sidechain turns. This same pattern unlocks `ConcurrencyTimeline`, `ModelDelegation`, and `AgentNetwork` — all reuse the lookup table.
+- **Cache pattern is uniform**: per-session routes use `globalThis.__<resource>Cache` with 60s TTL + evict-on-set; per-project routes key by slug + max-mtime with 5-min TTL. Wave 6.2's 4 new routes follow whichever fits.
+
+---
+
 <!-- insight:1373ca6b3ecc | session:4bb141a4-1a4c-4794-a32a-b6bb351076ba | 2026-05-06T11:46:38.999Z -->
 ## ★ Insight
 The `SqlResultsTable` architecture issue is a classic virtualizer gotcha: splitting the header and body into separate `overflow: auto` containers means horizontal scrolling is independent. The fix is to make the header `position: sticky; top: 0` inside the same scroll container that the virtualizer uses — sticky elements scroll horizontally with the container but pin vertically.
