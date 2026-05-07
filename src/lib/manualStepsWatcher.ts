@@ -153,6 +153,12 @@ class ManualStepsWatcher {
             title: e.title,
             changedAt: new Date().toISOString(),
           });
+          // Fire-and-forget push/telegram dispatch; os channel is handled browser-side
+          import("@/lib/notifications/dispatcher")
+            .then(({ dispatchManualStepAdded }) =>
+              dispatchManualStepAdded({ slug: entry.slug, projectName: entry.name, title: e.title })
+            )
+            .catch(() => {});
         }
         // New entries added — invalidate scan cache so counts update
         invalidateCache();
