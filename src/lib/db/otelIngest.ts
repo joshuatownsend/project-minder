@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb, prepCached, isDbAvailable } from "./connection";
+import { getDb, prepCached, isDriverLoaded } from "./connection";
 
 // OTLP attribute value helper types.  The JSON encoding wraps every value in
 // a typed union: {stringValue}, {intValue}, {doubleValue}, {boolValue}.
@@ -102,7 +102,6 @@ export async function ingestLog(
 
   const sessionId = (attrs.get("session.id") as string | undefined) ?? sessionFromResource(resource);
 
-  // Build a compact payload object: all attributes minus large redundant fields.
   const payloadAttrs: Record<string, unknown> = {};
   for (const [k, v] of attrs) payloadAttrs[k] = v;
 
@@ -126,18 +125,16 @@ export async function ingestLog(
 export async function ingestMetric(
   metric: OtlpMetric,
   resource: OtlpResource | undefined,
-): Promise<void> {
+): Promise<{ rejected: number }> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
 
   const metricName = metric.name;
   if (!metricName) throw new Error("Metric missing name");
 
-  const dataPoints: OtlpDataPoint[] = [
-    ...(metric.sum?.dataPoints ?? []),
-    ...(metric.gauge?.dataPoints ?? []),
-  ];
-  if (dataPoints.length === 0) return;
+  if (metric.sum && metric.gauge) throw new Error(`Metric ${metricName} has both sum and gauge — invalid OTLP shape`);
+  const dataPoints: OtlpDataPoint[] = metric.gauge?.dataPoints ?? metric.sum?.dataPoints ?? [];
+  if (dataPoints.length === 0) return { rejected: 0 };
 
   const metricType: "counter" | "gauge" = metric.gauge ? "gauge" : "counter";
   const defaultSessionId = sessionFromResource(resource);
@@ -148,10 +145,11 @@ export async function ingestMetric(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
 
-  const txn = db.transaction(() => {
+  let rejected = 0;
+  db.transaction(() => {
     for (const dp of dataPoints) {
       const ts = nanoToMs(dp.timeUnixNano);
-      if (ts === null) continue;
+      if (ts === null) { rejected++; continue; }
 
       const attrs = attrMap(dp.attributes);
       const sessionId = (attrs.get("session.id") as string | undefined) ?? defaultSessionId;
@@ -163,9 +161,8 @@ export async function ingestMetric(
           : dp.asInt !== undefined
           ? Number(dp.asInt)
           : null;
-      if (value === null || !Number.isFinite(value)) continue;
+      if (value === null || !Number.isFinite(value)) { rejected++; continue; }
 
-      // Serialize residual attributes (drop session.id and model — promoted).
       const residual: Record<string, unknown> = {};
       for (const [k, v] of attrs) {
         if (k !== "session.id" && k !== "model") residual[k] = v;
@@ -174,8 +171,8 @@ export async function ingestMetric(
 
       insertStmt.run(ts, sessionId, metricName, metricType, value, model, attrsJson);
     }
-  });
-  txn();
+  })();
+  return { rejected };
 }
 
 // ─── Batch log ingest ─────────────────────────────────────────────────────
@@ -238,5 +235,5 @@ export async function ingestLogBatch(
 // ─── Guard helper ─────────────────────────────────────────────────────────
 
 export function isOtelDbReady(): boolean {
-  return isDbAvailable();
+  return isDriverLoaded();
 }

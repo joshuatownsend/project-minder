@@ -49,8 +49,10 @@ export function OtelSection({
     setBusy(true); setMsg(null);
     try {
       const next = await callApi("install");
-      await onConfigChange({ otel: { endpoint } });
+      const actualEndpoint = next.endpoint ?? endpoint;
+      await onConfigChange({ otel: { endpoint: actualEndpoint } });
       setStatus(next);
+      if (actualEndpoint !== endpoint) setEndpoint(actualEndpoint);
       setMsg({ text: "OTEL env vars written to ~/.claude/settings.json. Restart Claude Code for them to take effect.", ok: true });
     } catch (err) {
       setMsg({ text: (err as Error).message, ok: false });

@@ -37,9 +37,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         ? endpoint.trim()
         : DEFAULT_ENDPOINT;
     try {
-      new URL(ep);
+      const u = new URL(ep);
+      const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+      if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) throw new Error();
     } catch {
-      return NextResponse.json({ error: "endpoint must be a valid URL" }, { status: 400 });
+      return NextResponse.json({ error: "endpoint must be an HTTPS URL (or http://localhost)" }, { status: 400 });
     }
     try {
       await installOtelEnv(ep);

@@ -101,6 +101,7 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
     expect(rows[1].event_name).toBe("tool_decision");
     expect(rows[2].event_name).toBe("api_request");
     expect(rows[3].event_name).toBe("tool_result");
+    conn.closeDb();
   });
 
   it("extracts session_id from resource attributes", async () => {
@@ -113,6 +114,7 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
 
     const row = db!.prepare("SELECT session_id FROM otel_events LIMIT 1").get() as { session_id: string };
     expect(row.session_id).toBe("test-session-abc123");
+    conn.closeDb();
   });
 
   it("stores MCP tool attributes in payload_json", async () => {
@@ -128,6 +130,7 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
     const payload = JSON.parse(row.payload_json) as { attrs: Record<string, unknown> };
     // tool_parameters should be in attrs so downstream consumers can extract mcp_server_name
     expect(payload.attrs["tool_parameters"]).toContain("context7");
+    conn.closeDb();
   });
 
   it("malformed record (null timeUnixNano) throws without corrupting valid records", async () => {
@@ -145,6 +148,7 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
 
     const count = (db!.prepare("SELECT COUNT(*) as c FROM otel_events").get() as { c: number }).c;
     expect(count).toBe(1); // valid record persisted; malformed record did not corrupt it
+    conn.closeDb();
   });
 
   it("inserts metric data points into otel_metrics", async () => {
@@ -175,6 +179,7 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
     const sessionRow = rows.find((r) => r.metric_name === "claude_code.session.count");
     expect(sessionRow).toBeDefined();
     expect(sessionRow!.metric_type).toBe("gauge");
+    conn.closeDb();
   });
 
   it("metric with no data points is a no-op", async () => {
@@ -186,10 +191,12 @@ describe.skipIf(!driverAvailable)("otelIngest", () => {
 
     const count = (db!.prepare("SELECT COUNT(*) as c FROM otel_metrics").get() as { c: number }).c;
     expect(count).toBe(0);
+    conn.closeDb();
   });
 
-  it("isOtelDbReady returns true after initDb", async () => {
-    const { otelIngest } = await setupDb(tmpHome);
+  it("isOtelDbReady returns true when the driver is loaded", async () => {
+    const { conn, otelIngest } = await setupDb(tmpHome);
     expect(otelIngest.isOtelDbReady()).toBe(true);
+    conn.closeDb();
   });
 });

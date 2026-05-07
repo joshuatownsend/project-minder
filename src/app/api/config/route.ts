@@ -220,9 +220,11 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "otel.endpoint must be a string" }, { status: 400 });
       }
       try {
-        new URL(endpoint as string);
+        const u = new URL(endpoint as string);
+        const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+        if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) throw new Error();
       } catch {
-        return NextResponse.json({ error: "otel.endpoint must be a valid URL" }, { status: 400 });
+        return NextResponse.json({ error: "otel.endpoint must be an HTTPS URL (or http://localhost)" }, { status: 400 });
       }
     }
     patches.push((c) => {

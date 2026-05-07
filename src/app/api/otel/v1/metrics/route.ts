@@ -50,18 +50,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   for (const rm of resourceMetrics) {
     if (typeof rm !== "object" || rm === null) continue;
     const resource = (rm as { resource?: OtlpResource }).resource;
-    const scopeMetrics = (rm as { scopeMetrics?: unknown[] }).scopeMetrics ?? [];
+    const raw = (rm as { scopeMetrics?: unknown }).scopeMetrics;
+    const scopeMetrics = Array.isArray(raw) ? raw : [];
 
     for (const sm of scopeMetrics) {
       if (typeof sm !== "object" || sm === null) continue;
-      const metrics = (sm as { metrics?: unknown[] }).metrics ?? [];
+      const rawM = (sm as { metrics?: unknown }).metrics;
+      const metrics = Array.isArray(rawM) ? rawM : [];
 
       for (const metric of metrics) {
         try {
-          await ingestMetric(metric as OtlpMetric, resource);
+          const { rejected: r } = await ingestMetric(metric as OtlpMetric, resource);
+          rejected += r;
         } catch (err) {
           rejected++;
-          errors.push((err as Error).message);
+          if (errors.length < 5) errors.push((err as Error).message);
         }
       }
     }
@@ -69,7 +72,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const partialSuccess =
     rejected > 0
-      ? { rejectedDataPoints: rejected, errorMessage: errors.slice(0, 5).join("; ") }
+      ? { rejectedDataPoints: rejected, errorMessage: errors.join("; ") }
       : { rejectedDataPoints: 0 };
 
   return NextResponse.json({ partialSuccess });

@@ -55,21 +55,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   for (const rl of resourceLogs) {
     if (typeof rl !== "object" || rl === null) continue;
     const resource = (rl as { resource?: OtlpResource }).resource;
-    const scopeLogs = (rl as { scopeLogs?: unknown[] }).scopeLogs ?? [];
+    const rawSl = (rl as { scopeLogs?: unknown }).scopeLogs;
+    const scopeLogs = Array.isArray(rawSl) ? rawSl : [];
 
     for (const sl of scopeLogs) {
       if (typeof sl !== "object" || sl === null) continue;
-      const logRecords = (sl as { logRecords?: unknown[] }).logRecords ?? [];
+      const rawLr = (sl as { logRecords?: unknown }).logRecords;
+      const logRecords = Array.isArray(rawLr) ? rawLr : [];
 
       const { errors: batchErrors } = await ingestLogBatch(logRecords as OtlpLogRecord[], resource);
       rejected += batchErrors.length;
-      errors.push(...batchErrors);
+      for (const e of batchErrors) {
+        if (errors.length < 5) errors.push(e);
+      }
     }
   }
 
   const partialSuccess =
     rejected > 0
-      ? { rejectedLogRecords: rejected, errorMessage: errors.slice(0, 5).join("; ") }
+      ? { rejectedLogRecords: rejected, errorMessage: errors.join("; ") }
       : { rejectedLogRecords: 0 };
 
   return NextResponse.json({ partialSuccess });

@@ -26,7 +26,9 @@ interface HookEntry {
 async function readUserSettings(targetPath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(targetPath, "utf-8");
-    return tryParseJsonc<Record<string, unknown>>(raw) ?? {};
+    const parsed = tryParseJsonc<Record<string, unknown>>(raw);
+    if (parsed === null) throw new Error(`${targetPath} is malformed JSON — fix the file before retrying`);
+    return parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw err;
