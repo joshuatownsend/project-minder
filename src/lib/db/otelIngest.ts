@@ -1,0 +1,185 @@
+import "server-only";
+import { getDb, prepCached, isDbAvailable } from "./connection";
+
+// OTLP attribute value helper types.  The JSON encoding wraps every value in
+// a typed union: {stringValue}, {intValue}, {doubleValue}, {boolValue}.
+interface AttrValue {
+  stringValue?: string;
+  intValue?: string | number;
+  doubleValue?: number;
+  boolValue?: boolean;
+}
+
+interface OtlpAttribute {
+  key: string;
+  value: AttrValue;
+}
+
+// ─── Public OTLP JSON shapes ──────────────────────────────────────────────
+
+export interface OtlpResource {
+  attributes?: OtlpAttribute[];
+}
+
+export interface OtlpLogRecord {
+  timeUnixNano?: string | number;
+  observedTimeUnixNano?: string | number;
+  body?: { stringValue?: string };
+  attributes?: OtlpAttribute[];
+}
+
+export interface OtlpDataPoint {
+  timeUnixNano?: string | number;
+  startTimeUnixNano?: string | number;
+  asDouble?: number;
+  asInt?: string | number;
+  attributes?: OtlpAttribute[];
+}
+
+export interface OtlpMetric {
+  name: string;
+  description?: string;
+  sum?: {
+    dataPoints?: OtlpDataPoint[];
+    isMonotonic?: boolean;
+  };
+  gauge?: {
+    dataPoints?: OtlpDataPoint[];
+  };
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────
+
+function attrMap(attrs: OtlpAttribute[] | undefined): Map<string, unknown> {
+  const m = new Map<string, unknown>();
+  if (!attrs) return m;
+  for (const a of attrs) {
+    const v = a.value;
+    if (v.stringValue !== undefined) m.set(a.key, v.stringValue);
+    else if (v.boolValue !== undefined) m.set(a.key, v.boolValue);
+    else if (v.intValue !== undefined) m.set(a.key, Number(v.intValue));
+    else if (v.doubleValue !== undefined) m.set(a.key, v.doubleValue);
+  }
+  return m;
+}
+
+function nanoToMs(nano: string | number | undefined): number | null {
+  if (nano === undefined || nano === null) return null;
+  const n = Number(nano);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n / 1_000_000);
+}
+
+function sessionFromResource(resource: OtlpResource | undefined): string | null {
+  const attrs = attrMap(resource?.attributes);
+  const s = attrs.get("session.id");
+  return typeof s === "string" && s.length > 0 ? s : null;
+}
+
+// ─── Log record ingest ────────────────────────────────────────────────────
+
+/**
+ * Persist a single OTLP log record to `otel_events`.
+ *
+ * Throws on hard failures (DB not available, schema bug) — the caller wraps
+ * per-record calls in a try/catch to implement partial-success semantics.
+ */
+export async function ingestLog(
+  record: OtlpLogRecord,
+  resource: OtlpResource | undefined,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const ts = nanoToMs(record.timeUnixNano ?? record.observedTimeUnixNano);
+  if (ts === null) throw new Error("Missing or invalid timeUnixNano");
+
+  const attrs = attrMap(record.attributes);
+  const eventName =
+    (attrs.get("event.name") as string | undefined) ??
+    record.body?.stringValue ??
+    "unknown";
+
+  const sessionId = (attrs.get("session.id") as string | undefined) ?? sessionFromResource(resource);
+
+  // Build a compact payload object: all attributes minus large redundant fields.
+  const payloadAttrs: Record<string, unknown> = {};
+  for (const [k, v] of attrs) payloadAttrs[k] = v;
+
+  const payloadJson = JSON.stringify({ ts, body: record.body?.stringValue, attrs: payloadAttrs });
+
+  prepCached(
+    db,
+    `INSERT INTO otel_events (ts, session_id, event_name, payload_json)
+     VALUES (?, ?, ?, ?)`,
+  ).run(new Date(ts).toISOString(), sessionId, eventName, payloadJson);
+}
+
+// ─── Metric data point ingest ─────────────────────────────────────────────
+
+/**
+ * Persist a single OTLP metric (all its data points) to `otel_metrics`.
+ *
+ * Wrapped in a transaction so either all data points for a metric write or
+ * none do on error.  Throws on hard failure.
+ */
+export async function ingestMetric(
+  metric: OtlpMetric,
+  resource: OtlpResource | undefined,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const metricName = metric.name;
+  if (!metricName) throw new Error("Metric missing name");
+
+  const dataPoints: OtlpDataPoint[] = [
+    ...(metric.sum?.dataPoints ?? []),
+    ...(metric.gauge?.dataPoints ?? []),
+  ];
+  if (dataPoints.length === 0) return;
+
+  const metricType: "counter" | "gauge" = metric.gauge ? "gauge" : "counter";
+  const defaultSessionId = sessionFromResource(resource);
+
+  const insertStmt = prepCached(
+    db,
+    `INSERT INTO otel_metrics (ts, session_id, metric_name, metric_type, value, model, attrs_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const txn = db.transaction(() => {
+    for (const dp of dataPoints) {
+      const ts = nanoToMs(dp.timeUnixNano);
+      if (ts === null) continue;
+
+      const attrs = attrMap(dp.attributes);
+      const sessionId = (attrs.get("session.id") as string | undefined) ?? defaultSessionId;
+      const model = (attrs.get("model") as string | undefined) ?? null;
+
+      const value =
+        dp.asDouble !== undefined
+          ? dp.asDouble
+          : dp.asInt !== undefined
+          ? Number(dp.asInt)
+          : null;
+      if (value === null || !Number.isFinite(value)) continue;
+
+      // Serialize residual attributes (drop session.id and model — promoted).
+      const residual: Record<string, unknown> = {};
+      for (const [k, v] of attrs) {
+        if (k !== "session.id" && k !== "model") residual[k] = v;
+      }
+      const attrsJson = Object.keys(residual).length ? JSON.stringify(residual) : null;
+
+      insertStmt.run(ts, sessionId, metricName, metricType, value, model, attrsJson);
+    }
+  });
+  txn();
+}
+
+// ─── Guard helper ─────────────────────────────────────────────────────────
+
+export function isOtelDbReady(): boolean {
+  return isDbAvailable();
+}

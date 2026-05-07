@@ -1,0 +1,77 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "session.id", "value": { "stringValue": "test-session-abc123" } }
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": { "name": "claude-code" },
+          "metrics": [
+            {
+              "name": "claude_code.token.usage",
+              "description": "Token usage by type",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1746000000000000000",
+                    "startTimeUnixNano": "1745999000000000000",
+                    "asDouble": 5000,
+                    "attributes": [
+                      { "key": "model", "value": { "stringValue": "claude-opus-4-7" } },
+                      { "key": "type", "value": { "stringValue": "input" } }
+                    ]
+                  },
+                  {
+                    "timeUnixNano": "1746000000000000000",
+                    "startTimeUnixNano": "1745999000000000000",
+                    "asDouble": 2500,
+                    "attributes": [
+                      { "key": "model", "value": { "stringValue": "claude-opus-4-7" } },
+                      { "key": "type", "value": { "stringValue": "output" } }
+                    ]
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            },
+            {
+              "name": "claude_code.cost.usage",
+              "description": "Cost in USD",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1746000000000000000",
+                    "startTimeUnixNano": "1745999000000000000",
+                    "asDouble": 0.015,
+                    "attributes": [
+                      { "key": "model", "value": { "stringValue": "claude-opus-4-7" } }
+                    ]
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            },
+            {
+              "name": "claude_code.session.count",
+              "description": "Active session gauge",
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1746000000000000000",
+                    "asDouble": 1,
+                    "attributes": []
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

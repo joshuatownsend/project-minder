@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { S } from "./styles";
+import { OtelSection } from "./OtelSection";
 
 export function IntegrationsSection({
   config,
@@ -68,7 +69,9 @@ export function IntegrationsSection({
   return (
     <section>
       <h2 style={S.sectionTitle}>Integrations</h2>
-      <p style={S.desc}>Connect external notification channels. Telegram bot bridge (Wave 7). OTEL and others coming in Wave 8.</p>
+      <p style={S.desc}>Connect external services. Telegram for notifications; OTEL for real-time Claude Code telemetry.</p>
+
+      <OtelSection config={config} onConfigChange={onConfigChange} />
 
       <div style={S.card}>
         <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "12px" }}>

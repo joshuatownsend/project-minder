@@ -206,6 +206,33 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
+  if (body.otel !== undefined) {
+    if (
+      typeof body.otel !== "object" ||
+      body.otel === null ||
+      Array.isArray(body.otel)
+    ) {
+      return NextResponse.json({ error: "otel must be an object" }, { status: 400 });
+    }
+    const { endpoint } = body.otel as Record<string, unknown>;
+    if (endpoint !== undefined) {
+      if (typeof endpoint !== "string") {
+        return NextResponse.json({ error: "otel.endpoint must be a string" }, { status: 400 });
+      }
+      try {
+        new URL(endpoint as string);
+      } catch {
+        return NextResponse.json({ error: "otel.endpoint must be a valid URL" }, { status: 400 });
+      }
+    }
+    patches.push((c) => {
+      c.otel = {
+        ...(c.otel ?? {}),
+        ...(endpoint !== undefined ? { endpoint: endpoint as string } : {}),
+      };
+    });
+  }
+
   if (patches.length === 0) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
