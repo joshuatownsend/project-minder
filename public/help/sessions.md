@@ -80,6 +80,15 @@ Cards for each spawned subagent showing type, description, and top tools used.
 ### Orchestration
 D3-powered DAG (directed acyclic graph) showing how subagents were spawned during the session. Each node is a spawned agent; edges show parent→child delegation. Node colors identify the agent type; hover for a tooltip with agent name and depth. Only appears when the session spawned at least one subagent (`subagentCount > 0`). Deep nesting beyond level 6 is collapsed into a `+N more` placeholder. Computed on demand from the original JSONL.
 
+### Concurrency
+Gantt-style timeline showing the main agent and each subagent as horizontal bars, positioned by wall-clock timestamps (falls back to turn-index proportions when timestamps are unavailable). Bar width represents active duration; bar label shows turn count. Hover a bar for `agentName · N turns`. A footnote appears when turn-index fallback is used. Only visible when the session has subagents.
+
+### Delegation
+Two-column Bezier flow diagram: primary models (left column) → subagent models (right column). Curve thickness scales with delegation count; curve opacity scales with token volume. Node height is proportional to total tokens routed through that model. Hover a curve for `ParentModel → ChildModel · N delegations · X.XK tokens`. Only visible when the session has subagents.
+
+### Network
+D3 force-directed graph of agent communication within the session. Each node represents a unique agent (collapsed across multiple invocations); node radius scales with message volume. Directed arrows show delegation edges. Hover a node for agent name and message count. A virtual `main` node anchors root-level delegations. Only visible when the session has subagents.
+
 ### Diagnosis
 Post-hoc 8-category quality analysis of the session, computed on demand from the JSONL:
 

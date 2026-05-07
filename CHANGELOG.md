@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 6.2 — Cluster O + G remainder: 5 D3 visualizations.** TODOs #207, #209, #211, #212, #213.
+  - **Concurrency Timeline (#207).** New "Concurrency" tab on session detail (visible when session has subagents). Gantt-style horizontal bars showing main agent + each subagent over session duration. Bar width = active time span; falls back to turn-index proportions when wall-clock timestamps are missing. `GET /api/sessions/[sessionId]/concurrency-timeline` (60s cache).
+  - **Error Propagation Map (#209).** New "Errors" tab on project detail (visible when project has sessions). Cross-session bar chart of error rates by subagent hierarchy depth (red → purple gradient), top error-prone agents, and tool error breakdown. `GET /api/projects/[slug]/error-propagation` (5-min cache + mtime key).
+  - **Model Delegation Flow (#211).** New "Delegation" tab on session detail (visible when session has subagents). Two-column Bezier flow diagram: primary models (left) → subagent models (right). Curve thickness = delegation count; curve opacity = token volume. `GET /api/sessions/[sessionId]/model-delegation` (60s cache).
+  - **Agent Network Graph (#213).** New "Network" tab on session detail (visible when session has subagents). D3 force-directed graph of agent communication. Node radius = message volume; directed arrows = delegation edges. `GET /api/sessions/[sessionId]/agent-network` (60s cache).
+  - **File Coupling Arc (#212).** Replaces bar list in the Hot Files panel "File Coupling" section when ≥4 unique files are present. Arc diagram with files on a horizontal axis, quadratic Bezier arcs for co-edited pairs (opacity = coupling strength, thickness = co-occurrence count). Click a file node to highlight incident arcs.
+  - New shared palette `agentPalette.ts` (8-color + depth gradient + model family colors) and `relPath.ts` helper extracted for viz reuse.
+
 - **Wave 6.1 — Cluster N: D3 Visualizations.** TODOs #201, #203, #205.
   - **D3 framework (`D3Container`, `Axes`).** Shared `ResizeObserver`-backed SVG wrapper with render-prop API and reusable axis components. Establishes the `next/dynamic` + `ssr:false` lazy-load convention (first D3 usage in the codebase).
   - **Orchestration DAG (#201).** New "Orchestration" tab on session detail pages (visible when `subagentCount > 0`). D3 hierarchy tree showing parent→child subagent delegation, colored by agent type. Computed on demand from JSONL via `GET /api/sessions/[sessionId]/orchestration` (60s cache).

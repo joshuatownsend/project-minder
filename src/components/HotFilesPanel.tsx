@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { HotFilesResult, HotFile } from "@/lib/usage/fileTracker";
 import type { FileCouplingResult, FilePair } from "@/lib/usage/fileCoupling";
+
+const FileCouplingArc = dynamic(
+  () => import("./viz/FileCouplingArc").then((m) => m.FileCouplingArc),
+  { ssr: false, loading: () => <Skeleton className="h-64" /> }
+);
 
 interface HotFilesResponse {
   slug: string;
@@ -269,10 +276,12 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             No co-edited file pairs found (minimum 2 sessions required).
           </p>
-        ) : (
+        ) : new Set(pairs.flatMap((p) => [p.fileA, p.fileB])).size < 4 ? (
           pairs.slice(0, 20).map((p) => (
             <PairRow key={p.fileA + "\0" + p.fileB} pair={p} max={maxCoOccurrences} />
           ))
+        ) : (
+          <FileCouplingArc result={couplingData.result} />
         )}
       </section>
     </div>

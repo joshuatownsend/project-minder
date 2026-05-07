@@ -110,4 +110,15 @@ Appears when the project has Claude sessions. Shows cross-session file intellige
 
 - **Summary strip** — unique files edited, total edit operations, and sessions analysed.
 - **Hot Files** — files ranked by total edit count, with a bar chart and per-file breakdown of write / edit / delete operations and the number of sessions that touched each file.
-- **File Coupling** — pairs of files that are frequently co-edited in the same session, ranked by co-occurrence count. Each pair shows a coupling strength percentage (0 = unrelated, 100 = always edited together).
+- **File Coupling** — when 4 or more files are co-edited, an **arc diagram** shows pairs of files as quadratic Bezier arcs above a horizontal file axis. Arc thickness scales with co-occurrence count; arc opacity scales with coupling strength. Click a file node to highlight its arcs and dim unrelated ones. With fewer than 4 files, falls back to a bar list.
+
+## Errors Tab
+
+Appears when the project has Claude sessions. Cross-session error analysis across all subagent hierarchy levels:
+
+- **Summary strip** — total sessions, agent nodes, errors, and overall error rate.
+- **Errors by hierarchy depth** — bar chart colored red (depth 0) → purple (depth 6+). Depth 0 = direct subagents of the main conversation; higher depths = nested subagents. Hover a bar for depth, error count/total, and rate.
+- **Top error-prone agents** — agents that appeared in at least 3 invocations, ranked by error count with a bar showing their rate.
+- **Tool error breakdown** — which tools were involved in error turns across all sidechain sessions. Only tools with 2+ occurrences are shown.
+
+When no errors have occurred across any session, the tab shows a success confirmation with the session count.

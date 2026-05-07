@@ -9,6 +9,18 @@ const OrchestrationDAG = dynamic(
   () => import("./viz/OrchestrationDAG").then((m) => m.OrchestrationDAG),
   { ssr: false, loading: () => <Skeleton className="h-96" /> }
 );
+const ConcurrencyTimeline = dynamic(
+  () => import("./viz/ConcurrencyTimeline").then((m) => m.ConcurrencyTimeline),
+  { ssr: false, loading: () => <Skeleton className="h-48" /> }
+);
+const ModelDelegationFlow = dynamic(
+  () => import("./viz/ModelDelegationFlow").then((m) => m.ModelDelegationFlow),
+  { ssr: false, loading: () => <Skeleton className="h-80" /> }
+);
+const AgentNetworkGraph = dynamic(
+  () => import("./viz/AgentNetworkGraph").then((m) => m.AgentNetworkGraph),
+  { ssr: false, loading: () => <Skeleton className="h-96" /> }
+);
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
@@ -130,7 +142,7 @@ function StatCell({
 }
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "handoff" | "diagnosis" | "feedback";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "diagnosis" | "feedback";
 
 function TabBar({
   tabs, active, onChange,
@@ -214,6 +226,13 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       : []),
     ...(data.subagentCount > 0
       ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
+      : []),
+    ...(data.subagents.length > 0
+      ? ([
+          { key: "concurrency", label: "Concurrency" },
+          { key: "delegation",  label: "Delegation"  },
+          { key: "network",     label: "Network"     },
+        ] as { key: TabKey; label: string }[])
       : []),
     { key: "handoff",   label: "Handoff"   },
     { key: "diagnosis", label: "Diagnosis" },
@@ -445,6 +464,18 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "orchestration" && (
             <OrchestrationDAG sessionId={data.sessionId} />
+          )}
+
+          {activeTab === "concurrency" && (
+            <ConcurrencyTimeline sessionId={data.sessionId} />
+          )}
+
+          {activeTab === "delegation" && (
+            <ModelDelegationFlow sessionId={data.sessionId} />
+          )}
+
+          {activeTab === "network" && (
+            <AgentNetworkGraph sessionId={data.sessionId} />
           )}
 
           {activeTab === "handoff" && (
