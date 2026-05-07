@@ -112,7 +112,10 @@ export function sweepAndGetState(): { liveSlugs: string[]; awaitingSlugs: string
     if (now - sess.lastEventAt > STALE_EVICT_MS) {
       sessions.delete(id);
       const still = [...sessions.values()].some((s) => s.slug === sess.slug);
-      if (!still) awaiting.delete(sess.slug);
+      if (!still) {
+        awaiting.delete(sess.slug);
+        g.__minderAwaitingReported!.delete(sess.slug);
+      }
     }
   }
 

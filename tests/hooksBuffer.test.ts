@@ -6,6 +6,7 @@ import {
   setAwaiting,
   clearAwaiting,
   sweepAndGetState,
+  drainNewAwaitingTransitions,
   getHookBuffer,
   type HookEvent,
 } from "@/lib/hooks/buffer";
@@ -16,6 +17,7 @@ function resetGlobals() {
   delete g.__minderHookBuffers;
   delete g.__minderLiveSessions;
   delete g.__minderAwaiting;
+  delete g.__minderAwaitingReported;
 }
 
 function makeEvent(overrides: Partial<HookEvent> = {}): HookEvent {
@@ -112,5 +114,29 @@ describe("awaiting state", () => {
     clearAwaiting("proj");
     const { awaitingSlugs } = sweepAndGetState();
     expect(awaitingSlugs).not.toContain("proj");
+  });
+
+  it("drainNewAwaitingTransitions returns new slugs only once", () => {
+    setAwaiting("proj");
+    const first = drainNewAwaitingTransitions();
+    expect(first).toContain("proj");
+    const second = drainNewAwaitingTransitions();
+    expect(second).toHaveLength(0);
+  });
+
+  it("stale eviction clears awaitingReported so future transitions are re-emitted", () => {
+    updateLiveSession("s1", "proj", "Notification");
+    setAwaiting("proj");
+    drainNewAwaitingTransitions(); // mark as reported
+
+    // Simulate stale session
+    const g = globalThis as { __minderLiveSessions?: Map<string, { slug: string; lastEventAt: number; lastEventName: string }> };
+    g.__minderLiveSessions!.set("s1", { slug: "proj", lastEventAt: Date.now() - 6 * 60_000, lastEventName: "Notification" });
+    sweepAndGetState(); // triggers eviction, clears awaiting + awaitingReported
+
+    // If a new session becomes awaiting again, it must be drained again
+    setAwaiting("proj");
+    const newDrain = drainNewAwaitingTransitions();
+    expect(newDrain).toContain("proj");
   });
 });

@@ -13,6 +13,7 @@ import {
   STOP_EVENTS,
 } from "@/lib/hooks/buffer";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
+import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import type { HookEventName } from "@/lib/types";
 
 const VALID_EVENTS = new Set<string>([
@@ -61,6 +62,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const flagEnabled = getFlag(config.featureFlags, "liveActivity", false);
   if (!flagEnabled) {
     return NextResponse.json({ ok: true, ignored: "flag-off" });
+  }
+
+  if (request.headers.get("user-agent") !== SENTINEL_UA) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   let body: Record<string, unknown>;

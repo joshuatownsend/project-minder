@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mutateConfig } from "@/lib/config";
+import { readConfig, mutateConfig } from "@/lib/config";
 import {
   installLiveActivityHooks,
   removeLiveActivityHooks,
   getLiveActivityHookStatus,
 } from "@/lib/hooks/applyLiveActivity";
 
-/** GET /api/live-activity/install — return current install status. */
+/** GET /api/live-activity/install — return current install status including registered hookUrl. */
 export async function GET(): Promise<NextResponse> {
-  const status = await getLiveActivityHookStatus();
-  return NextResponse.json(status);
+  const [status, config] = await Promise.all([getLiveActivityHookStatus(), readConfig()]);
+  return NextResponse.json({ ...status, hookUrl: config.liveActivity?.hookUrl ?? null });
 }
 
 /** POST /api/live-activity/install — install hooks into ~/.claude/settings.json. */
@@ -26,13 +26,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "hookUrl required" }, { status: 400 });
   }
 
-  // Validate hookUrl: must be http://localhost, http://127.0.0.1, or https:
+  // Validate hookUrl: must target loopback only (localhost / 127.0.0.1 / ::1)
   try {
     const u = new URL(hookUrl);
-    const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-    if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) {
+    const isLoopback =
+      u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]";
+    if (!isLoopback) {
       return NextResponse.json(
-        { error: "hookUrl must be an HTTPS URL or http://localhost / http://127.0.0.1" },
+        { error: "hookUrl must target localhost or 127.0.0.1" },
         { status: 400 },
       );
     }
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl };
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status });
+    return NextResponse.json({ ok: true, ...status, hookUrl });
   } catch (err) {
     console.error("[live-activity] install failed:", err);
     return NextResponse.json(
@@ -61,8 +62,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 export async function DELETE(): Promise<NextResponse> {
   try {
     await removeLiveActivityHooks();
+    await mutateConfig((c) => {
+      if (c.liveActivity) delete c.liveActivity.hookUrl;
+    });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status });
+    return NextResponse.json({ ok: true, ...status, hookUrl: null });
   } catch (err) {
     console.error("[live-activity] remove failed:", err);
     return NextResponse.json(

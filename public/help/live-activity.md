@@ -8,7 +8,7 @@ Claude Code supports [lifecycle hooks](https://docs.anthropic.com/en/docs/claude
 
 ## Security model
 
-The hook receiver is **localhost-only**. Claude Code runs on your machine, and Project Minder's Next.js server listens on `localhost`. The registered hook URL always points to `http://localhost:<port>/api/hooks` — it is never reachable from the internet. No authentication is required because only local processes can reach it.
+The hook receiver is **localhost-only**. Claude Code runs on your machine, and Project Minder's Next.js server listens on `localhost`. The registered hook URL always points to `http://localhost:<port>/api/hooks` — it is never reachable from the internet. The receiver also verifies a sentinel `User-Agent` header so only requests originating from Project Minder's registered curl command are accepted.
 
 ## Setup
 

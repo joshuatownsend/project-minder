@@ -42,12 +42,13 @@ import {
 } from "@/lib/hooks/buffer";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
 import { POST } from "@/app/api/hooks/route";
+import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import { NextRequest } from "next/server";
 
 function makeRequest(body: Record<string, unknown>): NextRequest {
   return new NextRequest("http://localhost:4100/api/hooks", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "user-agent": SENTINEL_UA },
     body: JSON.stringify(body),
   });
 }
@@ -80,6 +81,18 @@ describe("POST /api/hooks — feature flag", () => {
     expect(res.status).toBe(200);
     expect(json.ignored).toBe("flag-off");
     expect(pushHookEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/hooks — UA guard", () => {
+  it("rejects requests without the sentinel User-Agent", async () => {
+    const req = new NextRequest("http://localhost:4100/api/hooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(baseBody),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -177,8 +190,13 @@ describe("POST /api/hooks — awaiting-permission flow", () => {
     expect(dispatchAwaitingPermission).not.toHaveBeenCalled();
   });
 
-  it("clears awaiting on non-Notification event after Notification", async () => {
+  it("clears awaiting on any non-Notification event (e.g. user responded)", async () => {
+    // Establish awaiting state first
+    await POST(makeRequest({ ...baseBody, hook_event_name: "Notification", message: "Approve?" }));
+    vi.clearAllMocks();
+    // Any follow-up event should clear awaiting
     await POST(makeRequest({ ...baseBody, hook_event_name: "PreToolUse" }));
     expect(clearAwaiting).toHaveBeenCalledWith("project-minder");
+    expect(setAwaiting).not.toHaveBeenCalled();
   });
 });

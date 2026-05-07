@@ -12,7 +12,7 @@ export function Toggle({ value, disabled, onChange, label }: {
         transition: "background 0.15s", border: "none", padding: 0,
       }}
     >
-      <span style={{
+      <span aria-hidden="true" style={{
         position: "absolute", top: "2px", left: value ? "18px" : "2px",
         width: "14px", height: "14px", borderRadius: "50%",
         background: "var(--bg-primary, #fff)", transition: "left 0.15s",
