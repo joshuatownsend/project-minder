@@ -17,11 +17,14 @@ export interface PulseChange {
   projectName: string;
   title: string;
   changedAt: string;
+  kind?: string;
 }
 
 export interface PulseSnapshot {
   pendingSteps: number;
   approvalCount: number;
+  liveSlugs: string[];
+  awaitingSlugs: string[];
   generatedAt: string | null;
 }
 
@@ -45,6 +48,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<PulseSnapshot>({
     pendingSteps: 0,
     approvalCount: 0,
+    liveSlugs: [],
+    awaitingSlugs: [],
     generatedAt: null,
   });
   const lastCheckedRef = useRef<string>(new Date().toISOString());
@@ -78,6 +83,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
           pendingSteps: number;
           approvalCount: number;
           changes: PulseChange[];
+          liveSlugs?: string[];
+          awaitingSlugs?: string[];
           generatedAt: string;
         };
 
@@ -86,6 +93,8 @@ export function PulseProvider({ children }: { children: ReactNode }) {
         setSnapshot({
           pendingSteps: data.pendingSteps,
           approvalCount: data.approvalCount,
+          liveSlugs: data.liveSlugs ?? [],
+          awaitingSlugs: data.awaitingSlugs ?? [],
           generatedAt: data.generatedAt,
         });
 

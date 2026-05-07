@@ -127,7 +127,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "POST /api/hooks accepts Claude Code lifecycle events. Wave 7.",
     group: "active",
     appliesAt: "ingest",
-    wired: false,
+    wired: true,
   },
 ];
 

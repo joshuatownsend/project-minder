@@ -19,6 +19,7 @@ import {
 import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers } from "lucide-react";
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { StatusDot } from "./ui/StatusDot";
+import { usePulse } from "./PulseProvider";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
@@ -43,6 +44,9 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const router = useRouter();
+  const { snapshot } = usePulse();
+  const isLive = snapshot.liveSlugs.includes(project.slug);
+  const isAwaiting = snapshot.awaitingSlugs.includes(project.slug);
 
   // ── Aggregate worktree counts ──────────────────────────────────────────
   const pendingTodos = (() => {
@@ -123,6 +127,36 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
+            {isAwaiting && (
+              <span
+                title="Claude Code is awaiting permission"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: "var(--accent)", background: "var(--accent-bg)",
+                  border: "1px solid var(--accent-border)",
+                  borderRadius: "3px", padding: "2px 6px",
+                }}
+              >
+                <StatusDot status="awaiting" size={6} />
+                input
+              </span>
+            )}
+            {isLive && !isAwaiting && (
+              <span
+                title="Claude Code is active in this project"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: "var(--status-active-text)", background: "var(--status-active-bg)",
+                  border: "1px solid var(--status-active-border)",
+                  borderRadius: "3px", padding: "2px 6px",
+                }}
+              >
+                <StatusDot status="live" size={6} />
+                live
+              </span>
+            )}
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
@@ -247,6 +281,36 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
+            {isAwaiting && (
+              <span
+                title="Claude Code is awaiting permission"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: "var(--accent)", background: "var(--accent-bg)",
+                  border: "1px solid var(--accent-border)",
+                  borderRadius: "3px", padding: "2px 6px",
+                }}
+              >
+                <StatusDot status="awaiting" size={6} />
+                input
+              </span>
+            )}
+            {isLive && !isAwaiting && (
+              <span
+                title="Claude Code is active in this project"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                  color: "var(--status-active-text)", background: "var(--status-active-bg)",
+                  border: "1px solid var(--status-active-border)",
+                  borderRadius: "3px", padding: "2px 6px",
+                }}
+              >
+                <StatusDot status="live" size={6} />
+                live
+              </span>
+            )}
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}

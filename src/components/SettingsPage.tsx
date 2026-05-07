@@ -9,6 +9,7 @@ import { NotificationsSection } from "@/components/settings/NotificationsSection
 import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
 import { TerminalSection } from "@/components/settings/TerminalSection";
 import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
+import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
 const FLAG_GROUPS = {
@@ -24,7 +25,8 @@ type SectionKey =
   | "integrations"
   | "data"
   | "terminal"
-  | "auto-title";
+  | "auto-title"
+  | "live-activity";
 
 interface SectionDef {
   key: SectionKey;
@@ -43,8 +45,9 @@ const SECTIONS: SectionDef[] = [
   { key: "notifications", label: "Notifications", shipsInWave: 7,  description: "Push and Telegram event toggles." },
   { key: "integrations",  label: "Integrations",  shipsInWave: 8,  description: "OTEL, Anthropic OAuth, currency API status." },
   { key: "data",          label: "Data & Privacy", shipsInWave: 7, description: "History retention, distillation defaults, export shortcuts." },
-  { key: "terminal",      label: "Terminal",      shipsInWave: 7,  description: "Preferred terminal application for resume." },
-  { key: "auto-title",    label: "Auto-title",    shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
+  { key: "terminal",       label: "Terminal",       shipsInWave: 7,  description: "Preferred terminal application for resume." },
+  { key: "auto-title",    label: "Auto-title",     shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
+  { key: "live-activity", label: "Live Activity",  shipsInWave: 7,  description: "Hook server install/remove + awaiting-permission alerts." },
 ];
 
 export function SettingsPage() {
@@ -219,7 +222,10 @@ export function SettingsPage() {
         {active === "auto-title" && (
           <AutoTitleSection config={config} onConfigChange={patchConfig} />
         )}
-        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && activeSection && (
+        {active === "live-activity" && (
+          <LiveActivitySection config={config} onConfigChange={patchConfig} />
+        )}
+        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && activeSection && (
           <PlaceholderSection
             label={activeSection.label}
             wave={activeSection.shipsInWave}

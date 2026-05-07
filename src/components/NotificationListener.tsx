@@ -41,17 +41,31 @@ export function NotificationListener() {
   useEffect(() => {
     return subscribeChanges((changes: PulseChange[]) => {
       for (const change of changes) {
-        showToast(`New manual step: ${change.projectName}`, change.title);
+        if (change.kind === "awaiting-permission") {
+          showToast(`${change.projectName} — awaiting permission`, change.title);
 
-        const osEnabled = prefsRef.current?.events?.["manual-step-added"]?.os;
-        if (osEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-          new Notification(`Manual Step: ${change.projectName}`, {
-            body: change.title,
-            tag: `manual-step-added:${change.slug}`,
-          });
+          const osEnabled = prefsRef.current?.events?.["awaiting-permission"]?.os;
+          if (osEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification(`${change.projectName} — awaiting permission`, {
+              body: change.title,
+              tag: `awaiting-permission:${change.slug}`,
+            });
+          }
+
+          playNotificationSound();
+        } else {
+          showToast(`New manual step: ${change.projectName}`, change.title);
+
+          const osEnabled = prefsRef.current?.events?.["manual-step-added"]?.os;
+          if (osEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification(`Manual Step: ${change.projectName}`, {
+              body: change.title,
+              tag: `manual-step-added:${change.slug}`,
+            });
+          }
+
+          playNotificationSound();
         }
-
-        playNotificationSound();
       }
     });
   }, [subscribeChanges, showToast]);

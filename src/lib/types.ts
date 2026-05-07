@@ -249,6 +249,18 @@ export type FeatureFlagKey =
   | "devServerControl"
   | "liveActivity";
 
+/** Claude Code lifecycle hook event names sent in the hook stdin payload. */
+export type HookEventName =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "UserPromptSubmit"
+  | "Notification"
+  | "Stop"
+  | "SubagentStop"
+  | "PreCompact"
+  | "SessionStart"
+  | "SessionEnd";
+
 /** Schedule mode used by Wave 8's quota burndown projection. Persisted now
  *  so the Settings UI can capture it before the burndown chart lands. */
 export type ScheduleMode = "weekdays" | "vibe-coder" | "24x7" | "custom";
@@ -299,10 +311,18 @@ export interface MinderConfig {
   notificationPrefs?: {
     events: {
       "manual-step-added"?: { push?: boolean; telegram?: boolean; os?: boolean };
+      "awaiting-permission"?: { push?: boolean; telegram?: boolean; os?: boolean };
     };
   };
   /** LLM auto-title config. API key stored in secrets.json, not here. Wave 7 (P) honors. */
   autoTitle?: { endpoint?: string; model?: string };
+  /** Live activity hook receiver config. Wave 7 (Q) honors. */
+  liveActivity?: {
+    /** Full URL of the hook receiver endpoint (e.g. http://localhost:4100/api/hooks). */
+    hookUrl?: string;
+    /** Hook event names to register. Defaults to SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop. */
+    events?: HookEventName[];
+  };
   /** Per-model pricing overrides. Wave 8 (S) honors. */
   pricingRules?: PricingRule[];
 }

@@ -142,9 +142,8 @@ export async function PATCH(request: NextRequest) {
       if (typeof events !== "object" || events === null || Array.isArray(events)) {
         return NextResponse.json({ error: "notificationPrefs.events must be an object" }, { status: 400 });
       }
-      // Only manual-step-added has a real fire path this session.
-      const LIVE_EVENT_KEYS = ["manual-step-added"] as const;
-      const FUTURE_EVENT_KEYS = ["session-errored", "awaiting-permission", "dispatcher-emergency-stop"];
+      const LIVE_EVENT_KEYS = ["manual-step-added", "awaiting-permission"] as const;
+      const FUTURE_EVENT_KEYS = ["session-errored", "dispatcher-emergency-stop"];
       for (const [key, val] of Object.entries(events as Record<string, unknown>)) {
         if (FUTURE_EVENT_KEYS.includes(key)) {
           return NextResponse.json({
