@@ -276,7 +276,7 @@ export function HotFilesPanel({ slug }: HotFilesPanelProps) {
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             No co-edited file pairs found (minimum 2 sessions required).
           </p>
-        ) : pairs.length < 4 ? (
+        ) : new Set(pairs.flatMap((p) => [p.fileA, p.fileB])).size < 4 ? (
           pairs.slice(0, 20).map((p) => (
             <PairRow key={p.fileA + "\0" + p.fileB} pair={p} max={maxCoOccurrences} />
           ))

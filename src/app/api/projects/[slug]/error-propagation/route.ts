@@ -1,8 +1,26 @@
+import { promises as fsPromises } from "fs";
+import path from "path";
+import os from "os";
 import { NextRequest, NextResponse } from "next/server";
 import { buildErrorPropagation, type ErrorReport } from "@/lib/usage/errorPropagation";
-import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
+
+async function getProjectJsonlMaxMtime(projectPath: string): Promise<number> {
+  const dir = path.join(os.homedir(), ".claude", "projects", encodeProjectPath(projectPath));
+  try {
+    const entries = await fsPromises.readdir(dir);
+    const mtimes = await Promise.all(
+      entries
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => fsPromises.stat(path.join(dir, f)).then((s) => s.mtimeMs).catch(() => 0))
+    );
+    return mtimes.length ? Math.max(...mtimes) : 0;
+  } catch {
+    return 0;
+  }
+}
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -31,11 +49,6 @@ export async function GET(
 
   try {
     const cache = getCache();
-    const currentMtime = getJsonlMaxMtime();
-    const cached = cache.get(slug);
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
-      return NextResponse.json(cached.data);
-    }
 
     let scan = getCachedScan();
     if (!scan) {
@@ -45,6 +58,12 @@ export async function GET(
     const project = scan.projects.find((p) => p.slug === slug);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    const currentMtime = await getProjectJsonlMaxMtime(project.path);
+    const cached = cache.get(slug);
+    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+      return NextResponse.json(cached.data);
     }
 
     const data = await buildErrorPropagation(project.path);

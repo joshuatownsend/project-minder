@@ -586,8 +586,9 @@ export async function findSessionFile(
   try {
     const entries = await fs.readdir(projectsDir, { withFileTypes: true });
     dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw err;
   }
   for (const dir of dirs) {
     const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);

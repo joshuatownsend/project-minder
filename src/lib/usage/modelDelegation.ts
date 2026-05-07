@@ -14,10 +14,9 @@ export interface DelegationReport {
 }
 
 export function buildModelDelegation(turns: UsageTurn[]): DelegationReport {
-  // Pass 1: tool_use_id → model of the main-thread assistant turn that called Agent
+  // Pass 1: tool_use_id → model of the assistant turn that called Agent (all depths)
   const modelByToolUseId = new Map<string, string>();
   for (const turn of turns) {
-    if (turn.isSidechain) continue;
     if (turn.role !== "assistant") continue;
     for (const tc of turn.toolCalls) {
       if (tc.name === "Agent" && tc.id) {

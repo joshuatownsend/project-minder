@@ -15,10 +15,9 @@ export interface TimelineReport {
 }
 
 export function buildConcurrencyTimeline(turns: UsageTurn[]): TimelineReport {
-  // Pass 1: tool_use_id → agentName from main-thread Agent calls
+  // Pass 1: tool_use_id → agentName from all Agent calls (including nested sidechains)
   const agentByToolUseId = new Map<string, string>();
   for (const turn of turns) {
-    if (turn.isSidechain) continue;
     for (const tc of turn.toolCalls) {
       if (tc.name === "Agent" && tc.id) {
         const name =

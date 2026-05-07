@@ -23,31 +23,18 @@ export function buildAgentNetwork(turns: UsageTurn[]): NetworkReport {
 
   if (graph.nodes.length === 0) return { nodes: [], edges: [] };
 
-  // Project OrchNode instances by agentName — collapse multiple invocations
-  const nodeCountByName = new Map<string, number>();
+  // Build nodeId → agentName from the graph (covers all depths, including nested subagents)
+  const nodeIdToAgentName = new Map<string, string>();
   for (const node of graph.nodes) {
-    const name = node.agentName ?? node.toolName ?? node.id;
-    nodeCountByName.set(name, (nodeCountByName.get(name) ?? 0) + 1);
+    if (node.id.startsWith("__overflow__")) continue;
+    nodeIdToAgentName.set(node.id, node.agentName ?? node.toolName ?? node.id);
   }
 
-  // Count sidechain turns per agentName
-  const agentByToolUseId = new Map<string, string>();
-  for (const turn of turns) {
-    if (turn.isSidechain) continue;
-    for (const tc of turn.toolCalls) {
-      if (tc.name === "Agent" && tc.id) {
-        const name =
-          (tc.arguments?.subagent_type as string | undefined) ??
-          (tc.arguments?.agent as string | undefined);
-        if (name) agentByToolUseId.set(tc.id, name);
-      }
-    }
-  }
-
+  // Count sidechain turns per agentName using the graph-derived map
   const messageCounts = new Map<string, number>();
   for (const turn of turns) {
     if (!turn.isSidechain || !turn.parentToolUseId) continue;
-    const agentName = agentByToolUseId.get(turn.parentToolUseId) ?? "subagent";
+    const agentName = nodeIdToAgentName.get(turn.parentToolUseId) ?? "subagent";
     messageCounts.set(agentName, (messageCounts.get(agentName) ?? 0) + 1);
   }
 
@@ -69,10 +56,7 @@ export function buildAgentNetwork(turns: UsageTurn[]): NetworkReport {
   }));
 
   // Build projected edge set: for each OrchEdge, map nodeIds → agentNames
-  const nodeIdToName = new Map<string, string>();
-  for (const node of graph.nodes) {
-    nodeIdToName.set(node.id, node.agentName ?? node.toolName ?? node.id);
-  }
+  // (reuse nodeIdToAgentName built above)
 
   const edgeMap = new Map<string, number>();
 
@@ -84,7 +68,7 @@ export function buildAgentNetwork(turns: UsageTurn[]): NetworkReport {
   );
   for (const rootId of rootIds) {
     if (rootId.startsWith("__overflow__")) continue;
-    const childName = nodeIdToName.get(rootId);
+    const childName = nodeIdToAgentName.get(rootId);
     if (!childName) continue;
     const key = `${MAIN}\0${childName}`;
     edgeMap.set(key, (edgeMap.get(key) ?? 0) + 1);
@@ -93,8 +77,8 @@ export function buildAgentNetwork(turns: UsageTurn[]): NetworkReport {
   // Existing graph edges → map to agent names, drop self-loops
   for (const edge of graph.edges) {
     if (edge.from.startsWith("__overflow__") || edge.to.startsWith("__overflow__")) continue;
-    const fromName = nodeIdToName.get(edge.from);
-    const toName = nodeIdToName.get(edge.to);
+    const fromName = nodeIdToAgentName.get(edge.from);
+    const toName = nodeIdToAgentName.get(edge.to);
     if (!fromName || !toName || fromName === toName) continue;
     const key = `${fromName}\0${toName}`;
     edgeMap.set(key, (edgeMap.get(key) ?? 0) + 1);
