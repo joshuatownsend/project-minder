@@ -714,7 +714,7 @@ export function SessionsBrowser() {
         }
       }
     });
-  }, [data, search, sortBy, searchState]);
+  }, [data, search, sortBy, searchState, starredOnly]);
 
   const projectGroups = useMemo(
     () => groupByProject ? buildProjectGroups(filtered) : [],

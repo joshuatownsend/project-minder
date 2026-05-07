@@ -38,7 +38,6 @@ try {
   // this require — they can't follow a non-literal argument. The try/catch
   // handles the runtime case when the native binary isn't available (e.g. no
   // prebuilt for the current Node version).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Database = require(["better", "sqlite3"].join("-"));
 } catch (err) {
   loadError = err as Error;

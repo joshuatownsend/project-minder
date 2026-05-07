@@ -55,8 +55,8 @@ export function TerminalSection({
     <section>
       <h2 style={S.sectionTitle}>Terminal</h2>
       <p style={S.desc}>
-        Configure which terminal application to use when opening sessions. Project Minder auto-detects your platform's
-        default; use the override for custom terminal emulators.
+        Configure which terminal application to use when opening sessions. Project Minder auto-detects your
+        platform&apos;s default; use the override for custom terminal emulators.
       </p>
 
       <div style={S.card}>
