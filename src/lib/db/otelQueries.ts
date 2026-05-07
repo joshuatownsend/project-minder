@@ -1,4 +1,5 @@
 import "server-only";
+import type DatabaseT from "better-sqlite3";
 import { getDb, prepCached } from "./connection";
 
 // OTEL attribute schema — empirically verified 2026-05-07 against real Claude Code traffic.
@@ -57,15 +58,16 @@ import { getDb, prepCached } from "./connection";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-function periodToMs(period: "today" | "7d" | "30d"): number {
+export type Period = "today" | "7d" | "30d";
+
+function periodToMs(period: Period): number {
   const now = Date.now();
   if (period === "today") return now - 24 * 60 * 60 * 1000;
   if (period === "7d")    return now - 7 * 24 * 60 * 60 * 1000;
   return now - 30 * 24 * 60 * 60 * 1000;
 }
 
-// Convert ms-epoch to ISO-8601 for otel_events ts comparison.
-// SQLite ISO-8601 TEXT comparison is safe as long as format is consistent (it is: toISOString()).
+// otel_events.ts is TEXT (ISO-8601); comparison with toISOString() strings is safe.
 function msToIso(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -120,7 +122,6 @@ export async function getEditAcceptance(opts: {
      ORDER BY tool_name`,
   ).all(...params) as { tool_name: string; decision: string; n: number }[];
 
-  // Pivot to per-tool accepted/rejected counts.
   const byTool = new Map<string, { accepted: number; rejected: number }>();
   for (const row of rows) {
     if (!row.tool_name) continue;
@@ -174,7 +175,8 @@ export async function getToolLatency(opts: {
     params.push(opts.sessionId);
   }
 
-  // Fetch raw rows for percentile computation (SQLite has no native PERCENTILE_CONT).
+  // Fetch raw rows for JS-side percentile computation (SQLite lacks PERCENTILE_CONT).
+  // LIMIT 50000 caps memory on high-volume installs; accuracy loss is negligible at that scale.
   const rows = prepCached(
     db,
     `SELECT
@@ -184,10 +186,9 @@ export async function getToolLatency(opts: {
      FROM otel_events
      WHERE ${conditions.join(" AND ")}
        AND JSON_EXTRACT(payload_json, '$.attrs.duration_ms') IS NOT NULL
-     ORDER BY tool_name`,
+     ORDER BY ts DESC
+     LIMIT 50000`,
   ).all(...params) as { tool_name: string; duration_ms: number; success: string }[];
-
-  // Group by tool_name, then compute stats.
   const byTool = new Map<string, { durations: number[]; errors: number }>();
   for (const row of rows) {
     if (!row.tool_name || !Number.isFinite(row.duration_ms)) continue;
@@ -231,16 +232,12 @@ export interface TokenUsageResult {
   hasData: boolean;
 }
 
-export async function getTokenUsage(opts: {
-  period: "today" | "7d" | "30d";
-}): Promise<TokenUsageResult> {
-  const db = await getDb();
-  const empty = { daily: [], totals: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }, hasData: false };
-  if (!db) return empty;
+// Shared query for token usage metrics — both getTokenUsage and getCacheEfficiency use
+// the same aggregation; fetching once per call is fine (fast SQLite local aggregation).
+type RawTokenRow = { day: string; type: string; total: number };
 
-  const sinceMs = periodToMs(opts.period);
-
-  const rows = prepCached(
+function queryRawTokenDays(db: DatabaseT.Database, sinceMs: number): RawTokenRow[] {
+  return prepCached(
     db,
     `SELECT
        date(ts / 1000, 'unixepoch') AS day,
@@ -251,22 +248,31 @@ export async function getTokenUsage(opts: {
        AND ts >= ?
      GROUP BY day, type
      ORDER BY day`,
-  ).all(sinceMs) as { day: string; type: string; total: number }[];
+  ).all(sinceMs) as RawTokenRow[];
+}
 
-  if (rows.length === 0) return empty;
-
-  // Pivot by day.
+function pivotTokenRows(rows: RawTokenRow[]): TokenDay[] {
   const dayMap = new Map<string, TokenDay>();
   for (const row of rows) {
     const d = dayMap.get(row.day) ?? { day: row.day, input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-    if (row.type === "input")         d.input += row.total;
-    else if (row.type === "output")   d.output += row.total;
-    else if (row.type === "cacheRead")      d.cacheRead += row.total;
-    else if (row.type === "cacheCreation")  d.cacheCreation += row.total;
+    if (row.type === "input")              d.input += row.total;
+    else if (row.type === "output")        d.output += row.total;
+    else if (row.type === "cacheRead")     d.cacheRead += row.total;
+    else if (row.type === "cacheCreation") d.cacheCreation += row.total;
     dayMap.set(row.day, d);
   }
-  const daily = [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
+  return [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
 
+export async function getTokenUsage(opts: { period: Period }): Promise<TokenUsageResult> {
+  const db = await getDb();
+  const empty = { daily: [], totals: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }, hasData: false };
+  if (!db) return empty;
+
+  const rows = queryRawTokenDays(db, periodToMs(opts.period));
+  if (rows.length === 0) return empty;
+
+  const daily = pivotTokenRows(rows);
   const totals = daily.reduce(
     (acc, d) => ({
       input:         acc.input + d.input,
@@ -295,51 +301,23 @@ export interface CacheEfficiencyResult {
   hasData: boolean;
 }
 
-export async function getCacheEfficiency(opts: {
-  period: "today" | "7d" | "30d";
-}): Promise<CacheEfficiencyResult> {
+export async function getCacheEfficiency(opts: { period: Period }): Promise<CacheEfficiencyResult> {
   const db = await getDb();
   const empty = { hitRate: 0, daily: [], totalBillable: 0, hasData: false };
   if (!db) return empty;
 
-  const sinceMs = periodToMs(opts.period);
-
-  const rows = prepCached(
-    db,
-    `SELECT
-       date(ts / 1000, 'unixepoch') AS day,
-       JSON_EXTRACT(attrs_json, '$.type') AS type,
-       SUM(value) AS total
-     FROM otel_metrics
-     WHERE metric_name = 'claude_code.token.usage'
-       AND ts >= ?
-     GROUP BY day, type
-     ORDER BY day`,
-  ).all(sinceMs) as { day: string; type: string; total: number }[];
-
+  const rows = queryRawTokenDays(db, periodToMs(opts.period));
   if (rows.length === 0) return empty;
 
-  // Aggregate totals by day.
-  const dayTotals = new Map<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>();
-  for (const row of rows) {
-    const d = dayTotals.get(row.day) ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-    if (row.type === "input")              d.input += row.total;
-    else if (row.type === "output")        d.output += row.total;
-    else if (row.type === "cacheRead")     d.cacheRead += row.total;
-    else if (row.type === "cacheCreation") d.cacheCreation += row.total;
-    dayTotals.set(row.day, d);
-  }
-
-  // hit rate = cacheRead / (input + output + cacheCreation)
-  // Denominator excludes cacheRead itself: we want "what fraction of full-price tokens were cached?"
   const daily: CacheDay[] = [];
   let sumCacheRead = 0, sumBillable = 0;
 
-  for (const [day, t] of [...dayTotals.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const billable = t.input + t.output + t.cacheCreation;
-    const rate = billable > 0 ? t.cacheRead / billable : 0;
-    daily.push({ day, hitRate: rate });
-    sumCacheRead += t.cacheRead;
+  for (const d of pivotTokenRows(rows)) {
+    // Denominator excludes cacheRead: "what fraction of full-price tokens were served from cache?"
+    const billable = d.input + d.output + d.cacheCreation;
+    const rate = billable > 0 ? d.cacheRead / billable : 0;
+    daily.push({ day: d.day, hitRate: rate });
+    sumCacheRead += d.cacheRead;
     sumBillable += billable;
   }
 
@@ -383,7 +361,8 @@ export async function getHookActivity(opts: {
      WHERE event_name = 'hook_execution_complete'
        AND ts >= ?
        AND JSON_EXTRACT(payload_json, '$.attrs.hook_name') IS NOT NULL
-     ORDER BY hook_name`,
+     ORDER BY ts DESC
+     LIMIT 10000`,
   ).all(sinceIso) as { hook_name: string; duration_ms: number }[];
 
   const byHook = new Map<string, number[]>();

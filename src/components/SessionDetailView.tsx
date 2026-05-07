@@ -31,6 +31,7 @@ import { HandoffPanel } from "./HandoffPanel";
 import { HandoffDocModal } from "./HandoffDocModal";
 import { FeedbackPanel } from "./FeedbackPanel";
 import { BarChart } from "./stats/BarChart";
+import { ChartBlock } from "./stats/ChartBlock";
 import { EditAcceptanceCard } from "./stats/EditAcceptanceCard";
 import { ToolLatencyCard } from "./stats/ToolLatencyCard";
 import {
@@ -891,14 +892,12 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           {activeTab === "tools" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                <div style={{ padding: "14px 16px", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)" }}>
-                  <div style={{ fontSize: "0.65rem", fontFamily: "var(--font-mono)", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "10px" }}>Edit Acceptance</div>
+                <ChartBlock title="Edit Acceptance">
                   <EditAcceptanceCard sessionId={data.sessionId} />
-                </div>
-                <div style={{ padding: "14px 16px", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)" }}>
-                  <div style={{ fontSize: "0.65rem", fontFamily: "var(--font-mono)", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "10px" }}>Tool Latency</div>
+                </ChartBlock>
+                <ChartBlock title="Tool Latency">
                   <ToolLatencyCard sessionId={data.sessionId} />
-                </div>
+                </ChartBlock>
               </div>
               <BarChart data={data.toolUsage} color="var(--accent)" maxItems={20} />
             </div>

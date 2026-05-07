@@ -3,6 +3,7 @@
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { SampleBadge } from "./SampleBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { msLabel, defaultSince } from "@/lib/format";
 import type { ToolLatencyResult } from "@/lib/db/otelQueries";
 
 interface Props {
@@ -10,13 +11,8 @@ interface Props {
   sessionId?: string;
 }
 
-function msLabel(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
 export function ToolLatencyCard({ since, sessionId }: Props) {
-  const sinceParam = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sinceParam = since ?? defaultSince();
   const params = new URLSearchParams({ since: sinceParam });
   if (sessionId) params.set("sessionId", sessionId);
 

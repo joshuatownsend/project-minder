@@ -3,15 +3,9 @@
 import { useState } from "react";
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { TokenUsageResult } from "@/lib/db/otelQueries";
-
-type Period = "today" | "7d" | "30d";
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(Math.round(n));
-}
+import { formatTokens } from "@/lib/format";
+import type { Period, TokenUsageResult } from "@/lib/db/otelQueries";
+import { PeriodToggle } from "./PeriodToggle";
 
 const SEGMENT_COLORS: Record<string, string> = {
   input:         "var(--info)",
@@ -34,21 +28,7 @@ export function TokenUsageCard() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      {/* Period toggle */}
-      <div style={{ display: "flex", gap: "4px" }}>
-        {(["today", "7d", "30d"] as Period[]).map((p) => (
-          <button key={p} onClick={() => setPeriod(p)} style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.65rem",
-            padding: "2px 8px",
-            borderRadius: "4px",
-            border: `1px solid ${period === p ? "var(--accent)" : "var(--border-subtle)"}`,
-            background: period === p ? "rgba(245,158,11,0.1)" : "transparent",
-            color: period === p ? "var(--accent)" : "var(--text-muted)",
-            cursor: "pointer",
-          }}>{p}</button>
-        ))}
-      </div>
+      <PeriodToggle value={period} onChange={setPeriod} />
 
       {loading && <Skeleton className="h-24" />}
 
@@ -60,7 +40,6 @@ export function TokenUsageCard() {
 
       {!loading && data?.hasData && (
         <>
-          {/* Totals row */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
             {(["input", "output", "cacheRead", "cacheCreation"] as const).map((k) => (
               <div key={k} style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -77,7 +56,6 @@ export function TokenUsageCard() {
             ))}
           </div>
 
-          {/* Daily stacked bars */}
           {data.daily.length > 0 && (
             <div style={{ display: "flex", gap: "3px", alignItems: "flex-end", height: "48px" }}>
               {data.daily.map((d) => {

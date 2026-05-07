@@ -3,10 +3,11 @@
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { SampleBadge } from "./SampleBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { defaultSince } from "@/lib/format";
 import type { EditAcceptanceResult } from "@/lib/db/otelQueries";
 
 interface Props {
-  since?: string; // ISO-8601, defaults to last 7 days
+  since?: string;
   sessionId?: string;
 }
 
@@ -32,7 +33,7 @@ function AcceptBar({ accepted, rejected }: { accepted: number; rejected: number 
 }
 
 export function EditAcceptanceCard({ since, sessionId }: Props) {
-  const sinceParam = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sinceParam = since ?? defaultSince();
   const params = new URLSearchParams({ since: sinceParam });
   if (sessionId) params.set("sessionId", sessionId);
 

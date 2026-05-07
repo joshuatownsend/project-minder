@@ -2,6 +2,7 @@
 
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
+import { defaultSince } from "@/lib/format";
 import type { PressureResult } from "@/lib/db/otelQueries";
 
 interface Props {
@@ -36,7 +37,7 @@ function CounterBadge({ label, value, variant }: { label: string; value: number;
 }
 
 export function PressurePanel({ since }: Props) {
-  const sinceParam = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sinceParam = since ?? defaultSince();
   const { data, loading, error } = useReportFetch<PressureResult>(
     `/api/telemetry/pressure?since=${encodeURIComponent(sinceParam)}`,
   );

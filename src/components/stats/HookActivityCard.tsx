@@ -2,19 +2,15 @@
 
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
+import { msLabel, defaultSince } from "@/lib/format";
 import type { HookActivityResult } from "@/lib/db/otelQueries";
 
 interface Props {
   since?: string;
 }
 
-function msLabel(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
 export function HookActivityCard({ since }: Props) {
-  const sinceParam = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sinceParam = since ?? defaultSince();
   const { data, loading, error } = useReportFetch<HookActivityResult>(
     `/api/telemetry/hook-activity?since=${encodeURIComponent(sinceParam)}`,
   );
