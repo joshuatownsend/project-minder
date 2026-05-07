@@ -12,6 +12,12 @@ const SessionComplexityChart = dynamic(
 );
 import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu } from "lucide-react";
 import type { ReactNode } from "react";
+import { EditAcceptanceCard } from "./stats/EditAcceptanceCard";
+import { ToolLatencyCard } from "./stats/ToolLatencyCard";
+import { TokenUsageCard } from "./stats/TokenUsageCard";
+import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
+import { HookActivityCard } from "./stats/HookActivityCard";
+import { PressurePanel } from "./stats/PressurePanel";
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -342,6 +348,34 @@ export function StatsDashboard() {
           </div>
         </section>
       )}
+
+      {/* Telemetry */}
+      <section id="telemetry">
+        <SectionHeader label="Telemetry" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+          <ChartBlock title="Edit Acceptance">
+            <EditAcceptanceCard />
+          </ChartBlock>
+          <ChartBlock title="Tool Latency">
+            <ToolLatencyCard />
+          </ChartBlock>
+          <ChartBlock title="Token Usage">
+            <TokenUsageCard />
+          </ChartBlock>
+          <ChartBlock title="Cache Efficiency">
+            <CacheEfficiencyCard />
+          </ChartBlock>
+          <ChartBlock title="Hook Activity">
+            <HookActivityCard />
+          </ChartBlock>
+          <div /> {/* spacer */}
+        </div>
+        <div style={{ marginTop: "16px" }}>
+          <ChartBlock title="Pressure">
+            <PressurePanel />
+          </ChartBlock>
+        </div>
+      </section>
     </div>
   );
 }

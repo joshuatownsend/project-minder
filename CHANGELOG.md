@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 8.1b — Cluster R: OTEL consumption UI.** TODO #111, #112.
+  - **Telemetry section on `/stats`** with six cards consuming live OTEL data:
+    - **EditAcceptanceCard** — per-tool accept/reject bars with acceptance rate. Per-session variant on session detail Tools tab. Source: `tool_decision` events.
+    - **ToolLatencyCard** — per-tool p50/p95/max latency table; red row when p95 ≥ 10s, green dot when p50 < 500ms; per-session variant on session detail Tools tab. Source: `tool_result` events (`duration_ms` attr confirmed present).
+    - **TokenUsageCard** — today/7d/30d toggle; stacked daily bars (input/output/cacheRead/cacheCreation); period totals. Source: `claude_code.token.usage` metric.
+    - **CacheEfficiencyCard** — big hit-rate number; daily sparkline; 70% target line; SampleBadge when billable tokens < 10K. Hit rate = cacheRead / (input + output + cacheCreation).
+    - **HookActivityCard** — per-hook fire count bar + p50/p95 total duration. Source: `hook_execution_complete` events (`total_duration_ms` attr direct, no pairing needed).
+    - **PressurePanel** (full-width) — API error / retry exhaustion / compaction counters + last-10 error list. Source: `api_error`, `api_retries_exhausted`, `compaction` events.
+  - **`SampleBadge`** — reusable monospace pill (`n=12`); amber when n < threshold, muted otherwise.
+  - **Per-session edit acceptance + tool latency** on session detail Tools tab (scoped by `sessionId` query param).
+  - **`src/lib/db/otelQueries.ts`** — pure read layer: `getEditAcceptance`, `getToolLatency`, `getTokenUsage`, `getCacheEfficiency`, `getHookActivity`, `getPressureSnapshot`. Empirically verified attribute schema (Phase 0 capture confirmed `duration_ms` on `tool_result`, `decision` string on `tool_decision`, `total_duration_ms` on `hook_execution_complete`).
+  - **Six API routes** under `/api/telemetry/{edit-acceptance,tool-latency,token-usage,cache-efficiency,hook-activity,pressure}`.
+- **Wave 8.1a bugfix — OTEL wizard** was missing `OTEL_METRICS_EXPORTER=otlp` and `OTEL_LOGS_EXPORTER=otlp`. Without these the SDK defaults to no-op exporters regardless of endpoint config. Now writes all 6 required env vars.
+
 - **Wave 8.1a — Cluster R: OTEL ingest + setup wizard.** TODO #94.
   - **`POST /api/otel/v1/logs`** — OTLP/HTTP JSON logs receiver. Parses `resourceLogs → scopeLogs → logRecords`, persists events to `otel_events`. Per-record try/catch for partial-success semantics; returns `{ partialSuccess: { rejectedLogRecords, errorMessage } }` per OTLP spec.
   - **`POST /api/otel/v1/metrics`** — OTLP/HTTP JSON metrics receiver. Parses `resourceMetrics → scopeMetrics → metrics`, persists to new `otel_metrics` table. Returns `{ partialSuccess: { rejectedDataPoints } }`.

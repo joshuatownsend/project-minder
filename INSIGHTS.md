@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:3c6ffbda371f | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:08:46.483Z -->
+## ★ Insight
+OpenTelemetry separates **what to export** (`OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER`) from **where to send it** (`OTEL_EXPORTER_OTLP_ENDPOINT`). Setting only the endpoint is a no-op — the SDK won't export anything unless the exporter type is explicitly set to `otlp`. This is a common gotcha: env vars are independent and none implies the other.
+
+---
+
 <!-- insight:a1b2c3d4e5f6 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T22:00:00.000Z -->
 ## ★ Wave 8.1b Phase 0 — OTEL Root Cause & Verified Schema (docs-verified 2026-05-07)
 
