@@ -107,7 +107,11 @@ CREATE TABLE sessions (
   derived_version       INTEGER NOT NULL DEFAULT 0,
   indexed_at_ms         INTEGER NOT NULL,
   -- Wave 7.1 columns (schema v7):
-  generated_title       TEXT
+  generated_title       TEXT,
+  -- Wave 7.1b columns (schema v8):
+  starred_at            TEXT,
+  distilled_at          TEXT,
+  distilled_text        TEXT
 );
 
 CREATE INDEX sessions_by_project_end      ON sessions(project_slug, end_ts DESC);
@@ -115,6 +119,7 @@ CREATE INDEX sessions_by_end_ts      ON sessions(end_ts DESC);
 CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);
 CREATE INDEX sessions_by_slug        ON sessions(slug) WHERE slug IS NOT NULL;
 CREATE INDEX sessions_by_generated_title ON sessions(generated_title) WHERE generated_title IS NOT NULL;
+CREATE INDEX sessions_starred ON sessions(starred_at) WHERE starred_at IS NOT NULL;
 
 -- ─── push_subscriptions ──────────────────────────────────────────────────
 -- Web push endpoint registrations. One row per browser subscription.

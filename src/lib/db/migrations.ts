@@ -238,6 +238,26 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 8,
+    name: "wave7.1b: starred_at + distilled_at + distilled_text",
+    up: (db) => {
+      const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      const colNames = sessionCols.map((c) => c.name);
+      if (!colNames.includes("starred_at")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN starred_at TEXT").run();
+      }
+      if (!colNames.includes("distilled_at")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN distilled_at TEXT").run();
+      }
+      if (!colNames.includes("distilled_text")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN distilled_text TEXT").run();
+      }
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS sessions_starred ON sessions(starred_at) WHERE starred_at IS NOT NULL"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {
