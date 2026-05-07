@@ -1,0 +1,93 @@
+import "server-only";
+import { promises as fs } from "fs";
+import path from "path";
+
+export interface TerminalDef {
+  binary: string;
+  buildArgs: (cwd: string, command?: string) => string[];
+}
+
+async function whichExists(cmd: string): Promise<boolean> {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter);
+  for (const dir of dirs) {
+    try {
+      await fs.access(path.join(dir, cmd));
+      return true;
+    } catch {
+      // Try with .exe on Windows.
+      if (process.platform === "win32") {
+        try {
+          await fs.access(path.join(dir, `${cmd}.exe`));
+          return true;
+        } catch {
+          // Continue.
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export async function detectTerminal(): Promise<TerminalDef> {
+  if (process.platform === "win32") {
+    const hasWt = await whichExists("wt");
+    if (hasWt) {
+      return {
+        binary: "cmd.exe",
+        buildArgs: (cwd, command) =>
+          command
+            ? ["/c", "start", "", "wt", "-d", cwd, "cmd.exe", "/k", command]
+            : ["/c", "start", "", "wt", "-d", cwd],
+      };
+    }
+    return {
+      binary: "cmd.exe",
+      buildArgs: (cwd, command) =>
+        command
+          ? ["/c", "start", "", "cmd.exe", "/k", `cd /d "${cwd}" && ${command}`]
+          : ["/c", "start", "", "cmd.exe", "/k", `cd /d "${cwd}"`],
+    };
+  }
+
+  if (process.platform === "darwin") {
+    // Use osascript to open Terminal.app to a specific directory.
+    return {
+      binary: "osascript",
+      buildArgs: (cwd, command) => {
+        const script = command
+          ? `tell application "Terminal" to do script "cd '${cwd}' && ${command}"`
+          : `tell application "Terminal" to do script "cd '${cwd}'"`;
+        return ["-e", script];
+      },
+    };
+  }
+
+  // Linux: try common terminals in order.
+  const linuxTerminals: Array<{ cmd: string; buildArgs: (cwd: string, command?: string) => string[] }> = [
+    {
+      cmd: "gnome-terminal",
+      buildArgs: (cwd, command) =>
+        command
+          ? ["--working-directory", cwd, "--", "bash", "-c", `${command}; exec bash`]
+          : ["--working-directory", cwd],
+    },
+    {
+      cmd: "konsole",
+      buildArgs: (cwd, command) =>
+        command
+          ? ["--workdir", cwd, "-e", "bash", "-c", `${command}; exec bash`]
+          : ["--workdir", cwd],
+    },
+    {
+      cmd: "xterm",
+      buildArgs: (cwd, command) =>
+        command ? ["-e", `bash -c "cd '${cwd}' && ${command}; exec bash"`] : ["-e", `bash -c "cd '${cwd}'; exec bash"`],
+    },
+  ];
+  for (const t of linuxTerminals) {
+    if (await whichExists(t.cmd)) {
+      return { binary: t.cmd, buildArgs: t.buildArgs };
+    }
+  }
+  return { binary: "xterm", buildArgs: (cwd) => ["-e", `bash -c "cd '${cwd}'; exec bash"`] };
+}

@@ -417,6 +417,8 @@ export interface SessionSummary {
   cliVersion?: string;
   hasResumeAnomaly?: boolean;
   compactBoundaryCount?: number;
+  /** LLM-generated concise title (Wave 7.1). Stored in `sessions.generated_title`. */
+  generatedTitle?: string;
 }
 
 export interface TimelineEvent {
