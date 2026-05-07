@@ -10,6 +10,7 @@ import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
 import { TerminalSection } from "@/components/settings/TerminalSection";
 import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
 import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
+import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
 const FLAG_GROUPS = {
@@ -360,59 +361,13 @@ function FlagGroup(props: {
                 value={value}
                 disabled={disabled || isSaving}
                 onChange={(v) => onToggle(f.key, v)}
-                ariaLabel={f.label}
+                label={f.label}
               />
             </li>
           );
         })}
       </ul>
     </div>
-  );
-}
-
-function Toggle(props: {
-  value: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-  ariaLabel: string;
-}) {
-  const { value, disabled, onChange, ariaLabel } = props;
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={value}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onChange(!value)}
-      style={{
-        width: "34px",
-        height: "18px",
-        borderRadius: "9999px",
-        position: "relative",
-        background: value ? "var(--info)" : "var(--border-default)",
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "background 0.15s",
-        border: "none",
-        padding: 0,
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          top: "2px",
-          left: value ? "18px" : "2px",
-          width: "14px",
-          height: "14px",
-          borderRadius: "50%",
-          background: "var(--bg-primary, #fff)",
-          transition: "left 0.15s",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-        }}
-      />
-    </button>
   );
 }
 

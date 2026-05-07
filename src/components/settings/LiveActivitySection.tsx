@@ -4,35 +4,12 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { getFlag } from "@/lib/featureFlags";
 import { S } from "./styles";
+import { Toggle } from "./Toggle";
 
 interface InstallStatus {
   installed: boolean;
   hookUrl: string | null;
   eventsRegistered: string[];
-}
-
-function Toggle({ value, disabled, onChange, label }: {
-  value: boolean; disabled?: boolean; onChange: (v: boolean) => void; label: string;
-}) {
-  return (
-    <button
-      type="button" role="switch" aria-checked={value} aria-label={label}
-      disabled={disabled} onClick={() => onChange(!value)}
-      style={{
-        flexShrink: 0, width: "34px", height: "18px", borderRadius: "9999px",
-        position: "relative", background: value ? "var(--info)" : "var(--border-default)",
-        opacity: disabled ? 0.4 : 1, cursor: disabled ? "not-allowed" : "pointer",
-        transition: "background 0.15s", border: "none", padding: 0,
-      }}
-    >
-      <span style={{
-        position: "absolute", top: "2px", left: value ? "18px" : "2px",
-        width: "14px", height: "14px", borderRadius: "50%",
-        background: "var(--bg-primary, #fff)", transition: "left 0.15s",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-      }} />
-    </button>
-  );
 }
 
 export function LiveActivitySection({
@@ -60,18 +37,20 @@ export function LiveActivitySection({
   const needsReinstall =
     status?.installed && status.hookUrl !== null && status.hookUrl !== `${currentOrigin}/api/hooks`;
 
+  async function callApi(method: "POST" | "DELETE", body?: object): Promise<InstallStatus> {
+    const res = await fetch("/api/live-activity/install", {
+      method,
+      ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+    });
+    const data = (await res.json()) as InstallStatus & { error?: string };
+    if (!res.ok) throw new Error(data.error ?? `${method} failed`);
+    return data;
+  }
+
   async function handleInstall() {
-    setBusy(true);
-    setMsg(null);
+    setBusy(true); setMsg(null);
     try {
-      const res = await fetch("/api/live-activity/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hookUrl: `${currentOrigin}/api/hooks` }),
-      });
-      const data = (await res.json()) as InstallStatus & { error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Install failed");
-      setStatus(data);
+      setStatus(await callApi("POST", { hookUrl: `${currentOrigin}/api/hooks` }));
       setMsg({ text: "Hooks installed successfully.", ok: true });
     } catch (err) {
       setMsg({ text: (err as Error).message, ok: false });
@@ -81,13 +60,9 @@ export function LiveActivitySection({
   }
 
   async function handleRemove() {
-    setBusy(true);
-    setMsg(null);
+    setBusy(true); setMsg(null);
     try {
-      const res = await fetch("/api/live-activity/install", { method: "DELETE" });
-      const data = (await res.json()) as InstallStatus & { error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Remove failed");
-      setStatus(data);
+      setStatus(await callApi("DELETE"));
       setMsg({ text: "Hooks removed.", ok: true });
     } catch (err) {
       setMsg({ text: (err as Error).message, ok: false });
@@ -97,8 +72,16 @@ export function LiveActivitySection({
   }
 
   async function handleReinstall() {
-    await handleRemove();
-    await handleInstall();
+    setBusy(true); setMsg(null);
+    try {
+      setStatus(await callApi("DELETE"));
+      setStatus(await callApi("POST", { hookUrl: `${currentOrigin}/api/hooks` }));
+      setMsg({ text: "Hooks reinstalled successfully.", ok: true });
+    } catch (err) {
+      setMsg({ text: (err as Error).message, ok: false });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleFlagToggle(val: boolean) {

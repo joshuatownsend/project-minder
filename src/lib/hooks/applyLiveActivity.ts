@@ -4,6 +4,7 @@ import os from "os";
 import { withFileLock, writeFileAtomic } from "@/lib/atomicWrite";
 import { recordPreWrite } from "@/lib/configHistory";
 import { buildCurlCommand, isManagedCommand } from "./curlCommand";
+import { tryParseJsonc } from "@/lib/scanner/util/jsonc";
 import type { HookEventName } from "@/lib/types";
 
 const USER_SETTINGS_PATH = path.join(os.homedir(), ".claude", "settings.json");
@@ -25,13 +26,9 @@ interface HookEntry {
 async function readUserSettings(targetPath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(targetPath, "utf-8");
-    return JSON.parse(raw) as Record<string, unknown>;
+    return tryParseJsonc<Record<string, unknown>>(raw) ?? {};
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return {};
-    // Tolerate JSON parse errors by returning empty — the original bytes are
-    // already snapshotted by recordPreWrite; the user can restore if needed.
-    if (err instanceof SyntaxError) return {};
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw err;
   }
 }
@@ -66,7 +63,6 @@ export async function installLiveActivityHooks(
 ): Promise<void> {
   const command = buildCurlCommand(hookUrl);
   await withFileLock(USER_SETTINGS_PATH, async () => {
-    await recordPreWrite(USER_SETTINGS_PATH, { label: "applyLiveActivity" });
     const doc = await readUserSettings(USER_SETTINGS_PATH);
     if (!doc.hooks || typeof doc.hooks !== "object") doc.hooks = {};
     const hooksObj = doc.hooks as Record<string, HookEntry[]>;
@@ -81,6 +77,7 @@ export async function installLiveActivityHooks(
       changed = true;
     }
     if (!changed) return;
+    await recordPreWrite(USER_SETTINGS_PATH, { label: "applyLiveActivity" });
     // Ensure parent directory exists (first-run case where ~/.claude/ exists but settings.json doesn't)
     await fs.mkdir(path.dirname(USER_SETTINGS_PATH), { recursive: true });
     await writeFileAtomic(USER_SETTINGS_PATH, JSON.stringify(doc, null, 2) + "\n");

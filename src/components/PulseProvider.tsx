@@ -90,12 +90,19 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
         lastCheckedRef.current = data.generatedAt;
 
-        setSnapshot({
-          pendingSteps: data.pendingSteps,
-          approvalCount: data.approvalCount,
-          liveSlugs: data.liveSlugs ?? [],
-          awaitingSlugs: data.awaitingSlugs ?? [],
-          generatedAt: data.generatedAt,
+        const liveSlugs = data.liveSlugs ?? [];
+        const awaitingSlugs = data.awaitingSlugs ?? [];
+        setSnapshot((prev) => {
+          if (
+            prev.pendingSteps === data.pendingSteps &&
+            prev.approvalCount === data.approvalCount &&
+            prev.generatedAt === data.generatedAt &&
+            prev.liveSlugs.length === liveSlugs.length &&
+            prev.awaitingSlugs.length === awaitingSlugs.length &&
+            prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&
+            prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i])
+          ) return prev;
+          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
         });
 
         if (data.changes && data.changes.length > 0) {

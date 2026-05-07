@@ -19,7 +19,7 @@ const RING_CAP = 50;
 const LIVE_TTL_MS = 30_000; // session is "live" if last event within 30s
 const STALE_EVICT_MS = 5 * 60_000; // evict sessions inactive for 5 min
 
-const STOP_EVENTS = new Set<HookEventName>(["Stop", "SubagentStop", "SessionEnd"]);
+export const STOP_EVENTS = new Set<HookEventName>(["Stop", "SubagentStop", "SessionEnd"]);
 
 const g = globalThis as unknown as {
   __minderHookBuffers?: Map<string, HookEvent[]>;

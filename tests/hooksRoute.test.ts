@@ -23,6 +23,7 @@ vi.mock("@/lib/hooks/buffer", () => ({
   clearLiveSession: vi.fn(),
   setAwaiting: vi.fn().mockReturnValue(true),
   clearAwaiting: vi.fn(),
+  STOP_EVENTS: new Set(["Stop", "SubagentStop", "SessionEnd"]),
 }));
 
 vi.mock("@/lib/notifications/dispatchAwaitingPermission", () => ({

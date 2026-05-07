@@ -23,6 +23,30 @@ import { usePulse } from "./PulseProvider";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
+function LiveStatusBadge({ isLive, isAwaiting }: { isLive: boolean; isAwaiting: boolean }) {
+  if (isAwaiting) return (
+    <span title="Claude Code is awaiting permission" style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+      color: "var(--accent)", background: "var(--accent-bg)",
+      border: "1px solid var(--accent-border)", borderRadius: "3px", padding: "2px 6px",
+    }}>
+      <StatusDot status="awaiting" size={6} />input
+    </span>
+  );
+  if (isLive) return (
+    <span title="Claude Code is active in this project" style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+      color: "var(--status-active-text)", background: "var(--status-active-bg)",
+      border: "1px solid var(--status-active-border)", borderRadius: "3px", padding: "2px 6px",
+    }}>
+      <StatusDot status="live" size={6} />live
+    </span>
+  );
+  return null;
+}
+
 interface ProjectCardProps {
   project: ProjectData;
   onArchive?: (slug: string) => void;
@@ -127,36 +151,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
-            {isAwaiting && (
-              <span
-                title="Claude Code is awaiting permission"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  color: "var(--accent)", background: "var(--accent-bg)",
-                  border: "1px solid var(--accent-border)",
-                  borderRadius: "3px", padding: "2px 6px",
-                }}
-              >
-                <StatusDot status="awaiting" size={6} />
-                input
-              </span>
-            )}
-            {isLive && !isAwaiting && (
-              <span
-                title="Claude Code is active in this project"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  color: "var(--status-active-text)", background: "var(--status-active-bg)",
-                  border: "1px solid var(--status-active-border)",
-                  borderRadius: "3px", padding: "2px 6px",
-                }}
-              >
-                <StatusDot status="live" size={6} />
-                live
-              </span>
-            )}
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
@@ -281,36 +276,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
-            {isAwaiting && (
-              <span
-                title="Claude Code is awaiting permission"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  color: "var(--accent)", background: "var(--accent-bg)",
-                  border: "1px solid var(--accent-border)",
-                  borderRadius: "3px", padding: "2px 6px",
-                }}
-              >
-                <StatusDot status="awaiting" size={6} />
-                input
-              </span>
-            )}
-            {isLive && !isAwaiting && (
-              <span
-                title="Claude Code is active in this project"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "4px",
-                  fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  color: "var(--status-active-text)", background: "var(--status-active-bg)",
-                  border: "1px solid var(--status-active-border)",
-                  borderRadius: "3px", padding: "2px 6px",
-                }}
-              >
-                <StatusDot status="live" size={6} />
-                live
-              </span>
-            )}
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}

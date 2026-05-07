@@ -10,6 +10,7 @@ import {
   clearLiveSession,
   setAwaiting,
   clearAwaiting,
+  STOP_EVENTS,
 } from "@/lib/hooks/buffer";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
 import type { HookEventName } from "@/lib/types";
@@ -25,8 +26,6 @@ const VALID_EVENTS = new Set<string>([
   "SessionStart",
   "SessionEnd",
 ]);
-
-const STOP_EVENTS = new Set<string>(["Stop", "SubagentStop", "SessionEnd"]);
 
 /** Resolve a cwd path to a project slug using the live scan cache. */
 function resolveSlug(cwd: string): string {
