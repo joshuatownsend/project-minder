@@ -51,6 +51,96 @@ const MIGRATIONS: Migration[] = [
       runStatements(db, sql);
     },
   },
+  {
+    version: 2,
+    name: "task_decisions table for HITL + delegated-todo quadrant + metadata column (Wave 9.2)",
+    up: (db) => {
+      // SQLite cannot ALTER a CHECK constraint in-place. We rebuild ops_tasks
+      // to add 'delegated-todo' to the quadrant enum and the metadata column
+      // in a single atomic table swap, then add the task_decisions table.
+      runStatements(db, `
+        CREATE TABLE ops_tasks_v2 (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          title               TEXT    NOT NULL,
+          description         TEXT    NOT NULL DEFAULT '',
+          status              TEXT    NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','awaiting_approval','running','done','failed','cancelled')),
+          priority            INTEGER NOT NULL DEFAULT 3 CHECK (priority BETWEEN 1 AND 5),
+          quadrant            TEXT    NOT NULL DEFAULT 'do'
+            CHECK (quadrant IN ('do','schedule','delegate','archive','delegated-todo')),
+          assigned_skill      TEXT,
+          model               TEXT,
+          execution_mode      TEXT    NOT NULL DEFAULT 'stream'
+            CHECK (execution_mode IN ('classic','stream')),
+          scheduled_for       TEXT,
+          requires_approval   INTEGER NOT NULL DEFAULT 0 CHECK (requires_approval IN (0, 1)),
+          risk_level          TEXT    NOT NULL DEFAULT 'low'
+            CHECK (risk_level IN ('low','medium','high')),
+          dry_run             INTEGER NOT NULL DEFAULT 0 CHECK (dry_run IN (0, 1)),
+          schedule_id         INTEGER REFERENCES ops_schedules(id) ON DELETE SET NULL,
+          approved_at         TEXT,
+          session_id          TEXT,
+          started_at          TEXT,
+          completed_at        TEXT,
+          duration_ms         INTEGER,
+          cost_usd            REAL,
+          output_summary      TEXT,
+          error_message       TEXT,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          metadata            TEXT
+        );
+        INSERT INTO ops_tasks_v2
+          SELECT id,title,description,status,priority,quadrant,assigned_skill,model,
+                 execution_mode,scheduled_for,requires_approval,risk_level,dry_run,
+                 schedule_id,approved_at,session_id,started_at,completed_at,
+                 duration_ms,cost_usd,output_summary,error_message,
+                 consecutive_failures,created_at,NULL
+          FROM ops_tasks;
+        DROP TABLE ops_tasks;
+        ALTER TABLE ops_tasks_v2 RENAME TO ops_tasks;
+        CREATE INDEX IF NOT EXISTS ix_tasks_status ON ops_tasks(status);
+        CREATE INDEX IF NOT EXISTS ix_tasks_quadrant ON ops_tasks(quadrant);
+        CREATE INDEX IF NOT EXISTS ix_tasks_scheduled ON ops_tasks(scheduled_for) WHERE scheduled_for IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_tasks_schedule_fk ON ops_tasks(schedule_id) WHERE schedule_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_tasks_session ON ops_tasks(session_id) WHERE session_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS task_decisions (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id     INTEGER NOT NULL
+                        REFERENCES ops_tasks(id) ON DELETE CASCADE,
+          session_id  TEXT,
+          kind        TEXT NOT NULL CHECK (kind IN ('decision','inbox')),
+          prompt      TEXT NOT NULL,
+          choices     TEXT,
+          decision_text TEXT,
+          created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+          decided_at  INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_task_decisions_dedup
+          ON task_decisions(task_id, kind, prompt)
+          WHERE kind = 'decision' AND decided_at IS NULL;
+        CREATE INDEX IF NOT EXISTS ix_task_decisions_task
+          ON task_decisions(task_id);
+        CREATE INDEX IF NOT EXISTS ix_task_decisions_open
+          ON task_decisions(decided_at) WHERE decided_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 3,
+    name: "fix-dedup-index",
+    up(db) {
+      // Re-create the dedup index with correct columns. v2 used
+      // (session_id, prompt) which cannot dedup NULL session_ids
+      // (SQLite NULLs are never equal in UNIQUE constraints).
+      db.exec(
+        `DROP INDEX IF EXISTS ux_task_decisions_dedup;
+         CREATE UNIQUE INDEX IF NOT EXISTS ux_task_decisions_dedup
+           ON task_decisions(task_id, kind, prompt)
+           WHERE kind = 'decision' AND decided_at IS NULL;`
+      );
+    },
+  },
 ];
 
 function resolveTasksSchemaPath(): string {

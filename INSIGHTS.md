@@ -1,5 +1,305 @@
 # Insights
 
+<!-- insight:9fdb15510b89 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T20:06:59.408Z -->
+## ★ Insight
+The InboxPanel issue is the only one with real ongoing cost (720 unnecessary HTTP+DB round-trips per hour per tab). The double stat-walk and sequential PID checks are correctness-adjacent; the rest are cosmetic cleanups.
+
+---
+
+<!-- insight:709577227cb9 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:59:11.303Z -->
+## ★ Insight
+The `public/help/` directory is a runtime-fetchable mirror of `docs/help/` — Next.js serves the `public/` tree statically, so the help docs fetched by the UI's `HelpModal` component must be copied there manually. This two-directory pattern avoids storing docs inside `app/` (which would be server-component territory) while still allowing plain `fetch("/help/tasks.md")` calls from any client component.
+
+---
+
+<!-- insight:87b4ec139ae7 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:57:40.690Z -->
+## ★ Insight
+The existing `tasks.md` ends with a "What's coming" section that specifically mentions Wave 9.2 HITL — this is the exact section we're replacing with actual documentation. The CHANGELOG structure uses bolded wave headers with bullet sub-items; we'll follow that pattern exactly.
+
+---
+
+<!-- insight:a79c6d52b19e | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:43:04.757Z -->
+## ★ Insight
+For the Delegate button in TodoList, I'll fetch config once on mount (same pattern as `NotificationListener`) rather than adding a prop. This keeps `ProjectDetail` untouched and keeps the delegation concern self-contained in the component that owns TODO items.
+
+---
+
+<!-- insight:0f4c33550193 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:40:09.519Z -->
+## ★ Insight
+The `EmergencyStopButton` mount is clean here: `layout.tsx` already reads `config` server-side, so I can pass `taskDispatcherEnabled` as a prop rather than firing another fetch. Client components can be imported from server components — the "use client" boundary is established automatically at the component level.
+
+---
+
+<!-- insight:f5b4cc182129 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:36:37.821Z -->
+## ★ Insight
+Before writing the UI layer, a key architectural choice: `DecisionsPanel` should NOT do its own polling. Instead it watches `snapshot.decisionCount` from `usePulse()` — the PulseProvider already polls every 5s. When that count changes (edge-triggered by the server), the panel fetches `/api/decisions`. This avoids a second independent interval and keeps the two signals synchronized.
+
+---
+
+<!-- insight:761f023e3d33 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:22:07.723Z -->
+## ★ Insight
+**`TodoList.tsx` renders unchecked items as plain click-toggle buttons** — no row-level action slot exists yet. Rather than adding a "Delegate" button inside the toggle button, I'll add it as a sibling `<button>` element in the `li` row, styled as a small secondary affordance. This avoids breaking the existing click-to-toggle behavior. The `dispatch` call needs `slug` (already a prop) and `lineNumber` (already used for toggle). Clean extension.
+
+---
+
+<!-- insight:fa8e6d3427d9 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:19:05.264Z -->
+## ★ Insight
+**Why a separate `task_decisions` table beats overloading `awaiting_decision` on `ops_tasks`** — the partial UNIQUE index `WHERE decided_at IS NULL` is the elegant trick. SQLite lets the same `(session_id, prompt)` pair exist any number of times once decided, but enforces uniqueness only on the open subset. That's exactly the dedup semantic the plan calls for, and it falls naturally out of normalization. Trying the same with a status enum forces awkward "current-decision-only" columns and breaks down the moment a task emits two markers.
+
+---
+
+<!-- insight:e9190e031ae8 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T18:52:57.111Z -->
+## ★ Insight
+Both hooksRoute failures share the same root cause: `path.resolve("C:\\dev\\...")` on Linux treats the string as a *relative* path (because `\` isn't a separator), so the basename-based fallback slug includes the whole mangled path instead of just the last segment. The fix is to use `os.tmpdir() + path.join` — absolute paths that `path.resolve` handles correctly on both platforms.
+
+---
+
+<!-- insight:47044bd62e6e | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T18:40:03.439Z -->
+## ★ Insight
+The flush-on-close + overflow-fail pattern solves the two opposing requirements: NDJSON lines must parse atomically (no cap during accumulation), but unbounded accumulation is unsafe. The key insight is that these are two different problems with two different solutions: flush handles the no-`\n` edge case; overflow detection handles the runaway-process case.
+
+---
+
+<!-- insight:982d0641b281 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T18:38:31.900Z -->
+## ★ Insight
+These three fixes expose a design tension in NDJSON parsing: you need to both (1) handle lines split across chunks (buffer until `\n`) and (2) handle a final line with no `\n` (flush on close). A naive cap breaks (1); not flushing on close breaks (2). The correct approach: no cap on the buffer during data events (lines must parse atomically), but add an overflow flag + size check that fails hard rather than silently dropping.
+
+---
+
+<!-- insight:74ba86ea7d2e | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T18:11:02.404Z -->
+## ★ Insight
+This is why dev server restarts matter for server-side singletons. Next.js HMR reloads modules but the `globalThis.__minderDispatcher` singleton's closures hold references to the old module exports — changes to store.ts don't reach the already-running dispatcher until it's fully recreated. This is a key gotcha for any `globalThis`-based singleton pattern.
+
+---
+
+<!-- insight:94c4a5630412 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T18:04:08.401Z -->
+## ★ Insight
+This is a classic write-ordering bug: two concurrent DB writes to the same column. `setSessionId` runs fire-and-forget (no await) and `completeTask` runs awaited immediately after. But SQLite serializes them — `completeTask` wins and clobbers the session_id. The solution is for `completeTask` to simply not touch a column it no longer owns.
+
+---
+
+<!-- insight:615331edb3f9 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T17:50:22.645Z -->
+## ★ Insight
+The line buffer pattern below is critical: Node.js `data` events on stdout can split a single JSON line across multiple chunks, or merge multiple JSON lines into one chunk. We must accumulate bytes until we see a `\n`, then parse complete lines. Setting `setEncoding("utf8")` on the stream ensures chunk boundaries don't split multi-byte UTF-8 sequences.
+
+---
+
+<!-- insight:0a3b7480df8d | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T17:49:42.882Z -->
+## ★ Insight
+The stream-json format reuses the same `session_id` in both the init event and the final result event — so we get an early write opportunity (from init) before completion. The `total_cost_usd` field name differs from the column name in our schema (`cost_usd`), a subtle mismatch that would have caused silent `null` storage without empirical verification.
+
+---
+
+<!-- insight:0e9827e41cb6 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T17:45:44.690Z -->
+## ★ Insight
+Wave 9.1c adds **stream mode** spawning to the dispatcher. Classic mode (`-p --output-format text`) captures the final text blob; stream mode (`-p --output-format stream-json`) emits newline-delimited JSON events, allowing mid-run `session_id` extraction and eventually HITL parsing. The key new pieces: a `setSessionId()` store helper for early writes, a `runStreamTask()` spawner, and mode-based routing in the dispatcher tick.
+
+---
+
+<!-- insight:cd1afb725799 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T17:19:58.227Z -->
+## ★ Insight
+The two Codex P1 bugs interact: `approveTask()` not clearing `requires_approval=1` means the approved task is immediately re-promoted back to `awaiting_approval` on the very next dispatcher tick by `promoteApprovalTasks()`. Both fixes are needed together.
+
+---
+
+<!-- insight:cb43641f8e3e | session:291a793a-67bf-4ffd-80df-1f48dfb235d4 | 2026-05-08T17:04:45.172Z -->
+## ★ Insight
+- The state machine separates *intent* (`requires_approval` — does this task need review?) from *progress* (`approved_at` — has it been reviewed?). The SQL currently only looks at intent, so the second tick can't tell "needs approval" from "already got it." Filtering on the progress timestamp restores the missing edge in the state diagram.
+- The dispatcher unit tests probably injected a mock `claimPendingTask` and never ran two real ticks against the store, which is why this slipped past `tests/tasksDispatcher.test.ts`. The fix-test should drive `promoteApprovalTasks` + `approveTask` + `promoteApprovalTasks` against a real (or in-memory) DB.
+- The 30 s tick interval is fine for cron/spawn but feels glacial in a Mission Control UI — once the bug above is fixed, consider an event-driven nudge: have `approveTask` POST a synthetic "tick now" so a freshly-approved task gets claimed within a second instead of up to 30.
+
+---
+
+<!-- insight:42dd9405f9e4 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T17:02:12.374Z -->
+## ★ Insight
+The TOCTOU pattern here is subtle: a `getTask` → `approveTask` pair has a race window where another request changes the status between the read and the write, making the pre-check both redundant and incorrect. The SQL `WHERE status = 'awaiting_approval'` already enforces the guard atomically — returning `null` is the correct signal, and the route just needs to distinguish "not found" from "wrong state" (which the single-null return can't do without a separate lookup). The fix chosen — treating null as a 409 with a combined message — is the pragmatic choice for a low-traffic admin endpoint.
+
+---
+
+<!-- insight:1f674bd01bd2 | session:291a793a-67bf-4ffd-80df-1f48dfb235d4 | 2026-05-08T17:01:44.025Z -->
+## ★ Insight
+- The promotion happens *out-of-band* on the dispatcher tick, not in `createTask`. That's a deliberate decoupling: `createTask` stays a pure DB write, the state machine lives in the dispatcher. Trade-off: there's a transient window where a `requires_approval` task is `pending` and would be theoretically claimed by `claimPendingTask` — but `claimPendingTask` itself filters `requires_approval = 0`, so the safety is upheld even mid-window.
+- This means a UI test must either wait ≥30s after creation OR poll. Production users won't notice this latency, but tests do.
+
+---
+
+<!-- insight:037662f50055 | session:291a793a-67bf-4ffd-80df-1f48dfb235d4 | 2026-05-08T16:59:38.483Z -->
+## ★ Insight
+- All MCP browser servers serialize on a single `userDataDir` — different MCPs (Playwright vs chrome-devtools) each get their own profile, but a single MCP can only have one Chrome alive at a time. The `isolatedContext` flag creates an isolated browser *context* (cookies/storage) inside an already-running profile, so it doesn't help with the lock; you need to close the other process.
+- API-only verification still exercises the real `route.ts → store → dispatcher → spawner` graph for `dry_run=true`. The only thing it skips is the React composer's onSuccess/refresh behavior and Composer field validation.
+
+---
+
+<!-- insight:1ca81d9de7a8 | session:291a793a-67bf-4ffd-80df-1f48dfb235d4 | 2026-05-08T16:56:48.822Z -->
+## ★ Insight
+- The composer posts plain JSON to `/api/tasks` — no FormData, no CSRF — so the browser test can also independently `fetch()` the approve/rerun endpoints from the page console to round out coverage of code that has no UI surface yet.
+- `requires_approval=true` plus the dispatcher should route a freshly-created task into status `awaiting_approval` rather than `pending` — that's the cheap end-to-end signal that `dispatcher.ts` is wired into the POST path.
+
+---
+
+<!-- insight:563fae7d80b0 | session:291a793a-67bf-4ffd-80df-1f48dfb235d4 | 2026-05-08T16:55:35.812Z -->
+## ★ Insight
+- 9.1a built the Tasks DB foundation (read-only). 9.1b is the dispatching layer — `TaskComposer` to create, `spawner.ts` to launch Claude, `dispatcher.ts` to orchestrate, and approve/rerun endpoints. So a smoke test must exercise: compose → enqueue → see in list → approve/rerun.
+- Browser-test means real DOM driving, not just hitting the API. Playwright MCP is the right tool over Read-only inspection.
+
+---
+
+<!-- insight:3d17d8eccc6b | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:54:46.713Z -->
+## ★ Insight
+The `initDispatcher()` placement matters more than it appears: Next.js evaluates module-level code during `next build` (static analysis), not just at runtime. Moving the call into handler bodies means it only fires when a real HTTP request arrives in a live server process — the exact moment the `globalThis` singleton pattern makes sense.
+
+---
+
+<!-- insight:b825448fbb05 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:42:56.051Z -->
+## ★ Insight
+The spawner test creates a fake `ChildProcess` using Node's `EventEmitter` directly — emitting `data` on stdout and `close` with a code. This is the correct pattern for testing spawn-based code: no real processes, no filesystem side effects, fully synchronous event dispatch. The dispatcher test uses fake DB functions to verify tick behavior without a real SQLite file.
+
+---
+
+<!-- insight:67335e7e6e94 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:39:56.083Z -->
+## ★ Insight
+The Task Composer modal follows the same pattern as the `ApplyModal` / settings dialogs in this codebase — a full-screen overlay with an inline form, no dependency on Radix Dialog (not yet in use here). State is local React state; after POST succeeds we call `onSuccess()` which triggers a re-fetch in the parent `TasksBrowser`.
+
+---
+
+<!-- insight:9168711bd935 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:36:27.654Z -->
+## ★ Insight
+The spawner uses an injectable `SpawnFn` type to make it testable without the real `claude` binary. In production, it receives Node's `child_process.spawn`. In tests, it receives a function that returns a fake `ChildProcess` emitting controlled stdout/stderr and exit events. This seam is the key architectural decision that avoids `vi.mock('child_process')` at module level.
+
+---
+
+<!-- insight:391f2a8dbc6c | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:35:56.019Z -->
+## ★ Insight
+`PatchTaskInput` only covers user-facing fields. The dispatcher needs to write internal output fields (`output_summary`, `duration_ms`, `cost_usd`, `completed_at`, `error_message`, `consecutive_failures`). Rather than bloating `PatchTaskInput`, I'll add dedicated store functions — `completeTask()`, `failTask()`, `approveTask()`, `rerunTask()`, `materializeSchedules()` — that express exactly what each lifecycle transition sets.
+
+---
+
+<!-- insight:cb1194d16494 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T16:34:50.030Z -->
+## ★ Insight
+The dispatcher uses the `globalThis.__minderDispatcher` singleton pattern — same as `gitStatusCache`, `processManager`, and `manualStepsWatcher`. This means the dispatcher lifecycle is bound to the Next.js server process. On HMR hot-reload, the old globalThis value survives module re-evaluation, so the running tick interval and any in-flight spawns persist. The `dispose()` method must kill children and delete PID files to prevent orphaned processes during development.
+
+---
+
+<!-- insight:9e24713a9372 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:43:01.915Z -->
+## ★ Insight
+The `server-only` alias in `vitest.config.ts` stubs it globally for all tests — no per-test `vi.mock("server-only")` needed. This is cleaner than individual mocks because the stub applies to all transitive imports in the test graph.
+
+---
+
+<!-- insight:4e9d12d819ba | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:41:59.566Z -->
+## ★ Insight
+The test pattern uses `vi.spyOn(os, "homedir").mockReturnValue(tmpHome)` + `vi.resetModules()` to redirect `~/.minder/tasks.db` to a temp directory — critical because `connection.ts` computes `DB_PATH` at module load time via `os.homedir()`. Without `resetModules()`, the spy would affect the live singleton's path but the module cache would already hold the old value.
+
+---
+
+<!-- insight:704cfbe653f4 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:40:02.115Z -->
+## ★ Insight
+The browser components in this codebase follow two patterns: (1) self-fetching via internal hooks (AgentsBrowser fetches its own data), or (2) prop-fed (TasksBrowser receives `tasks` and `schedules` as props). Since TasksBrowser is prop-fed, the page must own the fetch — a clean separation of data-fetching from rendering concerns.
+
+---
+
+<!-- insight:e5b1289e9a59 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:29:54.163Z -->
+## ★ Insight
+cron-parser v5 made a breaking API change: `parseExpression()` (v4) → `CronExpressionParser.parse()` (v5, class-based). The returned iterator's `.next()` returns a `CronDate` with a `.toDate()` method, not a raw Date. Always check version-specific APIs before writing wrappers — the JS ecosystem moves fast.
+
+---
+
+<!-- insight:8c1628a555d3 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:29:06.248Z -->
+## ★ Insight
+Forking a DB layer rather than parameterizing is a classic "duplication beats the wrong abstraction" call. The existing `connection.ts` holds WAL/mmap/busy_timeout pragmas, a prepared-statement cache, and a single-flight open guard — all tightly coupled to one file path. Splitting to `src/lib/tasksDb/` keeps both layers independently versioned with zero coupling: tasks DB can have a quarantine without affecting sessions DB, and vice versa.
+
+---
+
+<!-- insight:a22ea7d5b926 | session:d8b3e79c-6416-4164-97e9-84ee066c9b6e | 2026-05-08T14:19:33.826Z -->
+## ★ Insight
+Two interesting findings from exploration: (1) The brainstorming spec says `.tmp/mission-control-queue/pids/` while the master plan says `~/.minder/pids/` — and *neither* path exists in the codebase yet. The project today uses CWD-local `.minder.json`, so introducing user-home `~/.minder/` is itself a small architectural shift. (2) Project Minder already has a perfect template for a self-scheduling dispatcher loop in `src/lib/db/ingestWatcher.ts:428-454` — uses `setTimeout`-after-completion (not `setInterval`) explicitly because long-running ticks must not overlap. The spec's spec for the dispatcher matches this pattern exactly.
+
+---
+
+<!-- insight:12f5fadc1dfd | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T13:00:36.111Z -->
+## ★ Insight
+The double-parse fix in `ingest.ts` is a good example of the two-pass-but-one-parse pattern: when you need two logical walks over the same data (here: a pre-pass to build an index, a main pass to use it), you can separate parse cost from iteration cost by pre-materializing into an array. The byte-offset cursor stays in the main pass where it belongs, and the pre-pass becomes a clean filter-map with no side effects.
+
+---
+
+<!-- insight:d66e12256039 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T12:52:41.698Z -->
+## ★ Insight
+The key design question for the `isWorktreeEncodedDir` fix: `worktrees.ts` imports `fs` at the top, so client components can't bundle it. The cleanest solution is a separate pure module (`worktreeCheck.ts`) with zero Node.js imports — both the scanner and the client component import from there, and `worktrees.ts` re-exports for backward compat.
+
+---
+
+<!-- insight:17cc9f7a03ca | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T05:10:59.344Z -->
+## ★ Insight
+The "9 uncommitted changes" warning is the untracked files from the status snapshot (`.agents/`, `.codegraph/`, `PRODUCT.md`, etc.) — none of them are part of this wave. The PR is clean: all 7 commits on `wave8.3` are the wave's work.
+
+---
+
+<!-- insight:0faa4f4b2380 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T05:06:04.810Z -->
+## ★ Insight
+The tool args expand sits inside the non-thinking branch alongside the existing "more/less" toggle. Since `formatToolArgs` returns `{kind, content, preview}`, we render `content` as a `<pre>` block — the `kind` already determines whether it's a command, file path, diff, or JSON, so the display is uniform regardless of tool type.
+
+---
+
+<!-- insight:4f433278db53 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:59:10.487Z -->
+## ★ Insight
+The `TimelineEvent` extension for `toolInput` follows the same "optional field added at the end" pattern used throughout — no existing callers break because they already spread the event shape. The deep-tool-args feature is additive: the Timeline only renders the expand toggle when `toolInput` is present, so legacy sessions (no `arguments_json`) render exactly as before.
+
+---
+
+<!-- insight:d4448cbdcf25 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:52:10.335Z -->
+## ★ Insight
+The `StackedStrip` SVG approach avoids the complexity of CSS flexbox percentage layouts (which don't handle rounding correctly). Each segment uses `x` offsets calculated from cumulative percentages, and a single `0.5px` gap between segments gives visual breathing room without affecting the total width.
+
+---
+
+<!-- insight:e2efb48c1ed0 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:47:55.537Z -->
+## ★ Insight
+The git-activity route uses a dual-path pattern — DB query first (joins `tool_uses + sessions` for commands + branch info in one shot), file-parse fallback using `gatherProjectTurns` (no branch info since `UsageTurn` doesn't carry `gitBranch`). This is intentional: the DB path is authoritative; degraded mode still shows commit/push counts.
+
+---
+
+<!-- insight:5f41623e3f83 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:26:56.375Z -->
+## ★ Insight
+`parseSessionTurns` is the cached file-parse path. Changes to its output shape won't invalidate existing `FileCache` entries (which key on mtime). A server restart clears the in-memory cache. This is fine because the file-parse path (`MINDER_USE_DB=0`) is rarely used in production.
+
+---
+
+<!-- insight:36c186bd22f6 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:22:01.047Z -->
+## ★ Insight
+The pre-pass approach here is a classic two-pass algorithm: pass 1 indexes `tool_result` error flags (user turns) keyed by `tool_use_id`, so pass 2 can enrich `tool_use` rows (assistant turns) with data that only appears later in the JSONL. This is necessary because JSONL sessions interleave assistant `tool_use` blocks (the call) with subsequent user `tool_result` blocks (the response) — you can't know if a tool errored until after the assistant turn is processed.
+
+---
+
+<!-- insight:0463f6d3b55f | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:06:05.283Z -->
+## ★ Insight
+Writing all pure functions (no DB, no FS) before wiring ingest (Commit 3) is the key discipline here. Pure functions test in milliseconds, run under any environment, and can be iterated rapidly. Once they're locked down with tests, Commit 3 is just threading parameters through — no logic to debug.
+
+---
+
+<!-- insight:4cc3e1f9a2c3 | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:01:15.836Z -->
+## ★ Insight
+The idempotent ALTER TABLE migration pattern used throughout this codebase (check `PRAGMA table_info`, then only `ALTER TABLE` if the column is absent) is SQLite-specific — SQLite didn't add `ALTER TABLE ADD COLUMN IF NOT EXISTS` until 3.37. The PRAGMA check keeps it compatible with older SQLite versions bundled in some Node environments.
+
+---
+
+<!-- insight:a06ed85742bf | session:75ee242c-39fd-4c7c-9fa4-2afa35d24865 | 2026-05-08T04:00:04.044Z -->
+## ★ Insight
+The single DERIVED_VERSION bump pattern used here is a classic write-once, derive-many strategy. By bumping from 6→7 in one migration, the ingest loop will re-derive ALL new computed columns (work_mode, error_category, invocation_source) from existing JSONL in a single pass — avoiding the expensive alternative of running multiple re-indexing passes or temporarily inconsistent DB states.
+
+---
+
+<!-- insight:662b6000a5ae | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T02:17:17.468Z -->
+## ★ Insight
+Moving `SCHEDULE_MODES` to `types.ts` eliminates the label/value duplication between `CostSection`, `QuotaBurndownChart`, and `api/config/route.ts`. A single source of truth means renaming a mode label is a one-line change instead of a grep-and-replace across three files.
+
+---
+
+<!-- insight:91592c4ea9b1 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T02:16:12.192Z -->
+## ★ Insight
+**Negative caching** is a pattern where failures are cached with a short TTL, preventing stampedes. Without it, every component mount after a probe failure triggers a fresh 15-second timeout — blocking the entire rendering. The fix: store the last failure result + timestamp, and return it instantly for the next 60 seconds.
+
+---
+
 <!-- insight:6f60269fea2a | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:57:08.229Z -->
 ## ★ Insight
 Using SVG `viewBox` with a fixed coordinate system (here 0 0 500 140) and `width="100%"` lets the chart scale fluidly to any container width while keeping all math in simple pixel coordinates. The SVG renderer handles the scaling.

@@ -52,6 +52,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     error_message: null,
     consecutive_failures: 0,
     created_at: new Date().toISOString(),
+    metadata: null,
     ...overrides,
   };
 }

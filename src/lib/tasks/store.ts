@@ -5,6 +5,7 @@ import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
 import type {
   Task,
+  TaskDecision,
   Schedule,
   CreateTaskInput,
   PatchTaskInput,
@@ -53,6 +54,9 @@ export async function listTasks(filter?: TaskListFilter): Promise<Task[]> {
     conditions.push("quadrant = ?");
     params.push(filter.quadrant);
   }
+  if (filter?.source === "todo") {
+    conditions.push("quadrant = 'delegated-todo'");
+  }
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
@@ -69,12 +73,13 @@ export async function getTask(id: number): Promise<Task | null> {
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
   const db = await ensureReady();
+  const metadataJson = input.metadata !== undefined ? JSON.stringify(input.metadata) : null;
   const result = prepTasksCached(
     db,
     `INSERT INTO ops_tasks
       (title, description, priority, quadrant, assigned_skill, model,
-       execution_mode, scheduled_for, requires_approval, risk_level, dry_run)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       execution_mode, scheduled_for, requires_approval, risk_level, dry_run, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING *`
   ).get(
     input.title,
@@ -87,7 +92,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     input.scheduled_for ?? null,
     input.requires_approval ? 1 : 0,
     input.risk_level ?? "low",
-    input.dry_run ? 1 : 0
+    input.dry_run ? 1 : 0,
+    metadataJson
   ) as Task;
   return result;
 }
@@ -353,6 +359,103 @@ export async function failTask(id: number, info: FailTaskInput): Promise<Task | 
     id
   ) as Task | undefined;
   return row ?? null;
+}
+
+/**
+ * Insert a DECISION or INBOX event from a running stream task.
+ * The partial UNIQUE(task_id, kind, prompt) WHERE kind='decision' AND decided_at IS NULL
+ * prevents duplicate DECISION markers from creating duplicate rows.
+ * Duplicate inserts are silently ignored via ON CONFLICT DO NOTHING.
+ */
+export async function recordDecision(
+  taskId: number,
+  sessionId: string | null,
+  kind: "decision" | "inbox",
+  prompt: string,
+  choices?: string[] | null
+): Promise<TaskDecision | null> {
+  const db = await ensureReady();
+  const choicesJson = choices && choices.length > 0 ? JSON.stringify(choices) : null;
+  const row = db.prepare(
+    `INSERT INTO task_decisions (task_id, session_id, kind, prompt, choices)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING
+     RETURNING *`
+  ).get(taskId, sessionId ?? null, kind, prompt, choicesJson) as TaskDecision | undefined;
+  return row ?? null;
+}
+
+/**
+ * Mark an open decision as resolved with the user's answer.
+ * Returns null if the decision was already decided or doesn't exist.
+ */
+export async function decideTask(
+  decisionId: number,
+  decisionText: string
+): Promise<TaskDecision | null> {
+  const db = await ensureReady();
+  const row = db.prepare(
+    `UPDATE task_decisions
+     SET decision_text = ?, decided_at = unixepoch()
+     WHERE id = ? AND decided_at IS NULL
+     RETURNING *`
+  ).get(decisionText, decisionId) as TaskDecision | undefined;
+  return row ?? null;
+}
+
+/** List all open (undecided) decisions across all tasks. */
+export async function listOpenDecisions(taskId?: number): Promise<TaskDecision[]> {
+  const db = await ensureReady();
+  if (taskId !== undefined) {
+    return db.prepare(
+      `SELECT * FROM task_decisions WHERE task_id = ? AND decided_at IS NULL ORDER BY created_at ASC`
+    ).all(taskId) as TaskDecision[];
+  }
+  return db.prepare(
+    `SELECT d.*, t.title as task_title FROM task_decisions d
+     JOIN ops_tasks t ON t.id = d.task_id
+     WHERE d.decided_at IS NULL
+     ORDER BY d.created_at ASC`
+  ).all() as TaskDecision[];
+}
+
+/** Recent inbox messages (inbox entries, regardless of decided_at). */
+export async function listInbox(limit = 50): Promise<TaskDecision[]> {
+  const db = await ensureReady();
+  return db.prepare(
+    `SELECT d.*, t.title as task_title FROM task_decisions d
+     JOIN ops_tasks t ON t.id = d.task_id
+     WHERE d.kind = 'inbox'
+     ORDER BY d.created_at DESC
+     LIMIT ?`
+  ).all(limit) as TaskDecision[];
+}
+
+/** Count open decisions (kind = 'decision' only). */
+export async function countOpenDecisions(): Promise<number> {
+  const db = await ensureReady();
+  const row = prepTasksCached(db,
+    `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'decision' AND decided_at IS NULL`
+  ).get() as { n: number };
+  return row.n;
+}
+
+/** Count inbox messages (kind = 'inbox', all time — used as a monotone change signal). */
+export async function countInboxMessages(): Promise<number> {
+  const db = await ensureReady();
+  const row = prepTasksCached(db,
+    `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'inbox'`
+  ).get() as { n: number };
+  return row.n;
+}
+
+/** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */
+export async function countNewDecisions(sinceEpoch: number): Promise<number> {
+  const db = await ensureReady();
+  const row = prepTasksCached(db,
+    `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'decision' AND created_at > ?`
+  ).get(sinceEpoch) as { n: number };
+  return row.n;
 }
 
 /**

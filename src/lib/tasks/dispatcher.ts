@@ -2,9 +2,12 @@ import "server-only";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask } from "./store";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask } from "./store";
 import { runClassicTask, runStreamTask, sweepStalePids, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
+import type { DecisionEvent } from "./decisionParser";
+import { readConfig } from "../config";
+import { onTaskCompleteToggleTodo } from "./todoDelegation";
 
 const HEARTBEAT_PATH = path.join(os.homedir(), ".minder", "dispatcher-heartbeat.json");
 const TICK_INTERVAL_MS = 30_000;
@@ -47,6 +50,16 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   let tickInProgress = false;
   const inFlight = new Map<number, Promise<void>>();
 
+  async function handleDecision(taskId: number, event: DecisionEvent): Promise<void> {
+    try {
+      // Fetch the current session_id (may have been written by the stream-init event).
+      const task = await getTask(taskId).catch(() => null);
+      await recordDecision(taskId, task?.session_id ?? null, event.kind, event.prompt, event.choices);
+    } catch (err) {
+      console.error(`[dispatcher] recordDecision failed for task ${taskId}:`, err);
+    }
+  }
+
   async function tick() {
     if (tickInProgress) return;
     tickInProgress = true;
@@ -54,8 +67,18 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       lastTickAt = new Date().toISOString();
       tickCount++;
 
-      writeHeartbeat(lastTickAt, inFlight.size);
       sweepStalePids();
+
+      // Emergency stop gate — skip spawning but keep heartbeat + sweep running
+      let cfg = null;
+      try {
+        cfg = await readConfig();
+      } catch {
+        // Config read failure is non-fatal — proceed without gate check
+      }
+      const paused = !!cfg?.emergencyStop;
+      writeHeartbeat(lastTickAt, inFlight.size, paused);
+      if (paused) return;
 
       try {
         await materializeSchedules();
@@ -85,11 +108,18 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           continue;
         }
 
-        const runFn = task.execution_mode === "stream" ? runStreamTask : runClassicTask;
-        const promise: Promise<void> = runFn(task, spawnFn)
-          .then(() => {})
-          .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
-          .finally(() => inFlight.delete(task!.id));
+        let promise: Promise<void>;
+        if (task.execution_mode === "stream") {
+          promise = runStreamTask(task, spawnFn, handleDecision, onTaskCompleteToggleTodo)
+            .then(() => {})
+            .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
+            .finally(() => inFlight.delete(task!.id));
+        } else {
+          promise = runClassicTask(task, spawnFn)
+            .then(() => {})
+            .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
+            .finally(() => inFlight.delete(task!.id));
+        }
 
         inFlight.set(task.id, promise);
       }
@@ -113,11 +143,11 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   };
 }
 
-function writeHeartbeat(lastTickAt: string, running: number) {
+function writeHeartbeat(lastTickAt: string, running: number, paused = false) {
   try {
     fs.writeFileSync(
       HEARTBEAT_PATH,
-      JSON.stringify({ lastTickAt, running, pid: process.pid }),
+      JSON.stringify({ lastTickAt, running, pid: process.pid, paused }),
       "utf8"
     );
   } catch {

@@ -125,9 +125,15 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Keyboard shortcut: `/` focuses search bar
 
 ## Git Workflow
-- NEVER push directly to main. Always create a feature branch (e.g., `wave3.3`), push to that branch, and open a PR.
+- NEVER push directly to main. Always create a feature branch (e.g., `wave3.3`), push to that branch, and open a PR when directed.
+- Do not automatically open PRs without being told to.
 - Use squash-merge for PRs. Admin override is acceptable when CI passes but branch protection blocks (e.g., `gh pr merge --squash --admin`).
 - After merging, verify post-merge state with typecheck and full test suite.
+
+## Pre-existing conditions
+- If you encounter a bug in a session, attempt to fix it if it is within scope of the current work.
+- Create a github issue for discovered pre-existing issues, bugs, test failures, and defects that are out of scope for current work. Include details, file names and line numbers
+
 ## Verification Gates
 Before committing or opening a PR, ALWAYS run: (1) `npm run typecheck`, (2) full test suite. Report exact pass counts (e.g., '934 tests passing'). Do not mark a task complete until both pass.
 

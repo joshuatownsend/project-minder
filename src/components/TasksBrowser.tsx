@@ -120,10 +120,11 @@ function formatDate(iso: string | null) {
 // TaskRow
 // ---------------------------------------------------------------------------
 
-function TaskRow({ task, expanded, onToggle }: {
+function TaskRow({ task, expanded, onToggle, pendingDecisions }: {
   task: Task;
   expanded: boolean;
   onToggle: () => void;
+  pendingDecisions?: number;
 }) {
   return (
     <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
@@ -150,6 +151,22 @@ function TaskRow({ task, expanded, onToggle }: {
             <StatusBadge status={task.status} />
             <PriorityBadge priority={task.priority} />
             <QuadrantBadge quadrant={task.quadrant} />
+            {pendingDecisions != null && pendingDecisions > 0 && (
+              <span style={{
+                fontSize: "0.6rem",
+                fontFamily: "var(--font-mono)",
+                fontWeight: 600,
+                padding: "1px 5px",
+                borderRadius: "3px",
+                background: "color-mix(in srgb, var(--accent) 15%, transparent)",
+                color: "var(--accent)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "2px",
+              }}>
+                ⏸ {pendingDecisions} waiting
+              </span>
+            )}
           </div>
           {task.description && !expanded && (
             <p style={{ margin: "3px 0 0", fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>
@@ -288,13 +305,15 @@ const SELECT_STYLE: React.CSSProperties = {
 interface Props {
   tasks: Task[];
   schedules: Schedule[];
+  decisionCounts?: Map<number, number>;
   onRefresh?: () => void;
 }
 
-export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
+export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Props) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "">("");
   const [quadrantFilter, setQuadrantFilter] = useState<TaskQuadrant | "">("");
+  const [sourceFilter, setSourceFilter] = useState<"" | "todo">("");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [composerOpen, setComposerOpen] = useState(false);
@@ -303,6 +322,7 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
     let result = tasks;
     if (statusFilter) result = result.filter((t) => t.status === statusFilter);
     if (quadrantFilter) result = result.filter((t) => t.quadrant === quadrantFilter);
+    if (sourceFilter === "todo") result = result.filter((t) => t.quadrant === "delegated-todo");
     if (query.trim()) {
       const q = query.toLowerCase();
       result = result.filter(
@@ -323,7 +343,7 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     });
     return sorted;
-  }, [tasks, statusFilter, quadrantFilter, query, sortKey]);
+  }, [tasks, statusFilter, quadrantFilter, sourceFilter, query, sortKey]);
 
   function toggleExpand(id: number) {
     setExpandedIds((prev) => {
@@ -382,6 +402,11 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
           {TASK_QUADRANTS.map((q) => (
             <option key={q} value={q} style={{ textTransform: "capitalize" }}>{q}</option>
           ))}
+        </select>
+
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as "" | "todo")} style={SELECT_STYLE}>
+          <option value="">All sources</option>
+          <option value="todo">From TODOs</option>
         </select>
 
         <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} style={SELECT_STYLE}>
@@ -444,6 +469,7 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
               task={task}
               expanded={expandedIds.has(task.id)}
               onToggle={() => toggleExpand(task.id)}
+              pendingDecisions={decisionCounts?.get(task.id)}
             />
           ))}
         </>

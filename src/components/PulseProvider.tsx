@@ -23,6 +23,9 @@ export interface PulseChange {
 export interface PulseSnapshot {
   pendingSteps: number;
   approvalCount: number;
+  decisionCount: number;
+  inboxCount: number;
+  dispatcherPaused: boolean;
   liveSlugs: string[];
   awaitingSlugs: string[];
   generatedAt: string | null;
@@ -48,6 +51,9 @@ export function PulseProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<PulseSnapshot>({
     pendingSteps: 0,
     approvalCount: 0,
+    decisionCount: 0,
+    inboxCount: 0,
+    dispatcherPaused: false,
     liveSlugs: [],
     awaitingSlugs: [],
     generatedAt: null,
@@ -82,6 +88,9 @@ export function PulseProvider({ children }: { children: ReactNode }) {
         const data = (await res.json()) as {
           pendingSteps: number;
           approvalCount: number;
+          decisionCount?: number;
+          inboxCount?: number;
+          dispatcherPaused?: boolean;
           changes: PulseChange[];
           liveSlugs?: string[];
           awaitingSlugs?: string[];
@@ -92,17 +101,22 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
         const liveSlugs = data.liveSlugs ?? [];
         const awaitingSlugs = data.awaitingSlugs ?? [];
+        const decisionCount = data.decisionCount ?? 0;
+        const inboxCount = data.inboxCount ?? 0;
+        const dispatcherPaused = data.dispatcherPaused ?? false;
         setSnapshot((prev) => {
           if (
             prev.pendingSteps === data.pendingSteps &&
             prev.approvalCount === data.approvalCount &&
-            prev.generatedAt === data.generatedAt &&
+            prev.decisionCount === decisionCount &&
+            prev.inboxCount === inboxCount &&
+            prev.dispatcherPaused === dispatcherPaused &&
             prev.liveSlugs.length === liveSlugs.length &&
             prev.awaitingSlugs.length === awaitingSlugs.length &&
             prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&
             prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i])
           ) return prev;
-          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
+          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, decisionCount, inboxCount, dispatcherPaused, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
         });
 
         if (data.changes && data.changes.length > 0) {

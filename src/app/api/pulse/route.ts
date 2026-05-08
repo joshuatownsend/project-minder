@@ -3,6 +3,9 @@ import { getCachedScan } from "@/lib/cache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffer";
+import { countOpenDecisions, countInboxMessages, countNewDecisions } from "@/lib/tasks/store";
+import { getFlag } from "@/lib/featureFlags";
+import { readConfig } from "@/lib/config";
 
 // Single endpoint that bundles every signal the dashboard chrome polls for.
 // Replaces three independent client-side intervals (5s + 10s + 30s) with one
@@ -42,9 +45,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Live status payload — single-flighted, so concurrent /api/status and
-  // /api/pulse callers share the same FS sweep within a 3-second window.
-  const status = await getLiveStatusPayload();
+  // Live status and config are independent — fetch concurrently.
+  // getLiveStatusPayload() is single-flighted so concurrent callers share the same sweep.
+  const [status, cfg] = await Promise.all([getLiveStatusPayload(), readConfig()]);
   const approvalCount = status.sessions.filter((s) => s.status === "approval").length;
 
   // Hook-server live activity — stale-sweep is cheap (bounded by session count)
@@ -63,19 +66,57 @@ export async function GET(request: NextRequest) {
     kind: "awaiting-permission" as const,
   }));
 
+  // Task dispatcher signals — only computed when taskDispatcher flag is on
+  let decisionCount = 0;
+  let inboxCount = 0;
+  let dispatcherPaused = false;
+  let newDecisionCount = 0;
+  try {
+    if (getFlag(cfg.featureFlags, "taskDispatcher")) {
+      dispatcherPaused = !!cfg.emergencyStop;
+      // countNewDecisions uses the client-supplied `since` timestamp so each
+      // tab gets its own edge-trigger without shared module-level state.
+      const sinceEpoch = since ? Math.floor(new Date(since).getTime() / 1000) : NaN;
+      const decisionsPromise = countOpenDecisions();
+      const inboxPromise = countInboxMessages();
+      const newDecisionsPromise = since && Number.isFinite(sinceEpoch)
+        ? countNewDecisions(sinceEpoch)
+        : Promise.resolve(0);
+      [decisionCount, inboxCount, newDecisionCount] = await Promise.all([
+        decisionsPromise,
+        inboxPromise,
+        newDecisionsPromise,
+      ]);
+    }
+  } catch {
+    // Non-fatal — dispatch signals are optional
+  }
+
+  const generatedAt = new Date().toISOString();
+
+  const decisionChanges = since && newDecisionCount > 0
+    ? [{ slug: "", projectName: "", title: `${newDecisionCount} decision${newDecisionCount > 1 ? "s" : ""} waiting`, changedAt: generatedAt, kind: "task-decision-required" as const }]
+    : [];
+
   return NextResponse.json({
     pendingSteps,
     approvalCount,
-    changes: [...changes, ...awaitingChanges],
+    decisionCount,
+    inboxCount,
+    dispatcherPaused,
+    changes: [...changes, ...awaitingChanges, ...decisionChanges],
     liveSlugs,
     awaitingSlugs,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
   });
 }
 
 export type PulsePayload = {
   pendingSteps: number;
   approvalCount: number;
+  decisionCount: number;
+  inboxCount: number;
+  dispatcherPaused: boolean;
   changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
   liveSlugs: string[];
   awaitingSlugs: string[];
