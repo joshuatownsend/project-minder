@@ -60,8 +60,10 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
   if (b.execution_mode !== undefined && !isExecutionMode(b.execution_mode)) {
     return { error: `execution_mode must be one of: ${EXECUTION_MODES.join(", ")}`, field: "execution_mode" };
   }
-  if (b.scheduled_for !== undefined && b.scheduled_for !== null && typeof b.scheduled_for !== "string") {
-    return { error: "scheduled_for must be an ISO 8601 string or null", field: "scheduled_for" };
+  if (b.scheduled_for !== undefined && b.scheduled_for !== null) {
+    if (typeof b.scheduled_for !== "string" || isNaN(Date.parse(b.scheduled_for as string))) {
+      return { error: "scheduled_for must be an ISO 8601 string or null", field: "scheduled_for" };
+    }
   }
   if (b.risk_level !== undefined && !isRiskLevel(b.risk_level)) {
     return { error: `risk_level must be one of: ${RISK_LEVELS.join(", ")}`, field: "risk_level" };
@@ -114,6 +116,17 @@ export function validatePatchTask(
   if (b.quadrant !== undefined && !isTaskQuadrant(b.quadrant)) {
     return { error: `quadrant must be one of: ${TASK_QUADRANTS.join(", ")}`, field: "quadrant" };
   }
+  if (b.assigned_skill !== undefined && b.assigned_skill !== null && typeof b.assigned_skill !== "string") {
+    return { error: "assigned_skill must be a string or null", field: "assigned_skill" };
+  }
+  if (b.model !== undefined && b.model !== null && typeof b.model !== "string") {
+    return { error: "model must be a string or null", field: "model" };
+  }
+  if (b.scheduled_for !== undefined && b.scheduled_for !== null) {
+    if (typeof b.scheduled_for !== "string" || isNaN(Date.parse(b.scheduled_for as string))) {
+      return { error: "scheduled_for must be an ISO 8601 string or null", field: "scheduled_for" };
+    }
+  }
   if (b.execution_mode !== undefined && !isExecutionMode(b.execution_mode)) {
     return { error: `execution_mode must be one of: ${EXECUTION_MODES.join(", ")}`, field: "execution_mode" };
   }
@@ -144,8 +157,19 @@ export function validatePatchTask(
     }
   }
 
-  const out: PatchTaskInput = { ...b } as PatchTaskInput;
-  if (typeof out.title === "string") out.title = out.title.trim();
+  const out: PatchTaskInput = {};
+  if (b.title !== undefined) out.title = (b.title as string).trim();
+  if (b.description !== undefined) out.description = b.description as string;
+  if (b.priority !== undefined) out.priority = Number(b.priority);
+  if (b.quadrant !== undefined) out.quadrant = b.quadrant as TaskQuadrant;
+  if ("assigned_skill" in b) out.assigned_skill = (b.assigned_skill as string | null) ?? null;
+  if ("model" in b) out.model = (b.model as string | null) ?? null;
+  if (b.execution_mode !== undefined) out.execution_mode = b.execution_mode as ExecutionMode;
+  if ("scheduled_for" in b) out.scheduled_for = (b.scheduled_for as string | null) ?? null;
+  if (b.requires_approval !== undefined) out.requires_approval = b.requires_approval as boolean;
+  if (b.risk_level !== undefined) out.risk_level = b.risk_level as RiskLevel;
+  if (b.dry_run !== undefined) out.dry_run = b.dry_run as boolean;
+  if (b.status !== undefined) out.status = b.status as TaskStatus;
   return out;
 }
 
@@ -220,11 +244,21 @@ export function validatePatchSchedule(
   if (b.task_description !== undefined && typeof b.task_description !== "string") {
     return { error: "task_description must be a string", field: "task_description" };
   }
+  if (b.assigned_skill !== undefined && b.assigned_skill !== null && typeof b.assigned_skill !== "string") {
+    return { error: "assigned_skill must be a string or null", field: "assigned_skill" };
+  }
   if (b.enabled !== undefined && typeof b.enabled !== "boolean") {
     return { error: "enabled must be a boolean", field: "enabled" };
   }
 
-  return b as PatchScheduleInput;
+  const out: PatchScheduleInput = {};
+  if (b.name !== undefined) out.name = (b.name as string).trim();
+  if (b.cron_expression !== undefined) out.cron_expression = (b.cron_expression as string).trim();
+  if (b.task_title !== undefined) out.task_title = (b.task_title as string).trim();
+  if (b.task_description !== undefined) out.task_description = b.task_description as string;
+  if ("assigned_skill" in b) out.assigned_skill = (b.assigned_skill as string | null) ?? null;
+  if (b.enabled !== undefined) out.enabled = b.enabled as boolean;
+  return out;
 }
 
 export { isTaskStatus, isTaskQuadrant, isExecutionMode, isRiskLevel };

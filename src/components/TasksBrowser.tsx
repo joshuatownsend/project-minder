@@ -38,12 +38,15 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   cancelled:          "var(--text-muted)",
 };
 
+const REDUCED_MOTION =
+  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 function StatusIcon({ status }: { status: TaskStatus }) {
   const style = { width: "12px", height: "12px", color: STATUS_COLORS[status] };
   switch (status) {
     case "pending":           return <Circle style={style} />;
     case "awaiting_approval": return <HelpCircle style={style} />;
-    case "running":           return <Loader2 style={{ ...style, animation: "spin 1s linear infinite" }} />;
+    case "running":           return <Loader2 style={{ ...style, animation: REDUCED_MOTION ? "none" : "spin 1s linear infinite" }} />;
     case "done":              return <CheckCircle2 style={style} />;
     case "failed":            return <AlertCircle style={style} />;
     case "cancelled":         return <XCircle style={style} />;
@@ -122,9 +125,13 @@ function TaskRow({ task, expanded, onToggle }: {
 }) {
   return (
     <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-      <div
-        style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 0", cursor: "pointer" }}
+      <button
+        style={{
+          display: "flex", alignItems: "center", gap: "8px", padding: "10px 0",
+          cursor: "pointer", width: "100%", background: "none", border: "none", textAlign: "left",
+        }}
         onClick={onToggle}
+        aria-expanded={expanded}
       >
         <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>
           {expanded
@@ -152,7 +159,7 @@ function TaskRow({ task, expanded, onToggle }: {
         <div style={{ flexShrink: 0, fontSize: "0.65rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
           {formatDate(task.created_at)}
         </div>
-      </div>
+      </button>
 
       {expanded && (
         <div
