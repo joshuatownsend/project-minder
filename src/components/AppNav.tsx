@@ -57,6 +57,13 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    label: "Mission Control",
+    children: [
+      item("/tasks",    "Tasks"),
+      item("/schedule", "Schedule"),
+    ],
+  },
+  {
     label: "Config",
     children: [
       item("/hooks", "Hooks"),
