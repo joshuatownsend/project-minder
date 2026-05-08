@@ -27,6 +27,7 @@ import {
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
 import { mostFrequent, canonicalizeDirName } from "../usage/parser";
+import { isWorktreeEncodedDir } from "./worktreeCheck";
 
 export interface ConversationEntry {
   type?: string;
@@ -398,6 +399,7 @@ async function scanSessionFile(
       hasCompactionLoop: qualityHasCompactionLoop,
       hasToolFailureStreak: qualityHasToolFailureStreak,
       workMode: sessionWorkMode,
+      isWorktree: isWorktreeEncodedDir(projectDirName),
     };
   } catch {
     return null;

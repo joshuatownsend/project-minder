@@ -10,7 +10,7 @@ export interface GitActivitySummary {
   branches: BranchStat[];
 }
 
-// Matches `git commit` but not `git commit-tree` or `git commit --amend-only` etc.
+// Matches `git commit` but not `git commit-tree` etc. (--amend commits are intentionally counted)
 const COMMIT_RE = /^\s*git\s+commit(\s|$)/m;
 // Matches `git push` but not `git push-pack` etc.
 const PUSH_RE = /^\s*git\s+push(\s|$)/m;

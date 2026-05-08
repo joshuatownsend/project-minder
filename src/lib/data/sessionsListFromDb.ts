@@ -4,6 +4,7 @@ import { decodeDirName } from "@/lib/platform";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
+import { isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -334,14 +335,18 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       starredAt: h.starred_at ?? undefined,
       distilledAt: h.distilled_at ?? undefined,
       distilledText: h.distilled_text ?? undefined,
-      workMode: (h.work_mode_exploration_pct !== null)
+      workMode: (h.work_mode_exploration_pct !== null &&
+                 h.work_mode_building_pct !== null &&
+                 h.work_mode_testing_pct !== null &&
+                 h.work_mode_other_pct !== null)
         ? {
-            exploration: h.work_mode_exploration_pct!,
-            building: h.work_mode_building_pct!,
-            testing: h.work_mode_testing_pct!,
-            other: h.work_mode_other_pct!,
+            exploration: h.work_mode_exploration_pct,
+            building: h.work_mode_building_pct,
+            testing: h.work_mode_testing_pct,
+            other: h.work_mode_other_pct,
           }
         : undefined,
+      isWorktree: isWorktreeEncodedDir(h.project_dir_name),
     });
   }
 

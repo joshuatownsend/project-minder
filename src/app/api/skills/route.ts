@@ -152,28 +152,33 @@ export async function GET(request: NextRequest) {
   }
 
   // Augment with invocation-source breakdown from DB when available.
-  const db = await getDb();
-  if (db) {
-    type InvRow = { skill_name: string; invocation_source: string; cnt: number };
-    const invRows = db.prepare(
-      `SELECT skill_name, invocation_source, COUNT(*) AS cnt
-       FROM tool_uses WHERE tool_name = 'Skill' AND skill_name IS NOT NULL
-       GROUP BY skill_name, invocation_source`
-    ).all() as InvRow[];
-    const slashMap = new Map<string, number>();
-    const autoMap = new Map<string, number>();
-    for (const r of invRows) {
-      if (r.invocation_source === "slash_command") slashMap.set(r.skill_name, (slashMap.get(r.skill_name) ?? 0) + r.cnt);
-      else autoMap.set(r.skill_name, (autoMap.get(r.skill_name) ?? 0) + r.cnt);
+  try {
+    const db = await getDb();
+    if (db) {
+      type InvRow = { skill_name: string; invocation_source: string; cnt: number };
+      const invRows = db.prepare(
+        `SELECT skill_name, invocation_source, COUNT(*) AS cnt
+         FROM tool_uses WHERE tool_name = 'Skill' AND skill_name IS NOT NULL
+         AND invocation_source IS NOT NULL
+         GROUP BY skill_name, invocation_source`
+      ).all() as InvRow[];
+      const slashMap = new Map<string, number>();
+      const autoMap = new Map<string, number>();
+      for (const r of invRows) {
+        if (r.invocation_source === "slash_command") slashMap.set(r.skill_name, (slashMap.get(r.skill_name) ?? 0) + r.cnt);
+        else autoMap.set(r.skill_name, (autoMap.get(r.skill_name) ?? 0) + r.cnt);
+      }
+      result = result.map((r) => {
+        const name = r.entry?.name ?? r.usage?.name;
+        if (!name) return r;
+        const slash = slashMap.get(name) ?? 0;
+        const auto = autoMap.get(name) ?? 0;
+        if (slash === 0 && auto === 0) return r;
+        return { ...r, slashCount: slash, autoCount: auto };
+      });
     }
-    result = result.map((r) => {
-      const name = r.entry?.name ?? r.usage?.name;
-      if (!name) return r;
-      const slash = slashMap.get(name) ?? 0;
-      const auto = autoMap.get(name) ?? 0;
-      if (slash === 0 && auto === 0) return r;
-      return { ...r, slashCount: slash, autoCount: auto };
-    });
+  } catch {
+    // DB schema not ready (e.g. empty/new DB) — skip invocation-source augmentation
   }
 
   setRouteCache(cacheKey, result, skillUsage.meta.backend);

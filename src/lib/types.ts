@@ -457,6 +457,8 @@ export interface SessionSummary {
   distilledText?: string;
   /** Work-mode distribution across categorized turns (integer percentages summing to 100). */
   workMode?: { exploration: number; building: number; testing: number; other: number };
+  /** True when this session came from a Claude Code worktree directory. */
+  isWorktree?: boolean;
 }
 
 export interface TimelineEvent {

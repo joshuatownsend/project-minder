@@ -9,8 +9,7 @@ export interface FormattedToolArg {
 }
 
 const COMMAND_TOOLS = new Set(["Bash", "PowerShell"]);
-const FILE_READ_TOOLS = new Set(["Read"]);
-const FILE_WRITE_TOOLS = new Set(["Write"]);
+const FILE_PATH_TOOLS = new Set(["Read", "Write", "Glob"]);
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
 
 export function formatToolArgs(
@@ -30,13 +29,14 @@ export function formatToolArgs(
     };
   }
 
-  if (FILE_READ_TOOLS.has(toolName) || FILE_WRITE_TOOLS.has(toolName)) {
-    const filePath = typeof args.file_path === "string" ? args.file_path : "";
-    const preview = filePath || "(no path)";
+  if (FILE_PATH_TOOLS.has(toolName)) {
+    const filePath = typeof args.file_path === "string" ? args.file_path
+      : typeof args.pattern === "string" ? args.pattern
+      : "";
     return {
       kind: "file-path",
-      preview: preview.length > 80 ? "…" + preview.slice(-79) : preview,
-      content: preview,
+      preview: filePath.length > 80 ? "…" + filePath.slice(-79) : filePath || "(no path)",
+      content: filePath || "(no path)",
     };
   }
 

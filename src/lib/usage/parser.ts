@@ -144,7 +144,7 @@ export async function parseSessionTurns(
     if (!trimmedPre) continue;
     let preEntry: ConversationEntry;
     try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
-    if (preEntry.type !== "user" || preEntry.isMeta || !preEntry.timestamp) continue;
+    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
     const msgC = preEntry.message?.content ?? [];
     const topC = (preEntry.content ?? []) as unknown[];
     const src = (msgC as unknown[]).length > 0 ? msgC : topC;
@@ -194,8 +194,7 @@ export async function parseSessionTurns(
           const id: string | undefined = b.id;
           const errEntry = id ? errorByToolUseId.get(id) : undefined;
           const tcIsError = errEntry?.isError ?? false;
-          const tcErrorCategory = tcIsError && errEntry?.content
-            ? categorizeToolError(errEntry.content) : undefined;
+          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
           const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
             ? b.input.skill : undefined;
           const isSlashMatch = !slashWindowConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
@@ -308,7 +307,7 @@ export async function parseSessionTurnsWithMeta(
     if (!trimmedPre) continue;
     let preEntry: ConversationEntry;
     try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
-    if (preEntry.type !== "user" || preEntry.isMeta || !preEntry.timestamp) continue;
+    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
     const msgC = preEntry.message?.content ?? [];
     const topC = (preEntry.content ?? []) as unknown[];
     const src = (msgC as unknown[]).length > 0 ? msgC : topC;
@@ -377,8 +376,7 @@ export async function parseSessionTurnsWithMeta(
           const id: string | undefined = b.id;
           const errEntry = id ? errorByToolUseIdMeta.get(id) : undefined;
           const tcIsError = errEntry?.isError ?? false;
-          const tcErrorCategory = tcIsError && errEntry?.content
-            ? categorizeToolError(errEntry.content) : undefined;
+          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
           const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
             ? b.input.skill : undefined;
           const isSlashMatch =

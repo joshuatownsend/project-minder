@@ -64,18 +64,21 @@ describe("aggregateWorkMode", () => {
     expect(result.exploration).toBe(0);
   });
 
-  it("percentages round to integers", () => {
-    // 1/3 ≈ 33%
+  it("percentages round to integers summing to 100", () => {
+    // 1/3 each — largest-remainder gives one bucket the extra 1%
     const turns = [
       { category: "Exploration" },
       { category: "Coding" },
       { category: "Testing" },
     ];
     const result = aggregateWorkMode(turns);
-    expect(result.exploration).toBe(33);
-    expect(result.building).toBe(33);
-    expect(result.testing).toBe(33);
+    const sum = result.exploration + result.building + result.testing + result.other;
+    expect(sum).toBe(100);
     expect(result.other).toBe(0);
+    // Each of the three active buckets is either 33 or 34
+    expect([33, 34]).toContain(result.exploration);
+    expect([33, 34]).toContain(result.building);
+    expect([33, 34]).toContain(result.testing);
   });
 
   it("all 13 categories map without throwing", () => {

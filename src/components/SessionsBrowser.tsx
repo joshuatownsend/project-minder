@@ -27,7 +27,6 @@ import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { StackedStrip } from "@/components/stats/StackedStrip";
-import { isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
@@ -340,7 +339,7 @@ function SessionRow({
               recap
             </span>
           )}
-          {isWorktreeEncodedDir(session.projectName) && session.gitBranch && (
+          {session.isWorktree && session.gitBranch && (
             <QualityChip tone="neutral" title={`Worktree session — branch: ${session.gitBranch}`}>
               {session.gitBranch}
             </QualityChip>

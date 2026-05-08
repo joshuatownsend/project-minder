@@ -17,7 +17,7 @@ export function workModeToSegments(
     key,
     pct: breakdown[key],
     color: WORK_MODE_DISPLAY[key].color,
-    label: `${WORK_MODE_DISPLAY[key].label} ${breakdown[key]}%`,
+    label: WORK_MODE_DISPLAY[key].label,
   }));
 }
 
@@ -73,10 +73,17 @@ export function aggregateWorkMode(
     return { exploration: 0, building: 0, testing: 0, other: 0 };
   }
 
-  return {
-    exploration: Math.round((exploration / total) * 100),
-    building: Math.round((building / total) * 100),
-    testing: Math.round((testing / total) * 100),
-    other: Math.round((other / total) * 100),
-  };
+  const rawPcts = [
+    { key: "exploration" as const, raw: (exploration / total) * 100 },
+    { key: "building" as const, raw: (building / total) * 100 },
+    { key: "testing" as const, raw: (testing / total) * 100 },
+    { key: "other" as const, raw: (other / total) * 100 },
+  ];
+  const floored = rawPcts.map((p) => ({ ...p, v: Math.floor(p.raw) }));
+  const remainder = 100 - floored.reduce((s, p) => s + p.v, 0);
+  const sorted = [...floored].sort((a, b) => (b.raw - b.v) - (a.raw - a.v));
+  for (let i = 0; i < remainder; i++) sorted[i].v++;
+  const result: Record<string, number> = {};
+  for (const p of floored) result[p.key] = p.v;
+  return { exploration: result.exploration, building: result.building, testing: result.testing, other: result.other };
 }
