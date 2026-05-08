@@ -25,8 +25,13 @@ let initPromise: Promise<{ available: boolean }> | null = null;
 async function ensureReady(): Promise<boolean> {
   if (!isOtelDbReady()) return false;
   if (!initPromise) initPromise = initDb();
-  const { available } = await initPromise;
-  return available;
+  try {
+    const { available } = await initPromise;
+    return available;
+  } catch {
+    initPromise = null;
+    return false;
+  }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
