@@ -3,7 +3,7 @@ import { getCachedScan } from "@/lib/cache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffer";
-import { countOpenDecisions } from "@/lib/tasks/store";
+import { countOpenDecisions, countInboxMessages } from "@/lib/tasks/store";
 import { getFlag } from "@/lib/featureFlags";
 import { readConfig } from "@/lib/config";
 
@@ -72,13 +72,14 @@ export async function GET(request: NextRequest) {
 
   // Task dispatcher signals — only computed when taskDispatcher flag is on
   let decisionCount = 0;
+  let inboxCount = 0;
   let dispatcherPaused = false;
   let newDecisionCount = 0;
   try {
     const cfg = await readConfig();
     if (getFlag(cfg.featureFlags, "taskDispatcher")) {
       dispatcherPaused = !!cfg.emergencyStop;
-      decisionCount = await countOpenDecisions();
+      [decisionCount, inboxCount] = await Promise.all([countOpenDecisions(), countInboxMessages()]);
       // Edge-trigger: track previous count in a module-level var so the
       // notification fires exactly once when count increases.
       if (decisionCount > prevDecisionCount) {
@@ -100,6 +101,7 @@ export async function GET(request: NextRequest) {
     pendingSteps,
     approvalCount,
     decisionCount,
+    inboxCount,
     dispatcherPaused,
     changes: [...changes, ...awaitingChanges, ...decisionChanges],
     liveSlugs,
@@ -112,6 +114,7 @@ export type PulsePayload = {
   pendingSteps: number;
   approvalCount: number;
   decisionCount: number;
+  inboxCount: number;
   dispatcherPaused: boolean;
   changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
   liveSlugs: string[];

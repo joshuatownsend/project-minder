@@ -22,10 +22,9 @@ export function InboxPanel() {
     }
   }, []);
 
-  // Poll on every pulse tick — inbox updates whenever a task emits INBOX: markers.
   useEffect(() => {
     void fetchMessages();
-  }, [snapshot.generatedAt, fetchMessages]);
+  }, [snapshot.inboxCount, fetchMessages]);
 
   if (messages.length === 0) return null;
 

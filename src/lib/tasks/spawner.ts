@@ -191,7 +191,7 @@ export async function runClassicTask(
  * Parses NDJSON events from stdout:
  *   - {type:"system", subtype:"init"} → write session_id early via setSessionId()
  *   - {type:"result"} → extract result text + total_cost_usd for completeTask()
- *   - DECISION: / INBOX: plain-text markers → forwarded to onDecision callback (Wave 9.2)
+ *   - DECISION: / INBOX: plain-text markers → forwarded to onDecision callback
  * Writes a PID marker file while the child is alive.
  * Stashes the ChildProcess in streamChildren map for HITL stdin injection and emergency stop.
  */
@@ -207,6 +207,14 @@ export async function runStreamTask(
   const [cmd, extraArgs] = buildSpawnTarget(spawnArgs);
 
   return new Promise<RunTaskResult>((resolve) => {
+    function fireOnComplete(t: Task | null) {
+      if (t && onComplete) {
+        onComplete(t).catch((e) =>
+          console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
+        );
+      }
+    }
+
     const child = spawnFn(cmd, extraArgs, {
       // stdin is "pipe" so HITL can write answers; classic mode keeps "ignore"
       stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
@@ -324,11 +332,7 @@ export async function runStreamTask(
         } catch (err) {
           console.error(`[spawner] completeTask failed for task ${task.id}:`, err);
         }
-        if (completedTask && onComplete) {
-          onComplete(completedTask).catch((e) =>
-            console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
-          );
-        }
+        fireOnComplete(completedTask);
         resolve({ taskId: task.id, status: "done", output: trimmed, durationMs });
       } else {
         const errMsg = stderr.trim() || `claude exited with code ${code}`;
@@ -338,11 +342,7 @@ export async function runStreamTask(
         } catch (err) {
           console.error(`[spawner] failTask failed for task ${task.id}:`, err);
         }
-        if (failedTask && onComplete) {
-          onComplete(failedTask).catch((e) =>
-            console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
-          );
-        }
+        fireOnComplete(failedTask);
         resolve({ taskId: task.id, status: "failed", error: errMsg, durationMs });
       }
     });
@@ -360,11 +360,7 @@ export async function runStreamTask(
       } catch (storeErr) {
         console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
       }
-      if (failedTask && onComplete) {
-        onComplete(failedTask).catch((e) =>
-          console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
-        );
-      }
+      fireOnComplete(failedTask);
       resolve({ taskId: task.id, status: "failed", error: err.message, durationMs });
     });
   });

@@ -29,12 +29,8 @@ export default function Home() {
 
   return (
     <>
-      {taskDispatcherEnabled && (
-        <>
-          <DecisionsPanel />
-          <InboxPanel />
-        </>
-      )}
+      {taskDispatcherEnabled && <DecisionsPanel />}
+      {taskDispatcherEnabled && <InboxPanel />}
       <DashboardGrid
         projects={data?.projects ?? []}
         loading={loading}

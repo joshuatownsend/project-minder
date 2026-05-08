@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { delegateTodo } from "@/lib/tasks/todoDelegation";
 import { scanTodoMd } from "@/lib/scanner/todoMd";
 import { readConfig, getDevRoots } from "@/lib/config";
-import path from "path";
 import { promises as fs } from "fs";
+import path from "path";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +54,7 @@ export async function POST(request: Request, { params }: Params): Promise<NextRe
       projectSlug: slug,
       lineNumber,
       todoText: item.text,
+      projectPath,
     });
 
     return NextResponse.json(result, { status: 201 });

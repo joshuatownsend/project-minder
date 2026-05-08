@@ -48,8 +48,8 @@ export async function emergencyStop(): Promise<EmergencyStopResult> {
   let interactiveSpared = 0;
   const errors: string[] = [];
 
-  for (const pid of pids) {
-    const confirmed = await isClaudeProcess(pid);
+  const results = await Promise.all(pids.map(async (pid) => ({ pid, confirmed: await isClaudeProcess(pid) })));
+  for (const { pid, confirmed } of results) {
     if (confirmed) {
       try {
         killProcessTree(pid);

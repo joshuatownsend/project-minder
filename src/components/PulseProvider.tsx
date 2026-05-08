@@ -24,6 +24,7 @@ export interface PulseSnapshot {
   pendingSteps: number;
   approvalCount: number;
   decisionCount: number;
+  inboxCount: number;
   dispatcherPaused: boolean;
   liveSlugs: string[];
   awaitingSlugs: string[];
@@ -51,6 +52,7 @@ export function PulseProvider({ children }: { children: ReactNode }) {
     pendingSteps: 0,
     approvalCount: 0,
     decisionCount: 0,
+    inboxCount: 0,
     dispatcherPaused: false,
     liveSlugs: [],
     awaitingSlugs: [],
@@ -87,6 +89,7 @@ export function PulseProvider({ children }: { children: ReactNode }) {
           pendingSteps: number;
           approvalCount: number;
           decisionCount?: number;
+          inboxCount?: number;
           dispatcherPaused?: boolean;
           changes: PulseChange[];
           liveSlugs?: string[];
@@ -99,12 +102,14 @@ export function PulseProvider({ children }: { children: ReactNode }) {
         const liveSlugs = data.liveSlugs ?? [];
         const awaitingSlugs = data.awaitingSlugs ?? [];
         const decisionCount = data.decisionCount ?? 0;
+        const inboxCount = data.inboxCount ?? 0;
         const dispatcherPaused = data.dispatcherPaused ?? false;
         setSnapshot((prev) => {
           if (
             prev.pendingSteps === data.pendingSteps &&
             prev.approvalCount === data.approvalCount &&
             prev.decisionCount === decisionCount &&
+            prev.inboxCount === inboxCount &&
             prev.dispatcherPaused === dispatcherPaused &&
             prev.generatedAt === data.generatedAt &&
             prev.liveSlugs.length === liveSlugs.length &&
@@ -112,7 +117,7 @@ export function PulseProvider({ children }: { children: ReactNode }) {
             prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&
             prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i])
           ) return prev;
-          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, decisionCount, dispatcherPaused, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
+          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, decisionCount, inboxCount, dispatcherPaused, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
         });
 
         if (data.changes && data.changes.length > 0) {

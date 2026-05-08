@@ -1,5 +1,6 @@
 import "server-only";
 import path from "path";
+import { promises as fs } from "fs";
 import { createTask } from "./store";
 import { toggleTodoInFile } from "../todoWriter";
 import { readConfig, getDevRoots } from "../config";
@@ -9,6 +10,8 @@ export interface DelegateTodoInput {
   projectSlug: string;
   lineNumber: number;
   todoText: string;
+  /** Pre-resolved filesystem path for the project; skips devRoots stat walk when provided. */
+  projectPath?: string;
   /** Dev roots to search for the project path; defaults to config devRoots. */
   devRoots?: string[];
 }
@@ -17,19 +20,14 @@ export interface DelegateTodoResult {
   taskId: number;
 }
 
-/** Resolve a project slug back to its filesystem path via devRoots. */
 async function resolveProjectPath(slug: string, devRoots: string[]): Promise<string | null> {
-  // Project directories use the filesystem name directly (no encoding).
-  // Slug is the directory basename with special chars replaced, but for
-  // local delegation we can try the most common case: basename === slug.
   for (const root of devRoots) {
     const candidate = path.join(root, slug);
     try {
-      const { promises: fs } = await import("fs");
       const stat = await fs.stat(candidate);
       if (stat.isDirectory()) return candidate;
     } catch {
-      // Not found in this root — try next
+      // not found in this root — try next
     }
   }
   return null;
@@ -41,12 +39,14 @@ async function resolveProjectPath(slug: string, devRoots: string[]): Promise<str
  * `onTaskCompleteToggleTodo` can check off the item when the task finishes.
  */
 export async function delegateTodo(input: DelegateTodoInput): Promise<DelegateTodoResult> {
-  const cfg = await readConfig();
-  const devRoots = input.devRoots ?? getDevRoots(cfg);
-
-  const projectPath = await resolveProjectPath(input.projectSlug, devRoots);
+  let projectPath = input.projectPath ?? null;
   if (!projectPath) {
-    throw new Error(`Project "${input.projectSlug}" not found in devRoots: ${devRoots.join(", ")}`);
+    const cfg = await readConfig();
+    const devRoots = input.devRoots ?? getDevRoots(cfg);
+    projectPath = await resolveProjectPath(input.projectSlug, devRoots);
+    if (!projectPath) {
+      throw new Error(`Project "${input.projectSlug}" not found in devRoots: ${devRoots.join(", ")}`);
+    }
   }
 
   const task = await createTask({

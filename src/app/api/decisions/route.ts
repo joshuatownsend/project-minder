@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listOpenDecisions } from "@/lib/tasks/store";
+import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const taskIdRaw = request.nextUrl.searchParams.get("taskId");
-  const taskId = taskIdRaw ? parseInt(taskIdRaw, 10) : undefined;
+  const taskId = taskIdRaw !== null ? (parseId(taskIdRaw) ?? undefined) : undefined;
 
   try {
-    const decisions = await listOpenDecisions(Number.isFinite(taskId) ? taskId : undefined);
+    const decisions = await listOpenDecisions(taskId);
     return NextResponse.json({ decisions });
   } catch (err) {
     console.error("[api/decisions GET]", err);

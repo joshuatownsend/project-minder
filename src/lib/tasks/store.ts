@@ -361,10 +361,6 @@ export async function failTask(id: number, info: FailTaskInput): Promise<Task | 
   return row ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// HITL decision queue (Wave 9.2)
-// ---------------------------------------------------------------------------
-
 /**
  * Insert a DECISION or INBOX event from a running stream task.
  * The partial UNIQUE(session_id, prompt) WHERE decided_at IS NULL prevents
@@ -440,6 +436,15 @@ export async function countOpenDecisions(): Promise<number> {
   const db = await ensureReady();
   const row = db.prepare(
     `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'decision' AND decided_at IS NULL`
+  ).get() as { n: number };
+  return row.n;
+}
+
+/** Count inbox messages (kind = 'inbox', all time — used as a monotone change signal). */
+export async function countInboxMessages(): Promise<number> {
+  const db = await ensureReady();
+  const row = db.prepare(
+    `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'inbox'`
   ).get() as { n: number };
   return row.n;
 }
