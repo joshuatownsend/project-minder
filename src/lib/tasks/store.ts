@@ -294,11 +294,16 @@ export async function rerunTask(id: number): Promise<Task | null> {
   return row ?? null;
 }
 
+/** Write session_id mid-run (before completeTask is called). Fire-and-forget safe. */
+export async function setSessionId(id: number, sessionId: string): Promise<void> {
+  const db = await ensureReady();
+  prepTasksCached(db, "UPDATE ops_tasks SET session_id = ? WHERE id = ? AND status = 'running'").run(sessionId, id);
+}
+
 export interface CompleteTaskInput {
   output_summary?: string;
   duration_ms?: number;
   cost_usd?: number;
-  session_id?: string;
 }
 
 /** Mark a running task as done with captured output. */
@@ -312,15 +317,13 @@ export async function completeTask(id: number, result: CompleteTaskInput): Promi
          consecutive_failures = 0,
          output_summary = ?,
          duration_ms = ?,
-         cost_usd = ?,
-         session_id = ?
+         cost_usd = ?
      WHERE id = ? AND status = 'running'
      RETURNING *`
   ).get(
     result.output_summary ?? null,
     result.duration_ms ?? null,
     result.cost_usd ?? null,
-    result.session_id ?? null,
     id
   ) as Task | undefined;
   return row ?? null;

@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask } from "./store";
-import { runClassicTask, sweepStalePids, type SpawnFn } from "./spawner";
+import { runClassicTask, runStreamTask, sweepStalePids, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 
 const HEARTBEAT_PATH = path.join(os.homedir(), ".minder", "dispatcher-heartbeat.json");
@@ -85,7 +85,8 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           continue;
         }
 
-        const promise: Promise<void> = runClassicTask(task, spawnFn)
+        const runFn = task.execution_mode === "stream" ? runStreamTask : runClassicTask;
+        const promise: Promise<void> = runFn(task, spawnFn)
           .then(() => {})
           .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
           .finally(() => inFlight.delete(task!.id));

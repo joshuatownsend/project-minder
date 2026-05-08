@@ -20,6 +20,10 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
 ];
 export const TASK_QUADRANTS: readonly TaskQuadrant[] = ["do", "schedule", "delegate", "archive"];
 export const EXECUTION_MODES: readonly ExecutionMode[] = ["classic", "stream"];
+export const EXECUTION_MODE_LABELS: Record<ExecutionMode, string> = {
+  classic: "Classic (text)",
+  stream: "Stream (JSON)",
+};
 export const RISK_LEVELS: readonly RiskLevel[] = ["low", "medium", "high"];
 
 /**

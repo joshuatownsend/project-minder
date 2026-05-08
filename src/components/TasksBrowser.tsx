@@ -429,7 +429,7 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
           <div style={{ fontSize: "2rem", marginBottom: "8px" }}>📋</div>
           <div style={{ fontWeight: 500, marginBottom: "4px" }}>No tasks yet</div>
           <div style={{ fontSize: "0.75rem" }}>
-            Create a task with "New task" — the dispatcher will pick it up and run it with Claude Code.
+            Create a task with &ldquo;New task&rdquo; — the dispatcher will pick it up and run it with Claude Code.
           </div>
         </div>
       ) : filtered.length === 0 ? (

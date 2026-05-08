@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import os from "os";
+import path from "path";
 
 // Mock all server-side dependencies before importing the route
 vi.mock("@/lib/config", () => ({
@@ -122,19 +124,20 @@ describe("POST /api/hooks — slug resolution", () => {
   });
 
   it("resolves subdirectory to parent project slug", async () => {
+    const projectPath = path.join(os.tmpdir(), "dev", "project-minder");
+    const subPath = path.join(projectPath, "src", "lib");
     (getCachedScan as ReturnType<typeof vi.fn>).mockReturnValue({
-      projects: [
-        { slug: "project-minder", path: "C:\\dev\\project-minder", name: "project-minder" },
-      ],
+      projects: [{ slug: "project-minder", path: projectPath, name: "project-minder" }],
     });
-    const res = await POST(makeRequest({ ...baseBody, cwd: "C:\\dev\\project-minder\\src\\lib" }));
+    const res = await POST(makeRequest({ ...baseBody, cwd: subPath }));
     const json = await res.json();
     expect(json.slug).toBe("project-minder");
   });
 
   it("falls back to synthetic slug when no project matches", async () => {
+    const unknownPath = path.join(os.tmpdir(), "dev", "unknown-project");
     (getCachedScan as ReturnType<typeof vi.fn>).mockReturnValue({ projects: [] });
-    const res = await POST(makeRequest({ ...baseBody, cwd: "C:\\dev\\unknown-project" }));
+    const res = await POST(makeRequest({ ...baseBody, cwd: unknownPath }));
     const json = await res.json();
     // toSlug of basename "unknown-project"
     expect(json.slug).toBe("unknown-project");
