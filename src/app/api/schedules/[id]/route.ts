@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSchedule, patchSchedule, deleteSchedule } from "@/lib/tasks/store";
 import { validatePatchSchedule } from "@/lib/tasks/validation";
+import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
-
-function parseId(raw: string): number | null {
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 export async function GET(_request: Request, { params }: Params): Promise<NextResponse> {
   const { id: rawId } = await params;
@@ -34,9 +30,6 @@ export async function PATCH(request: Request, { params }: Params): Promise<NextR
     return NextResponse.json({ error: "Invalid schedule id" }, { status: 400 });
   }
   try {
-    const existing = await getSchedule(id);
-    if (!existing) return NextResponse.json({ error: "Schedule not found" }, { status: 404 });
-
     const body = await request.json().catch(() => null);
     const validated = validatePatchSchedule(body);
     if ("error" in validated) {

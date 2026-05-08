@@ -223,10 +223,6 @@ function Detail({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ScheduleRow (compact list view for the schedule sub-section)
-// ---------------------------------------------------------------------------
-
 function ScheduleRow({ schedule }: { schedule: Schedule }) {
   return (
     <div
@@ -269,6 +265,17 @@ function ScheduleRow({ schedule }: { schedule: Schedule }) {
 
 type SortKey = "created_at" | "priority" | "scheduled_for";
 
+const SELECT_STYLE: React.CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: "4px",
+  padding: "4px 8px",
+  fontSize: "0.72rem",
+  fontFamily: "var(--font-body)",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+};
+
 interface Props {
   tasks: Task[];
   schedules: Schedule[];
@@ -298,9 +305,9 @@ export function TasksBrowser({ tasks, schedules }: Props) {
     sorted.sort((a, b) => {
       if (sortKey === "priority") return a.priority - b.priority;
       if (sortKey === "scheduled_for") {
-        const av = a.scheduled_for ?? "zzzz";
-        const bv = b.scheduled_for ?? "zzzz";
-        return av.localeCompare(bv);
+        if (!a.scheduled_for) return 1;
+        if (!b.scheduled_for) return -1;
+        return a.scheduled_for.localeCompare(b.scheduled_for);
       }
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     });
@@ -314,17 +321,6 @@ export function TasksBrowser({ tasks, schedules }: Props) {
       return next;
     });
   }
-
-  const selectStyle: React.CSSProperties = {
-    background: "var(--bg-card)",
-    border: "1px solid var(--border)",
-    borderRadius: "4px",
-    padding: "4px 8px",
-    fontSize: "0.72rem",
-    fontFamily: "var(--font-body)",
-    color: "var(--text-secondary)",
-    cursor: "pointer",
-  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -363,21 +359,21 @@ export function TasksBrowser({ tasks, schedules }: Props) {
           />
         </div>
 
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as TaskStatus | "")} style={selectStyle}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as TaskStatus | "")} style={SELECT_STYLE}>
           <option value="">All statuses</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>{STATUS_LABELS[s]}</option>
           ))}
         </select>
 
-        <select value={quadrantFilter} onChange={(e) => setQuadrantFilter(e.target.value as TaskQuadrant | "")} style={selectStyle}>
+        <select value={quadrantFilter} onChange={(e) => setQuadrantFilter(e.target.value as TaskQuadrant | "")} style={SELECT_STYLE}>
           <option value="">All quadrants</option>
           {TASK_QUADRANTS.map((q) => (
             <option key={q} value={q} style={{ textTransform: "capitalize" }}>{q}</option>
           ))}
         </select>
 
-        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} style={selectStyle}>
+        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} style={SELECT_STYLE}>
           <option value="created_at">Sort: newest</option>
           <option value="priority">Sort: priority</option>
           <option value="scheduled_for">Sort: scheduled</option>
@@ -402,7 +398,7 @@ export function TasksBrowser({ tasks, schedules }: Props) {
           No tasks match your filters.
         </div>
       ) : (
-        <div>
+        <>
           {filtered.map((task) => (
             <TaskRow
               key={task.id}
@@ -411,7 +407,7 @@ export function TasksBrowser({ tasks, schedules }: Props) {
               onToggle={() => toggleExpand(task.id)}
             />
           ))}
-        </div>
+        </>
       )}
 
       {/* Schedules sub-section */}

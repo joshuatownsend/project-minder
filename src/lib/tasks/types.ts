@@ -1,6 +1,3 @@
-// Task queue types for Mission Control (Wave 9).
-// Status enum matches brainstorming spec line 154 verbatim.
-
 export type TaskStatus =
   | "pending"
   | "awaiting_approval"

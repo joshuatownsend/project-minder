@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { getTask, patchTask, deleteTask } from "@/lib/tasks/store";
 import { validatePatchTask } from "@/lib/tasks/validation";
+import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
-
-function parseId(raw: string): number | null {
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 export async function GET(_request: Request, { params }: Params): Promise<NextResponse> {
   const { id: rawId } = await params;
@@ -34,6 +30,7 @@ export async function PATCH(request: Request, { params }: Params): Promise<NextR
     return NextResponse.json({ error: "Invalid task id" }, { status: 400 });
   }
   try {
+    // Pre-read required: validatePatchTask needs current.status for transition guard.
     const current = await getTask(id);
     if (!current) return NextResponse.json({ error: "Task not found" }, { status: 404 });
 

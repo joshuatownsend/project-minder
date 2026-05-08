@@ -144,7 +144,9 @@ export function validatePatchTask(
     }
   }
 
-  return b as PatchTaskInput;
+  const out: PatchTaskInput = { ...b } as PatchTaskInput;
+  if (typeof out.title === "string") out.title = out.title.trim();
+  return out;
 }
 
 export function validateCreateSchedule(
