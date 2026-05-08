@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:9fdb15510b89 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T20:06:59.408Z -->
+## ★ Insight
+The InboxPanel issue is the only one with real ongoing cost (720 unnecessary HTTP+DB round-trips per hour per tab). The double stat-walk and sequential PID checks are correctness-adjacent; the rest are cosmetic cleanups.
+
+---
+
+<!-- insight:709577227cb9 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:59:11.303Z -->
+## ★ Insight
+The `public/help/` directory is a runtime-fetchable mirror of `docs/help/` — Next.js serves the `public/` tree statically, so the help docs fetched by the UI's `HelpModal` component must be copied there manually. This two-directory pattern avoids storing docs inside `app/` (which would be server-component territory) while still allowing plain `fetch("/help/tasks.md")` calls from any client component.
+
+---
+
+<!-- insight:87b4ec139ae7 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:57:40.690Z -->
+## ★ Insight
+The existing `tasks.md` ends with a "What's coming" section that specifically mentions Wave 9.2 HITL — this is the exact section we're replacing with actual documentation. The CHANGELOG structure uses bolded wave headers with bullet sub-items; we'll follow that pattern exactly.
+
+---
+
+<!-- insight:a79c6d52b19e | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:43:04.757Z -->
+## ★ Insight
+For the Delegate button in TodoList, I'll fetch config once on mount (same pattern as `NotificationListener`) rather than adding a prop. This keeps `ProjectDetail` untouched and keeps the delegation concern self-contained in the component that owns TODO items.
+
+---
+
 <!-- insight:0f4c33550193 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T19:40:09.519Z -->
 ## ★ Insight
 The `EmergencyStopButton` mount is clean here: `layout.tsx` already reads `config` server-side, so I can pass `taskDispatcherEnabled` as a prop rather than firing another fetch. Client components can be imported from server components — the "use client" boundary is established automatically at the component level.
