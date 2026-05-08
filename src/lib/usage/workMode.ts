@@ -1,6 +1,27 @@
 import type { CategoryType } from "./types";
 
 export type WorkMode = "exploration" | "building" | "testing" | "other";
+export type InvocationSource = "slash_command" | "auto";
+
+export const WORK_MODE_DISPLAY: Record<WorkMode, { color: string; label: string }> = {
+  exploration: { color: "var(--status-active-text)", label: "Exploration" },
+  building:    { color: "var(--accent)",             label: "Building"    },
+  testing:     { color: "var(--status-error-text)",  label: "Testing"     },
+  other:       { color: "var(--border-default)",     label: "Other"       },
+};
+
+export function workModeToSegments(
+  breakdown: WorkModeBreakdown
+): Array<{ key: string; pct: number; color: string; label: string }> {
+  return (["exploration", "building", "testing", "other"] as WorkMode[]).map((key) => ({
+    key,
+    pct: breakdown[key],
+    color: WORK_MODE_DISPLAY[key].color,
+    label: `${WORK_MODE_DISPLAY[key].label} ${breakdown[key]}%`,
+  }));
+}
+
+export const WORK_MODE_SEGMENTS = workModeToSegments;
 
 export interface WorkModeBreakdown {
   exploration: number;
@@ -25,8 +46,8 @@ const MODE_MAP: Record<CategoryType, WorkMode> = {
   General: "other",
 };
 
-export function categoryToWorkMode(cat: CategoryType): WorkMode {
-  return MODE_MAP[cat] ?? "other";
+export function categoryToWorkMode(cat: string | null | undefined): WorkMode {
+  return (cat ? MODE_MAP[cat as CategoryType] : undefined) ?? "other";
 }
 
 export function aggregateWorkMode(
@@ -41,7 +62,7 @@ export function aggregateWorkMode(
   for (const t of turns) {
     if (!t.category) continue;
     total++;
-    const mode = categoryToWorkMode(t.category as CategoryType);
+    const mode = categoryToWorkMode(t.category);
     if (mode === "exploration") exploration++;
     else if (mode === "building") building++;
     else if (mode === "testing") testing++;

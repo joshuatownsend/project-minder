@@ -442,18 +442,22 @@ async function readJsonlSession(
   let assistantTurnCount = 0;
   let slug: string | null = null;
 
-  // Pre-pass: index tool_result error flags and slash-command markers from
-  // user turns so the main loop can enrich tool_use rows without a second
-  // file read. Tool results appear in user turns AFTER the assistant turn
-  // that called the tool, so a single-pass approach would miss them.
+  // Parse JSONL lines once into an array so the pre-pass and main pass
+  // both walk parsed objects — avoids a second JSON.parse per line.
+  // Tool results appear in user turns AFTER the assistant turn that called
+  // the tool, so two logical passes over the array are still required.
+  const rawLines = raw.split("\n");
+  const parsedLines: Array<{ line: string; entry: ConversationEntry | null }> = rawLines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return { line, entry: null };
+    try { return { line, entry: JSON.parse(trimmed) as ConversationEntry }; }
+    catch { return { line, entry: null }; }
+  });
+
   const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
   const slashCommandsByTimestamp = new Map<string, Set<string>>();
-  for (const line of raw.split("\n")) {
-    const trimmedPre = line.trim();
-    if (!trimmedPre) continue;
-    let preEntry: ConversationEntry;
-    try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
-    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
+  for (const { entry: preEntry } of parsedLines) {
+    if (!preEntry || preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
     const msgContent = preEntry.message?.content ?? [];
     const topContent = (preEntry.content ?? []) as unknown[];
     const src = (msgContent as unknown[]).length > 0 ? msgContent : topContent;
@@ -469,21 +473,13 @@ async function readJsonlSession(
   let prevUserTimestamp: string | null = null;
 
   const tParse = PROFILE ? performance.now() : 0;
-  for (const line of raw.split("\n")) {
+  for (const { line, entry } of parsedLines) {
     // Advance byte cursor BEFORE any continues so the offset is correct
     // for every line, including blank and sidechain lines.
     const thisLineOffset = relativeBytePos;
     relativeBytePos += Buffer.byteLength(line + "\n", "utf8");
 
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    let entry: ConversationEntry;
-    try {
-      entry = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    if (!entry) continue;
 
     // Collect CLI version from every entry that carries it.
     if (typeof entry.version === "string" && entry.version) {

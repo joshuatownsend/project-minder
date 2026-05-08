@@ -219,7 +219,7 @@ function HeaderStat({
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
-  const [report, setReport] = useState<(DiagnosisReport & { toolErrorsByCategory?: Record<string, number> }) | null>(null);
+  const [report, setReport] = useState<DiagnosisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -251,7 +251,7 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
           setLoading(false);
           return;
         }
-        const data = (await res.json()) as DiagnosisReport & { toolErrorsByCategory?: Record<string, number> };
+        const data = (await res.json()) as DiagnosisReport;
         if (cancelled) return;
         setReport(data);
         setLoading(false);

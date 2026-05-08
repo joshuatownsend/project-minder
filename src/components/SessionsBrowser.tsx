@@ -24,9 +24,11 @@ import {
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
 import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
-import { formatCost } from "@/lib/format";
+import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { StackedStrip } from "@/components/stats/StackedStrip";
+import { isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
+import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -37,12 +39,6 @@ function formatDuration(ms?: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
 }
 
 function formatDate(iso?: string): string {
@@ -479,17 +475,7 @@ function SessionRow({
           ))}
           {session.workMode && (
             <div style={{ marginLeft: "auto", flexShrink: 0 }}>
-              <StackedStrip
-                width={64}
-                height={5}
-                title="Work-mode breakdown"
-                segments={[
-                  { key: "exploration", pct: session.workMode.exploration, color: "var(--status-active-text)", label: `Exploration ${session.workMode.exploration}%` },
-                  { key: "building",    pct: session.workMode.building,    color: "var(--accent)",             label: `Building ${session.workMode.building}%` },
-                  { key: "testing",     pct: session.workMode.testing,     color: "var(--status-error-text)",  label: `Testing ${session.workMode.testing}%` },
-                  { key: "other",       pct: session.workMode.other,       color: "var(--border-default)",     label: `Other ${session.workMode.other}%` },
-                ]}
-              />
+              <StackedStrip width={64} height={5} title="Work-mode breakdown" segments={WORK_MODE_SEGMENTS(session.workMode)} />
             </div>
           )}
         </div>
@@ -510,18 +496,6 @@ interface ProjectGroup {
   activeSessions: number;
   lastActivity?: string;
   avgOneShotRate?: number;
-}
-
-function isWorktreeEncodedDir(dirName: string): boolean {
-  const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
-  let pos = searchFrom;
-  while (pos < dirName.length) {
-    const idx = dirName.indexOf("--", pos);
-    if (idx === -1) break;
-    if (/^(?:[a-z]+-)?worktrees-/.test(dirName.slice(idx + 2))) return true;
-    pos = idx + 2;
-  }
-  return false;
 }
 
 function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {

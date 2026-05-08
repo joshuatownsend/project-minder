@@ -64,9 +64,8 @@ export async function GET(
     }
   }
 
-  return NextResponse.json(
-    Object.keys(toolErrorsByCategory).length > 0
-      ? { ...report, toolErrorsByCategory }
-      : report
-  );
+  if (Object.keys(toolErrorsByCategory).length > 0) {
+    report.toolErrorsByCategory = toolErrorsByCategory;
+  }
+  return NextResponse.json(report);
 }

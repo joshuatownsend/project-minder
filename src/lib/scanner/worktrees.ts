@@ -5,12 +5,8 @@ import { scanTodoMd } from "./todoMd";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
 
-export const WORKTREE_SEP = "--claude-worktrees-";
-
-/** Returns true when an encoded project directory name belongs to a Claude Code worktree. */
-export function isWorktreeEncodedDir(encodedDirName: string): boolean {
-  return encodedDirName.includes(WORKTREE_SEP);
-}
+export { WORKTREE_SEP, isWorktreeEncodedDir } from "./worktreeCheck";
+import { WORKTREE_SEP } from "./worktreeCheck";
 
 /**
  * Parse the branch name from a worktree's `.git` file.

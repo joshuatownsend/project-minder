@@ -10,20 +10,13 @@ import type {
   WasteGrade,
 } from "@/lib/scanner/wasteOptimizer";
 import type { YieldResult, YieldOutcome } from "@/lib/usage/yieldAnalysis";
-
-
-interface WorkModeDistribution {
-  exploration: number;
-  building: number;
-  testing: number;
-  other: number;
-}
+import { WORK_MODE_DISPLAY, workModeToSegments, type WorkMode, type WorkModeBreakdown } from "@/lib/usage/workMode";
 
 interface EfficiencyResponse {
   slug: string;
   waste: WasteOptimizerInfo;
   yieldReport: YieldResult;
-  workMode?: WorkModeDistribution;
+  workMode?: WorkModeBreakdown;
   generatedAt: string;
 }
 
@@ -350,35 +343,24 @@ export function EfficiencyTab({ slug }: EfficiencyTabProps) {
           </div>
 
           <div style={{ marginBottom: "10px" }}>
-            <StackedStrip
-              height={8}
-              title="Work-mode distribution across project sessions"
-              segments={[
-                { key: "exploration", pct: workMode.exploration, color: "var(--status-active-text)", label: `Exploration ${workMode.exploration}%` },
-                { key: "building",    pct: workMode.building,    color: "var(--accent)",             label: `Building ${workMode.building}%` },
-                { key: "testing",     pct: workMode.testing,     color: "var(--status-error-text)",  label: `Testing ${workMode.testing}%` },
-                { key: "other",       pct: workMode.other,       color: "var(--border-default)",     label: `Other ${workMode.other}%` },
-              ]}
-            />
+            <StackedStrip height={8} title="Work-mode distribution across project sessions" segments={workModeToSegments(workMode)} />
           </div>
 
           <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
-            {[
-              { key: "exploration", label: "Exploration", pct: workMode.exploration, color: "var(--status-active-text)" },
-              { key: "building",    label: "Building",    pct: workMode.building,    color: "var(--accent)" },
-              { key: "testing",     label: "Testing",     pct: workMode.testing,     color: "var(--status-error-text)" },
-              { key: "other",       label: "Other",       pct: workMode.other,       color: "var(--border-default)" },
-            ].filter((m) => m.pct > 0).map((m) => (
-              <div key={m.key} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <div style={{ width: "8px", height: "8px", borderRadius: "2px", background: m.color, flexShrink: 0 }} />
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-                  {m.label}
-                </span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                  {m.pct}%
-                </span>
-              </div>
-            ))}
+            {workModeToSegments(workMode).filter((m) => m.pct > 0).map((m) => {
+              const display = WORK_MODE_DISPLAY[m.key as WorkMode];
+              return (
+                <div key={m.key} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div style={{ width: "8px", height: "8px", borderRadius: "2px", background: m.color, flexShrink: 0 }} />
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                    {display.label}
+                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                    {m.pct}%
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
