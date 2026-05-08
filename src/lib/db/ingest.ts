@@ -14,8 +14,12 @@ import { parseMcpTool } from "@/lib/usage/mcpParser";
 import {
   extractText,
   extractToolResults,
+  extractToolResultEntries,
+  extractCommandNames,
   isHumanText,
 } from "@/lib/usage/contentBlocks";
+import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
+import { aggregateWorkMode } from "@/lib/usage/workMode";
 import {
   FILE_OP_BY_TOOL,
   AGENT_DISPATCH_TOOL,
@@ -107,6 +111,8 @@ interface ParsedToolUse {
   filePath: string | null;
   fileOp: FileOp | null;
   isError: 0 | 1;
+  errorCategory: string | null;
+  invocationSource: string | null;
 }
 
 interface ParsedTurn {
@@ -257,6 +263,10 @@ interface ParsedSession {
   compactBoundaryCount: number;
   /** Whether the resume-anomaly detector fired. Populated by Phase 3 detector; 0 here. */
   hasResumeAnomaly: 0 | 1;
+  workModeExplorationPct: number | null;
+  workModeBuildingPct: number | null;
+  workModeTestingPct: number | null;
+  workModeOtherPct: number | null;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -432,6 +442,32 @@ async function readJsonlSession(
   let assistantTurnCount = 0;
   let slug: string | null = null;
 
+  // Pre-pass: index tool_result error flags and slash-command markers from
+  // user turns so the main loop can enrich tool_use rows without a second
+  // file read. Tool results appear in user turns AFTER the assistant turn
+  // that called the tool, so a single-pass approach would miss them.
+  const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
+  const slashCommandsByTimestamp = new Map<string, Set<string>>();
+  for (const line of raw.split("\n")) {
+    const trimmedPre = line.trim();
+    if (!trimmedPre) continue;
+    let preEntry: ConversationEntry;
+    try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
+    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
+    const msgContent = preEntry.message?.content ?? [];
+    const topContent = (preEntry.content ?? []) as unknown[];
+    const src = (msgContent as unknown[]).length > 0 ? msgContent : topContent;
+    for (const tr of extractToolResultEntries(src)) {
+      if (tr.tool_use_id) errorByToolUseId.set(tr.tool_use_id, { isError: tr.isError, content: tr.content });
+    }
+    const names = extractCommandNames(src);
+    if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
+  }
+
+  // Tracks the timestamp of the most-recent user turn so the following
+  // assistant turn can look up that turn's slash-command set.
+  let prevUserTimestamp: string | null = null;
+
   const tParse = PROFILE ? performance.now() : 0;
   for (const line of raw.split("\n")) {
     // Advance byte cursor BEFORE any continues so the offset is correct
@@ -525,6 +561,8 @@ async function readJsonlSession(
       }
       const textPreview = truncateText(text, TEXT_PREVIEW_LIMIT);
 
+      const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
+      let slashWindowConsumed = false;
       const toolUses: ParsedToolUse[] = toolBlocks.map((b, idx): ParsedToolUse => {
         const args = (b.input ?? {}) as Record<string, unknown>;
         const toolName = typeof b.name === "string" ? b.name : "unknown";
@@ -536,18 +574,30 @@ async function readJsonlSession(
         } catch {
           argsJson = null;
         }
+        const toolUseId = typeof b.id === "string" ? b.id : null;
+        const errEntry = toolUseId ? errorByToolUseId.get(toolUseId) : undefined;
+        const isError: 0 | 1 = errEntry?.isError ? 1 : 0;
+        const errorCategory: string | null =
+          isError && errEntry?.content ? categorizeToolError(errEntry.content) : null;
+        const skillName = extractSkillName(toolName, args);
+        const isSlashMatch =
+          !slashWindowConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
+        if (isSlashMatch) slashWindowConsumed = true;
+        const invocationSource: string = isSlashMatch ? "slash_command" : "auto";
         return {
           sequenceInTurn: idx,
-          toolUseId: typeof b.id === "string" ? b.id : null,
+          toolUseId,
           toolName,
           mcpServer: mcp?.server ?? null,
           mcpTool: mcp?.tool ?? null,
           agentName: extractAgentName(toolName, args),
-          skillName: extractSkillName(toolName, args),
+          skillName,
           argumentsJson: argsJson,
           filePath: fp,
           fileOp,
-          isError: 0,
+          isError,
+          errorCategory,
+          invocationSource,
         };
       });
       toolCallCount += toolUses.length;
@@ -685,6 +735,7 @@ async function readJsonlSession(
           }
         }
       }
+      prevUserTimestamp = timestamp;
     }
   }
 
@@ -709,6 +760,9 @@ async function readJsonlSession(
     }
   }
   if (PROFILE) tick("classify+price", performance.now() - tClassify);
+
+  // Derive: work-mode distribution across categorized assistant turns.
+  const workMode = aggregateWorkMode(turns.map((t) => ({ category: t.category })));
 
   // Derive: one-shot detection across the whole session.
   const allUsageTurns = turns.map((t) => t.usageTurn);
@@ -829,6 +883,10 @@ async function readJsonlSession(
       cliVersion,
       compactBoundaryCount: compactBoundaries.length,
       hasResumeAnomaly,
+      workModeExplorationPct: workMode.exploration,
+      workModeBuildingPct: workMode.building,
+      workModeTestingPct: workMode.testing,
+      workModeOtherPct: workMode.other,
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -927,7 +985,9 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        has_one_shot, verified_task_count, one_shot_task_count,
        git_branch, initial_prompt, last_prompt, slug,
        has_thinking, cli_version, has_resume_anomaly, compact_boundary_count,
-       derived_version, indexed_at_ms
+       derived_version, indexed_at_ms,
+       work_mode_exploration_pct, work_mode_building_pct,
+       work_mode_testing_pct, work_mode_other_pct
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
        @file_mtime_ms, @file_size, @byte_offset,
@@ -940,7 +1000,9 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @has_one_shot, @verified_task_count, @one_shot_task_count,
        @git_branch, @initial_prompt, @last_prompt, @slug,
        @has_thinking, @cli_version, @has_resume_anomaly, @compact_boundary_count,
-       @derived_version, @indexed_at_ms
+       @derived_version, @indexed_at_ms,
+       @work_mode_exploration_pct, @work_mode_building_pct,
+       @work_mode_testing_pct, @work_mode_other_pct
      )`
   ).run({
     session_id: s.sessionId,
@@ -985,6 +1047,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     compact_boundary_count: s.compactBoundaryCount,
     derived_version: DERIVED_VERSION,
     indexed_at_ms: Date.now(),
+    work_mode_exploration_pct: s.workModeExplorationPct,
+    work_mode_building_pct: s.workModeBuildingPct,
+    work_mode_testing_pct: s.workModeTestingPct,
+    work_mode_other_pct: s.workModeOtherPct,
   });
   rows++;
   if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
@@ -1010,11 +1076,13 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO tool_uses (
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
-       arguments_json, file_path, file_op, is_error
+       arguments_json, file_path, file_op, is_error,
+       error_category, invocation_source
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
-       @arguments_json, @file_path, @file_op, @is_error
+       @arguments_json, @file_path, @file_op, @is_error,
+       @error_category, @invocation_source
      )`
   );
   const insertFileEdit = db.prepare(
@@ -1064,6 +1132,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
         file_path: tu.filePath,
         file_op: tu.fileOp,
         is_error: tu.isError,
+        error_category: tu.errorCategory,
+        invocation_source: tu.invocationSource,
       });
       rows++;
 
@@ -1352,11 +1422,13 @@ function appendSessionTail(
     `INSERT INTO tool_uses (
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
-       arguments_json, file_path, file_op, is_error
+       arguments_json, file_path, file_op, is_error,
+       error_category, invocation_source
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
-       @arguments_json, @file_path, @file_op, @is_error
+       @arguments_json, @file_path, @file_op, @is_error,
+       @error_category, @invocation_source
      )`
   );
   const insertFileEdit = db.prepare(
@@ -1405,6 +1477,8 @@ function appendSessionTail(
         file_path: tu.filePath,
         file_op: tu.fileOp,
         is_error: tu.isError,
+        error_category: tu.errorCategory,
+        invocation_source: tu.invocationSource,
       });
       rows++;
 
@@ -1520,6 +1594,12 @@ function appendSessionTail(
   // `'waiting'` (and time-gate to `working / needs_attention / idle`
   // depending on file mtime) until the next process restart triggers a
   // full reconcile. Acceptable trade-off for the ~150-session corpus.
+  // Recompute work-mode over all turns (old + new) now that new turns are inserted.
+  const allCategoryRows = db
+    .prepare("SELECT category FROM turns WHERE session_id = ? AND role = 'assistant'")
+    .all(sessionId) as Array<{ category: string | null }>;
+  const tailWorkMode = aggregateWorkMode(allCategoryRows);
+
   const refreshStatus = parsed.assistantTurnCount > 0;
   const statusUpdateClause = refreshStatus ? "status = @status, " : "";
   const statusUpdateParam = refreshStatus ? { status: parsed.storedStatus } : {};
@@ -1552,7 +1632,11 @@ function appendSessionTail(
        verified_task_count = @verified_task_count,
        one_shot_task_count = @one_shot_task_count,
        last_prompt         = @last_prompt,
-       indexed_at_ms       = @indexed_at_ms
+       indexed_at_ms       = @indexed_at_ms,
+       work_mode_exploration_pct = @work_mode_exploration_pct,
+       work_mode_building_pct = @work_mode_building_pct,
+       work_mode_testing_pct  = @work_mode_testing_pct,
+       work_mode_other_pct    = @work_mode_other_pct
      WHERE session_id = @session_id`
   ).run({
     ...statusUpdateParam,
@@ -1586,6 +1670,10 @@ function appendSessionTail(
     one_shot_task_count: oneShot.oneShotTasks,
     last_prompt: lastPrompt,
     indexed_at_ms: Date.now(),
+    work_mode_exploration_pct: tailWorkMode.exploration,
+    work_mode_building_pct: tailWorkMode.building,
+    work_mode_testing_pct: tailWorkMode.testing,
+    work_mode_other_pct: tailWorkMode.other,
   });
   rows++;
 

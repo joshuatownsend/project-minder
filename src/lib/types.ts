@@ -455,6 +455,8 @@ export interface SessionSummary {
   distilledAt?: string;
   /** LLM-generated distillation of the session (Wave 7.1b). */
   distilledText?: string;
+  /** Work-mode distribution across categorized turns (integer percentages summing to 100). */
+  workMode?: { exploration: number; building: number; testing: number; other: number };
 }
 
 export interface TimelineEvent {

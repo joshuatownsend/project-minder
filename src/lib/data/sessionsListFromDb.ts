@@ -131,6 +131,10 @@ interface SessionRow {
   starred_at: string | null;
   distilled_at: string | null;
   distilled_text: string | null;
+  work_mode_exploration_pct: number | null;
+  work_mode_building_pct: number | null;
+  work_mode_testing_pct: number | null;
+  work_mode_other_pct: number | null;
 }
 
 interface ToolCountRow {
@@ -184,7 +188,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             git_branch, initial_prompt, last_prompt,
             slug, continued_from_session_id,
             has_thinking, cli_version, has_resume_anomaly, compact_boundary_count,
-            generated_title, starred_at, distilled_at, distilled_text
+            generated_title, starred_at, distilled_at, distilled_text,
+            work_mode_exploration_pct, work_mode_building_pct,
+            work_mode_testing_pct, work_mode_other_pct
      FROM sessions
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
@@ -327,6 +333,14 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       starredAt: h.starred_at ?? undefined,
       distilledAt: h.distilled_at ?? undefined,
       distilledText: h.distilled_text ?? undefined,
+      workMode: (h.work_mode_exploration_pct !== null)
+        ? {
+            exploration: h.work_mode_exploration_pct!,
+            building: h.work_mode_building_pct!,
+            testing: h.work_mode_testing_pct!,
+            other: h.work_mode_other_pct!,
+          }
+        : undefined,
     });
   }
 

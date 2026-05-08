@@ -2,6 +2,9 @@ export interface ToolCall {
   name: string;
   id?: string;
   arguments?: Record<string, any>;
+  isError?: boolean;
+  errorCategory?: string;
+  invocationSource?: string;
 }
 
 export interface UsageTurn {

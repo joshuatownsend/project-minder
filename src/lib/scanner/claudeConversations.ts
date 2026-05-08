@@ -13,6 +13,8 @@ import {
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
+import { classifyTurn } from "../usage/classifier";
+import { aggregateWorkMode } from "../usage/workMode";
 import { readSubagentMeta } from "./subagentMeta";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
@@ -321,6 +323,15 @@ async function scanSessionFile(
       qualityHasToolFailureStreak = quality.toolFailureStreaks.length > 0;
     } catch { /* non-critical */ }
 
+    // Work-mode distribution: classify each assistant turn and aggregate.
+    let sessionWorkMode: SessionSummary["workMode"] | undefined;
+    try {
+      const categories = lightTurns
+        .filter((t) => t.role === "assistant")
+        .map((t) => ({ category: classifyTurn(t) }));
+      sessionWorkMode = aggregateWorkMode(categories);
+    } catch { /* non-critical */ }
+
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
     await loadPricing();
     let costEstimate = 0;
@@ -385,6 +396,7 @@ async function scanSessionFile(
       maxContextFill: qualityMaxContextFill,
       hasCompactionLoop: qualityHasCompactionLoop,
       hasToolFailureStreak: qualityHasToolFailureStreak,
+      workMode: sessionWorkMode,
     };
   } catch {
     return null;
