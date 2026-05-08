@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { S } from "./styles";
 import { OtelSection } from "./OtelSection";
+import type { QuotaResult } from "@/lib/quota";
 
 export function IntegrationsSection({
   config,
@@ -17,11 +18,16 @@ export function IntegrationsSection({
   const [tokenConfigured, setTokenConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [quota, setQuota] = useState<QuotaResult | null>(null);
 
   useEffect(() => {
     fetch("/api/secrets/telegram")
       .then((r) => r.json())
       .then((d) => setTokenConfigured(!!d.configured))
+      .catch(() => {});
+    fetch("/api/integrations/quota")
+      .then((r) => r.json())
+      .then((d) => setQuota(d as QuotaResult))
       .catch(() => {});
   }, []);
 
@@ -72,6 +78,51 @@ export function IntegrationsSection({
       <p style={S.desc}>Connect external services. Telegram for notifications; OTEL for real-time Claude Code telemetry.</p>
 
       <OtelSection config={config} onConfigChange={onConfigChange} />
+
+      {/* ── Claude Quota ────────────────────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "12px" }}>
+          Claude Max Quota
+        </div>
+        {quota === null ? (
+          <div style={S.muted}>Loading…</div>
+        ) : !quota.configured ? (
+          <div style={{ ...S.muted }}>
+            {quota.reason}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{
+                display: "inline-block", width: "8px", height: "8px", borderRadius: "50%",
+                background: quota.overallStatus === "allowed" ? "var(--status-active-text)" : "var(--status-error-text)",
+                flexShrink: 0,
+              }} />
+              <span style={S.label}>
+                {quota.overallStatus} · {quota.subscriptionType} ({quota.rateLimitTier})
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "24px", fontSize: "0.78rem", fontFamily: "var(--font-mono)" }}>
+              <div>
+                <span style={{ color: "var(--text-muted)" }}>5h: </span>
+                <span style={{ color: "var(--text-primary)" }}>
+                  {Math.round(quota.windows["5h"].utilization * 100)}%
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "var(--text-muted)" }}>7d: </span>
+                <span style={{ color: "var(--text-primary)" }}>
+                  {Math.round(quota.windows["7d"].utilization * 100)}%
+                </span>
+              </div>
+            </div>
+            <div style={{ ...S.muted }}>
+              Full burndown chart in Settings → Cost.
+              Cached at {new Date(quota.cachedAt).toLocaleTimeString()}.
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={S.card}>
         <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "12px" }}>

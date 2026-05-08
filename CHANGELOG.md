@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 8.2b — Cluster S: Claude Max quota burndown + schedule mode.** TODO #136, #137.
+  - **Claude Max quota probe** (`src/lib/quota.ts`). Reads the OAuth access token from `~/.claude/.credentials.json` and makes a minimal POST to `api.anthropic.com/v1/messages` (Claude Haiku 4.5, 1 token, ~$0.00001/probe) to read `anthropic-ratelimit-unified-*` response headers. Returns 5-hour and 7-day rolling-window utilization (0–1), status, and reset timestamps. Disk-cached 5 min at `~/.minder/quota-cache.json`; stale-cache fallback on network failure. Only works for Claude Max subscribers using OAuth (not API-key auth).
+  - **`GET /api/integrations/quota`** — returns `QuotaResult` (either `{ configured: true, windows: { "5h", "7d", overage }, subscriptionType, rateLimitTier, ... }` or `{ configured: false, reason }`).
+  - **`QuotaBurndownChart` component** (`src/components/QuotaBurndownChart.tsx`). SVG progress bars for both rolling windows with colour-coded utilization (green < 70%, amber 70–90%, red ≥ 90%), reset countdown, and schedule-mode-aware linear projection.
+  - **Schedule mode picker** (Settings → Cost). Four options: Weekdays (Mon–Fri), Vibe coder (~70 % of hours), 24 × 7, Custom. Adjusts the active-time fraction used in 7-day projection. Persisted in `.minder.json` via `PATCH /api/config`.
+  - **Usage Quota card** (Settings → Cost). Shows schedule picker + full burndown chart when Claude OAuth credentials are present.
+  - **Claude Max Quota summary** (Settings → Integrations). Shows overall status (● allowed/throttled), subscription type, 5 h %, 7 d %, and a link to the full burndown in Settings → Cost.
+  - **`scheduleMode` PATCH validator** in `src/app/api/config/route.ts`. Accepts `"weekdays" | "vibe-coder" | "24x7" | "custom"`.
+
 - **Wave 8.2a — Cluster S: Currency display + pricing rule overrides.** TODO #79, #80.
   - **Display currency preference** (Settings → Cost). Choose from 30 ISO 4217 currencies powered by the Frankfurter API. Exchange rates cached 24 h in `~/.minder/exchange-rates.json`; last-good fallback on network failure. Zero-decimal currencies (JPY, KRW, IDR) rendered without fractional part.
   - **Centralized `formatCost` / `formatCostCompact`** in `src/lib/format.ts`. All five components (`UsageDashboard`, `SessionsBrowser`, `SessionDetailView`, `ProjectSessions`, `StatsDashboard`) now import from format.ts rather than repeating identical inline functions. Both functions accept optional `(currency, fxRate)` args; defaults preserve USD behaviour.
