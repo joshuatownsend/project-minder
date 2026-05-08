@@ -24,6 +24,7 @@ Click **New task** in the toolbar to open the Task Composer. Fill in:
 - **Skill** — optional assigned skill to use (e.g. `code-review`)
 - **Model** — optional model override (e.g. `claude-opus-4-7`)
 - **Risk level** — Low / Medium / High
+- **Execution mode** — `Classic (text)` uses `claude -p --output-format text`; `Stream (JSON)` uses `--output-format stream-json --verbose` and captures the `session_id` mid-run
 - **Run after** — optional datetime; the dispatcher won't pick up the task until then
 - **Requires approval** — task waits in `awaiting_approval` until you approve it
 - **Dry run** — dispatcher logs but does not spawn a child process
@@ -53,8 +54,9 @@ The dispatcher is an in-process singleton (`globalThis.__minderDispatcher`) that
 1. Writes a heartbeat to `~/.minder/dispatcher-heartbeat.json` on each 30-second tick
 2. Materializes due schedules into `ops_tasks` rows
 3. Promotes `pending + requires_approval` tasks to `awaiting_approval`
-4. Claims and spawns up to 3 concurrent `classic` mode tasks (via `claude -p`)
-5. Writes a PID file to `~/.minder/pids/<pid>` for each spawned child (used by the Wave 9.2 emergency stop)
+4. Claims and spawns up to 3 concurrent tasks — `classic` mode via `claude -p --output-format text`, `stream` mode via `claude -p --output-format stream-json --verbose`
+5. In stream mode, writes `session_id` to the task row as soon as the init event arrives (before the task completes)
+6. Writes a PID file to `~/.minder/pids/<pid>` for each spawned child (used by the Wave 9.2 emergency stop)
 
 The dispatcher lifecycle is bound to the Next.js server process — restarting the server restarts the dispatcher. Tasks that were `running` when the server stopped will remain stuck in that state; use the re-run endpoint to reset them to `pending`.
 
@@ -76,6 +78,5 @@ Recurring tasks are driven by cron schedules. Create one at `POST /api/schedules
 
 ## What's coming
 
-- **Wave 9.1c** — Stream mode (line-buffered JSON, `session_id` extraction)
 - **Wave 9.2** — HITL: `DECISION:` / `INBOX:` marker parsing, decision queue, emergency stop
 - **Wave 10** — Kanban board, task dependency graph, multi-agent swarm

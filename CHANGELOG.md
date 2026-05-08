@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 9.1c — Stream mode spawning.** `execution_mode: "stream"` tasks now use `claude -p --output-format stream-json --verbose` instead of `--output-format text`. NDJSON events are parsed from stdout: the `init` event writes `session_id` to the task row mid-run via a new `setSessionId()` store helper; the `result` event captures output text and `total_cost_usd`. Chunk-boundary safety is guaranteed by a line buffer that accumulates across `data` events with UTF-8 stream encoding. Non-JSON lines (hook output, warnings) are silently skipped. Task Composer now exposes an "Execution mode" selector (Classic / Stream). Dispatcher routes tasks by `execution_mode` field. 7 new `runStreamTask` tests.
 - **Wave 9.1b — Cluster U (continued): Dispatcher loop + classic spawning + Task Composer.** TODO #244.
   - Dispatcher loop singleton (`globalThis.__minderDispatcher`) starts automatically on the first `/api/tasks` request. 30-second tick: writes heartbeat to `~/.minder/dispatcher-heartbeat.json`, materializes due cron schedules into `ops_tasks` rows (serialized transaction), promotes `requires_approval` tasks to `awaiting_approval`, claims up to 3 pending tasks and spawns `claude -p` (classic mode).
   - PID marker files at `~/.minder/pids/<pid>` — written on spawn, deleted on exit. `sweepStalePids()` on each tick cleans dead files via `process.kill(pid, 0)` (cross-platform, throws ESRCH if dead).

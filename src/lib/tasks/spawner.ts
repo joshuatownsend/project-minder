@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import type { Task } from "./types";
-import { completeTask, failTask } from "./store";
+import { completeTask, failTask, setSessionId } from "./store";
 import { isWindows } from "../platform";
 
 const PID_DIR = path.join(os.homedir(), ".minder", "pids");
@@ -132,6 +132,122 @@ export async function runClassicTask(
           await completeTask(task.id, {
             output_summary: trimmed.slice(0, 4000) || undefined,
             duration_ms: durationMs,
+          });
+        } catch (err) {
+          console.error(`[spawner] completeTask failed for task ${task.id}:`, err);
+        }
+        resolve({ taskId: task.id, status: "done", output: trimmed, durationMs });
+      } else {
+        const errMsg = stderr.trim() || `claude exited with code ${code}`;
+        try {
+          await failTask(task.id, { error_message: errMsg.slice(0, 2000), duration_ms: durationMs });
+        } catch (err) {
+          console.error(`[spawner] failTask failed for task ${task.id}:`, err);
+        }
+        resolve({ taskId: task.id, status: "failed", error: errMsg, durationMs });
+      }
+    });
+
+    child.on("error", async (err) => {
+      if (pid) deletePidFile(pid);
+      const durationMs = Date.now() - startMs;
+      try {
+        await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });
+      } catch (storeErr) {
+        console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
+      }
+      resolve({ taskId: task.id, status: "failed", error: err.message, durationMs });
+    });
+  });
+}
+
+/**
+ * Spawn `claude -p "<prompt>" --output-format stream-json --verbose` (stream mode).
+ * Parses NDJSON events from stdout:
+ *   - {type:"system", subtype:"init"} → write session_id early via setSessionId()
+ *   - {type:"result"} → extract result text + total_cost_usd for completeTask()
+ * Writes a PID marker file while the child is alive.
+ */
+export async function runStreamTask(
+  task: Task,
+  spawnFn: SpawnFn = spawn
+): Promise<RunTaskResult> {
+  const startMs = Date.now();
+  const prompt = [task.title, task.description].filter(Boolean).join("\n\n");
+
+  const spawnArgs = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
+  if (task.assigned_skill) {
+    spawnArgs.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
+  }
+  if (task.model) {
+    spawnArgs.push("--model", task.model);
+  }
+
+  const opts = {
+    stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+    env: { ...process.env, MINDER_DISPATCHED: "1" },
+  };
+
+  const [cmd, extraArgs]: [string, string[]] = isWindows
+    ? ["cmd.exe", ["/c", "claude", ...spawnArgs]]
+    : ["claude", spawnArgs];
+
+  return new Promise<RunTaskResult>((resolve) => {
+    const child = spawnFn(cmd, extraArgs, opts);
+    const pid = child.pid;
+
+    if (pid) writePidFile(pid);
+
+    let lineBuffer = "";
+    let resultText = "";
+    let resultCostUsd: number | undefined;
+    let stderr = "";
+    const LINE_BUFFER_CAP = 50_000;
+    const STDERR_CAP = 10_000;
+
+    // UTF-8 encoding prevents chunk boundaries from splitting multi-byte sequences.
+    (child.stdout as NodeJS.ReadableStream & { setEncoding?: (enc: string) => void })
+      ?.setEncoding?.("utf8");
+
+    child.stdout?.on("data", (chunk: string | Buffer) => {
+      if (lineBuffer.length < LINE_BUFFER_CAP)
+        lineBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      let nl: number;
+      while ((nl = lineBuffer.indexOf("\n")) !== -1) {
+        const line = lineBuffer.slice(0, nl).trimEnd();
+        lineBuffer = lineBuffer.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const evt = JSON.parse(line) as Record<string, unknown>;
+          if (evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
+            setSessionId(task.id, evt.session_id).catch((e) =>
+              console.error(`[spawner] setSessionId failed for task ${task.id}:`, e)
+            );
+          } else if (evt.type === "result") {
+            if (typeof evt.result === "string") resultText = evt.result;
+            if (typeof evt.total_cost_usd === "number") resultCostUsd = evt.total_cost_usd;
+          }
+        } catch {
+          // Non-JSON lines (hook output, warnings) — ignore
+        }
+      }
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < STDERR_CAP) stderr += chunk.toString();
+    });
+
+    child.on("close", async (code) => {
+      if (pid) deletePidFile(pid);
+      const durationMs = Date.now() - startMs;
+
+      if (code === 0) {
+        const trimmed = resultText.trim();
+        try {
+          await completeTask(task.id, {
+            output_summary: trimmed.slice(0, 4000) || undefined,
+            duration_ms: durationMs,
+            cost_usd: resultCostUsd,
           });
         } catch (err) {
           console.error(`[spawner] completeTask failed for task ${task.id}:`, err);

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Modal } from "@/components/ui/modal";
-import type { TaskQuadrant, RiskLevel } from "@/lib/tasks/types";
+import type { TaskQuadrant, RiskLevel, ExecutionMode } from "@/lib/tasks/types";
 import { EXECUTION_MODES } from "@/lib/tasks/types";
 
 interface TaskComposerProps {
@@ -53,6 +53,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
   const [assignedSkill, setAssignedSkill] = useState("");
   const [model, setModel] = useState("");
   const [riskLevel, setRiskLevel] = useState<RiskLevel>("low");
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("classic");
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [scheduledFor, setScheduledFor] = useState("");
@@ -68,7 +69,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
     try {
       const body: Record<string, unknown> = {
         title: title.trim(),
-        execution_mode: EXECUTION_MODES[0],
+        execution_mode: executionMode,
       };
       if (description.trim()) body.description = description.trim();
       if (quadrant) body.quadrant = quadrant;
@@ -165,12 +166,20 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
           </Field>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
           <Field label="Risk level">
             <select value={riskLevel} onChange={(e) => setRiskLevel(e.target.value as RiskLevel)} style={selectStyle}>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+            </select>
+          </Field>
+
+          <Field label="Execution mode">
+            <select value={executionMode} onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)} style={selectStyle}>
+              {EXECUTION_MODES.map((m) => (
+                <option key={m} value={m}>{m === "classic" ? "Classic (text)" : "Stream (JSON)"}</option>
+              ))}
             </select>
           </Field>
 
