@@ -1,5 +1,41 @@
 # Insights
 
+<!-- insight:6f60269fea2a | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:57:08.229Z -->
+## ★ Insight
+Using SVG `viewBox` with a fixed coordinate system (here 0 0 500 140) and `width="100%"` lets the chart scale fluidly to any container width while keeping all math in simple pixel coordinates. The SVG renderer handles the scaling.
+
+---
+
+<!-- insight:a82b529a23c3 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:56:01.388Z -->
+## ★ Insight
+The "probe" pattern here — making a minimal real inference call just to read response headers — is unusual but legitimate. Anthropic only exposes rate-limit state on inference responses, not on account-API endpoints. The cost is ~$0.00001 per probe; the 5-minute TTL keeps it to $0.003/day.
+
+---
+
+<!-- insight:1c73260034af | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:52:11.591Z -->
+## ★ Insight
+The Anthropic Max tier uses a "unified" rate limit model with rolling 5h and 7d windows expressed as utilization percentages (0.0–1.0), not absolute token buckets. This design lets Anthropic dynamically adjust limits without breaking client parsers — clients just read "57% used" regardless of the underlying unit.
+
+---
+
+<!-- insight:e1bacdcb164c | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:43:59.663Z -->
+## ★ Insight
+The plan flagged this as "higher risk — unverified endpoint." Building quota.ts around a guessed API shape is the fastest way to produce a beautiful chart with fake numbers. Probe first, then design.
+
+---
+
+<!-- insight:758a590c8813 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:26:54.501Z -->
+## ★ Insight
+The `fxRates.ts` bug is subtle: the in-memory `ratesMap` guard (`if (ratesMap) return`) has no TTL check, so a long-lived server process caches exchange rates forever after first load. The TTL check only applies to the _disk_ cache during initial load, not the in-memory one. The fix needs a `loadedAt` timestamp at the module level.
+
+---
+
+<!-- insight:91cf59199652 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T01:07:00.975Z -->
+## ★ Insight
+Three independent lists (VALID_CURRENCIES in route.ts, SUPPORTED_CURRENCIES in CostSection.tsx, CURRENCY_SYMBOL in format.ts) all describe the same 30-currency set. Any future currency addition requires editing three files — a textbook "shotgun surgery" code smell. Extracting to one module makes the invariant ("these three maps always cover the same codes") enforced by a single edit point.
+
+---
+
 <!-- insight:e3abfc2a082f | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T00:52:56.945Z -->
 ## ★ Insight
 Native `<select>` elements resist CSS in a way `<input>` elements don't — browsers apply their OS-level widget rendering unless you opt out via `appearance: none`. Without it, even correctly-set `background` and `color` CSS variables get overridden by the browser's native control paint. The SVG chevron in the `backgroundImage` replaces the native arrow that `appearance: none` removes, keeping the control visually complete.
