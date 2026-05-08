@@ -3,13 +3,9 @@ import { getCachedScan } from "@/lib/cache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffer";
-import { countOpenDecisions, countInboxMessages } from "@/lib/tasks/store";
+import { countOpenDecisions, countInboxMessages, countNewDecisions } from "@/lib/tasks/store";
 import { getFlag } from "@/lib/featureFlags";
 import { readConfig } from "@/lib/config";
-
-// Module-level edge-trigger for decision count. Tracks previous count so the
-// "task-decision-required" change event fires only when the count increases.
-let prevDecisionCount = 0;
 
 // Single endpoint that bundles every signal the dashboard chrome polls for.
 // Replaces three independent client-side intervals (5s + 10s + 30s) with one
@@ -78,13 +74,19 @@ export async function GET(request: NextRequest) {
   try {
     if (getFlag(cfg.featureFlags, "taskDispatcher")) {
       dispatcherPaused = !!cfg.emergencyStop;
-      [decisionCount, inboxCount] = await Promise.all([countOpenDecisions(), countInboxMessages()]);
-      // Edge-trigger: track previous count in a module-level var so the
-      // notification fires exactly once when count increases.
-      if (decisionCount > prevDecisionCount) {
-        newDecisionCount = decisionCount - prevDecisionCount;
-      }
-      prevDecisionCount = decisionCount;
+      // countNewDecisions uses the client-supplied `since` timestamp so each
+      // tab gets its own edge-trigger without shared module-level state.
+      const sinceEpoch = since ? Math.floor(new Date(since).getTime() / 1000) : NaN;
+      const decisionsPromise = countOpenDecisions();
+      const inboxPromise = countInboxMessages();
+      const newDecisionsPromise = since && Number.isFinite(sinceEpoch)
+        ? countNewDecisions(sinceEpoch)
+        : Promise.resolve(0);
+      [decisionCount, inboxCount, newDecisionCount] = await Promise.all([
+        decisionsPromise,
+        inboxPromise,
+        newDecisionsPromise,
+      ]);
     }
   } catch {
     // Non-fatal — dispatch signals are optional

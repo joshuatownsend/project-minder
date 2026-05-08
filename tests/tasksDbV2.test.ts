@@ -97,8 +97,8 @@ function applyV2(db: DatabaseT.Database) {
       decided_at  INTEGER
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_task_decisions_dedup
-      ON task_decisions(session_id, prompt)
-      WHERE decided_at IS NULL;
+      ON task_decisions(task_id, kind, prompt)
+      WHERE kind = 'decision' AND decided_at IS NULL;
     CREATE INDEX IF NOT EXISTS ix_task_decisions_task
       ON task_decisions(task_id);
     CREATE INDEX IF NOT EXISTS ix_task_decisions_open
@@ -146,27 +146,28 @@ describe.skipIf(!Database)("tasksDb v2 migration", () => {
     }).toThrow(/CHECK constraint failed/);
   });
 
-  it("partial UNIQUE index blocks duplicate open decisions per (session_id, prompt)", () => {
+  it("partial UNIQUE index blocks duplicate open decisions per (task_id, kind, prompt)", () => {
     const task = db.prepare("INSERT INTO ops_tasks (title) VALUES ('HITL task')").run();
     const taskId = task.lastInsertRowid as number;
 
     db.prepare(
-      "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, 's1', 'decision', 'Overwrite?')"
+      "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, NULL, 'decision', 'Overwrite?')"
     ).run(taskId);
 
+    // Same task_id + kind + prompt with NULL session_id must still deduplicate
     expect(() => {
       db.prepare(
-        "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, 's1', 'decision', 'Overwrite?')"
+        "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, NULL, 'decision', 'Overwrite?')"
       ).run(taskId);
     }).toThrow(/UNIQUE constraint failed/);
   });
 
-  it("allows same (session_id, prompt) once decided_at is set", () => {
+  it("allows same (task_id, kind, prompt) once decided_at is set", () => {
     const task = db.prepare("INSERT INTO ops_tasks (title) VALUES ('HITL task 2')").run();
     const taskId = task.lastInsertRowid as number;
 
     const d = db.prepare(
-      "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, 's2', 'decision', 'Continue?')"
+      "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, NULL, 'decision', 'Continue?')"
     ).run(taskId);
     db.prepare("UPDATE task_decisions SET decided_at = unixepoch() WHERE id = ?").run(
       d.lastInsertRowid
@@ -174,7 +175,7 @@ describe.skipIf(!Database)("tasksDb v2 migration", () => {
 
     expect(() => {
       db.prepare(
-        "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, 's2', 'decision', 'Continue?')"
+        "INSERT INTO task_decisions (task_id, session_id, kind, prompt) VALUES (?, NULL, 'decision', 'Continue?')"
       ).run(taskId);
     }).not.toThrow();
   });

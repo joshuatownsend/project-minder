@@ -117,13 +117,28 @@ const MIGRATIONS: Migration[] = [
           decided_at  INTEGER
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_task_decisions_dedup
-          ON task_decisions(session_id, prompt)
-          WHERE decided_at IS NULL;
+          ON task_decisions(task_id, kind, prompt)
+          WHERE kind = 'decision' AND decided_at IS NULL;
         CREATE INDEX IF NOT EXISTS ix_task_decisions_task
           ON task_decisions(task_id);
         CREATE INDEX IF NOT EXISTS ix_task_decisions_open
           ON task_decisions(decided_at) WHERE decided_at IS NULL;
       `);
+    },
+  },
+  {
+    version: 3,
+    name: "fix-dedup-index",
+    up(db) {
+      // Re-create the dedup index with correct columns. v2 used
+      // (session_id, prompt) which cannot dedup NULL session_ids
+      // (SQLite NULLs are never equal in UNIQUE constraints).
+      db.exec(
+        `DROP INDEX IF EXISTS ux_task_decisions_dedup;
+         CREATE UNIQUE INDEX IF NOT EXISTS ux_task_decisions_dedup
+           ON task_decisions(task_id, kind, prompt)
+           WHERE kind = 'decision' AND decided_at IS NULL;`
+      );
     },
   },
 ];

@@ -363,9 +363,9 @@ export async function failTask(id: number, info: FailTaskInput): Promise<Task | 
 
 /**
  * Insert a DECISION or INBOX event from a running stream task.
- * The partial UNIQUE(session_id, prompt) WHERE decided_at IS NULL prevents
- * duplicate markers from creating duplicate rows. Duplicate inserts are
- * silently ignored via ON CONFLICT DO NOTHING.
+ * The partial UNIQUE(task_id, kind, prompt) WHERE kind='decision' AND decided_at IS NULL
+ * prevents duplicate DECISION markers from creating duplicate rows.
+ * Duplicate inserts are silently ignored via ON CONFLICT DO NOTHING.
  */
 export async function recordDecision(
   taskId: number,
@@ -446,6 +446,15 @@ export async function countInboxMessages(): Promise<number> {
   const row = prepTasksCached(db,
     `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'inbox'`
   ).get() as { n: number };
+  return row.n;
+}
+
+/** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */
+export async function countNewDecisions(sinceEpoch: number): Promise<number> {
+  const db = await ensureReady();
+  const row = prepTasksCached(db,
+    `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'decision' AND created_at > ?`
+  ).get(sinceEpoch) as { n: number };
   return row.n;
 }
 

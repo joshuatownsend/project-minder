@@ -133,7 +133,7 @@ The **Stop** button (top-right of every page when the `taskDispatcher` feature f
 2. Verifies each one is a `claude` process via `tasklist /FI "PID eq <pid>"` (Windows) or `ps -p` (POSIX)
 3. Calls `killProcessTree(pid)` — uses `taskkill /F /T` on Windows so cmd.exe wrappers and child processes all terminate
 4. Counts non-`claude` PIDs as **interactively spared** — any Claude Code session you started manually in your terminal is left alone
-5. Sets `emergency_stop: true` in `~/.minder/config.json`
+5. Sets `emergencyStop: true` in `.minder.json`
 
 While the emergency stop flag is set, the dispatcher skips claim and spawn on each tick (heartbeat continues). The button turns green and shows **Resume dispatcher**.
 

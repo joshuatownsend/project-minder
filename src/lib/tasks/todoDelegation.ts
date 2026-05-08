@@ -41,8 +41,7 @@ export async function resolveProjectPath(slug: string, devRoots: string[]): Prom
 export async function delegateTodo(input: DelegateTodoInput): Promise<DelegateTodoResult> {
   let projectPath = input.projectPath ?? null;
   if (!projectPath) {
-    const cfg = await readConfig();
-    const devRoots = input.devRoots ?? getDevRoots(cfg);
+    const devRoots = input.devRoots ?? getDevRoots(await readConfig());
     projectPath = await resolveProjectPath(input.projectSlug, devRoots);
     if (!projectPath) {
       throw new Error(`Project "${input.projectSlug}" not found in devRoots: ${devRoots.join(", ")}`);
