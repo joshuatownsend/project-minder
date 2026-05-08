@@ -49,9 +49,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Live status payload — single-flighted, so concurrent /api/status and
-  // /api/pulse callers share the same FS sweep within a 3-second window.
-  const status = await getLiveStatusPayload();
+  // Live status and config are independent — fetch concurrently.
+  // getLiveStatusPayload() is single-flighted so concurrent callers share the same sweep.
+  const [status, cfg] = await Promise.all([getLiveStatusPayload(), readConfig()]);
   const approvalCount = status.sessions.filter((s) => s.status === "approval").length;
 
   // Hook-server live activity — stale-sweep is cheap (bounded by session count)
@@ -76,7 +76,6 @@ export async function GET(request: NextRequest) {
   let dispatcherPaused = false;
   let newDecisionCount = 0;
   try {
-    const cfg = await readConfig();
     if (getFlag(cfg.featureFlags, "taskDispatcher")) {
       dispatcherPaused = !!cfg.emergencyStop;
       [decisionCount, inboxCount] = await Promise.all([countOpenDecisions(), countInboxMessages()]);

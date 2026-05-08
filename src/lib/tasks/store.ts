@@ -434,7 +434,7 @@ export async function listInbox(limit = 50): Promise<TaskDecision[]> {
 /** Count open decisions (kind = 'decision' only). */
 export async function countOpenDecisions(): Promise<number> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(db,
     `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'decision' AND decided_at IS NULL`
   ).get() as { n: number };
   return row.n;
@@ -443,7 +443,7 @@ export async function countOpenDecisions(): Promise<number> {
 /** Count inbox messages (kind = 'inbox', all time — used as a monotone change signal). */
 export async function countInboxMessages(): Promise<number> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(db,
     `SELECT COUNT(*) as n FROM task_decisions WHERE kind = 'inbox'`
   ).get() as { n: number };
   return row.n;

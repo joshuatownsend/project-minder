@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { delegateTodo } from "@/lib/tasks/todoDelegation";
+import { delegateTodo, resolveProjectPath } from "@/lib/tasks/todoDelegation";
 import { scanTodoMd } from "@/lib/scanner/todoMd";
 import { readConfig, getDevRoots } from "@/lib/config";
-import { promises as fs } from "fs";
-import path from "path";
 
 export const dynamic = "force-dynamic";
 
@@ -28,15 +26,7 @@ export async function POST(request: Request, { params }: Params): Promise<NextRe
     const cfg = await readConfig();
     const devRoots = getDevRoots(cfg);
 
-    // Resolve projectPath and find the TODO item text
-    let projectPath: string | null = null;
-    for (const root of devRoots) {
-      const candidate = path.join(root, slug);
-      try {
-        const stat = await fs.stat(candidate);
-        if (stat.isDirectory()) { projectPath = candidate; break; }
-      } catch { /* try next */ }
-    }
+    const projectPath = await resolveProjectPath(slug, devRoots);
     if (!projectPath) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }

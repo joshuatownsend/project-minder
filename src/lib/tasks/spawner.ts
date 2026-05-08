@@ -215,6 +215,16 @@ export async function runStreamTask(
       }
     }
 
+    // Returns elapsed ms, or null if the handler already ran (settled guard).
+    function teardown(): number | null {
+      if (settled) return null;
+      settled = true;
+      if (pid) deletePidFile(pid);
+      streamChildren.delete(task.id);
+      decisionParser?.finish();
+      return Date.now() - startMs;
+    }
+
     const child = spawnFn(cmd, extraArgs, {
       // stdin is "pipe" so HITL can write answers; classic mode keeps "ignore"
       stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
@@ -283,12 +293,8 @@ export async function runStreamTask(
     });
 
     child.on("close", async (code) => {
-      if (settled) return;
-      settled = true;
-      if (pid) deletePidFile(pid);
-      streamChildren.delete(task.id);
-      decisionParser?.finish();
-      const durationMs = Date.now() - startMs;
+      const durationMs = teardown();
+      if (durationMs === null) return;
 
       // Flush any trailing NDJSON line that wasn't newline-terminated on process exit
       if (lineBuffer.trim()) {
@@ -296,7 +302,7 @@ export async function runStreamTask(
           const evt = JSON.parse(lineBuffer.trim()) as Record<string, unknown>;
           if (!sessionIdWritten && evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
             sessionIdWritten = true;
-            // Await here — completeTask below will change status to 'done', blocking the setSessionId guard
+            // Must await: completeTask below changes status to 'done', blocking the setSessionId guard
             await setSessionId(task.id, evt.session_id).catch((e) =>
               console.error(`[spawner] setSessionId failed for task ${task.id}:`, e)
             );
@@ -348,12 +354,8 @@ export async function runStreamTask(
     });
 
     child.on("error", async (err) => {
-      if (settled) return;
-      settled = true;
-      if (pid) deletePidFile(pid);
-      streamChildren.delete(task.id);
-      decisionParser?.finish();
-      const durationMs = Date.now() - startMs;
+      const durationMs = teardown();
+      if (durationMs === null) return;
       let failedTask = null;
       try {
         failedTask = await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });

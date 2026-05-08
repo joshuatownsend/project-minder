@@ -111,7 +111,6 @@ export function PulseProvider({ children }: { children: ReactNode }) {
             prev.decisionCount === decisionCount &&
             prev.inboxCount === inboxCount &&
             prev.dispatcherPaused === dispatcherPaused &&
-            prev.generatedAt === data.generatedAt &&
             prev.liveSlugs.length === liveSlugs.length &&
             prev.awaitingSlugs.length === awaitingSlugs.length &&
             prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&

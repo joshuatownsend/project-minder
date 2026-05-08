@@ -23,7 +23,7 @@ export function InboxPanel() {
   }, []);
 
   useEffect(() => {
-    void fetchMessages();
+    if (snapshot.inboxCount > 0) void fetchMessages();
   }, [snapshot.inboxCount, fetchMessages]);
 
   if (messages.length === 0) return null;

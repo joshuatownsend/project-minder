@@ -8,6 +8,9 @@ const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
 
 export const DEFAULT_DEV_ROOT = getDefaultDevRoot();
 
+let configCache: { value: MinderConfig; expiresAt: number } | null = null;
+const CONFIG_TTL_MS = 3_000;
+
 const DEFAULT_CONFIG: MinderConfig = {
   statuses: {},
   hidden: [],
@@ -23,15 +26,21 @@ export function getDevRoots(config: MinderConfig): string[] {
 }
 
 export async function readConfig(): Promise<MinderConfig> {
+  if (configCache && Date.now() < configCache.expiresAt) return configCache.value;
   try {
     const data = await fs.readFile(CONFIG_PATH, "utf-8");
-    return { ...DEFAULT_CONFIG, ...JSON.parse(data) };
+    const value = { ...DEFAULT_CONFIG, ...JSON.parse(data) };
+    configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
+    return value;
   } catch {
-    return { ...DEFAULT_CONFIG };
+    const value = { ...DEFAULT_CONFIG };
+    configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
+    return value;
   }
 }
 
 export async function writeConfig(config: MinderConfig): Promise<void> {
+  configCache = null;
   await writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 

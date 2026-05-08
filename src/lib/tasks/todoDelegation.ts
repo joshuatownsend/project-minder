@@ -20,7 +20,7 @@ export interface DelegateTodoResult {
   taskId: number;
 }
 
-async function resolveProjectPath(slug: string, devRoots: string[]): Promise<string | null> {
+export async function resolveProjectPath(slug: string, devRoots: string[]): Promise<string | null> {
   for (const root of devRoots) {
     const candidate = path.join(root, slug);
     try {
