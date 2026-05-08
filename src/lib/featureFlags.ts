@@ -133,10 +133,10 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "taskDispatcher",
     label: "Task dispatcher",
-    description: "Dispatcher loop that spawns claude CLI child processes and tracks runs. Wired in Wave 9.1b.",
+    description: "Dispatcher loop that spawns claude CLI child processes and tracks runs (classic mode). Stream mode ships in Wave 9.1c.",
     group: "active",
     appliesAt: "ingest",
-    wired: false,
+    wired: true,
   },
 ];
 

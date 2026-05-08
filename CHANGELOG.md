@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 9.1b — Cluster U (continued): Dispatcher loop + classic spawning + Task Composer.** TODO #244.
+  - Dispatcher loop singleton (`globalThis.__minderDispatcher`) starts automatically on the first `/api/tasks` request. 30-second tick: writes heartbeat to `~/.minder/dispatcher-heartbeat.json`, materializes due cron schedules into `ops_tasks` rows (wrapped in `BEGIN IMMEDIATE` to prevent double-materialization), promotes `requires_approval` tasks to `awaiting_approval`, claims up to 3 pending tasks and spawns `claude -p` (classic mode).
+  - PID marker files at `~/.minder/pids/<pid>` — written on spawn, deleted on exit. `sweepStalePids()` on each tick cleans dead files via `process.kill(pid, 0)` (cross-platform, throws ESRCH if dead).
+  - `POST /api/tasks/[id]/approve` — transitions `awaiting_approval → pending`, sets `approved_at`; dispatcher picks up on next tick.
+  - `POST /api/tasks/[id]/rerun` — resets `failed` task to `pending`, clears all output fields (`error_message`, `started_at`, `completed_at`, `duration_ms`, `cost_usd`, `output_summary`, `session_id`).
+  - Task Composer modal (`TaskComposer.tsx`) — "New task" button in TasksBrowser toolbar opens a full-form overlay. Fields: title, description, quadrant, priority, skill, model, risk level, scheduled_for, requires_approval, dry_run. POSTs to `/api/tasks` and refreshes the list on success.
+  - New store helpers: `approveTask()`, `rerunTask()`, `completeTask()`, `failTask()`, `promoteApprovalTasks()`, `materializeSchedules()`.
+  - `taskDispatcher` feature flag flipped to `wired: true`. Settings UI now shows it as active.
+  - Help doc at `/help/tasks` updated with dispatcher architecture, approve/rerun usage, and upcoming Wave 9.1c (stream mode) and Wave 9.2 (HITL) roadmap.
+  - Stream mode (line-buffered JSON, `session_id` extraction), `DECISION:` / `INBOX:` parsing, and emergency-stop button deferred to Wave 9.1c / 9.2.
+
 - **Wave 9.1a — Cluster U (partial): Tasks queue foundation.** TODO #244.
   - New `~/.minder/tasks.db` SQLite database (`src/lib/tasksDb/`) with `ops_tasks` and `ops_schedules` tables (schema v1). Status enum locked to `pending/awaiting_approval/running/done/failed/cancelled`. Full CHECK constraints, FK on `schedule_id`, and 5 covering indexes.
   - CRUD store (`src/lib/tasks/store.ts`) with `listTasks`, `createTask`, `patchTask`, `deleteTask`, `claimPendingTask` (atomic, for 9.1b dispatcher), and matching schedule functions.
