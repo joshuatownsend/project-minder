@@ -37,6 +37,8 @@ export interface SkillRow {
     sessions: string[];
   };
   catalogMissing?: boolean;
+  slashCount?: number;
+  autoCount?: number;
 }
 
 export function useSkills(source?: string, project?: string, query?: string) {

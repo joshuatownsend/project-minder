@@ -26,6 +26,7 @@ import { StatusDot } from "./ui/StatusDot";
 import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
 import { formatCost } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
+import { StackedStrip } from "@/components/stats/StackedStrip";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -476,6 +477,21 @@ function SessionRow({
               {m}
             </span>
           ))}
+          {session.workMode && (
+            <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+              <StackedStrip
+                width={64}
+                height={5}
+                title="Work-mode breakdown"
+                segments={[
+                  { key: "exploration", pct: session.workMode.exploration, color: "var(--status-active-text)", label: `Exploration ${session.workMode.exploration}%` },
+                  { key: "building",    pct: session.workMode.building,    color: "var(--accent)",             label: `Building ${session.workMode.building}%` },
+                  { key: "testing",     pct: session.workMode.testing,     color: "var(--status-error-text)",  label: `Testing ${session.workMode.testing}%` },
+                  { key: "other",       pct: session.workMode.other,       color: "var(--border-default)",     label: `Other ${session.workMode.other}%` },
+                ]}
+              />
+            </div>
+          )}
         </div>
       </div>
     </Link>
