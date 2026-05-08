@@ -196,14 +196,22 @@ export async function runStreamTask(
     let stderr = "";
     let settled = false;
     let sessionIdWritten = false;
+    let lineBufOverflow = false;
     const STDERR_CAP = 10_000;
+    const LINEBUF_CAP = 5_000_000; // 5 MB — fail hard on runaway output
 
     // UTF-8 encoding prevents chunk boundaries from splitting multi-byte sequences.
     (child.stdout as NodeJS.ReadableStream & { setEncoding?: (enc: string) => void })
       ?.setEncoding?.("utf8");
 
     child.stdout?.on("data", (chunk: string | Buffer) => {
+      if (lineBufOverflow) return;
       lineBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      if (lineBuffer.length > LINEBUF_CAP) {
+        lineBufOverflow = true;
+        lineBuffer = "";
+        return;
+      }
       let nl: number;
       while ((nl = lineBuffer.indexOf("\n")) !== -1) {
         const line = lineBuffer.slice(0, nl).trimEnd();
@@ -235,6 +243,36 @@ export async function runStreamTask(
       settled = true;
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
+
+      // Flush any trailing NDJSON line that wasn't newline-terminated on process exit
+      if (lineBuffer.trim()) {
+        try {
+          const evt = JSON.parse(lineBuffer.trim()) as Record<string, unknown>;
+          if (!sessionIdWritten && evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
+            sessionIdWritten = true;
+            // Await here — completeTask below will change status to 'done', blocking the setSessionId guard
+            await setSessionId(task.id, evt.session_id).catch((e) =>
+              console.error(`[spawner] setSessionId failed for task ${task.id}:`, e)
+            );
+          } else if (evt.type === "result") {
+            if (typeof evt.result === "string") resultText = evt.result;
+            if (typeof evt.total_cost_usd === "number") resultCostUsd = evt.total_cost_usd;
+          }
+        } catch {
+          // Not valid JSON — ignore
+        }
+      }
+
+      if (lineBufOverflow) {
+        const errMsg = "Stream output exceeded 5 MB buffer limit";
+        try {
+          await failTask(task.id, { error_message: errMsg, duration_ms: durationMs });
+        } catch (err) {
+          console.error(`[spawner] failTask failed for task ${task.id}:`, err);
+        }
+        resolve({ taskId: task.id, status: "failed", error: errMsg, durationMs });
+        return;
+      }
 
       if (code === 0) {
         const trimmed = resultText.trim();

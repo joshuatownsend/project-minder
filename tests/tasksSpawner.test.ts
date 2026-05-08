@@ -281,4 +281,22 @@ describe("runStreamTask", () => {
     expect(args).toContain("stream-json");
     expect(args).toContain("--verbose");
   });
+
+  it("flushes trailing result line without newline on close", async () => {
+    const { proc, emitOutput, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    const task = makeTask({ id: 16, execution_mode: "stream" });
+    const promise = runStreamTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    // No trailing \n — simulates process flushing stdout on exit without newline
+    emitOutput(JSON.stringify({ type: "result", result: "No newline", total_cost_usd: 0.003 }));
+    emitClose(0);
+
+    const result = await promise;
+    expect(result.status).toBe("done");
+    expect(completeTask).toHaveBeenCalledWith(
+      16,
+      expect.objectContaining({ output_summary: "No newline", cost_usd: 0.003 })
+    );
+  });
 });

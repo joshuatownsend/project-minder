@@ -297,7 +297,7 @@ export async function rerunTask(id: number): Promise<Task | null> {
 /** Write session_id mid-run (before completeTask is called). Fire-and-forget safe. */
 export async function setSessionId(id: number, sessionId: string): Promise<void> {
   const db = await ensureReady();
-  prepTasksCached(db, "UPDATE ops_tasks SET session_id = ? WHERE id = ?").run(sessionId, id);
+  prepTasksCached(db, "UPDATE ops_tasks SET session_id = ? WHERE id = ? AND status = 'running'").run(sessionId, id);
 }
 
 export interface CompleteTaskInput {
