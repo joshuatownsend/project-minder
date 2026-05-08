@@ -76,7 +76,111 @@ The dispatcher lifecycle is bound to the Next.js server process — restarting t
 
 Recurring tasks are driven by cron schedules. Create one at `POST /api/schedules` with a standard 5-field cron expression (e.g. `0 9 * * 1-5` = 09:00 on weekdays). The dispatcher materializes due schedules on each tick.
 
+## HITL — Human-in-the-Loop decisions
+
+When a stream-mode task emits a `DECISION:` or `INBOX:` marker on stdout, Project Minder surfaces it on the dashboard and lets you respond without touching a terminal.
+
+### Marker syntax
+
+```
+DECISION: Should I overwrite the existing migration? [yes, no, skip]
+INBOX: Still scanning — found 14 candidates so far
+```
+
+- **`DECISION:`** — a blocking prompt. The dispatcher keeps the child running and records the decision in the `task_decisions` table. Choices in `[a, b, c]` format are rendered as clickable buttons; free-text is accepted for any decision.
+- **`INBOX:`** — a non-blocking status update. Recorded in the same table but requires no reply.
+
+Markers inside triple-backtick code fences are silently ignored (fence-aware parser).
+
+### Decisions panel
+
+When a running task has pending decisions, a **Decisions** panel appears above the project grid. Each card shows the task title, the decision prompt, and choice buttons (or a text field). Clicking a choice or submitting text:
+
+1. Writes the answer to the child's stdin pipe followed by `\n`
+2. Marks the `decided_at` timestamp in `task_decisions`
+3. Removes the card from the panel
+
+If the task finishes before you respond, the panel shows "Task already finished" and the card is removed.
+
+### Inbox panel
+
+An **Inbox** panel below the Decisions panel shows recent `INBOX:` messages from all running tasks. It refreshes every 5 seconds alongside the Pulse ticker.
+
+### API
+
+```
+GET  /api/decisions        — open decisions, supports ?taskId=<id>
+GET  /api/inbox?limit=N    — recent inbox messages
+POST /api/tasks/<id>/decide
+     { "decisionId": 42, "answer": "yes" }
+```
+
+Returns 410 if the stream child has already exited.
+
+### TasksBrowser badge
+
+Tasks with pending decisions show a **⏸ N waiting** badge on their row in the Tasks table.
+
+---
+
+## Emergency stop
+
+The **Stop** button (top-right of every page when the `taskDispatcher` feature flag is on) lets you immediately kill all active dispatcher-spawned Claude processes.
+
+### How it works
+
+1. Reads every PID from `~/.minder/pids/`
+2. Verifies each one is a `claude` process via `tasklist /FI "PID eq <pid>"` (Windows) or `ps -p` (POSIX)
+3. Calls `killProcessTree(pid)` — uses `taskkill /F /T` on Windows so cmd.exe wrappers and child processes all terminate
+4. Counts non-`claude` PIDs as **interactively spared** — any Claude Code session you started manually in your terminal is left alone
+5. Sets `emergency_stop: true` in `~/.minder/config.json`
+
+While the emergency stop flag is set, the dispatcher skips claim and spawn on each tick (heartbeat continues). The button turns green and shows **Resume dispatcher**.
+
+### Resume
+
+Clicking **Resume** sends `POST /api/tasks/emergency-stop/resume`, which clears the flag. The dispatcher picks up pending tasks on its next 30-second tick.
+
+### API
+
+```
+POST /api/tasks/emergency-stop        — kills confirmed children, sets flag
+POST /api/tasks/emergency-stop/resume — clears flag, dispatcher resumes
+```
+
+Both return a JSON body with `processesKilled`, `interactiveSpared`, `errors`.
+
+---
+
+## TODO delegation
+
+Any unchecked item in a project's `TODO.md` can be delegated to the dispatcher with one click.
+
+### Delegate button
+
+Open a project's **TODOs** tab. Each unchecked item shows a small **Delegate** icon-button on the right (visible when the `taskDispatcher` flag is on). Clicking it:
+
+1. Creates an `ops_tasks` row with the TODO text as the title, `quadrant = delegated-todo`, and metadata recording the source file and line number
+2. The dispatcher picks up the task on its next tick and runs it like any other stream-mode task
+3. When the task completes, Project Minder automatically toggles the checkbox in `TODO.md` from `[ ]` to `[x]`
+
+The auto-toggle is best-effort — if the file was deleted or locked, the task still completes and a warning is logged.
+
+### Finding delegated tasks
+
+In the Tasks page, use the **Source** filter to select **From TODOs** — this shows only `quadrant = delegated-todo` tasks.
+
+### API
+
+```
+POST /api/projects/<slug>/todos/delegate
+     { "lineNumber": 7 }
+```
+
+Returns `{ "taskId": 123 }`.
+
+---
+
 ## What's coming
 
-- **Wave 9.2** — HITL: `DECISION:` / `INBOX:` marker parsing, decision queue, emergency stop
 - **Wave 10** — Kanban board, task dependency graph, multi-agent swarm

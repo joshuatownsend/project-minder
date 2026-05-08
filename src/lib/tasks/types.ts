@@ -6,7 +6,7 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
-export type TaskQuadrant = "do" | "schedule" | "delegate" | "archive";
+export type TaskQuadrant = "do" | "schedule" | "delegate" | "archive" | "delegated-todo";
 export type ExecutionMode = "classic" | "stream";
 export type RiskLevel = "low" | "medium" | "high";
 
@@ -18,7 +18,7 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "failed",
   "cancelled",
 ];
-export const TASK_QUADRANTS: readonly TaskQuadrant[] = ["do", "schedule", "delegate", "archive"];
+export const TASK_QUADRANTS: readonly TaskQuadrant[] = ["do", "schedule", "delegate", "archive", "delegated-todo"];
 export const EXECUTION_MODES: readonly ExecutionMode[] = ["classic", "stream"];
 export const EXECUTION_MODE_LABELS: Record<ExecutionMode, string> = {
   classic: "Classic (text)",
@@ -74,6 +74,23 @@ export interface Task {
   error_message: string | null;
   consecutive_failures: number;
   created_at: string;
+  /** JSON blob set by todoDelegation for auto-toggle on completion. */
+  metadata: string | null;
+}
+
+export type DecisionKind = "decision" | "inbox";
+
+export interface TaskDecision {
+  id: number;
+  task_id: number;
+  session_id: string | null;
+  kind: DecisionKind;
+  prompt: string;
+  /** JSON array string of choices, or null. */
+  choices: string | null;
+  decision_text: string | null;
+  created_at: number;
+  decided_at: number | null;
 }
 
 export interface Schedule {
@@ -101,6 +118,8 @@ export interface CreateTaskInput {
   requires_approval?: boolean;
   risk_level?: RiskLevel;
   dry_run?: boolean;
+  /** Arbitrary JSON metadata (e.g. todoDelegation source info). */
+  metadata?: unknown;
 }
 
 export interface PatchTaskInput {
@@ -139,4 +158,6 @@ export interface PatchScheduleInput {
 export interface TaskListFilter {
   status?: TaskStatus;
   quadrant?: TaskQuadrant;
+  /** Filter to only delegated-todo tasks (quadrant = "delegated-todo"). */
+  source?: "todo";
 }

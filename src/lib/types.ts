@@ -336,6 +336,8 @@ export interface MinderConfig {
   };
   /** Per-model pricing overrides. Wave 8 (S) honors. */
   pricingRules?: PricingRule[];
+  /** When true, the task dispatcher loop skips all spawning until cleared. Wave 9.2 (emergency stop). */
+  emergencyStop?: boolean;
 }
 
 export interface ClaudeUsageStats {

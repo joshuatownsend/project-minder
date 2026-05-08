@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { TodoInfo, WorktreeOverlay } from "@/lib/types";
-import { CheckCircle2, Circle, Plus, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Plus, Loader2, Share2 } from "lucide-react";
 import { WorktreeSection } from "./WorktreeSection";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { useToast } from "./ToastProvider";
+import type { MinderConfig } from "@/lib/types";
+import { getFlag } from "@/lib/featureFlags";
 
 interface TodoListProps {
   todos: TodoInfo;
@@ -20,7 +22,40 @@ type FilterMode = "all" | "open" | "done";
 export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
   const [filter, setFilter] = useState<FilterMode>("open");
   const [toggling, setToggling] = useState<number | null>(null);
+  const [delegating, setDelegating] = useState<number | null>(null);
+  const [taskDispatcherEnabled, setTaskDispatcherEnabled] = useState(false);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d: MinderConfig) => {
+        setTaskDispatcherEnabled(getFlag(d.featureFlags, "taskDispatcher", false));
+      })
+      .catch(() => {});
+  }, []);
+
+  const delegateItem = async (lineNumber: number | undefined) => {
+    if (!slug || lineNumber == null || delegating != null) return;
+    setDelegating(lineNumber);
+    try {
+      const res = await fetch(`/api/projects/${slug}/todos/delegate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineNumber }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as { taskId: number };
+      showToast("TODO delegated", `Task #${body.taskId} queued for Claude Code`);
+    } catch (err) {
+      showToast("Failed to delegate", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setDelegating(null);
+    }
+  };
 
   const toggleItem = async (lineNumber: number | undefined) => {
     if (!slug || lineNumber == null || toggling != null) return;
@@ -103,19 +138,22 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
       <ul style={{ display: "flex", flexDirection: "column", gap: "2px", padding: 0, margin: 0, listStyle: "none" }}>
         {filtered.map((item) => {
           const isToggling = toggling === item.lineNumber;
+          const isDelegating = delegating === item.lineNumber;
           const canToggle = slug != null && item.lineNumber != null;
+          const canDelegate = taskDispatcherEnabled && slug != null && item.lineNumber != null && !item.completed;
           const itemKey = item.lineNumber != null ? `line-${item.lineNumber}` : `todo-${item.text}`;
           return (
-            <li key={itemKey}>
+            <li key={itemKey} style={{ display: "flex", alignItems: "flex-start", gap: "4px" }}>
               <button
                 type="button"
                 onClick={() => canToggle && toggleItem(item.lineNumber)}
                 disabled={!canToggle || isToggling}
                 style={{
-                  display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0",
-                  width: "100%", border: "none", background: "none", textAlign: "left",
+                  flex: 1, display: "flex", alignItems: "flex-start", gap: "8px", padding: "4px 0",
+                  border: "none", background: "none", textAlign: "left",
                   cursor: canToggle && !isToggling ? "pointer" : "default",
                   opacity: isToggling ? 0.5 : 1,
+                  minWidth: 0,
                 }}
               >
                 {item.completed ? (
@@ -131,6 +169,35 @@ export function TodoList({ todos, slug, onChange, worktrees }: TodoListProps) {
                   {item.text}
                 </span>
               </button>
+              {canDelegate && (
+                <button
+                  type="button"
+                  onClick={() => void delegateItem(item.lineNumber)}
+                  disabled={isDelegating || delegating != null}
+                  title="Delegate to Claude Code"
+                  style={{
+                    flexShrink: 0,
+                    display: "flex", alignItems: "center", gap: "3px",
+                    padding: "2px 7px",
+                    marginTop: "3px",
+                    background: "transparent",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "3px",
+                    fontSize: "0.62rem", fontWeight: 500,
+                    color: "var(--text-muted)",
+                    cursor: delegating != null ? "default" : "pointer",
+                    opacity: isDelegating ? 0.5 : 1,
+                    lineHeight: 1,
+                  }}
+                >
+                  {isDelegating ? (
+                    <Loader2 style={{ width: "9px", height: "9px", animation: "spin 1s linear infinite" }} />
+                  ) : (
+                    <Share2 style={{ width: "9px", height: "9px" }} />
+                  )}
+                  Delegate
+                </button>
+              )}
             </li>
           );
         })}

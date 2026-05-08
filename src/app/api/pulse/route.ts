@@ -3,6 +3,13 @@ import { getCachedScan } from "@/lib/cache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffer";
+import { countOpenDecisions } from "@/lib/tasks/store";
+import { getFlag } from "@/lib/featureFlags";
+import { readConfig } from "@/lib/config";
+
+// Module-level edge-trigger for decision count. Tracks previous count so the
+// "task-decision-required" change event fires only when the count increases.
+let prevDecisionCount = 0;
 
 // Single endpoint that bundles every signal the dashboard chrome polls for.
 // Replaces three independent client-side intervals (5s + 10s + 30s) with one
@@ -63,19 +70,49 @@ export async function GET(request: NextRequest) {
     kind: "awaiting-permission" as const,
   }));
 
+  // Task dispatcher signals — only computed when taskDispatcher flag is on
+  let decisionCount = 0;
+  let dispatcherPaused = false;
+  let newDecisionCount = 0;
+  try {
+    const cfg = await readConfig();
+    if (getFlag(cfg.featureFlags, "taskDispatcher")) {
+      dispatcherPaused = !!cfg.emergencyStop;
+      decisionCount = await countOpenDecisions();
+      // Edge-trigger: track previous count in a module-level var so the
+      // notification fires exactly once when count increases.
+      if (decisionCount > prevDecisionCount) {
+        newDecisionCount = decisionCount - prevDecisionCount;
+      }
+      prevDecisionCount = decisionCount;
+    }
+  } catch {
+    // Non-fatal — dispatch signals are optional
+  }
+
+  const generatedAt = new Date().toISOString();
+
+  const decisionChanges = since && newDecisionCount > 0
+    ? [{ slug: "", projectName: "", title: `${newDecisionCount} decision${newDecisionCount > 1 ? "s" : ""} waiting`, changedAt: generatedAt, kind: "task-decision-required" as const }]
+    : [];
+
   return NextResponse.json({
     pendingSteps,
     approvalCount,
-    changes: [...changes, ...awaitingChanges],
+    decisionCount,
+    dispatcherPaused,
+    changes: [...changes, ...awaitingChanges, ...decisionChanges],
     liveSlugs,
     awaitingSlugs,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
   });
 }
 
 export type PulsePayload = {
   pendingSteps: number;
   approvalCount: number;
+  decisionCount: number;
+  dispatcherPaused: boolean;
   changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
   liveSlugs: string[];
   awaitingSlugs: string[];

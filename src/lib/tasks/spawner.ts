@@ -1,15 +1,29 @@
 import "server-only";
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import os from "os";
 import path from "path";
 import fs from "fs";
 import type { Task } from "./types";
 import { completeTask, failTask, setSessionId } from "./store";
 import { isWindows } from "../platform";
+import { createDecisionParser, type DecisionEvent } from "./decisionParser";
 
 const PID_DIR = path.join(os.homedir(), ".minder", "pids");
 
 try { fs.mkdirSync(PID_DIR, { recursive: true }); } catch { /* non-fatal */ }
+
+/** Live stream-mode children, keyed by task id. Used by HITL /decide and emergency stop. */
+const streamChildren = new Map<number, ChildProcess>();
+
+/** Return the stream child for a task, or null if it has already exited. */
+export function getStreamChild(taskId: number): ChildProcess | null {
+  return streamChildren.get(taskId) ?? null;
+}
+
+/** List all live stream child handles. Used by emergency stop to kill confirmed children. */
+export function listStreamChildren(): Map<number, ChildProcess> {
+  return streamChildren;
+}
 
 export type SpawnFn = typeof spawn;
 
@@ -77,6 +91,12 @@ export interface RunTaskResult {
   error?: string;
   durationMs: number;
 }
+
+/** Callback injected by the dispatcher for HITL decision events. */
+export type OnDecisionFn = (taskId: number, event: DecisionEvent) => Promise<void>;
+
+/** Callback injected by the dispatcher to react when a task completes or fails. */
+export type OnCompleteFn = (task: Task) => Promise<void>;
 
 function buildPrompt(task: Task): string {
   return [task.title, task.description].filter(Boolean).join("\n\n");
@@ -171,11 +191,15 @@ export async function runClassicTask(
  * Parses NDJSON events from stdout:
  *   - {type:"system", subtype:"init"} → write session_id early via setSessionId()
  *   - {type:"result"} → extract result text + total_cost_usd for completeTask()
+ *   - DECISION: / INBOX: plain-text markers → forwarded to onDecision callback (Wave 9.2)
  * Writes a PID marker file while the child is alive.
+ * Stashes the ChildProcess in streamChildren map for HITL stdin injection and emergency stop.
  */
 export async function runStreamTask(
   task: Task,
-  spawnFn: SpawnFn = spawn
+  spawnFn: SpawnFn = spawn,
+  onDecision?: OnDecisionFn,
+  onComplete?: OnCompleteFn
 ): Promise<RunTaskResult> {
   const startMs = Date.now();
   const spawnArgs = ["-p", buildPrompt(task), "--output-format", "stream-json", "--verbose"];
@@ -184,11 +208,13 @@ export async function runStreamTask(
 
   return new Promise<RunTaskResult>((resolve) => {
     const child = spawnFn(cmd, extraArgs, {
-      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      // stdin is "pipe" so HITL can write answers; classic mode keeps "ignore"
+      stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
       env: { ...process.env, MINDER_DISPATCHED: "1" },
     });
     const pid = child.pid;
     if (pid) writePidFile(pid);
+    streamChildren.set(task.id, child);
 
     let lineBuffer = "";
     let resultText = "";
@@ -199,6 +225,8 @@ export async function runStreamTask(
     let lineBufOverflow = false;
     const STDERR_CAP = 10_000;
     const LINEBUF_CAP = 5_000_000; // 5 MB — fail hard on runaway output
+
+    const decisionParser = onDecision ? createDecisionParser() : null;
 
     // UTF-8 encoding prevents chunk boundaries from splitting multi-byte sequences.
     (child.stdout as NodeJS.ReadableStream & { setEncoding?: (enc: string) => void })
@@ -229,7 +257,15 @@ export async function runStreamTask(
             if (typeof evt.total_cost_usd === "number") resultCostUsd = evt.total_cost_usd;
           }
         } catch {
-          // Non-JSON lines (hook output, warnings) — ignore
+          // Non-JSON line — feed into decision parser for DECISION:/INBOX: markers
+          if (decisionParser) {
+            const events = decisionParser.feed(line);
+            for (const event of events) {
+              onDecision!(task.id, event).catch((e) =>
+                console.error(`[spawner] onDecision failed for task ${task.id}:`, e)
+              );
+            }
+          }
         }
       }
     });
@@ -242,6 +278,8 @@ export async function runStreamTask(
       if (settled) return;
       settled = true;
       if (pid) deletePidFile(pid);
+      streamChildren.delete(task.id);
+      decisionParser?.finish();
       const durationMs = Date.now() - startMs;
 
       // Flush any trailing NDJSON line that wasn't newline-terminated on process exit
@@ -276,8 +314,9 @@ export async function runStreamTask(
 
       if (code === 0) {
         const trimmed = resultText.trim();
+        let completedTask = null;
         try {
-          await completeTask(task.id, {
+          completedTask = await completeTask(task.id, {
             output_summary: trimmed.slice(0, 4000) || undefined,
             duration_ms: durationMs,
             cost_usd: resultCostUsd,
@@ -285,13 +324,24 @@ export async function runStreamTask(
         } catch (err) {
           console.error(`[spawner] completeTask failed for task ${task.id}:`, err);
         }
+        if (completedTask && onComplete) {
+          onComplete(completedTask).catch((e) =>
+            console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
+          );
+        }
         resolve({ taskId: task.id, status: "done", output: trimmed, durationMs });
       } else {
         const errMsg = stderr.trim() || `claude exited with code ${code}`;
+        let failedTask = null;
         try {
-          await failTask(task.id, { error_message: errMsg.slice(0, 2000), duration_ms: durationMs });
+          failedTask = await failTask(task.id, { error_message: errMsg.slice(0, 2000), duration_ms: durationMs });
         } catch (err) {
           console.error(`[spawner] failTask failed for task ${task.id}:`, err);
+        }
+        if (failedTask && onComplete) {
+          onComplete(failedTask).catch((e) =>
+            console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
+          );
         }
         resolve({ taskId: task.id, status: "failed", error: errMsg, durationMs });
       }
@@ -301,11 +351,19 @@ export async function runStreamTask(
       if (settled) return;
       settled = true;
       if (pid) deletePidFile(pid);
+      streamChildren.delete(task.id);
+      decisionParser?.finish();
       const durationMs = Date.now() - startMs;
+      let failedTask = null;
       try {
-        await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });
+        failedTask = await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });
       } catch (storeErr) {
         console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
+      }
+      if (failedTask && onComplete) {
+        onComplete(failedTask).catch((e) =>
+          console.error(`[spawner] onComplete failed for task ${task.id}:`, e)
+        );
       }
       resolve({ taskId: task.id, status: "failed", error: err.message, durationMs });
     });

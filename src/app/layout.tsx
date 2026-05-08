@@ -10,7 +10,9 @@ import { NotificationListener } from "@/components/NotificationListener";
 import { AppNav } from "@/components/AppNav";
 import { PulseProvider } from "@/components/PulseProvider";
 import { PortConflictIndicator } from "@/components/PortConflictIndicator";
+import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -39,6 +41,7 @@ export default async function RootLayout({
   const rootLabel = devRoots.length === 1
     ? devRoots[0]
     : `${devRoots[0]} +${devRoots.length - 1} more`;
+  const taskDispatcherEnabled = getFlag(config.featureFlags, "taskDispatcher", false);
   return (
     <html
       lang="en"
@@ -93,6 +96,7 @@ export default async function RootLayout({
 
                 {/* Right side */}
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  {taskDispatcherEnabled && <EmergencyStopButton />}
                   <PortConflictIndicator />
                   <span
                     style={{

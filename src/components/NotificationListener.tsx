@@ -53,6 +53,9 @@ export function NotificationListener() {
           }
 
           playNotificationSound();
+        } else if (change.kind === "task-decision-required") {
+          showToast("Task decision required", change.title);
+          playNotificationSound();
         } else {
           showToast(`New manual step: ${change.projectName}`, change.title);
 
