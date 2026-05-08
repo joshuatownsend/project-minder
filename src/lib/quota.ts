@@ -1,3 +1,4 @@
+import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
@@ -88,7 +89,7 @@ async function probe(
   token: string,
   subscriptionType: string,
   rateLimitTier: string
-): Promise<QuotaData | null> {
+): Promise<QuotaData | string> {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -105,9 +106,12 @@ async function probe(
       signal: AbortSignal.timeout(15_000),
     });
 
-    if (!res.ok) return null;
-    // Verify unified headers are present (API key auth won't return them).
-    if (!res.headers.has("anthropic-ratelimit-unified-5h-reset")) return null;
+    // Check for unified headers FIRST — they may be present on non-2xx responses (e.g. 429).
+    if (!res.headers.has("anthropic-ratelimit-unified-5h-reset")) {
+      return res.ok
+        ? "Quota probe returned no unified rate-limit headers"
+        : `Probe failed: HTTP ${res.status}`;
+    }
 
     return {
       configured: true,
@@ -126,7 +130,7 @@ async function probe(
       cachedAt: new Date().toISOString(),
     };
   } catch {
-    return null;
+    return "Quota probe returned no unified rate-limit headers";
   }
 }
 
@@ -161,9 +165,10 @@ export async function loadQuota(): Promise<QuotaResult> {
         }
       } catch { /* no fresh cache */ }
 
-      const data = await probe(tokenInfo.token, tokenInfo.subscriptionType, tokenInfo.rateLimitTier);
+      const probeResult = await probe(tokenInfo.token, tokenInfo.subscriptionType, tokenInfo.rateLimitTier);
 
-      if (data) {
+      if (typeof probeResult !== "string") {
+        const data = probeResult;
         memData = data;
         memStoredAt = Date.now();
         try {
@@ -177,10 +182,12 @@ export async function loadQuota(): Promise<QuotaResult> {
       try {
         const raw = await fs.readFile(CACHE_FILE, "utf-8");
         const entry = JSON.parse(raw) as DiskEntry;
+        memData = entry.data;
+        memStoredAt = Date.now();
         return entry.data;
       } catch { /* no stale cache */ }
 
-      return fail("Quota probe returned no unified rate-limit headers");
+      return fail(probeResult);
     } catch (err) {
       return fail(String(err));
     } finally {

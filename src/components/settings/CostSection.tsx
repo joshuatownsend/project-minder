@@ -116,10 +116,13 @@ export function CostSection({
   }
 
   async function handleScheduleChange(next: ScheduleMode) {
+    const prev = scheduleMode;
     setScheduleMode(next);
     setScheduleSaving(true);
     try {
       await onConfigChange({ scheduleMode: next });
+    } catch {
+      setScheduleMode(prev);
     } finally {
       setScheduleSaving(false);
     }
@@ -363,8 +366,9 @@ export function CostSection({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
-          <label style={{ ...S.label, flexShrink: 0 }}>Schedule</label>
+          <label htmlFor="schedule-mode-select" style={{ ...S.label, flexShrink: 0 }}>Schedule</label>
           <select
+            id="schedule-mode-select"
             style={{ ...S.select, width: "240px" }}
             value={scheduleMode}
             onChange={(e) => handleScheduleChange(e.target.value as ScheduleMode)}

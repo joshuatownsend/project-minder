@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { QuotaData, QuotaWindow } from "@/lib/quota";
 import { SCHEDULE_MODES } from "@/lib/types";
 import type { ScheduleMode } from "@/lib/types";
@@ -42,11 +43,13 @@ function windowDurationSecs(key: "5h" | "7d"): number {
 function computeProjected(
   window: QuotaWindow,
   key: "5h" | "7d",
-  scheduleMode: ScheduleMode
+  scheduleMode: ScheduleMode,
+  nowMs: number
 ): number | null {
-  const now = Date.now() / 1000;
+  const now = nowMs / 1000;
   const secsLeft = window.reset - now;
   const totalSecs = windowDurationSecs(key);
+  if (window.reset <= 0 || secsLeft > totalSecs) return null;
   const elapsedSecs = totalSecs - secsLeft;
   if (elapsedSecs <= 0) return null;
   const elapsedFrac = elapsedSecs / totalSecs;
@@ -66,20 +69,22 @@ function UtilRow({
   window,
   windowKey,
   scheduleMode,
+  nowMs,
   y,
 }: {
   label: string;
   window: QuotaWindow;
   windowKey: "5h" | "7d";
   scheduleMode: ScheduleMode;
+  nowMs: number;
   y: number;
 }) {
   const pct = Math.round(window.utilization * 100);
   const color = utilColor(window.utilization);
-  const now = Date.now() / 1000;
+  const now = nowMs / 1000;
   const secsLeft = Math.max(0, window.reset - now);
   const countdown = formatCountdown(secsLeft);
-  const projected = computeProjected(window, windowKey, scheduleMode);
+  const projected = computeProjected(window, windowKey, scheduleMode, nowMs);
   const projPct = projected !== null ? Math.round(projected * 100) : null;
   const barFill = Math.min(window.utilization, 1) * VIEW_W;
 
@@ -130,6 +135,12 @@ interface Props {
 
 export function QuotaBurndownChart({ data, scheduleMode }: Props) {
   const VIEW_H = ROW_H * 2 + 10;
+  const [nowMs, setNowMs] = useState(Date.now);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div>
@@ -158,6 +169,7 @@ export function QuotaBurndownChart({ data, scheduleMode }: Props) {
           window={data.windows["5h"]}
           windowKey="5h"
           scheduleMode={scheduleMode}
+          nowMs={nowMs}
           y={4}
         />
         <UtilRow
@@ -165,6 +177,7 @@ export function QuotaBurndownChart({ data, scheduleMode }: Props) {
           window={data.windows["7d"]}
           windowKey="7d"
           scheduleMode={scheduleMode}
+          nowMs={nowMs}
           y={4 + ROW_H}
         />
       </svg>
