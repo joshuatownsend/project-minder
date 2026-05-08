@@ -54,5 +54,19 @@ export async function GET(
     compactBoundaries: meta.compactBoundaries,
     cliVersion: meta.cliVersion,
   });
-  return NextResponse.json(report);
+
+  const toolErrorsByCategory: Record<string, number> = {};
+  for (const turn of turns) {
+    for (const tc of turn.toolCalls) {
+      if (tc.isError && tc.errorCategory) {
+        toolErrorsByCategory[tc.errorCategory] = (toolErrorsByCategory[tc.errorCategory] ?? 0) + 1;
+      }
+    }
+  }
+
+  return NextResponse.json(
+    Object.keys(toolErrorsByCategory).length > 0
+      ? { ...report, toolErrorsByCategory }
+      : report
+  );
 }

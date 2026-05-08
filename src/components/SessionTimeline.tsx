@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { TimelineEvent } from "@/lib/types";
 import { User, Bot, Wrench, Brain, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { parseMarkdown, hasCodeFence } from "@/lib/markdown";
+import { formatToolArgs } from "@/lib/usage/toolArgFormatter";
 
 type EventType = TimelineEvent["type"];
 
@@ -195,6 +196,7 @@ function TimelineItem({ event, sessionStart, sessionId }: {
   sessionId?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [toolExpanded, setToolExpanded] = useState(false);
   const cfg = EVENT_CONFIG[event.type];
   const Icon = cfg.icon;
   // Expand threshold: code-heavy content warrants more space before truncation.
@@ -267,6 +269,26 @@ function TimelineItem({ event, sessionStart, sessionId }: {
                   ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> less</>
                   : <><ChevronRight style={{ width: "10px", height: "10px" }} /> more</>}
               </button>
+            )}
+            {event.type === "tool_use" && event.toolInput && (
+              <>
+                <button
+                  onClick={() => setToolExpanded(!toolExpanded)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "3px", background: "none", border: "none", padding: 0, fontSize: "0.68rem", color: "var(--text-muted)", cursor: "pointer", width: "fit-content" }}
+                >
+                  {toolExpanded
+                    ? <><ChevronDown style={{ width: "10px", height: "10px" }} /> hide args</>
+                    : <><ChevronRight style={{ width: "10px", height: "10px" }} /> show args</>}
+                </button>
+                {toolExpanded && (() => {
+                  const formatted = formatToolArgs(event.toolName ?? "", event.toolInput!);
+                  return (
+                    <pre style={{ margin: "4px 0 0", fontSize: "0.72rem", fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-all", color: "var(--text-secondary)", background: "var(--bg-surface)", borderRadius: "3px", padding: "6px 8px", lineHeight: 1.5 }}>
+                      {formatted.content || formatted.preview}
+                    </pre>
+                  );
+                })()}
+              </>
             )}
           </>
         )}

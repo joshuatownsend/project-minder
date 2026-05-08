@@ -643,6 +643,8 @@ export async function scanSessionDetail(
                   timestamp: entry.timestamp,
                   content: summary,
                   toolName,
+                  toolUseId: block.id as string | undefined,
+                  toolInput: Object.keys(input).length > 0 ? (input as Record<string, unknown>) : undefined,
                 });
 
                 // File operations

@@ -238,9 +238,11 @@ describe.skipIf(!driverAvailable)("Commit 3 parity: DB path vs file-parse path",
       fpTurns.filter((t) => t.role === "assistant").map((t) => ({ category: classifyTurn(t) }))
     );
 
-    // Both paths should agree on which buckets are non-zero
-    const dbIsExplorationNonZero = (dbSession.work_mode_exploration_pct ?? 0) > 0;
-    const fpIsExplorationNonZero = fpWorkMode.exploration > 0;
-    expect(dbIsExplorationNonZero).toBe(fpIsExplorationNonZero);
+    // Exact match across all 4 buckets — both paths use the same aggregateWorkMode
+    // and classifyTurn, so values must be identical, not just sign-equal.
+    expect(fpWorkMode.exploration).toBe(dbSession.work_mode_exploration_pct);
+    expect(fpWorkMode.building).toBe(dbSession.work_mode_building_pct);
+    expect(fpWorkMode.testing).toBe(dbSession.work_mode_testing_pct);
+    expect(fpWorkMode.other).toBe(dbSession.work_mode_other_pct);
   });
 });

@@ -468,6 +468,10 @@ export interface TimelineEvent {
   durationMs?: number;
   /** DB-path turn index; used to lazy-fetch thinking content on expand. */
   turnIndex?: number;
+  /** Raw tool arguments for expand-in-place inspection (#231). */
+  toolInput?: Record<string, unknown>;
+  /** Stable ID linking this event to its tool_result counterpart. */
+  toolUseId?: string;
 }
 
 export interface FileOperation {
