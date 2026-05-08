@@ -43,6 +43,15 @@ Lists any external APIs or services detected in the project (e.g., AWS, Firebase
 - Last commit message
 - Number of uncommitted changes (if any)
 
+### Git Activity
+
+When the project has Claude sessions, the **Git Activity** panel aggregates `git commit` and `git push` calls made across all recorded sessions. It shows:
+
+- **Commits** and **Pushes** — total counts across all sessions
+- **Branches** — list of branches Claude worked on, sorted by most-recent session
+
+Data is sourced from Bash/PowerShell tool call arguments in the SQLite index (DB mode) or by re-parsing JSONL files (file-parse fallback). The panel is hidden when no git activity was detected.
+
 ## Context Tab
 
 Displays the full contents of the project's `CLAUDE.md` file, if one exists. This is the context file that Claude reads when working on the project.
@@ -84,10 +93,11 @@ Shows your Claude session history for this project:
 
 ## Efficiency Tab
 
-Appears when the project has Claude sessions. Shows two analytics panels:
+Appears when the project has Claude sessions. Shows three analytics panels:
 
 - **Waste Optimizer** — grades the project A–F and lists up to 5 findings: junk-directory reads, duplicate reads, unused MCP servers, ghost agent/skill capabilities, and low read/edit ratio. Each finding includes a severity level and actionable detail.
 - **Session Yield** — classifies sessions as Productive, Reverted, or Abandoned by aligning session intervals with the main-branch commit log. Displays yield rate, total sessions analysed, and cost-per-shipped-commit when session cost data is available.
+- **By Work Mode** — colour-coded strip and percentage breakdown of how the project's assistant turns were classified across the four work modes (Exploration, Building, Testing, Other). Matches the per-session strips shown in the Sessions browser.
 
 ## Patterns Tab
 
