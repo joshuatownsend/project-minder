@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { MinderConfig, PricingRule } from "@/lib/types";
+import type { MinderConfig, PricingRule, ScheduleMode } from "@/lib/types";
+import { SCHEDULE_MODES } from "@/lib/types";
 import { S } from "./styles";
 import { SUPPORTED_CURRENCIES, CURRENCY_NAMES } from "@/lib/currencies";
 import { invalidateCurrencyCache } from "@/hooks/useCurrency";
+import { useQuota } from "@/hooks/useQuota";
+import { QuotaBurndownChart } from "@/components/QuotaBurndownChart";
 
 interface FxData {
   base: string;
@@ -42,6 +45,11 @@ export function CostSection({
   const [rulesSaving, setRulesSaving] = useState(false);
   const [rulesMsg, setRulesMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(config?.scheduleMode ?? "weekdays");
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+
+  const quota = useQuota();
+
   useEffect(() => {
     fetch("/api/integrations/fx")
       .then((r) => r.json())
@@ -56,6 +64,10 @@ export function CostSection({
   useEffect(() => {
     setRows((config?.pricingRules ?? []).map(toRow));
   }, [config?.pricingRules]);
+
+  useEffect(() => {
+    setScheduleMode(config?.scheduleMode ?? "weekdays");
+  }, [config?.scheduleMode]);
 
   async function handleCurrencyChange(next: string) {
     setCurrency(next);
@@ -100,6 +112,19 @@ export function CostSection({
       setRulesMsg({ text: (err as Error).message, ok: false });
     } finally {
       setRulesSaving(false);
+    }
+  }
+
+  async function handleScheduleChange(next: ScheduleMode) {
+    const prev = scheduleMode;
+    setScheduleMode(next);
+    setScheduleSaving(true);
+    try {
+      await onConfigChange({ scheduleMode: next });
+    } catch {
+      setScheduleMode(prev);
+    } finally {
+      setScheduleSaving(false);
     }
   }
 
@@ -328,6 +353,48 @@ export function CostSection({
           Pricing rule changes apply to new session ingest immediately.
           Previously indexed session costs are not retroactively recalculated.
         </div>
+      </div>
+
+      {/* ── Quota Burndown ───────────────────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "4px" }}>
+          Usage Quota
+        </div>
+        <div style={{ ...S.muted, marginBottom: "16px" }}>
+          Claude Max unified rate limits — 5-hour and 7-day rolling windows.
+          Select your typical work schedule for paced projections.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+          <label htmlFor="schedule-mode-select" style={{ ...S.label, flexShrink: 0 }}>Schedule</label>
+          <select
+            id="schedule-mode-select"
+            style={{ ...S.select, width: "240px" }}
+            value={scheduleMode}
+            onChange={(e) => handleScheduleChange(e.target.value as ScheduleMode)}
+            disabled={scheduleSaving}
+          >
+            {SCHEDULE_MODES.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          {scheduleSaving && <span style={S.muted}>Saving…</span>}
+        </div>
+
+        {quota === null ? (
+          <div style={S.muted}>Loading quota…</div>
+        ) : !quota.configured ? (
+          <div style={{
+            padding: "10px 12px", borderRadius: "var(--radius)",
+            background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)",
+            fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.6,
+          }}>
+            <strong style={{ color: "var(--text-secondary)" }}>Not available:</strong>{" "}
+            {quota.reason}
+          </div>
+        ) : (
+          <QuotaBurndownChart data={quota} scheduleMode={scheduleMode} />
+        )}
       </div>
     </section>
   );

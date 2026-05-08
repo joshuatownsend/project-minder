@@ -46,3 +46,41 @@ Each rule has four optional rate fields (USD per 1 million tokens). Leave a fiel
 - Rule changes apply to **new session ingest immediately** — no restart required.
 - **Previously indexed session costs are not retroactively recalculated.** If you need historical recost, delete `~/.minder/index.db` (all sessions will be re-indexed on next startup, which may take a few minutes).
 - Click **Reset to defaults** to clear all overrides and return to LiteLLM pricing.
+
+## Usage Quota (Claude Max)
+
+Project Minder can display your Claude Max rolling-window utilization directly in the dashboard.
+
+### How it works
+
+When you authenticate Claude Code via OAuth (the default for Claude Max subscribers), Project Minder reads the access token from `~/.claude/.credentials.json` and makes a single minimal API call to `api.anthropic.com/v1/messages` (1-token Haiku response, ~$0.00001) to read the `anthropic-ratelimit-unified-*` response headers. This data is disk-cached for 5 minutes.
+
+If you use an API key instead of OAuth, or your token has expired, the quota section will show "Not available" with the reason.
+
+### Windows
+
+Anthropic's Max tier exposes two rolling windows:
+
+| Window | What it tracks |
+|---|---|
+| **5-hour** | The most recent 5-hour sliding window — the binding short-term limit |
+| **7-day** | The rolling 7-day window — guards against sustained high usage |
+
+Utilization is expressed as a percentage (0–100 %). The chart colours follow traffic-light semantics: green < 70 %, amber 70–90 %, red ≥ 90 %.
+
+### Schedule mode
+
+The schedule mode controls the active-time fraction used in the 7-day linear projection:
+
+| Mode | Active fraction used in projection |
+|---|---|
+| **Weekdays (Mon–Fri)** | 5/7 ≈ 71 % of the window is expected active time |
+| **Vibe coder** | 70 % — bursty work with frequent breaks |
+| **24 × 7** | 100 % — always on |
+| **Custom** | 100 % (no specific fraction defined yet) |
+
+The projected utilization is a simple linear extrapolation based on elapsed window time and schedule mode. It helps answer "if I keep working at this rate, where will I land by reset time?"
+
+### Quick status in Integrations
+
+A compact status row in **Settings → Integrations** shows your current subscription type, overall status (● allowed / throttled), and the two window percentages at a glance, with a link to the full burndown chart in Cost.

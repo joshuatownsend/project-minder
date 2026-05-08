@@ -261,9 +261,14 @@ export type HookEventName =
   | "SessionStart"
   | "SessionEnd";
 
-/** Schedule mode used by Wave 8's quota burndown projection. Persisted now
- *  so the Settings UI can capture it before the burndown chart lands. */
 export type ScheduleMode = "weekdays" | "vibe-coder" | "24x7" | "custom";
+
+export const SCHEDULE_MODES: { value: ScheduleMode; label: string }[] = [
+  { value: "weekdays",   label: "Weekdays (Mon–Fri)" },
+  { value: "vibe-coder", label: "Vibe coder (~70% of hours)" },
+  { value: "24x7",       label: "24 × 7 (always on)" },
+  { value: "custom",     label: "Custom" },
+];
 
 /** Pricing override rule. Placeholder shape; Wave 8 (Cluster S) tightens
  *  the contract and adds the Settings editor. */
