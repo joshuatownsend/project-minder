@@ -98,6 +98,7 @@ export type OnDecisionFn = (taskId: number, event: DecisionEvent) => Promise<voi
 /** Callback injected by the dispatcher to react when a task completes or fails. */
 export type OnCompleteFn = (task: Task) => Promise<void>;
 
+
 function buildPrompt(task: Task): string {
   return [task.title, task.description].filter(Boolean).join("\n\n");
 }
