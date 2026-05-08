@@ -78,6 +78,20 @@ export interface RunTaskResult {
   durationMs: number;
 }
 
+function buildPrompt(task: Task): string {
+  return [task.title, task.description].filter(Boolean).join("\n\n");
+}
+
+function appendTaskFlags(args: string[], task: Task): void {
+  if (task.assigned_skill) args.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
+  if (task.model) args.push("--model", task.model);
+}
+
+// On Windows, `claude` is a .cmd file; must invoke via cmd.exe
+function buildSpawnTarget(args: string[]): [string, string[]] {
+  return isWindows ? ["cmd.exe", ["/c", "claude", ...args]] : ["claude", args];
+}
+
 /**
  * Spawn `claude -p "<prompt>"` for the task (classic mode).
  * Writes a PID marker file while the child is alive.
@@ -88,34 +102,21 @@ export async function runClassicTask(
   spawnFn: SpawnFn = spawn
 ): Promise<RunTaskResult> {
   const startMs = Date.now();
-  const prompt = [task.title, task.description].filter(Boolean).join("\n\n");
-
-  const spawnArgs = ["-p", prompt, "--output-format", "text"];
-  if (task.assigned_skill) {
-    spawnArgs.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
-  }
-  if (task.model) {
-    spawnArgs.push("--model", task.model);
-  }
-
-  const opts = {
-    stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
-    env: { ...process.env, MINDER_DISPATCHED: "1" },
-  };
-
-  // On Windows, `claude` is a .cmd file; must invoke via cmd.exe
-  const [cmd, extraArgs]: [string, string[]] = isWindows
-    ? ["cmd.exe", ["/c", "claude", ...spawnArgs]]
-    : ["claude", spawnArgs];
+  const spawnArgs = ["-p", buildPrompt(task), "--output-format", "text"];
+  appendTaskFlags(spawnArgs, task);
+  const [cmd, extraArgs] = buildSpawnTarget(spawnArgs);
 
   return new Promise<RunTaskResult>((resolve) => {
-    const child = spawnFn(cmd, extraArgs, opts);
+    const child = spawnFn(cmd, extraArgs, {
+      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      env: { ...process.env, MINDER_DISPATCHED: "1" },
+    });
     const pid = child.pid;
-
     if (pid) writePidFile(pid);
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
     const STDOUT_CAP = 50_000;
     const STDERR_CAP = 10_000;
 
@@ -123,6 +124,8 @@ export async function runClassicTask(
     child.stderr?.on("data", (chunk: Buffer) => { if (stderr.length < STDERR_CAP) stderr += chunk.toString(); });
 
     child.on("close", async (code) => {
+      if (settled) return;
+      settled = true;
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
 
@@ -149,6 +152,8 @@ export async function runClassicTask(
     });
 
     child.on("error", async (err) => {
+      if (settled) return;
+      settled = true;
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
       try {
@@ -173,36 +178,24 @@ export async function runStreamTask(
   spawnFn: SpawnFn = spawn
 ): Promise<RunTaskResult> {
   const startMs = Date.now();
-  const prompt = [task.title, task.description].filter(Boolean).join("\n\n");
-
-  const spawnArgs = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
-  if (task.assigned_skill) {
-    spawnArgs.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
-  }
-  if (task.model) {
-    spawnArgs.push("--model", task.model);
-  }
-
-  const opts = {
-    stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
-    env: { ...process.env, MINDER_DISPATCHED: "1" },
-  };
-
-  const [cmd, extraArgs]: [string, string[]] = isWindows
-    ? ["cmd.exe", ["/c", "claude", ...spawnArgs]]
-    : ["claude", spawnArgs];
+  const spawnArgs = ["-p", buildPrompt(task), "--output-format", "stream-json", "--verbose"];
+  appendTaskFlags(spawnArgs, task);
+  const [cmd, extraArgs] = buildSpawnTarget(spawnArgs);
 
   return new Promise<RunTaskResult>((resolve) => {
-    const child = spawnFn(cmd, extraArgs, opts);
+    const child = spawnFn(cmd, extraArgs, {
+      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      env: { ...process.env, MINDER_DISPATCHED: "1" },
+    });
     const pid = child.pid;
-
     if (pid) writePidFile(pid);
 
     let lineBuffer = "";
     let resultText = "";
     let resultCostUsd: number | undefined;
     let stderr = "";
-    const LINE_BUFFER_CAP = 50_000;
+    let settled = false;
+    let sessionIdWritten = false;
     const STDERR_CAP = 10_000;
 
     // UTF-8 encoding prevents chunk boundaries from splitting multi-byte sequences.
@@ -210,8 +203,7 @@ export async function runStreamTask(
       ?.setEncoding?.("utf8");
 
     child.stdout?.on("data", (chunk: string | Buffer) => {
-      if (lineBuffer.length < LINE_BUFFER_CAP)
-        lineBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      lineBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
       let nl: number;
       while ((nl = lineBuffer.indexOf("\n")) !== -1) {
         const line = lineBuffer.slice(0, nl).trimEnd();
@@ -219,7 +211,8 @@ export async function runStreamTask(
         if (!line) continue;
         try {
           const evt = JSON.parse(line) as Record<string, unknown>;
-          if (evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
+          if (!sessionIdWritten && evt.type === "system" && evt.subtype === "init" && typeof evt.session_id === "string") {
+            sessionIdWritten = true;
             setSessionId(task.id, evt.session_id).catch((e) =>
               console.error(`[spawner] setSessionId failed for task ${task.id}:`, e)
             );
@@ -238,6 +231,8 @@ export async function runStreamTask(
     });
 
     child.on("close", async (code) => {
+      if (settled) return;
+      settled = true;
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
 
@@ -265,6 +260,8 @@ export async function runStreamTask(
     });
 
     child.on("error", async (err) => {
+      if (settled) return;
+      settled = true;
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
       try {

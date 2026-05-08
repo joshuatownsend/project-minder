@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import type { TaskQuadrant, RiskLevel, ExecutionMode } from "@/lib/tasks/types";
-import { EXECUTION_MODES } from "@/lib/tasks/types";
+import { EXECUTION_MODES, EXECUTION_MODE_LABELS } from "@/lib/tasks/types";
 
 interface TaskComposerProps {
   open: boolean;
@@ -178,7 +178,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
           <Field label="Execution mode">
             <select value={executionMode} onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)} style={selectStyle}>
               {EXECUTION_MODES.map((m) => (
-                <option key={m} value={m}>{m === "classic" ? "Classic (text)" : "Stream (JSON)"}</option>
+                <option key={m} value={m}>{EXECUTION_MODE_LABELS[m]}</option>
               ))}
             </select>
           </Field>
