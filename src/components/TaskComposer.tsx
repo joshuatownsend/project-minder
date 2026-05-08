@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import type { TaskQuadrant, RiskLevel } from "@/lib/tasks/types";
+import { EXECUTION_MODES } from "@/lib/tasks/types";
 
 interface TaskComposerProps {
   onClose: () => void;
@@ -66,7 +67,7 @@ export function TaskComposer({ onClose, onSuccess }: TaskComposerProps) {
     try {
       const body: Record<string, unknown> = {
         title: title.trim(),
-        execution_mode: "classic",
+        execution_mode: EXECUTION_MODES[0],
       };
       if (description.trim()) body.description = description.trim();
       if (quadrant) body.quadrant = quadrant;

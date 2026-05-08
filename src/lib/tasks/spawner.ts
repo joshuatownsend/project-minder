@@ -9,6 +9,8 @@ import { isWindows } from "../platform";
 
 const PID_DIR = path.join(os.homedir(), ".minder", "pids");
 
+try { fs.mkdirSync(PID_DIR, { recursive: true }); } catch { /* non-fatal */ }
+
 export type SpawnFn = typeof spawn;
 
 function ensurePidDir() {
@@ -38,7 +40,6 @@ function deletePidFile(pid: number) {
  */
 export function sweepStalePids(): void {
   try {
-    ensurePidDir();
     const files = fs.readdirSync(PID_DIR);
     for (const f of files) {
       const pid = parseInt(f, 10);
@@ -60,7 +61,6 @@ export function sweepStalePids(): void {
 /** List PIDs currently tracked in PID_DIR. Used by emergency stop (Wave 9.2). */
 export function listTrackedPids(): number[] {
   try {
-    ensurePidDir();
     return fs
       .readdirSync(PID_DIR)
       .map((f) => parseInt(f, 10))

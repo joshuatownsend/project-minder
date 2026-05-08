@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { TasksBrowser } from "@/components/TasksBrowser";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import type { Task, Schedule } from "@/lib/tasks/types";
@@ -12,7 +12,7 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const [tasksRes, schedRes] = await Promise.all([
         fetch("/api/tasks"),
@@ -30,9 +30,9 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
     return (

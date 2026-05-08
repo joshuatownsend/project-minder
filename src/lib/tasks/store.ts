@@ -346,7 +346,7 @@ export async function failTask(id: number, info: FailTaskInput): Promise<Task | 
 
 /**
  * Materialize due schedules into ops_tasks rows.
- * Wrapped in BEGIN IMMEDIATE to prevent double-materialization across concurrent ticks.
+ * Wrapped in a serialized transaction (DEFERRED) — safe because the dispatcher is single-threaded JS.
  * Returns the number of tasks created.
  */
 export async function materializeSchedules(): Promise<number> {

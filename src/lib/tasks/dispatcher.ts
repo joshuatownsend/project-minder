@@ -41,6 +41,8 @@ export function isDispatcherRunning(): boolean {
 export function initDispatcher(spawnFn?: SpawnFn): void {
   if (globalThis.__minderDispatcher) return;
 
+  try { fs.mkdirSync(path.dirname(HEARTBEAT_PATH), { recursive: true }); } catch { /* non-fatal */ }
+
   const startedAt = new Date().toISOString();
   let tickCount = 0;
   let lastTickAt: string | null = null;
@@ -82,7 +84,7 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       }
 
       const promise: Promise<void> = runClassicTask(task, spawnFn)
-        .then(() => { /* result already written to DB by completeTask/failTask */ })
+        .then(() => {})
         .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
         .finally(() => inFlight.delete(task!.id));
 
@@ -107,7 +109,6 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
 
 function writeHeartbeat(lastTickAt: string, running: number) {
   try {
-    fs.mkdirSync(path.dirname(HEARTBEAT_PATH), { recursive: true });
     fs.writeFileSync(
       HEARTBEAT_PATH,
       JSON.stringify({ lastTickAt, running, pid: process.pid }),
