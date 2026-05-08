@@ -1,6 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { ModelPricing, UsageTurn } from "@/lib/usage/types";
+import type { PricingRule } from "@/lib/types";
+import { matchPricingRule, applyPricingOverlay } from "@/lib/usage/pricingRules";
 
 // ── Hardcoded fallback pricing (per token) ──────────────────────────────────
 
@@ -29,6 +31,18 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
 
 let pricingMap: Map<string, ModelPricing> | null = null;
 let pricingLoadPromise: Promise<void> | null = null;
+
+// globalThis so pricing rules survive hot-reload in dev and are shared
+// across concurrent requests in production.
+const g = globalThis as unknown as { __minderPricingRules?: PricingRule[] };
+
+export function setPricingRules(rules: PricingRule[]): void {
+  g.__minderPricingRules = rules;
+}
+
+export function getPricingRules(): PricingRule[] {
+  return g.__minderPricingRules ?? [];
+}
 
 // ── Cache paths ──────────────────────────────────────────────────────────────
 
@@ -85,6 +99,13 @@ export async function loadPricing(): Promise<void> {
   if (pricingLoadPromise) return pricingLoadPromise;
 
   pricingLoadPromise = (async () => {
+    // Warm pricing rules from config so they survive server restarts.
+    try {
+      const { readConfig } = await import("@/lib/config");
+      const config = await readConfig();
+      if (config.pricingRules?.length) setPricingRules(config.pricingRules);
+    } catch { /* non-critical */ }
+
     try {
       let useDiskCache = false;
       try {
@@ -121,59 +142,53 @@ export async function loadPricing(): Promise<void> {
 
 /**
  * Look up pricing for a model by name. Falls back gracefully.
+ * Applies any active pricing rule overlay before returning.
  */
 export function getModelPricing(model: string): ModelPricing {
   const map = pricingMap ?? new Map(Object.entries(FALLBACK_PRICING));
 
   // 1. Exact match
-  const exact = map.get(model);
-  if (exact) return exact;
+  let base = map.get(model);
 
-  // 2. Fuzzy match: strip date suffix and progressively shorten
-  //    e.g. "claude-sonnet-4-5-20250514" → "claude-sonnet-4-5" → "claude-sonnet-4" → ...
-  const dateSuffixPattern = /-\d{8}$/;
-  let candidate = model.replace(dateSuffixPattern, "");
+  if (!base) {
+    // 2. Fuzzy match: strip date suffix and progressively shorten
+    const dateSuffixPattern = /-\d{8}$/;
+    let candidate = model.replace(dateSuffixPattern, "");
 
-  while (candidate.length > 0) {
-    const match = map.get(candidate);
-    if (match) return match;
-
-    // Also try fallback map directly for known keys
-    const fallback = FALLBACK_PRICING[candidate];
-    if (fallback) return fallback;
-
-    // Strip last dash-separated segment
-    const lastDash = candidate.lastIndexOf("-");
-    if (lastDash === -1) break;
-    candidate = candidate.substring(0, lastDash);
+    while (candidate.length > 0) {
+      const match = map.get(candidate);
+      if (match) { base = match; break; }
+      const fallback = FALLBACK_PRICING[candidate];
+      if (fallback) { base = fallback; break; }
+      const lastDash = candidate.lastIndexOf("-");
+      if (lastDash === -1) break;
+      candidate = candidate.substring(0, lastDash);
+    }
   }
 
-  // 3. Keyword match: opus, sonnet, haiku
-  const lower = model.toLowerCase();
-  if (lower.includes("opus")) {
-    return (
-      map.get("claude-opus-4") ??
-      FALLBACK_PRICING["claude-opus-4"]
-    );
-  }
-  if (lower.includes("haiku")) {
-    return (
-      map.get("claude-haiku-3.5") ??
-      FALLBACK_PRICING["claude-haiku-3.5"]
-    );
-  }
-  if (lower.includes("sonnet")) {
-    return (
-      map.get("claude-sonnet-4") ??
-      FALLBACK_PRICING["claude-sonnet-4"]
-    );
+  if (!base) {
+    // 3. Keyword match: opus, sonnet, haiku
+    const lower = model.toLowerCase();
+    if (lower.includes("opus")) {
+      base = map.get("claude-opus-4") ?? FALLBACK_PRICING["claude-opus-4"];
+    } else if (lower.includes("haiku")) {
+      base = map.get("claude-haiku-3.5") ?? FALLBACK_PRICING["claude-haiku-3.5"];
+    } else if (lower.includes("sonnet")) {
+      base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
+    } else {
+      // 4. Default fallback: sonnet pricing
+      base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
+    }
   }
 
-  // 4. Default fallback: sonnet pricing
-  return (
-    map.get("claude-sonnet-4") ??
-    FALLBACK_PRICING["claude-sonnet-4"]
-  );
+  // Apply pricing rule overlay (user-defined overrides from settings)
+  const rules = getPricingRules();
+  if (rules.length > 0) {
+    const rule = matchPricingRule(rules, model);
+    return applyPricingOverlay(base, rule);
+  }
+
+  return base;
 }
 
 export interface TokenCounts {
@@ -216,4 +231,5 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
 export function _resetForTesting(): void {
   pricingMap = null;
   pricingLoadPromise = null;
+  delete g.__minderPricingRules;
 }

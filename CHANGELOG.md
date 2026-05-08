@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 8.2a — Cluster S: Currency display + pricing rule overrides.** TODO #79, #80.
+  - **Display currency preference** (Settings → Cost). Choose from 30 ISO 4217 currencies powered by the Frankfurter API. Exchange rates cached 24 h in `~/.minder/exchange-rates.json`; last-good fallback on network failure. Zero-decimal currencies (JPY, KRW, IDR) rendered without fractional part.
+  - **Centralized `formatCost` / `formatCostCompact`** in `src/lib/format.ts`. All five components (`UsageDashboard`, `SessionsBrowser`, `SessionDetailView`, `ProjectSessions`, `StatsDashboard`) now import from format.ts rather than repeating identical inline functions. Both functions accept optional `(currency, fxRate)` args; defaults preserve USD behaviour.
+  - **`useCurrency()` hook** (`src/hooks/useCurrency.ts`). Fetches `/api/config` + `/api/integrations/fx` once per page mount; provides `{ currency, fxRate }` to all cost-displaying components.
+  - **`GET /api/integrations/fx`** — returns `{ base: "USD", rates, fetchedAt }` from the 24 h Frankfurter cache. Used by the CostSection UI to show the live rate next to the currency picker.
+  - **Per-model pricing rule overrides** (Settings → Cost, below the currency picker). `*` wildcard patterns; longest match wins; four rate fields (input, output, cache-read, cache-write in USD/M tokens); Reset to defaults clears all rules. New rules take effect on the next session ingest without a server restart.
+  - **`src/lib/usage/pricingRules.ts`** — `matchPricingRule` (longest-wins glob) + `applyPricingOverlay` (per-field merge). `costCalculator.getModelPricing` now applies the overlay before returning.
+  - **`src/lib/fxRates.ts`** — Frankfurter fetch + 24 h disk cache, abort-on-timeout, last-good fallback.
+  - **PATCH `/api/config`** now validates and persists `currency` (allowlist) and `pricingRules` (array shape + range checks). On `pricingRules` change, calls `setPricingRules()` to warm the globalThis cache immediately.
+  - **Help doc** `cost.md` (Settings → Cost context help).
+
 - **Wave 8.1b — Cluster R: OTEL consumption UI.** TODO #111, #112.
   - **Telemetry section on `/stats`** with six cards consuming live OTEL data:
     - **EditAcceptanceCard** — per-tool accept/reject bars with acceptance rate. Per-session variant on session detail Tools tab. Source: `tool_decision` events.

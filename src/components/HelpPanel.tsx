@@ -37,6 +37,8 @@ const slugTitles: Record<HelpSlug, string> = {
   telegram: "Telegram Integration",
   terminal: "Terminal Launch",
   "auto-title": "Auto-title",
+  otel: "OpenTelemetry",
+  cost: "Cost Settings",
 };
 
 const iconBtnBase: React.CSSProperties = {

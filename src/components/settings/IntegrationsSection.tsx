@@ -137,7 +137,7 @@ export function IntegrationsSection({
 
         <div style={{
           marginTop: "16px", padding: "10px 12px", borderRadius: "var(--radius)",
-          background: "var(--surface-2, transparent)", fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.6,
+          background: "var(--bg-elevated)", fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.6,
         }}>
           <strong style={{ color: "var(--text-secondary)" }}>Setup:</strong>{" "}
           Create a bot with @BotFather and copy the token. Send /start to your bot, then visit{" "}
