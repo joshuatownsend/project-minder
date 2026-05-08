@@ -1,5 +1,87 @@
 # Insights
 
+<!-- insight:e3abfc2a082f | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T00:52:56.945Z -->
+## ★ Insight
+Native `<select>` elements resist CSS in a way `<input>` elements don't — browsers apply their OS-level widget rendering unless you opt out via `appearance: none`. Without it, even correctly-set `background` and `color` CSS variables get overridden by the browser's native control paint. The SVG chevron in the `backgroundImage` replaces the native arrow that `appearance: none` removes, keeping the control visually complete.
+
+---
+
+<!-- insight:c93d6f4c9160 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T00:24:52.523Z -->
+## ★ Insight
+The `slugTitles: Record<HelpSlug, string>` pattern is an exhaustive mapped type — TypeScript enforces that every member of the `HelpSlug` union has a corresponding key. This means adding a new slug to `helpSlugs` in `help-mapping.ts` *always* causes a typecheck failure in `HelpPanel.tsx` until the title is filled in. It's an intentional completeness gate: you can't ship a help slug without also giving it a display title.
+
+---
+
+<!-- insight:c178297d0b59 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-08T00:03:30.887Z -->
+## ★ Insight
+- **Mirror the LiteLLM cache pattern exactly**: disk cache with TTL check via `stat.mtimeMs`, in-flight promise dedupe, fallback on network error. Same infrastructure, new endpoint.
+- **Module-level `ratesMap` + `fetchedAt`**: sync reads are fast for the hot path (`formatCost`); async warm-up happens once on first `getRate()` call.
+
+---
+
+<!-- insight:2c60425803f1 | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-07T23:59:08.332Z -->
+## ★ Insight
+- The `PATCH` route follows a validate-then-mutate pattern with a `patches[]` closure list — no mutation happens unless all validations pass. I'll add `currency` and `pricingRules` following this exact shape.
+- `formatCostCompact` has subtly different thresholds from `formatCost` (0.001 vs 0.01) — the centralized version must preserve this distinction.
+
+---
+
+<!-- insight:96cb007af94e | session:dd13fdd4-1171-47c7-99d6-804a8ac47a84 | 2026-05-07T23:55:22.342Z -->
+## ★ Insight
+- **Pre-existing types pay off**: `MinderConfig` already has `currency?`, `scheduleMode?`, `pricingRules?` typed from a prior wave — zero schema work needed.
+- **Centralize before extending**: `formatCost` is duplicated in 5 components hardcoding `$`. Extracting to `format.ts` first turns a feature add (currency) into a clean refactor.
+- **DERIVED_VERSION auto-bump beats a manual "recost" button**: precedent from Wave 4.2 — re-ingest infra already exists.
+
+---
+
+<!-- insight:b1561c93d153 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T22:28:54.025Z -->
+## ★ Insight
+The `appendFileSync` on every OTEL POST is doubly problematic: (1) it's synchronous I/O on the hot request path in a Node.js server, blocking the event loop during every Claude Code metric export, and (2) the file grows without bound. The `console.log` on the metrics route has the same problem but lighter weight — it still floods stdout in production where OTEL exporters post every 30–60s.
+
+---
+
+<!-- insight:2ae21244938a | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T22:27:22.147Z -->
+## ★ Insight
+The "today" period fix is a subtle but important correctness issue: rolling 24h and calendar-day boundary produce different results when displayed as a daily bar chart — a rolling window can show two buckets (yesterday + today), while users expect "today" to mean midnight-to-now. Same SQL, different perceived meaning depending on how the UI groups data.
+
+---
+
+<!-- insight:2a2d78cbca16 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T22:12:04.017Z -->
+## ★ Insight
+The simplify pass found a pattern worth noting: both `getTokenUsage` and `getCacheEfficiency` independently issued the exact same SQL query to `otel_metrics`. This is a classic sign of functions that evolved from copy-paste — they differed only in how they *pivoted* the result rows, not in what they fetched. Extracting `queryRawTokenDays` + `pivotTokenRows` makes the shared mechanism explicit and ensures future filter changes (e.g. adding a project-scoped `session_id` filter) only need one edit.
+
+---
+
+<!-- insight:412ff844b8e0 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:44:16.677Z -->
+## ★ Insight
+The two highest-severity efficiency issues are `getToolLatency` fetching unbounded rows for JS-side percentile computation, and all 6 API routes missing try/catch — both silent failure modes that only manifest at scale or under disk errors.
+
+---
+
+<!-- insight:d3b9d1e67643 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:37:58.265Z -->
+## ★ Insight
+The doc still says "four environment variables" and has the old text marking telemetry cards as "coming in a future update" — both need updating since we just shipped those cards in Phase 2.
+
+---
+
+<!-- insight:a2a2e40405c2 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:29:50.997Z -->
+## ★ Insight
+The `vi.useFakeTimers({ now: ... })` approach is the correct way to test time-dependent logic in Vitest. The key insight: `vi.useFakeTimers()` must be called before the module is loaded (here: before `reloadModules`) because `Date.now()` calls inside the imported module get frozen at the point the fake timer is installed. Wrapping in try/finally ensures `vi.useRealTimers()` always runs even if assertions fail.
+
+---
+
+<!-- insight:5ec294584ae9 | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:23:24.015Z -->
+## ★ Insight
+SQLite lacks native `PERCENTILE_CONT` — the typical workaround is a window function trick using `ROW_NUMBER() OVER (ORDER BY value)`, but that requires computing exact row counts first. For datasets where all rows fit in memory (hundreds of hook events, not millions), fetching raw values and computing percentiles in JS is simpler and correct. The sort+index approach used here is O(n log n) and fine for observability data.
+
+---
+
+<!-- insight:476c395a9afd | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:22:09.541Z -->
+## ★ Insight
+The OTEL JS SDK serializes different attribute types differently: `intValue` fields become JS numbers in our attrMap (api_request's `input_tokens: 341`), but many event attrs arrive as `stringValue` despite being numeric (`duration_ms: "19"`). This is an SDK-level encoding choice — it matters because SQLite's `JSON_EXTRACT` returns the raw stored type, so math on string-stored numbers requires `CAST(...AS REAL)`.
+
+---
+
 <!-- insight:3c6ffbda371f | session:b0fd2cb0-9bfc-45ea-9cb7-6b14345ada42 | 2026-05-07T21:08:46.483Z -->
 ## ★ Insight
 OpenTelemetry separates **what to export** (`OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER`) from **where to send it** (`OTEL_EXPORTER_OTLP_ENDPOINT`). Setting only the endpoint is a no-op — the SDK won't export anything unless the exporter type is explicitly set to `otlp`. This is a common gotcha: env vars are independent and none implies the other.

@@ -143,7 +143,7 @@ export function AutoTitleSection({
         {testResult && (
           <div style={{
             marginTop: "12px", padding: "10px 12px", borderRadius: "var(--radius)",
-            background: "var(--surface-2, transparent)",
+            background: "var(--bg-elevated)",
             fontSize: "0.78rem",
             color: testResult.ok ? "var(--text-primary)" : "var(--error, #f87171)",
           }}>

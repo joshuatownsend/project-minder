@@ -24,6 +24,8 @@ import {
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
 import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
+import { formatCost } from "@/lib/format";
+import { useCurrency } from "@/hooks/useCurrency";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -40,12 +42,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
-}
-
-function formatCost(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(4)}`;
 }
 
 function formatDate(iso?: string): string {
@@ -275,6 +271,7 @@ function SessionRow({
   showProject?: boolean;
   search?: string;
 }) {
+  const { currency, fxRate } = useCurrency();
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))
@@ -401,7 +398,7 @@ function SessionRow({
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
             <DollarSign style={{ width: "10px", height: "10px" }} />
-            {formatCost(session.costEstimate)}
+            {formatCost(session.costEstimate, currency, fxRate)}
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
             <Wrench style={{ width: "10px", height: "10px" }} />
@@ -549,6 +546,7 @@ function SectionHeader({
   collapsed: boolean;
   onToggle: () => void;
 }) {
+  const { currency, fxRate } = useCurrency();
   return (
     <div
       style={{
@@ -593,7 +591,7 @@ function SectionHeader({
       </span>
 
       <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)" }}>
-        {formatTokens(group.totalTokens)} · {formatCost(group.totalCost)} · {formatDuration(group.totalDurationMs)}
+        {formatTokens(group.totalTokens)} · {formatCost(group.totalCost, currency, fxRate)} · {formatDuration(group.totalDurationMs)}
       </span>
 
       {group.avgOneShotRate !== undefined && (

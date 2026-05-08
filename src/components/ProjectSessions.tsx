@@ -18,6 +18,8 @@ import {
   Layers,
 } from "lucide-react";
 import Link from "next/link";
+import { formatCost } from "@/lib/format";
+import { useCurrency } from "@/hooks/useCurrency";
 
 function formatDuration(ms?: number): string {
   if (!ms) return "—";
@@ -33,12 +35,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
-}
-
-function formatCost(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(4)}`;
 }
 
 function formatDate(iso?: string): string {
@@ -94,6 +90,7 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
 export function ProjectSessions({ projectPath }: { projectPath: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const { currency, fxRate } = useCurrency();
   // Respect user's motion preference for the active ping animation
   const [reducedMotion, setReducedMotion] = useState(false);
 
@@ -167,7 +164,7 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
         <StatCard label="Total Time" value={formatDuration(stats!.totalDuration)} icon={<Clock className="h-4 w-4" />} />
         <StatCard label="Messages" value={stats!.totalMessages} icon={<MessageSquare className="h-4 w-4" />} />
         <StatCard label="Tokens" value={formatTokens(stats!.totalTokens)} icon={<Cpu className="h-4 w-4" />} />
-        <StatCard label="Cost" value={formatCost(stats!.totalCost)} icon={<DollarSign className="h-4 w-4" />} />
+        <StatCard label="Cost" value={formatCost(stats!.totalCost, currency, fxRate)} icon={<DollarSign className="h-4 w-4" />} />
         <StatCard label="Errors" value={stats!.totalErrors} icon={<AlertCircle className="h-4 w-4" />} />
       </div>
 

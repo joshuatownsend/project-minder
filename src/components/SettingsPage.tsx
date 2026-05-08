@@ -10,6 +10,7 @@ import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
 import { TerminalSection } from "@/components/settings/TerminalSection";
 import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
 import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
+import { CostSection } from "@/components/settings/CostSection";
 import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
@@ -226,7 +227,10 @@ export function SettingsPage() {
         {active === "live-activity" && (
           <LiveActivitySection config={config} onConfigChange={patchConfig} />
         )}
-        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && activeSection && (
+        {active === "cost" && (
+          <CostSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && active !== "cost" && activeSection && (
           <PlaceholderSection
             label={activeSection.label}
             wave={activeSection.shipsInWave}

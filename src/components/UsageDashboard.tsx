@@ -18,25 +18,15 @@ import { HourlyDistributionChart } from "./HourlyDistributionChart";
 import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
 
+import { formatCost, formatCostCompact } from "@/lib/format";
+import { useCurrency } from "@/hooks/useCurrency";
+
 // ── Formatters ─────────────────────────────────────────────────────────────
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
-}
-
-function formatCost(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `$${n.toFixed(3)}`;
-  if (n > 0) return `$${n.toFixed(4)}`;
-  return "$0";
-}
-
-function formatCostCompact(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.001) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(4)}`;
 }
 
 // ── Project name decode ────────────────────────────────────────────────────
@@ -141,6 +131,7 @@ function StatCell({ label, value, detail, accent, last }: {
 function CostRow({ label, cost, maxCost, color, detail }: {
   label: string; cost: number; maxCost: number; color: string; detail?: string;
 }) {
+  const { currency, fxRate } = useCurrency();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
       <span style={{
@@ -166,7 +157,7 @@ function CostRow({ label, cost, maxCost, color, detail }: {
         fontFamily: "var(--font-mono)", fontSize: "0.68rem",
         color: "var(--text-secondary)", width: "54px", textAlign: "right", flexShrink: 0,
       }}>
-        {formatCostCompact(cost)}
+        {formatCostCompact(cost, currency, fxRate)}
       </span>
       {detail && (
         <span style={{
@@ -221,6 +212,7 @@ function CountRow({ label, count, maxCount, color }: {
 function DailyCostChart({ daily }: {
   daily: Array<{ date: string; cost: number; turns: number }>;
 }) {
+  const { currency, fxRate } = useCurrency();
   if (daily.length === 0) return <EmptyNote />;
   const maxCost = Math.max(...daily.map((d) => d.cost), 0.001);
 
@@ -230,7 +222,7 @@ function DailyCostChart({ daily }: {
         {daily.map((d) => (
           <div
             key={d.date}
-            title={`${d.date}: ${formatCost(d.cost)} · ${d.turns} turns`}
+            title={`${d.date}: ${formatCost(d.cost, currency, fxRate)} · ${d.turns} turns`}
             style={{
               flex: 1,
               height: `${d.cost > 0 ? Math.max((d.cost / maxCost) * 100, 2) : 0}%`,
@@ -321,6 +313,7 @@ function ProjectBreakdownView({
 }: {
   projectDetails: ProjectDetail[];
 }) {
+  const { currency, fxRate } = useCurrency();
   const [focusCategory, setFocusCategory] = useState<CategoryType | null>(null);
 
   // Determine which categories are present in the data — depends only on the
@@ -444,7 +437,7 @@ function ProjectBreakdownView({
                   p.categoryBreakdown.map((c) => (
                     <div
                       key={c.category}
-                      title={`${c.category}: ${formatCostCompact(c.cost)}`}
+                      title={`${c.category}: ${formatCostCompact(c.cost, currency, fxRate)}`}
                       style={{
                         width: `${p.cost > 0 ? (c.cost / p.cost) * 100 : 0}%`,
                         height: "100%",
@@ -463,8 +456,8 @@ function ProjectBreakdownView({
                 color: "var(--text-secondary)", width: "54px", textAlign: "right", flexShrink: 0,
               }}>
                 {focusCategory && focusCost !== null
-                  ? formatCostCompact(focusCost)
-                  : formatCostCompact(p.cost)}
+                  ? formatCostCompact(focusCost, currency, fxRate)
+                  : formatCostCompact(p.cost, currency, fxRate)}
               </span>
 
               {/* Top tool + MCP indicator */}
@@ -563,6 +556,7 @@ export function UsageDashboard() {
   const [project, setProject] = useState<string | undefined>(undefined);
   const [breakdownMode, setBreakdownMode] = useState<"aggregate" | "by-project">("aggregate");
   const { data, loading } = useUsage(period, project);
+  const { currency, fxRate } = useCurrency();
   const { data: allData } = useUsage(period);
   const availableProjects = allData?.byProject ?? data?.byProject ?? [];
 
@@ -762,7 +756,7 @@ export function UsageDashboard() {
           }}>
             <StatCell
               label="Total Cost"
-              value={formatCost(data.totalCost)}
+              value={formatCost(data.totalCost, currency, fxRate)}
               detail={data.period}
             />
             <StatCell

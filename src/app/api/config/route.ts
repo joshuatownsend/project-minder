@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
-import { ProjectStatus, MinderConfig, FeatureFlagKey } from "@/lib/types";
+import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule } from "@/lib/types";
 import { isFeatureFlagKey } from "@/lib/featureFlags";
+import { setPricingRules } from "@/lib/usage/costCalculator";
+import { VALID_CURRENCIES } from "@/lib/currencies";
 
 // Derived from the MinderConfig union types — update both together if options change
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
@@ -235,6 +237,47 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
+  if (body.currency !== undefined) {
+    if (typeof body.currency !== "string" || !VALID_CURRENCIES.has(body.currency)) {
+      return NextResponse.json({ error: `currency must be a supported ISO 4217 code (e.g. "EUR", "JPY")` }, { status: 400 });
+    }
+    patches.push((c) => { c.currency = body.currency as string; });
+  }
+
+  let newPricingRules: PricingRule[] | undefined;
+  if (body.pricingRules !== undefined) {
+    if (!Array.isArray(body.pricingRules)) {
+      return NextResponse.json({ error: "pricingRules must be an array" }, { status: 400 });
+    }
+    const rules: PricingRule[] = [];
+    for (let i = 0; i < (body.pricingRules as unknown[]).length; i++) {
+      const r = (body.pricingRules as unknown[])[i];
+      if (typeof r !== "object" || r === null || Array.isArray(r)) {
+        return NextResponse.json({ error: `pricingRules[${i}] must be an object` }, { status: 400 });
+      }
+      const { pattern, inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion, cacheCreateUsdPerMillion } =
+        r as Record<string, unknown>;
+      if (typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > 100) {
+        return NextResponse.json({ error: `pricingRules[${i}].pattern must be a non-empty string ≤ 100 chars` }, { status: 400 });
+      }
+      const rateFields = { inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion, cacheCreateUsdPerMillion };
+      for (const [key, val] of Object.entries(rateFields)) {
+        if (val !== undefined && (typeof val !== "number" || !isFinite(val) || val < 0 || val > 10000)) {
+          return NextResponse.json({ error: `pricingRules[${i}].${key} must be a finite number in 0–10000` }, { status: 400 });
+        }
+      }
+      rules.push({
+        pattern: pattern.trim(),
+        ...(inputUsdPerMillion !== undefined ? { inputUsdPerMillion: inputUsdPerMillion as number } : {}),
+        ...(outputUsdPerMillion !== undefined ? { outputUsdPerMillion: outputUsdPerMillion as number } : {}),
+        ...(cacheReadUsdPerMillion !== undefined ? { cacheReadUsdPerMillion: cacheReadUsdPerMillion as number } : {}),
+        ...(cacheCreateUsdPerMillion !== undefined ? { cacheCreateUsdPerMillion: cacheCreateUsdPerMillion as number } : {}),
+      });
+    }
+    patches.push((c) => { c.pricingRules = rules; });
+    newPricingRules = rules;
+  }
+
   if (patches.length === 0) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
@@ -242,6 +285,7 @@ export async function PATCH(request: NextRequest) {
   const config = await mutateConfig((c) => {
     for (const patch of patches) patch(c);
   });
+  if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
   return NextResponse.json({ ok: true, config });
 }

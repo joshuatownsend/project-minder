@@ -47,6 +47,8 @@ import {
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
 import { downloadBlob } from "@/lib/downloadBlob";
+import { formatCost } from "@/lib/format";
+import { useCurrency } from "@/hooks/useCurrency";
 
 const checkboxRowStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "8px",
@@ -78,12 +80,6 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
-}
-
-function formatCost(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(4)}`;
 }
 
 // ── Resume / terminal split button ───────────────────────────────────────────
@@ -301,6 +297,7 @@ function ExportModal({
   data: import("@/lib/types").SessionDetail;
   generatedTitle: string | undefined;
 }) {
+  const { currency, fxRate } = useCurrency();
   const [sections, setSections] = useState<Set<ExportSection>>(
     new Set(["timeline", "files", "subagents"])
   );
@@ -324,7 +321,7 @@ function ExportModal({
       `**Date:** ${date}`,
       data.gitBranch ? `**Branch:** ${data.gitBranch}` : "",
       `**Duration:** ${data.durationMs ? formatDuration(data.durationMs) : "—"}`,
-      `**Cost:** ${formatCost(data.costEstimate)}`,
+      `**Cost:** ${formatCost(data.costEstimate, currency, fxRate)}`,
       `**Session ID:** \`${data.sessionId}\``,
       "",
     ].filter(Boolean);
@@ -560,6 +557,7 @@ function TabBar({
 // ── Main view ─────────────────────────────────────────────────────────────────
 export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
+  const { currency, fxRate } = useCurrency();
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -632,7 +630,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     { label: "Duration",   value: formatDuration(data.durationMs) },
     { label: "Messages",   value: data.messageCount,  detail: `${data.userMessageCount}u · ${data.assistantMessageCount}a` },
     { label: "Tokens",     value: formatTokens(data.inputTokens + data.outputTokens), detail: `${formatTokens(data.inputTokens)} in · ${formatTokens(data.outputTokens)} out` },
-    { label: "Cost",       value: formatCost(data.costEstimate) },
+    { label: "Cost",       value: formatCost(data.costEstimate, currency, fxRate) },
     { label: "Tools",      value: totalTools,          detail: `${Object.keys(data.toolUsage).length} unique` },
     ...(data.errorCount > 0    ? [{ label: "Errors",    value: data.errorCount,    accent: "error" as const }] : []),
     ...(data.subagentCount > 0 ? [{ label: "Subagents", value: data.subagentCount }] : []),
