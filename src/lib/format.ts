@@ -38,7 +38,7 @@ export function formatCostCompact(amountUsd: number, currency = "USD", fxRate = 
   const sym = CURRENCY_SYMBOL[currency] ?? currency;
   if (ZERO_DECIMAL_CURRENCIES.has(currency)) {
     const rounded = Math.round(amount);
-    return rounded === 0 ? `<1${sym}` : `${sym}${rounded}`;
+    return amount > 0 && rounded === 0 ? `${sym}<1` : `${sym}${rounded}`;
   }
   if (amount >= 1) return `${sym}${amount.toFixed(2)}`;
   if (amount >= 0.001) return `${sym}${amount.toFixed(3)}`;

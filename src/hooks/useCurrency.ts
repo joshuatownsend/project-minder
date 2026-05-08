@@ -23,7 +23,10 @@ async function loadCurrency(): Promise<CurrencyState> {
     currencyLoadPromise = (async () => {
       try {
         const configRes = await fetch("/api/config");
-        if (!configRes.ok) return { currency: "USD", fxRate: 1 };
+        if (!configRes.ok) {
+          currencyLoadPromise = null;
+          return { currency: "USD", fxRate: 1 };
+        }
         const config = (await configRes.json()) as Record<string, unknown>;
         const currency = (typeof config.currency === "string" ? config.currency : null) ?? "USD";
 

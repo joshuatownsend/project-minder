@@ -139,8 +139,9 @@ export function SettingsPage() {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      showToast("Couldn't save setting", body.error || `HTTP ${res.status}`);
-      return;
+      const message = body.error || `HTTP ${res.status}`;
+      showToast("Couldn't save setting", message);
+      throw new Error(message);
     }
     const updated = await res.json().catch(() => null);
     if (updated?.config) setConfig(updated.config as MinderConfig);

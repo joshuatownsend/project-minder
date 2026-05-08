@@ -8,6 +8,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 let ratesMap: Record<string, number> | null = null;
 let fetchedAt: string | null = null;
+let loadedAt: number | null = null;
 let loadPromise: Promise<void> | null = null;
 
 interface FrankfurterResponse {
@@ -22,7 +23,7 @@ interface CacheEntry {
 }
 
 export async function loadFxRates(): Promise<void> {
-  if (ratesMap) return;
+  if (ratesMap && loadedAt && Date.now() - loadedAt < CACHE_TTL_MS) return;
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
@@ -38,6 +39,7 @@ export async function loadFxRates(): Promise<void> {
         const entry = JSON.parse(raw) as CacheEntry;
         ratesMap = entry.rates;
         fetchedAt = entry.fetchedAt;
+        loadedAt = Date.now();
         return;
       }
 
@@ -49,6 +51,7 @@ export async function loadFxRates(): Promise<void> {
         const body = (await res.json()) as FrankfurterResponse;
         ratesMap = body.rates;
         fetchedAt = new Date().toISOString();
+        loadedAt = Date.now();
 
         try {
           await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
@@ -59,7 +62,20 @@ export async function loadFxRates(): Promise<void> {
         clearTimeout(timeout);
       }
     } catch {
-      if (!ratesMap) ratesMap = {};
+      // Network failed: use stale disk cache as last-good fallback.
+      try {
+        const raw = await fs.readFile(CACHE_FILE, "utf-8");
+        const entry = JSON.parse(raw) as CacheEntry;
+        ratesMap = entry.rates;
+        fetchedAt = entry.fetchedAt;
+        loadedAt = Date.now();
+      } catch {
+        ratesMap = {};
+        loadedAt = Date.now();
+      }
+    } finally {
+      // Clear the in-flight guard so TTL expiry can schedule a fresh fetch.
+      loadPromise = null;
     }
   })();
 
@@ -90,5 +106,6 @@ export function getFetchedAt(): string | null {
 export function _resetForTesting(): void {
   ratesMap = null;
   fetchedAt = null;
+  loadedAt = null;
   loadPromise = null;
 }

@@ -34,14 +34,14 @@ let pricingLoadPromise: Promise<void> | null = null;
 
 // globalThis so pricing rules survive hot-reload in dev and are shared
 // across concurrent requests in production.
-declare const globalThis: { __minderPricingRules?: PricingRule[] };
+const g = globalThis as unknown as { __minderPricingRules?: PricingRule[] };
 
 export function setPricingRules(rules: PricingRule[]): void {
-  globalThis.__minderPricingRules = rules;
+  g.__minderPricingRules = rules;
 }
 
 export function getPricingRules(): PricingRule[] {
-  return globalThis.__minderPricingRules ?? [];
+  return g.__minderPricingRules ?? [];
 }
 
 // ── Cache paths ──────────────────────────────────────────────────────────────
@@ -231,5 +231,5 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
 export function _resetForTesting(): void {
   pricingMap = null;
   pricingLoadPromise = null;
-  delete globalThis.__minderPricingRules;
+  delete g.__minderPricingRules;
 }
