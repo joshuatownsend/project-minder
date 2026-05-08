@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 9.1a — Cluster U (partial): Tasks queue foundation.** TODO #244.
+  - New `~/.minder/tasks.db` SQLite database (`src/lib/tasksDb/`) with `ops_tasks` and `ops_schedules` tables (schema v1). Status enum locked to `pending/awaiting_approval/running/done/failed/cancelled`. Full CHECK constraints, FK on `schedule_id`, and 5 covering indexes.
+  - CRUD store (`src/lib/tasks/store.ts`) with `listTasks`, `createTask`, `patchTask`, `deleteTask`, `claimPendingTask` (atomic, for 9.1b dispatcher), and matching schedule functions.
+  - REST API: `GET/POST /api/tasks`, `GET/PATCH/DELETE /api/tasks/[id]`, `GET/POST /api/schedules`, `GET/PATCH/DELETE /api/schedules/[id]`. Status-transition guard in PATCH (illegal transitions return 400).
+  - Cron validation via cron-parser v5 (`src/lib/tasks/cron.ts`). `validateCron()` and `computeNextRun()` used at schedule create/patch time to reject bad expressions and populate `next_run_at`.
+  - Read-only Tasks page at `/tasks` with `TasksBrowser` component: search, status/quadrant filters, sort by created_at/priority/scheduled_for, expand-row for full field detail, schedules sub-section.
+  - `Mission Control ▾` nav group in AppNav with `/tasks` (live) and `/schedule` (placeholder, Wave 9.1b).
+  - `taskDispatcher` feature flag (`wired: false`) — persists the toggle; dispatcher loop wired in 9.1b.
+  - Help doc at `/help/tasks` explaining statuses, fields, API usage, and Wave 9.1b roadmap.
+  - Dispatcher loop, cron materializer, PID files, claude spawning, Task Composer modal, approve/rerun routes deferred to Wave 9.1b.
+
 - **Wave 8.3 — Cluster T: Session-row UX bundle.** TODOs #158, #162, #164, #189, #191, #231.
   - **#164 Worktree consolidation.** `canonicalizeDirName` now applied in both DB (`sessionsListFromDb`) and file-parse (`claudeConversations`) loaders so worktree sessions group under the parent project slug. `SessionsBrowser` groups by `projectSlug` (was `projectPath`). `claudeSessions` scanner unions worktree JSONL counts into parent session count. Worktree branch chip renders on session rows.
   - **#191 Per-project Git activity panel.** `GET /api/projects/[slug]/git-activity` aggregates `git commit` / `git push` counts and branch activity from tool call arguments (DB-first with file-parse fallback; 5-min cache). `GitActivityPanel` renders commit/push stat boxes and a recency-sorted branch list in Project Overview.

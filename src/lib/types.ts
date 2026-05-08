@@ -247,7 +247,8 @@ export type FeatureFlagKey =
   | "usageAnalytics"
   | "agentSkillIndexer"
   | "devServerControl"
-  | "liveActivity";
+  | "liveActivity"
+  | "taskDispatcher";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =

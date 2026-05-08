@@ -16,6 +16,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentSkillIndexer",
   "devServerControl",
   "liveActivity",
+  "taskDispatcher",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -128,6 +129,14 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "ingest",
     wired: true,
+  },
+  {
+    key: "taskDispatcher",
+    label: "Task dispatcher",
+    description: "Dispatcher loop that spawns claude CLI child processes and tracks runs. Wired in Wave 9.1b.",
+    group: "active",
+    appliesAt: "ingest",
+    wired: false,
   },
 ];
 
