@@ -26,7 +26,7 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
-import { mostFrequent } from "../usage/parser";
+import { mostFrequent, canonicalizeDirName } from "../usage/parser";
 
 export interface ConversationEntry {
   type?: string;
@@ -123,6 +123,7 @@ async function scanSessionFile(
   mtime: Date
 ): Promise<SessionSummary | null> {
   try {
+    const canonicalDirName = canonicalizeDirName(projectDirName);
     const stat = await fs.stat(filePath);
     if (stat.size > MAX_SESSION_FILE_SIZE) return null;
     const content = await fs.readFile(filePath, "utf-8");
@@ -279,8 +280,8 @@ async function scanSessionFile(
           lightTurns.push({
             timestamp: entry.timestamp,
             sessionId,
-            projectSlug: toSlug(projectDirName),
-            projectDirName,
+            projectSlug: toSlug(canonicalDirName),
+            projectDirName: canonicalDirName,
             model: entry.message?.model || "",
             role: entry.type === "assistant" ? "assistant" : "user",
             inputTokens: turnUsage?.input_tokens ?? 0,
@@ -353,8 +354,8 @@ async function scanSessionFile(
         ? new Date(endTime).getTime() - new Date(startTime).getTime()
         : undefined;
 
-    const projectPath = decodeDirName(projectDirName);
-    const projectSlug = toSlug(projectDirName);
+    const projectPath = decodeDirName(canonicalDirName);
+    const projectSlug = toSlug(canonicalDirName);
 
     return {
       sessionId,

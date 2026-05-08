@@ -343,6 +343,11 @@ function SessionRow({
               recap
             </span>
           )}
+          {isWorktreeEncodedDir(session.projectName) && session.gitBranch && (
+            <QualityChip tone="neutral" title={`Worktree session — branch: ${session.gitBranch}`}>
+              {session.gitBranch}
+            </QualityChip>
+          )}
           <span
             style={{
               flex: 1,
@@ -491,16 +496,28 @@ interface ProjectGroup {
   avgOneShotRate?: number;
 }
 
+function isWorktreeEncodedDir(dirName: string): boolean {
+  const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
+  let pos = searchFrom;
+  while (pos < dirName.length) {
+    const idx = dirName.indexOf("--", pos);
+    if (idx === -1) break;
+    if (/^(?:[a-z]+-)?worktrees-/.test(dirName.slice(idx + 2))) return true;
+    pos = idx + 2;
+  }
+  return false;
+}
+
 function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
   const map = new Map<string, SessionSummary[]>();
   for (const s of sessions) {
-    const list = map.get(s.projectPath) ?? [];
+    const list = map.get(s.projectSlug) ?? [];
     list.push(s);
-    map.set(s.projectPath, list);
+    map.set(s.projectSlug, list);
   }
 
   const groups: ProjectGroup[] = [];
-  for (const [projectPath, projectSessions] of map) {
+  for (const [projectSlug, projectSessions] of map) {
     let totalTokens = 0, totalCost = 0, totalDurationMs = 0, activeSessions = 0;
     let lastActivity: string | undefined;
     const oneShotRates: number[] = [];
@@ -515,9 +532,9 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
     }
 
     groups.push({
-      projectPath,
+      projectPath: projectSessions[0].projectPath,
       projectName: projectSessions[0].projectName,
-      projectSlug: projectSessions[0].projectSlug,
+      projectSlug,
       sessions: projectSessions,
       totalTokens,
       totalCost,
@@ -732,7 +749,7 @@ export function SessionsBrowser() {
     });
   };
 
-  const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectPath));
+  const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectSlug));
 
   // Flatten the (possibly grouped) tree into a single positional array so one
   // virtualizer can drive both render modes. Recomputes only when the inputs
@@ -743,7 +760,7 @@ export function SessionsBrowser() {
     }
     const items: FlatItem[] = [];
     for (const group of projectGroups) {
-      const collapsed = collapsedSlugs.has(group.projectPath);
+      const collapsed = collapsedSlugs.has(group.projectSlug);
       items.push({ kind: "header", group, collapsed });
       if (!collapsed) {
         for (const session of group.sessions) {
@@ -861,7 +878,7 @@ export function SessionsBrowser() {
         {/* Collapse all */}
         {groupByProject && projectGroups.length > 1 && (
           <button
-            onClick={() => allCollapsed ? setCollapsedSlugs(new Set()) : setCollapsedSlugs(new Set(projectGroups.map((g) => g.projectPath)))}
+            onClick={() => allCollapsed ? setCollapsedSlugs(new Set()) : setCollapsedSlugs(new Set(projectGroups.map((g) => g.projectSlug)))}
             style={{ padding: "5px 11px", fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: "var(--text-secondary)", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
           >
             {allCollapsed ? "Expand all" : "Collapse all"}
@@ -932,7 +949,7 @@ export function SessionsBrowser() {
                     <SectionHeader
                       group={item.group}
                       collapsed={item.collapsed}
-                      onToggle={() => toggleCollapse(item.group.projectPath)}
+                      onToggle={() => toggleCollapse(item.group.projectSlug)}
                     />
                   ) : (
                     <SessionRow session={item.session} showProject={item.showProject} search={search} />

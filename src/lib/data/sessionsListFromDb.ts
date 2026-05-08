@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
+import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 
@@ -283,7 +284,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 
     result.push({
       sessionId: h.session_id,
-      projectPath: decodeDirName(h.project_dir_name),
+      projectPath: decodeDirName(canonicalizeDirName(h.project_dir_name)),
       // `project_slug` is set at ingest via `toSlug(canonicalDir)` so
       // it should never be NULL on a healthy index. Schema permits NULL
       // though, so fall back to deriving the same slug on the fly

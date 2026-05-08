@@ -89,7 +89,26 @@ export async function scanClaudeSessions(
   const historyMap = await getHistoryByProject();
   const projectEntries = historyMap.get(normalizedPath) || [];
 
-  result.sessionCount = projectEntries.length;
+  // Count worktree sessions: sibling dirs named <parent-encoded>--<type>-worktrees-*
+  // in ~/.claude/projects/ whose sessions are not in history.jsonl under the parent path.
+  const parentEncoded = encodePath(projectPath);
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  let worktreeSessionCount = 0;
+  try {
+    const allDirs = await fs.readdir(projectsDir);
+    for (const d of allDirs) {
+      const suffix = d.slice(parentEncoded.length);
+      if (
+        d.startsWith(parentEncoded + "--") &&
+        /^--(?:[a-z]+-)?worktrees-/.test(suffix)
+      ) {
+        const entries = await fs.readdir(path.join(projectsDir, d));
+        worktreeSessionCount += entries.filter((e) => e.endsWith(".jsonl")).length;
+      }
+    }
+  } catch { /* projectsDir may not exist */ }
+
+  result.sessionCount = projectEntries.length + worktreeSessionCount;
 
   if (projectEntries.length > 0) {
     projectEntries.sort((a, b) => {
