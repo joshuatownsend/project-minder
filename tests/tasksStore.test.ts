@@ -71,7 +71,7 @@ describe.skipIf(!Database)("tasksStore CRUD", () => {
     expect(task.status).toBe("pending");
     expect(task.priority).toBe(3);
     expect(task.quadrant).toBe("do");
-    expect(task.execution_mode).toBe("stream");
+    expect(task.execution_mode).toBe("classic");
     expect(task.risk_level).toBe("low");
   });
 

@@ -83,7 +83,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     input.quadrant ?? "do",
     input.assigned_skill ?? null,
     input.model ?? null,
-    input.execution_mode ?? "stream",
+    input.execution_mode ?? "classic",
     input.scheduled_for ?? null,
     input.requires_approval ? 1 : 0,
     input.risk_level ?? "low",
@@ -158,11 +158,13 @@ export async function claimPendingTask(): Promise<Task | null> {
  */
 export async function promoteApprovalTasks(): Promise<number> {
   const db = await ensureReady();
-  const result = db.prepare(
+  const result = prepTasksCached(
+    db,
     `UPDATE ops_tasks
      SET status = 'awaiting_approval'
      WHERE status = 'pending'
        AND requires_approval = 1
+       AND approved_at IS NULL
        AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
   ).run();
   return result.changes;
@@ -257,12 +259,15 @@ export async function deleteSchedule(id: number): Promise<boolean> {
 // Dispatcher lifecycle helpers
 // ---------------------------------------------------------------------------
 
-/** Mark awaiting_approval → pending; set approved_at. Returns null if task not found or wrong status. */
+/** Mark awaiting_approval → pending; set approved_at and clear requires_approval so dispatcher can claim it. */
 export async function approveTask(id: number): Promise<Task | null> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(
+    db,
     `UPDATE ops_tasks
-     SET status = 'pending', approved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     SET status = 'pending',
+         approved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         requires_approval = 0
      WHERE id = ? AND status = 'awaiting_approval'
      RETURNING *`
   ).get(id) as Task | undefined;
@@ -272,7 +277,8 @@ export async function approveTask(id: number): Promise<Task | null> {
 /** Reset failed task to pending; clear all output fields. Returns null if task not found or wrong status. */
 export async function rerunTask(id: number): Promise<Task | null> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(
+    db,
     `UPDATE ops_tasks
      SET status = 'pending',
          error_message = NULL,
@@ -298,7 +304,8 @@ export interface CompleteTaskInput {
 /** Mark a running task as done with captured output. */
 export async function completeTask(id: number, result: CompleteTaskInput): Promise<Task | null> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(
+    db,
     `UPDATE ops_tasks
      SET status = 'done',
          completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
@@ -327,7 +334,8 @@ export interface FailTaskInput {
 /** Mark a running task as failed. Increments consecutive_failures. */
 export async function failTask(id: number, info: FailTaskInput): Promise<Task | null> {
   const db = await ensureReady();
-  const row = db.prepare(
+  const row = prepTasksCached(
+    db,
     `UPDATE ops_tasks
      SET status = 'failed',
          completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),

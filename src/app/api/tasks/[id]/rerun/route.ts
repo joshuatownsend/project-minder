@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { rerunTask } from "@/lib/tasks/store";
+import { getTask, rerunTask } from "@/lib/tasks/store";
 import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,10 @@ export async function POST(_request: Request, { params }: Params): Promise<NextR
   try {
     const task = await rerunTask(id);
     if (!task) {
+      const exists = await getTask(id);
+      if (!exists) return NextResponse.json({ error: "Task not found" }, { status: 404 });
       return NextResponse.json(
-        { error: "Task not found or not in failed state" },
+        { error: `Task is '${exists.status}', not 'failed'` },
         { status: 409 }
       );
     }

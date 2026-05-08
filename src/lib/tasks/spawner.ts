@@ -116,9 +116,11 @@ export async function runClassicTask(
 
     let stdout = "";
     let stderr = "";
+    const STDOUT_CAP = 50_000;
+    const STDERR_CAP = 10_000;
 
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stdout?.on("data", (chunk: Buffer) => { if (stdout.length < STDOUT_CAP) stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { if (stderr.length < STDERR_CAP) stderr += chunk.toString(); });
 
     child.on("close", async (code) => {
       if (pid) deletePidFile(pid);
@@ -126,14 +128,22 @@ export async function runClassicTask(
 
       if (code === 0) {
         const trimmed = stdout.trim();
-        await completeTask(task.id, {
-          output_summary: trimmed.slice(0, 4000) || undefined,
-          duration_ms: durationMs,
-        });
+        try {
+          await completeTask(task.id, {
+            output_summary: trimmed.slice(0, 4000) || undefined,
+            duration_ms: durationMs,
+          });
+        } catch (err) {
+          console.error(`[spawner] completeTask failed for task ${task.id}:`, err);
+        }
         resolve({ taskId: task.id, status: "done", output: trimmed, durationMs });
       } else {
         const errMsg = stderr.trim() || `claude exited with code ${code}`;
-        await failTask(task.id, { error_message: errMsg.slice(0, 2000), duration_ms: durationMs });
+        try {
+          await failTask(task.id, { error_message: errMsg.slice(0, 2000), duration_ms: durationMs });
+        } catch (err) {
+          console.error(`[spawner] failTask failed for task ${task.id}:`, err);
+        }
         resolve({ taskId: task.id, status: "failed", error: errMsg, durationMs });
       }
     });
@@ -141,7 +151,11 @@ export async function runClassicTask(
     child.on("error", async (err) => {
       if (pid) deletePidFile(pid);
       const durationMs = Date.now() - startMs;
-      await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });
+      try {
+        await failTask(task.id, { error_message: err.message.slice(0, 2000), duration_ms: durationMs });
+      } catch (storeErr) {
+        console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
+      }
       resolve({ taskId: task.id, status: "failed", error: err.message, durationMs });
     });
   });

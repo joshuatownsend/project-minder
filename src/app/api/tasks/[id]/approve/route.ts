@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { approveTask } from "@/lib/tasks/store";
+import { getTask, approveTask } from "@/lib/tasks/store";
 import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,10 @@ export async function POST(_request: Request, { params }: Params): Promise<NextR
   try {
     const task = await approveTask(id);
     if (!task) {
+      const exists = await getTask(id);
+      if (!exists) return NextResponse.json({ error: "Task not found" }, { status: 404 });
       return NextResponse.json(
-        { error: "Task not found or not in awaiting_approval state" },
+        { error: `Task is '${exists.status}', not 'awaiting_approval'` },
         { status: 409 }
       );
     }

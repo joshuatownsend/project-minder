@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { X } from "lucide-react";
+import { Modal } from "@/components/ui/modal";
 import type { TaskQuadrant, RiskLevel } from "@/lib/tasks/types";
 import { EXECUTION_MODES } from "@/lib/tasks/types";
 
 interface TaskComposerProps {
+  open: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -44,7 +45,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function TaskComposer({ onClose, onSuccess }: TaskComposerProps) {
+export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [quadrant, setQuadrant] = useState<TaskQuadrant>("do");
@@ -98,180 +99,140 @@ export function TaskComposer({ onClose, onSuccess }: TaskComposerProps) {
   }
 
   return (
-    <div
-      style={{
-        position: "fixed", inset: 0, zIndex: 9000,
-        background: "rgba(0,0,0,0.6)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: "16px",
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border)",
-          borderRadius: "8px",
-          width: "100%",
-          maxWidth: "520px",
-          maxHeight: "90vh",
-          overflowY: "auto",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "16px 20px",
-            borderBottom: "1px solid var(--border-subtle)",
-          }}
-        >
-          <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--text-primary)" }}>
-            New Task
-          </span>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "2px" }}
-            aria-label="Close"
-          >
-            <X style={{ width: "16px", height: "16px" }} />
-          </button>
+    <Modal open={open} onClose={onClose} title="New Task" maxWidthClass="max-w-lg">
+      <form onSubmit={handleSubmit} style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+        <Field label="Title *">
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Describe the task for Claude…"
+            style={inputStyle}
+            autoFocus
+          />
+        </Field>
+
+        <Field label="Description">
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Additional context, constraints, or acceptance criteria…"
+            rows={3}
+            style={{ ...inputStyle, resize: "vertical" }}
+          />
+        </Field>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <Field label="Quadrant">
+            <select value={quadrant} onChange={(e) => setQuadrant(e.target.value as TaskQuadrant)} style={selectStyle}>
+              <option value="do">Do (urgent + important)</option>
+              <option value="schedule">Schedule (important)</option>
+              <option value="delegate">Delegate</option>
+              <option value="archive">Archive</option>
+            </select>
+          </Field>
+
+          <Field label="Priority">
+            <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} style={selectStyle}>
+              <option value={1}>P1 — critical</option>
+              <option value={2}>P2 — high</option>
+              <option value={3}>P3 — normal</option>
+              <option value={4}>P4 — low</option>
+              <option value={5}>P5 — someday</option>
+            </select>
+          </Field>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
-          <Field label="Title *">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <Field label="Skill (optional)">
             <input
               type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Describe the task for Claude…"
+              value={assignedSkill}
+              onChange={(e) => setAssignedSkill(e.target.value)}
+              placeholder="e.g. code-review"
               style={inputStyle}
-              autoFocus
             />
           </Field>
 
-          <Field label="Description">
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Additional context, constraints, or acceptance criteria…"
-              rows={3}
-              style={{ ...inputStyle, resize: "vertical" }}
+          <Field label="Model (optional)">
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. claude-opus-4-7"
+              style={inputStyle}
             />
           </Field>
+        </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <Field label="Quadrant">
-              <select value={quadrant} onChange={(e) => setQuadrant(e.target.value as TaskQuadrant)} style={selectStyle}>
-                <option value="do">Do (urgent + important)</option>
-                <option value="schedule">Schedule (important)</option>
-                <option value="delegate">Delegate</option>
-                <option value="archive">Archive</option>
-              </select>
-            </Field>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <Field label="Risk level">
+            <select value={riskLevel} onChange={(e) => setRiskLevel(e.target.value as RiskLevel)} style={selectStyle}>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </Field>
 
-            <Field label="Priority">
-              <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} style={selectStyle}>
-                <option value={1}>P1 — critical</option>
-                <option value={2}>P2 — high</option>
-                <option value={3}>P3 — normal</option>
-                <option value={4}>P4 — low</option>
-                <option value={5}>P5 — someday</option>
-              </select>
-            </Field>
+          <Field label="Run after (optional)">
+            <input
+              type="datetime-local"
+              value={scheduledFor}
+              onChange={(e) => setScheduledFor(e.target.value)}
+              style={inputStyle}
+            />
+          </Field>
+        </div>
+
+        <div style={{ display: "flex", gap: "20px", fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={requiresApproval}
+              onChange={(e) => setRequiresApproval(e.target.checked)}
+            />
+            Requires approval before running
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={(e) => setDryRun(e.target.checked)}
+            />
+            Dry run (log only, no spawn)
+          </label>
+        </div>
+
+        {error && (
+          <div style={{ fontSize: "0.78rem", color: "var(--error)", padding: "8px 10px", background: "color-mix(in srgb, var(--error) 10%, transparent)", borderRadius: "4px" }}>
+            {error}
           </div>
+        )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <Field label="Skill (optional)">
-              <input
-                type="text"
-                value={assignedSkill}
-                onChange={(e) => setAssignedSkill(e.target.value)}
-                placeholder="e.g. code-review"
-                style={inputStyle}
-              />
-            </Field>
-
-            <Field label="Model (optional)">
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="e.g. claude-opus-4-7"
-                style={inputStyle}
-              />
-            </Field>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <Field label="Risk level">
-              <select value={riskLevel} onChange={(e) => setRiskLevel(e.target.value as RiskLevel)} style={selectStyle}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </Field>
-
-            <Field label="Run after (optional)">
-              <input
-                type="datetime-local"
-                value={scheduledFor}
-                onChange={(e) => setScheduledFor(e.target.value)}
-                style={inputStyle}
-              />
-            </Field>
-          </div>
-
-          <div style={{ display: "flex", gap: "20px", fontSize: "0.82rem", color: "var(--text-secondary)" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={requiresApproval}
-                onChange={(e) => setRequiresApproval(e.target.checked)}
-              />
-              Requires approval before running
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={dryRun}
-                onChange={(e) => setDryRun(e.target.checked)}
-              />
-              Dry run (log only, no spawn)
-            </label>
-          </div>
-
-          {error && (
-            <div style={{ fontSize: "0.78rem", color: "var(--error)", padding: "8px 10px", background: "color-mix(in srgb, var(--error) 10%, transparent)", borderRadius: "4px" }}>
-              {error}
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", paddingTop: "4px" }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: "7px 16px", fontSize: "0.8rem", borderRadius: "4px", cursor: "pointer",
-                background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)",
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !title.trim()}
-              style={{
-                padding: "7px 16px", fontSize: "0.8rem", borderRadius: "4px", cursor: submitting ? "not-allowed" : "pointer",
-                background: "var(--accent)", border: "none", color: "white", fontWeight: 600,
-                opacity: submitting || !title.trim() ? 0.6 : 1,
-              }}
-            >
-              {submitting ? "Creating…" : "Create task"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", paddingTop: "4px" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "7px 16px", fontSize: "0.8rem", borderRadius: "4px", cursor: "pointer",
+              background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !title.trim()}
+            style={{
+              padding: "7px 16px", fontSize: "0.8rem", borderRadius: "4px", cursor: submitting ? "not-allowed" : "pointer",
+              background: "var(--accent)", border: "none", color: "white", fontWeight: 600,
+              opacity: submitting || !title.trim() ? 0.6 : 1,
+            }}
+          >
+            {submitting ? "Creating…" : "Create task"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

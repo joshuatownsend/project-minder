@@ -13,6 +13,7 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setError(null);
     try {
       const [tasksRes, schedRes] = await Promise.all([
         fetch("/api/tasks"),

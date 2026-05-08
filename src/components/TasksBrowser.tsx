@@ -414,15 +414,14 @@ export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
         </button>
       </div>
 
-      {composerOpen && (
-        <TaskComposer
-          onClose={() => setComposerOpen(false)}
-          onSuccess={() => {
-            setComposerOpen(false);
-            onRefresh?.();
-          }}
-        />
-      )}
+      <TaskComposer
+        open={composerOpen}
+        onClose={() => setComposerOpen(false)}
+        onSuccess={() => {
+          setComposerOpen(false);
+          onRefresh?.();
+        }}
+      />
 
       {/* Tasks list */}
       {tasks.length === 0 ? (

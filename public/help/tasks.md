@@ -56,7 +56,7 @@ The dispatcher is an in-process singleton (`globalThis.__minderDispatcher`) that
 4. Claims and spawns up to 3 concurrent `classic` mode tasks (via `claude -p`)
 5. Writes a PID file to `~/.minder/pids/<pid>` for each spawned child (used by the Wave 9.2 emergency stop)
 
-The dispatcher lifecycle is bound to the Next.js server process — restarting the server restarts the dispatcher. In-flight tasks survive short reloads because their PID files and DB rows persist.
+The dispatcher lifecycle is bound to the Next.js server process — restarting the server restarts the dispatcher. Tasks that were `running` when the server stopped will remain stuck in that state; use the re-run endpoint to reset them to `pending`.
 
 ## Fields reference
 

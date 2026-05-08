@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Wave 9.1b — Cluster U (continued): Dispatcher loop + classic spawning + Task Composer.** TODO #244.
-  - Dispatcher loop singleton (`globalThis.__minderDispatcher`) starts automatically on the first `/api/tasks` request. 30-second tick: writes heartbeat to `~/.minder/dispatcher-heartbeat.json`, materializes due cron schedules into `ops_tasks` rows (wrapped in `BEGIN IMMEDIATE` to prevent double-materialization), promotes `requires_approval` tasks to `awaiting_approval`, claims up to 3 pending tasks and spawns `claude -p` (classic mode).
+  - Dispatcher loop singleton (`globalThis.__minderDispatcher`) starts automatically on the first `/api/tasks` request. 30-second tick: writes heartbeat to `~/.minder/dispatcher-heartbeat.json`, materializes due cron schedules into `ops_tasks` rows (serialized transaction), promotes `requires_approval` tasks to `awaiting_approval`, claims up to 3 pending tasks and spawns `claude -p` (classic mode).
   - PID marker files at `~/.minder/pids/<pid>` — written on spawn, deleted on exit. `sweepStalePids()` on each tick cleans dead files via `process.kill(pid, 0)` (cross-platform, throws ESRCH if dead).
   - `POST /api/tasks/[id]/approve` — transitions `awaiting_approval → pending`, sets `approved_at`; dispatcher picks up on next tick.
   - `POST /api/tasks/[id]/rerun` — resets `failed` task to `pending`, clears all output fields (`error_message`, `started_at`, `completed_at`, `duration_ms`, `cost_usd`, `output_summary`, `session_id`).

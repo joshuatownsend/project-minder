@@ -22,16 +22,14 @@ interface DispatcherStats {
   startedAt: string;
 }
 
-declare const globalThis: {
-  __minderDispatcher?: DispatcherHandle;
-} & typeof global;
+const g = globalThis as unknown as { __minderDispatcher?: DispatcherHandle };
 
 export function getDispatcherStats(): DispatcherStats | null {
-  return globalThis.__minderDispatcher?.getStats() ?? null;
+  return g.__minderDispatcher?.getStats() ?? null;
 }
 
 export function isDispatcherRunning(): boolean {
-  return !!globalThis.__minderDispatcher;
+  return !!g.__minderDispatcher;
 }
 
 /**
@@ -39,67 +37,74 @@ export function isDispatcherRunning(): boolean {
  * Safe to call multiple times — no-ops if already initialized.
  */
 export function initDispatcher(spawnFn?: SpawnFn): void {
-  if (globalThis.__minderDispatcher) return;
+  if (g.__minderDispatcher) return;
 
   try { fs.mkdirSync(path.dirname(HEARTBEAT_PATH), { recursive: true }); } catch { /* non-fatal */ }
 
   const startedAt = new Date().toISOString();
   let tickCount = 0;
   let lastTickAt: string | null = null;
+  let tickInProgress = false;
   const inFlight = new Map<number, Promise<void>>();
 
   async function tick() {
-    lastTickAt = new Date().toISOString();
-    tickCount++;
-
-    writeHeartbeat(lastTickAt, inFlight.size);
-    sweepStalePids();
-
+    if (tickInProgress) return;
+    tickInProgress = true;
     try {
-      await materializeSchedules();
-    } catch (err) {
-      console.error("[dispatcher] schedule materialization error:", err);
-    }
+      lastTickAt = new Date().toISOString();
+      tickCount++;
 
-    try {
-      await promoteApprovalTasks();
-    } catch (err) {
-      console.error("[dispatcher] promoteApprovalTasks error:", err);
-    }
+      writeHeartbeat(lastTickAt, inFlight.size);
+      sweepStalePids();
 
-    while (inFlight.size < MAX_CONCURRENT) {
-      let task: Task | null = null;
       try {
-        task = await claimPendingTask();
+        await materializeSchedules();
       } catch (err) {
-        console.error("[dispatcher] claimPendingTask error:", err);
-        break;
-      }
-      if (!task) break;
-
-      if (task.dry_run) {
-        console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
-        await completeTask(task.id, { output_summary: "dry-run: spawn skipped" }).catch(console.error);
-        continue;
+        console.error("[dispatcher] schedule materialization error:", err);
       }
 
-      const promise: Promise<void> = runClassicTask(task, spawnFn)
-        .then(() => {})
-        .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
-        .finally(() => inFlight.delete(task!.id));
+      try {
+        await promoteApprovalTasks();
+      } catch (err) {
+        console.error("[dispatcher] promoteApprovalTasks error:", err);
+      }
 
-      inFlight.set(task.id, promise);
+      while (inFlight.size < MAX_CONCURRENT) {
+        let task: Task | null = null;
+        try {
+          task = await claimPendingTask();
+        } catch (err) {
+          console.error("[dispatcher] claimPendingTask error:", err);
+          break;
+        }
+        if (!task) break;
+
+        if (task.dry_run) {
+          console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
+          await completeTask(task.id, { output_summary: "dry-run: spawn skipped" }).catch(console.error);
+          continue;
+        }
+
+        const promise: Promise<void> = runClassicTask(task, spawnFn)
+          .then(() => {})
+          .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
+          .finally(() => inFlight.delete(task!.id));
+
+        inFlight.set(task.id, promise);
+      }
+    } finally {
+      tickInProgress = false;
     }
   }
 
   const interval = setInterval(() => { tick().catch(console.error); }, TICK_INTERVAL_MS);
-  // Run first tick after a short delay so the server is fully initialized
-  setTimeout(() => { tick().catch(console.error); }, 2_000);
+  const initialTimeout = setTimeout(() => { tick().catch(console.error); }, 2_000);
 
-  globalThis.__minderDispatcher = {
+  g.__minderDispatcher = {
     dispose() {
       clearInterval(interval);
-      globalThis.__minderDispatcher = undefined;
+      clearTimeout(initialTimeout);
+      g.__minderDispatcher = undefined;
     },
     getStats() {
       return { running: inFlight.size, tickCount, lastTickAt, startedAt };
