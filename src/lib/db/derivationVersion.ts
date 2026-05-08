@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 6;
+export const DERIVED_VERSION = 7;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -54,3 +54,11 @@ export const DERIVED_VERSION = 6;
 //     get the new fields. No read-side gate needed — missing values
 //     degrade to "thinking content unavailable" / no duration badge,
 //     both of which are explicit non-silent UX states.
+// 7 — Wave 8.3 added `tool_uses.{is_error (was always 0), error_category,
+//     invocation_source}` and `sessions.{work_mode_*_pct}`. All four
+//     work-mode columns are derived from turns.category at session
+//     finalization; error fields require re-reading tool_result blocks
+//     in user turns. Bumping forces a full re-parse so these are
+//     populated across the existing corpus. No read-side gate — NULL
+//     work_mode columns degrade to "no work-mode strip", NULL error
+//     columns to "no error category breakdown", both non-silent.

@@ -111,7 +111,14 @@ CREATE TABLE sessions (
   -- Wave 7.1b columns (schema v8):
   starred_at            TEXT,
   distilled_at          TEXT,
-  distilled_text        TEXT
+  distilled_text        TEXT,
+  -- Wave 8.3 columns (schema v10 / DERIVED_VERSION 7):
+  -- Percentage split of session turns across 3 work modes + other bucket.
+  -- Derived from turns.category at ingest finalization; NULL until computed.
+  work_mode_exploration_pct REAL,
+  work_mode_building_pct    REAL,
+  work_mode_testing_pct     REAL,
+  work_mode_other_pct       REAL
 );
 
 CREATE INDEX sessions_by_project_end      ON sessions(project_slug, end_ts DESC);
@@ -221,6 +228,9 @@ CREATE TABLE tool_uses (
   file_op           TEXT CHECK (file_op IN ('read','write','edit','delete')),
   duration_ms       INTEGER,
   is_error          INTEGER NOT NULL DEFAULT 0 CHECK (is_error IN (0,1)),
+  -- Wave 8.3 columns (schema v10 / DERIVED_VERSION 7):
+  error_category    TEXT,
+  invocation_source TEXT CHECK (invocation_source IN ('slash_command','auto')),
   PRIMARY KEY (session_id, turn_index, sequence_in_turn),
   FOREIGN KEY (session_id, turn_index) REFERENCES turns(session_id, turn_index) ON DELETE CASCADE
 ) WITHOUT ROWID;

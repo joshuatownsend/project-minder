@@ -285,6 +285,36 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 10,
+    name: "wave8.3: work_mode on sessions; error_category + invocation_source on tool_uses",
+    up: (db) => {
+      const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      const sessionColNames = sessionCols.map((c) => c.name);
+      for (const col of [
+        "work_mode_exploration_pct REAL",
+        "work_mode_building_pct REAL",
+        "work_mode_testing_pct REAL",
+        "work_mode_other_pct REAL",
+      ]) {
+        const name = col.split(" ")[0];
+        if (!sessionColNames.includes(name)) {
+          db.prepare(`ALTER TABLE sessions ADD COLUMN ${col}`).run();
+        }
+      }
+
+      const tuCols = db.prepare("PRAGMA table_info(tool_uses)").all() as Array<{ name: string }>;
+      const tuColNames = tuCols.map((c) => c.name);
+      if (!tuColNames.includes("error_category")) {
+        db.prepare("ALTER TABLE tool_uses ADD COLUMN error_category TEXT").run();
+      }
+      if (!tuColNames.includes("invocation_source")) {
+        db.prepare(
+          "ALTER TABLE tool_uses ADD COLUMN invocation_source TEXT CHECK (invocation_source IN ('slash_command','auto'))"
+        ).run();
+      }
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {
