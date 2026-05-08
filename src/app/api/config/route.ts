@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
-import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode } from "@/lib/types";
+import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES } from "@/lib/types";
 import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
@@ -11,7 +11,7 @@ import { VALID_CURRENCIES } from "@/lib/currencies";
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
 const VALID_STATUS_FILTERS: MinderConfig["defaultStatusFilter"][] = ["all", "active", "paused", "archived"];
 const VALID_VIEW_MODES: MinderConfig["viewMode"][] = ["full", "compact", "list"];
-const VALID_SCHEDULE_MODES: ScheduleMode[] = ["weekdays", "vibe-coder", "24x7", "custom"];
+const VALID_SCHEDULE_MODES = SCHEDULE_MODES.map((m) => m.value);
 
 function invalidateAll() {
   invalidateCache();

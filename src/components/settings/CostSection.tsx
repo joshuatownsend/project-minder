@@ -2,18 +2,12 @@
 
 import { useEffect, useState } from "react";
 import type { MinderConfig, PricingRule, ScheduleMode } from "@/lib/types";
+import { SCHEDULE_MODES } from "@/lib/types";
 import { S } from "./styles";
 import { SUPPORTED_CURRENCIES, CURRENCY_NAMES } from "@/lib/currencies";
 import { invalidateCurrencyCache } from "@/hooks/useCurrency";
-import type { QuotaResult } from "@/lib/quota";
+import { useQuota } from "@/hooks/useQuota";
 import { QuotaBurndownChart } from "@/components/QuotaBurndownChart";
-
-const SCHEDULE_MODES: { value: ScheduleMode; label: string }[] = [
-  { value: "weekdays", label: "Weekdays (Mon–Fri)" },
-  { value: "vibe-coder", label: "Vibe coder (~70% of hours)" },
-  { value: "24x7", label: "24 × 7 (always on)" },
-  { value: "custom", label: "Custom" },
-];
 
 interface FxData {
   base: string;
@@ -54,16 +48,12 @@ export function CostSection({
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(config?.scheduleMode ?? "weekdays");
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
-  const [quota, setQuota] = useState<QuotaResult | null>(null);
+  const quota = useQuota();
 
   useEffect(() => {
     fetch("/api/integrations/fx")
       .then((r) => r.json())
       .then((d) => setFx(d as FxData))
-      .catch(() => {});
-    fetch("/api/integrations/quota")
-      .then((r) => r.json())
-      .then((d) => setQuota(d as QuotaResult))
       .catch(() => {});
   }, []);
 
@@ -388,7 +378,7 @@ export function CostSection({
         </div>
 
         {quota === null ? (
-          <div style={{ ...S.muted }}>Loading quota…</div>
+          <div style={S.muted}>Loading quota…</div>
         ) : !quota.configured ? (
           <div style={{
             padding: "10px 12px", borderRadius: "var(--radius)",

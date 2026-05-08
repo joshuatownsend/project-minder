@@ -5,6 +5,7 @@ import os from "os";
 const CREDENTIALS_FILE = path.join(os.homedir(), ".claude", ".credentials.json");
 const CACHE_FILE = path.join(os.homedir(), ".minder", "quota-cache.json");
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const FAILURE_TTL_MS = 60_000;
 // Cheapest available model — probe costs ~$0.00001 per call.
 const PROBE_MODEL = "claude-haiku-4-5-20251001";
 
@@ -43,11 +44,12 @@ export type QuotaResult = QuotaData | { configured: false; reason: string };
 
 interface DiskEntry {
   data: QuotaData;
-  storedAt: number;
 }
 
 let memData: QuotaData | null = null;
 let memStoredAt = 0;
+let memFailure: { configured: false; reason: string } | null = null;
+let memFailedAt = 0;
 let loadPromise: Promise<QuotaResult> | null = null;
 
 async function readToken(): Promise<{
@@ -128,18 +130,23 @@ async function probe(
   }
 }
 
+function fail(reason: string): { configured: false; reason: string } {
+  const r = { configured: false as const, reason };
+  memFailure = r;
+  memFailedAt = Date.now();
+  return r;
+}
+
 export async function loadQuota(): Promise<QuotaResult> {
   if (memData && Date.now() - memStoredAt < CACHE_TTL_MS) return memData;
+  if (memFailure && Date.now() - memFailedAt < FAILURE_TTL_MS) return memFailure;
   if (loadPromise) return loadPromise;
 
   loadPromise = (async (): Promise<QuotaResult> => {
     try {
       const tokenInfo = await readToken();
       if (!tokenInfo) {
-        return {
-          configured: false,
-          reason: "No valid Claude OAuth credentials in ~/.claude/.credentials.json",
-        };
+        return fail("No valid Claude OAuth credentials in ~/.claude/.credentials.json");
       }
 
       // Fresh disk cache
@@ -161,8 +168,7 @@ export async function loadQuota(): Promise<QuotaResult> {
         memStoredAt = Date.now();
         try {
           await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
-          const entry: DiskEntry = { data, storedAt: Date.now() };
-          await fs.writeFile(CACHE_FILE, JSON.stringify(entry), "utf-8");
+          await fs.writeFile(CACHE_FILE, JSON.stringify({ data }), "utf-8");
         } catch { /* non-critical */ }
         return data;
       }
@@ -174,9 +180,9 @@ export async function loadQuota(): Promise<QuotaResult> {
         return entry.data;
       } catch { /* no stale cache */ }
 
-      return { configured: false, reason: "Quota probe returned no unified rate-limit headers" };
+      return fail("Quota probe returned no unified rate-limit headers");
     } catch (err) {
-      return { configured: false, reason: String(err) };
+      return fail(String(err));
     } finally {
       loadPromise = null;
     }
@@ -188,5 +194,7 @@ export async function loadQuota(): Promise<QuotaResult> {
 export function _resetForTesting(): void {
   memData = null;
   memStoredAt = 0;
+  memFailure = null;
+  memFailedAt = 0;
   loadPromise = null;
 }

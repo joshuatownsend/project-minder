@@ -1,21 +1,16 @@
 "use client";
 
 import type { QuotaData, QuotaWindow } from "@/lib/quota";
+import { SCHEDULE_MODES } from "@/lib/types";
 import type { ScheduleMode } from "@/lib/types";
 
 const VIEW_W = 500;
 const BAR_H = 12;
 const BAR_X = 0;
-const BAR_W = VIEW_W;
 const ROW_H = 62;
 
 function scheduleLabel(mode: ScheduleMode): string {
-  switch (mode) {
-    case "weekdays":    return "Weekdays (Mon–Fri)";
-    case "vibe-coder":  return "Vibe coder (~70% of hours)";
-    case "24x7":        return "24 × 7 (always on)";
-    case "custom":      return "Custom";
-  }
+  return SCHEDULE_MODES.find((m) => m.value === mode)?.label ?? mode;
 }
 
 // Fraction of 7d window that is "active" given schedule mode.
@@ -86,23 +81,19 @@ function UtilRow({
   const countdown = formatCountdown(secsLeft);
   const projected = computeProjected(window, windowKey, scheduleMode);
   const projPct = projected !== null ? Math.round(projected * 100) : null;
-  const barFill = Math.min(window.utilization, 1) * BAR_W;
+  const barFill = Math.min(window.utilization, 1) * VIEW_W;
 
   return (
     <g>
-      {/* Section label */}
       <text x={BAR_X} y={y} fill="var(--text-secondary)" fontSize={11} fontFamily="var(--font-body)">
         {label}
       </text>
 
-      {/* Progress bar track */}
-      <rect x={BAR_X} y={y + 6} width={BAR_W} height={BAR_H} rx={BAR_H / 2} fill="var(--border-subtle, #333)" />
-      {/* Progress bar fill */}
+      <rect x={BAR_X} y={y + 6} width={VIEW_W} height={BAR_H} rx={BAR_H / 2} fill="var(--border-subtle, #333)" />
       <rect x={BAR_X} y={y + 6} width={barFill} height={BAR_H} rx={BAR_H / 2} fill={color} />
 
-      {/* Pct label right of bar */}
       <text
-        x={BAR_X + BAR_W - 2}
+        x={BAR_X + VIEW_W - 2}
         y={y + BAR_H}
         fill={color}
         fontSize={11}
@@ -112,15 +103,13 @@ function UtilRow({
         {pct}%
       </text>
 
-      {/* Reset countdown */}
       <text x={BAR_X} y={y + BAR_H + 16} fill="var(--text-muted)" fontSize={10} fontFamily="var(--font-mono)">
         Resets in {countdown}
       </text>
 
-      {/* Projection */}
       {projPct !== null && (
         <text
-          x={BAR_X + BAR_W - 2}
+          x={BAR_X + VIEW_W - 2}
           y={y + BAR_H + 16}
           fill={projPct >= 90 ? "var(--status-error-text, #f87171)" : projPct >= 70 ? "var(--warning, #fb923c)" : "var(--text-muted)"}
           fontSize={10}

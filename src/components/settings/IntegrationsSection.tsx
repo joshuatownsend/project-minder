@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { S } from "./styles";
 import { OtelSection } from "./OtelSection";
-import type { QuotaResult } from "@/lib/quota";
+import { useQuota } from "@/hooks/useQuota";
 
 export function IntegrationsSection({
   config,
@@ -18,16 +18,12 @@ export function IntegrationsSection({
   const [tokenConfigured, setTokenConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [quota, setQuota] = useState<QuotaResult | null>(null);
+  const quota = useQuota();
 
   useEffect(() => {
     fetch("/api/secrets/telegram")
       .then((r) => r.json())
       .then((d) => setTokenConfigured(!!d.configured))
-      .catch(() => {});
-    fetch("/api/integrations/quota")
-      .then((r) => r.json())
-      .then((d) => setQuota(d as QuotaResult))
       .catch(() => {});
   }, []);
 
@@ -87,7 +83,7 @@ export function IntegrationsSection({
         {quota === null ? (
           <div style={S.muted}>Loading…</div>
         ) : !quota.configured ? (
-          <div style={{ ...S.muted }}>
+          <div style={S.muted}>
             {quota.reason}
           </div>
         ) : (
@@ -116,7 +112,7 @@ export function IntegrationsSection({
                 </span>
               </div>
             </div>
-            <div style={{ ...S.muted }}>
+            <div style={S.muted}>
               Full burndown chart in Settings → Cost.
               Cached at {new Date(quota.cachedAt).toLocaleTimeString()}.
             </div>
