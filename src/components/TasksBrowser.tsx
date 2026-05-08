@@ -12,9 +12,11 @@ import {
   Circle,
   XCircle,
   HelpCircle,
+  Plus,
 } from "lucide-react";
 import type { Task, Schedule, TaskStatus, TaskQuadrant } from "@/lib/tasks/types";
 import { TASK_STATUSES, TASK_QUADRANTS } from "@/lib/tasks/types";
+import { TaskComposer } from "./TaskComposer";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -286,14 +288,16 @@ const SELECT_STYLE: React.CSSProperties = {
 interface Props {
   tasks: Task[];
   schedules: Schedule[];
+  onRefresh?: () => void;
 }
 
-export function TasksBrowser({ tasks, schedules }: Props) {
+export function TasksBrowser({ tasks, schedules, onRefresh }: Props) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "">("");
   const [quadrantFilter, setQuadrantFilter] = useState<TaskQuadrant | "">("");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [composerOpen, setComposerOpen] = useState(false);
 
   const filtered = useMemo(() => {
     let result = tasks;
@@ -389,7 +393,35 @@ export function TasksBrowser({ tasks, schedules }: Props) {
         <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
           {filtered.length} / {tasks.length}
         </span>
+
+        <button
+          onClick={() => setComposerOpen(true)}
+          style={{
+            display: "flex", alignItems: "center", gap: "5px",
+            padding: "5px 12px",
+            background: "var(--accent)",
+            border: "none",
+            borderRadius: "4px",
+            fontSize: "0.78rem",
+            fontWeight: 600,
+            color: "white",
+            cursor: "pointer",
+            marginLeft: "auto",
+          }}
+        >
+          <Plus style={{ width: "12px", height: "12px" }} />
+          New task
+        </button>
       </div>
+
+      <TaskComposer
+        open={composerOpen}
+        onClose={() => setComposerOpen(false)}
+        onSuccess={() => {
+          setComposerOpen(false);
+          onRefresh?.();
+        }}
+      />
 
       {/* Tasks list */}
       {tasks.length === 0 ? (
@@ -397,7 +429,7 @@ export function TasksBrowser({ tasks, schedules }: Props) {
           <div style={{ fontSize: "2rem", marginBottom: "8px" }}>📋</div>
           <div style={{ fontWeight: 500, marginBottom: "4px" }}>No tasks yet</div>
           <div style={{ fontSize: "0.75rem" }}>
-            Tasks dispatched to Claude Code will appear here. The Task Composer and dispatcher loop ship in Wave 9.1b.
+            Create a task with "New task" — the dispatcher will pick it up and run it with Claude Code.
           </div>
         </div>
       ) : filtered.length === 0 ? (

@@ -83,7 +83,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     input.quadrant ?? "do",
     input.assigned_skill ?? null,
     input.model ?? null,
-    input.execution_mode ?? "stream",
+    input.execution_mode ?? "classic",
     input.scheduled_for ?? null,
     input.requires_approval ? 1 : 0,
     input.risk_level ?? "low",
@@ -128,11 +128,9 @@ export async function deleteTask(id: number): Promise<boolean> {
 }
 
 /**
- * Atomically claim the next pending task for the dispatcher.
- * Uses UPDATE...WHERE status='pending' to prevent race conditions.
- * Returns the claimed task or null if no pending tasks exist.
- * Used by Wave 9.1b dispatcher — exported here so the schema round-trips
- * can be tested independently of the dispatcher singleton.
+ * Atomically claim the next pending task that does NOT require approval.
+ * Tasks with requires_approval=1 are promoted to awaiting_approval instead.
+ * Returns the claimed (now running) task, or null if no eligible tasks exist.
  */
 export async function claimPendingTask(): Promise<Task | null> {
   const db = await ensureReady();
@@ -143,6 +141,7 @@ export async function claimPendingTask(): Promise<Task | null> {
      WHERE id = (
        SELECT id FROM ops_tasks
        WHERE status = 'pending'
+         AND requires_approval = 0
          AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        ORDER BY priority ASC, created_at ASC
        LIMIT 1
@@ -150,6 +149,25 @@ export async function claimPendingTask(): Promise<Task | null> {
      RETURNING *`
   ).get() as Task | undefined;
   return row ?? null;
+}
+
+/**
+ * Promote tasks with requires_approval=1 from pending → awaiting_approval.
+ * Called on each dispatcher tick before claiming runnable tasks.
+ * Returns the number of tasks promoted.
+ */
+export async function promoteApprovalTasks(): Promise<number> {
+  const db = await ensureReady();
+  const result = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'awaiting_approval'
+     WHERE status = 'pending'
+       AND requires_approval = 1
+       AND approved_at IS NULL
+       AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+  ).run();
+  return result.changes;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,4 +253,143 @@ export async function deleteSchedule(id: number): Promise<boolean> {
     "DELETE FROM ops_schedules WHERE id = ?"
   ).run(id);
   return result.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Dispatcher lifecycle helpers
+// ---------------------------------------------------------------------------
+
+/** Mark awaiting_approval → pending; set approved_at and clear requires_approval so dispatcher can claim it. */
+export async function approveTask(id: number): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'pending',
+         approved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         requires_approval = 0
+     WHERE id = ? AND status = 'awaiting_approval'
+     RETURNING *`
+  ).get(id) as Task | undefined;
+  return row ?? null;
+}
+
+/** Reset failed task to pending; clear all output fields. Returns null if task not found or wrong status. */
+export async function rerunTask(id: number): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'pending',
+         error_message = NULL,
+         started_at = NULL,
+         completed_at = NULL,
+         duration_ms = NULL,
+         cost_usd = NULL,
+         output_summary = NULL,
+         session_id = NULL
+     WHERE id = ? AND status = 'failed'
+     RETURNING *`
+  ).get(id) as Task | undefined;
+  return row ?? null;
+}
+
+export interface CompleteTaskInput {
+  output_summary?: string;
+  duration_ms?: number;
+  cost_usd?: number;
+  session_id?: string;
+}
+
+/** Mark a running task as done with captured output. */
+export async function completeTask(id: number, result: CompleteTaskInput): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'done',
+         completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         consecutive_failures = 0,
+         output_summary = ?,
+         duration_ms = ?,
+         cost_usd = ?,
+         session_id = ?
+     WHERE id = ? AND status = 'running'
+     RETURNING *`
+  ).get(
+    result.output_summary ?? null,
+    result.duration_ms ?? null,
+    result.cost_usd ?? null,
+    result.session_id ?? null,
+    id
+  ) as Task | undefined;
+  return row ?? null;
+}
+
+export interface FailTaskInput {
+  error_message?: string;
+  duration_ms?: number;
+}
+
+/** Mark a running task as failed. Increments consecutive_failures. */
+export async function failTask(id: number, info: FailTaskInput): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'failed',
+         completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         consecutive_failures = consecutive_failures + 1,
+         error_message = ?,
+         duration_ms = ?
+     WHERE id = ? AND status = 'running'
+     RETURNING *`
+  ).get(
+    info.error_message ?? null,
+    info.duration_ms ?? null,
+    id
+  ) as Task | undefined;
+  return row ?? null;
+}
+
+/**
+ * Materialize due schedules into ops_tasks rows.
+ * Wrapped in a serialized transaction (DEFERRED) — safe because the dispatcher is single-threaded JS.
+ * Returns the number of tasks created.
+ */
+export async function materializeSchedules(): Promise<number> {
+  const db = await ensureReady();
+  const now = new Date().toISOString();
+
+  const insertScheduleTask = db.prepare(
+    `INSERT INTO ops_tasks (title, description, assigned_skill, schedule_id)
+     VALUES (?, ?, ?, ?)`
+  );
+  const updateNextRun = db.prepare(
+    `UPDATE ops_schedules SET last_run_at = ?, next_run_at = ? WHERE id = ?`
+  );
+  const selectDue = db.prepare(
+    `SELECT * FROM ops_schedules
+     WHERE enabled = 1
+       AND (next_run_at IS NULL OR next_run_at <= ?)
+     ORDER BY next_run_at ASC`
+  );
+
+  let count = 0;
+  const txn = db.transaction(() => {
+    const due = selectDue.all(now) as Schedule[];
+    for (const sched of due) {
+      insertScheduleTask.run(
+        sched.task_title,
+        sched.task_description ?? "",
+        sched.assigned_skill ?? null,
+        sched.id
+      );
+      const next = computeNextRun(sched.cron_expression);
+      updateNextRun.run(now, next ? next.toISOString() : null, sched.id);
+      count++;
+    }
+  });
+  txn();
+  return count;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { TasksBrowser } from "@/components/TasksBrowser";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import type { Task, Schedule } from "@/lib/tasks/types";
@@ -12,28 +12,28 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [tasksRes, schedRes] = await Promise.all([
-          fetch("/api/tasks"),
-          fetch("/api/schedules"),
-        ]);
-        if (!tasksRes.ok || !schedRes.ok) throw new Error("Failed to load");
-        const [tasksData, schedData] = await Promise.all([
-          tasksRes.json() as Promise<{ tasks: Task[] }>,
-          schedRes.json() as Promise<{ schedules: Schedule[] }>,
-        ]);
-        setTasks(tasksData.tasks);
-        setSchedules(schedData.schedules);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      } finally {
-        setLoading(false);
-      }
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const [tasksRes, schedRes] = await Promise.all([
+        fetch("/api/tasks"),
+        fetch("/api/schedules"),
+      ]);
+      if (!tasksRes.ok || !schedRes.ok) throw new Error("Failed to load");
+      const [tasksData, schedData] = await Promise.all([
+        tasksRes.json() as Promise<{ tasks: Task[] }>,
+        schedRes.json() as Promise<{ schedules: Schedule[] }>,
+      ]);
+      setTasks(tasksData.tasks);
+      setSchedules(schedData.schedules);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoading(false);
     }
-    load();
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
     return (
@@ -51,5 +51,5 @@ export default function TasksPage() {
     );
   }
 
-  return <TasksBrowser tasks={tasks} schedules={schedules} />;
+  return <TasksBrowser tasks={tasks} schedules={schedules} onRefresh={load} />;
 }

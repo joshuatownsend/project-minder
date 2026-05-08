@@ -39,6 +39,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "auto-title": "Auto-title",
   otel: "OpenTelemetry",
   cost: "Cost Settings",
+  tasks: "Task Queue & Dispatcher",
 };
 
 const iconBtnBase: React.CSSProperties = {

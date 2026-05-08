@@ -3,10 +3,12 @@ import { listTasks, createTask } from "@/lib/tasks/store";
 import { validateCreateTask } from "@/lib/tasks/validation";
 import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
+import { initDispatcher } from "@/lib/tasks/dispatcher";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<NextResponse> {
+  initDispatcher();
   try {
     const url = new URL(request.url);
     const filter: TaskListFilter = {};
@@ -36,6 +38,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  initDispatcher();
   try {
     const body = await request.json().catch(() => null);
     const validated = validateCreateTask(body);

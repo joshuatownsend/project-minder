@@ -71,7 +71,7 @@ describe.skipIf(!Database)("tasksStore CRUD", () => {
     expect(task.status).toBe("pending");
     expect(task.priority).toBe(3);
     expect(task.quadrant).toBe("do");
-    expect(task.execution_mode).toBe("stream");
+    expect(task.execution_mode).toBe("classic");
     expect(task.risk_level).toBe("low");
   });
 
@@ -211,5 +211,116 @@ describe.skipIf(!Database)("tasksStore CRUD", () => {
 
   it("deleteSchedule returns false for unknown id", async () => {
     expect(await store.deleteSchedule(99999)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Dispatcher lifecycle helpers
+  // -------------------------------------------------------------------------
+
+  it("approveTask transitions awaiting_approval → pending and sets approved_at", async () => {
+    const t = await store.createTask({ title: "Needs approval", requires_approval: true });
+    // Manually set to awaiting_approval (simulating dispatcher promotion)
+    await store.patchTask(t.id, { status: "awaiting_approval" });
+
+    const approved = await store.approveTask(t.id);
+    expect(approved).not.toBeNull();
+    expect(approved!.status).toBe("pending");
+    expect(approved!.approved_at).toBeTruthy();
+  });
+
+  it("approveTask returns null when task is not awaiting_approval", async () => {
+    const t = await store.createTask({ title: "Still pending" });
+    const result = await store.approveTask(t.id);
+    expect(result).toBeNull(); // pending ≠ awaiting_approval
+  });
+
+  it("rerunTask transitions failed → pending and clears output fields", async () => {
+    const t = await store.createTask({ title: "Will fail" });
+    // Simulate running then failing
+    await store.patchTask(t.id, { status: "running" });
+    await store.failTask(t.id, { error_message: "Some error", duration_ms: 500 });
+
+    const rerun = await store.rerunTask(t.id);
+    expect(rerun).not.toBeNull();
+    expect(rerun!.status).toBe("pending");
+    expect(rerun!.error_message).toBeNull();
+    expect(rerun!.started_at).toBeNull();
+    expect(rerun!.completed_at).toBeNull();
+    expect(rerun!.duration_ms).toBeNull();
+  });
+
+  it("rerunTask returns null when task is not failed", async () => {
+    const t = await store.createTask({ title: "Pending task" });
+    expect(await store.rerunTask(t.id)).toBeNull();
+  });
+
+  it("completeTask marks running task as done with output", async () => {
+    const t = await store.createTask({ title: "Will complete" });
+    await store.patchTask(t.id, { status: "running" });
+
+    const done = await store.completeTask(t.id, {
+      output_summary: "All tasks done",
+      duration_ms: 1234,
+      cost_usd: 0.0005,
+    });
+    expect(done).not.toBeNull();
+    expect(done!.status).toBe("done");
+    expect(done!.output_summary).toBe("All tasks done");
+    expect(done!.duration_ms).toBe(1234);
+    expect(done!.cost_usd).toBe(0.0005);
+    expect(done!.consecutive_failures).toBe(0);
+    expect(done!.completed_at).toBeTruthy();
+  });
+
+  it("failTask marks running task as failed and increments consecutive_failures", async () => {
+    const t = await store.createTask({ title: "Will fail" });
+    await store.patchTask(t.id, { status: "running" });
+
+    const failed = await store.failTask(t.id, { error_message: "oops", duration_ms: 100 });
+    expect(failed).not.toBeNull();
+    expect(failed!.status).toBe("failed");
+    expect(failed!.error_message).toBe("oops");
+    expect(failed!.consecutive_failures).toBe(1);
+
+    // Rerun and fail again to verify increment
+    await store.rerunTask(t.id);
+    await store.patchTask(t.id, { status: "running" });
+    const failed2 = await store.failTask(t.id, { error_message: "oops again" });
+    expect(failed2!.consecutive_failures).toBe(2);
+  });
+
+  it("promoteApprovalTasks transitions pending+requires_approval tasks to awaiting_approval", async () => {
+    const t = await store.createTask({ title: "Needs HITL", requires_approval: true });
+    expect(t.status).toBe("pending");
+
+    const count = await store.promoteApprovalTasks();
+    expect(count).toBeGreaterThanOrEqual(1);
+
+    const updated = await store.getTask(t.id);
+    expect(updated!.status).toBe("awaiting_approval");
+  });
+
+  it("materializeSchedules creates a task row for each due schedule", async () => {
+    const sched = await store.createSchedule({
+      name: "Instant run",
+      cron_expression: "* * * * *",
+      task_title: "Materialized task",
+    });
+    // Force next_run_at to the past so it's immediately due
+    memDb!.prepare("UPDATE ops_schedules SET next_run_at = ? WHERE id = ?").run(
+      new Date(Date.now() - 60_000).toISOString(),
+      sched.id
+    );
+
+    const before = await store.listTasks();
+    const created = await store.materializeSchedules();
+    expect(created).toBeGreaterThanOrEqual(1);
+
+    const after = await store.listTasks();
+    expect(after.length).toBe(before.length + created);
+
+    const newTask = after.find((t) => t.schedule_id === sched.id);
+    expect(newTask).toBeDefined();
+    expect(newTask!.title).toBe("Materialized task");
   });
 });
