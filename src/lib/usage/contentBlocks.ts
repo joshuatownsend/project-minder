@@ -73,3 +73,67 @@ export function toolUseBlocks(content: unknown): Array<{
       b?.type === "tool_use"
   );
 }
+
+/**
+ * Richer tool_result extraction that preserves the `is_error` flag and the
+ * `tool_use_id` linking it back to the originating tool call.
+ *
+ * IMPORTANT: Call this BEFORE applying `isHumanText()` filtering — the
+ * `<command-name>` extractor below has the same constraint. System-injected
+ * user-turn content is structured, not human text, and must be processed
+ * in a pre-pass before the human-text filter discards it.
+ */
+export interface ToolResultEntry {
+  tool_use_id: string;
+  isError: boolean;
+  content: string;
+}
+
+export function extractToolResultEntries(content: unknown): ToolResultEntry[] {
+  if (!Array.isArray(content)) return [];
+  const results: ToolResultEntry[] = [];
+  for (const b of content as ContentBlock[]) {
+    if (b?.type !== "tool_result") continue;
+    const id = (b as { tool_use_id?: string }).tool_use_id ?? "";
+    const isError = Boolean((b as { is_error?: boolean }).is_error);
+    let text = "";
+    if (typeof b.content === "string") {
+      text = b.content;
+    } else if (Array.isArray(b.content)) {
+      for (const c of b.content as ContentBlock[]) {
+        if (c?.type === "text" && typeof c.text === "string") {
+          if (text) text += "\n";
+          text += c.text;
+        }
+      }
+    }
+    results.push({ tool_use_id: id, isError, content: text });
+  }
+  return results;
+}
+
+/**
+ * Extract `<command-name>X</command-name>` tags from user-turn content.
+ * These are Claude Code's internal markers injected before a slash-command
+ * run. Must run BEFORE `isHumanText()` filtering since the tag starts with
+ * `<`, which that filter treats as non-human.
+ */
+export function extractCommandNames(content: unknown): string[] {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? (content as ContentBlock[])
+          .filter((b) => b?.type === "text" && typeof b.text === "string")
+          .map((b) => b.text ?? "")
+          .join("\n")
+      : "";
+  const names: string[] = [];
+  const pattern = /<command-name>([\s\S]*?)<\/command-name>/g;
+  let match = pattern.exec(text);
+  while (match !== null) {
+    const name = match[1].trim();
+    if (name) names.push(name);
+    match = pattern.exec(text);
+  }
+  return names;
+}

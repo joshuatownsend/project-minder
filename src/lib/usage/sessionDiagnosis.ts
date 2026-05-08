@@ -60,6 +60,8 @@ export interface DiagnosisReport {
   /** Up to 3 advice strings, ordered by estimated impact desc. */
   topAdvice: string[];
   generatedAt: string;
+  /** Tool error counts by category, populated by the quality route from UsageTurn.toolCalls. */
+  toolErrorsByCategory?: Record<string, number>;
 }
 
 // ── Thresholds ────────────────────────────────────────────────────────────────

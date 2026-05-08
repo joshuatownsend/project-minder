@@ -24,8 +24,10 @@ import {
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
 import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
-import { formatCost } from "@/lib/format";
+import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
+import { StackedStrip } from "@/components/stats/StackedStrip";
+import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -36,12 +38,6 @@ function formatDuration(ms?: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
 }
 
 function formatDate(iso?: string): string {
@@ -343,6 +339,11 @@ function SessionRow({
               recap
             </span>
           )}
+          {session.isWorktree && session.gitBranch && (
+            <QualityChip tone="neutral" title={`Worktree session — branch: ${session.gitBranch}`}>
+              {session.gitBranch}
+            </QualityChip>
+          )}
           <span
             style={{
               flex: 1,
@@ -471,6 +472,11 @@ function SessionRow({
               {m}
             </span>
           ))}
+          {session.workMode && (
+            <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+              <StackedStrip width={64} height={5} title="Work-mode breakdown" segments={WORK_MODE_SEGMENTS(session.workMode)} />
+            </div>
+          )}
         </div>
       </div>
     </Link>
@@ -494,13 +500,13 @@ interface ProjectGroup {
 function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
   const map = new Map<string, SessionSummary[]>();
   for (const s of sessions) {
-    const list = map.get(s.projectPath) ?? [];
+    const list = map.get(s.projectSlug) ?? [];
     list.push(s);
-    map.set(s.projectPath, list);
+    map.set(s.projectSlug, list);
   }
 
   const groups: ProjectGroup[] = [];
-  for (const [projectPath, projectSessions] of map) {
+  for (const [projectSlug, projectSessions] of map) {
     let totalTokens = 0, totalCost = 0, totalDurationMs = 0, activeSessions = 0;
     let lastActivity: string | undefined;
     const oneShotRates: number[] = [];
@@ -515,9 +521,9 @@ function buildProjectGroups(sessions: SessionSummary[]): ProjectGroup[] {
     }
 
     groups.push({
-      projectPath,
+      projectPath: projectSessions[0].projectPath,
       projectName: projectSessions[0].projectName,
-      projectSlug: projectSessions[0].projectSlug,
+      projectSlug,
       sessions: projectSessions,
       totalTokens,
       totalCost,
@@ -732,7 +738,7 @@ export function SessionsBrowser() {
     });
   };
 
-  const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectPath));
+  const allCollapsed = projectGroups.length > 0 && projectGroups.every((g) => collapsedSlugs.has(g.projectSlug));
 
   // Flatten the (possibly grouped) tree into a single positional array so one
   // virtualizer can drive both render modes. Recomputes only when the inputs
@@ -743,7 +749,7 @@ export function SessionsBrowser() {
     }
     const items: FlatItem[] = [];
     for (const group of projectGroups) {
-      const collapsed = collapsedSlugs.has(group.projectPath);
+      const collapsed = collapsedSlugs.has(group.projectSlug);
       items.push({ kind: "header", group, collapsed });
       if (!collapsed) {
         for (const session of group.sessions) {
@@ -861,7 +867,7 @@ export function SessionsBrowser() {
         {/* Collapse all */}
         {groupByProject && projectGroups.length > 1 && (
           <button
-            onClick={() => allCollapsed ? setCollapsedSlugs(new Set()) : setCollapsedSlugs(new Set(projectGroups.map((g) => g.projectPath)))}
+            onClick={() => allCollapsed ? setCollapsedSlugs(new Set()) : setCollapsedSlugs(new Set(projectGroups.map((g) => g.projectSlug)))}
             style={{ padding: "5px 11px", fontSize: "0.72rem", fontFamily: "var(--font-body)", letterSpacing: "0.03em", color: "var(--text-secondary)", background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
           >
             {allCollapsed ? "Expand all" : "Collapse all"}
@@ -932,7 +938,7 @@ export function SessionsBrowser() {
                     <SectionHeader
                       group={item.group}
                       collapsed={item.collapsed}
-                      onToggle={() => toggleCollapse(item.group.projectPath)}
+                      onToggle={() => toggleCollapse(item.group.projectSlug)}
                     />
                   ) : (
                     <SessionRow session={item.session} showProject={item.showProject} search={search} />

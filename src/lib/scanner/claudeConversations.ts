@@ -13,6 +13,8 @@ import {
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
+import { classifyTurn } from "../usage/classifier";
+import { aggregateWorkMode } from "../usage/workMode";
 import { readSubagentMeta } from "./subagentMeta";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
@@ -24,7 +26,8 @@ import {
   type CachedFileStats,
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
-import { mostFrequent } from "../usage/parser";
+import { mostFrequent, canonicalizeDirName } from "../usage/parser";
+import { isWorktreeEncodedDir } from "./worktreeCheck";
 
 export interface ConversationEntry {
   type?: string;
@@ -121,6 +124,7 @@ async function scanSessionFile(
   mtime: Date
 ): Promise<SessionSummary | null> {
   try {
+    const canonicalDirName = canonicalizeDirName(projectDirName);
     const stat = await fs.stat(filePath);
     if (stat.size > MAX_SESSION_FILE_SIZE) return null;
     const content = await fs.readFile(filePath, "utf-8");
@@ -277,8 +281,8 @@ async function scanSessionFile(
           lightTurns.push({
             timestamp: entry.timestamp,
             sessionId,
-            projectSlug: toSlug(projectDirName),
-            projectDirName,
+            projectSlug: toSlug(canonicalDirName),
+            projectDirName: canonicalDirName,
             model: entry.message?.model || "",
             role: entry.type === "assistant" ? "assistant" : "user",
             inputTokens: turnUsage?.input_tokens ?? 0,
@@ -321,6 +325,15 @@ async function scanSessionFile(
       qualityHasToolFailureStreak = quality.toolFailureStreaks.length > 0;
     } catch { /* non-critical */ }
 
+    // Work-mode distribution: classify each assistant turn and aggregate.
+    let sessionWorkMode: SessionSummary["workMode"] | undefined;
+    try {
+      const categories = lightTurns
+        .filter((t) => t.role === "assistant")
+        .map((t) => ({ category: classifyTurn(t) }));
+      sessionWorkMode = aggregateWorkMode(categories);
+    } catch { /* non-critical */ }
+
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
     await loadPricing();
     let costEstimate = 0;
@@ -342,8 +355,8 @@ async function scanSessionFile(
         ? new Date(endTime).getTime() - new Date(startTime).getTime()
         : undefined;
 
-    const projectPath = decodeDirName(projectDirName);
-    const projectSlug = toSlug(projectDirName);
+    const projectPath = decodeDirName(canonicalDirName);
+    const projectSlug = toSlug(canonicalDirName);
 
     return {
       sessionId,
@@ -385,6 +398,8 @@ async function scanSessionFile(
       maxContextFill: qualityMaxContextFill,
       hasCompactionLoop: qualityHasCompactionLoop,
       hasToolFailureStreak: qualityHasToolFailureStreak,
+      workMode: sessionWorkMode,
+      isWorktree: isWorktreeEncodedDir(projectDirName),
     };
   } catch {
     return null;
@@ -630,6 +645,8 @@ export async function scanSessionDetail(
                   timestamp: entry.timestamp,
                   content: summary,
                   toolName,
+                  toolUseId: block.id as string | undefined,
+                  toolInput: Object.keys(input).length > 0 ? (input as Record<string, unknown>) : undefined,
                 });
 
                 // File operations

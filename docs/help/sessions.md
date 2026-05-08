@@ -28,9 +28,22 @@ Each session card shows:
 - **Git branch** — the branch active during the session
 - **Model badges** — which Claude models were used
 
+### Work-mode strip
+
+Each session row shows a narrow colour-coded strip on the right summarising how the session's turns were classified:
+
+| Colour | Mode | Includes |
+|---|---|---|
+| Green | Exploration | Exploration, Brainstorming, Planning |
+| Amber | Building | Coding, Feature Dev, Refactoring |
+| Red | Testing | Testing |
+| Grey | Other | Git Ops, Build/Deploy, Debugging, Delegation, Conversation, General |
+
+The strip is proportional to the percentage of assistant turns in each mode. Hover the strip for a tooltip with exact percentages. Sessions indexed before schema v10 (DERIVED_VERSION 7) will not show the strip.
+
 ### Quality chips
 
-When a session has been re-indexed under DERIVED_VERSION 6 (or scanned by the file-parse path), the row may surface up to five quality chips:
+When a session has been re-indexed under DERIVED_VERSION 7 (or scanned by the file-parse path), the row may surface up to five quality chips:
 
 - **`NN% cache`** — cache hit ratio (`cache_read / (cache_read + cache_create)`). Green at ≥70% (cache paying back the build cost), amber under 50% (rebuilds dominating). Sessions with no cache activity at all simply don't show the chip.
 - **`compaction loop`** (red) — at least one run of consecutive turn pairs where input variance was <10% and context fill was >75%. Signals Claude was burning tokens cycling on the same context without progress.
@@ -65,6 +78,8 @@ Click a session to see the full detail view with tabs:
 Chronological list of all events: user prompts, assistant responses, tool calls, thinking blocks, and errors. Each event shows a time offset from the session start. Assistant and user messages render **markdown formatting** — fenced code blocks appear in a monospace code box, and inline `code` spans are styled distinctly.
 
 **Turn-duration badges** appear on assistant events when the session data includes `turn_duration` system entries — a wall-clock measurement Claude Code records at the end of each assistant turn. Durations format as `2.3s` for sub-minute turns and `4m12s` for longer ones.
+
+**Tool call arguments** — click **show args** on any tool call row to expand the full arguments. Bash and PowerShell events show the command string; Read/Write/Glob events show the file path; Edit/MultiEdit events show an old→new inline diff; all other tools show a JSON pretty-print. Sessions indexed before schema v10 may not show tool arguments (requires `arguments_json` to be populated in the SQLite index).
 
 **Thinking blocks** are collapsible. Click to expand an extended-thinking event and read the full reasoning trace (up to ~3000 characters). When the SQLite index is active (the default), thinking content is not stored in the database — it is fetched on demand from the original JSONL at the recorded byte offset. If the file has been moved or deleted, the block shows "Thinking content unavailable for this turn." rather than silently hiding the section.
 
@@ -106,6 +121,8 @@ The header strip surfaces outcome (completed / partial / abandoned / stuck), cac
 Two additional finding categories appear when relevant:
 - **Buggy CLI version** (P1) — the session ran on CLI 2.1.69–2.1.89, a range with a known prompt-cache bug that causes cache rebuilds after compaction. Upgraded to P0 when a resume anomaly is also present.
 - **Resume anomaly** (P1) — post-compaction output token spike detected (≥10× pre-boundary median). May indicate context confusion following `--resume` or `--continue` under a buggy CLI version.
+
+**Tool errors by category** — below the findings, a strip of coloured chips shows how many tool errors occurred in each error category (permission, timeout, not-found, parse, network, interrupted, other). This section only appears when at least one tool call in the session errored.
 
 This view is computed from JSONL on demand and does not require the SQLite index.
 

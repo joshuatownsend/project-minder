@@ -455,6 +455,10 @@ export interface SessionSummary {
   distilledAt?: string;
   /** LLM-generated distillation of the session (Wave 7.1b). */
   distilledText?: string;
+  /** Work-mode distribution across categorized turns (integer percentages summing to 100). */
+  workMode?: { exploration: number; building: number; testing: number; other: number };
+  /** True when this session came from a Claude Code worktree directory. */
+  isWorktree?: boolean;
 }
 
 export interface TimelineEvent {
@@ -466,6 +470,10 @@ export interface TimelineEvent {
   durationMs?: number;
   /** DB-path turn index; used to lazy-fetch thinking content on expand. */
   turnIndex?: number;
+  /** Raw tool arguments for expand-in-place inspection (#231). */
+  toolInput?: Record<string, unknown>;
+  /** Stable ID linking this event to its tool_result counterpart. */
+  toolUseId?: string;
 }
 
 export interface FileOperation {

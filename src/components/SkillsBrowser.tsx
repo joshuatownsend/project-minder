@@ -206,6 +206,17 @@ function SkillRowItem({
               {row.usage.invocations}×
             </span>
           )}
+          {(row.slashCount ?? 0) + (row.autoCount ?? 0) > 0 && (
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6rem",
+                color: "var(--text-muted)",
+              }}
+            >
+              {row.slashCount ?? 0} slash · {row.autoCount ?? 0} auto
+            </span>
+          )}
           {row.usage?.lastUsed && (
             <span
               style={{

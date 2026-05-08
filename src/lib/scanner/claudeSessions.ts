@@ -23,6 +23,8 @@ interface HistoryEntry {
 
 // Cache parsed history to avoid reading the file 61 times
 let cachedHistory: Map<string, HistoryEntry[]> | null = null;
+// Cache worktree dir listing to avoid 61× readdir on every scan batch
+let cachedWorktreeDirs: string[] | null = null;
 let cacheTime = 0;
 const HISTORY_CACHE_TTL = 60_000; // 1 minute
 
@@ -56,6 +58,12 @@ async function getHistoryByProject(): Promise<Map<string, HistoryEntry[]>> {
   }
 
   cachedHistory = map;
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  try {
+    cachedWorktreeDirs = await fs.readdir(projectsDir);
+  } catch {
+    cachedWorktreeDirs = [];
+  }
   cacheTime = Date.now();
   return map;
 }
@@ -89,7 +97,24 @@ export async function scanClaudeSessions(
   const historyMap = await getHistoryByProject();
   const projectEntries = historyMap.get(normalizedPath) || [];
 
-  result.sessionCount = projectEntries.length;
+  // Count worktree sessions: sibling dirs named <parent-encoded>--<type>-worktrees-*
+  // in ~/.claude/projects/. The dir listing is cached alongside historyMap (same TTL)
+  // to avoid 61× readdir per scan batch.
+  const parentEncoded = encodePath(projectPath);
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  const allDirs = cachedWorktreeDirs ?? [];
+  let worktreeSessionCount = 0;
+  for (const d of allDirs) {
+    const suffix = d.slice(parentEncoded.length);
+    if (d.startsWith(parentEncoded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
+      try {
+        const entries = await fs.readdir(path.join(projectsDir, d));
+        worktreeSessionCount += entries.filter((e) => e.endsWith(".jsonl")).length;
+      } catch { /* dir removed between cache and now */ }
+    }
+  }
+
+  result.sessionCount = projectEntries.length + worktreeSessionCount;
 
   if (projectEntries.length > 0) {
     projectEntries.sort((a, b) => {

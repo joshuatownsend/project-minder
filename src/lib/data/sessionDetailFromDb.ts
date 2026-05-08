@@ -332,11 +332,14 @@ function buildTimeline(turns: TurnRow[], toolsByTurn: Map<number, ToolRow[]>): T
     const toolList = toolsByTurn.get(turn.turn_index);
     if (!toolList) continue;
     for (const tu of toolList) {
+      const parsedArgs = parseStoredArgs(tu.arguments_json) ?? undefined;
       events.push({
         type: "tool_use",
         timestamp: tu.ts ?? turn.ts,
         content: summarizeTool(tu),
         toolName: tu.tool_name,
+        toolUseId: tu.tool_use_id ?? undefined,
+        toolInput: parsedArgs && Object.keys(parsedArgs).length > 0 ? parsedArgs : undefined,
       });
     }
   }

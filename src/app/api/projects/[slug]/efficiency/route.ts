@@ -7,15 +7,25 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import { classifyTurn } from "@/lib/usage/classifier";
+import { aggregateWorkMode } from "@/lib/usage/workMode";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
 // advances so newly-ingested sessions surface promptly.
 
+interface WorkModeDistribution {
+  exploration: number;
+  building: number;
+  testing: number;
+  other: number;
+}
+
 interface EfficiencyResponse {
   slug: string;
   waste: WasteOptimizerInfo;
   yieldReport: YieldResult;
+  workMode: WorkModeDistribution;
   generatedAt: string;
 }
 
@@ -92,10 +102,17 @@ export async function GET(
     };
   }
 
+  const workMode = aggregateWorkMode(
+    projectTurns
+      .filter((t) => t.role === "assistant")
+      .map((t) => ({ category: classifyTurn(t) }))
+  );
+
   const data: EfficiencyResponse = {
     slug,
     waste,
     yieldReport,
+    workMode,
     generatedAt: new Date().toISOString(),
   };
   cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });

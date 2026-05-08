@@ -10,7 +10,10 @@ import { FileCache } from "./cache";
 import {
   extractText as extractTextRaw,
   extractToolResults as extractToolResultsRaw,
+  extractToolResultEntries,
+  extractCommandNames,
 } from "./contentBlocks";
+import { categorizeToolError } from "./toolErrorCategorizer";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -130,6 +133,30 @@ export async function parseSessionTurns(
 
   const turns: UsageTurn[] = [];
 
+  // Pre-pass: index tool_result error flags and slash-command markers from
+  // user turns. Tool results come AFTER the assistant turn that called the
+  // tool, so this pre-pass is required to populate isError/errorCategory on
+  // ToolCall objects in the assistant turn during the main loop.
+  const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
+  const slashCommandsByTimestamp = new Map<string, Set<string>>();
+  for (const line of raw.split("\n")) {
+    const trimmedPre = line.trim();
+    if (!trimmedPre) continue;
+    let preEntry: ConversationEntry;
+    try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
+    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
+    const msgC = preEntry.message?.content ?? [];
+    const topC = (preEntry.content ?? []) as unknown[];
+    const src = (msgC as unknown[]).length > 0 ? msgC : topC;
+    for (const tr of extractToolResultEntries(src)) {
+      if (tr.tool_use_id) errorByToolUseId.set(tr.tool_use_id, { isError: tr.isError, content: tr.content });
+    }
+    const names = extractCommandNames(src);
+    if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
+  }
+
+  let prevUserTimestamp: string | null = null;
+
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -159,9 +186,28 @@ export async function parseSessionTurns(
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
       const content = entry.message?.content ?? [];
-      const toolCalls = content
+      const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
+      let slashWindowConsumed = false;
+      const toolCalls = (content as any[])
         .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => ({ name: b.name, id: b.id as string | undefined, arguments: b.input }));
+        .map((b: any) => {
+          const id: string | undefined = b.id;
+          const errEntry = id ? errorByToolUseId.get(id) : undefined;
+          const tcIsError = errEntry?.isError ?? false;
+          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
+          const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
+            ? b.input.skill : undefined;
+          const isSlashMatch = !slashWindowConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
+          if (isSlashMatch) slashWindowConsumed = true;
+          return {
+            name: b.name,
+            id,
+            arguments: b.input,
+            isError: tcIsError || undefined,
+            errorCategory: tcErrorCategory,
+            invocationSource: isSlashMatch ? "slash_command" : "auto",
+          };
+        });
 
       const assistantText = extractText(content) || undefined;
 
@@ -209,6 +255,7 @@ export async function parseSessionTurns(
         userMessageText,
         toolResultText,
       });
+      prevUserTimestamp = timestamp;
     }
   }
 
@@ -251,6 +298,26 @@ export async function parseSessionTurnsWithMeta(
   let hasThinking = false;
   // Index into turns[] of the last pushed assistant turn (for turn_duration attachment).
   let lastAssistantTurnIdx = -1;
+
+  // Pre-pass: index tool_result error flags and slash-command markers.
+  const errorByToolUseIdMeta = new Map<string, { isError: boolean; content: string }>();
+  const slashCommandsByTimestampMeta = new Map<string, Set<string>>();
+  for (const line of raw.split("\n")) {
+    const trimmedPre = line.trim();
+    if (!trimmedPre) continue;
+    let preEntry: ConversationEntry;
+    try { preEntry = JSON.parse(trimmedPre); } catch { continue; }
+    if (preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
+    const msgC = preEntry.message?.content ?? [];
+    const topC = (preEntry.content ?? []) as unknown[];
+    const src = (msgC as unknown[]).length > 0 ? msgC : topC;
+    for (const tr of extractToolResultEntries(src)) {
+      if (tr.tool_use_id) errorByToolUseIdMeta.set(tr.tool_use_id, { isError: tr.isError, content: tr.content });
+    }
+    const names = extractCommandNames(src);
+    if (names.length > 0) slashCommandsByTimestampMeta.set(preEntry.timestamp, new Set(names));
+  }
+  let prevUserTimestampMeta: string | null = null;
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -299,9 +366,31 @@ export async function parseSessionTurnsWithMeta(
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
       const content = entry.message?.content ?? [];
+      const slashCmdsMeta = prevUserTimestampMeta
+        ? slashCommandsByTimestampMeta.get(prevUserTimestampMeta)
+        : undefined;
+      let slashWindowConsumedMeta = false;
       const toolCalls = (content as any[])
         .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => ({ name: b.name, id: b.id as string | undefined, arguments: b.input }));
+        .map((b: any) => {
+          const id: string | undefined = b.id;
+          const errEntry = id ? errorByToolUseIdMeta.get(id) : undefined;
+          const tcIsError = errEntry?.isError ?? false;
+          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
+          const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
+            ? b.input.skill : undefined;
+          const isSlashMatch =
+            !slashWindowConsumedMeta && !!slashCmdsMeta && !!skillName && slashCmdsMeta.has(skillName);
+          if (isSlashMatch) slashWindowConsumedMeta = true;
+          return {
+            name: b.name,
+            id,
+            arguments: b.input,
+            isError: tcIsError || undefined,
+            errorCategory: tcErrorCategory,
+            invocationSource: isSlashMatch ? "slash_command" : "auto",
+          };
+        });
 
       const assistantText = extractText(content) || undefined;
       const isError = entry.isApiErrorMessage === true;
@@ -354,6 +443,7 @@ export async function parseSessionTurnsWithMeta(
         userMessageText,
         toolResultText,
       });
+      prevUserTimestampMeta = timestamp;
     }
   }
 

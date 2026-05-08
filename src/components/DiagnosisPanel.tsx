@@ -437,6 +437,40 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
           report.findings.map((f) => <FindingCard key={f.category} finding={f} />)
         )}
       </div>
+
+      {/* ── Tool errors by category ──────────────────────────────────────── */}
+      {report.toolErrorsByCategory && Object.keys(report.toolErrorsByCategory).length > 0 && (
+        <div>
+          <div
+            style={{
+              fontSize: "0.68rem", fontWeight: 600, color: "var(--text-muted)",
+              textTransform: "uppercase", letterSpacing: "0.06em",
+              fontFamily: "var(--font-body)", marginBottom: "8px",
+            }}
+          >
+            Tool errors by category
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            {Object.entries(report.toolErrorsByCategory)
+              .sort((a, b) => b[1] - a[1])
+              .map(([cat, count]) => (
+                <div
+                  key={cat}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: "6px",
+                    padding: "4px 10px",
+                    background: "var(--status-error-bg)",
+                    border: "1px solid var(--status-error-border)",
+                    borderRadius: "var(--radius)",
+                  }}
+                >
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--status-error-text)", fontWeight: 600 }}>{count}×</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--text-secondary)" }}>{cat}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

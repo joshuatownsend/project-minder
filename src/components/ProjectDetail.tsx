@@ -21,6 +21,7 @@ import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
 import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import { EfficiencyTab } from "./EfficiencyTab";
 import { HotFilesPanel } from "./HotFilesPanel";
+import { GitActivityPanel } from "./projects/GitActivityPanel";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -386,6 +387,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   </div>
                 </div>
               )}
+
+              {/* Git Activity (Claude-driven commits/pushes per branch) */}
+              <GitActivityPanel slug={project.slug} />
 
               {/* Infrastructure: ports + database + services */}
               {(devPort || project.dbPort || project.dockerPorts.length > 0 || project.database || project.externalServices.length > 0) && (

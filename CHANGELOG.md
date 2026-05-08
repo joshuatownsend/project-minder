@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 8.3 — Cluster T: Session-row UX bundle.** TODOs #158, #162, #164, #189, #191, #231.
+  - **#164 Worktree consolidation.** `canonicalizeDirName` now applied in both DB (`sessionsListFromDb`) and file-parse (`claudeConversations`) loaders so worktree sessions group under the parent project slug. `SessionsBrowser` groups by `projectSlug` (was `projectPath`). `claudeSessions` scanner unions worktree JSONL counts into parent session count. Worktree branch chip renders on session rows.
+  - **#191 Per-project Git activity panel.** `GET /api/projects/[slug]/git-activity` aggregates `git commit` / `git push` counts and branch activity from tool call arguments (DB-first with file-parse fallback; 5-min cache). `GitActivityPanel` renders commit/push stat boxes and a recency-sorted branch list in Project Overview.
+  - **#158 Work-mode distribution.** `sessions.work_mode_{exploration,building,testing,other}_pct` columns (schema v10). `aggregateWorkMode` maps the 13 classifer categories to 4 buckets. `StackedStrip` (pure SVG, largest-remainder rounding) renders per-session in `SessionsBrowser`. "By Work Mode" subsection in `EfficiencyTab`.
+  - **#162 Invocation source tracking.** `tool_uses.invocation_source` (`slash_command` | `auto`) stamped during ingest. `GET /api/skills` returns `slashCount` / `autoCount`; `SkillsBrowser` renders the breakdown inline.
+  - **#189 Tool error categorization.** `tool_uses.is_error` now written correctly; `tool_uses.error_category` (`permission` | `timeout` | `not-found` | `parse` | `network` | `interrupted` | `other`) populated by `categorizeToolError`. `DiagnosisPanel` renders a "Tool errors by category" chip strip below findings.
+  - **#231 Deep tool args in session timeline.** `TimelineEvent` gains `toolInput` + `toolUseId`. Both timeline builders (DB and file-parse) populate these fields. `SessionTimeline` shows a "show args" expand toggle on `tool_use` events, rendering via `formatToolArgs` (Bash command, file path, edit diff, or JSON).
+
 - **Wave 8.2b — Cluster S: Claude Max quota burndown + schedule mode.** TODO #136, #137.
   - **Claude Max quota probe** (`src/lib/quota.ts`). Reads the OAuth access token from `~/.claude/.credentials.json` and makes a minimal POST to `api.anthropic.com/v1/messages` (Claude Haiku 4.5, 1 token, ~$0.00001/probe) to read `anthropic-ratelimit-unified-*` response headers. Returns 5-hour and 7-day rolling-window utilization (0–1), status, and reset timestamps. Disk-cached 5 min at `~/.minder/quota-cache.json`; stale-cache fallback on network failure. Only works for Claude Max subscribers using OAuth (not API-key auth).
   - **`GET /api/integrations/quota`** — returns `QuotaResult` (either `{ configured: true, windows: { "5h", "7d", overage }, subscriptionType, rateLimitTier, ... }` or `{ configured: false, reason }`).

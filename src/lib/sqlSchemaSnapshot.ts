@@ -1,4 +1,4 @@
-// Last verified: schema version 8 (src/lib/db/schema.sql + migrations v1-v8)
+// Last verified: schema version 10 (src/lib/db/schema.sql + migrations v1-v10)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 
 export interface TableSchema {
@@ -28,6 +28,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "has_resume_anomaly", "compact_boundary_count", "derived_version",
       "indexed_at_ms", "generated_title", "starred_at", "distilled_at",
       "distilled_text",
+      "work_mode_exploration_pct", "work_mode_building_pct",
+      "work_mode_testing_pct", "work_mode_other_pct",
     ],
   },
   {
@@ -46,6 +48,7 @@ export const SQL_SCHEMA: TableSchema[] = [
       "session_id", "turn_index", "sequence_in_turn", "tool_use_id", "ts",
       "tool_name", "mcp_server", "mcp_tool", "agent_name", "skill_name",
       "arguments_json", "file_path", "file_op", "duration_ms", "is_error",
+      "error_category", "invocation_source",
     ],
   },
   {
