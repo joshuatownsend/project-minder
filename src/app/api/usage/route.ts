@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
   if (fresh) {
     slot = cached!;
   } else {
-    const { report, meta } = await getUsage(safePeriod, project);
+    const { report, meta } = await getUsage(safePeriod, project, source);
     slot = {
       report,
       cachedAt: Date.now(),

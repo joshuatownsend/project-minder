@@ -271,12 +271,13 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  */
 async function runFileUsage(
   period: "today" | "week" | "month" | "all",
-  project: string | undefined
+  project: string | undefined,
+  source: string | undefined
 ): Promise<UsageResult> {
   // `getJsonlMaxMtime()` is captured AFTER report generation —
   // `parseAllSessions` warms the FileCache as a side effect, so a
   // pre-call read returns 0 on a cold process.
-  const report = await generateUsageReport(period, project);
+  const report = await generateUsageReport(period, project, source);
   return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
 }
 
@@ -290,9 +291,10 @@ async function runFileUsage(
  */
 export async function getUsage(
   period: "today" | "week" | "month" | "all",
-  project?: string
+  project?: string,
+  source?: string
 ): Promise<UsageResult> {
-  if (!dbModeRequested()) return runFileUsage(period, project);
+  if (!dbModeRequested()) return runFileUsage(period, project, source);
 
   const db = await getReadyDb();
   if (await checkV3Gate("getUsage", db)) {
@@ -300,10 +302,10 @@ export async function getUsage(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
     );
-    return runFileUsage(period, project);
+    return runFileUsage(period, project, source);
   }
   const report = await callDbLoader("getUsage", () =>
-    loadUsageReportFromSql(db, period, project)
+    loadUsageReportFromSql(db, period, project, source)
   );
   if (!project) await augmentPortfolioYield(report);
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };

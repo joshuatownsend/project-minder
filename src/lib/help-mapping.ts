@@ -94,6 +94,7 @@ export const helpSlugs = [
   'cost',
   'tasks',
   'kanban',
+  'adapters',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

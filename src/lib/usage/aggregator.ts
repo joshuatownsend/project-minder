@@ -32,7 +32,8 @@ type Period = "today" | "week" | "month" | "all";
 
 export async function generateUsageReport(
   period: Period,
-  project?: string
+  project?: string,
+  source?: string
 ): Promise<UsageReport> {
   const sessionMap = await parseAllSessions();
 
@@ -41,10 +42,13 @@ export async function generateUsageReport(
     turns.push(...sessionTurns);
   }
 
-  // Project filter first (before period) — activity aggregates are project-scoped
-  // but use full history (not period-filtered).
+  // Project + source filters first (before period) — activity aggregates are
+  // project/source-scoped but use full history (not period-filtered).
   if (project) {
     turns = turns.filter((t) => t.projectSlug === project);
+  }
+  if (source) {
+    turns = turns.filter((t) => (t.source ?? "claude") === source);
   }
 
   const assistantTurnsFullHistory = turns.filter((t) => t.role === "assistant");
