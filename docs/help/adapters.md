@@ -7,8 +7,22 @@ Project Minder reads AI coding-agent sessions through **adapters** — thin modu
 | Adapter | ID | Status |
 |---|---|---|
 | Claude Code | `claude` | Active |
-| Codex | `codex` | Coming in Wave 10.2b |
+| Codex | `codex` | Active |
 | Gemini | `gemini` | Coming in Wave 10.2c |
+
+## Codex adapter
+
+The Codex adapter reads sessions from `~/.codex/sessions/` and `~/.codex/archived_sessions/`, walking both recursively. Each session file is a JSONL event stream where the first line is session metadata (including the working directory). Sessions are deduped by their session ID so a file copied to the archive directory is not double-counted.
+
+To enable Codex alongside Claude Code:
+
+```json
+{ "enabledAdapters": ["claude", "codex"] }
+```
+
+**Custom data location:** If your Codex data is not in `~/.codex/`, set the `CODEX_HOME` environment variable to the directory you want the adapter to scan. This takes precedence over the default `~/.codex/` path and is useful for CI environments or non-standard installs.
+
+Note: Codex does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Codex sessions. Cost estimates use OpenAI model pricing when available, falling back to Claude Sonnet pricing for unknown models.
 
 ## Managing adapters
 

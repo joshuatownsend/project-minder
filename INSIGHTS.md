@@ -1,5 +1,215 @@
 # Insights
 
+<!-- insight:00f7550bd851 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T16:47:36.001Z -->
+## ★ Insight
+The client/server boundary is the core constraint here. `AdaptersSection` is a `"use client"` component — it can't import from `@/lib/adapters` (a server-only module using `fs`/`path`/`os`). Fetching from `/api/adapters` is the correct pattern: server module stays on server, client gets plain JSON.
+
+---
+
+<!-- insight:a37b58b8e2a0 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T16:43:31.398Z -->
+## ★ Insight
+The SQL path uses `FilterParams` as a named-binding object passed directly to `prepCached` statements. Adding `source: string | null` to that struct automatically threads through to every query that references `@source` — no parameter-by-parameter surgery needed. The `category_costs` rollup table doesn't have a `source` column, so that one query stays unfiltered; everything else gets the filter via the sessions JOIN.
+
+---
+
+<!-- insight:6388f295667a | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:55:13.543Z -->
+## ★ Insight
+The `ALL_ADAPTERS` list hardcoded codex/gemini as `"Coming in Wave 10.2b/c"` — but the PATCH `/api/config` handler validates `enabledAdapters` against `listAdapters()` (the live registry). Enabling codex in the UI would immediately get a 400 rejection from the API. The correct pattern is: UI lists only what the registry knows about. Future adapters appear automatically when their registry entry is added.
+
+---
+
+<!-- insight:cd7404eade9f | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:54:50.013Z -->
+## ★ Insight
+The advisor identified a pattern mismatch: the plan treats "By Source" and the source filter as always-visible UI chrome that *proves* the architecture works end-to-end, not conditional UI that appears only when diversity exists. Hiding them until a second adapter ships means the §6.3 verification steps can never pass.
+
+---
+
+<!-- insight:afd5151a06bb | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:30:53.530Z -->
+## ★ Insight
+The `SourceBadge` uses the same visual token system as `QualityChip` but as a shared component, making it importable anywhere. When only one adapter exists, every session shows "Claude Code" — this provides a verified end-to-end proof that the `source` field flows correctly through the whole stack before any second adapter is introduced.
+
+---
+
+<!-- insight:359c52abb896 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:27:21.780Z -->
+## ★ Insight
+The `source` field flows through four distinct layers: the adapter contract, the in-memory parse shape, the DB row, and the JSON API response. In each layer the coercion `?? "claude"` acts as a backward-compatibility shim — existing rows and test fixtures pre-dating the `source` field get the correct default without needing migration data, only a schema DEFAULT.
+
+---
+
+<!-- insight:dab28aa6db82 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:22:12.361Z -->
+## ★ Insight
+The `SessionAdapter` interface uses the **optional method** pattern (`parseFileWithMeta?`) — adapters that have richer session metadata (compaction boundaries, CLI version) can opt in. This avoids forcing all adapters to implement metadata they don't have, while letting the caller fall back gracefully to an empty meta object. This is a clean extension point compared to using a base class or inheritance.
+
+---
+
+<!-- insight:e4db66d93b46 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T14:07:06.519Z -->
+## ★ Insight
+The cluster has three TODOs (#223 refactor, #219 Codex, #221 Gemini), but they're not equal-effort. The refactor alone touches DB schema (`source` column migration), ingest, parser, ~10 UI files for source badges, and a new Settings section — that's a full session. Codex has a confirmed empirical schema (100+ files at `~/.codex/sessions/2025-2026/`). Gemini has a real research gap: the agentlytics reference (`agentlytics-repo/editors/gemini.js`) only handles the ≤v0.38 single-JSON format; the ≥v0.39 JSONL format is unknown both locally and in the reference.
+
+---
+
+<!-- insight:62310aa3c3cd | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T13:25:27.828Z -->
+## ★ Insight
+The shared-mode cwd bug was caught by two reviewers independently — it's a common mistake when metadata shapes change. The key lesson: when you add a new mode that omits a field (`worktreePath`), every consumer of that metadata needs to handle the partial case. The `runWorktreeTask` function was written assuming worktree presence meant "has both fields," but shared mode only sets one.
+
+---
+
+<!-- insight:92c5555ebf30 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T13:20:37.973Z -->
+## ★ Insight
+The reviews caught two structural bugs: (1) worktree paths derive uniqueness only from the swarm name slug, so two same-named swarms collide on the same directory; (2) the `runWorktreeTask` classic path never fires the `onComplete` callback, so swarm status rollups are silently skipped for classic-mode members. Both are quiet correctness issues that pass tests.
+
+---
+
+<!-- insight:c77afb96b0be | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:54:41.971Z -->
+## ★ Insight
+The net result is -70 lines despite adding one new file (`composer-fields.tsx`). This is the hallmark of a good extraction: the shared module is smaller than the sum of the copies it replaced. The `updateSwarmStatus` function also shrank meaningfully — removing the existence check eliminated 7 lines and one DB round-trip, and the correctness argument is simple: `tasks.length === 0` already handles a missing swarm with no additional query needed.
+
+---
+
+<!-- insight:6cb14e24df1d | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:47:12.549Z -->
+## ★ Insight
+The most important fix here is extracting `inputStyle`/`labelStyle`/`Field` into a shared module — not because of bundle size, but because this exact triplet will be copied into every future composer modal. A single shared source prevents 4 future divergences. The key rule: if two files are byte-for-byte identical on something, that something belongs in one place.
+
+---
+
+<!-- insight:5819c7534dab | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:42:39.391Z -->
+## ★ Insight
+The three agents below are examining orthogonal quality dimensions simultaneously. Rather than a single sequential review (which might linger on early findings), parallel agents each focus on one lens: reuse (are we duplicating?), quality (are the patterns clean?), and efficiency (are we doing unnecessary work?). This is especially valuable for a large diff like 10.1c where a single pass would naturally underweight later concerns.
+
+---
+
+<!-- insight:2958e4fdb937 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:41:29.568Z -->
+## ★ Insight
+Wave 10 Cluster W (TODOs #166, #167, #247) is now fully landed across three sessions spanning 10.1a–10.1c. The pattern here — splitting a large cluster into a, b, c sub-sessions with each one building directly on the previous session's schema/store additions — keeps individual PRs reviewable and lets tests grow incrementally rather than arriving all at once.
+
+---
+
+<!-- insight:ede05846c133 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:23:28.151Z -->
+## ★ Insight
+The `<!-- swarm-summaries-injected -->` HTML comment in the description acts as an idempotency guard — it's invisible to the claude CLI prompt but prevents duplicate injection if `updateSwarmStatus` is called multiple times with all members terminal. This is more reliable than checking swarm.status because the swarm might not yet be finalized when the guard is checked.
+
+---
+
+<!-- insight:df1a9b4ac44f | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:20:15.129Z -->
+## ★ Insight
+The key architectural pattern here: SQLite's `db.transaction()` callback in better-sqlite3 must be synchronous, so `createSwarm` will inline all DB operations rather than calling async `createTask`. The coordinator SQL guard uses a role-aware OR branch — non-coordinators need `bt.status != 'done'`, coordinators accept all terminal states — solving the "coordinator blocked forever" problem when members fail.
+
+---
+
+<!-- insight:ca1065daebcc | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T12:09:44.860Z -->
+## ★ Insight
+The `runStatements` helper (not `db.exec`) is the established pattern for multi-statement migrations — it strips `--` comments and runs each `;`-terminated statement individually, avoiding the security linter that flags the multi-statement exec name.
+
+---
+
+<!-- insight:d68853183b50 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T03:22:33.100Z -->
+## ★ Insight
+The depth guard `if (depth > nodes.length) return 0` is a blunt recursion limiter, not a real cycle detector. It terminates after too many stack frames but doesn't set `layerMap` for cycle participants, so they can be visited again with different depths. A `visiting` set (the DFS "gray" set) is the canonical fix: if we encounter a node already on the current recursion stack, we've found a cycle back-edge and can safely return 0 without infinite recursion.
+
+---
+
+<!-- insight:8fb2f4a2415f | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T03:21:56.992Z -->
+## ★ Insight
+The reason we use `allTasks` (not period-filtered `tasks`) for the status lookup is subtle: a blocker task completed 10 days ago would be excluded from the `last24h` view, making `taskStatusMap.get(dep.blocker_id)` return `undefined` — which isn't `'done'`, so the badge would persist incorrectly. `allTasks` is fetched before filtering, so it's the authoritative source of truth for blocker status regardless of the active time window.
+
+---
+
+<!-- insight:7ff9b6f0ce03 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T03:21:15.097Z -->
+## ★ Insight
+The `parseInt("12abc", 10)` silently returns `12` — JavaScript's partial parse. `parseId` uses a regex `/^\d+$/` to reject any string with non-digit characters before calling parseInt, making it a strict validator. That's the key difference from the current `Number.isFinite` check, which only catches `NaN` and `Infinity` but not partial parses.
+
+---
+
+<!-- insight:aaa2dccadf20 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T03:18:29.953Z -->
+## ★ Insight
+The Copilot review caught a subtle Gantt bug: `computeLayout` assigns `order` as a within-layer index (0..N per layer), but the Gantt used it as a global row index. With two layers, nodes in layer 1 get order=0 and overlap layer 0's first row. The fix must happen in the component, not in `computeLayout`, since the layout function's contract is layer-local ordering.
+
+---
+
+<!-- insight:11e63ff6b056 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:53:44.091Z -->
+## ★ Insight
+The biggest perf win is the DFS loop: `db.prepare()` compiles SQL every call. SQLite's `better-sqlite3` uses a prepared-statement cache API (`prepTasksCached`) for exactly this reason — the same SQL string returns the same compiled Statement object. Hoisting the prepare call above the loop converts O(n) compiles to O(1).
+
+---
+
+<!-- insight:11ef9fb50bb8 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:43:25.279Z -->
+## ★ Insight
+The `{ tasks: [...] }` wrapper pattern is an API convention: named properties are easier to extend later (add `total`, `nextCursor`, etc.) without breaking callers. But it requires consumers to unwrap correctly — a raw `Array.isArray()` guard will silently fail on a wrapped response. The fix extracts `.tasks` first, then validates the array.
+
+---
+
+<!-- insight:143583bd9923 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:35:03.787Z -->
+## ★ Insight
+The DFS direction matters critically for cycle detection. We want to check "if I add edge `blockerId → taskId`, does `taskId` already have a path back to `blockerId`?" — so we must traverse FROM `taskId` through downstream dependents looking for `blockerId`. Starting from `blockerId` instead detects existing paths `blockerId → taskId`, which falsely triggers on the exact existing edge being re-inserted (idempotent case).
+
+---
+
+<!-- insight:6dbceb988f78 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:24:15.700Z -->
+## ★ Insight
+The `dependencyLayout.ts` is a pure function with no side effects — it's ideal for unit testing. The store-level `addDependency` tests need a real (in-memory) SQLite instance. Looking at how other store tests work will reveal the testing pattern for this project.
+
+---
+
+<!-- insight:e746b0093184 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:18:13.274Z -->
+## ★ Insight
+The layered layout uses **longest-path layering**: each node gets layer = max(blocker layers) + 1. This is a standard Sugiyama step that ensures all edges go "left to right" (blockers always appear before their dependents). Since we prevent cycles at insert time, the DFS-based layer assignment is guaranteed to terminate.
+
+---
+
+<!-- insight:efe7d40f5665 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:14:36.599Z -->
+## ★ Insight
+The migration pattern (`MIGRATIONS[]` registry + `applyPendingMigrations`) means adding v4 requires zero changes to the migration runner — just append a new object to the array. SQLite's `ON DELETE CASCADE` on both FKs means deleting either task or blocker automatically cleans up the edge row, preventing orphaned dependency data.
+
+---
+
+<!-- insight:3e9c77b8f243 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T02:06:33.310Z -->
+## ★ Insight
+The migration pattern here is a numbered registry (v1, v2, v3...) where each migration is a function — identical to how Flyway/Liquibase work. Key insight: SQLite can't `ALTER TABLE ... ADD CONSTRAINT`, so changing an enum (like the `delegated-todo` quadrant in v2) requires rebuilding the table via `CREATE TABLE ... AS SELECT ... DROP ... RENAME`. This is why migration v2 is so large.
+
+---
+
+<!-- insight:c8abc1a69b26 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T01:52:27.258Z -->
+## ★ Insight
+The 11 comments collapse into 5 root causes: (1) wrong dedup key in the hook, (2) aspirational session→Done/Error path that has no data supply, (3) `cancelled` tasks escaping the always-include list, (4) feature flag not actually gating tasks, (5) `decisionCount` never populated. All fixable without breaking the API shape.
+
+---
+
+<!-- insight:2a6631acbd0e | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T00:11:25.508Z -->
+## ★ Insight
+Project Minder uses inline `style` objects throughout rather than Tailwind className strings — this is intentional for dark-mode-first CSS variable theming. The `color-mix(in srgb, ...)` technique produces alpha-blended backgrounds from a single color token without needing separate background tokens.
+
+---
+
+<!-- insight:c08b6bff73da | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T00:08:42.046Z -->
+## ★ Insight
+Writing exhaustive enumeration tests for `columnMap.ts` serves as a "change detector" — if a new `LiveSessionStatus` or `TaskStatus` is ever added to the upstream types, TypeScript will fail compilation at the `assertNever` call site inside `columnMap.ts`, making the gap impossible to ship silently.
+
+---
+
+<!-- insight:0d5b3a8e8ed3 | session:d0040c9c-f8c3-4c92-9c47-2da263a51212 | 2026-05-09T00:07:51.660Z -->
+## ★ Insight
+The `LiveSessionStatus` type has 4 values (`working`, `approval`, `waiting`, `other`) while `TaskStatus` has 6 values. The Kanban only has 5 columns, so both need to be mapped down — notably `other` maps conditionally based on the session's `SessionStatus`, and `cancelled` tasks go to `idle` (not `error`) since cancellation is intentional.
+
+---
+
+<!-- insight:0aea45fa87fa | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T22:53:27.855Z -->
+## ★ Insight
+Module-level mutable state in Next.js route handlers is shared across all clients in the same server process (but reset on redeploy). For edge-triggering, a better pattern is stateless: the client sends its last `generatedAt` timestamp, and the server compares against records newer than that epoch. No shared state, correct for any number of tabs.
+
+---
+
+<!-- insight:b108207a7e92 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T22:52:06.389Z -->
+## ★ Insight
+The dedup bug here is subtle: SQLite UNIQUE indexes treat NULL as distinct from every other NULL (ISO SQL behavior), so `UNIQUE(session_id, prompt) WHERE decided_at IS NULL` never deduplicates rows where `session_id IS NULL`. The fix shifts to `(task_id, kind, prompt)` which are all NOT NULL. The `WHERE kind = 'decision'` predicate keeps INBOX rows from occupying the index permanently — inbox messages intentionally stack.
+
+---
+
+<!-- insight:b19621ab57d4 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T22:48:06.511Z -->
+## ★ Insight
+The dedup index `UNIQUE(session_id, prompt) WHERE decided_at IS NULL` has two fundamental flaws: (1) SQLite NULLs don't compare equal, so rows with `session_id = NULL` can never collide, and (2) `inbox` kind rows with no `decided_at` live in the index forever. Changing to `(task_id, kind, prompt) WHERE kind = 'decision'` fixes both.
+
+---
+
 <!-- insight:9fdb15510b89 | session:aa6ac6db-3e8a-441e-9507-703090057d06 | 2026-05-08T20:06:59.408Z -->
 ## ★ Insight
 The InboxPanel issue is the only one with real ongoing cost (720 unnecessary HTTP+DB round-trips per hour per tab). The double stat-walk and sequential PID checks are correctness-adjacent; the rest are cosmetic cleanups.
