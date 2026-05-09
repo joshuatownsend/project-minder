@@ -35,6 +35,8 @@ export interface UsageTurn {
   parentToolUseId?: string;
   /** True when this turn belongs to a sidechain (subagent) session. */
   isSidechain?: boolean;
+  /** Adapter source id (e.g. "claude", "codex"). Optional; aggregator coerces absent to "claude". */
+  source?: string;
 }
 
 export type CategoryType =
@@ -127,6 +129,14 @@ export interface ProjectBreakdown {
   tokens: number;
   cost: number;
   turns: number;
+}
+
+export interface SourceBreakdown {
+  source: string;
+  displayName: string;
+  cost: number;
+  tokens: number;
+  sessionCount: number;
 }
 
 export interface ModelPricing {
@@ -232,4 +242,5 @@ export interface UsageReport {
   contributionCalendar: ContributionCell[];
   /** Portfolio-level yield aggregate. Populated by augmentPortfolioYield() on both backends. */
   portfolioYield?: PortfolioYield;
+  bySource: SourceBreakdown[];
 }

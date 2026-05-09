@@ -118,9 +118,12 @@ CREATE TABLE sessions (
   work_mode_exploration_pct REAL,
   work_mode_building_pct    REAL,
   work_mode_testing_pct     REAL,
-  work_mode_other_pct       REAL
+  work_mode_other_pct       REAL,
+  -- Wave 10.2a columns (schema v11): multi-platform adapter source id.
+  source TEXT NOT NULL DEFAULT 'claude'
 );
 
+CREATE INDEX idx_sessions_source          ON sessions(source);
 CREATE INDEX sessions_by_project_end      ON sessions(project_slug, end_ts DESC);
 CREATE INDEX sessions_by_end_ts      ON sessions(end_ts DESC);
 CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);

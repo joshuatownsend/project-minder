@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 10.2a — Cluster X (part 1): Multi-platform adapter architecture.** TODO #223.
+  - New `SessionAdapter` interface + registry (`src/lib/adapters/`) with `discover()`, `parseFile()`, `parseFileWithMeta?()`. `claude` adapter wraps existing parser/ingest paths — no behavior change, only formalization.
+  - `enabledAdapters?: string[]` on `MinderConfig` (default `["claude"]`). `PATCH /api/config` validates adapter IDs against the registry; rejects unknown IDs with 400.
+  - `source` field threaded through `UsageTurn`, `SessionSummary`, `SessionDetail`, `SessionRow`. All existing sessions coerce to `"claude"`.
+  - **By Source** breakdown on `/usage` — always visible when data exists (proves the pipeline end-to-end with one "Claude Code" row today). `bySource: SourceBreakdown[]` on `UsageReport`, computed by both file-parse and DB aggregation paths.
+  - **Source badge** (`SourceBadge`) in session row and session header — always visible; shows "Claude Code" for all current sessions.
+  - **Source filter** dropdown in Sessions browser toolbar — always visible when sessions exist.
+  - **Adapters** section in Settings — lists all registered adapters with enable/disable toggle and status badge.
+  - `?source=` query param on `/api/sessions` and `/api/usage` (cache key + ETag). `/api/sessions` also gates results by `enabledAdapters` config — disabling an adapter produces an empty list.
+  - Help doc at `/settings#adapters`.
+
+### Changed
+- **DB schema v11**: `sessions.source TEXT NOT NULL DEFAULT 'claude'` + `idx_sessions_source` index. Existing rows migrated to `'claude'` automatically — no re-parse required.
+
+### Internal
+- Claude session reading wrapped as the `claude` adapter; existing `parser.ts` / `ingest.ts` functions stay public and are called by the adapter wrapper.
+- `claudeConversations.scanAllSessions` stamps `source: "claude"` directly (adapter-registry routing deferred to Wave 10.2b when Codex lands).
+
 - **Wave 10.1c — Cluster W (part 3): Multi-agent swarm dispatch.** TODO #247.
   - New `ops_swarms` table (migration v5) with `name`, `mode` (`worktree`|`shared`), `project_path`, `status`, `completed_at`. Two new nullable columns on `ops_tasks`: `swarm_id` (FK → `ops_swarms`) and `swarm_role` (`member`|`coordinator`), added via `ALTER TABLE ADD COLUMN` — zero migration cost for existing rows.
   - **Swarm creation**: `createSwarm()` — single SQLite transaction creates the swarm row + 2–8 member tasks (with `worktreePath`/`projectPath` in metadata for worktree mode) + optional coordinator task with `task_dependencies` edges to every member.

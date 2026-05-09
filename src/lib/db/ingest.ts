@@ -267,6 +267,8 @@ interface ParsedSession {
   workModeBuildingPct: number | null;
   workModeTestingPct: number | null;
   workModeOtherPct: number | null;
+  /** Adapter source id (e.g. "claude"). */
+  source: string;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -883,6 +885,7 @@ async function readJsonlSession(
       workModeBuildingPct: workMode.building,
       workModeTestingPct: workMode.testing,
       workModeOtherPct: workMode.other,
+      source: "claude",
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -983,7 +986,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        has_thinking, cli_version, has_resume_anomaly, compact_boundary_count,
        derived_version, indexed_at_ms,
        work_mode_exploration_pct, work_mode_building_pct,
-       work_mode_testing_pct, work_mode_other_pct
+       work_mode_testing_pct, work_mode_other_pct,
+       source
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
        @file_mtime_ms, @file_size, @byte_offset,
@@ -998,7 +1002,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @has_thinking, @cli_version, @has_resume_anomaly, @compact_boundary_count,
        @derived_version, @indexed_at_ms,
        @work_mode_exploration_pct, @work_mode_building_pct,
-       @work_mode_testing_pct, @work_mode_other_pct
+       @work_mode_testing_pct, @work_mode_other_pct,
+       @source
      )`
   ).run({
     session_id: s.sessionId,
@@ -1047,6 +1052,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     work_mode_building_pct: s.workModeBuildingPct,
     work_mode_testing_pct: s.workModeTestingPct,
     work_mode_other_pct: s.workModeOtherPct,
+    source: s.source,
   });
   rows++;
   if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
@@ -1632,7 +1638,8 @@ function appendSessionTail(
        work_mode_exploration_pct = @work_mode_exploration_pct,
        work_mode_building_pct = @work_mode_building_pct,
        work_mode_testing_pct  = @work_mode_testing_pct,
-       work_mode_other_pct    = @work_mode_other_pct
+       work_mode_other_pct    = @work_mode_other_pct,
+       source                 = @source
      WHERE session_id = @session_id`
   ).run({
     ...statusUpdateParam,
@@ -1670,6 +1677,7 @@ function appendSessionTail(
     work_mode_building_pct: tailWorkMode.building,
     work_mode_testing_pct: tailWorkMode.testing,
     work_mode_other_pct: tailWorkMode.other,
+    source: parsed.source,
   });
   rows++;
 

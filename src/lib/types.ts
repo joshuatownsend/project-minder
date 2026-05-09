@@ -338,6 +338,8 @@ export interface MinderConfig {
   pricingRules?: PricingRule[];
   /** When true, the task dispatcher loop skips all spawning until cleared. Wave 9.2 (emergency stop). */
   emergencyStop?: boolean;
+  /** Adapter ids to enable. Defaults to ["claude"]. Wave 10.2a (multi-platform). */
+  enabledAdapters?: string[];
 }
 
 export interface ClaudeUsageStats {
@@ -462,6 +464,8 @@ export interface SessionSummary {
   workMode?: { exploration: number; building: number; testing: number; other: number };
   /** True when this session came from a Claude Code worktree directory. */
   isWorktree?: boolean;
+  /** Adapter source id (e.g. "claude", "codex"). Defaults to "claude" for legacy sessions. */
+  source?: string;
 }
 
 export interface TimelineEvent {

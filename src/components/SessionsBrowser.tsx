@@ -28,6 +28,7 @@ import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
+import { SourceBadge } from "@/components/SourceBadge";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
 
@@ -456,6 +457,7 @@ function SessionRow({
           {session.oneShotRate !== undefined && (
             <OneShotBadge rate={session.oneShotRate} />
           )}
+          <SourceBadge source={session.source} />
           {session.modelsUsed.slice(0, 1).map((m) => (
             <span
               key={m}
@@ -645,6 +647,7 @@ export function SessionsBrowser() {
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [groupByProject, setGroupByProject] = useState(true);
   const [starredOnly, setStarredOnly] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
   const [searchState, setSearchState] = useState<SearchState>({ kind: "idle" });
 
@@ -685,10 +688,18 @@ export function SessionsBrowser() {
     };
   }, [search]);
 
+  const availableSources = useMemo(() => {
+    const srcs = new Set(data.map((s) => s.source ?? "claude"));
+    return [...srcs].sort();
+  }, [data]);
+
   const filtered = useMemo(() => {
     let result = data;
     if (starredOnly) {
       result = result.filter((s) => !!s.starredAt);
+    }
+    if (sourceFilter !== "all") {
+      result = result.filter((s) => (s.source ?? "claude") === sourceFilter);
     }
     const trimmed = search.trim();
     if (trimmed) {
@@ -718,7 +729,7 @@ export function SessionsBrowser() {
         }
       }
     });
-  }, [data, search, sortBy, searchState, starredOnly]);
+  }, [data, search, sortBy, searchState, starredOnly, sourceFilter]);
 
   const projectGroups = useMemo(
     () => groupByProject ? buildProjectGroups(filtered) : [],
@@ -855,6 +866,20 @@ export function SessionsBrowser() {
           <Star style={{ width: "10px", height: "10px", fill: starredOnly ? "currentColor" : "none" }} />
           Starred
         </button>
+
+        {/* Source filter */}
+        {availableSources.length > 0 && (
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            style={{ padding: "5px 8px", fontSize: "0.72rem", fontFamily: "var(--font-body)", color: sourceFilter !== "all" ? "var(--accent)" : "var(--text-secondary)", background: "var(--bg-surface)", border: `1px solid ${sourceFilter !== "all" ? "var(--accent-border)" : "var(--border-subtle)"}`, borderRadius: "var(--radius)", cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
+          >
+            <option value="all">All sources</option>
+            {availableSources.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
 
         {/* Group by project toggle */}
         <button

@@ -400,6 +400,7 @@ async function scanSessionFile(
       hasToolFailureStreak: qualityHasToolFailureStreak,
       workMode: sessionWorkMode,
       isWorktree: isWorktreeEncodedDir(projectDirName),
+      source: "claude",
     };
   } catch {
     return null;

@@ -9,7 +9,9 @@ import type {
   DailyBucket,
   ProjectDetail,
   McpServerStats,
+  SourceBreakdown,
 } from "@/lib/usage/types";
+import { listAdapters } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { getPeriodStart } from "@/lib/usage/periods";
 import { groupByBinary } from "@/lib/usage/shellParser";
@@ -101,6 +103,7 @@ export function loadUsageReportFromSql(
   };
 
   const totals = queryTotals(db, filter);
+  const bySource = queryBySource(db, filter);
   const byModel = queryByModel(db, filter);
   const byProject = queryByProject(db, filter);
   const byCategory = queryByCategory(db, filter);
@@ -150,6 +153,7 @@ export function loadUsageReportFromSql(
     byHourDay,
     streak,
     contributionCalendar,
+    bySource,
   };
 }
 
@@ -192,6 +196,33 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
     )
     .get(f) as { distinct_sessions: number };
   return { ...a, distinct_sessions: sRow.distinct_sessions };
+}
+
+function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown[] {
+  interface SourceRow { source: string; cost: number; tokens: number; sessionCount: number }
+  const rows = prepCached(db,
+      `SELECT
+         s.source,
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_create_tokens), 0) AS tokens,
+         COUNT(DISTINCT t.session_id) AS sessionCount
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+       GROUP BY s.source
+       ORDER BY cost DESC`
+    )
+    .all(f) as SourceRow[];
+
+  const adapterDisplayNames = new Map(listAdapters().map((a) => [a.id, a.displayName]));
+  return rows.map((r) => ({
+    source: r.source,
+    displayName: adapterDisplayNames.get(r.source) ?? r.source,
+    cost: r.cost,
+    tokens: r.tokens,
+    sessionCount: r.sessionCount,
+  }));
 }
 
 function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {

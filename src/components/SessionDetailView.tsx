@@ -49,6 +49,7 @@ import { Modal } from "@/components/ui/modal";
 import { downloadBlob } from "@/lib/downloadBlob";
 import { formatCost } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
+import { SourceBadge } from "@/components/SourceBadge";
 
 const checkboxRowStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "8px",
@@ -720,6 +721,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
               {data.gitBranch}
             </span>
           )}
+          <SourceBadge source={data.source} />
           {data.modelsUsed.map((m) => (
             <span key={m} style={{ fontFamily: "var(--font-mono)", fontSize: "0.65rem", color: "var(--text-muted)", background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", borderRadius: "3px", padding: "2px 6px" }}>
               {m}
