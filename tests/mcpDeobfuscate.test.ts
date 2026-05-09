@@ -32,8 +32,9 @@ describe("stripZeroWidth", () => {
 
 describe("stripTagChars", () => {
   it("removes tag characters in U+E0000 range", () => {
+    // U+E0000 = surrogate pair 󠀀 in UTF-16
     const withTag = "hello󠀀world";
-    expect(stripTagChars(withTag)).not.toContain("\uDB40");
+    expect(stripTagChars(withTag)).toBe("helloworld");
   });
   it("leaves normal text unchanged", () => {
     expect(stripTagChars("normal")).toBe("normal");

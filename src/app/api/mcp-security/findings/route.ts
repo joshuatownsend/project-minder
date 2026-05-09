@@ -29,6 +29,6 @@ export async function GET(req: NextRequest) {
       durationMs: latestRun?.durationMs ?? null,
       serversScanned: latestRun?.serversScanned ?? 0,
     },
-    "private, max-age=60"
+    fresh ? "no-store" : "private, max-age=60"
   );
 }

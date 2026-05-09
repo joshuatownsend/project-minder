@@ -17,7 +17,6 @@ export const helpMapping: Record<string, string> = {
   '/templates': 'templates',
   '/templates/[slug]': 'templates',
   '/config': 'config',
-  '/config?type=mcp': 'mcp-security',
   '/setup': 'setup',
   '/settings': 'settings',
   '/settings/cost': 'cost',
@@ -56,6 +55,7 @@ export const tabHelpMapping: Record<string, string> = {
   handoff: 'sessions',
   orchestration: 'sessions',
   'config-history': 'config-history',
+  mcp: 'mcp-security',
 }
 
 /** All available help doc slugs. */

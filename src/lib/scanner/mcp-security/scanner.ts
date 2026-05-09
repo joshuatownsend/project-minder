@@ -7,10 +7,15 @@
  */
 
 import type { McpServer } from "../../types";
-import type { McpFinding, McpFindingSurface, McpScanRun } from "../../types";
+import type { McpFinding, McpFindingCategory, McpFindingSurface, McpScanRun } from "../../types";
 import { deobfuscate } from "./deobfuscate";
 import { PATTERN_RULES, LEETSPEAK_CATEGORIES } from "./patterns";
 import { buildServerId } from "./ids";
+
+// DE rules detect evasion techniques — they must run on the original text before deobfuscation.
+const DE_CATEGORIES = new Set<McpFindingCategory>(["DE"]);
+// CH/EP matches may contain actual credentials — store evidence as undefined rather than writing secrets to disk.
+const REDACT_EVIDENCE_CATEGORIES = new Set<McpFindingCategory>(["CH", "EP"]);
 
 const MAX_EVIDENCE_CHARS = 120;
 
@@ -55,7 +60,9 @@ function scanSurface(
   const deobbedLeet = deobfuscate(text, true);
 
   for (const rule of PATTERN_RULES) {
-    const target = LEETSPEAK_CATEGORIES.has(rule.category) ? deobbedLeet : deobbed;
+    const target = DE_CATEGORIES.has(rule.category)
+      ? text
+      : LEETSPEAK_CATEGORIES.has(rule.category) ? deobbedLeet : deobbed;
 
     const match = target.match(rule.regex);
     if (!match) continue;
@@ -70,7 +77,9 @@ function scanSurface(
       severity: rule.severity,
       surface,
       message: rule.message,
-      evidence: truncateEvidence(match[0]),
+      evidence: REDACT_EVIDENCE_CATEGORIES.has(rule.category)
+        ? undefined
+        : truncateEvidence(match[0]),
       foundAtMs: nowMs,
     });
   }
