@@ -8,7 +8,7 @@ Project Minder reads AI coding-agent sessions through **adapters** — thin modu
 |---|---|---|
 | Claude Code | `claude` | Active |
 | Codex | `codex` | Active |
-| Gemini | `gemini` | Coming in Wave 10.2c |
+| Gemini CLI | `gemini` | Active |
 
 ## Codex adapter
 
@@ -23,6 +23,20 @@ To enable Codex alongside Claude Code:
 **Custom data location:** If your Codex data is not in `~/.codex/`, set the `CODEX_HOME` environment variable to the directory you want the adapter to scan. This takes precedence over the default `~/.codex/` path and is useful for CI environments or non-standard installs.
 
 Note: Codex does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Codex sessions. Cost estimates use OpenAI model pricing when available, falling back to Claude Sonnet pricing for unknown models.
+
+## Gemini CLI adapter
+
+The Gemini CLI adapter reads sessions from `~/.gemini/tmp/<project>/chats/session-*.json`. Each session file is a JSON document containing an array of messages. Project folder paths are resolved from `~/.gemini/projects.json` (which maps folder paths to project names) or from `.project_root` files written by newer Gemini CLI versions that use hashed directory names.
+
+To enable Gemini CLI alongside Claude Code:
+
+```json
+{ "enabledAdapters": ["claude", "gemini"] }
+```
+
+**Custom data location:** Set the `GEMINI_HOME` environment variable to override the default `~/.gemini/` path.
+
+Note: Gemini CLI does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Gemini sessions. Token values are treated as per-turn deltas. Cost estimates use Google model pricing when available.
 
 ## Managing adapters
 

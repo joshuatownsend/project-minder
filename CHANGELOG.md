@@ -31,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Project slug derived from `cwd` in session metadata via `encodeProjectPath` + `toSlug` — same encoding used by the scanner, so Codex sessions correlate with the correct project in analytics.
   - Help doc updated: Codex adapter status changed from "Coming" to "Active"; Codex-specific section added.
 
+- **Wave 10.2c — Cluster X (part 3): Gemini CLI adapter.** TODO #221.
+  - New `src/lib/adapters/gemini.ts`: `discover()` walks `~/.gemini/tmp/<project>/chats/session-*.json`. Project folder paths resolved from `~/.gemini/projects.json` (primary) or `.project_root` files (fallback for hashed-directory layouts used by newer Gemini CLI versions). `parseFile()` parses Gemini's JSON session format (user / gemini / info messages) into `UsageTurn[]`.
+  - Token math: per-turn deltas directly from `tokens.{input, output, cached}` on each gemini message. `cacheReadTokens = min(cached, input)`; `cacheCreateTokens` is always 0.
+  - Thoughts and tool calls extracted and included in assistant turn text and `toolCalls` array.
+  - `GEMINI_HOME` environment variable overrides `~/.gemini/` for custom installs.
+  - Help doc updated: Gemini CLI adapter status changed from "Coming" to "Active"; Gemini-specific section added.
+
 - **Wave 10.1c — Cluster W (part 3): Multi-agent swarm dispatch.** TODO #247.
   - New `ops_swarms` table (migration v5) with `name`, `mode` (`worktree`|`shared`), `project_path`, `status`, `completed_at`. Two new nullable columns on `ops_tasks`: `swarm_id` (FK → `ops_swarms`) and `swarm_role` (`member`|`coordinator`), added via `ALTER TABLE ADD COLUMN` — zero migration cost for existing rows.
   - **Swarm creation**: `createSwarm()` — single SQLite transaction creates the swarm row + 2–8 member tasks (with `worktreePath`/`projectPath` in metadata for worktree mode) + optional coordinator task with `task_dependencies` edges to every member.
