@@ -154,6 +154,31 @@ describe("GET /api/kanban", () => {
     expect(card.blockedBy).toBeUndefined();
   });
 
+  it("excludes done blockers from task card's blockedBy", async () => {
+    const pendingTask = {
+      id: 10, title: "Dependent", status: "pending", quadrant: "do", priority: 3,
+      assigned_skill: null, model: null, risk_level: "low", execution_mode: "classic",
+      requires_approval: false, dry_run: false, scheduled_for: null,
+      created_at: NOW, started_at: null, completed_at: null,
+    };
+    const doneBlocker = {
+      id: 11, title: "Blocker", status: "done", quadrant: "do", priority: 3,
+      assigned_skill: null, model: null, risk_level: "low", execution_mode: "classic",
+      requires_approval: false, dry_run: false, scheduled_for: null,
+      created_at: NOW, started_at: NOW, completed_at: NOW,
+    };
+    mockListTasks.mockResolvedValue([pendingTask, doneBlocker] as any);
+    // dep edge: task 10 is blocked by task 11 (which is done)
+    mockListAllDependencies.mockResolvedValue([{ id: 1, task_id: 10, blocker_id: 11, created_at: NOW }] as any);
+    const res = await getRoute(mkGet());
+    const body = await res.json();
+    const idleCards = body.columns.idle;
+    const depCard = idleCards.find((c: { kind: string; taskId: number }) => c.kind === "task" && c.taskId === 10);
+    expect(depCard).toBeDefined();
+    // Blocker is done — blocked badge should NOT appear
+    expect(depCard.blockedBy).toEqual([]);
+  });
+
   it("is read-only (no mutations)", async () => {
     const routeModule = await import("@/app/api/kanban/route");
     expect((routeModule as Record<string, unknown>).POST).toBeUndefined();

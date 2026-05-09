@@ -55,10 +55,16 @@ export async function GET(request: Request): Promise<NextResponse> {
     const allTasks = await listTasks();
     tasks = filterTasksByPeriod(allTasks, period);
     decisionCounts = await countOpenDecisionsByTask();
+    const taskStatusMap = new Map(allTasks.map((t) => [t.id, t.status]));
     const deps = await listAllDependencies();
     for (const dep of deps) {
-      if (!blockedByMap.has(dep.task_id)) blockedByMap.set(dep.task_id, []);
-      blockedByMap.get(dep.task_id)!.push(dep.blocker_id);
+      // Only surface the blocked badge while the blocker is still in-flight.
+      // We check allTasks (not period-filtered tasks) so done blockers that
+      // fell outside the time window are still recognized as done.
+      if (taskStatusMap.get(dep.blocker_id) !== "done") {
+        if (!blockedByMap.has(dep.task_id)) blockedByMap.set(dep.task_id, []);
+        blockedByMap.get(dep.task_id)!.push(dep.blocker_id);
+      }
       if (!blocksMap.has(dep.blocker_id)) blocksMap.set(dep.blocker_id, []);
       blocksMap.get(dep.blocker_id)!.push(dep.task_id);
     }
