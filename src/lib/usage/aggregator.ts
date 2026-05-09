@@ -13,7 +13,7 @@ import { computeContributionCalendar } from "./contributionCalendar";
 import { computeProjectYield } from "./computeProjectYield";
 import { gatherProjectTurns, encodeProjectPath } from "./projectMatch";
 import { getCachedScan } from "@/lib/cache";
-import { listAdapters } from "@/lib/adapters";
+import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import type {
   UsageTurn,
   UsageReport,
@@ -370,7 +370,7 @@ export async function aggregateUsage(
     }));
 
   // By-source breakdown (computed from enriched loop data — cost already resolved)
-  const adapterDisplayNames = new Map(listAdapters().map((a) => [a.id, a.displayName]));
+  const adapterDisplayNames = getAdapterDisplayNameMap();
   const bySource: SourceBreakdown[] = [...sourceAccum.entries()]
     .sort((a, b) => b[1].cost - a[1].cost)
     .map(([source, s]) => ({

@@ -11,7 +11,7 @@ import type {
   McpServerStats,
   SourceBreakdown,
 } from "@/lib/usage/types";
-import { listAdapters } from "@/lib/adapters";
+import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { getPeriodStart } from "@/lib/usage/periods";
 import { groupByBinary } from "@/lib/usage/shellParser";
@@ -215,7 +215,7 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
     )
     .all(f) as SourceRow[];
 
-  const adapterDisplayNames = new Map(listAdapters().map((a) => [a.id, a.displayName]));
+  const adapterDisplayNames = getAdapterDisplayNameMap();
   return rows.map((r) => ({
     source: r.source,
     displayName: adapterDisplayNames.get(r.source) ?? r.source,

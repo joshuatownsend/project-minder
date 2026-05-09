@@ -15,7 +15,6 @@ const claudeAdapter: SessionAdapter = {
 
   async discover(): Promise<SessionFile[]> {
     const projectsDir = path.join(os.homedir(), ".claude", "projects");
-    const files: SessionFile[] = [];
 
     let subdirs: string[];
     try {
@@ -25,26 +24,25 @@ const claudeAdapter: SessionAdapter = {
       return [];
     }
 
-    for (const dirName of subdirs) {
-      const dirPath = path.join(projectsDir, dirName);
-      let jsonlFiles: string[];
-      try {
-        const entries = await fs.readdir(dirPath);
-        jsonlFiles = entries.filter((f) => f.endsWith(".jsonl"));
-      } catch {
-        continue;
-      }
+    const perDir = await Promise.all(
+      subdirs.map(async (dirName) => {
+        const dirPath = path.join(projectsDir, dirName);
+        try {
+          const entries = await fs.readdir(dirPath);
+          return entries
+            .filter((f) => f.endsWith(".jsonl"))
+            .map((file) => ({
+              source: "claude",
+              filePath: path.join(dirPath, file),
+              projectDirName: dirName,
+            }));
+        } catch {
+          return [];
+        }
+      })
+    );
 
-      for (const file of jsonlFiles) {
-        files.push({
-          source: "claude",
-          filePath: path.join(dirPath, file),
-          projectDirName: dirName,
-        });
-      }
-    }
-
-    return files;
+    return perDir.flat();
   },
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {
