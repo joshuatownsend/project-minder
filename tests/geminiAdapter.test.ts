@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 
-const FIXTURE_DIR = path.join(os.tmpdir(), "gemini-adapter-test-" + Date.now());
+const FIXTURE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "gemini-adapter-test-"));
 const TMP_DIR = path.join(FIXTURE_DIR, ".gemini", "tmp");
 
 const PROJECT_NAME = "my-project";

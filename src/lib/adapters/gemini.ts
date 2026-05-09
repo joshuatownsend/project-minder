@@ -113,7 +113,6 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
     (await fs.stat(filePath).then((s) => s.mtime.toISOString()).catch(() => new Date().toISOString()));
 
   const projectSlug = toSlug(projectDirName);
-  const baseTurn = () => makeBaseTurn(ADAPTER_ID, sessionTimestamp, sessionId, projectSlug, projectDirName);
 
   const turns: UsageTurn[] = [];
 
@@ -121,6 +120,15 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) continue;
     const m = msg as Record<string, unknown>;
     const type = m.type;
+
+    // Use per-message timestamp when present; fall back to session startTime.
+    // Gemini sessions can span hours, so per-message timestamps keep hourly
+    // and daily analytics accurate.
+    const turnTimestamp =
+      (typeof m.timestamp === "string" && m.timestamp.trim() ? m.timestamp : null) ??
+      sessionTimestamp;
+
+    const baseTurn = () => makeBaseTurn(ADAPTER_ID, turnTimestamp, sessionId, projectSlug, projectDirName);
 
     if (type === "user") {
       const text = extractTextContent(m.content ?? m.displayContent);
@@ -165,7 +173,8 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
             t.args && typeof t.args === "object" && !Array.isArray(t.args)
               ? (t.args as Record<string, unknown>)
               : {};
-          toolCalls.push({ name, arguments: args });
+          const isError = t.status === "error" ? true : undefined;
+          toolCalls.push({ name, arguments: args, isError });
         }
       }
 
@@ -185,10 +194,8 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
         toolCalls,
         assistantText: parts.join("\n").slice(0, TEXT_CAP) || undefined,
       });
-      continue;
     }
-
-    // Skip info / error / warning messages
+    // All other message types (info, error, warning) carry no turn data.
   }
 
   return turns;
