@@ -5,9 +5,9 @@ import type { SessionAdapter, SessionFile } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
+import { TEXT_CAP, makeBaseTurn } from "./utils";
 
 const ADAPTER_ID = "gemini" as const;
-const TEXT_CAP = 500;
 
 // ─── project map ─────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ function extractTokens(raw: unknown): { inputTokens: number; outputTokens: numbe
 
 // ─── file parser ──────────────────────────────────────────────────────────────
 
-async function parseGeminiFile(filePath: string, fallbackProjectDirName: string): Promise<UsageTurn[]> {
+async function parseGeminiFile(filePath: string, projectDirName: string): Promise<UsageTurn[]> {
   let content: string;
   try {
     content = await fs.readFile(filePath, "utf-8");
@@ -112,17 +112,8 @@ async function parseGeminiFile(filePath: string, fallbackProjectDirName: string)
     (typeof record.startTime === "string" && record.startTime.trim() ? record.startTime : null) ??
     (await fs.stat(filePath).then((s) => s.mtime.toISOString()).catch(() => new Date().toISOString()));
 
-  const projectDirName = fallbackProjectDirName;
   const projectSlug = toSlug(projectDirName);
-
-  const baseTurn = () => ({
-    timestamp: sessionTimestamp,
-    sessionId,
-    projectSlug,
-    projectDirName,
-    cacheCreateTokens: 0 as const,
-    source: ADAPTER_ID,
-  });
+  const baseTurn = () => makeBaseTurn(ADAPTER_ID, sessionTimestamp, sessionId, projectSlug, projectDirName);
 
   const turns: UsageTurn[] = [];
 
@@ -150,7 +141,6 @@ async function parseGeminiFile(filePath: string, fallbackProjectDirName: string)
     if (type === "gemini") {
       const { inputTokens, outputTokens, cacheReadTokens } = extractTokens(m.tokens);
 
-      // Build text parts from thoughts + main content
       const parts: string[] = [];
       if (m.thoughts && Array.isArray(m.thoughts)) {
         for (const t of m.thoughts as unknown[]) {
@@ -165,7 +155,6 @@ async function parseGeminiFile(filePath: string, fallbackProjectDirName: string)
       const mainText = extractTextContent(m.content ?? m.displayContent);
       if (mainText) parts.push(mainText);
 
-      // Build tool calls
       const toolCalls: ToolCall[] = [];
       if (Array.isArray(m.toolCalls)) {
         for (const tc of m.toolCalls as unknown[]) {
@@ -180,13 +169,11 @@ async function parseGeminiFile(filePath: string, fallbackProjectDirName: string)
         }
       }
 
-      // Skip gemini turns with no content and no tokens
       const hasContent = parts.length > 0 || toolCalls.length > 0;
       const hasTokens = inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0;
       if (!hasContent && !hasTokens) continue;
 
-      const model =
-        typeof m.model === "string" && m.model.trim() ? m.model : "unknown";
+      const model = typeof m.model === "string" && m.model.trim() ? m.model : "unknown";
 
       turns.push({
         ...baseTurn(),
@@ -220,8 +207,6 @@ const geminiAdapter: SessionAdapter = {
         : path.join(os.homedir(), ".gemini");
 
     const tmpDir = path.join(geminiHome, "tmp");
-
-    // projName → folderPath (from projects.json)
     const projectMap = await loadProjectMap(geminiHome);
 
     let projectEntries: import("fs").Dirent[];
@@ -231,41 +216,40 @@ const geminiAdapter: SessionAdapter = {
       return [];
     }
 
-    const files: SessionFile[] = [];
+    const results = await Promise.all(
+      projectEntries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry): Promise<SessionFile[]> => {
+          const projName = entry.name;
+          const projDir = path.join(tmpDir, projName);
+          const chatsDir = path.join(projDir, "chats");
 
-    for (const entry of projectEntries) {
-      if (!entry.isDirectory()) continue;
-      const projName = entry.name;
-      const projDir = path.join(tmpDir, projName);
-      const chatsDir = path.join(projDir, "chats");
+          let chatFiles: string[];
+          try {
+            const entries = await fs.readdir(chatsDir);
+            chatFiles = entries.filter((f) => f.startsWith("session-") && f.endsWith(".json"));
+          } catch {
+            return [];
+          }
+          if (chatFiles.length === 0) return [];
 
-      let chatFiles: string[];
-      try {
-        const entries = await fs.readdir(chatsDir);
-        chatFiles = entries.filter((f) => f.startsWith("session-") && f.endsWith(".json"));
-      } catch {
-        continue;
-      }
-      if (chatFiles.length === 0) continue;
+          // Resolve project folder path: projects.json → .project_root → fallback to dir name
+          const folderPath =
+            projectMap.get(projName) ??
+            (await readProjectRoot(projDir)) ??
+            null;
 
-      // Resolve project folder path: projects.json → .project_root → fallback to dir name
-      const folderPath =
-        projectMap.get(projName) ??
-        (await readProjectRoot(projDir)) ??
-        null;
+          const projectDirName = folderPath ? encodeProjectPath(folderPath) : projName;
 
-      const projectDirName = folderPath ? encodeProjectPath(folderPath) : projName;
+          return chatFiles.map((file) => ({
+            source: ADAPTER_ID,
+            filePath: path.join(chatsDir, file),
+            projectDirName,
+          }));
+        })
+    );
 
-      for (const file of chatFiles) {
-        files.push({
-          source: ADAPTER_ID,
-          filePath: path.join(chatsDir, file),
-          projectDirName,
-        });
-      }
-    }
-
-    return files;
+    return results.flat();
   },
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {

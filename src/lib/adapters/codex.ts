@@ -6,6 +6,7 @@ import type { SessionAdapter, SessionFile } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
+import { TEXT_CAP, makeBaseTurn } from "./utils";
 
 const ADAPTER_ID = "codex" as const;
 const META_READ_CONCURRENCY = 16;
@@ -185,8 +186,6 @@ function createTurnState(): TurnState {
   return { parts: [], toolCalls: [], inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, model: null };
 }
 
-const TEXT_CAP = 500;
-
 async function parseCodexFile(filePath: string, fallbackProjectDirName: string): Promise<UsageTurn[]> {
   let content: string;
   try {
@@ -219,14 +218,7 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
   let previousTotals: RawUsage | null = null;
   let currentTurn: TurnState = createTurnState();
 
-  const baseTurn = () => ({
-    timestamp: sessionTimestamp,
-    sessionId,
-    projectSlug,
-    projectDirName,
-    cacheCreateTokens: 0 as const,
-    source: ADAPTER_ID,
-  });
+  const baseTurn = () => makeBaseTurn(ADAPTER_ID, sessionTimestamp, sessionId, projectSlug, projectDirName);
 
   function flushTurn() {
     const hasContent = currentTurn.parts.length > 0;
