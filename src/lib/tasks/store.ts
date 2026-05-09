@@ -449,6 +449,17 @@ export async function countInboxMessages(): Promise<number> {
   return row.n;
 }
 
+/** Per-task count of open decisions (kind = 'decision', undecided). Used by /api/kanban for card badges. */
+export async function countOpenDecisionsByTask(): Promise<Map<number, number>> {
+  const db = await ensureReady();
+  const rows = db.prepare(
+    `SELECT task_id, COUNT(*) as n FROM task_decisions
+     WHERE kind = 'decision' AND decided_at IS NULL
+     GROUP BY task_id`
+  ).all() as { task_id: number; n: number }[];
+  return new Map(rows.map((r) => [r.task_id, r.n]));
+}
+
 /** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */
 export async function countNewDecisions(sinceEpoch: number): Promise<number> {
   const db = await ensureReady();

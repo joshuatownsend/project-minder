@@ -40,6 +40,7 @@ const slugTitles: Record<HelpSlug, string> = {
   otel: "OpenTelemetry",
   cost: "Cost Settings",
   tasks: "Task Queue & Dispatcher",
+  kanban: "Mission Control Kanban",
 };
 
 const iconBtnBase: React.CSSProperties = {

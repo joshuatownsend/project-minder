@@ -59,6 +59,7 @@ const GROUPS: Group[] = [
   {
     label: "Mission Control",
     children: [
+      item("/kanban",   "Kanban"),
       item("/tasks",    "Tasks"),
       item("/schedule", "Schedule"),
     ],
