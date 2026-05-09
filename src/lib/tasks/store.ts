@@ -101,16 +101,18 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
         metadataJson
       ) as Task;
 
-    // Insert blocker edges synchronously inside the same transaction.
-    // addDependency uses its own ensureReady + transaction, so we inline the
-    // core insert here to stay within the outer transaction.
+    // Insert blocker edges inside the same transaction.
+    // Inlined rather than calling addDependency (which owns its own transaction).
+    // Cycle detection is skipped: createdTask.id is brand-new, so no existing
+    // edge can point back to it — a cycle is impossible for fresh tasks.
     if (input.blockedBy && input.blockedBy.length > 0) {
+      const insertDep = prepTasksCached(db,
+        `INSERT INTO task_dependencies (task_id, blocker_id) VALUES (?, ?)
+         ON CONFLICT(task_id, blocker_id) DO NOTHING`
+      );
       for (const blockerId of input.blockedBy) {
         if (blockerId === createdTask.id) throw new CycleError(createdTask.id, blockerId);
-        db.prepare(
-          `INSERT INTO task_dependencies (task_id, blocker_id) VALUES (?, ?)
-           ON CONFLICT(task_id, blocker_id) DO NOTHING`
-        ).run(createdTask.id, blockerId);
+        insertDep.run(createdTask.id, blockerId);
       }
     }
   });
@@ -514,8 +516,15 @@ export async function addDependency(taskId: number, blockerId: number): Promise<
 
   let result: TaskDependency | undefined;
   const txn = db.transaction(() => {
-    // DFS from taskId over "blocks" edges: if we can reach blockerId, the new
-    // edge would close a cycle (blockerId → taskId already has a reverse path).
+    const outgoingStmt = prepTasksCached(db, "SELECT task_id FROM task_dependencies WHERE blocker_id = ?");
+    const insertStmt = prepTasksCached(db,
+      `INSERT INTO task_dependencies (task_id, blocker_id)
+       VALUES (?, ?)
+       ON CONFLICT(task_id, blocker_id) DO UPDATE SET created_at = created_at
+       RETURNING *`
+    );
+
+    // DFS from taskId: if we can reach blockerId, the new edge would close a cycle.
     const visited = new Set<number>();
     const stack = [taskId];
     while (stack.length > 0) {
@@ -523,20 +532,11 @@ export async function addDependency(taskId: number, blockerId: number): Promise<
       if (cur === blockerId) throw new CycleError(taskId, blockerId);
       if (visited.has(cur)) continue;
       visited.add(cur);
-      const outgoing = db
-        .prepare("SELECT task_id FROM task_dependencies WHERE blocker_id = ?")
-        .all(cur) as { task_id: number }[];
+      const outgoing = outgoingStmt.all(cur) as { task_id: number }[];
       for (const row of outgoing) stack.push(row.task_id);
     }
 
-    result = db
-      .prepare(
-        `INSERT INTO task_dependencies (task_id, blocker_id)
-         VALUES (?, ?)
-         ON CONFLICT(task_id, blocker_id) DO UPDATE SET created_at = created_at
-         RETURNING *`
-      )
-      .get(taskId, blockerId) as TaskDependency;
+    result = insertStmt.get(taskId, blockerId) as TaskDependency;
   });
   txn();
   return result!;
@@ -545,9 +545,9 @@ export async function addDependency(taskId: number, blockerId: number): Promise<
 /** Remove a blocking relationship. Returns true if the edge existed, false if not found. */
 export async function removeDependency(taskId: number, blockerId: number): Promise<boolean> {
   const db = await ensureReady();
-  const result = db
-    .prepare("DELETE FROM task_dependencies WHERE task_id = ? AND blocker_id = ?")
-    .run(taskId, blockerId);
+  const result = prepTasksCached(db,
+    "DELETE FROM task_dependencies WHERE task_id = ? AND blocker_id = ?"
+  ).run(taskId, blockerId);
   return result.changes > 0;
 }
 
@@ -556,12 +556,12 @@ export async function listDependencies(
   taskId: number
 ): Promise<{ blockedBy: number[]; blocks: number[] }> {
   const db = await ensureReady();
-  const blockedByRows = db
-    .prepare("SELECT blocker_id FROM task_dependencies WHERE task_id = ?")
-    .all(taskId) as { blocker_id: number }[];
-  const blocksRows = db
-    .prepare("SELECT task_id FROM task_dependencies WHERE blocker_id = ?")
-    .all(taskId) as { task_id: number }[];
+  const blockedByRows = prepTasksCached(db,
+    "SELECT blocker_id FROM task_dependencies WHERE task_id = ?"
+  ).all(taskId) as { blocker_id: number }[];
+  const blocksRows = prepTasksCached(db,
+    "SELECT task_id FROM task_dependencies WHERE blocker_id = ?"
+  ).all(taskId) as { task_id: number }[];
   return {
     blockedBy: blockedByRows.map((r) => r.blocker_id),
     blocks: blocksRows.map((r) => r.task_id),
@@ -571,9 +571,9 @@ export async function listDependencies(
 /** Return every dependency row. Used by /api/kanban to build per-card blocked state. */
 export async function listAllDependencies(): Promise<TaskDependency[]> {
   const db = await ensureReady();
-  return db
-    .prepare("SELECT * FROM task_dependencies ORDER BY created_at ASC")
-    .all() as TaskDependency[];
+  return prepTasksCached(db,
+    "SELECT * FROM task_dependencies ORDER BY created_at ASC"
+  ).all() as TaskDependency[];
 }
 
 /** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */

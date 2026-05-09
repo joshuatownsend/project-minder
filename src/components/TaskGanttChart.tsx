@@ -3,8 +3,8 @@
 import { useMemo } from "react";
 import * as d3 from "d3";
 import { D3Container } from "@/components/viz/D3Container";
-import { computeLayout } from "@/lib/kanban/dependencyLayout";
-import type { KanbanSnapshot, KanbanCard } from "@/lib/kanban/types";
+import { computeLayout, extractTaskCards, truncateTitle, STATUS_COLOR } from "@/lib/kanban/dependencyLayout";
+import type { KanbanSnapshot } from "@/lib/kanban/types";
 
 const ROW_H = 24;
 const ROW_GAP = 8;
@@ -12,28 +12,12 @@ const LABEL_W = 160;
 const AXIS_H = 28;
 const PLACEHOLDER_MIN = 30 * 60 * 1000; // 30 min in ms (visual only)
 
-const STATUS_COLOR: Record<string, string> = {
-  working:          "var(--success, #22c55e)",
-  waiting:          "var(--accent)",
-  idle:             "var(--text-muted)",
-  done:             "var(--info)",
-  error:            "var(--error)",
-};
-
 interface Props {
   snapshot: KanbanSnapshot;
 }
 
 export function TaskGanttChart({ snapshot }: Props) {
-  const taskCards = useMemo(() => {
-    const all: Extract<KanbanCard, { kind: "task" }>[] = [];
-    for (const cards of Object.values(snapshot.columns)) {
-      for (const c of cards) {
-        if (c.kind === "task") all.push(c);
-      }
-    }
-    return all;
-  }, [snapshot]);
+  const taskCards = useMemo(() => extractTaskCards(snapshot), [snapshot]);
 
   const layout = useMemo(() => {
     const nodes = taskCards.map((c) => ({
@@ -190,7 +174,7 @@ export function TaskGanttChart({ snapshot }: Props) {
                 const barW = Math.max(4, xScale(new Date(endMs)) - barX);
                 const isPlaceholder = !n.startedAt;
 
-                const label = n.title.length > 22 ? n.title.slice(0, 21) + "…" : n.title;
+                const label = truncateTitle(n.title);
 
                 return (
                   <g key={n.id}>

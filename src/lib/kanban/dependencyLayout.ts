@@ -7,6 +7,8 @@
  * receive layer 0 and the layout degrades gracefully rather than looping.
  */
 
+import type { KanbanSnapshot, KanbanCard } from "@/lib/kanban/types";
+
 export interface LayoutNode {
   id: number;
   title: string;
@@ -37,6 +39,33 @@ export interface DependencyLayout {
   layerSizes: number[];
 }
 
+/** Column-keyed status colors shared by DAG and Gantt views. */
+export const STATUS_COLOR: Record<string, string> = {
+  working: "var(--success, #22c55e)",
+  waiting: "var(--accent)",
+  idle:    "var(--text-muted)",
+  done:    "var(--info)",
+  error:   "var(--error)",
+};
+
+/** Extract all task cards from a KanbanSnapshot across all columns. */
+export function extractTaskCards(
+  snapshot: KanbanSnapshot
+): Extract<KanbanCard, { kind: "task" }>[] {
+  const result: Extract<KanbanCard, { kind: "task" }>[] = [];
+  for (const cards of Object.values(snapshot.columns)) {
+    for (const c of cards) {
+      if (c.kind === "task") result.push(c);
+    }
+  }
+  return result;
+}
+
+/** Truncate a title to maxLen chars, appending "…" if needed. */
+export function truncateTitle(title: string, maxLen = 22): string {
+  return title.length > maxLen ? title.slice(0, maxLen - 1) + "…" : title;
+}
+
 /**
  * Compute a layered layout for the given nodes.
  *
@@ -58,29 +87,27 @@ export function computeLayout(
   }
 
   const idSet = new Set(nodes.map((n) => n.id));
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
   // Longest-path layer assignment. Nodes with no in-graph blockers → layer 0.
   const layerMap = new Map<number, number>();
-  const assigned = new Set<number>();
 
   function assignLayer(id: number, depth: number): number {
     if (depth > nodes.length) return 0; // cycle guard
     if (layerMap.has(id)) return layerMap.get(id)!;
 
-    const node = nodes.find((n) => n.id === id);
+    const node = nodeById.get(id);
     if (!node) { layerMap.set(id, 0); return 0; }
 
     const blockers = node.blockedBy.filter((b) => idSet.has(b));
     if (blockers.length === 0) {
       layerMap.set(id, 0);
-      assigned.add(id);
       return 0;
     }
 
     const maxBlockerLayer = Math.max(...blockers.map((b) => assignLayer(b, depth + 1)));
     const layer = maxBlockerLayer + 1;
     layerMap.set(id, layer);
-    assigned.add(id);
     return layer;
   }
 
@@ -107,19 +134,23 @@ export function computeLayout(
     layerSizes.push(byLayer.get(l)?.length ?? 0);
   }
 
-  const positioned: PositionedNode[] = [];
-  for (const n of nodes) {
+  // Build per-node order index from the sorted layer arrays in O(n).
+  const orderByid = new Map<number, number>();
+  for (const [, layerNodes] of byLayer) {
+    layerNodes.forEach((n, i) => orderByid.set(n.id, i));
+  }
+
+  const positioned: PositionedNode[] = nodes.map((n) => {
     const layer = layerMap.get(n.id) ?? 0;
-    const layerNodes = byLayer.get(layer) ?? [];
-    const order = layerNodes.findIndex((ln) => ln.id === n.id);
-    positioned.push({
+    const order = orderByid.get(n.id) ?? 0;
+    return {
       ...n,
       layer,
       order,
       x: layer * (nodeWidthPx + gapXPx),
       y: order * (nodeHeightPx + gapYPx),
-    });
-  }
+    };
+  });
 
   return { nodes: positioned, maxLayer, layerSizes };
 }

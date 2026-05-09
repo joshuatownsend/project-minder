@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/modal";
-import type { TaskQuadrant, RiskLevel, ExecutionMode, Task } from "@/lib/tasks/types";
+import type { TaskQuadrant, RiskLevel, ExecutionMode, TaskStatus, Task } from "@/lib/tasks/types";
 import { EXECUTION_MODES, EXECUTION_MODE_LABELS } from "@/lib/tasks/types";
+
+const BLOCKER_ELIGIBLE: Set<TaskStatus> = new Set(["pending", "awaiting_approval", "running"]);
 
 interface TaskComposerProps {
   open: boolean;
@@ -72,11 +74,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
         if (!Array.isArray(raw)) return;
         const tasks = raw as Task[];
         setBlockerOptions(
-          tasks.filter((t) =>
-            t.status === "pending" ||
-            t.status === "awaiting_approval" ||
-            t.status === "running"
-          )
+          tasks.filter((t) => BLOCKER_ELIGIBLE.has(t.status))
         );
       })
       .catch(() => { /* non-critical */ });

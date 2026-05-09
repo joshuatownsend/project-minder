@@ -3,26 +3,14 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { D3Container } from "@/components/viz/D3Container";
-import { computeLayout } from "@/lib/kanban/dependencyLayout";
-import type { KanbanSnapshot, KanbanCard } from "@/lib/kanban/types";
+import { computeLayout, extractTaskCards, truncateTitle, STATUS_COLOR } from "@/lib/kanban/dependencyLayout";
+import type { KanbanSnapshot } from "@/lib/kanban/types";
 
 const NODE_W = 180;
 const NODE_H = 54;
 const GAP_X = 80;
 const GAP_Y = 16;
 const PADDING = 24;
-
-const STATUS_COLOR: Record<string, string> = {
-  working:          "var(--success, #22c55e)",
-  waiting:          "var(--accent)",
-  idle:             "var(--text-muted)",
-  done:             "var(--info)",
-  error:            "var(--error)",
-};
-
-function columnToStatus(col: string) {
-  return col; // column name is the status bucket
-}
 
 interface Props {
   snapshot: KanbanSnapshot;
@@ -31,16 +19,7 @@ interface Props {
 export function TaskDependencyGraph({ snapshot }: Props) {
   const router = useRouter();
 
-  // Collect all task cards that have at least one dependency edge.
-  const taskCards = useMemo(() => {
-    const all: Extract<KanbanCard, { kind: "task" }>[] = [];
-    for (const cards of Object.values(snapshot.columns)) {
-      for (const c of cards) {
-        if (c.kind === "task") all.push(c);
-      }
-    }
-    return all;
-  }, [snapshot]);
+  const taskCards = useMemo(() => extractTaskCards(snapshot), [snapshot]);
 
   const nodesWithEdges = useMemo(() => {
     const edged = new Set<number>();
@@ -87,17 +66,15 @@ export function TaskDependencyGraph({ snapshot }: Props) {
   const svgWidth  = (layout.maxLayer + 1) * (NODE_W + GAP_X) - GAP_X + PADDING * 2;
   const svgHeight = maxLayerCount * (NODE_H + GAP_Y) - GAP_Y + PADDING * 2;
 
-  // Build edge list: blocker → dependent
+  const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
+
+  // Build edge list: blocker → dependent (only in-graph edges).
   const edges: { fromId: number; toId: number }[] = [];
   for (const n of layout.nodes) {
     for (const bid of n.blockedBy) {
-      if (layout.nodes.find((ln) => ln.id === bid)) {
-        edges.push({ fromId: bid, toId: n.id });
-      }
+      if (nodeMap.has(bid)) edges.push({ fromId: bid, toId: n.id });
     }
   }
-
-  const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
 
   return (
     <div style={{ overflowX: "auto", overflowY: "auto", padding: "8px 0" }}>
@@ -147,8 +124,7 @@ export function TaskDependencyGraph({ snapshot }: Props) {
 
             {/* Nodes */}
             {layout.nodes.map((n) => {
-              const statusColor = STATUS_COLOR[columnToStatus(n.status)] ?? "var(--text-muted)";
-              const truncTitle = n.title.length > 22 ? n.title.slice(0, 21) + "…" : n.title;
+              const statusColor = STATUS_COLOR[n.status] ?? "var(--text-muted)";
 
               return (
                 <g
@@ -191,7 +167,7 @@ export function TaskDependencyGraph({ snapshot }: Props) {
                     fontWeight={600}
                     fill="var(--text-primary)"
                   >
-                    {truncTitle}
+                    {truncateTitle(n.title)}
                   </text>
                   <text
                     x={10}
