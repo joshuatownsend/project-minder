@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
-import { listTasks } from "@/lib/tasks/store";
+import { listTasks, countOpenDecisionsByTask } from "@/lib/tasks/store";
 import { buildBoard } from "@/lib/kanban/buildBoard";
+import { readConfig } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 import type { KanbanPeriod } from "@/lib/kanban/types";
 import type { Task } from "@/lib/tasks/types";
 
@@ -26,21 +28,37 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   // Sessions — always include all live sessions regardless of period.
   // getLiveStatusPayload() is 6 s in-memory cached + single-flighted.
-  const { sessions, generatedAt } = await getLiveStatusPayload();
+  const { sessions } = await getLiveStatusPayload();
+
+  // Use a fresh timestamp so clients always process the response.
+  // The session cache timestamp would cause task updates within the 6 s
+  // TTL window to be silently dropped by the client's dedup check.
+  const generatedAt = new Date().toISOString();
+
+  // Check feature flag before touching the tasks DB.
+  const config = await readConfig();
+  const taskDispatcherEnabled = getFlag(config.featureFlags, "taskDispatcher");
+
+  if (!taskDispatcherEnabled) {
+    return NextResponse.json(
+      buildBoard({ sessions, tasks: [], dispatcherEnabled: false }, generatedAt)
+    );
+  }
 
   let tasks: Task[] = [];
+  let decisionCounts = new Map<number, number>();
   let dispatcherEnabled = true;
 
   try {
     const allTasks = await listTasks();
     tasks = filterTasksByPeriod(allTasks, period);
+    decisionCounts = await countOpenDecisionsByTask();
   } catch {
-    // tasks.db unavailable (driver missing, DB corrupt, or dispatcher disabled)
+    // tasks.db unavailable (driver missing, DB corrupt)
     dispatcherEnabled = false;
-    tasks = [];
   }
 
-  const snapshot = buildBoard({ sessions, tasks, dispatcherEnabled }, generatedAt);
+  const snapshot = buildBoard({ sessions, tasks, dispatcherEnabled, decisionCounts }, generatedAt);
   return NextResponse.json(snapshot);
 }
 
@@ -57,15 +75,16 @@ function filterTasksByPeriod(
   const cutoff = Date.now() - cutoffMs;
 
   return tasks.filter((t) => {
-    // Always include open/in-progress tasks
+    // Always include open/active tasks and cancelled (which map to Idle)
     if (
       t.status === "pending" ||
       t.status === "running" ||
-      t.status === "awaiting_approval"
+      t.status === "awaiting_approval" ||
+      t.status === "cancelled"
     ) {
       return true;
     }
-    // For terminal states, filter by completion time or created_at
+    // For done/failed only, filter by completion time
     const anchor = t.completed_at ?? t.started_at ?? t.created_at;
     return new Date(anchor).getTime() >= cutoff;
   });

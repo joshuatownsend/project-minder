@@ -8,9 +8,9 @@ The Kanban page (`/kanban`) gives you a single-glance view of everything happeni
 |--------|---------------|
 | **Working** | Sessions actively running a tool; tasks with `running` status |
 | **Waiting** | Sessions waiting for your permission (approval); tasks awaiting your approval (`awaiting_approval`) |
-| **Idle** | Sessions that have finished a turn and are waiting for your next message; tasks queued as `pending`; cancelled tasks |
-| **Done** | Sessions whose JSONL history shows `done`; tasks with `done` status |
-| **Error** | Sessions whose history shows an error or cancellation by Claude; tasks with `failed` status |
+| **Idle** | Sessions that have finished a turn and are waiting for your next message; tasks queued as `pending` or `cancelled` |
+| **Done** | Tasks with `done` status |
+| **Error** | Tasks with `failed` status |
 
 ## Live / awaiting dots
 

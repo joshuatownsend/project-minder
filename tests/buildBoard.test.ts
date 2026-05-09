@@ -154,6 +154,15 @@ describe("buildBoard", () => {
     expect(snap.columns.done[0].kind === "task" && (snap.columns.done[0] as any).taskId).toBe(2);
   });
 
+  it("populates decisionCount from decisionCounts map", () => {
+    const task = makeTask({ id: 42, status: "running" });
+    const counts = new Map([[42, 3]]);
+    const snap = buildBoard({ sessions: [], tasks: [task], dispatcherEnabled: true, decisionCounts: counts }, NOW);
+    const card = snap.columns.working[0];
+    expect(card.kind).toBe("task");
+    if (card.kind === "task") expect(card.decisionCount).toBe(3);
+  });
+
   it("sets dispatcherEnabled=false when passed false", () => {
     const snap = buildBoard({ sessions: [], tasks: [], dispatcherEnabled: false }, NOW);
     expect(snap.dispatcherEnabled).toBe(false);

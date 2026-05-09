@@ -8,10 +8,12 @@ export interface BuildBoardInput {
   sessions: LiveSession[];
   tasks: Task[];
   dispatcherEnabled: boolean;
+  /** Open decision counts per task id. Missing keys default to 0. */
+  decisionCounts?: Map<number, number>;
 }
 
 export function buildBoard(
-  { sessions, tasks, dispatcherEnabled }: BuildBoardInput,
+  { sessions, tasks, dispatcherEnabled, decisionCounts }: BuildBoardInput,
   generatedAt: string,
 ): KanbanSnapshot {
   const columns: Record<KanbanColumn, KanbanCard[]> = {
@@ -50,7 +52,7 @@ export function buildBoard(
       model: t.model,
       costUsd: t.cost_usd,
       sessionId: t.session_id,
-      decisionCount: 0,
+      decisionCount: decisionCounts?.get(t.id) ?? 0,
       createdAt: t.created_at,
       startedAt: t.started_at,
       completedAt: t.completed_at,

@@ -10,8 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Wave 10.1a — Cluster W (part 1): Mission Control Kanban board.** TODO #166.
   - New `/kanban` page with a 5-column board (Working / Waiting / Idle / Done / Error) that unifies Claude Code sessions and dispatcher tasks in a single view.
   - `GET /api/kanban` route: reuses `getLiveStatusPayload()` (6 s cached) for sessions + `listTasks()` for tasks. Optional `?period=last24h|last7d|all` filter controls Done/Error horizon. Returns `{ columns, generatedAt, dispatcherEnabled }`. Graceful no-DB fallback returns sessions-only with `dispatcherEnabled: false`.
-  - `useKanban` hook: polls every 6 s (aligned to cache TTL), pauses on hidden tab, primes on visibility change, short-circuits re-renders when `generatedAt` is unchanged.
-  - `KanbanBoard` component: search (debounced 200 ms), kind filter (all/sessions/tasks), period selector, column-visibility menu (persisted to `localStorage:minder:kanban:hidden-columns`), per-column 10-card cap with "Show N more", ARIA live region for screen readers.
+  - `useKanban` hook: polls every 6 s (aligned to cache TTL), pauses on hidden tab, primes on visibility change.
+  - `KanbanBoard` component: search (debounced 200 ms), kind filter (all/sessions/tasks), period selector, column-visibility menu (persisted in localStorage under key `minder:kanban:hidden-columns`), per-column 10-card cap with "Show N more", ARIA live region for screen readers.
   - `KanbanCard` component: session cards show project slug, worktree label, last tool, elapsed age, and green/amber live dot; task cards show quadrant, skill, model, cost, pending-decision count.
   - `columnMap.ts` + `buildBoard.ts`: pure mapping/builder layer with exhaustive switch coverage.
   - 3 new test files (`columnMap`, `buildBoard`, `apiKanban`): exhaustive enumeration of all `LiveSessionStatus` × session-status pairs and all `TaskStatus` values.

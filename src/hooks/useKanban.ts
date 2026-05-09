@@ -18,7 +18,6 @@ export function useKanban(period: KanbanPeriod = "last24h") {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const lastGeneratedAt = useRef<string>("");
 
   const fetch_ = useCallback(async () => {
     if (inFlight.current) return;
@@ -30,9 +29,6 @@ export function useKanban(period: KanbanPeriod = "last24h") {
         return;
       }
       const data: KanbanSnapshot = await res.json();
-      // Short-circuit re-renders when snapshot hasn't changed
-      if (data.generatedAt === lastGeneratedAt.current) return;
-      lastGeneratedAt.current = data.generatedAt;
       setSnapshot(data);
       setError(null);
     } catch (e) {

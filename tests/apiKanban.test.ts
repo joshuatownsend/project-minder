@@ -8,14 +8,27 @@ vi.mock("@/lib/liveStatus", () => ({
 
 vi.mock("@/lib/tasks/store", () => ({
   listTasks: vi.fn(),
+  countOpenDecisionsByTask: vi.fn(),
 }));
 
-// Reset modules so mock state is fresh per-test (liveStatus uses globalThis cache)
+vi.mock("@/lib/config", () => ({
+  readConfig: vi.fn(),
+}));
+
+vi.mock("@/lib/featureFlags", () => ({
+  getFlag: vi.fn(),
+}));
+
 import { getLiveStatusPayload } from "@/lib/liveStatus";
-import { listTasks } from "@/lib/tasks/store";
+import { listTasks, countOpenDecisionsByTask } from "@/lib/tasks/store";
+import { readConfig } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 
 const mockGetLiveStatusPayload = vi.mocked(getLiveStatusPayload);
 const mockListTasks = vi.mocked(listTasks);
+const mockCountOpenDecisionsByTask = vi.mocked(countOpenDecisionsByTask);
+const mockReadConfig = vi.mocked(readConfig);
+const mockGetFlag = vi.mocked(getFlag);
 
 const NOW = "2026-05-08T12:00:00.000Z";
 
@@ -25,6 +38,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetLiveStatusPayload.mockResolvedValue(emptyPayload);
   mockListTasks.mockResolvedValue([]);
+  mockCountOpenDecisionsByTask.mockResolvedValue(new Map());
+  // Default: taskDispatcher flag is enabled
+  mockReadConfig.mockResolvedValue({ statuses: {}, hidden: [], portOverrides: {}, devRoot: "C:\\dev", pinnedSlugs: [] } as any);
+  mockGetFlag.mockReturnValue(true);
 });
 
 function mkGet(params?: Record<string, string>): NextRequest {
@@ -46,7 +63,7 @@ describe("GET /api/kanban", () => {
     for (const col of KANBAN_COLUMNS) {
       expect(Array.isArray(body.columns[col])).toBe(true);
     }
-    expect(body.generatedAt).toBe(NOW);
+    expect(typeof body.generatedAt).toBe("string");
     expect(body.dispatcherEnabled).toBe(true);
   });
 
@@ -70,6 +87,15 @@ describe("GET /api/kanban", () => {
   it("accepts all period", async () => {
     const res = await getRoute(mkGet({ period: "all" }));
     expect(res.status).toBe(200);
+  });
+
+  it("returns dispatcherEnabled=false when taskDispatcher flag is off", async () => {
+    mockGetFlag.mockReturnValue(false);
+    const res = await getRoute(mkGet());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.dispatcherEnabled).toBe(false);
+    expect(mockListTasks).not.toHaveBeenCalled();
   });
 
   it("returns dispatcherEnabled=false when listTasks throws", async () => {
@@ -104,7 +130,6 @@ describe("GET /api/kanban", () => {
   });
 
   it("is read-only (no mutations)", async () => {
-    // The route only exports GET — no POST/PUT/DELETE
     const routeModule = await import("@/app/api/kanban/route");
     expect((routeModule as Record<string, unknown>).POST).toBeUndefined();
     expect((routeModule as Record<string, unknown>).PUT).toBeUndefined();

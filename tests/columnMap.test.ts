@@ -25,34 +25,10 @@ describe("sessionToColumn", () => {
     expect(sessionToColumn("waiting")).toBe("idle");
   });
 
-  describe("other + sessionStatus", () => {
-    it("other + errored → error", () => {
-      expect(sessionToColumn("other", "errored")).toBe("error");
-    });
-
-    it("other + api-error → error", () => {
-      expect(sessionToColumn("other", "api-error")).toBe("error");
-    });
-
-    it("other + cancelled → error", () => {
-      expect(sessionToColumn("other", "cancelled")).toBe("error");
-    });
-
-    it("other + done → done", () => {
-      expect(sessionToColumn("other", "done")).toBe("done");
-    });
-
-    it("other + undefined → idle", () => {
-      expect(sessionToColumn("other", undefined)).toBe("idle");
-    });
-
-    it("other + working → idle", () => {
-      expect(sessionToColumn("other", "working")).toBe("idle");
-    });
-
-    it("other + needs_attention → idle", () => {
-      expect(sessionToColumn("other", "needs_attention")).toBe("idle");
-    });
+  it("other → idle", () => {
+    // getLiveStatusPayload() provides no terminal-state signal — sessions
+    // with liveStatus "other" always land in Idle.
+    expect(sessionToColumn("other")).toBe("idle");
   });
 
   it("covers every LiveSessionStatus value", () => {
