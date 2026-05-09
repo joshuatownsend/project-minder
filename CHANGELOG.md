@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Claude session reading wrapped as the `claude` adapter; existing `parser.ts` / `ingest.ts` functions stay public and are called by the adapter wrapper.
 - `claudeConversations.scanAllSessions` stamps `source: "claude"` directly (adapter-registry routing deferred to Wave 10.2b when Codex lands).
 
+- **Wave 10.2b — Cluster X (part 2): Codex CLI adapter.** TODO #219.
+  - New `src/lib/adapters/codex.ts`: `discover()` recursively walks `~/.codex/sessions/` and `~/.codex/archived_sessions/`, deduping sessions by ID. `parseFile()` translates Codex's event-stream JSONL format (session_meta / turn_context / response_item / event_msg) into `UsageTurn[]`.
+  - Token delta math: prefers `last_token_usage` per turn; falls back to delta from `total_token_usage` when absent. `cacheReadTokens = min(cached_input_tokens, input_tokens)`; `cacheCreateTokens` is always 0 (Codex does not report cache creation).
+  - Project slug derived from `cwd` in session metadata via `encodeProjectPath` + `toSlug` — same encoding used by the scanner, so Codex sessions correlate with the correct project in analytics.
+  - Help doc updated: Codex adapter status changed from "Coming" to "Active"; Codex-specific section added.
+
 - **Wave 10.1c — Cluster W (part 3): Multi-agent swarm dispatch.** TODO #247.
   - New `ops_swarms` table (migration v5) with `name`, `mode` (`worktree`|`shared`), `project_path`, `status`, `completed_at`. Two new nullable columns on `ops_tasks`: `swarm_id` (FK → `ops_swarms`) and `swarm_role` (`member`|`coordinator`), added via `ALTER TABLE ADD COLUMN` — zero migration cost for existing rows.
   - **Swarm creation**: `createSwarm()` — single SQLite transaction creates the swarm row + 2–8 member tasks (with `worktreePath`/`projectPath` in metadata for worktree mode) + optional coordinator task with `task_dependencies` edges to every member.

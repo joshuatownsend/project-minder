@@ -1,6 +1,7 @@
 import type { SessionAdapter, SessionFile } from "./types";
 import type { MinderConfig } from "@/lib/types";
 import claudeAdapter from "./claude";
+import codexAdapter from "./codex";
 
 const REGISTRY = new Map<string, SessionAdapter>();
 
@@ -9,6 +10,7 @@ function register(adapter: SessionAdapter): void {
 }
 
 register(claudeAdapter);
+register(codexAdapter);
 
 export function listAdapters(): SessionAdapter[] {
   return [...REGISTRY.values()];
