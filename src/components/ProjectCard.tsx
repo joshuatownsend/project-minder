@@ -18,6 +18,7 @@ import {
 } from "./ui/dropdown-menu";
 import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers } from "lucide-react";
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
+import { SwarmComposer } from "./SwarmComposer";
 import { StatusDot } from "./ui/StatusDot";
 import { usePulse } from "./PulseProvider";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
@@ -67,6 +68,7 @@ const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }>
 export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
   const router = useRouter();
   const { snapshot } = usePulse();
   const isLive = snapshot.liveSlugs.includes(project.slug);
@@ -338,6 +340,10 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   align="end"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
+                  <DropdownMenuItem onClick={() => setSwarmComposerOpen(true)}>
+                    <Layers style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                    Launch Swarm…
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setShowTemplateModal(true)}>
                     <Layers style={{ width: "12px", height: "12px", marginRight: "6px" }} />
                     Mark as template…
@@ -355,6 +361,11 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 onClose={() => setShowTemplateModal(false)}
               />
             )}
+            <SwarmComposer
+              open={swarmComposerOpen}
+              onClose={() => setSwarmComposerOpen(false)}
+              projectPath={project.path}
+            />
           </div>
         </div>
 

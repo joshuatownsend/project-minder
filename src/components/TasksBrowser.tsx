@@ -17,6 +17,7 @@ import {
 import type { Task, Schedule, TaskStatus, TaskQuadrant } from "@/lib/tasks/types";
 import { TASK_STATUSES, TASK_QUADRANTS } from "@/lib/tasks/types";
 import { TaskComposer } from "./TaskComposer";
+import { SwarmComposer } from "./SwarmComposer";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -317,6 +318,7 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [composerOpen, setComposerOpen] = useState(false);
+  const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
 
   const filtered = useMemo(() => {
     let result = tasks;
@@ -419,24 +421,41 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
           {filtered.length} / {tasks.length}
         </span>
 
-        <button
-          onClick={() => setComposerOpen(true)}
-          style={{
-            display: "flex", alignItems: "center", gap: "5px",
-            padding: "5px 12px",
-            background: "var(--accent)",
-            border: "none",
-            borderRadius: "4px",
-            fontSize: "0.78rem",
-            fontWeight: 600,
-            color: "white",
-            cursor: "pointer",
-            marginLeft: "auto",
-          }}
-        >
-          <Plus style={{ width: "12px", height: "12px" }} />
-          New task
-        </button>
+        <div style={{ display: "flex", gap: "6px", marginLeft: "auto" }}>
+          <button
+            onClick={() => setSwarmComposerOpen(true)}
+            style={{
+              display: "flex", alignItems: "center", gap: "5px",
+              padding: "5px 12px",
+              background: "none",
+              border: "1px solid var(--border)",
+              borderRadius: "4px",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              cursor: "pointer",
+            }}
+          >
+            Launch Swarm
+          </button>
+          <button
+            onClick={() => setComposerOpen(true)}
+            style={{
+              display: "flex", alignItems: "center", gap: "5px",
+              padding: "5px 12px",
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: "4px",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              color: "white",
+              cursor: "pointer",
+            }}
+          >
+            <Plus style={{ width: "12px", height: "12px" }} />
+            New task
+          </button>
+        </div>
       </div>
 
       <TaskComposer
@@ -446,6 +465,10 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
           setComposerOpen(false);
           onRefresh?.();
         }}
+      />
+      <SwarmComposer
+        open={swarmComposerOpen}
+        onClose={() => setSwarmComposerOpen(false)}
       />
 
       {/* Tasks list */}

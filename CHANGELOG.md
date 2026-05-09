@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 10.1c — Cluster W (part 3): Multi-agent swarm dispatch.** TODO #247.
+  - New `ops_swarms` table (migration v5) with `name`, `mode` (`worktree`|`shared`), `project_path`, `status`, `completed_at`. Two new nullable columns on `ops_tasks`: `swarm_id` (FK → `ops_swarms`) and `swarm_role` (`member`|`coordinator`), added via `ALTER TABLE ADD COLUMN` — zero migration cost for existing rows.
+  - **Swarm creation**: `createSwarm()` — single SQLite transaction creates the swarm row + 2–8 member tasks (with `worktreePath`/`projectPath` in metadata for worktree mode) + optional coordinator task with `task_dependencies` edges to every member.
+  - **Coordinator "all-terminal" SQL guard**: `claimPendingTask` and `promoteApprovalTasks` use a role-aware `NOT EXISTS` subquery — non-coordinator tasks need blockers `= 'done'`; coordinator tasks unblock when all blockers reach any terminal state (`done`|`failed`|`cancelled`).
+  - **Coordinator context injection**: `updateSwarmStatus()` appends member `output_summary` values to the coordinator task's `description` field when all members become terminal — injected exactly once (guarded by `<!-- swarm-summaries-injected -->` marker) so the coordinator runs with full context of what each member produced.
+  - **Worktree spawner**: `runWorktreeTask()` — calls `git worktree add -B <branch> <path> HEAD` via `execFile` (not shell exec), sets `cwd` to the worktree directory via a `spawnFn` closure (no signature change to `runClassicTask`/`runStreamTask`). Worktree paths are siblings of the project dir using `--claude-worktrees-` naming (compatible with the existing worktrees scanner).
+  - **Dispatcher routing**: detects worktree tasks by `worktreePath` in metadata; routes to `runWorktreeTask`; calls `updateSwarmStatus(swarmId)` after every swarm task completes/fails.
+  - **REST surface**: `GET/POST /api/swarms`, `GET /api/swarms/[id]`, `DELETE /api/swarms/[id]/worktrees` (idempotent `git worktree remove --force` cleanup).
+  - **SwarmComposer modal** — name, project path (prefilled from project card or text input on Tasks page), mode radio, 2–8 member definitions, optional coordinator. Navigates to `/swarms/<id>` on success.
+  - **Entry points**: "Launch Swarm" button on Tasks page; "Launch Swarm…" in the project card dropdown (pre-fills project path).
+  - **Swarms nav entry** added to Mission Control group in AppNav.
+  - **`/swarms`** — list page with status dot and mode badges. **`/swarms/[id]`** — detail page polling every 5 s while running; shows per-member status/cost/session link, total cost, "Remove worktrees" action for worktree-mode swarms.
+
 - **Wave 10.1b — Cluster W (part 2): Task dependency graph.** TODO #167.
   - New `task_dependencies(task_id, blocker_id)` table (migration v4) with `CHECK (task_id != blocker_id)`, `UNIQUE (task_id, blocker_id)`, and cascade-delete. Indexed on both columns.
   - **Dispatcher SQL guard**: `claimPendingTask` and `promoteApprovalTasks` skip tasks whose blockers haven't reached `done` via a single `NOT EXISTS (...)` subquery — atomically safe, no JS-level filter.

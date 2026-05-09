@@ -161,6 +161,27 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: "ops_swarms + swarm_id/swarm_role on ops_tasks (Wave 10.1c)",
+    up(db) {
+      runStatements(db, `
+        CREATE TABLE IF NOT EXISTS ops_swarms (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          name         TEXT    NOT NULL,
+          mode         TEXT    NOT NULL CHECK (mode IN ('worktree','shared')),
+          project_path TEXT    NOT NULL,
+          status       TEXT    NOT NULL DEFAULT 'running'
+                       CHECK (status IN ('running','done','failed','cancelled')),
+          created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          completed_at TEXT
+        );
+        ALTER TABLE ops_tasks ADD COLUMN swarm_id INTEGER REFERENCES ops_swarms(id) ON DELETE SET NULL;
+        ALTER TABLE ops_tasks ADD COLUMN swarm_role TEXT CHECK (swarm_role IN ('member','coordinator') OR swarm_role IS NULL);
+        CREATE INDEX IF NOT EXISTS ix_tasks_swarm ON ops_tasks(swarm_id) WHERE swarm_id IS NOT NULL
+      `);
+    },
+  },
 ];
 
 function resolveTasksSchemaPath(): string {

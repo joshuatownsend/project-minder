@@ -1,3 +1,36 @@
+export type SwarmMode = "worktree" | "shared";
+export type SwarmStatus = "running" | "done" | "failed" | "cancelled";
+export type SwarmRole = "member" | "coordinator";
+export const SWARM_MODES: readonly SwarmMode[] = ["worktree", "shared"];
+
+export interface Swarm {
+  id: number;
+  name: string;
+  mode: SwarmMode;
+  project_path: string;
+  status: SwarmStatus;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface CreateSwarmInput {
+  name: string;
+  mode: SwarmMode;
+  project_path: string;
+  members: {
+    title: string;
+    description?: string;
+    assigned_skill?: string;
+    model?: string;
+    execution_mode?: ExecutionMode;
+  }[];
+  coordinator?: {
+    title: string;
+    description?: string;
+    assigned_skill?: string;
+  };
+}
+
 export type TaskStatus =
   | "pending"
   | "awaiting_approval"
@@ -76,6 +109,8 @@ export interface Task {
   created_at: string;
   /** JSON blob set by todoDelegation for auto-toggle on completion. */
   metadata: string | null;
+  swarm_id: number | null;
+  swarm_role: SwarmRole | null;
 }
 
 export type DecisionKind = "decision" | "inbox";

@@ -1,5 +1,6 @@
 import "server-only";
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, execFile, type ChildProcess } from "child_process";
+import { promisify } from "util";
 import os from "os";
 import path from "path";
 import fs from "fs";
@@ -367,4 +368,58 @@ export async function runStreamTask(
       resolve({ taskId: task.id, status: "failed", error: err.message, durationMs });
     });
   });
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Spawn a task inside a git worktree directory.
+ * Reads worktreePath and projectPath from task metadata JSON.
+ * Creates the worktree via `git worktree add` if the directory doesn't exist yet.
+ * Injects cwd via a spawnFn closure so runClassicTask/runStreamTask need no signature changes.
+ */
+export async function runWorktreeTask(
+  task: Task,
+  spawnFn: SpawnFn = spawn,
+  onDecision?: OnDecisionFn,
+  onComplete?: OnCompleteFn
+): Promise<RunTaskResult> {
+  let meta: { worktreePath?: string; projectPath?: string } = {};
+  try {
+    meta = JSON.parse(task.metadata ?? "{}") as typeof meta;
+  } catch {
+    // malformed metadata — fall through to normal dispatch
+  }
+
+  const { worktreePath, projectPath } = meta;
+
+  if (!worktreePath || !projectPath) {
+    return task.execution_mode === "stream"
+      ? runStreamTask(task, spawnFn, onDecision, onComplete)
+      : runClassicTask(task, spawnFn);
+  }
+
+  // Create the worktree if it doesn't already exist.
+  if (!fs.existsSync(worktreePath)) {
+    const branchName = `swarm-${task.swarm_id ?? "x"}-${task.id}-${Date.now()}`;
+    try {
+      await execFileAsync("git", ["worktree", "add", "-B", branchName, worktreePath, "HEAD"], {
+        cwd: projectPath,
+      });
+    } catch (err) {
+      const errMsg = `git worktree add failed: ${(err as Error).message}`.slice(0, 2000);
+      console.error(`[spawner] ${errMsg}`);
+      await failTask(task.id, { error_message: errMsg }).catch(() => {});
+      return { taskId: task.id, status: "failed", error: errMsg, durationMs: 0 };
+    }
+  }
+
+  // Wrap spawnFn so child processes inherit the worktree's cwd.
+  // Cast required because SpawnFn has many overloads; we only use the (cmd, args, opts) form.
+  const cwdSpawnFn = ((cmd: string, args: readonly string[], opts: object) =>
+    spawnFn(cmd as string, args as readonly string[], { ...opts, cwd: worktreePath } as never)) as unknown as SpawnFn;
+
+  return task.execution_mode === "stream"
+    ? runStreamTask(task, cwdSpawnFn, onDecision, onComplete)
+    : runClassicTask(task, cwdSpawnFn);
 }
