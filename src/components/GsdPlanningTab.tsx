@@ -114,18 +114,23 @@ export function GsdPlanningTab({ slug }: { slug: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/projects/${encodeURIComponent(slug)}/gsd-planning`)
+    fetch(`/api/projects/${encodeURIComponent(slug)}/gsd-planning`, {
+      signal: controller.signal,
+    })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json() as Promise<GsdPlanningInfo>;
       })
       .then((d) => { setData(d); setLoading(false); })
       .catch((e: unknown) => {
+        if (e instanceof Error && e.name === "AbortError") return;
         setError(e instanceof Error ? e.message : "Failed to load planning data");
         setLoading(false);
       });
+    return () => controller.abort();
   }, [slug]);
 
   if (loading) {

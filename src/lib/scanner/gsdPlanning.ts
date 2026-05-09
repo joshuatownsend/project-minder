@@ -169,41 +169,34 @@ async function readPhases(dir: string): Promise<GsdPhaseEntry[]> {
     return [];
   }
 
-  // Parse stateInfo for timing — re-read here with a self-contained call
-  // (readPhases is called in parallel with readStateMd; we'll apply timing
-  //  in the parent scanGsdPlanning after both resolve)
   const phaseFiles = files
     .filter((f) => /^\d+-.+\.md$/i.test(f))
-    .sort((a, b) => {
-      const na = parseInt(a, 10);
-      const nb = parseInt(b, 10);
-      return na - nb;
-    });
+    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
 
-  const entries: GsdPhaseEntry[] = [];
-  for (const file of phaseFiles) {
-    const num = parseInt(file, 10);
-    const filePath = path.join(phasesDir, file);
-    try {
-      const raw = await fs.readFile(filePath, "utf-8");
-      const lines = raw.split("\n");
-      const heading = lines.find((l) => l.startsWith("# "))?.slice(2).trim() ?? file;
-      const tokenLine = lines.find((l) => /token budget:/i.test(l));
-      const tokenBudget = tokenLine
-        ? parseInt(tokenLine.replace(/.*token budget:\s*/i, ""), 10) || undefined
-        : undefined;
-      entries.push({
-        number: num,
-        name: heading,
-        file,
-        status: "pending", // default; overridden by stateInfo in parent
-        tokenBudget: isFinite(tokenBudget ?? NaN) ? tokenBudget : undefined,
-      });
-    } catch {
-      // Unreadable phase file — skip
-    }
-  }
-  return entries;
+  const entries = await Promise.all(
+    phaseFiles.map(async (file): Promise<GsdPhaseEntry | null> => {
+      const num = parseInt(file, 10);
+      try {
+        const raw = await fs.readFile(path.join(phasesDir, file), "utf-8");
+        const lines = raw.split("\n");
+        const heading = lines.find((l) => l.startsWith("# "))?.slice(2).trim() ?? file;
+        const tokenLine = lines.find((l) => /token budget:/i.test(l));
+        const tokenBudget = tokenLine
+          ? parseInt(tokenLine.replace(/.*token budget:\s*/i, ""), 10) || undefined
+          : undefined;
+        return {
+          number: num,
+          name: heading,
+          file,
+          status: "pending", // default; overridden by applyStateOverrides in parent
+          tokenBudget: isFinite(tokenBudget ?? NaN) ? tokenBudget : undefined,
+        };
+      } catch {
+        return null; // unreadable phase file — skip
+      }
+    }),
+  );
+  return entries.filter((e): e is GsdPhaseEntry => e !== null);
 }
 
 function normalizePhaseStatus(raw: unknown): GsdPhaseEntry["status"] | undefined {
