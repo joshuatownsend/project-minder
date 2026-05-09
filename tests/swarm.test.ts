@@ -332,7 +332,10 @@ describe.skipIf(!Database)("swarm store", () => {
 
     // Call again — should not duplicate the block
     await store.updateSwarmStatus(swarm.id);
-    const count = (updatedCoord.description.match(/## Member Task Outputs/g) ?? []).length;
+    const afterSecond = memDb!
+      .prepare("SELECT description FROM ops_tasks WHERE id = ?")
+      .get(coord.id) as { description: string };
+    const count = (afterSecond.description.match(/## Member Task Outputs/g) ?? []).length;
     expect(count).toBe(1);
 
     void swarm;

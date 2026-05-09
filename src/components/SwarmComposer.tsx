@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/modal";
-import type { SwarmMode, ExecutionMode } from "@/lib/tasks/types";
+import type { SwarmMode } from "@/lib/tasks/types";
 import { SWARM_MODES } from "@/lib/tasks/types";
 import { inputStyle, labelStyle, Field } from "./composer-fields";
 
@@ -11,7 +11,6 @@ interface MemberDraft {
   title: string;
   description: string;
   assigned_skill: string;
-  execution_mode: ExecutionMode;
 }
 
 interface SwarmComposerProps {
@@ -22,7 +21,7 @@ interface SwarmComposerProps {
 }
 
 function emptyMember(): MemberDraft {
-  return { title: "", description: "", assigned_skill: "", execution_mode: "stream" };
+  return { title: "", description: "", assigned_skill: "" };
 }
 
 export function SwarmComposer({ open, onClose, projectPath: propProjectPath }: SwarmComposerProps) {
@@ -88,7 +87,6 @@ export function SwarmComposer({ open, onClose, projectPath: propProjectPath }: S
           title: m.title.trim(),
           description: m.description.trim() || undefined,
           assigned_skill: m.assigned_skill.trim() || undefined,
-          execution_mode: m.execution_mode,
         })),
         coordinator: hasCoordinator
           ? {
@@ -146,12 +144,12 @@ export function SwarmComposer({ open, onClose, projectPath: propProjectPath }: S
               style={inputStyle}
               value={projectPath}
               onChange={(e) => setProjectPath(e.target.value)}
-              placeholder="C:\dev\my-project"
+              placeholder={"C:\\dev\\my-project"}
             />
           </Field>
         )}
 
-        <Field label="Execution mode">
+        <Field label="Swarm mode">
           <div style={{ display: "flex", gap: "16px" }}>
             {SWARM_MODES.map((m) => (
               <label key={m} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "0.82rem" }}>

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { listSwarms, createSwarm } from "@/lib/tasks/store";
 import type { SwarmMode } from "@/lib/tasks/types";
-import { SWARM_MODES } from "@/lib/tasks/types";
+import { SWARM_MODES, EXECUTION_MODES } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +52,22 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (!m || typeof m.title !== "string" || !m.title.trim()) {
         return NextResponse.json(
           { error: "each member must have a non-empty title", field: "members" },
+          { status: 400 }
+        );
+      }
+      if (m.execution_mode !== undefined && !(EXECUTION_MODES as readonly string[]).includes(m.execution_mode as string)) {
+        return NextResponse.json(
+          { error: `execution_mode must be one of: ${EXECUTION_MODES.join(", ")}`, field: "members" },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (coordinator !== undefined) {
+      if (!coordinator || typeof (coordinator as Record<string, unknown>).title !== "string" ||
+          !(coordinator as Record<string, unknown>).title) {
+        return NextResponse.json(
+          { error: "coordinator must have a non-empty title", field: "coordinator" },
           { status: 400 }
         );
       }

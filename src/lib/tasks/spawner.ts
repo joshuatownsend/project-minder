@@ -5,7 +5,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import type { Task } from "./types";
-import { completeTask, failTask, setSessionId } from "./store";
+import { completeTask, failTask, setSessionId, getTask } from "./store";
 import { isWindows } from "../platform";
 import { createDecisionParser, type DecisionEvent } from "./decisionParser";
 
@@ -388,10 +388,28 @@ export async function runWorktreeTask(
 
   const { worktreePath, projectPath } = meta;
 
-  if (!worktreePath || !projectPath) {
-    return task.execution_mode === "stream"
-      ? runStreamTask(task, spawnFn, onDecision, onComplete)
-      : runClassicTask(task, spawnFn);
+  if (!projectPath) {
+    // No project context at all — dispatch with default cwd and inherited spawnFn.
+    if (task.execution_mode === "stream") return runStreamTask(task, spawnFn, onDecision, onComplete);
+    const result = await runClassicTask(task, spawnFn);
+    if (onComplete) {
+      const updated = await getTask(task.id).catch(() => null);
+      if (updated) onComplete(updated).catch((e) => console.error(`[spawner] onComplete failed for task ${task.id}:`, e));
+    }
+    return result;
+  }
+
+  // Shared mode: no worktree, but cwd should be the project root.
+  if (!worktreePath) {
+    const sharedSpawnFn = ((cmd: string, args: readonly string[], opts: object) =>
+      spawnFn(cmd as string, args as readonly string[], { ...opts, cwd: projectPath } as never)) as unknown as SpawnFn;
+    if (task.execution_mode === "stream") return runStreamTask(task, sharedSpawnFn, onDecision, onComplete);
+    const result = await runClassicTask(task, sharedSpawnFn);
+    if (onComplete) {
+      const updated = await getTask(task.id).catch(() => null);
+      if (updated) onComplete(updated).catch((e) => console.error(`[spawner] onComplete failed for task ${task.id}:`, e));
+    }
+    return result;
   }
 
   // Create the worktree if it doesn't already exist.
@@ -409,12 +427,19 @@ export async function runWorktreeTask(
     }
   }
 
-  // Wrap spawnFn so child processes inherit the worktree's cwd.
+  // Wrap spawnFn so child processes inherit the target cwd.
   // Cast required because SpawnFn has many overloads; we only use the (cmd, args, opts) form.
+  const effectiveCwd = worktreePath;
   const cwdSpawnFn = ((cmd: string, args: readonly string[], opts: object) =>
-    spawnFn(cmd as string, args as readonly string[], { ...opts, cwd: worktreePath } as never)) as unknown as SpawnFn;
+    spawnFn(cmd as string, args as readonly string[], { ...opts, cwd: effectiveCwd } as never)) as unknown as SpawnFn;
 
-  return task.execution_mode === "stream"
-    ? runStreamTask(task, cwdSpawnFn, onDecision, onComplete)
-    : runClassicTask(task, cwdSpawnFn);
+  if (task.execution_mode === "stream") {
+    return runStreamTask(task, cwdSpawnFn, onDecision, onComplete);
+  }
+  const result = await runClassicTask(task, cwdSpawnFn);
+  if (onComplete) {
+    const updated = await getTask(task.id).catch(() => null);
+    if (updated) onComplete(updated).catch((e) => console.error(`[spawner] onComplete failed for task ${task.id}:`, e));
+  }
+  return result;
 }

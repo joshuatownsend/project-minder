@@ -1,6 +1,7 @@
 import "server-only";
 import path from "path";
 import type DatabaseT from "better-sqlite3";
+import { WORKTREE_SEP } from "../scanner/worktreeCheck";
 import { initTasksDb } from "../tasksDb/migrations";
 import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
@@ -595,7 +596,6 @@ export async function listAllDependencies(): Promise<TaskDependency[]> {
 // Swarms
 // ---------------------------------------------------------------------------
 
-const WORKTREE_SEP = "--claude-worktrees-";
 const TERMINAL_STATUSES = new Set<TaskStatus>(["done", "failed", "cancelled"]);
 
 type SwarmTaskRow = Pick<Task, "id" | "status" | "output_summary" | "title" | "swarm_role" | "description">;
@@ -636,13 +636,15 @@ export async function createSwarm(
 
     for (let i = 0; i < input.members.length; i++) {
       const member = input.members[i];
-      let meta: Record<string, unknown> | null = null;
+      let meta: Record<string, unknown>;
       if (input.mode === "worktree") {
         const worktreePath = path.join(
           path.dirname(input.project_path),
-          path.basename(input.project_path) + WORKTREE_SEP + slug + "-" + i
+          path.basename(input.project_path) + WORKTREE_SEP + slug + "-" + swarm.id + "-" + i
         );
         meta = { worktreePath, projectPath: input.project_path };
+      } else {
+        meta = { projectPath: input.project_path };
       }
       const task = insertTask.get(
         member.title,
@@ -652,7 +654,7 @@ export async function createSwarm(
         member.assigned_skill ?? null,
         member.model ?? null,
         member.execution_mode ?? "stream",
-        meta ? JSON.stringify(meta) : null,
+        JSON.stringify(meta),
         swarm.id,
         "member"
       ) as Task;
