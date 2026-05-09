@@ -17,6 +17,7 @@ import { ProjectAgentsTab } from "./ProjectAgentsTab";
 import { ProjectSkillsTab } from "./ProjectSkillsTab";
 import { ConfigHistoryTab } from "./ConfigHistoryTab";
 import { ProjectConfigTab } from "./ProjectConfigTab";
+import { GsdPlanningTab } from "./GsdPlanningTab";
 import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
 import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import { EfficiencyTab } from "./EfficiencyTab";
@@ -47,7 +48,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -138,6 +139,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
+  const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
@@ -147,6 +149,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     ...(hasManualSteps  ? [{ key: "manual-steps" as TabKey, label: "Manual Steps" }] : []),
     ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
     { key: "memory",      label: "Memory" },
+    ...(hasGsdPlanning   ? [{ key: "planning"     as TabKey, label: "Planning"    }] : []),
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
     ...(hasSessions ? [{ key: "efficiency"   as TabKey, label: "Efficiency"   }] : []),
@@ -548,6 +551,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── MEMORY ────────────────────────────────────────────────── */}
           {activeTab === "memory" && (
             <MemoryTab slug={project.slug} />
+          )}
+
+          {/* ── PLANNING ─────────────────────────────────────────────── */}
+          {activeTab === "planning" && (
+            <GsdPlanningTab slug={project.slug} />
           )}
 
           {/* ── AGENTS ───────────────────────────────────────────────── */}

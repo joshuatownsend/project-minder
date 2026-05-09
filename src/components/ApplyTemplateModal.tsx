@@ -444,40 +444,64 @@ function UnitResultRow({
   const status = result.ok ? result.status : `error · ${result.error?.code ?? "UNKNOWN"}`;
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "8px",
-        alignItems: "center",
-        fontSize: "0.7rem",
-        padding: "3px 0",
-        borderBottom: "1px solid var(--border-subtle)",
-      }}
-    >
-      <span
+    <>
+      <div
         style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.6rem",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: "3px",
-          padding: "1px 4px",
-          color: "var(--text-muted)",
-          minWidth: "75px",
-          textAlign: "center",
+          display: "flex",
+          gap: "8px",
+          alignItems: "center",
+          fontSize: "0.7rem",
+          padding: "3px 0",
+          borderBottom: result.bundle ? "none" : "1px solid var(--border-subtle)",
         }}
       >
-        {kindLabel(unit)}
-      </span>
-      <span style={{ flex: 1, minWidth: 0, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {unit.name ?? unit.key}
-      </span>
-      {result.warnings && result.warnings.length > 0 && (
-        <span title={result.warnings.join("; ")} style={{ color: "var(--warning, #f59e0b)", fontSize: "0.6rem" }}>
-          ⚠ {result.warnings.length}
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.6rem",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "3px",
+            padding: "1px 4px",
+            color: "var(--text-muted)",
+            minWidth: "75px",
+            textAlign: "center",
+          }}
+        >
+          {kindLabel(unit)}
         </span>
+        <span style={{ flex: 1, minWidth: 0, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {unit.name ?? unit.key}
+        </span>
+        {result.warnings && result.warnings.length > 0 && (
+          <span title={result.warnings.join("; ")} style={{ color: "var(--warning, #f59e0b)", fontSize: "0.6rem" }}>
+            ⚠ {result.warnings.length}
+          </span>
+        )}
+        <span style={{ color, fontFamily: "var(--font-mono)", fontSize: "0.65rem" }}>{status}</span>
+      </div>
+      {result.bundle && (
+        <div
+          style={{
+            paddingLeft: "83px",
+            paddingBottom: "4px",
+            fontSize: "0.58rem",
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-muted)",
+            borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          <span style={{ color: "var(--text-secondary)" }}>📁 {result.bundle.rootName}/</span>
+          {result.bundle.files.slice(0, 5).map((f) => (
+            <span key={f} style={{ display: "block", paddingLeft: "10px" }}>📄 {f}</span>
+          ))}
+          {result.bundle.files.length > 5 && (
+            <span style={{ display: "block", paddingLeft: "10px", fontStyle: "italic" }}>
+              … +{result.bundle.files.length - 5} more
+            </span>
+          )}
+        </div>
       )}
-      <span style={{ color, fontFamily: "var(--font-mono)", fontSize: "0.65rem" }}>{status}</span>
-    </div>
+    </>
   );
 }
 

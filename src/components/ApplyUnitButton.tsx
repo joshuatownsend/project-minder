@@ -349,7 +349,9 @@ function ResultBlock({
           ))}
         </ul>
       )}
-      {result.diffPreview && (
+      {result.bundle ? (
+        <BundleTree bundle={result.bundle} />
+      ) : result.diffPreview ? (
         <pre
           style={{
             margin: 0,
@@ -367,12 +369,53 @@ function ResultBlock({
         >
           {result.diffPreview}
         </pre>
-      )}
+      ) : null}
       {result.changedFiles.length > 0 && mode === "apply" && (
         <div style={{ fontSize: "0.6rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
           {result.changedFiles.length} file{result.changedFiles.length === 1 ? "" : "s"} written
         </div>
       )}
+    </div>
+  );
+}
+
+function BundleTree({ bundle }: { bundle: NonNullable<import("@/lib/types").ApplyResult["bundle"]> }) {
+  const { rootName, files, totalBytes } = bundle;
+  const shown = files.slice(0, 20);
+  const more = files.length - shown.length;
+  return (
+    <div
+      style={{
+        padding: "6px 8px",
+        fontSize: "0.6rem",
+        fontFamily: "var(--font-mono)",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+        maxHeight: "180px",
+        overflow: "auto",
+      }}
+    >
+      <div style={{ color: "var(--text-secondary)", marginBottom: "2px" }}>
+        📁 {rootName}/
+        {totalBytes != null && (
+          <span style={{ color: "var(--text-muted)", marginLeft: "6px" }}>
+            {(totalBytes / 1024).toFixed(1)} KB
+          </span>
+        )}
+      </div>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+        {shown.map((f) => (
+          <li key={f} style={{ color: "var(--text-muted)", paddingLeft: "12px" }}>
+            📄 {f}
+          </li>
+        ))}
+        {more > 0 && (
+          <li style={{ color: "var(--text-muted)", paddingLeft: "12px", fontStyle: "italic" }}>
+            … +{more} more
+          </li>
+        )}
+      </ul>
     </div>
   );
 }

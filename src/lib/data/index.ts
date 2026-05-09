@@ -19,6 +19,8 @@ import type {
   SessionSearchHit,
   SessionSearchScope,
 } from "./sessionSearch";
+import { loadSessionCostsInWindow } from "./sessionsInWindow";
+import type { SessionCostRow } from "./sessionsInWindow";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
 import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/types";
 
@@ -680,6 +682,29 @@ export async function searchSessions(
   // "DB has a real problem."
   const hits = searchSessionsInDb(db, query, scope, limit);
   return { hits, meta: { backend: "db" } };
+}
+
+export type { SessionCostRow };
+
+/**
+ * Return sessions overlapping the given time window [startMs, endMs] for the
+ * project slug. Used by the GSD planning tab to attribute cost to phases.
+ *
+ * Returns [] when DB mode is off or the DB is unavailable — the GSD route
+ * treats an empty result as "cost unknown", not an error.
+ */
+export async function getSessionCostsInWindow(
+  projectSlug: string,
+  startMs: number,
+  endMs: number,
+): Promise<SessionCostRow[]> {
+  if (!dbModeRequested()) return [];
+  try {
+    const db = await getReadyDb();
+    return loadSessionCostsInWindow(db, projectSlug, startMs, endMs);
+  } catch {
+    return [];
+  }
 }
 
 export type { SessionSearchHit, SessionSearchScope } from "./sessionSearch";

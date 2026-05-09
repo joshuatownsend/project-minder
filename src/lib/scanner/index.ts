@@ -18,6 +18,7 @@ import { scanMcpServers } from "./mcpServers";
 import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
 import { countProjectCatalog } from "./projectCatalogCounts";
+import { scanGsdPlanning } from "./gsdPlanning";
 
 // Neutral substitutes typed against the real scanner returns so downstream
 // code reads the same shape whether the scanner ran or was gated off.
@@ -81,6 +82,7 @@ async function scanProject(
     mcpServers,
     cicd,
     catalogCounts,
+    gsdPlanning,
   ] = await Promise.all([
     scanPackageJson(projectPath),
     scanEnvFiles(projectPath),
@@ -106,6 +108,9 @@ async function scanProject(
     scanMcpServers(projectPath),
     scanCiCd(projectPath),
     countProjectCatalog(projectPath),
+    getFlag(flags, "gsdPlanning")
+      ? scanGsdPlanning(projectPath)
+      : Promise.resolve(undefined),
   ]);
 
   // Determine DB port from env or docker
@@ -162,6 +167,7 @@ async function scanProject(
     cicd,
     agentCount: catalogCounts.agentCount > 0 ? catalogCounts.agentCount : undefined,
     skillCount: catalogCounts.skillCount > 0 ? catalogCounts.skillCount : undefined,
+    gsdPlanning,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

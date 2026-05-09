@@ -9,7 +9,7 @@ import { Pill, inlineCode, commandPreview } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import type { HookSource } from "@/lib/types";
 
-const SOURCE_OPTIONS = ["all", "project", "local", "user"] as const;
+const SOURCE_OPTIONS = ["all", "project", "local", "user", "plugin"] as const;
 type SourceFilter = (typeof SOURCE_OPTIONS)[number];
 
 const SORT_OPTIONS = [
@@ -55,6 +55,7 @@ export function HooksBrowser() {
   const projectCount = allHooks.filter((h) => h.source === "project").length;
   const localCount = allHooks.filter((h) => h.source === "local").length;
   const userCount = allHooks.filter((h) => h.source === "user").length;
+  const pluginCount = allHooks.filter((h) => h.source === "plugin").length;
 
   const uniqueEvents = new Set(allHooks.map((h) => h.event)).size;
 
@@ -90,7 +91,7 @@ export function HooksBrowser() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
+            gridTemplateColumns: "repeat(5, 1fr)",
             gap: "8px",
           }}
         >
@@ -98,6 +99,7 @@ export function HooksBrowser() {
             { label: "Project", count: projectCount, source: "project" as HookSource },
             { label: "Local", count: localCount, source: "local" as HookSource },
             { label: "User", count: userCount, source: "user" as HookSource },
+            { label: "Plugin", count: pluginCount, source: "plugin" as HookSource },
             { label: "Events", count: uniqueEvents, source: null },
           ].map(({ label, count, source }) => (
             <button

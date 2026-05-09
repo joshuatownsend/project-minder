@@ -107,13 +107,15 @@ export async function applyDirectory(args: {
     }
   }
 
+  const rootName = path.basename(sourceDir);
+
   if (dryRun) {
-    const files = await listDirFiles(sourceDir);
+    const { files, totalBytes } = await listDirFiles(sourceDir);
     const shown = files.slice(0, 12);
     const more = files.length - shown.length;
     const action = willRemoveExisting
-      ? `[overwrite directory] ${path.basename(sourceDir)}/`
-      : `[copy directory] ${path.basename(sourceDir)}/`;
+      ? `[overwrite directory] ${rootName}/`
+      : `[copy directory] ${rootName}/`;
     const preview =
       `${action}\n` +
       `  → ${targetDir}\n` +
@@ -125,6 +127,7 @@ export async function applyDirectory(args: {
       status: "would-apply",
       changedFiles: [targetDir],
       diffPreview: preview,
+      bundle: { rootName, files, totalBytes },
     };
   }
 
@@ -133,14 +136,19 @@ export async function applyDirectory(args: {
     await fs.rm(targetDir, { recursive: true, force: true });
   }
   const written = await copyDirRecursive(sourceDir, targetDir);
-  return { ok: true, status: "applied", changedFiles: written };
+  const { files: writtenRelPaths } = await listDirFiles(sourceDir);
+  return {
+    ok: true,
+    status: "applied",
+    changedFiles: written,
+    bundle: { rootName, files: writtenRelPaths },
+  };
 }
 
-/** Walk `dir` and return every file path relative to it, depth-first.
- *  Used by the bundled-skill dryRun preview so the user sees what's actually
- *  in the bundle before clicking apply. */
-async function listDirFiles(dir: string): Promise<string[]> {
+/** Walk `dir` and return every file path relative to it (sorted) plus total byte count. */
+async function listDirFiles(dir: string): Promise<{ files: string[]; totalBytes: number }> {
   const out: string[] = [];
+  let totalBytes = 0;
   async function walk(curr: string, rel: string): Promise<void> {
     const entries = await fs.readdir(curr, { withFileTypes: true });
     for (const e of entries) {
@@ -150,6 +158,12 @@ async function listDirFiles(dir: string): Promise<string[]> {
         await walk(path.join(curr, e.name), childRel);
       } else if (e.isFile() || e.isSymbolicLink()) {
         out.push(childRel);
+        try {
+          const stat = await fs.stat(path.join(curr, e.name));
+          totalBytes += stat.size;
+        } catch {
+          // stat failure — skip size contribution
+        }
       }
     }
   }
@@ -159,7 +173,7 @@ async function listDirFiles(dir: string): Promise<string[]> {
     // Source dir disappeared between the existence check and the walk — return
     // whatever we collected. The caller will see an empty list rather than throw.
   }
-  return out.sort();
+  return { files: out.sort(), totalBytes };
 }
 
 async function pickRename(filePath: string): Promise<string> {

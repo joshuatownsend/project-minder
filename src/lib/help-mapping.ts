@@ -49,6 +49,7 @@ export const tabHelpMapping: Record<string, string> = {
   agents: 'agents',
   skills: 'skills',
   memory: 'memory',
+  planning: 'gsd-planning',
   efficiency: 'project-details',
   'hot-files': 'project-details',
   patterns: 'project-details',

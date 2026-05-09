@@ -228,6 +228,14 @@ describe("applyDirectory", () => {
     expect(result.diffPreview).toContain("SKILL.md");
     expect(result.diffPreview).toContain("helper.css");
     expect(result.diffPreview).toContain("sub/helper.md");
+    // bundle field is populated for dryRun too
+    expect(result.bundle).toBeDefined();
+    expect(result.bundle!.rootName).toBe(path.basename(src));
+    expect(result.bundle!.files).toHaveLength(3);
+    expect(result.bundle!.files).toContain("SKILL.md");
+    expect(result.bundle!.files).toContain("helper.css");
+    expect(result.bundle!.files).toContain("sub/helper.md");
+    expect(result.bundle!.totalBytes).toBeGreaterThan(0);
     // No write should have happened.
     await expect(fs.access(dst)).rejects.toThrow();
   });
@@ -255,6 +263,27 @@ describe("applyDirectory", () => {
     // Target dir + every existing file are still there.
     expect(await fs.readFile(path.join(dst, "SKILL.md"), "utf-8")).toBe("existing");
     expect(await fs.readFile(path.join(dst, "obsolete.md"), "utf-8")).toBe("stale");
+  });
+
+  it("real apply populates bundle field with relative file paths", async () => {
+    const src = path.join(tmp, "src");
+    const dst = path.join(tmp, "dst");
+    await fs.mkdir(path.join(src, "sub"), { recursive: true });
+    await fs.writeFile(path.join(src, "SKILL.md"), "skill", "utf-8");
+    await fs.writeFile(path.join(src, "sub", "helper.md"), "helper", "utf-8");
+
+    const result = await applyDirectory({
+      sourceDir: src,
+      targetDir: dst,
+      conflict: "skip",
+    });
+
+    expect(result.status).toBe("applied");
+    expect(result.bundle).toBeDefined();
+    expect(result.bundle!.rootName).toBe(path.basename(src));
+    expect(result.bundle!.files).toHaveLength(2);
+    expect(result.bundle!.files).toContain("SKILL.md");
+    expect(result.bundle!.files).toContain("sub/helper.md");
   });
 
   it("dryRun preview truncates long file lists with `… (+N more)`", async () => {

@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 11.2a — Cluster Z (part 1): Plugin-bundled hooks, bundled-skill UI polish, shareable stats image, GSD project planning tab.**
+  - **#76 Plugin-bundled hooks**: Plugins can ship `hooks/hooks.json`; entries surface with a `plugin` provenance badge and are read-only. Wired via new `src/lib/scanner/pluginHooks.ts` (mirrors `pluginMcp.ts`). `HookSource` union widened to `"project" | "local" | "user" | "plugin"`.
+  - **#70 Bundled-skill UI polish**: `ApplyResult` gains a structured `bundle?: { rootName, files, totalBytes }` field. `applyDirectory` populates it on both dry-run and real apply. `ApplyUnitButton` and `ApplyTemplateModal` render a `BundleTree` (📁/📄 file tree) when `bundle` is present, replacing the `<pre>` text wall.
+  - **#235 Shareable stats image**: `GET /api/share?period=&theme=&project=&source=` returns a pure-SVG stats card (1200×800) with KPI row, 24-hour activity strip, top-5 projects bar chart, by-model stacked bar. `ShareButton` component on `/usage` opens a modal with period/theme toggles, Copy URL, and Download SVG. Inline hex palettes (dark + invented light) — no canvas, no headless browser.
+  - **#229 GSD project planning tab**: Per-project `.planning/` scanner (`src/lib/scanner/gsdPlanning.ts`) reads `PROJECT.md`, `ROADMAP.md`, `STATE.md` (YAML frontmatter via js-yaml), and `phases/*.md`. Planning tab appears on project detail pages when `.planning/` is present and has at least one phase. Per-phase cost attribution via `GET /api/projects/[slug]/gsd-planning` (sums sessions in the phase window from the DB; requires explicit `startedAt`/`endedAt` in `STATE.md` — no mtime fallback). Feature flag `gsdPlanning` (default ON). Help doc at `/project/[slug]?tab=planning`.
+
+### Changed
+- **Apply result preview**: Bundled-skill applies now render a file tree instead of a flat `<pre>` text block. `ApplyResult.diffPreview` preserved for backward compatibility.
+
+### Internal
+- `src/lib/data/sessionsInWindow.ts` + `getSessionCostsInWindow` façade: focused SQL helper that queries the sessions window for phase cost attribution. Fixed: passes ISO strings (not raw ms integers) to the TEXT column comparison.
+
 - **Wave 11.1a — Cluster Y: MCP Security Scanner (static-surface).** TODO #62.
   - 8-pass deobfuscation pipeline (`stripZeroWidth`, `stripTagChars`, `stripVariationSelectors`, `stripBidiControls`, `stripHtmlComments`, `normalizeUnicode`, `decodeBase64Blocks`, `unescapeSequences` + optional leetspeak pass).
   - 58 pattern rules across 13 categories (PI, CH, TP, CE, DE, SF, HK, TS, CI, PE, EP, SC, XR) plus a 30-name `SUSPICIOUS_PARAM_NAMES` set.

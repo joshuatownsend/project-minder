@@ -17,6 +17,7 @@ import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { HourlyDistributionChart } from "./HourlyDistributionChart";
 import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
+import { ShareButton } from "./ShareButton";
 
 import { formatCost, formatCostCompact } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -693,6 +694,9 @@ export function UsageDashboard() {
             })}
           </div>
         )}
+
+        {/* Share button */}
+        <ShareButton period={period} project={project} />
 
         {/* Export buttons */}
         {(["csv", "json"] as const).map((fmt) => (
