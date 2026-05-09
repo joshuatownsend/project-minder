@@ -74,6 +74,14 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
   if (b.dry_run !== undefined && typeof b.dry_run !== "boolean") {
     return { error: "dry_run must be a boolean", field: "dry_run" };
   }
+  if (b.blockedBy !== undefined) {
+    if (
+      !Array.isArray(b.blockedBy) ||
+      !(b.blockedBy as unknown[]).every((v) => typeof v === "number" && Number.isInteger(v) && v > 0)
+    ) {
+      return { error: "blockedBy must be an array of positive integers", field: "blockedBy" };
+    }
+  }
 
   return {
     title: (b.title as string).trim(),
@@ -87,6 +95,7 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
     requires_approval: typeof b.requires_approval === "boolean" ? b.requires_approval : undefined,
     risk_level: b.risk_level as RiskLevel | undefined,
     dry_run: typeof b.dry_run === "boolean" ? b.dry_run : undefined,
+    blockedBy: Array.isArray(b.blockedBy) ? (b.blockedBy as number[]) : undefined,
   };
 }
 

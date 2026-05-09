@@ -109,6 +109,16 @@ function buildMemDb(): DatabaseT.Database {
       WHERE decided_at IS NULL;
     CREATE INDEX IF NOT EXISTS ix_task_decisions_task ON task_decisions(task_id);
     CREATE INDEX IF NOT EXISTS ix_task_decisions_open ON task_decisions(decided_at) WHERE decided_at IS NULL;
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id     INTEGER NOT NULL REFERENCES ops_tasks(id) ON DELETE CASCADE,
+      blocker_id  INTEGER NOT NULL REFERENCES ops_tasks(id) ON DELETE CASCADE,
+      created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      CHECK (task_id != blocker_id),
+      UNIQUE (task_id, blocker_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_task_deps_task ON task_dependencies(task_id);
+    CREATE INDEX IF NOT EXISTS ix_task_deps_blocker ON task_dependencies(blocker_id);
   `);
   return db;
 }

@@ -6,6 +6,7 @@ import { computeNextRun } from "./cron";
 import type {
   Task,
   TaskDecision,
+  TaskDependency,
   Schedule,
   CreateTaskInput,
   PatchTaskInput,
@@ -74,28 +75,49 @@ export async function getTask(id: number): Promise<Task | null> {
 export async function createTask(input: CreateTaskInput): Promise<Task> {
   const db = await ensureReady();
   const metadataJson = input.metadata !== undefined ? JSON.stringify(input.metadata) : null;
-  const result = prepTasksCached(
-    db,
-    `INSERT INTO ops_tasks
-      (title, description, priority, quadrant, assigned_skill, model,
-       execution_mode, scheduled_for, requires_approval, risk_level, dry_run, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     RETURNING *`
-  ).get(
-    input.title,
-    input.description ?? "",
-    input.priority ?? 3,
-    input.quadrant ?? "do",
-    input.assigned_skill ?? null,
-    input.model ?? null,
-    input.execution_mode ?? "classic",
-    input.scheduled_for ?? null,
-    input.requires_approval ? 1 : 0,
-    input.risk_level ?? "low",
-    input.dry_run ? 1 : 0,
-    metadataJson
-  ) as Task;
-  return result;
+
+  let createdTask: Task;
+  const txn = db.transaction(() => {
+    createdTask = db
+      .prepare(
+        `INSERT INTO ops_tasks
+          (title, description, priority, quadrant, assigned_skill, model,
+           execution_mode, scheduled_for, requires_approval, risk_level, dry_run, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`
+      )
+      .get(
+        input.title,
+        input.description ?? "",
+        input.priority ?? 3,
+        input.quadrant ?? "do",
+        input.assigned_skill ?? null,
+        input.model ?? null,
+        input.execution_mode ?? "classic",
+        input.scheduled_for ?? null,
+        input.requires_approval ? 1 : 0,
+        input.risk_level ?? "low",
+        input.dry_run ? 1 : 0,
+        metadataJson
+      ) as Task;
+
+    // Insert blocker edges inside the same transaction.
+    // Inlined rather than calling addDependency (which owns its own transaction).
+    // Cycle detection is skipped: createdTask.id is brand-new, so no existing
+    // edge can point back to it — a cycle is impossible for fresh tasks.
+    if (input.blockedBy && input.blockedBy.length > 0) {
+      const insertDep = prepTasksCached(db,
+        `INSERT INTO task_dependencies (task_id, blocker_id) VALUES (?, ?)
+         ON CONFLICT(task_id, blocker_id) DO NOTHING`
+      );
+      for (const blockerId of input.blockedBy) {
+        if (blockerId === createdTask.id) throw new CycleError(createdTask.id, blockerId);
+        insertDep.run(createdTask.id, blockerId);
+      }
+    }
+  });
+  txn();
+  return createdTask!;
 }
 
 export async function patchTask(id: number, input: PatchTaskInput): Promise<Task | null> {
@@ -149,6 +171,12 @@ export async function claimPendingTask(): Promise<Task | null> {
        WHERE status = 'pending'
          AND requires_approval = 0
          AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         AND NOT EXISTS (
+           SELECT 1 FROM task_dependencies td
+           JOIN ops_tasks bt ON bt.id = td.blocker_id
+           WHERE td.task_id = ops_tasks.id
+             AND bt.status != 'done'
+         )
        ORDER BY priority ASC, created_at ASC
        LIMIT 1
      )
@@ -171,7 +199,13 @@ export async function promoteApprovalTasks(): Promise<number> {
      WHERE status = 'pending'
        AND requires_approval = 1
        AND approved_at IS NULL
-       AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+       AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       AND NOT EXISTS (
+         SELECT 1 FROM task_dependencies td
+         JOIN ops_tasks bt ON bt.id = td.blocker_id
+         WHERE td.task_id = ops_tasks.id
+           AND bt.status != 'done'
+       )`
   ).run();
   return result.changes;
 }
@@ -458,6 +492,88 @@ export async function countOpenDecisionsByTask(): Promise<Map<number, number>> {
      GROUP BY task_id`
   ).all() as { task_id: number; n: number }[];
   return new Map(rows.map((r) => [r.task_id, r.n]));
+}
+
+// ---------------------------------------------------------------------------
+// Task dependencies
+// ---------------------------------------------------------------------------
+
+export class CycleError extends Error {
+  constructor(taskId: number, blockerId: number) {
+    super(`Adding dependency ${taskId}→${blockerId} would create a cycle`);
+    this.name = "CycleError";
+  }
+}
+
+/**
+ * Add a blocking relationship: taskId is blocked by blockerId.
+ * Runs cycle-prevention DFS inside a transaction. Idempotent on duplicate.
+ * Throws CycleError if the edge would close a cycle.
+ */
+export async function addDependency(taskId: number, blockerId: number): Promise<TaskDependency> {
+  if (taskId === blockerId) throw new CycleError(taskId, blockerId);
+  const db = await ensureReady();
+
+  let result: TaskDependency | undefined;
+  const txn = db.transaction(() => {
+    const outgoingStmt = prepTasksCached(db, "SELECT task_id FROM task_dependencies WHERE blocker_id = ?");
+    const insertStmt = prepTasksCached(db,
+      `INSERT INTO task_dependencies (task_id, blocker_id)
+       VALUES (?, ?)
+       ON CONFLICT(task_id, blocker_id) DO UPDATE SET created_at = created_at
+       RETURNING *`
+    );
+
+    // DFS from taskId: if we can reach blockerId, the new edge would close a cycle.
+    const visited = new Set<number>();
+    const stack = [taskId];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur === blockerId) throw new CycleError(taskId, blockerId);
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      const outgoing = outgoingStmt.all(cur) as { task_id: number }[];
+      for (const row of outgoing) stack.push(row.task_id);
+    }
+
+    result = insertStmt.get(taskId, blockerId) as TaskDependency;
+  });
+  txn();
+  return result!;
+}
+
+/** Remove a blocking relationship. Returns true if the edge existed, false if not found. */
+export async function removeDependency(taskId: number, blockerId: number): Promise<boolean> {
+  const db = await ensureReady();
+  const result = prepTasksCached(db,
+    "DELETE FROM task_dependencies WHERE task_id = ? AND blocker_id = ?"
+  ).run(taskId, blockerId);
+  return result.changes > 0;
+}
+
+/** Get the direct blockedBy and blocks lists for a single task. */
+export async function listDependencies(
+  taskId: number
+): Promise<{ blockedBy: number[]; blocks: number[] }> {
+  const db = await ensureReady();
+  const blockedByRows = prepTasksCached(db,
+    "SELECT blocker_id FROM task_dependencies WHERE task_id = ?"
+  ).all(taskId) as { blocker_id: number }[];
+  const blocksRows = prepTasksCached(db,
+    "SELECT task_id FROM task_dependencies WHERE blocker_id = ?"
+  ).all(taskId) as { task_id: number }[];
+  return {
+    blockedBy: blockedByRows.map((r) => r.blocker_id),
+    blocks: blocksRows.map((r) => r.task_id),
+  };
+}
+
+/** Return every dependency row. Used by /api/kanban to build per-card blocked state. */
+export async function listAllDependencies(): Promise<TaskDependency[]> {
+  const db = await ensureReady();
+  return prepTasksCached(db,
+    "SELECT * FROM task_dependencies ORDER BY created_at ASC"
+  ).all() as TaskDependency[];
 }
 
 /** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */

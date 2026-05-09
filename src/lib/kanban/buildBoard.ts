@@ -10,10 +10,14 @@ export interface BuildBoardInput {
   dispatcherEnabled: boolean;
   /** Open decision counts per task id. Missing keys default to 0. */
   decisionCounts?: Map<number, number>;
+  /** Blocker ids per task id. Missing keys default to []. */
+  blockedByMap?: Map<number, number[]>;
+  /** Dependent ids per task id. Missing keys default to []. */
+  blocksMap?: Map<number, number[]>;
 }
 
 export function buildBoard(
-  { sessions, tasks, dispatcherEnabled, decisionCounts }: BuildBoardInput,
+  { sessions, tasks, dispatcherEnabled, decisionCounts, blockedByMap, blocksMap }: BuildBoardInput,
   generatedAt: string,
 ): KanbanSnapshot {
   const columns: Record<KanbanColumn, KanbanCard[]> = {
@@ -53,6 +57,8 @@ export function buildBoard(
       costUsd: t.cost_usd,
       sessionId: t.session_id,
       decisionCount: decisionCounts?.get(t.id) ?? 0,
+      blockedBy: blockedByMap?.get(t.id) ?? [],
+      blocks: blocksMap?.get(t.id) ?? [],
       createdAt: t.created_at,
       startedAt: t.started_at,
       completedAt: t.completed_at,

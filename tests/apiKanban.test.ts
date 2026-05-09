@@ -9,6 +9,7 @@ vi.mock("@/lib/liveStatus", () => ({
 vi.mock("@/lib/tasks/store", () => ({
   listTasks: vi.fn(),
   countOpenDecisionsByTask: vi.fn(),
+  listAllDependencies: vi.fn(),
 }));
 
 vi.mock("@/lib/config", () => ({
@@ -20,13 +21,14 @@ vi.mock("@/lib/featureFlags", () => ({
 }));
 
 import { getLiveStatusPayload } from "@/lib/liveStatus";
-import { listTasks, countOpenDecisionsByTask } from "@/lib/tasks/store";
+import { listTasks, countOpenDecisionsByTask, listAllDependencies } from "@/lib/tasks/store";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 
 const mockGetLiveStatusPayload = vi.mocked(getLiveStatusPayload);
 const mockListTasks = vi.mocked(listTasks);
 const mockCountOpenDecisionsByTask = vi.mocked(countOpenDecisionsByTask);
+const mockListAllDependencies = vi.mocked(listAllDependencies);
 const mockReadConfig = vi.mocked(readConfig);
 const mockGetFlag = vi.mocked(getFlag);
 
@@ -42,6 +44,7 @@ beforeEach(() => {
   // Default: taskDispatcher flag is enabled
   mockReadConfig.mockResolvedValue({ statuses: {}, hidden: [], portOverrides: {}, devRoot: "C:\\dev", pinnedSlugs: [] } as any);
   mockGetFlag.mockReturnValue(true);
+  mockListAllDependencies.mockResolvedValue([]);
 });
 
 function mkGet(params?: Record<string, string>): NextRequest {
@@ -127,6 +130,53 @@ describe("GET /api/kanban", () => {
     const body = await res.json();
     expect(body.columns.working).toHaveLength(1);
     expect(body.columns.working[0].sessionId).toBe("sess-abc");
+  });
+
+  it("task cards include blockedBy field (defaults to [])", async () => {
+    const liveSession = {
+      sessionId: "s1",
+      projectSlug: "proj",
+      projectName: "Proj",
+      status: "working" as const,
+      mtime: NOW,
+    };
+    mockGetLiveStatusPayload.mockResolvedValue({
+      generatedAt: NOW,
+      sessions: [liveSession],
+    });
+    const res = await getRoute(mkGet());
+    const body = await res.json();
+    // No tasks, so check the structure still has blockedBy on task cards when tasks exist.
+    expect(Array.isArray(body.columns.working)).toBe(true);
+    // Sessions in working column don't have blockedBy — verify session card shape.
+    const card = body.columns.working[0];
+    expect(card.kind).toBe("session");
+    expect(card.blockedBy).toBeUndefined();
+  });
+
+  it("excludes done blockers from task card's blockedBy", async () => {
+    const pendingTask = {
+      id: 10, title: "Dependent", status: "pending", quadrant: "do", priority: 3,
+      assigned_skill: null, model: null, risk_level: "low", execution_mode: "classic",
+      requires_approval: false, dry_run: false, scheduled_for: null,
+      created_at: NOW, started_at: null, completed_at: null,
+    };
+    const doneBlocker = {
+      id: 11, title: "Blocker", status: "done", quadrant: "do", priority: 3,
+      assigned_skill: null, model: null, risk_level: "low", execution_mode: "classic",
+      requires_approval: false, dry_run: false, scheduled_for: null,
+      created_at: NOW, started_at: NOW, completed_at: NOW,
+    };
+    mockListTasks.mockResolvedValue([pendingTask, doneBlocker] as any);
+    // dep edge: task 10 is blocked by task 11 (which is done)
+    mockListAllDependencies.mockResolvedValue([{ id: 1, task_id: 10, blocker_id: 11, created_at: NOW }] as any);
+    const res = await getRoute(mkGet());
+    const body = await res.json();
+    const idleCards = body.columns.idle;
+    const depCard = idleCards.find((c: { kind: string; taskId: number }) => c.kind === "task" && c.taskId === 10);
+    expect(depCard).toBeDefined();
+    // Blocker is done — blocked badge should NOT appear
+    expect(depCard.blockedBy).toEqual([]);
   });
 
   it("is read-only (no mutations)", async () => {

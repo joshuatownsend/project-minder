@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
-import { listTasks, countOpenDecisionsByTask } from "@/lib/tasks/store";
+import { listTasks, countOpenDecisionsByTask, listAllDependencies } from "@/lib/tasks/store";
 import { buildBoard } from "@/lib/kanban/buildBoard";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
@@ -47,18 +47,36 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   let tasks: Task[] = [];
   let decisionCounts = new Map<number, number>();
+  let blockedByMap = new Map<number, number[]>();
+  let blocksMap = new Map<number, number[]>();
   let dispatcherEnabled = true;
 
   try {
     const allTasks = await listTasks();
     tasks = filterTasksByPeriod(allTasks, period);
     decisionCounts = await countOpenDecisionsByTask();
+    const taskStatusMap = new Map(allTasks.map((t) => [t.id, t.status]));
+    const deps = await listAllDependencies();
+    for (const dep of deps) {
+      // Only surface the blocked badge while the blocker is still in-flight.
+      // We check allTasks (not period-filtered tasks) so done blockers that
+      // fell outside the time window are still recognized as done.
+      if (taskStatusMap.get(dep.blocker_id) !== "done") {
+        if (!blockedByMap.has(dep.task_id)) blockedByMap.set(dep.task_id, []);
+        blockedByMap.get(dep.task_id)!.push(dep.blocker_id);
+      }
+      if (!blocksMap.has(dep.blocker_id)) blocksMap.set(dep.blocker_id, []);
+      blocksMap.get(dep.blocker_id)!.push(dep.task_id);
+    }
   } catch {
     // tasks.db unavailable (driver missing, DB corrupt)
     dispatcherEnabled = false;
   }
 
-  const snapshot = buildBoard({ sessions, tasks, dispatcherEnabled, decisionCounts }, generatedAt);
+  const snapshot = buildBoard(
+    { sessions, tasks, dispatcherEnabled, decisionCounts, blockedByMap, blocksMap },
+    generatedAt
+  );
   return NextResponse.json(snapshot);
 }
 

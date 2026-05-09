@@ -10,8 +10,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useKanban } from "@/hooks/useKanban";
 import { KanbanCard } from "@/components/KanbanCard";
+import { TaskDependencyGraph } from "@/components/TaskDependencyGraph";
+import { TaskGanttChart } from "@/components/TaskGanttChart";
 import type { KanbanColumn, KanbanCard as KanbanCardType, KanbanKindFilter, KanbanPeriod } from "@/lib/kanban/types";
 import { KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, KANBAN_COLUMN_EMPTY, KANBAN_KIND_FILTERS } from "@/lib/kanban/types";
+
+type ViewMode = "board" | "dag" | "gantt";
+const LS_VIEW_KEY = "minder:kanban:view-mode";
 
 const PAGE_SIZE = 10;
 const LS_KEY = "minder:kanban:hidden-columns";
@@ -229,6 +234,7 @@ export function KanbanBoard() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [hiddenCols, setHiddenCols] = useState<Set<KanbanColumn>>(new Set());
+  const [viewMode, setViewMode] = useState<ViewMode>("board");
   const [mounted, setMounted] = useState(false);
 
   const { snapshot, loading, error, refresh } = useKanban(period);
@@ -236,6 +242,8 @@ export function KanbanBoard() {
   // Load localStorage on client only
   useEffect(() => {
     setHiddenCols(loadHiddenColumns());
+    const savedView = localStorage.getItem(LS_VIEW_KEY);
+    if (savedView === "dag" || savedView === "gantt") setViewMode(savedView);
     setMounted(true);
   }, []);
 
@@ -339,6 +347,32 @@ export function KanbanBoard() {
             }}
           >
             {k.charAt(0).toUpperCase() + k.slice(1)}
+          </button>
+        ))}
+
+        {/* View mode toggle */}
+        {(["board", "dag", "gantt"] as ViewMode[]).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => {
+              setViewMode(mode);
+              try { localStorage.setItem(LS_VIEW_KEY, mode); } catch { /* noop */ }
+            }}
+            aria-pressed={viewMode === mode}
+            style={{
+              padding: "5px 10px",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              borderRadius: "5px",
+              border: "1px solid var(--border)",
+              cursor: "pointer",
+              background: viewMode === mode
+                ? "color-mix(in srgb, var(--info) 15%, transparent)"
+                : "transparent",
+              color: viewMode === mode ? "var(--info)" : "var(--text-muted)",
+            }}
+          >
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
           </button>
         ))}
 
@@ -448,29 +482,34 @@ export function KanbanBoard() {
         {loading ? "Loading Kanban board…" : `Kanban updated. ${totalCards} card${totalCards !== 1 ? "s" : ""} visible.`}
       </div>
 
-      {/* Columns */}
-      <div
-        style={{
-          display: "flex",
-          gap: "16px",
-          overflowX: "auto",
-          paddingBottom: "8px",
-          alignItems: "flex-start",
-        }}
-      >
-        {KANBAN_COLUMNS.map((col) => (
-          <KanbanColumnSection
-            key={col}
-            col={col}
-            cards={filteredColumns[col]}
-            hidden={hiddenCols.has(col)}
-            onToggleHide={() => toggleHide(col)}
-          />
-        ))}
-      </div>
+      {/* Board / DAG / Gantt */}
+      {viewMode === "board" && (
+        <div
+          style={{
+            display: "flex",
+            gap: "16px",
+            overflowX: "auto",
+            paddingBottom: "8px",
+            alignItems: "flex-start",
+          }}
+        >
+          {KANBAN_COLUMNS.map((col) => (
+            <KanbanColumnSection
+              key={col}
+              col={col}
+              cards={filteredColumns[col]}
+              hidden={hiddenCols.has(col)}
+              onToggleHide={() => toggleHide(col)}
+            />
+          ))}
+        </div>
+      )}
 
-      {/* Whole-board empty state */}
-      {!loading && totalCards === 0 && (
+      {viewMode === "dag" && <TaskDependencyGraph snapshot={snapshot} />}
+      {viewMode === "gantt" && <TaskGanttChart snapshot={snapshot} />}
+
+      {/* Whole-board empty state (board mode only) */}
+      {viewMode === "board" && !loading && totalCards === 0 && (
         <div
           style={{
             textAlign: "center",

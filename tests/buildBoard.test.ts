@@ -23,7 +23,7 @@ function makeTask(overrides: Partial<Task>): Task {
     title: "Do something",
     description: "",
     status: "pending",
-    priority: 0,
+    priority: 3,
     quadrant: "do",
     assigned_skill: null,
     model: null,
@@ -161,6 +161,33 @@ describe("buildBoard", () => {
     const card = snap.columns.working[0];
     expect(card.kind).toBe("task");
     if (card.kind === "task") expect(card.decisionCount).toBe(3);
+  });
+
+  it("task card has blockedBy=[] and blocks=[] by default", () => {
+    const task = makeTask({ id: 10, status: "pending" });
+    const snap = buildBoard({ sessions: [], tasks: [task], dispatcherEnabled: true }, NOW);
+    const card = snap.columns.idle[0];
+    expect(card.kind).toBe("task");
+    if (card.kind === "task") {
+      expect(card.blockedBy).toEqual([]);
+      expect(card.blocks).toEqual([]);
+    }
+  });
+
+  it("populates blockedBy and blocks from maps", () => {
+    const task = makeTask({ id: 20, status: "pending" });
+    const blockedByMap = new Map([[20, [5, 6]]]);
+    const blocksMap = new Map([[20, [99]]]);
+    const snap = buildBoard(
+      { sessions: [], tasks: [task], dispatcherEnabled: true, blockedByMap, blocksMap },
+      NOW
+    );
+    const card = snap.columns.idle[0];
+    expect(card.kind).toBe("task");
+    if (card.kind === "task") {
+      expect(card.blockedBy).toEqual([5, 6]);
+      expect(card.blocks).toEqual([99]);
+    }
   });
 
   it("sets dispatcherEnabled=false when passed false", () => {
