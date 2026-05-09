@@ -73,9 +73,11 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
         const raw = data && typeof data === "object" && "tasks" in data ? (data as { tasks: unknown }).tasks : data;
         if (!Array.isArray(raw)) return;
         const tasks = raw as Task[];
-        setBlockerOptions(
-          tasks.filter((t) => BLOCKER_ELIGIBLE.has(t.status))
-        );
+        const eligible = tasks.filter((t) => BLOCKER_ELIGIBLE.has(t.status));
+        const eligibleIds = new Set(eligible.map((t) => t.id));
+        setBlockerOptions(eligible);
+        // Drop any stale selections that are no longer in the eligible set.
+        setSelectedBlockerIds((prev) => prev.filter((id) => eligibleIds.has(id)));
       })
       .catch(() => { /* non-critical */ });
   }, [open]);
