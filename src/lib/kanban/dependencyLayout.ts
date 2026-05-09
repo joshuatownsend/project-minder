@@ -3,8 +3,9 @@
  * Shared by TaskDependencyGraph (SVG DAG view) and TaskGanttChart (Gantt rows).
  *
  * Assumes no cycles — enforced at DB insert time by addDependency's DFS check.
- * If a cycle somehow appears in the data (corrupt DB), nodes in the cycle
- * receive layer 0 and the layout degrades gracefully rather than looping.
+ * If a cycle somehow appears in the data (corrupt DB), the visiting-set guard
+ * clamps cycle-involved nodes to layer 0 and the layout degrades gracefully
+ * rather than looping.
  */
 
 import type { KanbanSnapshot, KanbanCard } from "@/lib/kanban/types";
@@ -91,10 +92,11 @@ export function computeLayout(
 
   // Longest-path layer assignment. Nodes with no in-graph blockers → layer 0.
   const layerMap = new Map<number, number>();
+  const visiting = new Set<number>(); // DFS recursion stack for cycle detection
 
-  function assignLayer(id: number, depth: number): number {
-    if (depth > nodes.length) return 0; // cycle guard
+  function assignLayer(id: number): number {
     if (layerMap.has(id)) return layerMap.get(id)!;
+    if (visiting.has(id)) return 0; // back-edge detected — clamp to 0
 
     const node = nodeById.get(id);
     if (!node) { layerMap.set(id, 0); return 0; }
@@ -105,13 +107,16 @@ export function computeLayout(
       return 0;
     }
 
-    const maxBlockerLayer = Math.max(...blockers.map((b) => assignLayer(b, depth + 1)));
+    visiting.add(id);
+    const maxBlockerLayer = Math.max(...blockers.map((b) => assignLayer(b)));
+    visiting.delete(id);
+
     const layer = maxBlockerLayer + 1;
     layerMap.set(id, layer);
     return layer;
   }
 
-  for (const n of nodes) assignLayer(n.id, 0);
+  for (const n of nodes) assignLayer(n.id);
 
   // Group nodes by layer, sort within each layer by (priority ASC, createdAt ASC).
   const byLayer = new Map<number, LayoutNode[]>();
