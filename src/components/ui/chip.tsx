@@ -4,13 +4,16 @@ export function Chip({
   label,
   color = "var(--text-muted)",
   muted = false,
+  title,
 }: {
   label: string;
   color?: string;
   muted?: boolean;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       style={{
         fontSize: "0.6rem",
         fontFamily: "var(--font-mono)",

@@ -2,6 +2,28 @@
 
 The Kanban page (`/kanban`) gives you a single-glance view of everything happening across your Claude Code sessions and dispatcher tasks, organized into five columns.
 
+## View modes
+
+Use the **Board / Dag / Gantt** toggle in the toolbar to switch how the Kanban data is displayed.
+
+### Board (default)
+
+Five-column card layout. Dispatcher tasks show a **blocked (N)** chip when they are waiting on one or more blocker tasks that haven't finished yet.
+
+### Dag — dependency graph
+
+A layered SVG graph where each node is a task and each arrow points from a blocker to its dependent ("blocker → dependent" read left to right). Tasks with no dependency edges are excluded. Click any node to jump to `/tasks?focus=<id>`.
+
+Empty state: appears when no tasks have dependency edges yet.
+
+### Gantt — time chart
+
+A horizontal bar chart with one row per task, sorted by dependency layer (blockers above dependents). Bars represent the task's real execution window (`started_at → completed_at`). Tasks still in flight extend to the current time. Pending/awaiting-approval tasks render a hollow placeholder bar (not a real estimate). Dependency arrows connect blocker bar-right to dependent bar-left.
+
+Empty state: appears when no task data exists for the selected period.
+
+View mode is persisted in `localStorage` under `minder:kanban:view-mode`.
+
 ## Columns
 
 | Column | What goes here |
@@ -11,6 +33,32 @@ The Kanban page (`/kanban`) gives you a single-glance view of everything happeni
 | **Idle** | Sessions that have finished a turn and are waiting for your next message; tasks queued as `pending` or `cancelled` |
 | **Done** | Tasks with `done` status |
 | **Error** | Tasks with `failed` status |
+
+## Task dependencies
+
+You can declare that one task must complete before another is dispatched. This is called a **blocking relationship**: task B is *blocked by* task A means B will not be claimed by the dispatcher until A reaches `done` status.
+
+### Creating dependencies
+
+Open the **Task Composer** (`+ New task`), fill in the task details, then check one or more tasks under **Depends on (optional)**. The dependency edges are inserted atomically with the task — if any edge would create a cycle, the whole creation fails with a 409 error.
+
+You can also add edges after creation via the REST API:
+```
+POST /api/tasks/{id}/dependencies     { "blockerId": <number> }
+DELETE /api/tasks/{id}/dependencies/{blockerId}
+```
+
+### Blocker semantics
+
+**Only `done` unblocks a dependent.** A blocker that ends in `failed` or `cancelled` keeps its dependents blocked indefinitely. To clear the hold:
+- **Rerun** the failed/cancelled blocker task (moves it back to `pending` for the dispatcher to retry).
+- **Remove** the dependency edge via `DELETE /api/tasks/{id}/dependencies/{blockerId}`.
+
+This is intentional: a cancelled task usually means "this didn't go the way we planned" — the dependent shouldn't proceed on a potentially half-done state.
+
+### Cycle prevention
+
+The API rejects edges that would create a cycle (direct or transitive) with `409 Conflict`. The graph is always a DAG; the Dag view can safely assume acyclic input.
 
 ## Live / awaiting dots
 

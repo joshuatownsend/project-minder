@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 10.1b — Cluster W (part 2): Task dependency graph.** TODO #167.
+  - New `task_dependencies(task_id, blocker_id)` table (migration v4) with `CHECK (task_id != blocker_id)`, `UNIQUE (task_id, blocker_id)`, and cascade-delete. Indexed on both columns.
+  - **Dispatcher SQL guard**: `claimPendingTask` and `promoteApprovalTasks` skip tasks whose blockers haven't reached `done` via a single `NOT EXISTS (...)` subquery — atomically safe, no JS-level filter.
+  - **Cycle prevention at insert time**: DFS from `taskId` over downstream edges before each insert; throws `CycleError` (409) if `blockerId` is reachable, preventing cyclic graphs.
+  - `addDependency(taskId, blockerId)` — idempotent (ON CONFLICT DO NOTHING); `removeDependency(taskId, blockerId)` — idempotent 204; `listDependencies(taskId)` — `{ blockedBy, blocks }`; `listAllDependencies()` — full table scan for kanban+DAG+Gantt.
+  - New REST surface: `GET/POST /api/tasks/[id]/dependencies`, `DELETE /api/tasks/[id]/dependencies/[blockerId]`.
+  - `GET /api/kanban` now fetches all dependency edges and builds `blockedByMap`/`blocksMap` passed into `buildBoard`; task cards carry `blockedBy: number[]` and `blocks: number[]`.
+  - **Blocked badge** on Kanban task cards when `blockedBy.length > 0` — gray chip with count.
+  - **Three Kanban view modes** (Board / Dag / Gantt) via toolbar toggle; mode persisted to `localStorage` under `minder:kanban:view-mode`.
+  - **Dag view** — `TaskDependencyGraph.tsx`: manual Sugiyama-style layered layout (`dependencyLayout.ts`), D3 SVG rendering, cubic Bezier edges with arrowhead marker, nodes colored by status, click → `/tasks?focus=<id>`. No new npm dependencies.
+  - **Gantt view** — `TaskGanttChart.tsx`: `d3.scaleTime()` horizontal bars, one row per task ordered by layer, dependency arrows as dashed polylines, placeholder bars for pending/awaiting-approval tasks.
+  - `dependencyLayout.ts` shared pure function (longest-path layer assignment + priority sort) used by both DAG and Gantt.
+  - **Task Composer** gains a "Depends on (optional)" checkbox list of active tasks; creates dependency edges atomically with the task.
+  - Help doc at `/kanban` updated with view modes and dependency semantics.
+  - 32 new tests: `taskDependencies` (store), `dependencyLayout` (pure layout), `apiTaskDependencies` (route), plus extensions to `buildBoard` and `apiKanban`. 1656 tests pass, typecheck clean.
+
 - **Wave 10.1a — Cluster W (part 1): Mission Control Kanban board.** TODO #166.
   - New `/kanban` page with a 5-column board (Working / Waiting / Idle / Done / Error) that unifies Claude Code sessions and dispatcher tasks in a single view.
   - `GET /api/kanban` route: reuses `getLiveStatusPayload()` (6 s cached) for sessions + `listTasks()` for tasks. Optional `?period=last24h|last7d|all` filter controls Done/Error horizon. Returns `{ columns, generatedAt, dispatcherEnabled }`. Graceful no-DB fallback returns sessions-only with `dispatcherEnabled: false`.

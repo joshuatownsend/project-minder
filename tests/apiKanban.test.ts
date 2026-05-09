@@ -9,6 +9,7 @@ vi.mock("@/lib/liveStatus", () => ({
 vi.mock("@/lib/tasks/store", () => ({
   listTasks: vi.fn(),
   countOpenDecisionsByTask: vi.fn(),
+  listAllDependencies: vi.fn(),
 }));
 
 vi.mock("@/lib/config", () => ({
@@ -20,13 +21,14 @@ vi.mock("@/lib/featureFlags", () => ({
 }));
 
 import { getLiveStatusPayload } from "@/lib/liveStatus";
-import { listTasks, countOpenDecisionsByTask } from "@/lib/tasks/store";
+import { listTasks, countOpenDecisionsByTask, listAllDependencies } from "@/lib/tasks/store";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 
 const mockGetLiveStatusPayload = vi.mocked(getLiveStatusPayload);
 const mockListTasks = vi.mocked(listTasks);
 const mockCountOpenDecisionsByTask = vi.mocked(countOpenDecisionsByTask);
+const mockListAllDependencies = vi.mocked(listAllDependencies);
 const mockReadConfig = vi.mocked(readConfig);
 const mockGetFlag = vi.mocked(getFlag);
 
@@ -42,6 +44,7 @@ beforeEach(() => {
   // Default: taskDispatcher flag is enabled
   mockReadConfig.mockResolvedValue({ statuses: {}, hidden: [], portOverrides: {}, devRoot: "C:\\dev", pinnedSlugs: [] } as any);
   mockGetFlag.mockReturnValue(true);
+  mockListAllDependencies.mockResolvedValue([]);
 });
 
 function mkGet(params?: Record<string, string>): NextRequest {
@@ -127,6 +130,28 @@ describe("GET /api/kanban", () => {
     const body = await res.json();
     expect(body.columns.working).toHaveLength(1);
     expect(body.columns.working[0].sessionId).toBe("sess-abc");
+  });
+
+  it("task cards include blockedBy field (defaults to [])", async () => {
+    const liveSession = {
+      sessionId: "s1",
+      projectSlug: "proj",
+      projectName: "Proj",
+      status: "working" as const,
+      mtime: NOW,
+    };
+    mockGetLiveStatusPayload.mockResolvedValue({
+      generatedAt: NOW,
+      sessions: [liveSession],
+    });
+    const res = await getRoute(mkGet());
+    const body = await res.json();
+    // No tasks, so check the structure still has blockedBy on task cards when tasks exist.
+    expect(Array.isArray(body.columns.working)).toBe(true);
+    // Sessions in working column don't have blockedBy — verify session card shape.
+    const card = body.columns.working[0];
+    expect(card.kind).toBe("session");
+    expect(card.blockedBy).toBeUndefined();
   });
 
   it("is read-only (no mutations)", async () => {

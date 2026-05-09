@@ -80,6 +80,13 @@ export interface Task {
 
 export type DecisionKind = "decision" | "inbox";
 
+export interface TaskDependency {
+  id: number;
+  task_id: number;
+  blocker_id: number;
+  created_at: string;
+}
+
 export interface TaskDecision {
   id: number;
   task_id: number;
@@ -120,6 +127,8 @@ export interface CreateTaskInput {
   dry_run?: boolean;
   /** Arbitrary JSON metadata (e.g. todoDelegation source info). */
   metadata?: unknown;
+  /** Task ids that must reach 'done' before this task can be dispatched. */
+  blockedBy?: number[];
 }
 
 export interface PatchTaskInput {

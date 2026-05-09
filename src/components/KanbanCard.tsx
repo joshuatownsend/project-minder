@@ -180,6 +180,13 @@ function TaskKanbanCard({ card }: { card: TaskCard }) {
           {card.decisionCount > 0 && (
             <Chip label={`${card.decisionCount} pending`} color="var(--accent)" />
           )}
+          {card.blockedBy.length > 0 && (
+            <Chip
+              label={`blocked (${card.blockedBy.length})`}
+              muted
+              title={`Waiting on task${card.blockedBy.length > 1 ? "s" : ""} #${card.blockedBy.join(", #")}`}
+            />
+          )}
           {card.cancelled && (
             <Chip label="cancelled" muted />
           )}

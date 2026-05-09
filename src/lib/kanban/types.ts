@@ -52,6 +52,10 @@ export type KanbanCard =
       sessionId: string | null;
       /** Number of pending decisions for this task. */
       decisionCount: number;
+      /** Task ids this task is blocked by (blockers not yet 'done'). */
+      blockedBy: number[];
+      /** Task ids that are blocked by this task. */
+      blocks: number[];
       createdAt: string;
       startedAt: string | null;
       completedAt: string | null;

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/modal";
-import type { TaskQuadrant, RiskLevel, ExecutionMode } from "@/lib/tasks/types";
+import type { TaskQuadrant, RiskLevel, ExecutionMode, Task } from "@/lib/tasks/types";
 import { EXECUTION_MODES, EXECUTION_MODE_LABELS } from "@/lib/tasks/types";
 
 interface TaskComposerProps {
@@ -59,6 +59,28 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
   const [scheduledFor, setScheduledFor] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [blockerOptions, setBlockerOptions] = useState<Task[]>([]);
+  const [selectedBlockerIds, setSelectedBlockerIds] = useState<number[]>([]);
+
+  // Fetch active tasks that can serve as blockers.
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/tasks")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: unknown) => {
+        const raw = data && typeof data === "object" && "tasks" in data ? (data as { tasks: unknown }).tasks : data;
+        if (!Array.isArray(raw)) return;
+        const tasks = raw as Task[];
+        setBlockerOptions(
+          tasks.filter((t) =>
+            t.status === "pending" ||
+            t.status === "awaiting_approval" ||
+            t.status === "running"
+          )
+        );
+      })
+      .catch(() => { /* non-critical */ });
+  }, [open]);
 
   async function handleSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
@@ -80,6 +102,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
       if (requiresApproval) body.requires_approval = true;
       if (dryRun) body.dry_run = true;
       if (scheduledFor) body.scheduled_for = new Date(scheduledFor).toISOString();
+      if (selectedBlockerIds.length > 0) body.blockedBy = selectedBlockerIds;
 
       const res = await fetch("/api/tasks", {
         method: "POST",
@@ -122,6 +145,56 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
             style={{ ...inputStyle, resize: "vertical" }}
           />
         </Field>
+
+        {blockerOptions.length > 0 && (
+          <Field label="Depends on (optional)">
+            <div
+              style={{
+                maxHeight: "120px",
+                overflowY: "auto",
+                border: "1px solid var(--border)",
+                borderRadius: "4px",
+                padding: "6px 8px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+                fontSize: "0.78rem",
+              }}
+            >
+              {blockerOptions.map((t) => (
+                <label
+                  key={t.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    cursor: "pointer",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedBlockerIds.includes(t.id)}
+                    onChange={(e) => {
+                      setSelectedBlockerIds((prev) =>
+                        e.target.checked
+                          ? [...prev, t.id]
+                          : prev.filter((id) => id !== t.id)
+                      );
+                    }}
+                  />
+                  <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-muted)", fontSize: "0.68rem" }}>
+                    #{t.id}
+                  </span>
+                  {t.title}
+                </label>
+              ))}
+            </div>
+            <p style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "3px" }}>
+              This task won&apos;t be dispatched until all selected tasks are done.
+            </p>
+          </Field>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <Field label="Quadrant">
