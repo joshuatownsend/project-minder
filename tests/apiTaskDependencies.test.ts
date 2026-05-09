@@ -105,6 +105,54 @@ describe("POST /api/tasks/[id]/dependencies", () => {
   });
 });
 
+describe("GET /api/tasks/[id]/dependencies — malformed id", () => {
+  it("returns 400 for non-numeric task id like '12abc'", async () => {
+    const req = mkRequest("GET");
+    const { GET } = await import("@/app/api/tasks/[id]/dependencies/route");
+    const res = await GET(req, { params: Promise.resolve({ id: "12abc" }) });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/tasks/[id]/dependencies — input validation", () => {
+  it("returns 400 for non-numeric task id like '12abc'", async () => {
+    const req = mkRequest("POST", { blockerId: 2 });
+    const { POST } = await import("@/app/api/tasks/[id]/dependencies/route");
+    const res = await POST(req, { params: Promise.resolve({ id: "12abc" }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when blockerId is a float", async () => {
+    const req = mkRequest("POST", { blockerId: 2.5 });
+    const { POST } = await import("@/app/api/tasks/[id]/dependencies/route");
+    const res = await POST(req, { params: Promise.resolve({ id: "1" }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when blockerId is negative", async () => {
+    const req = mkRequest("POST", { blockerId: -1 });
+    const { POST } = await import("@/app/api/tasks/[id]/dependencies/route");
+    const res = await POST(req, { params: Promise.resolve({ id: "1" }) });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("DELETE /api/tasks/[id]/dependencies/[blockerId] — malformed ids", () => {
+  it("returns 400 for non-numeric task id", async () => {
+    const req = new NextRequest("http://localhost/api/tasks/abc/dependencies/2", { method: "DELETE" });
+    const { DELETE } = await import("@/app/api/tasks/[id]/dependencies/[blockerId]/route");
+    const res = await DELETE(req, { params: Promise.resolve({ id: "abc", blockerId: "2" }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for non-numeric blockerId", async () => {
+    const req = new NextRequest("http://localhost/api/tasks/1/dependencies/abc", { method: "DELETE" });
+    const { DELETE } = await import("@/app/api/tasks/[id]/dependencies/[blockerId]/route");
+    const res = await DELETE(req, { params: Promise.resolve({ id: "1", blockerId: "abc" }) });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("DELETE /api/tasks/[id]/dependencies/[blockerId]", () => {
   it("returns 204 when edge existed", async () => {
     mockRemoveDependency.mockResolvedValue(true);

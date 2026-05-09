@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { removeDependency } from "@/lib/tasks/store";
+import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
 
@@ -8,10 +9,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; blockerId: string }> }
 ): Promise<NextResponse> {
   const { id, blockerId: blockerIdStr } = await params;
-  const taskId = parseInt(id, 10);
-  const blockerId = parseInt(blockerIdStr, 10);
+  const taskId = parseId(id);
+  const blockerId = parseId(blockerIdStr);
 
-  if (!Number.isFinite(taskId) || !Number.isFinite(blockerId)) {
+  if (taskId === null || blockerId === null) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTask } from "@/lib/tasks/store";
 import { addDependency, listDependencies, CycleError } from "@/lib/tasks/store";
+import { parseId } from "@/lib/tasks/routeUtils";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +10,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   const { id } = await params;
-  const taskId = parseInt(id, 10);
-  if (!Number.isFinite(taskId)) {
+  const taskId = parseId(id);
+  if (taskId === null) {
     return NextResponse.json({ error: "Invalid task id" }, { status: 400 });
   }
 
@@ -26,8 +27,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   const { id } = await params;
-  const taskId = parseInt(id, 10);
-  if (!Number.isFinite(taskId)) {
+  const taskId = parseId(id);
+  if (taskId === null) {
     return NextResponse.json({ error: "Invalid task id" }, { status: 400 });
   }
 
@@ -38,14 +39,16 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  const rawBlockerId = (body as Record<string, unknown>)?.blockerId;
   if (
     typeof body !== "object" ||
     body === null ||
-    typeof (body as Record<string, unknown>).blockerId !== "number"
+    !Number.isInteger(rawBlockerId) ||
+    (rawBlockerId as number) <= 0
   ) {
-    return NextResponse.json({ error: "body.blockerId must be a number" }, { status: 400 });
+    return NextResponse.json({ error: "body.blockerId must be a positive integer" }, { status: 400 });
   }
-  const blockerId = (body as { blockerId: number }).blockerId;
+  const blockerId = rawBlockerId as number;
 
   if (blockerId === taskId) {
     return NextResponse.json({ error: "A task cannot block itself" }, { status: 400 });
