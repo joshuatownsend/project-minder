@@ -7,6 +7,7 @@ import { readClaudeJsonMcp } from "./scanner/claudeJsonMcp";
 import { readPluginScopeMcp } from "./scanner/pluginMcp";
 import { readDesktopScopeMcp } from "./scanner/desktopMcp";
 import { readManagedScopeMcp } from "./scanner/managedMcp";
+import { readPluginScopeHooks } from "./scanner/pluginHooks";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { loadInstalledPlugins } from "./indexer/walkPlugins";
 import { RESERVED_SETTINGS_KEYS } from "./template/jsonPath";
@@ -69,9 +70,13 @@ async function readUserConfig(): Promise<UserConfig> {
 
   const plugins = await readPluginsInfo(claudeDir, settings, installedPlugins);
 
-  const hookEntries: HookEntry[] = settings
-    ? extractHookEntries(settings.hooks, "user", settingsPath)
-    : [];
+  const [userHookEntries, pluginHookEntries] = await Promise.all([
+    Promise.resolve(
+      settings ? extractHookEntries(settings.hooks, "user", settingsPath) : [],
+    ),
+    readPluginScopeHooks(installedPlugins),
+  ]);
+  const hookEntries: HookEntry[] = [...userHookEntries, ...pluginHookEntries];
 
   // Merge MCP servers from every known source. No dedup on name
   // collisions across sources — both entries surface, and downstream

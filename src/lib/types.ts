@@ -59,9 +59,34 @@ export interface ProjectData {
   agentCount?: number;
   skillCount?: number;
 
+  // GSD project planning (.planning/ directory)
+  gsdPlanning?: GsdPlanningInfo;
+
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
+}
+
+export interface GsdPlanningInfo {
+  projectName?: string;
+  description?: string;
+  status?: string;
+  milestone?: string;
+  completedPhases: number;
+  totalPhases: number;
+  stoppedAt?: string;
+  phases: GsdPhaseEntry[];
+}
+
+export interface GsdPhaseEntry {
+  number: number;
+  name: string;
+  file: string;
+  status: "completed" | "in-progress" | "pending";
+  tokenBudget?: number;
+  startedAt?: string;
+  endedAt?: string;
+  costUsd?: number;
 }
 
 export type ProjectStatus = "active" | "paused" | "archived";
@@ -249,7 +274,8 @@ export type FeatureFlagKey =
   | "devServerControl"
   | "liveActivity"
   | "taskDispatcher"
-  | "mcpSecurityScan";
+  | "mcpSecurityScan"
+  | "gsdPlanning";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =
@@ -519,7 +545,7 @@ export interface SessionDetail extends SessionSummary {
 
 // ─── Claude config: hooks, MCP servers, plugins ──────────────────────────────
 
-export type HookSource = "project" | "local" | "user";
+export type HookSource = "project" | "local" | "user" | "plugin";
 
 export interface HookCommand {
   type: "command";
@@ -776,6 +802,7 @@ export interface ApplyResult {
   status: ApplyStatus;
   changedFiles: string[];
   diffPreview?: string;
+  bundle?: { rootName: string; files: string[]; totalBytes?: number };
   warnings?: string[];
   error?: { code: string; message: string };
 }

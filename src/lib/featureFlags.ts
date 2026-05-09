@@ -18,6 +18,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "liveActivity",
   "taskDispatcher",
   "mcpSecurityScan",
+  "gsdPlanning",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -147,6 +148,14 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
       "Static-surface scan (command/args/url/env/name) runs unconditionally once wired. " +
       "Live tool-list introspection (Wave 11.1b) is gated behind this flag.",
     group: "active",
+    appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "gsdPlanning",
+    label: "GSD planning scanner",
+    description: "Scans per-project .planning/ directories (produced by the GSD skill) and surfaces a Planning tab on the project detail page.",
+    group: "passive",
     appliesAt: "scan",
     wired: true,
   },

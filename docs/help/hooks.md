@@ -13,6 +13,8 @@ The four stat cards at the top summarise coverage at a glance:
 | **User** | Hooks in `~/.claude.json` or `~/.claude/settings.json` (apply everywhere) |
 | **Events** | Number of distinct event types across all hooks |
 
+Plugins can also ship their own hooks via `<installPath>/hooks/hooks.json`; these surface with a **plugin** provenance badge and are read-only (they cannot be modified from the dashboard).
+
 Click a scope card to filter the list to that scope.
 
 ## Row anatomy
