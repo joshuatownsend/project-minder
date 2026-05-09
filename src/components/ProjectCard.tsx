@@ -16,7 +16,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers } from "lucide-react";
+import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers, Zap } from "lucide-react";
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { SwarmComposer } from "./SwarmComposer";
 import { StatusDot } from "./ui/StatusDot";
@@ -341,7 +341,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 >
                   <DropdownMenuItem onClick={() => setSwarmComposerOpen(true)}>
-                    <Layers style={{ width: "12px", height: "12px", marginRight: "6px" }} />
+                    <Zap style={{ width: "12px", height: "12px", marginRight: "6px" }} />
                     Launch Swarm…
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setShowTemplateModal(true)}>

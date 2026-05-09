@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/modal";
 import type { TaskQuadrant, RiskLevel, ExecutionMode, TaskStatus, Task } from "@/lib/tasks/types";
 import { EXECUTION_MODES, EXECUTION_MODE_LABELS } from "@/lib/tasks/types";
+import { inputStyle, selectStyle, Field } from "./composer-fields";
 
 const BLOCKER_ELIGIBLE: Set<TaskStatus> = new Set(["pending", "awaiting_approval", "running"]);
 
@@ -13,39 +14,6 @@ interface TaskComposerProps {
   onSuccess: () => void;
 }
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 10px",
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: "4px",
-  fontSize: "0.82rem",
-  fontFamily: "var(--font-body)",
-  color: "var(--text-primary)",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const selectStyle: React.CSSProperties = { ...inputStyle, cursor: "pointer" };
-
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: "0.7rem",
-  fontWeight: 600,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  color: "var(--text-muted)",
-  marginBottom: "4px",
-};
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      {children}
-    </div>
-  );
-}
 
 export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
   const [title, setTitle] = useState("");

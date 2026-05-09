@@ -1,18 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { useState, useEffect, useCallback, useRef, use } from "react";
 import Link from "next/link";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import type { Swarm, Task } from "@/lib/tasks/types";
-
-const STATUS_COLORS: Record<string, string> = {
-  running:            "var(--info, #60a5fa)",
-  done:               "var(--success, #22c55e)",
-  failed:             "var(--error)",
-  cancelled:          "var(--text-muted)",
-  pending:            "var(--text-muted)",
-  awaiting_approval:  "var(--accent)",
-};
+import { TASK_STATUS_COLORS } from "@/lib/tasks/types";
 
 export default function SwarmDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -23,6 +15,9 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
   const [removing, setRemoving] = useState(false);
 
   useDocumentTitle(swarm ? `Swarm: ${swarm.name}` : "Swarm");
+
+  const swarmRef = useRef<Swarm | null>(null);
+  swarmRef.current = swarm;
 
   const load = useCallback(async () => {
     try {
@@ -45,12 +40,13 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
     load();
   }, [load]);
 
-  // Poll while running
+  // Single stable interval; checks status via ref so it doesn't restart on each poll.
   useEffect(() => {
-    if (!swarm || swarm.status !== "running") return;
-    const interval = setInterval(() => { load(); }, 5_000);
+    const interval = setInterval(() => {
+      if (swarmRef.current?.status === "running") load();
+    }, 5_000);
     return () => clearInterval(interval);
-  }, [swarm, load]);
+  }, [load]);
 
   async function handleRemoveWorktrees() {
     setRemoving(true);
@@ -95,7 +91,7 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
               fontSize: "0.7rem",
               padding: "2px 8px",
               borderRadius: "3px",
-              background: STATUS_COLORS[swarm.status] ?? "var(--text-muted)",
+              background: TASK_STATUS_COLORS[swarm.status as keyof typeof TASK_STATUS_COLORS] ?? "var(--text-muted)",
               color: "#fff",
               fontWeight: 600,
             }}
@@ -188,7 +184,7 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
 }
 
 function TaskRow({ task }: { task: Task }) {
-  const color = STATUS_COLORS[task.status] ?? "var(--text-muted)";
+  const color = TASK_STATUS_COLORS[task.status] ?? "var(--text-muted)";
   return (
     <div
       style={{

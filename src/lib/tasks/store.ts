@@ -6,6 +6,7 @@ import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
 import type {
   Task,
+  TaskStatus,
   TaskDecision,
   TaskDependency,
   Schedule,
@@ -595,6 +596,9 @@ export async function listAllDependencies(): Promise<TaskDependency[]> {
 // ---------------------------------------------------------------------------
 
 const WORKTREE_SEP = "--claude-worktrees-";
+const TERMINAL_STATUSES = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
+type SwarmTaskRow = Pick<Task, "id" | "status" | "output_summary" | "title" | "swarm_role" | "description">;
 
 /** Create a swarm with its member tasks (and optional coordinator) in one transaction. */
 export async function createSwarm(
@@ -715,28 +719,13 @@ export async function getSwarmTasks(swarmId: number): Promise<Task[]> {
 export async function updateSwarmStatus(swarmId: number): Promise<void> {
   const db = await ensureReady();
 
-  const swarm = db
-    .prepare("SELECT * FROM ops_swarms WHERE id = ?")
-    .get(swarmId) as Swarm | undefined;
-  if (!swarm) return;
-
-  type TaskRow = {
-    id: number;
-    status: string;
-    output_summary: string | null;
-    title: string;
-    swarm_role: string;
-    description: string;
-  };
-
   const tasks = db
     .prepare(
       "SELECT id, status, output_summary, title, swarm_role, description FROM ops_tasks WHERE swarm_id = ?"
     )
-    .all(swarmId) as TaskRow[];
+    .all(swarmId) as SwarmTaskRow[];
   if (tasks.length === 0) return;
 
-  const TERMINAL = new Set(["done", "failed", "cancelled"]);
   const members = tasks.filter((t) => t.swarm_role === "member");
   const coordinator = tasks.find((t) => t.swarm_role === "coordinator");
 
@@ -744,7 +733,7 @@ export async function updateSwarmStatus(swarmId: number): Promise<void> {
   if (
     coordinator &&
     coordinator.status === "pending" &&
-    members.every((t) => TERMINAL.has(t.status))
+    members.every((t) => TERMINAL_STATUSES.has(t.status))
   ) {
     const withOutput = members.filter((t) => t.output_summary);
     if (
@@ -763,7 +752,7 @@ export async function updateSwarmStatus(swarmId: number): Promise<void> {
     }
   }
 
-  const allTerminal = tasks.every((t) => TERMINAL.has(t.status));
+  const allTerminal = tasks.every((t) => TERMINAL_STATUSES.has(t.status));
   if (!allTerminal) return;
 
   let newStatus: SwarmStatus;

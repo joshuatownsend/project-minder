@@ -21,25 +21,19 @@ export async function DELETE(
     const tasks = await getSwarmTasks(numId);
     const errors: string[] = [];
 
-    for (const task of tasks) {
-      if (task.swarm_role !== "member") continue;
+    const removals = tasks.flatMap((task) => {
+      if (task.swarm_role !== "member") return [];
       let meta: { worktreePath?: string; projectPath?: string } = {};
-      try {
-        meta = JSON.parse(task.metadata ?? "{}") as typeof meta;
-      } catch {
-        continue;
-      }
+      try { meta = JSON.parse(task.metadata ?? "{}") as typeof meta; } catch { return []; }
       const { worktreePath, projectPath } = meta;
-      if (!worktreePath || !projectPath || !existsSync(worktreePath)) continue;
+      if (!worktreePath || !projectPath || !existsSync(worktreePath)) return [];
+      return [
+        execFileAsync("git", ["worktree", "remove", "--force", worktreePath], { cwd: projectPath })
+          .catch((err: Error) => { errors.push(`task ${task.id}: ${err.message}`); }),
+      ];
+    });
 
-      try {
-        await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], {
-          cwd: projectPath,
-        });
-      } catch (err) {
-        errors.push(`task ${task.id}: ${(err as Error).message}`);
-      }
-    }
+    await Promise.allSettled(removals);
 
     if (errors.length > 0) {
       console.warn("[api/swarms/[id]/worktrees DELETE] partial failures:", errors);

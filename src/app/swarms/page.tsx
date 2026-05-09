@@ -1,17 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import type { Swarm } from "@/lib/tasks/types";
+import { TASK_STATUS_COLORS } from "@/lib/tasks/types";
 import { SwarmComposer } from "@/components/SwarmComposer";
-
-const STATUS_COLORS: Record<string, string> = {
-  running:   "var(--info, #60a5fa)",
-  done:      "var(--success, #22c55e)",
-  failed:    "var(--error)",
-  cancelled: "var(--text-muted)",
-};
 
 export default function SwarmsPage() {
   useDocumentTitle("Swarms");
@@ -20,7 +14,7 @@ export default function SwarmsPage() {
   const [error, setError] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null);
     try {
       const res = await fetch("/api/swarms");
@@ -32,9 +26,9 @@ export default function SwarmsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
     return (
@@ -101,7 +95,7 @@ export default function SwarmsPage() {
                   width: "8px",
                   height: "8px",
                   borderRadius: "50%",
-                  background: STATUS_COLORS[s.status] ?? "var(--text-muted)",
+                  background: TASK_STATUS_COLORS[s.status as keyof typeof TASK_STATUS_COLORS] ?? "var(--text-muted)",
                   flexShrink: 0,
                 }}
               />

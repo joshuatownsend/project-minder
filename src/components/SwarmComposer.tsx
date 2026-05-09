@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/modal";
 import type { SwarmMode, ExecutionMode } from "@/lib/tasks/types";
 import { SWARM_MODES } from "@/lib/tasks/types";
+import { inputStyle, labelStyle, Field } from "./composer-fields";
 
 interface MemberDraft {
   title: string;
@@ -18,38 +19,6 @@ interface SwarmComposerProps {
   onClose: () => void;
   /** Pre-fill project path (from project card). If not provided, shows a text input. */
   projectPath?: string;
-}
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 10px",
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: "4px",
-  fontSize: "0.82rem",
-  fontFamily: "var(--font-body)",
-  color: "var(--text-primary)",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: "0.7rem",
-  fontWeight: 600,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  color: "var(--text-muted)",
-  marginBottom: "4px",
-};
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      {children}
-    </div>
-  );
 }
 
 function emptyMember(): MemberDraft {

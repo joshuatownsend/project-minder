@@ -372,12 +372,7 @@ export async function runStreamTask(
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Spawn a task inside a git worktree directory.
- * Reads worktreePath and projectPath from task metadata JSON.
- * Creates the worktree via `git worktree add` if the directory doesn't exist yet.
- * Injects cwd via a spawnFn closure so runClassicTask/runStreamTask need no signature changes.
- */
+/** Injects cwd via spawnFn closure — avoids signature changes to runClassicTask/runStreamTask. */
 export async function runWorktreeTask(
   task: Task,
   spawnFn: SpawnFn = spawn,

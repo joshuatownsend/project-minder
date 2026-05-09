@@ -51,6 +51,15 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "failed",
   "cancelled",
 ];
+
+export const TASK_STATUS_COLORS: Record<TaskStatus, string> = {
+  pending:           "var(--text-muted)",
+  awaiting_approval: "var(--accent)",
+  running:           "var(--info, #60a5fa)",
+  done:              "var(--success, #22c55e)",
+  failed:            "var(--error)",
+  cancelled:         "var(--text-muted)",
+};
 export const TASK_QUADRANTS: readonly TaskQuadrant[] = ["do", "schedule", "delegate", "archive", "delegated-todo"];
 export const EXECUTION_MODES: readonly ExecutionMode[] = ["classic", "stream"];
 export const EXECUTION_MODE_LABELS: Record<ExecutionMode, string> = {
