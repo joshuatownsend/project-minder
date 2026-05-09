@@ -35,6 +35,8 @@ export function TaskGanttChart({ snapshot }: Props) {
     return computeLayout(nodes, 1, ROW_H, 0, ROW_GAP);
   }, [taskCards]);
 
+  const now = useMemo(() => Date.now(), []);
+
   if (layout.nodes.length === 0) {
     return (
       <div
@@ -49,8 +51,6 @@ export function TaskGanttChart({ snapshot }: Props) {
       </div>
     );
   }
-
-  const now = Date.now();
 
   // Build a global row index sorted by (layer, order) so that rows are
   // sequential across layers. `n.order` is a within-layer index that resets
