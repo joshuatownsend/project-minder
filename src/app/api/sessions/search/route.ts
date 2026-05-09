@@ -11,6 +11,7 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 //   q      — search text (required, non-empty after trim)
 //   scope  — 'titles' | 'prompts' | 'both' (default: 'both')
 //   limit  — clamp to 1..200 (default: 50)
+//   source — adapter source id (e.g. 'claude'). Client-side filtered in SessionsBrowser.
 //
 // Response shape:
 //   { hits: Array<{ sessionId, score, source }>, backend: 'db' | 'file' }

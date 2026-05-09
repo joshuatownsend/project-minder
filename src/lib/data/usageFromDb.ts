@@ -9,7 +9,9 @@ import type {
   DailyBucket,
   ProjectDetail,
   McpServerStats,
+  SourceBreakdown,
 } from "@/lib/usage/types";
+import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { getPeriodStart } from "@/lib/usage/periods";
 import { groupByBinary } from "@/lib/usage/shellParser";
@@ -82,6 +84,8 @@ interface FilterParams {
   project: string | null;
   /** YYYY-MM-DD slice of `periodStart` for queries that filter by `day` column. */
   startDay: string | null;
+  /** Adapter source filter (e.g. "claude"). null for all sources. */
+  source: string | null;
 }
 
 /**
@@ -91,16 +95,19 @@ interface FilterParams {
 export function loadUsageReportFromSql(
   db: DatabaseT.Database,
   period: string,
-  project?: string
+  project?: string,
+  source?: string
 ): UsageReport {
   const periodStart = periodStartIso(period);
   const filter: FilterParams = {
     periodStart,
     project: project ?? null,
     startDay: periodStart?.slice(0, 10) ?? null,
+    source: source ?? null,
   };
 
   const totals = queryTotals(db, filter);
+  const bySource = queryBySource(db, filter);
   const byModel = queryByModel(db, filter);
   const byProject = queryByProject(db, filter);
   const byCategory = queryByCategory(db, filter);
@@ -150,6 +157,7 @@ export function loadUsageReportFromSql(
     byHourDay,
     streak,
     contributionCalendar,
+    bySource,
   };
 }
 
@@ -181,17 +189,47 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
-         AND (@project IS NULL OR s.project_slug = @project)`
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
     )
     .get(f) as Omit<TotalsRow, "distinct_sessions">;
   const sRow = prepCached(db,
       `SELECT COUNT(DISTINCT t.session_id) AS distinct_sessions
        FROM turns t JOIN sessions s USING (session_id)
        WHERE (@periodStart IS NULL OR t.ts >= @periodStart)
-         AND (@project IS NULL OR s.project_slug = @project)`
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
     )
     .get(f) as { distinct_sessions: number };
   return { ...a, distinct_sessions: sRow.distinct_sessions };
+}
+
+function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown[] {
+  interface SourceRow { source: string; cost: number; tokens: number; sessionCount: number }
+  const rows = prepCached(db,
+      `SELECT
+         s.source,
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_create_tokens), 0) AS tokens,
+         COUNT(DISTINCT t.session_id) AS sessionCount
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+       GROUP BY s.source
+       ORDER BY cost DESC`
+    )
+    .all(f) as SourceRow[];
+
+  const adapterDisplayNames = getAdapterDisplayNameMap();
+  return rows.map((r) => ({
+    source: r.source,
+    displayName: adapterDisplayNames.get(r.source) ?? r.source,
+    cost: r.cost,
+    tokens: r.tokens,
+    sessionCount: r.sessionCount,
+  }));
 }
 
 function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
@@ -208,6 +246,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY t.model
        ORDER BY cost DESC`
     )
@@ -227,6 +266,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY s.project_slug, s.project_dir_name
        ORDER BY cost DESC`
     )
@@ -269,6 +309,7 @@ function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY date
        ORDER BY date ASC`
     )
@@ -284,6 +325,7 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
        WHERE tu.tool_name NOT LIKE 'mcp__%'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY tu.tool_name
        ORDER BY count DESC
        LIMIT 15`
@@ -301,6 +343,7 @@ function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[
        WHERE tu.mcp_server IS NOT NULL
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY tu.mcp_server, tu.mcp_tool`
     )
     .all(f) as Array<{ server: string; tool: string; count: number }>;
@@ -336,8 +379,9 @@ function queryActivityTurns(
     `SELECT t.ts AS timestamp, t.cost_usd AS cost
        FROM turns t JOIN sessions s USING (session_id)
       WHERE t.role = 'assistant'
-        AND (@project IS NULL OR s.project_slug = @project)`
-  ).all({ project: f.project }) as Array<{ timestamp: string; cost: number }>;
+        AND (@project IS NULL OR s.project_slug = @project)
+        AND (@source IS NULL OR s.source = @source)`
+  ).all({ project: f.project, source: f.source }) as Array<{ timestamp: string; cost: number }>;
   return rows;
 }
 
@@ -353,7 +397,8 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
        JOIN sessions s ON s.session_id = t.session_id
        WHERE tu.tool_name IN ('Bash', 'PowerShell')
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
-         AND (@project IS NULL OR s.project_slug = @project)`
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
     )
     .all(f) as Array<{ arguments_json: string | null }>;
   const commands: string[] = [];
@@ -373,7 +418,8 @@ function queryOneShot(db: DatabaseT.Database, f: FilterParams) {
          COALESCE(SUM(one_shot_task_count), 0) AS oneShot
        FROM sessions
        WHERE (@periodStart IS NULL OR end_ts >= @periodStart)
-         AND (@project IS NULL OR project_slug = @project)`
+         AND (@project IS NULL OR project_slug = @project)
+         AND (@source IS NULL OR source = @source)`
     )
     .get(f) as { verified: number; oneShot: number };
   return {
@@ -398,6 +444,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
        GROUP BY s.project_slug, s.project_dir_name
        ORDER BY cost DESC`
     )

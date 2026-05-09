@@ -13,6 +13,7 @@ import { computeContributionCalendar } from "./contributionCalendar";
 import { computeProjectYield } from "./computeProjectYield";
 import { gatherProjectTurns, encodeProjectPath } from "./projectMatch";
 import { getCachedScan } from "@/lib/cache";
+import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import type {
   UsageTurn,
   UsageReport,
@@ -24,13 +25,15 @@ import type {
   DailyBucket,
   ToolCall,
   PortfolioYield,
+  SourceBreakdown,
 } from "./types";
 
 type Period = "today" | "week" | "month" | "all";
 
 export async function generateUsageReport(
   period: Period,
-  project?: string
+  project?: string,
+  source?: string
 ): Promise<UsageReport> {
   const sessionMap = await parseAllSessions();
 
@@ -39,10 +42,13 @@ export async function generateUsageReport(
     turns.push(...sessionTurns);
   }
 
-  // Project filter first (before period) — activity aggregates are project-scoped
-  // but use full history (not period-filtered).
+  // Project + source filters first (before period) — activity aggregates are
+  // project/source-scoped but use full history (not period-filtered).
   if (project) {
     turns = turns.filter((t) => t.projectSlug === project);
+  }
+  if (source) {
+    turns = turns.filter((t) => (t.source ?? "claude") === source);
   }
 
   const assistantTurnsFullHistory = turns.filter((t) => t.role === "assistant");
@@ -196,6 +202,7 @@ export async function aggregateUsage(
     mcpMap: Map<string, number>; // server -> call count
   };
   const projectDetailAccum = new Map<string, ProjectDetailAccum>();
+  const sourceAccum = new Map<string, { cost: number; tokens: number; sessions: Set<string> }>();
   let totalInput = 0;
   let totalOutput = 0;
   let totalCacheRead = 0;
@@ -277,6 +284,16 @@ export async function aggregateUsage(
     }
     projectDetailAccum.set(turn.projectSlug, detail);
 
+    // Source
+    const src = turn.source ?? "claude";
+    {
+      const entry = sourceAccum.get(src) ?? { cost: 0, tokens: 0, sessions: new Set<string>() };
+      entry.cost += cost;
+      entry.tokens += tokens;
+      entry.sessions.add(turn.sessionId);
+      sourceAccum.set(src, entry);
+    }
+
     // Totals
     totalInput += turn.inputTokens;
     totalOutput += turn.outputTokens;
@@ -356,6 +373,18 @@ export async function aggregateUsage(
       mcpCalls: [...d.mcpMap.values()].reduce((s, n) => s + n, 0),
     }));
 
+  // By-source breakdown (computed from enriched loop data — cost already resolved)
+  const adapterDisplayNames = getAdapterDisplayNameMap();
+  const bySource: SourceBreakdown[] = [...sourceAccum.entries()]
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([source, s]) => ({
+      source,
+      displayName: adapterDisplayNames.get(source) ?? source,
+      cost: s.cost,
+      tokens: s.tokens,
+      sessionCount: s.sessions.size,
+    }));
+
   return {
     period,
     totalCost,
@@ -385,5 +414,6 @@ export async function aggregateUsage(
     byHourDay: activity.byHourDay,
     streak: activity.streak,
     contributionCalendar: activity.contributionCalendar,
+    bySource,
   };
 }

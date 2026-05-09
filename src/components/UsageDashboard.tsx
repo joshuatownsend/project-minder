@@ -840,6 +840,28 @@ export function UsageDashboard() {
           {/* ── Aggregate mode ──────────────────────────────────────────── */}
           {(breakdownMode === "aggregate" || !!project) && (
             <>
+              {/* By source */}
+              {data.bySource && data.bySource.length > 0 && (
+                <div style={{ marginBottom: "24px" }}>
+                  <SectionHeader label="By Source" />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {(() => {
+                      const max = Math.max(...data.bySource.map((s) => s.cost));
+                      return data.bySource.map((s) => (
+                        <CostRow
+                          key={s.source}
+                          label={s.displayName}
+                          cost={s.cost}
+                          maxCost={max}
+                          color="var(--accent)"
+                          detail={`${s.sessionCount} sessions`}
+                        />
+                      ));
+                    })()}
+                  </div>
+                </div>
+              )}
+
               {/* By model + by category */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "32px" }}>
                 <div>

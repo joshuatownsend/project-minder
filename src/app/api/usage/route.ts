@@ -31,13 +31,14 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
+  const source = params.get("source") || undefined;
 
   // Include the requested backend in the cache key so a flag flip
   // (MINDER_USE_DB toggled at runtime) invalidates the slot immediately
   // — without this, a cached file-backend report could be served to a
   // db-backend caller for the rest of the 2-min TTL window.
   const requestedBackend = dbModeRequested() ? "db" : "file";
-  const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}`;
+  const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
   const cache = globalForUsage.__usageCache!;
   const cached = cache.get(cacheKey);
   const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL;
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
   if (fresh) {
     slot = cached!;
   } else {
-    const { report, meta } = await getUsage(safePeriod, project);
+    const { report, meta } = await getUsage(safePeriod, project, source);
     slot = {
       report,
       cachedAt: Date.now(),
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: `usage-v3-${slot.backend}`,
     maxMtimeMs: slot.maxMtime,
-    parts: [safePeriod, project ?? ""],
+    parts: [safePeriod, project ?? "", source ?? ""],
   });
 
   const notModified = ifNoneMatch(request, etag);

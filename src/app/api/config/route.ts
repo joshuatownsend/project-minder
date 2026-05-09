@@ -6,6 +6,7 @@ import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode,
 import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
+import { listAdapters } from "@/lib/adapters";
 
 // Derived from the MinderConfig union types — update both together if options change
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
@@ -287,6 +288,21 @@ export async function PATCH(request: NextRequest) {
       );
     }
     patches.push((c) => { c.scheduleMode = body.scheduleMode as ScheduleMode; });
+  }
+
+  if (body.enabledAdapters !== undefined) {
+    if (!Array.isArray(body.enabledAdapters) || body.enabledAdapters.some((id: unknown) => typeof id !== "string")) {
+      return NextResponse.json({ error: "enabledAdapters must be an array of strings" }, { status: 400 });
+    }
+    const knownIds = new Set(listAdapters().map((a) => a.id));
+    const ids = body.enabledAdapters as string[];
+    const unknown = ids.filter((id) => !knownIds.has(id));
+    if (unknown.length > 0) {
+      return NextResponse.json({
+        error: `Unknown adapter id(s): ${unknown.join(", ")}. Known adapters: ${[...knownIds].join(", ")}`,
+      }, { status: 400 });
+    }
+    patches.push((c) => { c.enabledAdapters = ids; });
   }
 
   if (patches.length === 0) {

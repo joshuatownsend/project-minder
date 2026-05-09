@@ -11,6 +11,7 @@ import { TerminalSection } from "@/components/settings/TerminalSection";
 import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
 import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
 import { CostSection } from "@/components/settings/CostSection";
+import { AdaptersSection } from "@/components/settings/AdaptersSection";
 import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
@@ -28,7 +29,8 @@ type SectionKey =
   | "data"
   | "terminal"
   | "auto-title"
-  | "live-activity";
+  | "live-activity"
+  | "adapters";
 
 interface SectionDef {
   key: SectionKey;
@@ -50,6 +52,7 @@ const SECTIONS: SectionDef[] = [
   { key: "terminal",       label: "Terminal",       shipsInWave: 7,  description: "Preferred terminal application for resume." },
   { key: "auto-title",    label: "Auto-title",     shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
   { key: "live-activity", label: "Live Activity",  shipsInWave: 7,  description: "Hook server install/remove + awaiting-permission alerts." },
+  { key: "adapters",      label: "Adapters",       shipsInWave: 10, description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
 ];
 
 export function SettingsPage() {
@@ -231,7 +234,10 @@ export function SettingsPage() {
         {active === "cost" && (
           <CostSection config={config} onConfigChange={patchConfig} />
         )}
-        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && active !== "cost" && activeSection && (
+        {active === "adapters" && (
+          <AdaptersSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && active !== "cost" && active !== "adapters" && activeSection && (
           <PlaceholderSection
             label={activeSection.label}
             wave={activeSection.shipsInWave}

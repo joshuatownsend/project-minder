@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSessionsList, type SessionsListResult } from "@/lib/data";
 import { SessionSummary } from "@/lib/types";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
+import { readConfig } from "@/lib/config";
 
 const CACHE_TTL = 30_000; // 30s — kept short so live status badges on the dashboard are timely
 
@@ -35,6 +36,7 @@ function deriveMaxSessionMs(sessions: SessionSummary[]): number {
 
 export async function GET(request: NextRequest) {
   const project = request.nextUrl.searchParams.get("project");
+  const source = request.nextUrl.searchParams.get("source");
 
   // Refresh the in-route cache when stale. The façade itself layers DB and
   // file-parse caches under it, so a refresh that finds no JSONL changes is
@@ -64,18 +66,25 @@ export async function GET(request: NextRequest) {
   // Combining both means the ETag is stable WITHIN a 30 s window (304s work
   // for back-to-back navigations) but rotates ACROSS windows so any
   // time-driven status flip surfaces on the next refresh.
+  const config = await readConfig();
+  const enabledAdapters = new Set(config.enabledAdapters ?? ["claude"]);
+
   const etag = computeETag({
     salt: "sessions-v1",
     maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
-    parts: [project ?? "", cache.result.sessions.length],
+    parts: [project ?? "", source ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
   });
 
   const notModified = ifNoneMatch(request, etag);
   if (notModified) return notModified;
 
   let results = cache.result.sessions;
+  results = results.filter((s) => enabledAdapters.has(s.source ?? "claude"));
   if (project) {
     results = results.filter((s) => s.projectSlug === project || s.projectName.includes(project));
+  }
+  if (source) {
+    results = results.filter((s) => (s.source ?? "claude") === source);
   }
 
   // jsonWithETag returns a NextResponse; layer the backend header on top so

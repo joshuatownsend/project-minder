@@ -200,6 +200,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
     expect(session.derived_version).toBe(7);
+    expect(session.source).toBe("claude");
 
     const turnRows = db
       .prepare("SELECT role, category FROM turns WHERE session_id = 'abc-session' ORDER BY turn_index")

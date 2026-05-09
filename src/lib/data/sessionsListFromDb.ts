@@ -137,6 +137,7 @@ interface SessionRow {
   work_mode_building_pct: number | null;
   work_mode_testing_pct: number | null;
   work_mode_other_pct: number | null;
+  source: string | null;
 }
 
 interface ToolCountRow {
@@ -192,7 +193,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             has_thinking, cli_version, has_resume_anomaly, compact_boundary_count,
             generated_title, starred_at, distilled_at, distilled_text,
             work_mode_exploration_pct, work_mode_building_pct,
-            work_mode_testing_pct, work_mode_other_pct
+            work_mode_testing_pct, work_mode_other_pct,
+            source
      FROM sessions
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
@@ -347,6 +349,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
           }
         : undefined,
       isWorktree: isWorktreeEncodedDir(h.project_dir_name),
+      source: h.source ?? "claude",
     });
   }
 

@@ -315,6 +315,20 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 11,
+    name: "wave10.2a: source column on sessions (multi-platform adapter)",
+    up: (db) => {
+      const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      const sessionColNames = sessionCols.map((c) => c.name);
+      if (!sessionColNames.includes("source")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'claude'").run();
+      }
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source)"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

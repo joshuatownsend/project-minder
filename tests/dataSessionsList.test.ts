@@ -244,6 +244,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
       expect(d.skillsUsed).toEqual(f.skillsUsed);
       expect(d.gitBranch).toBe(f.gitBranch);
       expect(d.isActive).toBe(f.isActive);
+      expect(d.source).toBe(f.source ?? "claude");
 
       // Documented divergences — assert the DB path's intentional differences.
       expect(d.recaps).toBeUndefined();
