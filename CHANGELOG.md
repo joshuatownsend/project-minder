@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 11.1a — Cluster Y: MCP Security Scanner (static-surface).** TODO #62.
+  - 8-pass deobfuscation pipeline (`stripZeroWidth`, `stripTagChars`, `stripVariationSelectors`, `stripBidiControls`, `stripHtmlComments`, `normalizeUnicode`, `decodeBase64Blocks`, `unescapeSequences` + optional leetspeak pass).
+  - 58 pattern rules across 13 categories (PI, CH, TP, CE, DE, SF, HK, TS, CI, PE, EP, SC, XR) plus a 30-name `SUSPICIOUS_PARAM_NAMES` set.
+  - SHA-256 tool-description fingerprinting + diff for rug-pull detection (store wired; population begins in Wave 11.1b).
+  - Static-surface scanner: analyses `command`, `args`, `url`, env keys, and `name` of every MCP server — no subprocess execution.
+  - `GET /api/mcp-security/findings` endpoint with optional `?serverId=` filter and `?refresh=1` trigger.
+  - **Security subsection** on the **Config → MCP** tab: severity chips (`crit`, `high`, `med`, `low`) per server row, expandable findings list, "Last scanned" banner with manual rescan button, `disabled` chip on toggled-off servers.
+  - Scan wired into `POST /api/scan` — runs in parallel with the project scan.
+  - Feature flag `mcpSecurityScan` (group: active, appliesAt: scan, default ON). Gates live introspection (Wave 11.1b); static scan is unconditional.
+  - Help doc at `/config?type=mcp`.
+
+### Changed
+- **DB schema v12**: three new tables — `mcp_scan_runs`, `mcp_scan_findings` (FK cascades on run delete, indexes on `server_id` and `run_id`), `mcp_tool_fingerprints` (composite PK `server_id + tool_name` avoids NULL footgun).
+
 - **Wave 10.2a — Cluster X (part 1): Multi-platform adapter architecture.** TODO #223.
   - New `SessionAdapter` interface + registry (`src/lib/adapters/`) with `discover()`, `parseFile()`, `parseFileWithMeta?()`. `claude` adapter wraps existing parser/ingest paths — no behavior change, only formalization.
   - `enabledAdapters?: string[]` on `MinderConfig` (default `["claude"]`). `PATCH /api/config` validates adapter IDs against the registry; rejects unknown IDs with 400.

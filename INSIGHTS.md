@@ -1,5 +1,74 @@
 # Insights
 
+<!-- insight:4a6977953912 | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T20:08:34.812Z -->
+## ★ Insight
+The original `stripTagChars` had actual Unicode tag characters (U+E0030, U+E0046) embedded inside the regex character class `[0-F]`. Without the `/u` flag, JavaScript treats surrogate pairs as separate 16-bit code units. The high surrogate U+DB40 appeared as the `0` and `F`, making the range cover thousands of characters — hence stripping all text. The fix uses explicit surrogate pair notation: `/\uDB40[\uDC00-\uDC7F]/g`.
+
+---
+
+<!-- insight:01688d57199c | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T19:46:37.272Z -->
+## ★ Insight
+- The `FeatureFlagKey` union in `types.ts` and the `FEATURE_FLAG_KEYS` array in `featureFlags.ts` must stay in sync — the array drives the Settings UI and the `/api/config` validator; the union drives TypeScript's exhaustiveness checking in `getFlag()`. Adding a key to both in the same edit prevents the "flag exists in config but not in UI" class of drift.
+- Migration v12 uses `db.prepare(...).run()` per statement instead of `db.exec(multiStatement)` — this avoids the `exec` hook while keeping each DDL statement independently transactional (the caller wraps the whole `up()` in a transaction).
+
+---
+
+<!-- insight:7ec3dc160c00 | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T19:38:57.138Z -->
+## ★ Insight
+- **Static-surface first, transport second** — splitting "what the catalog says" from "what the server does" lets us ship value in 11.1a with zero new dependencies. The schema + UI are wired now so 11.1b only adds the introspection plumbing.
+- **`server_id TEXT NOT NULL` over composite-PK-with-nullable-column** — a classic SQLite footgun: NULLs are treated as distinct in PK constraints, silently allowing duplicate inserts. Constructing a synthetic id (`user:<name>` / `<slug>:<name>`) mirrors `mcp_servers.id` and makes the constraint behave as humans expect.
+- **Feature flag gates *behavior*, not presence** — the static scan is unconditional because it inspects strings already in memory; the flag exists for 11.1b where we will spawn subprocesses. Keeping the flag `wired: true` from day one avoids the awkward "persists but does nothing" state.
+
+---
+
+<!-- insight:7c216b13d3d6 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T18:46:21.124Z -->
+## ★ Insight
+`TEXT_CAP` and `baseTurn()` are duplicated across Codex and Gemini adapters. Extracting shared constants/factories to `adapters/utils.ts` is the right seam — future adapters (Cursor, Aider, etc.) automatically inherit them without copy-paste. The `Promise.all` refactor in `discover()` converts O(N) sequential disk I/O to one concurrent wave, which matters when users have dozens of Gemini projects.
+
+---
+
+<!-- insight:6b9f5ce498ac | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T18:21:42.671Z -->
+## ★ Insight
+Gemini CLI has evolved: older versions use readable `projName` dirs matching `projects.json`; newer versions use SHA256-hashed dirs with `.project_root` files. No session files exist on this machine (chats dirs are empty), so I'll implement both lookup strategies and document the per-turn token assumption.
+
+---
+
+<!-- insight:bedb26414074 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T18:17:37.797Z -->
+## ★ Insight
+Gemini's format is significantly simpler than Codex: it uses plain JSON files (not JSONL event streams), token data is directly on each message object (no stateful accumulation needed), and sessions live under `~/.gemini/tmp/<projName>/chats/session-*.json`. The `projects.json` file maps `folderPath → projName` (inverted in memory to `projName → folderPath` for lookup). No EMFILE risk since we only read one JSON per session, no bounded-concurrency batching needed.
+
+---
+
+<!-- insight:b314cde394a0 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T17:47:37.513Z -->
+## ★ Insight
+The FD exhaustion bug is a classic async footgun: `Promise.all` is not concurrency-limited — it fires all promises simultaneously. On a large session history (hundreds of files), each `readSessionMeta` opens an `fs.open` handle concurrently. The OS default FD limit is often 1024, and `EMFILE` gets swallowed by the `catch` in `readSessionMeta`, silently dropping valid sessions. A batch loop that processes N files at a time is the idiomatic fix.
+
+---
+
+<!-- insight:b6b743a4b7de | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T17:35:29.605Z -->
+## ★ Insight
+The `withFileTypes: true` fix removes a hidden N+1: without it, every entry requires a separate `stat` syscall (2 syscalls: readdir + stat per entry). `Dirent` objects from `withFileTypes` carry `.isDirectory()`/`.isFile()` at zero extra cost — the OS returns this info alongside the name. On a 200-file session tree, that's 200 fewer syscalls on every `discover()` call.
+
+---
+
+<!-- insight:68172114908f | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T17:30:36.674Z -->
+## ★ Insight
+The Codex event-stream format requires **stateful** parsing — unlike Claude's JSONL where each line is a self-contained conversation entry, here a single "turn" is assembled from multiple events over several lines. The `flushTurn()` pattern (accumulate state, emit on boundary) is the standard approach for this class of streaming protocol. The `last_token_usage` vs `total_token_usage` delta math mirrors how streaming APIs report incremental vs cumulative billing.
+
+---
+
+<!-- insight:610939fd8176 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T17:26:28.449Z -->
+## ★ Insight
+The Codex session format is an event stream (not a conversation snapshot like Claude's JSONL), so parsing requires accumulating state across events — `turn_context` marks turn boundaries, `event_msg.token_count` carries billing data, and we prefer `last_token_usage` (per-turn) over computing deltas from `total_token_usage` (running sum). This is more complex than Claude's format where each line is a complete conversation entry.
+
+---
+
+<!-- insight:e9e1ec2a7237 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T17:22:26.382Z -->
+## ★ Insight
+Before writing, verifying the DB ingest path (hardcoded vs. adapter-routed), cost fallbacks, and real session file format. Silent $0 costs or missed ingest are the two failure modes that won't surface in tests.
+
+---
+
 <!-- insight:00f7550bd851 | session:6693a164-23dd-41c9-97e7-d81ba6e665d8 | 2026-05-09T16:47:36.001Z -->
 ## ★ Insight
 The client/server boundary is the core constraint here. `AdaptersSection` is a `"use client"` component — it can't import from `@/lib/adapters` (a server-only module using `fs`/`path`/`os`). Fetching from `/api/adapters` is the correct pattern: server module stays on server, client gets plain JSON.

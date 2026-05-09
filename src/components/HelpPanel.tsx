@@ -41,6 +41,8 @@ const slugTitles: Record<HelpSlug, string> = {
   cost: "Cost Settings",
   tasks: "Task Queue & Dispatcher",
   kanban: "Mission Control Kanban",
+  adapters: "Adapters",
+  "mcp-security": "MCP Security Scanner",
 };
 
 const iconBtnBase: React.CSSProperties = {

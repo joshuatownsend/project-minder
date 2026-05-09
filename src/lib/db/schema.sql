@@ -1,4 +1,4 @@
--- Project Minder local index — SQLite schema, version 1.
+-- Project Minder local index — SQLite schema, version 12.
 --
 -- Design tenets:
 --
@@ -585,3 +585,56 @@ CREATE TRIGGER commands_ad AFTER DELETE ON commands
 BEGIN
   DELETE FROM catalog_fts WHERE kind = 'command' AND id = OLD.id;
 END;
+
+-- ─── mcp_scan_runs ───────────────────────────────────────────────────────
+-- One row per security scan invocation. Findings reference this for provenance.
+
+CREATE TABLE mcp_scan_runs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at_ms   INTEGER NOT NULL,
+  duration_ms     INTEGER NOT NULL,
+  servers_scanned INTEGER NOT NULL,
+  findings_count  INTEGER NOT NULL,
+  trigger         TEXT NOT NULL CHECK (trigger IN ('scan','manual','startup'))
+);
+
+-- ─── mcp_scan_findings ───────────────────────────────────────────────────
+-- One row per pattern match per scan run. `evidence` is a short excerpt
+-- (≤120 chars) so we can show context without logging full command lines.
+-- `server_id` mirrors the construction in `mcp_servers.id`: `user:<name>`
+-- for user-scope servers, `<slug>:<name>` for project-scope.
+
+CREATE TABLE mcp_scan_findings (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id        INTEGER NOT NULL,
+  server_id     TEXT NOT NULL,
+  scope         TEXT NOT NULL CHECK (scope IN ('user','project')),
+  project_slug  TEXT,
+  rule_id       TEXT NOT NULL,
+  category      TEXT NOT NULL,
+  severity      TEXT NOT NULL CHECK (severity IN ('crit','high','med','low','info')),
+  surface       TEXT NOT NULL CHECK (surface IN ('command','args','url','env','name','tool-desc','param-name')),
+  surface_ref   TEXT,
+  message       TEXT NOT NULL,
+  evidence      TEXT,
+  found_at_ms   INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES mcp_scan_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_mcp_scan_findings_server ON mcp_scan_findings(server_id);
+CREATE INDEX idx_mcp_scan_findings_run    ON mcp_scan_findings(run_id);
+
+-- ─── mcp_tool_fingerprints ───────────────────────────────────────────────
+-- SHA-256 of each tool's description text, keyed by (server_id, tool_name).
+-- Used by the rug-pull detector in Wave 11.1b: if description_hash changes
+-- between scans without a server version bump, we emit a DE (description-
+-- edit) finding. First populated in 11.1b when live introspection is wired.
+
+CREATE TABLE mcp_tool_fingerprints (
+  server_id        TEXT NOT NULL,
+  tool_name        TEXT NOT NULL,
+  description_hash TEXT NOT NULL,
+  first_seen_ms    INTEGER NOT NULL,
+  last_seen_ms     INTEGER NOT NULL,
+  PRIMARY KEY (server_id, tool_name)
+);
