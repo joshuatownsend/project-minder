@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import path from "path";
 import os from "os";
 import fs from "fs";
@@ -26,6 +26,10 @@ beforeAll(() => {
   fs.writeFileSync(path.join(SESSIONS_DIR, `${SESSION_ID}.jsonl`), SAMPLE_JSONL, "utf-8");
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 afterAll(() => {
   fs.rmSync(FIXTURE_DIR, { recursive: true, force: true });
 });
@@ -41,7 +45,6 @@ describe("codex adapter", () => {
     expect(files[0].filePath).toContain(`${SESSION_ID}.jsonl`);
     expect(files[0].projectDirName).toContain("my-project");
 
-    vi.mocked(os.homedir).mockRestore();
   });
 
   it("parseFile() stamps source: 'codex' on every turn", async () => {
@@ -81,7 +84,6 @@ describe("codex adapter", () => {
     vi.spyOn(os, "homedir").mockReturnValue(path.join(os.tmpdir(), "nonexistent-codex-" + Date.now()));
     const files = await codexAdapter.discover();
     expect(files).toEqual([]);
-    vi.mocked(os.homedir).mockRestore();
   });
 
   it("discover() deduplicates sessions with the same id across sessions/ and archived_sessions/", async () => {
@@ -103,6 +105,5 @@ describe("codex adapter", () => {
     const matchingFiles = files.filter((f) => f.filePath.includes(SESSION_ID));
     expect(matchingFiles.length).toBe(1);
 
-    vi.mocked(os.homedir).mockRestore();
   });
 });

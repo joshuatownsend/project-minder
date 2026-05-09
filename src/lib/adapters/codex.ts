@@ -8,6 +8,7 @@ import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 
 const ADAPTER_ID = "codex" as const;
+const META_READ_CONCURRENCY = 16;
 
 // ─── file walk ──────────────────────────────────────────────────────────────
 
@@ -38,16 +39,33 @@ interface SessionMeta {
   cwd: string;
 }
 
-// Reads only the first line via a small fixed buffer — avoids loading entire session files
+// Reads the first line in 4KB chunks until a newline is found (max 64KB).
+// Avoids loading entire session files while handling arbitrarily long session_meta lines.
 async function readSessionMeta(filePath: string): Promise<SessionMeta | null> {
   let fh: FileHandle | undefined;
   try {
     fh = await fs.open(filePath, "r");
-    const buf = Buffer.allocUnsafe(1024);
-    const { bytesRead } = await fh.read(buf, 0, 1024, 0);
-    const chunk = buf.toString("utf-8", 0, bytesRead);
-    const newline = chunk.indexOf("\n");
-    const firstLine = newline >= 0 ? chunk.slice(0, newline) : chunk;
+    const CHUNK = 4096;
+    const MAX = 65536;
+    const buf = Buffer.allocUnsafe(CHUNK);
+    const chunks: string[] = [];
+    let offset = 0;
+    let firstLine = "";
+    while (offset < MAX) {
+      const { bytesRead } = await fh.read(buf, 0, CHUNK, offset);
+      if (bytesRead === 0) {
+        firstLine = chunks.join("");
+        break;
+      }
+      const chunk = buf.toString("utf-8", 0, bytesRead);
+      const nl = chunk.indexOf("\n");
+      if (nl >= 0) {
+        firstLine = chunks.join("") + chunk.slice(0, nl);
+        break;
+      }
+      chunks.push(chunk);
+      offset += bytesRead;
+    }
     const entry = safeParseJson(firstLine);
     if (!entry || entry.type !== "session_meta" || !entry.payload) return null;
     const p = entry.payload as Record<string, unknown>;
@@ -60,6 +78,15 @@ async function readSessionMeta(filePath: string): Promise<SessionMeta | null> {
   } finally {
     await fh?.close();
   }
+}
+
+// Runs fn over items in batches to cap concurrent open file handles
+async function batchedMap<T, R>(items: T[], fn: (item: T) => Promise<R>, limit: number): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    results.push(...await Promise.all(items.slice(i, i + limit).map(fn)));
+  }
+  return results;
 }
 
 // ─── parsing helpers ─────────────────────────────────────────────────────────
@@ -211,7 +238,7 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
     }
     turns.push({
       ...baseTurn(),
-      model: currentTurn.model ?? currentModel ?? ADAPTER_ID,
+      model: currentTurn.model ?? currentModel ?? "unknown",
       role: "assistant",
       inputTokens: currentTurn.inputTokens,
       outputTokens: currentTurn.outputTokens,
@@ -249,7 +276,7 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
           flushTurn();
           turns.push({
             ...baseTurn(),
-            model: currentModel ?? ADAPTER_ID,
+            model: currentModel ?? "unknown",
             role: "user",
             inputTokens: 0,
             outputTokens: 0,
@@ -355,8 +382,8 @@ const codexAdapter: SessionAdapter = {
     const [sessionFiles, archivedFiles] = await Promise.all(searchDirs.map(walkJsonlFiles));
     const allFiles = [...sessionFiles, ...archivedFiles];
 
-    // Read metadata for all files in parallel
-    const metas = await Promise.all(allFiles.map(readSessionMeta));
+    // Read metadata in bounded batches to avoid hitting the FD limit (EMFILE)
+    const metas = await batchedMap(allFiles, readSessionMeta, META_READ_CONCURRENCY);
 
     const seen = new Set<string>();
     const files: SessionFile[] = [];

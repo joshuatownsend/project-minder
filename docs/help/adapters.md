@@ -20,6 +20,8 @@ To enable Codex alongside Claude Code:
 { "enabledAdapters": ["claude", "codex"] }
 ```
 
+**Custom data location:** If your Codex data is not in `~/.codex/`, set the `CODEX_HOME` environment variable to the directory you want the adapter to scan. This takes precedence over the default `~/.codex/` path and is useful for CI environments or non-standard installs.
+
 Note: Codex does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Codex sessions. Cost estimates use OpenAI model pricing when available, falling back to Claude Sonnet pricing for unknown models.
 
 ## Managing adapters
