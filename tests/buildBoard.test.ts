@@ -44,6 +44,8 @@ function makeTask(overrides: Partial<Task>): Task {
     consecutive_failures: 0,
     created_at: NOW,
     metadata: null,
+    swarm_id: null,
+    swarm_role: null,
     ...overrides,
   };
 }

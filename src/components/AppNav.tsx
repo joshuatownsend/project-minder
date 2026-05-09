@@ -61,6 +61,7 @@ const GROUPS: Group[] = [
     children: [
       item("/kanban",   "Kanban"),
       item("/tasks",    "Tasks"),
+      item("/swarms",   "Swarms"),
       item("/schedule", "Schedule"),
     ],
   },

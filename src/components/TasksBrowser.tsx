@@ -15,8 +15,9 @@ import {
   Plus,
 } from "lucide-react";
 import type { Task, Schedule, TaskStatus, TaskQuadrant } from "@/lib/tasks/types";
-import { TASK_STATUSES, TASK_QUADRANTS } from "@/lib/tasks/types";
+import { TASK_STATUSES, TASK_QUADRANTS, TASK_STATUS_COLORS } from "@/lib/tasks/types";
 import { TaskComposer } from "./TaskComposer";
+import { SwarmComposer } from "./SwarmComposer";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,20 +32,12 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
   cancelled:          "Cancelled",
 };
 
-const STATUS_COLORS: Record<TaskStatus, string> = {
-  pending:            "var(--text-muted)",
-  awaiting_approval:  "var(--accent)",
-  running:            "var(--info)",
-  done:               "var(--success, #22c55e)",
-  failed:             "var(--error)",
-  cancelled:          "var(--text-muted)",
-};
 
 const REDUCED_MOTION =
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function StatusIcon({ status }: { status: TaskStatus }) {
-  const style = { width: "12px", height: "12px", color: STATUS_COLORS[status] };
+  const style = { width: "12px", height: "12px", color: TASK_STATUS_COLORS[status] };
   switch (status) {
     case "pending":           return <Circle style={style} />;
     case "awaiting_approval": return <HelpCircle style={style} />;
@@ -66,8 +59,8 @@ function StatusBadge({ status }: { status: TaskStatus }) {
         textTransform: "uppercase",
         padding: "1px 5px",
         borderRadius: "3px",
-        background: `color-mix(in srgb, ${STATUS_COLORS[status]} 12%, transparent)`,
-        color: STATUS_COLORS[status],
+        background: `color-mix(in srgb, ${TASK_STATUS_COLORS[status]} 12%, transparent)`,
+        color: TASK_STATUS_COLORS[status],
         display: "inline-flex",
         alignItems: "center",
         gap: "3px",
@@ -317,6 +310,7 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [composerOpen, setComposerOpen] = useState(false);
+  const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
 
   const filtered = useMemo(() => {
     let result = tasks;
@@ -419,24 +413,41 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
           {filtered.length} / {tasks.length}
         </span>
 
-        <button
-          onClick={() => setComposerOpen(true)}
-          style={{
-            display: "flex", alignItems: "center", gap: "5px",
-            padding: "5px 12px",
-            background: "var(--accent)",
-            border: "none",
-            borderRadius: "4px",
-            fontSize: "0.78rem",
-            fontWeight: 600,
-            color: "white",
-            cursor: "pointer",
-            marginLeft: "auto",
-          }}
-        >
-          <Plus style={{ width: "12px", height: "12px" }} />
-          New task
-        </button>
+        <div style={{ display: "flex", gap: "6px", marginLeft: "auto" }}>
+          <button
+            onClick={() => setSwarmComposerOpen(true)}
+            style={{
+              display: "flex", alignItems: "center", gap: "5px",
+              padding: "5px 12px",
+              background: "none",
+              border: "1px solid var(--border)",
+              borderRadius: "4px",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              cursor: "pointer",
+            }}
+          >
+            Launch Swarm
+          </button>
+          <button
+            onClick={() => setComposerOpen(true)}
+            style={{
+              display: "flex", alignItems: "center", gap: "5px",
+              padding: "5px 12px",
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: "4px",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              color: "white",
+              cursor: "pointer",
+            }}
+          >
+            <Plus style={{ width: "12px", height: "12px" }} />
+            New task
+          </button>
+        </div>
       </div>
 
       <TaskComposer
@@ -446,6 +457,10 @@ export function TasksBrowser({ tasks, schedules, decisionCounts, onRefresh }: Pr
           setComposerOpen(false);
           onRefresh?.();
         }}
+      />
+      <SwarmComposer
+        open={swarmComposerOpen}
+        onClose={() => setSwarmComposerOpen(false)}
       />
 
       {/* Tasks list */}

@@ -63,6 +63,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
       projectSlug: "my-project",
       projectPath: "/mock/roots/my-project",
     }),
+    swarm_id: null,
+    swarm_role: null,
     ...overrides,
   };
 }

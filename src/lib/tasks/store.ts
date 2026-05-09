@@ -1,14 +1,20 @@
 import "server-only";
+import path from "path";
 import type DatabaseT from "better-sqlite3";
+import { WORKTREE_SEP } from "../scanner/worktreeCheck";
 import { initTasksDb } from "../tasksDb/migrations";
 import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
 import type {
   Task,
+  TaskStatus,
   TaskDecision,
   TaskDependency,
   Schedule,
+  Swarm,
+  SwarmStatus,
   CreateTaskInput,
+  CreateSwarmInput,
   PatchTaskInput,
   CreateScheduleInput,
   PatchScheduleInput,
@@ -174,8 +180,13 @@ export async function claimPendingTask(): Promise<Task | null> {
          AND NOT EXISTS (
            SELECT 1 FROM task_dependencies td
            JOIN ops_tasks bt ON bt.id = td.blocker_id
-           WHERE td.task_id = ops_tasks.id
-             AND bt.status != 'done'
+           WHERE td.task_id = ops_tasks.id AND (
+             (ops_tasks.swarm_role IS NULL OR ops_tasks.swarm_role != 'coordinator')
+               AND bt.status != 'done'
+             OR
+             ops_tasks.swarm_role = 'coordinator'
+               AND bt.status NOT IN ('done','failed','cancelled')
+           )
          )
        ORDER BY priority ASC, created_at ASC
        LIMIT 1
@@ -203,8 +214,13 @@ export async function promoteApprovalTasks(): Promise<number> {
        AND NOT EXISTS (
          SELECT 1 FROM task_dependencies td
          JOIN ops_tasks bt ON bt.id = td.blocker_id
-         WHERE td.task_id = ops_tasks.id
-           AND bt.status != 'done'
+         WHERE td.task_id = ops_tasks.id AND (
+           (ops_tasks.swarm_role IS NULL OR ops_tasks.swarm_role != 'coordinator')
+             AND bt.status != 'done'
+           OR
+           ops_tasks.swarm_role = 'coordinator'
+             AND bt.status NOT IN ('done','failed','cancelled')
+         )
        )`
   ).run();
   return result.changes;
@@ -574,6 +590,188 @@ export async function listAllDependencies(): Promise<TaskDependency[]> {
   return prepTasksCached(db,
     "SELECT * FROM task_dependencies ORDER BY created_at ASC"
   ).all() as TaskDependency[];
+}
+
+// ---------------------------------------------------------------------------
+// Swarms
+// ---------------------------------------------------------------------------
+
+const TERMINAL_STATUSES = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
+type SwarmTaskRow = Pick<Task, "id" | "status" | "output_summary" | "title" | "swarm_role" | "description">;
+
+/** Create a swarm with its member tasks (and optional coordinator) in one transaction. */
+export async function createSwarm(
+  input: CreateSwarmInput
+): Promise<{ swarm: Swarm; tasks: Task[] }> {
+  const db = await ensureReady();
+
+  const slug = input.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 30);
+
+  let swarm!: Swarm;
+  const allTasks: Task[] = [];
+
+  const txn = db.transaction(() => {
+    swarm = db
+      .prepare(
+        `INSERT INTO ops_swarms (name, mode, project_path) VALUES (?, ?, ?) RETURNING *`
+      )
+      .get(input.name, input.mode, input.project_path) as Swarm;
+
+    const insertTask = db.prepare(
+      `INSERT INTO ops_tasks
+        (title, description, priority, quadrant, assigned_skill, model,
+         execution_mode, requires_approval, risk_level, dry_run, metadata,
+         swarm_id, swarm_role)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'low', 0, ?, ?, ?)
+       RETURNING *`
+    );
+
+    const memberIds: number[] = [];
+
+    for (let i = 0; i < input.members.length; i++) {
+      const member = input.members[i];
+      let meta: Record<string, unknown>;
+      if (input.mode === "worktree") {
+        const worktreePath = path.join(
+          path.dirname(input.project_path),
+          path.basename(input.project_path) + WORKTREE_SEP + slug + "-" + swarm.id + "-" + i
+        );
+        meta = { worktreePath, projectPath: input.project_path };
+      } else {
+        meta = { projectPath: input.project_path };
+      }
+      const task = insertTask.get(
+        member.title,
+        member.description ?? "",
+        3,
+        "do",
+        member.assigned_skill ?? null,
+        member.model ?? null,
+        member.execution_mode ?? "stream",
+        JSON.stringify(meta),
+        swarm.id,
+        "member"
+      ) as Task;
+      allTasks.push(task);
+      memberIds.push(task.id);
+    }
+
+    if (input.coordinator) {
+      const coordTask = insertTask.get(
+        input.coordinator.title,
+        input.coordinator.description ?? "",
+        3,
+        "do",
+        input.coordinator.assigned_skill ?? null,
+        null,
+        "stream",
+        null,
+        swarm.id,
+        "coordinator"
+      ) as Task;
+      allTasks.push(coordTask);
+
+      const insertDep = db.prepare(
+        `INSERT INTO task_dependencies (task_id, blocker_id) VALUES (?, ?)
+         ON CONFLICT(task_id, blocker_id) DO NOTHING`
+      );
+      for (const memberId of memberIds) {
+        insertDep.run(coordTask.id, memberId);
+      }
+    }
+  });
+
+  txn();
+  return { swarm, tasks: allTasks };
+}
+
+export async function getSwarm(id: number): Promise<Swarm | null> {
+  const db = await ensureReady();
+  const row = db
+    .prepare("SELECT * FROM ops_swarms WHERE id = ?")
+    .get(id) as Swarm | undefined;
+  return row ?? null;
+}
+
+export async function listSwarms(): Promise<Swarm[]> {
+  const db = await ensureReady();
+  return db
+    .prepare("SELECT * FROM ops_swarms ORDER BY created_at DESC")
+    .all() as Swarm[];
+}
+
+export async function getSwarmTasks(swarmId: number): Promise<Task[]> {
+  const db = await ensureReady();
+  return db
+    .prepare("SELECT * FROM ops_tasks WHERE swarm_id = ? ORDER BY created_at ASC")
+    .all(swarmId) as Task[];
+}
+
+/**
+ * Recompute and write the aggregate status for a swarm after any member/coordinator changes.
+ * When all members become terminal, injects their output summaries into the coordinator description
+ * (exactly once, guarded by a marker string in the description).
+ */
+export async function updateSwarmStatus(swarmId: number): Promise<void> {
+  const db = await ensureReady();
+
+  const tasks = db
+    .prepare(
+      "SELECT id, status, output_summary, title, swarm_role, description FROM ops_tasks WHERE swarm_id = ?"
+    )
+    .all(swarmId) as SwarmTaskRow[];
+  if (tasks.length === 0) return;
+
+  const members = tasks.filter((t) => t.swarm_role === "member");
+  const coordinator = tasks.find((t) => t.swarm_role === "coordinator");
+
+  // Inject member summaries into coordinator description once, right before it becomes claimable.
+  if (
+    coordinator &&
+    coordinator.status === "pending" &&
+    members.every((t) => TERMINAL_STATUSES.has(t.status))
+  ) {
+    const withOutput = members.filter((t) => t.output_summary);
+    if (
+      withOutput.length > 0 &&
+      !coordinator.description.includes("<!-- swarm-summaries-injected -->")
+    ) {
+      const block = [
+        "<!-- swarm-summaries-injected -->",
+        "## Member Task Outputs",
+        ...withOutput.map((m) => `\n### ${m.title} (${m.status})\n${m.output_summary}`),
+      ].join("\n\n");
+      db.prepare(
+        `UPDATE ops_tasks SET description = description || ?
+         WHERE id = ? AND status = 'pending'`
+      ).run("\n\n" + block, coordinator.id);
+    }
+  }
+
+  const allTerminal = tasks.every((t) => TERMINAL_STATUSES.has(t.status));
+  if (!allTerminal) return;
+
+  let newStatus: SwarmStatus;
+  if (coordinator) {
+    const cs = coordinator.status;
+    newStatus = cs === "done" ? "done" : cs === "failed" ? "failed" : "cancelled";
+  } else {
+    if (members.every((t) => t.status === "done")) newStatus = "done";
+    else if (members.some((t) => t.status === "failed")) newStatus = "failed";
+    else newStatus = "cancelled";
+  }
+
+  db.prepare(
+    `UPDATE ops_swarms
+     SET status = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND status = 'running'`
+  ).run(newStatus, swarmId);
 }
 
 /** Count decisions created after sinceEpoch (Unix seconds). Used by pulse for per-client edge-triggering. */

@@ -181,6 +181,79 @@ Returns `{ "taskId": 123 }`.
 
 ---
 
-## What's coming
+## Swarms
 
-- **Wave 10** — Kanban board, task dependency graph, multi-agent swarm
+A **swarm** lets you dispatch 2–8 tasks concurrently, with an optional coordinator that fires after all member tasks finish.
+
+### Launching a swarm
+
+Two entry points:
+- **Tasks page** — click **Launch Swarm** (next to "New task") to open the SwarmComposer.
+- **Project card** — open the card's **⋮** dropdown and choose **Launch Swarm…** (pre-fills the project path).
+
+In the SwarmComposer, fill in:
+
+| Field | Description |
+|-------|-------------|
+| **Swarm name** | Display label for the swarm |
+| **Project path** | The git project the swarm operates on |
+| **Execution mode** | `Shared` — all tasks run in the project directory; `Worktree` — each member task gets its own `git worktree` sibling directory |
+| **Member tasks** | 2–8 task definitions, each with title, optional description, skill, and execution mode |
+| **Coordinator** | Optional task that runs after all members complete (blocked via `task_dependencies`) |
+
+### Execution modes
+
+**Shared mode** — members run concurrently in the same project directory. Good for independent tasks that don't conflict on the same files.
+
+**Worktree mode** — the dispatcher calls `git worktree add -B <branch> <path> HEAD` before spawning each member. Each member's `claude` process runs with `cwd` set to its own worktree directory. Worktree paths use the `--claude-worktrees-<slug>-<index>` naming convention compatible with Project Minder's worktrees scanner. After the swarm completes, click **Remove worktrees** on the swarm detail page to clean up.
+
+### Coordinator task
+
+If you add a coordinator:
+- It is blocked by all member tasks via `task_dependencies` rows
+- It becomes claimable when all members reach a **terminal** state — `done`, `failed`, or `cancelled` (unlike regular dependencies which require `done`)
+- Member output summaries are appended to the coordinator's description before it is claimed, so Claude Code has full context of what each member produced
+
+### Swarm status
+
+| Status | Meaning |
+|--------|---------|
+| **Running** | At least one task is still pending or running |
+| **Done** | All tasks completed; coordinator done (if present) |
+| **Failed** | All tasks terminal; coordinator failed (or any member failed with no coordinator) |
+| **Cancelled** | All tasks terminal; coordinator cancelled (or all members cancelled) |
+
+### Viewing swarms
+
+- **`/swarms`** — lists all swarms with status dots and mode badges
+- **`/swarms/<id>`** — detail page showing per-member status, cost, session links, and total cost. Polls every 5 s while the swarm is running.
+
+### REST API
+
+```
+GET    /api/swarms                    — list all swarms
+POST   /api/swarms                    — create a swarm (see body below)
+GET    /api/swarms/<id>               — { swarm, tasks }
+DELETE /api/swarms/<id>/worktrees     — remove all worktree directories (idempotent)
+```
+
+**Create body:**
+```json
+{
+  "name": "Auth refactor",
+  "mode": "worktree",
+  "project_path": "C:\\dev\\my-app",
+  "members": [
+    { "title": "Extract rate limiter", "execution_mode": "stream" },
+    { "title": "Add PKCE support", "execution_mode": "stream" }
+  ],
+  "coordinator": {
+    "title": "Integrate and test",
+    "description": "Review both branches and write integration tests"
+  }
+}
+```
+
+Validation: `members` must have 2–8 items with non-empty titles; `mode` must be `worktree` or `shared`; `project_path` is required.
+
+---

@@ -2,8 +2,8 @@ import "server-only";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask } from "./store";
-import { runClassicTask, runStreamTask, sweepStalePids, type SpawnFn } from "./spawner";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus } from "./store";
+import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
@@ -108,15 +108,37 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           continue;
         }
 
+        const swarmId = task.swarm_id;
+
+        async function afterComplete(completedTask?: Task): Promise<void> {
+          if (completedTask) await onTaskCompleteToggleTodo(completedTask);
+          if (swarmId != null) {
+            await updateSwarmStatus(swarmId).catch((err) =>
+              console.error(`[dispatcher] updateSwarmStatus failed for swarm ${swarmId}:`, err)
+            );
+          }
+        }
+
+        let worktreePath: string | undefined;
+        try {
+          worktreePath = (JSON.parse(task.metadata ?? "{}") as { worktreePath?: string }).worktreePath;
+        } catch { /* metadata not JSON */ }
+        const isWorktree = task.swarm_id != null && !!worktreePath;
+
         let promise: Promise<void>;
-        if (task.execution_mode === "stream") {
-          promise = runStreamTask(task, spawnFn, handleDecision, onTaskCompleteToggleTodo)
+        if (isWorktree) {
+          promise = runWorktreeTask(task, spawnFn, handleDecision, afterComplete)
+            .then(() => {})
+            .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
+            .finally(() => inFlight.delete(task!.id));
+        } else if (task.execution_mode === "stream") {
+          promise = runStreamTask(task, spawnFn, handleDecision, afterComplete)
             .then(() => {})
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         } else {
           promise = runClassicTask(task, spawnFn)
-            .then(() => {})
+            .then(() => afterComplete())
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         }
