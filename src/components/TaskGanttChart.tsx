@@ -52,6 +52,15 @@ export function TaskGanttChart({ snapshot }: Props) {
 
   const now = Date.now();
 
+  // Build a global row index sorted by (layer, order) so that rows are
+  // sequential across layers. `n.order` is a within-layer index that resets
+  // to 0 for each layer — using it directly as rowY causes nodes in later
+  // layers to overlap earlier-layer rows that share the same within-layer index.
+  const sortedNodes = [...layout.nodes].sort(
+    (a, b) => a.layer - b.layer || a.order - b.order
+  );
+  const rowIndex = new Map(sortedNodes.map((n, i) => [n.id, i]));
+
   // Compute time bounds across all tasks.
   let minTime = now;
   let maxTime = now;
@@ -103,7 +112,7 @@ export function TaskGanttChart({ snapshot }: Props) {
             <g>
               {/* Horizontal grid lines */}
               {layout.nodes.map((n) => {
-                const rowY = n.order * (ROW_H + ROW_GAP);
+                const rowY = rowIndex.get(n.id)! * (ROW_H + ROW_GAP);
                 return (
                   <line
                     key={`grid-${n.id}`}
@@ -131,9 +140,9 @@ export function TaskGanttChart({ snapshot }: Props) {
                   : new Date(to.createdAt).getTime();
 
                 const x1 = xScale(new Date(fromEnd));
-                const y1 = from.order * (ROW_H + ROW_GAP) + ROW_H / 2;
+                const y1 = rowIndex.get(from.id)! * (ROW_H + ROW_GAP) + ROW_H / 2;
                 const x2 = xScale(new Date(toStart));
-                const y2 = to.order * (ROW_H + ROW_GAP) + ROW_H / 2;
+                const y2 = rowIndex.get(to.id)! * (ROW_H + ROW_GAP) + ROW_H / 2;
 
                 return (
                   <path
@@ -158,7 +167,7 @@ export function TaskGanttChart({ snapshot }: Props) {
 
               {/* Task bars + labels */}
               {layout.nodes.map((n) => {
-                const rowY = n.order * (ROW_H + ROW_GAP);
+                const rowY = rowIndex.get(n.id)! * (ROW_H + ROW_GAP);
                 const color = STATUS_COLOR[n.status] ?? "var(--text-muted)";
 
                 const startMs = n.startedAt
