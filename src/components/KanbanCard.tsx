@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { KanbanCard as KanbanCardType } from "@/lib/kanban/types";
+import { Chip } from "@/components/ui/chip";
 import { formatDistanceToNow } from "date-fns";
 
 // ---------------------------------------------------------------------------
@@ -10,73 +11,26 @@ import { formatDistanceToNow } from "date-fns";
 
 type SessionLiveStatus = Extract<KanbanCardType, { kind: "session" }>["liveStatus"];
 
+const LIVE_DOT: Partial<Record<SessionLiveStatus, { title: string; bg: string }>> = {
+  working:  { title: "Working",           bg: "var(--success, #22c55e)" },
+  approval: { title: "Awaiting approval", bg: "var(--accent)" },
+};
+
 function LiveDot({ liveStatus }: { liveStatus: SessionLiveStatus }) {
-  if (liveStatus === "working") {
-    return (
-      <span
-        title="Working"
-        style={{
-          width: "7px",
-          height: "7px",
-          borderRadius: "50%",
-          background: "var(--success, #22c55e)",
-          display: "inline-block",
-          flexShrink: 0,
-        }}
-      />
-    );
-  }
-  if (liveStatus === "approval") {
-    return (
-      <span
-        title="Awaiting approval"
-        style={{
-          width: "7px",
-          height: "7px",
-          borderRadius: "50%",
-          background: "var(--accent)",
-          display: "inline-block",
-          flexShrink: 0,
-        }}
-      />
-    );
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Pill chip
-// ---------------------------------------------------------------------------
-
-function Chip({
-  label,
-  color = "var(--text-muted)",
-  muted = false,
-}: {
-  label: string;
-  color?: string;
-  muted?: boolean;
-}) {
+  const cfg = LIVE_DOT[liveStatus];
+  if (!cfg) return null;
   return (
     <span
+      title={cfg.title}
       style={{
-        fontSize: "0.6rem",
-        fontFamily: "var(--font-mono)",
-        fontWeight: 600,
-        letterSpacing: "0.04em",
-        textTransform: "uppercase",
-        padding: "1px 5px",
-        borderRadius: "3px",
-        background: muted
-          ? "color-mix(in srgb, var(--text-muted) 10%, transparent)"
-          : `color-mix(in srgb, ${color} 14%, transparent)`,
-        color: muted ? "var(--text-muted)" : color,
+        width: "7px",
+        height: "7px",
+        borderRadius: "50%",
+        background: cfg.bg,
         display: "inline-block",
-        whiteSpace: "nowrap",
+        flexShrink: 0,
       }}
-    >
-      {label}
-    </span>
+    />
   );
 }
 

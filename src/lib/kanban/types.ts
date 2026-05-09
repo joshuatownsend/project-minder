@@ -60,6 +60,8 @@ export type KanbanCard =
     };
 
 export type KanbanKindFilter = "all" | "sessions" | "tasks";
+export const KANBAN_KIND_FILTERS = ["all", "sessions", "tasks"] as const satisfies readonly KanbanKindFilter[];
+
 export type KanbanPeriod = "last24h" | "last7d" | "all";
 
 export interface KanbanSnapshot {

@@ -11,7 +11,7 @@ import {
 import { useKanban } from "@/hooks/useKanban";
 import { KanbanCard } from "@/components/KanbanCard";
 import type { KanbanColumn, KanbanCard as KanbanCardType, KanbanKindFilter, KanbanPeriod } from "@/lib/kanban/types";
-import { KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, KANBAN_COLUMN_EMPTY } from "@/lib/kanban/types";
+import { KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, KANBAN_COLUMN_EMPTY, KANBAN_KIND_FILTERS } from "@/lib/kanban/types";
 
 const PAGE_SIZE = 10;
 const LS_KEY = "minder:kanban:hidden-columns";
@@ -320,7 +320,7 @@ export function KanbanBoard() {
         </div>
 
         {/* Kind filter */}
-        {(["all", "sessions", "tasks"] as KanbanKindFilter[]).map((k) => (
+        {KANBAN_KIND_FILTERS.map((k) => (
           <button
             key={k}
             onClick={() => setKindFilter(k)}

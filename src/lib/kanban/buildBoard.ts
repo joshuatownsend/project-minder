@@ -65,44 +65,25 @@ export function buildBoard(
   return { columns, generatedAt, dispatcherEnabled };
 }
 
+type TaskKanbanCard = Extract<KanbanCard, { kind: "task" }>;
+
+function cardTime(
+  card: KanbanCard,
+  taskField: (t: TaskKanbanCard) => string | null,
+): number {
+  if (card.kind === "session") return new Date(card.mtime).getTime();
+  const v = taskField(card as TaskKanbanCard);
+  return v ? new Date(v).getTime() : new Date((card as TaskKanbanCard).createdAt).getTime();
+}
+
+const cardActivityTime   = (c: KanbanCard) => cardTime(c, (t) => t.startedAt);
+const cardCompletionTime = (c: KanbanCard) => cardTime(c, (t) => t.completedAt);
+const cardCreationTime   = (c: KanbanCard) => cardTime(c, () => null);
+
 function sortColumn(col: KanbanColumn, cards: KanbanCard[]): KanbanCard[] {
-  if (col === "working" || col === "waiting") {
-    // Newest activity first (sessions by mtime, tasks by started_at then created_at)
-    return [...cards].sort((a, b) => {
-      const aTime = cardActivityTime(a);
-      const bTime = cardActivityTime(b);
-      return bTime - aTime;
-    });
-  }
-  if (col === "done" || col === "error") {
-    // Newest completion first
-    return [...cards].sort((a, b) => {
-      const aTime = cardCompletionTime(a);
-      const bTime = cardCompletionTime(b);
-      return bTime - aTime;
-    });
-  }
-  // idle — newest creation first
-  return [...cards].sort((a, b) => {
-    const aTime = cardCreationTime(a);
-    const bTime = cardCreationTime(b);
-    return bTime - aTime;
-  });
-}
-
-function cardActivityTime(card: KanbanCard): number {
-  if (card.kind === "session") return new Date(card.mtime).getTime();
-  if (card.startedAt) return new Date(card.startedAt).getTime();
-  return new Date(card.createdAt).getTime();
-}
-
-function cardCompletionTime(card: KanbanCard): number {
-  if (card.kind === "session") return new Date(card.mtime).getTime();
-  if (card.completedAt) return new Date(card.completedAt).getTime();
-  return new Date(card.createdAt).getTime();
-}
-
-function cardCreationTime(card: KanbanCard): number {
-  if (card.kind === "session") return new Date(card.mtime).getTime();
-  return new Date(card.createdAt).getTime();
+  let timeFn: (c: KanbanCard) => number;
+  if (col === "working" || col === "waiting") timeFn = cardActivityTime;
+  else if (col === "done" || col === "error") timeFn = cardCompletionTime;
+  else                                        timeFn = cardCreationTime;
+  return [...cards].sort((a, b) => timeFn(b) - timeFn(a));
 }
