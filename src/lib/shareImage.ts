@@ -135,7 +135,7 @@ export function composeShareSvg(
     `<text x="${PAD}" y="${row3Y - 8}" font-size="12" fill="${p.textMuted}">Top projects by cost</text>`,
   );
   const topProjects = report.byProject.slice(0, 5);
-  const maxProjCost = topProjects[0]?.cost ?? 1;
+  const maxProjCost = topProjects[0]?.cost || 1;
   topProjects.forEach((proj, i) => {
     const barY = row3Y + i * 38;
     const filled = Math.max(4, Math.round((proj.cost / maxProjCost) * halfW));

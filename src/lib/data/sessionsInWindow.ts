@@ -30,12 +30,12 @@ export function loadSessionCostsInWindow(
        AND start_ts <= ?
      ORDER BY start_ts ASC`,
   ).all(projectSlug, startIso, endIso) as Array<{
-    start_ts: number;
+    start_ts: string;
     cost_usd: number | null;
   }>;
 
   return rows.map((r) => ({
-    startedAt: r.start_ts,
+    startedAt: Date.parse(r.start_ts),
     costUsd: r.cost_usd ?? 0,
   }));
 }

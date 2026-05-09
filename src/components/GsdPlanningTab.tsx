@@ -120,8 +120,12 @@ export function GsdPlanningTab({ slug }: { slug: string }) {
     fetch(`/api/projects/${encodeURIComponent(slug)}/gsd-planning`, {
       signal: controller.signal,
     })
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
+      .then(async (r) => {
+        if (r.status === 404) return null; // no planning data — render empty state
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({})) as { error?: string };
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
         return r.json() as Promise<GsdPlanningInfo>;
       })
       .then((d) => { setData(d); setLoading(false); })

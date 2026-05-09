@@ -113,7 +113,7 @@ async function readStateMd(dir: string): Promise<StateInfo> {
   try {
     const raw = await fs.readFile(path.join(dir, "STATE.md"), "utf-8");
     // Extract YAML frontmatter between --- delimiters
-    const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
+    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!fmMatch) return empty;
     let doc: Record<string, unknown>;
     try {
