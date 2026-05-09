@@ -329,6 +329,59 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 12,
+    name: "wave11.1a: mcp security scanner tables",
+    up: (db) => {
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS mcp_scan_runs (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          started_at_ms   INTEGER NOT NULL,
+          duration_ms     INTEGER NOT NULL,
+          servers_scanned INTEGER NOT NULL,
+          findings_count  INTEGER NOT NULL,
+          trigger         TEXT NOT NULL CHECK (trigger IN ('scan','manual','startup'))
+        )
+      `).run();
+
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS mcp_scan_findings (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id        INTEGER NOT NULL,
+          server_id     TEXT NOT NULL,
+          scope         TEXT NOT NULL CHECK (scope IN ('user','project')),
+          project_slug  TEXT,
+          rule_id       TEXT NOT NULL,
+          category      TEXT NOT NULL,
+          severity      TEXT NOT NULL CHECK (severity IN ('crit','high','med','low','info')),
+          surface       TEXT NOT NULL CHECK (surface IN ('command','args','url','env','name','tool-desc','param-name')),
+          surface_ref   TEXT,
+          message       TEXT NOT NULL,
+          evidence      TEXT,
+          found_at_ms   INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES mcp_scan_runs(id) ON DELETE CASCADE
+        )
+      `).run();
+
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_scan_findings_server ON mcp_scan_findings(server_id)"
+      ).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_scan_findings_run ON mcp_scan_findings(run_id)"
+      ).run();
+
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS mcp_tool_fingerprints (
+          server_id        TEXT NOT NULL,
+          tool_name        TEXT NOT NULL,
+          description_hash TEXT NOT NULL,
+          first_seen_ms    INTEGER NOT NULL,
+          last_seen_ms     INTEGER NOT NULL,
+          PRIMARY KEY (server_id, tool_name)
+        )
+      `).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

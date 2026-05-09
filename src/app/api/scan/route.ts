@@ -6,6 +6,7 @@ import { invalidateAgentsRouteCache } from "@/app/api/agents/route";
 import { invalidateSkillsRouteCache } from "@/app/api/skills/route";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { invalidateUserConfigCache } from "@/lib/userConfigCache";
+import { runMcpSecurityScan } from "@/lib/scanner/mcp-security";
 
 export async function POST() {
   invalidateCache();
@@ -14,7 +15,11 @@ export async function POST() {
   invalidateSkillsRouteCache();
   invalidateClaudeConfigRouteCache();
   invalidateUserConfigCache();
-  const result = await scanAllProjects();
+  // Run the project scan and MCP security scan in parallel.
+  const [result] = await Promise.all([
+    scanAllProjects(),
+    runMcpSecurityScan("scan").catch(() => null),
+  ]);
   setCachedScan(result);
   return NextResponse.json(result);
 }

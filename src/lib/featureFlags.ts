@@ -17,6 +17,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "devServerControl",
   "liveActivity",
   "taskDispatcher",
+  "mcpSecurityScan",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -136,6 +137,17 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Dispatcher loop that spawns claude CLI child processes and tracks runs (classic mode). Stream mode ships in Wave 9.1c.",
     group: "active",
     appliesAt: "ingest",
+    wired: true,
+  },
+  {
+    key: "mcpSecurityScan",
+    label: "MCP security scan",
+    description:
+      "Runs the deobfuscation + pattern engine across MCP servers. " +
+      "Static-surface scan (command/args/url/env/name) runs unconditionally once wired. " +
+      "Live tool-list introspection (Wave 11.1b) is gated behind this flag.",
+    group: "active",
+    appliesAt: "scan",
     wired: true,
   },
 ];

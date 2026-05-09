@@ -55,6 +55,7 @@ export const tabHelpMapping: Record<string, string> = {
   handoff: 'sessions',
   orchestration: 'sessions',
   'config-history': 'config-history',
+  mcp: 'mcp-security',
 }
 
 /** All available help doc slugs. */
@@ -95,6 +96,7 @@ export const helpSlugs = [
   'tasks',
   'kanban',
   'adapters',
+  'mcp-security',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

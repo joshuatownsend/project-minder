@@ -44,6 +44,7 @@ describe.skipIf(!Database)("schema.sql", () => {
     for (const expected of [
       "meta", "sessions", "turns", "tool_uses", "file_edits", "daily_costs",
       "agents", "skills", "commands", "mcp_servers", "otel_events", "indexer_runs",
+      "mcp_scan_runs", "mcp_scan_findings", "mcp_tool_fingerprints",
       "prompts_fts", "catalog_fts",
     ]) {
       expect(tables).toContain(expected);
