@@ -25,7 +25,7 @@ const DB_STATUS_LABEL: Record<InitStatus["state"], string> = {
   idle: "Idle",
   "in-flight": "Initializing…",
   success: "Healthy",
-  "transient-failed": "Transient failure (retrying)",
+  "transient-failed": "Transient failure (will retry)",
   "permanent-failed": "Permanent failure",
 };
 
@@ -165,7 +165,7 @@ export function SettingsPage() {
 
   // Polls /api/health every 15s. Each poll returns a fresh object even
   // when nothing changed, so re-using the prior reference on a field-
-  // equal response avoids re-rendering DbStatusRow on every tick.
+  // equal response avoids re-rendering InitStatusRow on every tick.
   const [dbStatus, setDbStatus] = useState<InitStatus | null>(null);
   useEffect(() => {
     let cancelled = false;

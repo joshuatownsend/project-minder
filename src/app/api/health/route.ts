@@ -1,16 +1,15 @@
 import { NextResponse } from "next/server";
-import { getInitStatus } from "@/lib/data";
+import { probeInitStatus } from "@/lib/data";
 
-// Lightweight health endpoint — exposes the schema-readiness state
-// machine snapshot. Used by the Settings DB-status row and any external
-// monitor that wants to check whether the SQLite index is healthy
-// without hitting a heavier read path. Intentionally does NOT trigger
-// `ensureSchemaReady()` itself; it reports current state, never
-// provokes a fresh init attempt.
+// Active health probe — drives `ensureSchemaReady()` forward (idempotent
+// on a healthy DB or a within-TTL cached failure) so external monitors
+// don't see a misleading `ok: true` on a never-probed `idle` state.
+// `ok` is only true when the state machine has reached `success`; every
+// other state (idle, in-flight, transient-failed, permanent-failed)
+// returns 503 to signal "not yet healthy."
 export async function GET() {
-  const initStatus = getInitStatus();
-  const ok =
-    initStatus.state === "success" || initStatus.state === "idle" || initStatus.state === "in-flight";
+  const initStatus = await probeInitStatus();
+  const ok = initStatus.state === "success";
   return NextResponse.json(
     {
       ok,

@@ -211,9 +211,9 @@ function synthFailureResult(error: Error): InitResult {
   };
 }
 
-async function runInitWithRetries(carriedQuarantineRuns: number): Promise<InitResult> {
-  let attempts = 0;
-  let quarantineRuns = carriedQuarantineRuns;
+type InFlightState = Extract<InitState, { kind: "in-flight" }>;
+
+async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> {
   let lastResult: InitResult | null = null;
   let lastError: Error | null = null;
   let permanent = false;
@@ -226,7 +226,10 @@ async function runInitWithRetries(carriedQuarantineRuns: number): Promise<InitRe
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
-    attempts = attemptIdx + 1;
+    // Mutate the in-flight state object so getInitStatus() can report
+    // live attempt/quarantine counts during long retries — the in-flight
+    // object IS the current `initState` until terminal commit below.
+    inFlight.attempts = attemptIdx + 1;
 
     let result: InitResult | null = null;
     let thrown: Error | null = null;
@@ -240,10 +243,15 @@ async function runInitWithRetries(carriedQuarantineRuns: number): Promise<InitRe
     // with-quarantine and failure-with-quarantine both observe the same
     // updated count. The 2-cumulative-quarantine permanent rule only
     // fires on the failure branch.
-    if (result?.quarantined) quarantineRuns += 1;
+    if (result?.quarantined) inFlight.quarantineRuns += 1;
 
     if (result?.available) {
-      initState = { kind: "success", result, attempts, quarantineRuns };
+      initState = {
+        kind: "success",
+        result,
+        attempts: inFlight.attempts,
+        quarantineRuns: inFlight.quarantineRuns,
+      };
       return result;
     }
 
@@ -252,7 +260,7 @@ async function runInitWithRetries(carriedQuarantineRuns: number): Promise<InitRe
 
     // 2nd cumulative quarantine + still-failing → rebuild itself isn't
     // recovering. Mark permanent. Process-exit only.
-    if (quarantineRuns >= 2) {
+    if (inFlight.quarantineRuns >= 2) {
       permanent = true;
       break;
     }
@@ -266,8 +274,8 @@ async function runInitWithRetries(carriedQuarantineRuns: number): Promise<InitRe
   initState = {
     kind: permanent ? "permanent-failed" : "transient-failed",
     failedAt: Date.now(),
-    attempts,
-    quarantineRuns,
+    attempts: inFlight.attempts,
+    quarantineRuns: inFlight.quarantineRuns,
     lastError: finalError,
   };
   return lastResult ?? synthFailureResult(finalError);
@@ -293,19 +301,32 @@ function ensureSchemaReady(): Promise<InitResult> {
       break;
   }
 
-  const carriedQuarantineRuns = initState.quarantineRuns;
-  // `runInitWithRetries` runs synchronously up to its first `await` —
-  // there's no event-loop yield between this call and the `initState`
-  // assignment below, so concurrent callers from other async chains
-  // can't observe the stale prior state.
-  const promise = runInitWithRetries(carriedQuarantineRuns);
-  initState = {
+  // Construct the in-flight state object first so `runInitWithRetries`
+  // can mutate `attempts`/`quarantineRuns` on it as the loop progresses
+  // — that way getInitStatus() reports live counts mid-flight rather
+  // than a frozen `attempts: 0` snapshot.
+  const inFlight: InFlightState = {
     kind: "in-flight",
-    promise,
+    promise: undefined as unknown as Promise<InitResult>,
     attempts: 0,
-    quarantineRuns: carriedQuarantineRuns,
+    quarantineRuns: initState.quarantineRuns,
   };
-  return promise;
+  initState = inFlight;
+  inFlight.promise = runInitWithRetries(inFlight);
+  return inFlight.promise;
+}
+
+/**
+ * Drive the schema-readiness state machine forward and return the
+ * resulting status. Intended for external probes (`/api/health`) that
+ * want an active health signal rather than a stale snapshot. Idempotent
+ * — `success` and within-TTL `transient-failed` / `permanent-failed`
+ * states return immediately without re-running `initDb()`.
+ */
+export async function probeInitStatus(): Promise<InitStatus> {
+  if (!dbModeRequested()) return getInitStatus();
+  await ensureSchemaReady();
+  return getInitStatus();
 }
 
 export function getInitStatus(): InitStatus {
