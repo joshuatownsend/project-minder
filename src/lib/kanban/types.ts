@@ -67,10 +67,9 @@ export type KanbanKindFilter = "all" | "sessions" | "tasks";
 export const KANBAN_KIND_FILTERS = ["all", "sessions", "tasks"] as const satisfies readonly KanbanKindFilter[];
 
 // Mirrors the standard period vocabulary in src/lib/usage/constants.ts.
-// Kanban deliberately drops the "today" option (calendar boundary doesn't
-// match the rolling-window mental model the rest of this surface uses) and
-// keeps a 24-hour rolling lookback as the default. 'today' still validates
-// here as an alias for parity with other surfaces.
+// All four options surface in the Kanban toolbar; the 'today' bucket maps
+// to a 24-hour rolling lookback (the same window the page used before the
+// vocabulary standardization, just renamed from 'last24h').
 export type KanbanPeriod = "today" | "7d" | "30d" | "all";
 
 export interface KanbanSnapshot {

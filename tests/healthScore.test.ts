@@ -12,12 +12,11 @@ const empty: HealthInputs = {
 };
 
 describe("computeHealthScore", () => {
-  it("returns hasData=false when no signals are populated except approvals=0", () => {
+  it("scores 100/A from approvals alone when no other signals are populated", () => {
     const r = computeHealthScore(empty);
-    // Approvals component scores 100 when there are zero pending — that's the
-    // only contributor in this scenario. So hasData IS true (1 component).
-    // Confirms the renormalization: we don't insist all 6 signals are
-    // present, just at least one.
+    // Approvals scores 100 at zero pending — that's the only contributor in
+    // this scenario. Confirms the renormalization: we don't require all 6
+    // signals to be present, just at least one.
     expect(r.hasData).toBe(true);
     expect(r.score).toBe(100);
     expect(r.grade).toBe("A");

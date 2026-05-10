@@ -7,9 +7,12 @@ interface PeriodToggleProps {
   onChange: (p: Period) => void;
 }
 
-// Standard four-option vocabulary used across every period toggle in the app.
-// Labels are display-friendly; values are the raw period keys passed to the
-// API. Mirrors VALID_PERIODS in src/lib/usage/constants.ts.
+// Standard four-option vocabulary used across every period toggle in the
+// app. Values mirror VALID_PERIODS in src/lib/usage/constants.ts; labels
+// are intentionally compact (lowercase abbreviations) because this toggle
+// renders inline inside small stats cards where the full "Today / 7 days /
+// 30 days / All time" labels would wrap. The Home / Kanban / Usage
+// surfaces use the full-width labels.
 const PERIODS: { value: Period; label: string }[] = [
   { value: "today", label: "today" },
   { value: "7d", label: "7d" },
