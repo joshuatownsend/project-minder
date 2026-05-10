@@ -19,6 +19,7 @@ import { TokenUsageCard } from "./stats/TokenUsageCard";
 import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
 import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
+import { ContextOverheadPanel } from "./ContextOverheadPanel";
 
 import { formatCost } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -321,6 +322,21 @@ export function StatsDashboard() {
           </div>
         </section>
       )}
+
+      {/* Context Overhead */}
+      <section id="context-overhead">
+        <SectionHeader label="Context Overhead" />
+        <div
+          style={{
+            padding: "16px",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius)",
+            background: "var(--bg-surface)",
+          }}
+        >
+          <ContextOverheadPanel />
+        </div>
+      </section>
 
       {/* Telemetry */}
       <section id="telemetry">

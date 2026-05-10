@@ -79,6 +79,7 @@ function makeSkillEntry(
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
     disabled: opts.disabled || undefined,
+    fileBytes: Buffer.byteLength(text, "utf-8"),
   };
 }
 

@@ -91,6 +91,10 @@ export interface SkillEntry extends CatalogEntryBase {
   description?: string;
   /** True when the skill lives in ~/.claude/skills-disabled/ and is excluded from Claude Code. */
   disabled?: boolean;
+  /** UTF-8 byte count of the source SKILL.md (or standalone .md). Captured at walk
+   *  time when the body is already in memory so portfolio-wide token estimators
+   *  (see `src/lib/contextOverhead.ts`) don't need a separate fs.stat pass. */
+  fileBytes?: number;
 }
 
 export type CatalogEntry = AgentEntry | SkillEntry;
