@@ -18,19 +18,17 @@ import {
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useScope } from "@/components/ScopeProvider";
 import { usePulse } from "@/components/PulseProvider";
+import { projectColor } from "@/lib/projectColor";
 import type { ProjectData, SessionSummary } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
 
 type Period = "today" | "week" | "month";
 
-interface InsightSummaryItem {
-  slug: string;
-  insightCount: number;
-  topInsightTitle: string | null;
-}
-
+// Shape of /api/insights — `{ insights: InsightEntry[], total: number }`.
+// Earlier this file declared a non-existent `{ results: …, total }` shape and
+// summed over the missing `results` field, which caused HIGH-1/HIGH-2 in the
+// 2026-05-10 review (Home insight count permanently stuck at 0).
 interface InsightsResponse {
-  results: InsightSummaryItem[];
   total: number;
 }
 
@@ -47,24 +45,6 @@ function timeOfDayGreeting(): string {
   if (h < 17) return "Good afternoon";
   if (h < 21) return "Good evening";
   return "Good night";
-}
-
-function projectColor(p: ProjectData, idx: number): string {
-  // Stable color per project. Uses an oklch palette that matches dataviz tokens.
-  const palette = [
-    "var(--info)",
-    "var(--good)",
-    "var(--accent)",
-    "var(--purple)",
-    "oklch(0.66 0.14 320)",
-    "oklch(0.62 0.10 175)",
-    "oklch(0.68 0.14 50)",
-    "var(--danger)",
-  ];
-  // Lightweight deterministic hash so colors are stable across re-renders
-  let h = 0;
-  for (const ch of p.slug) h = (h * 31 + ch.charCodeAt(0)) | 0;
-  return palette[Math.abs(h + idx) % palette.length];
 }
 
 export default function HomePage() {
@@ -109,7 +89,12 @@ export default function HomePage() {
     const ctrl = new AbortController();
     fetch("/api/sessions", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d?.sessions && setSessions((d.sessions as SessionSummary[]).slice(0, 6)))
+      .then((d) => {
+        // /api/sessions returns a JSON array of SessionSummary directly. The
+        // earlier `d?.sessions && …` check meant we never set state.
+        if (!Array.isArray(d)) return;
+        setSessions((d as SessionSummary[]).slice(0, 6));
+      })
       .catch(() => {});
     return () => ctrl.abort();
   }, []);
@@ -120,8 +105,7 @@ export default function HomePage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d: InsightsResponse | null) => {
         if (!d) return;
-        const total = d.results.reduce((s, r) => s + (r.insightCount || 0), 0);
-        setInsightCount(total);
+        setInsightCount(d.total ?? 0);
       })
       .catch(() => {});
     return () => ctrl.abort();
@@ -132,9 +116,12 @@ export default function HomePage() {
     fetch("/api/manual-steps?pending=true", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!d?.results) return;
-        const total = d.results.reduce(
-          (s: number, r: { pendingCount?: number }) => s + (r.pendingCount || 0),
+        // /api/manual-steps?pending=true returns an array of project entries
+        // shaped { slug, name, manualSteps: { pendingSteps, … } }. Sum the
+        // pendingSteps across projects for the Home attention strip badge.
+        if (!Array.isArray(d)) return;
+        const total = (d as Array<{ manualSteps?: { pendingSteps?: number } }>).reduce(
+          (s, p) => s + (p.manualSteps?.pendingSteps ?? 0),
           0,
         );
         setPendingStepsCount(total);
@@ -146,8 +133,15 @@ export default function HomePage() {
   const now = new Date();
   const greeting = timeOfDayGreeting();
   const projectCount = projects.length;
-  const liveSessionCount = snapshot.liveSlugs.length;
-  const liveProject = liveSessionCount > 0 ? snapshot.liveSlugs[0] : null;
+  // Active = working OR waiting-on-user. liveSlugs and awaitingSlugs SHOULD be
+  // disjoint (per PulseProvider) but we dedupe through a Set so a backend bug
+  // that puts a slug in both lists doesn't double-count (was LOW-4 in review).
+  const activeSlugs = useMemo(
+    () => Array.from(new Set([...snapshot.liveSlugs, ...snapshot.awaitingSlugs])),
+    [snapshot.liveSlugs, snapshot.awaitingSlugs],
+  );
+  const liveSessionCount = activeSlugs.length;
+  const liveProject = activeSlugs[0] ?? null;
 
   // Slice the monthly daily array based on the active period toggle.
   // "today" = last 1 entry; "week" = last 7; "month" = full array.
@@ -276,11 +270,14 @@ export default function HomePage() {
         }
       />
 
-      {/* Top stats */}
+      {/* Top stats. While the usage report is still loading we show em-dashes
+          rather than zeros so the user doesn't see a brief "you spent $0
+          today / 0 turns / 0 tokens / 100% healthy" frame before real data
+          swaps in (was MEDIUM-4 in the 2026-05-10 review). */}
       <div className="stat-grid">
         <Stat
           label="Spend"
-          value={`$${headlineCost.toFixed(2)}`}
+          value={usageMonth === null ? "—" : `$${headlineCost.toFixed(2)}`}
           sub={
             period === "today"
               ? "today so far"
@@ -295,23 +292,23 @@ export default function HomePage() {
         />
         <Stat
           label="Turns"
-          value={formatCount(headlineTurns)}
-          sub={liveSessionCount > 0 ? `${liveSessionCount} session${liveSessionCount === 1 ? "" : "s"} active now` : "no active sessions"}
+          value={usageMonth === null ? "—" : formatCount(headlineTurns)}
+          sub={`${liveSessionCount} active now`}
           accent="var(--good)"
           spark={sessionsSpark}
           sparkColor="var(--good)"
         />
         <Stat
           label="Tokens"
-          value={formatCount(headlineTokens)}
-          sub={`${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          value={usageMonth === null ? "—" : formatCount(headlineTokens)}
+          sub={usageMonth === null ? "loading…" : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
         />
         <Stat
           label="Health score"
-          value={`${healthScore}%`}
+          value={usageMonth === null ? "—" : `${healthScore}%`}
           sub={`${insightCount} insights · ${pendingStepsCount} steps`}
           accent="var(--danger)"
         />
@@ -407,7 +404,7 @@ export default function HomePage() {
             <div>
               {sessions.map((s, i) => (
                 <div key={s.sessionId} className="list-item">
-                  <ProjectGlyph name={s.projectName} color={projectColor({ slug: s.projectSlug } as ProjectData, i)} size={24} />
+                  <ProjectGlyph name={s.projectName} color={projectColor(s.projectSlug, i)} size={24} />
                   <div className="li-text">
                     <div className="li-title">
                       {s.lastPrompt?.slice(0, 60) || s.initialPrompt?.slice(0, 60) || "(no prompt)"}
@@ -445,7 +442,7 @@ export default function HomePage() {
               <Link key={p.slug} href={`/project/${p.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="ds-card" style={{ padding: 14, cursor: "pointer", transition: "border-color .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <ProjectGlyph name={p.name} color={projectColor(p, i)} />
+                    <ProjectGlyph name={p.name} color={projectColor(p.slug, i)} />
                     <div style={{ fontWeight: 600, fontSize: 13, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.name}>
                       {p.name}
                     </div>
@@ -496,7 +493,7 @@ export default function HomePage() {
                   key={p.projectSlug}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--line-soft)" }}
                 >
-                  <ProjectGlyph name={proj?.name || p.projectDirName} color={projectColor(proj || ({ slug: p.projectSlug } as ProjectData), i)} size={20} />
+                  <ProjectGlyph name={proj?.name || p.projectDirName} color={projectColor(proj?.slug ?? p.projectSlug, i)} size={20} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
                       <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{proj?.name || p.projectDirName}</span>
@@ -505,7 +502,7 @@ export default function HomePage() {
                       </span>
                     </div>
                     <div style={{ height: 3, background: "var(--bg-elev-2)", borderRadius: 2 }}>
-                      <div style={{ height: "100%", background: projectColor(proj || ({ slug: p.projectSlug } as ProjectData), i), width: `${pct}%`, borderRadius: 2 }} />
+                      <div style={{ height: "100%", background: projectColor(proj?.slug ?? p.projectSlug, i), width: `${pct}%`, borderRadius: 2 }} />
                     </div>
                   </div>
                 </div>

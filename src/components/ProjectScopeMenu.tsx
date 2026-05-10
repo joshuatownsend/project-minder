@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { ProjectGlyph } from "@/components/ui/design";
 import { useScope } from "./ScopeProvider";
+import { projectColor } from "@/lib/projectColor";
 import type { ProjectData } from "@/lib/types";
 
 interface ProjectScopeMenuProps {
@@ -164,7 +165,7 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
                     ∞
                   </span>
                 ) : (
-                  <ProjectGlyph name={it.label} color="var(--info)" size={18} />
+                  <ProjectGlyph name={it.label} color={projectColor(it.key, idx)} size={18} />
                 )}
                 <span
                   className="label"
