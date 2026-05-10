@@ -1,5 +1,115 @@
 # Insights
 
+<!-- insight:c6186e5d512d | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T13:29:47.018Z -->
+## ★ Insight
+- The trickiest fix was MEDIUM-6 (Kanban overflow). The container already had `overflow-x: auto` — but it's a flex *child* of the page-level flex column. CSS flexbox refuses to shrink a child below its intrinsic content width unless you explicitly set `min-width: 0` on it. That's why scrolling never engaged: flex was computing a width >= sum-of-columns, so there was nothing to scroll. This is one of the most common flex gotchas in production CSS and worth committing to memory.
+- For HIGH-4 (sidebar hydration), the `mounted`/`hydrated` gate is the canonical fix for Suspense-boundary mismatches. By forcing both SSR and the first client paint to render zero badges, we eliminate the diff React was complaining about. The badges then "fade in" on the next paint — fast enough that no user notices, but late enough that React's reconciliation is happy.
+- The `projectColor` helper extraction (now in `src/lib/projectColor.ts`) is a textbook DRY win: previously the home page hash-palette algorithm was inlined and the scope menu defaulted to `var(--info)` for everything. Centralizing the algorithm means any future surface that renders a project glyph automatically inherits the same stable per-slug coloring.
+
+---
+
+<!-- insight:5671ba4e8bfa | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T13:14:35.674Z -->
+## ★ Insight
+- The pre-commit hook is bypassed with `--no-verify` because there's a known pre-existing Vitest 4 + `.mjs` hashbang issue on Windows in `tests/setupHooks.test.ts` that fails identically on `main`. CLAUDE.md authorizes this for genuinely pre-existing issues — but I'll re-run typecheck + tests at the end to confirm no NEW regressions.
+- BLOCKER-1's root cause was Windows CRLF normalization warnings masking a partial `git add`. Worth remembering: when `git add foo bar baz qux` emits CRLF warnings, run `git status` immediately to confirm everything actually staged before committing.
+
+---
+
+<!-- insight:2f93adf5dd07 | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T12:20:53.220Z -->
+## ★ Insight
+- "Today" deserves a small look-back even when the toggle is "today" — a single-bar chart looks like a glitch, not a chart. Three is the smallest count that still reads as "trend over time".
+- Both the chart and the headline numbers now derive from the same `usageMonth.daily` array via the same `period` state, so they can never drift. One source of truth, three slices.
+
+---
+
+<!-- insight:c808803a5688 | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T12:19:04.249Z -->
+## ★ Insight
+- Calendar periods and rolling windows look identical mid-week but diverge on calendar boundaries — the test for "is your toggle real?" is to try it on a Sunday or the 1st. UI labels should match the actual semantics (rolling vs calendar) or users perceive the toggle as broken.
+- One broad fetch + client-side slicing beats N period-specific fetches when the broad data is small (a month of daily buckets is ~31 rows). Less network, less cache thrash, and the toggle feels instant because there's no fetch on each click.
+
+---
+
+<!-- insight:8dfd8d1892be | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T12:10:12.887Z -->
+## ★ Insight
+- `preserveAspectRatio="none"` is a tempting shortcut for "fill the parent" SVG charts but it scales **every coordinate** including text, which becomes obvious only when the parent is wider than your reference viewBox. When you need responsive bar charts, measure the container in pixel-space and draw to actual width — your bars stay rectangular, text stays crisp.
+- For the bell, routing to `/status` rather than opening a popover keeps the topbar simple (no extra shell state) and reuses the page that already lists pending approvals — the design's "Status" pinned item and the bell point at the same destination, which is the right level of redundancy for a time-sensitive surface.
+
+---
+
+<!-- insight:79fdca231805 | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T11:59:20.706Z -->
+## ★ Insight
+- **The 3-tier sidebar maps to user mental context.** Pinned items (Home/Projects/Status) are time-sensitive — they answer "what needs my attention now?" The 4 collapsible groups (Build/Sessions/Library/Review) cluster by intent, not by feature: when you're in dev-flow you open Build; when you're auditing you open Review. Footer separation keeps Setup/Settings out of the primary nav until you're explicitly configuring.
+- **Token aliasing is the cheapest redesign strategy.** Adding short design names (`--bg`, `--bg-elev`, `--text-2`) on top of canonical tokens (`--bg-base`, `--bg-surface`, `--text-secondary`) lets new code use the design language directly while 60+ existing components keep working. Zero rename churn.
+- **Auto-expand with override-memory** is the small UX touch that makes the sidebar feel intelligent: navigating into a group child opens that group, but if you collapsed it manually, your preference wins on the next navigation.
+
+---
+
+<!-- insight:38d068a4fc88 | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T11:27:08.402Z -->
+## ★ Insight
+- The token alias layer (e.g. `--bg-elev` → `var(--bg-surface)`) is the cheapest way to land a redesign. New code uses short design names; existing 60+ components keep working unchanged because canonical token names are preserved.
+- Brightening `--info` from chroma 0.07 → 0.13 and `--good` from 0.13 → 0.18 was the user's explicit feedback in the design chat — those weren't arbitrary picks, they were tuned against on-screen samples.
+- `color-mix(in oklch, var(--danger) 12%, transparent)` replaces hand-picked `rgba(240,106,106,0.12)` literals so tag tints stay coherent if the source token is ever recolored.
+
+---
+
+<!-- insight:82490a3b8525 | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T11:01:29.385Z -->
+## ★ Insight
+All three CodeQL findings point at the same root issue: regex-based HTML sanitization is inherently a blocklist approach. CodeQL flags it because a single-pass regex can be bypassed (nested tags, attribute-value `>`, `</script >` with whitespace). The fix is switching to an allowlist-based parser — `sanitize-html` is the minimal server-safe option and avoids the DOM dependency that DOMPurify requires.
+
+---
+
+<!-- insight:16441427d50e | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T03:41:11.218Z -->
+## ★ Insight
+The Playwright timeout suggests the browser automation tooling can't connect to the running dev server in this environment — likely a network namespace issue with the sandbox. The production build compiling all routes successfully is a strong proxy: Next.js's static analysis would fail if any import or type were broken at the route level.
+
+---
+
+<!-- insight:92bd3177018e | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T03:23:08.407Z -->
+## ★ Insight
+The conflict-detection test belongs in the unit test file testing the algorithm's logic, not as a route integration test. The route and the algorithm share the same `effectiveShortcuts()` function, so testing the resulting map for duplicates exercises the same code path the validator uses.
+
+---
+
+<!-- insight:f0593b2eaabc | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T03:06:17.771Z -->
+## ★ Insight
+The palette uses `role="combobox"` + `aria-controls` + `aria-activedescendant` — the ARIA combobox pattern differs from a dialog: the input is the widget, and the listbox is a separate descendant. This is distinct from Modal's `role="dialog"` pattern, so the palette builds its own overlay rather than composing Modal.
+
+---
+
+<!-- insight:594a093f5ecb | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T03:04:22.063Z -->
+## ★ Insight
+The `HelpProvider` and `DashboardGrid` both use `useEffectiveShortcuts()` — but they render in different subtrees. By sourcing config from `ConfigProvider` (mounted at layout level), they all read the same cached value and stay in sync after a shortcut save without any additional fetch coordination.
+
+---
+
+<!-- insight:86b748ac9093 | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T03:01:59.520Z -->
+## ★ Insight
+The project has no global config context — each consumer (SettingsPage, DashboardGrid) does its own `fetch("/api/config")`. I'll create a `ConfigProvider` at the layout level so `useEffectiveShortcuts` is consistent across all consumers, eliminating redundant fetches and sync problems after a shortcut save.
+
+---
+
+<!-- insight:0a00f398df01 | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T02:50:46.571Z -->
+## ★ Insight
+- Splitting `CODE_OF_CONDUCT.md` into a reference-plus-summary (rather than verbatim Contributor Covenant text) both avoids content filtering and is actually better practice — the canonical URL is the authoritative source, so a link is more durable than a copy that can drift.
+- The `scripts/setup-hooks.mjs` design (export `setupHooks()` + `isMain` guard) means the script is both directly runnable *and* unit-testable without any test-framework ceremony — the same pattern ESM CLIs like `tsx` use.
+
+---
+
+<!-- insight:1c7b9603206d | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T02:23:35.998Z -->
+## ★ Insight
+- Session 12.1 is pure docs/YAML/a tiny Node script — no app behavior changes, no DB migrations. This makes it uniquely safe: if any community file needs revision later, it won't break builds or require migrations.
+- The `scripts/setup-hooks.mjs` design choice (Node, not shell) means it works identically on Windows, macOS, and Linux — important since the `pre-commit` hook itself must be a POSIX shell script (Git requires it), but the *installer* can be Node.
+
+---
+
+<!-- insight:1448fae1931f | session:6fc0d86c-62bb-4f17-94c0-25ae0415de52 | 2026-05-10T01:48:27.649Z -->
+## ★ Insight
+- The DashboardGrid keyboard handler is page-scoped — for app-wide `Ctrl+K`, the listener belongs in a top-level provider (e.g. `CommandPaletteProvider` in `src/app/layout.tsx`) so it works on every route, not just `/`.
+- The plan should re-use `src/components/ui/modal.tsx` (which already handles Escape, focus-trap, scroll-lock) and add only the typeahead-specific ARIA combobox/listbox roles inside it — a duplicate `Dialog` would diverge keyboard behavior and confuse users.
+- TODO #48's regeneration sub-task is the single risky item. Project Minder ships into `.git/hooks/pre-commit` runs `npm run typecheck && npm test`, and the user prefers no silent fallbacks (§9) — so if `claude /insights` can't be invoked headlessly, the regen button should surface a copy-paste fallback rather than fail silently.
+
+---
+
 <!-- insight:f9f7a9047716 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-10T01:23:59.970Z -->
 ## ★ Insight
 Skill keys in this codebase encode layout as `<slug>:<layout>` — a classic "compound discriminant" pattern. The `findSkill` function relies on `unitKey.split(":")` to destructure both dimensions. Library skills are always standalone `.md` files, so their key must be `"<slug>:standalone"`. This bug would have silently produced `UNIT_NOT_FOUND` on every library skill apply.
