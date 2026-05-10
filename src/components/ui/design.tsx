@@ -410,28 +410,57 @@ export function StackedBars({
         {data.map((d, i) => {
           const total = d.values.reduce((s, v) => s + v, 0);
           const cx = padding.left + i * columnW + columnW / 2;
-          let stackY = padding.top + innerH;
-          // Token-usage stacks frequently have a 1:500+ input:output ratio,
-          // which would render the input segment at sub-pixel height and
-          // disappear visually (was HIGH-7 in the 2026-05-10 review). Any
-          // non-zero series gets a minimum visible height so the user can
-          // see two colors instead of one. Zero-valued series remain
-          // invisible (we don't want to fake bars where there's no data).
-          const MIN_VISIBLE = 2;
+          // Allocate the total bar height first, then distribute across the
+          // non-zero series. Token-usage stacks frequently have 1:500+
+          // input:output ratios, which would render the input segment at
+          // sub-pixel height and disappear visually. We clamp non-zero
+          // series to MIN_VISIBLE_PX, then steal the deficit back from the
+          // larger series proportional to their overage above MIN_VISIBLE_PX,
+          // so the stack height STILL sums to the allocated total instead
+          // of overshooting and clipping above padding.top (PR #102).
+          const MIN_VISIBLE_PX = 2;
+          const totalH = total > 0 ? (total / max) * innerH : 0;
+          const proportional = d.values.map((v) =>
+            total > 0 && v > 0 ? (v / total) * totalH : 0,
+          );
+          // First pass: clamp positive segments below MIN_VISIBLE up.
+          const clamped = proportional.map((h) =>
+            h > 0 && h < MIN_VISIBLE_PX ? MIN_VISIBLE_PX : h,
+          );
+          // Second pass: redistribute any overshoot back from segments that
+          // have headroom above MIN_VISIBLE_PX, weighted by their excess.
+          const overshoot = clamped.reduce((s, h) => s + h, 0) - totalH;
+          let heights = clamped;
+          if (overshoot > 0) {
+            const headroomTotal = clamped.reduce(
+              (s, h) => s + Math.max(0, h - MIN_VISIBLE_PX),
+              0,
+            );
+            if (headroomTotal > 0) {
+              heights = clamped.map((h) => {
+                const headroom = Math.max(0, h - MIN_VISIBLE_PX);
+                const give = (headroom / headroomTotal) * overshoot;
+                return Math.max(MIN_VISIBLE_PX, h - give);
+              });
+            }
+          }
+          // Cumulative ys from bottom up — declarative so we don't mutate
+          // a `let` accumulator inside the segment map.
+          const segmentYs = heights.reduce<number[]>((acc, h, idx) => {
+            const prevY = idx === 0 ? padding.top + innerH : acc[idx - 1];
+            return [...acc, prevY - h];
+          }, []);
           return (
             <g key={d.label}>
               {d.values.map((v, j) => {
-                const raw = (v / max) * innerH;
-                const h = v > 0 ? Math.max(MIN_VISIBLE, raw) : 0;
-                stackY -= h;
                 if (v <= 0) return null;
                 return (
                   <rect
                     key={j}
                     x={cx - barW / 2}
-                    y={stackY}
+                    y={segmentYs[j]}
                     width={barW}
-                    height={h}
+                    height={heights[j]}
                     fill={colors[j % colors.length]}
                     rx={2}
                   />
