@@ -13,6 +13,8 @@ import { PortConflictIndicator } from "@/components/PortConflictIndicator";
 import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
+import { ConfigProvider } from "@/components/ConfigProvider";
+import { CommandPaletteProvider } from "@/components/CommandPaletteProvider";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -49,8 +51,10 @@ export default async function RootLayout({
     >
       <body suppressHydrationWarning>
         <ToastProvider>
+          <ConfigProvider>
+          <PulseProvider>
+          <CommandPaletteProvider>
           <HelpProvider>
-            <PulseProvider>
             <header
               style={{
                 borderBottom: "1px solid var(--border-subtle)",
@@ -125,8 +129,10 @@ export default async function RootLayout({
 
             <HelpPanel />
             <NotificationListener />
-            </PulseProvider>
           </HelpProvider>
+          </CommandPaletteProvider>
+          </PulseProvider>
+          </ConfigProvider>
         </ToastProvider>
       </body>
     </html>

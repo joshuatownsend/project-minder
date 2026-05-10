@@ -35,6 +35,7 @@ export const helpMapping: Record<string, string> = {
   '/sql': 'sql',
   '/library': 'library',
   '/new-project': 'new-project',
+  '/insights-report': 'insights-report',
 }
 
 /**
@@ -102,6 +103,9 @@ export const helpSlugs = [
   'mcp-security',
   'library',
   'new-project',
+  'insights-report',
+  'command-palette',
+  'keyboard-shortcuts',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

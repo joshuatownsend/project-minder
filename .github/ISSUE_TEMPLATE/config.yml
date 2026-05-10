@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://joshuatownsend.github.io/project-minder/
+    about: Read the user-facing help docs
+  - name: Open backlog (TODO.md)
+    url: https://github.com/joshuatownsend/project-minder/blob/main/TODO.md
+    about: See all planned features and their wave assignments
+  - name: Discussions
+    url: https://github.com/joshuatownsend/project-minder/discussions
+    about: Ask questions or share ideas

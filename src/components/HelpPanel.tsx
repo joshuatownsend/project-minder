@@ -45,6 +45,9 @@ const slugTitles: Record<HelpSlug, string> = {
   "mcp-security": "MCP Security Scanner",
   library: "Library Browser",
   "new-project": "New Project Wizard",
+  "insights-report": "Insights Report",
+  "command-palette": "Command Palette",
+  "keyboard-shortcuts": "Keyboard Shortcuts",
 };
 
 const iconBtnBase: React.CSSProperties = {

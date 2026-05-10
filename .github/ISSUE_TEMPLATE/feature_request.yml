@@ -1,0 +1,48 @@
+name: Feature Request
+description: Suggest an improvement or new feature
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [`TODO.md`](../../TODO.md) first — the feature may already be planned.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Dashboard / project cards
+        - Sessions browser
+        - Agents / Skills / Catalog
+        - Usage analytics
+        - MCP / Config
+        - Template mode
+        - Mission Control (tasks / swarms)
+        - Notifications
+        - Visualizations
+        - Public repo / developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What problem does this solve? What do you currently have to do manually?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

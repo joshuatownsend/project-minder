@@ -1,5 +1,113 @@
 # Insights
 
+<!-- insight:f9f7a9047716 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-10T01:23:59.970Z -->
+## ★ Insight
+Skill keys in this codebase encode layout as `<slug>:<layout>` — a classic "compound discriminant" pattern. The `findSkill` function relies on `unitKey.split(":")` to destructure both dimensions. Library skills are always standalone `.md` files, so their key must be `"<slug>:standalone"`. This bug would have silently produced `UNIT_NOT_FOUND` on every library skill apply.
+
+---
+
+<!-- insight:0a10f0b25232 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-10T00:53:18.486Z -->
+## ★ Insight
+The tmp-dir pattern (`write content → applyUnit with path source → rm -rf in finally`) let all 8 existing apply primitives work unchanged for library items — new feature with zero primitive-layer changes. The TypeScript-inlined content approach sidesteps the entire Next.js production build path problem that fs.readFile would have introduced.
+
+---
+
+<!-- insight:b7a497054963 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-10T00:41:58.140Z -->
+## ★ Insight
+Stripping `content` from the API response (only sending metadata) keeps the payload small. The browser fetches all 16 items' metadata for rendering the list, but content only flows through the apply endpoint when a user actually clicks Apply — lazy on the server side, eager on the client is the right trade-off here.
+
+---
+
+<!-- insight:03ea944c4acb | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-10T00:36:52.121Z -->
+## ★ Insight
+Library content as inlined TypeScript strings (not fs.readFile) solves the Next.js production build path problem — bundler sees the strings as static data and includes them automatically. The temp-dir redirect pattern (`write → applyUnit with path source → cleanup`) lets us reuse all 8 existing primitives without touching their internals.
+
+---
+
+<!-- insight:80700b932a48 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T23:47:38.575Z -->
+## ★ Insight
+The `?? 1` fallback only handles `undefined`/`null` — `0 ?? 1` evaluates to `0`, not `1`. This is a common JavaScript gotcha: use `|| 1` (or `Math.max(..., 1)`) when you want to guard against falsy values including zero. The `??` operator was designed for null-coalescing, not zero-guarding.
+
+---
+
+<!-- insight:b568a6fd9a7a | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:53:45.743Z -->
+## ★ Insight
+`for...of` with `await` inside creates sequential I/O — each file waits for the previous. `Promise.all` over a mapped array launches all reads concurrently, cutting total time from N×latency to max(latency). The try/catch pattern inside the map preserves the fail-open-per-file semantics from the original loop.
+
+---
+
+<!-- insight:006d7375b3ef | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:53:35.865Z -->
+## ★ Insight
+The `AbortController` pattern solves two distinct bugs at once: the stale-closure race (old response clobbers new state) AND memory safety (setting state on an unmounted component). The `cancelled` flag pattern only solves the first; `AbortController` also cancels the in-flight network request, saving bandwidth.
+
+---
+
+<!-- insight:d34a6196f4a6 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:52:55.479Z -->
+## ★ Insight
+The codebase has two modal patterns: `Modal` (Tailwind, ARIA-complete) and bare div modals (inline styles, used in `ApplyTemplateModal`, `ShareButton`). Both exist because the app migrated styling approaches mid-development. When primitives have conflicting style systems, using the "correct" primitive for new code can actually decrease consistency — the pragmatic fix is to backfill the bare modals over time, not force an incompatible composition now.
+
+---
+
+<!-- insight:39e6033b9107 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:36:22.305Z -->
+## ★ Insight
+SQLite compares values based on their storage class: TEXT > INTEGER (always). Passing a Unix millisecond integer to a TEXT column comparison silently produces wrong results — the integer is either coerced to a text string (lexicographically incomparable to ISO dates) or treated as a different type entirely. The safe pattern: always convert to ISO strings when querying ISO-string columns.
+
+---
+
+<!-- insight:b4e9713339ea | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:31:30.284Z -->
+## ★ Insight
+The GSD Planning tab is a read-only display component — it fetches from the API route we already wired, then renders a completion bar and phase list. The API route handles the expensive work (session cost windowing via SQL), so this component stays pure-presentation. Pattern: fetch in `useEffect`, show skeleton loading state, then render.
+
+---
+
+<!-- insight:1c204cfbcc5a | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:30:52.600Z -->
+## ★ Insight
+The tab gating pattern in `ProjectDetail` uses conditional spread into a flat array (`...(condition ? [{key, label}] : [])`). This is a common React pattern for dynamic tab lists — clean and type-safe because `TabKey` is a union that TypeScript exhaustively checks at each `activeTab === "key"` branch.
+
+---
+
+<!-- insight:399c432a5eff | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:16:51.536Z -->
+## ★ Insight
+Since the app exclusively uses OKLCH CSS tokens that browsers can't render in SVG shared outside the app, `shareImage.ts` needs to define its own inline hex palette — a one-time OKLCH→hex conversion baked into the module. This is actually cleaner than referencing CSS variables: the share image has a stable appearance regardless of any future theming changes to the app itself. The light theme palette is invented for v1 since the app has no light mode.
+
+---
+
+<!-- insight:bbbb3803fbe6 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:12:19.709Z -->
+## ★ Insight
+Cross-platform path separator issues in tests are a common trap on Windows: `path.join` produces backslashes but test fixtures typically use forward slashes. The pattern of normalizing with `.replace(/\\/g, "/")` before assertions, or using `.includes()` with a unique path segment rather than exact equality, keeps tests portable without mocking the `path` module itself.
+
+---
+
+<!-- insight:82a18d130762 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:07:14.163Z -->
+## ★ Insight
+`pluginMcp.ts` is exactly 53 lines and follows a clean two-function pattern: a public `readPluginScopeMcp(installed?)` that delegates to `readOnePluginMcp(installPath)` per plugin. `extractHookEntries` in `claudeHooks.ts` already accepts the `source: HookSource` parameter we need — widening the union type and calling it with `"plugin"` is the only type system change required.
+
+---
+
+<!-- insight:8899af494364 | session:a1c41d92-0311-4934-b5ce-9f5569e023e2 | 2026-05-09T22:00:39.958Z -->
+## ★ Insight
+Three plan refinements driven by advisor review: (1) refusing mtime as a session-window proxy for GSD cost attribution — file mtimes are rewritten by routine git ops and would attribute random session costs to phases, so `costUsd` stays undefined unless STATE.md has explicit timestamps; (2) widening `bundle` field to populate on real apply too — the file walk already happens, so giving the post-apply success view tree-rendering parity is free; (3) recognizing `help-mapping.ts` is a UI-route → slug convention, so an API route like `/api/share` doesn't fit — discoverability moves into the modal as a `?` link instead.
+
+---
+
+<!-- insight:1bc2247b4136 | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T21:16:24.528Z -->
+## ★ Insight
+React Compiler enforces referential transparency in render functions — any call to a non-deterministic function like `Date.now()` or `Math.random()` directly in render body triggers this rule. The fix is to lift the impure call into a `useMemo` hook, which React Compiler treats as a "cache slot" rather than a render-body side effect. Using `useMemo(() => Date.now(), [])` computes once on mount and returns a stable value.
+
+---
+
+<!-- insight:6d3c0b79f1ce | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T21:05:11.740Z -->
+## ★ Insight
+DE (de-obfuscation evasion) rules are meta-rules: they detect *the presence of evasion techniques* in the raw input. Running them on already-deobfuscated text defeats their purpose — `atob(` is gone after deobfuscation, which is exactly when you want to flag it.
+
+---
+
+<!-- insight:6b7e26eee6eb | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T20:33:59.300Z -->
+## ★ Insight
+Five real issues worth fixing: (1) 17× deobfuscation redundancy in the inner loop, (2) `getAllFindings` returning unbounded historical data, (3) double `getLatestRun` call in the route, (4) duplicate server-ID construction logic between client and server, (5) inline relative-time duplicating an existing utility.
+
+---
+
 <!-- insight:4a6977953912 | session:831c3b19-738c-4453-af0b-b55323878e44 | 2026-05-09T20:08:34.812Z -->
 ## ★ Insight
 The original `stripTagChars` had actual Unicode tag characters (U+E0030, U+E0046) embedded inside the regex character class `[0-F]`. Without the `/u` flag, JavaScript treats surrogate pairs as separate 16-bit code units. The high surrogate U+DB40 appeared as the `0` and `F`, making the range cover thousands of characters — hence stripping all text. The fix uses explicit surrogate pair notation: `/\uDB40[\uDC00-\uDC7F]/g`.

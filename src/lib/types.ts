@@ -367,6 +367,8 @@ export interface MinderConfig {
   emergencyStop?: boolean;
   /** Adapter ids to enable. Defaults to ["claude"]. Wave 10.2a (multi-platform). */
   enabledAdapters?: string[];
+  /** User-defined keyboard shortcut overrides. Keys are ShortcutActionId strings. Wave 12.2. */
+  keyboardShortcuts?: Record<string, string>;
 }
 
 export interface ClaudeUsageStats {

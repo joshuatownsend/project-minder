@@ -1,3 +1,21 @@
+## 2026-05-09 | wave12.1 | GitHub repo hardening — ruleset + permission changes
+
+- [ ] **Enable "Require signed commits" on the `main` branch ruleset**
+  GitHub → Settings → Branches → `main-protection` → enable "Require signed commits"
+  Prerequisite: at least one signed commit must already exist on the branch.
+  See: https://docs.github.com/en/authentication/managing-commit-signature-verification
+
+- [ ] **Verify release workflow has `contents: write` permission**
+  After pushing a `v*` tag, check the workflow run in Actions → Release.
+  If it fails with a 403, go to GitHub → Settings → Actions → General → Workflow permissions
+  and ensure "Read and write permissions" is selected.
+
+- [ ] **Enable "Require code scanning results" after first CodeQL run**
+  GitHub → Settings → Branches → `main-protection` → Code scanning → add CodeQL rule
+  Do this only AFTER the CodeQL workflow has completed at least one successful run.
+
+---
+
 ## 2026-05-07 | wave8.1b | Phase 0 — Capture real OTEL data (reinstall required — wizard was broken)
 
 **Context**: The wizard was missing OTEL_METRICS_EXPORTER=otlp and OTEL_LOGS_EXPORTER=otlp.
