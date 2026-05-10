@@ -104,9 +104,14 @@ export async function writeFileAtomic(
  * On a fast path (no contention) the first attempt succeeds. On a slow
  * path the linear backoff caps at ~2.75 s total wait (50ms × 1..10).
  *
- * Errors other than EBUSY/EPERM (most importantly ENOENT) are NOT
- * retried — those are caller bugs, not lock contention.
+ * Errors other than EBUSY/EPERM/ENOTEMPTY (most importantly ENOENT) are NOT
+ * retried — those are caller bugs, not lock contention. ENOTEMPTY is added
+ * because Windows occasionally surfaces it when a destination directory
+ * still has handles being released; the same release-lag justifies retry
+ * with the same backoff.
  */
+const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
+
 export async function renameWithRetry(
   src: string,
   dest: string,
@@ -120,7 +125,7 @@ export async function renameWithRetry(
     } catch (err) {
       lastErr = err;
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EBUSY" && code !== "EPERM") throw err;
+      if (!RENAME_RETRY_CODES.has(code ?? "")) throw err;
       await new Promise((resolve) => setTimeout(resolve, 50 * (i + 1)));
     }
   }

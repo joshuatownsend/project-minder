@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
-import type { FeatureFlagKey, MinderConfig } from "@/lib/types";
+import type { FeatureFlagKey, InitStatus, MinderConfig } from "@/lib/types";
 import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { useToast } from "@/components/ToastProvider";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
@@ -20,6 +20,34 @@ const FLAG_GROUPS = {
   passive: FEATURE_FLAG_META.filter((f) => f.group === "passive"),
   active: FEATURE_FLAG_META.filter((f) => f.group === "active"),
 };
+
+const DB_STATUS_LABEL: Record<InitStatus["state"], string> = {
+  idle: "Idle",
+  "in-flight": "Initializing…",
+  success: "Healthy",
+  "transient-failed": "Transient failure (retrying)",
+  "permanent-failed": "Permanent failure",
+};
+
+const DB_STATUS_COLOR: Record<InitStatus["state"], string> = {
+  idle: "var(--text-muted)",
+  "in-flight": "var(--text-muted)",
+  success: "var(--text-muted)",
+  "transient-failed": "var(--warning, var(--text-secondary))",
+  "permanent-failed": "var(--danger)",
+};
+
+function dbStatusEqual(a: InitStatus | null, b: InitStatus): boolean {
+  if (!a) return false;
+  return (
+    a.state === b.state &&
+    a.attempts === b.attempts &&
+    a.quarantineRuns === b.quarantineRuns &&
+    a.failedAt === b.failedAt &&
+    a.lastError?.message === b.lastError?.message &&
+    a.lastError?.code === b.lastError?.code
+  );
+}
 
 type SectionKey =
   | "features"
@@ -135,6 +163,31 @@ export function SettingsPage() {
 
   const activeSection = SECTIONS.find((s) => s.key === active);
 
+  // Polls /api/health every 15s. Each poll returns a fresh object even
+  // when nothing changed, so re-using the prior reference on a field-
+  // equal response avoids re-rendering DbStatusRow on every tick.
+  const [dbStatus, setDbStatus] = useState<InitStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStatus = () => {
+      fetch("/api/health")
+        .then((r) => r.json())
+        .then((data: { db: InitStatus }) => {
+          if (cancelled) return;
+          setDbStatus((prev) => (dbStatusEqual(prev, data.db) ? prev : data.db));
+        })
+        .catch(() => {
+          /* health endpoint failures don't deserve a toast */
+        });
+    };
+    fetchStatus();
+    const id = setInterval(fetchStatus, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   async function patchConfig(patch: Partial<MinderConfig>): Promise<void> {
     const res = await fetch("/api/config", {
       method: "PATCH",
@@ -248,7 +301,42 @@ export function SettingsPage() {
             description={activeSection.description}
           />
         )}
+        <InitStatusRow status={dbStatus} />
       </main>
+    </div>
+  );
+}
+
+function InitStatusRow({ status }: { status: InitStatus | null }) {
+  if (!status) return null;
+  return (
+    <div
+      style={{
+        marginTop: "32px",
+        paddingTop: "12px",
+        borderTop: "1px solid var(--border-subtle)",
+        fontSize: "0.7rem",
+        color: "var(--text-muted)",
+        fontFamily: "var(--font-mono)",
+        display: "flex",
+        gap: "12px",
+        flexWrap: "wrap",
+      }}
+      title={
+        status.lastError
+          ? `${status.lastError.message}${status.lastError.code ? ` (${status.lastError.code})` : ""}`
+          : undefined
+      }
+    >
+      <span>
+        DB status:{" "}
+        <span style={{ color: DB_STATUS_COLOR[status.state] }}>
+          {DB_STATUS_LABEL[status.state]}
+        </span>
+      </span>
+      <span>attempts: {status.attempts}</span>
+      <span>quarantines: {status.quarantineRuns}</span>
+      {status.lastError && <span>last error: {status.lastError.message.slice(0, 80)}</span>}
     </div>
   );
 }
