@@ -564,11 +564,21 @@ export default function HomePage() {
           <div className="gauge-wrap" style={{ marginBottom: 18 }}>
             <div className="gauge">
               <GaugeRing
-                pct={healthScore}
-                color={healthScore >= 75 ? "var(--good)" : healthScore >= 60 ? "var(--accent)" : "var(--danger)"}
+                // While the health report is loading we show an empty
+                // ring at the neutral track color rather than 0% red — a
+                // brief "0%" red flash on every Home mount made it look
+                // like the environment was unhealthy when it was just
+                // waiting on the fetch.
+                pct={health === null ? 0 : healthScore}
+                color={
+                  health === null ? "var(--bg-elev-2)"
+                  : healthScore >= 75 ? "var(--good)"
+                  : healthScore >= 60 ? "var(--accent)"
+                  : "var(--danger)"
+                }
               />
               <div className="center">
-                <div className="pct">{healthScore}%</div>
+                <div className="pct">{health === null ? "—" : `${healthScore}%`}</div>
                 <div className="lab">{healthLabel}</div>
               </div>
             </div>
