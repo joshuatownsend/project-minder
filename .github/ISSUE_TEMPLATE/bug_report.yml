@@ -1,0 +1,62 @@
+name: Bug Report
+description: Report a bug in Project Minder
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the fields below.
+
+  - type: input
+    id: route
+    attributes:
+      label: Dashboard route
+      description: Which page were you on? (e.g. `/sessions`, `/usage`, `/project/my-app`)
+      placeholder: /sessions
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Running mode
+      options:
+        - Dev (`npm run dev`)
+        - Production (`npm run build && npm run start`)
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      placeholder: "Chrome 124, Windows 11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors
+      description: Paste any errors from the browser DevTools console (F12 → Console)
+      render: text
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Step-by-step instructions to reproduce the bug
+      placeholder: |
+        1. Open `/sessions`
+        2. Search for "…"
+        3. Click on a result
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true

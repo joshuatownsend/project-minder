@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 12.1 — Cluster AA: Public-repo polish + CI hardening.** TODO #44, #45, #46, #47.
+  - **#44 Community files**: `CONTRIBUTING.md` (dev setup, pre-commit contract, branching, CHANGELOG discipline, test policy, signed-commit setup guide), `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 reference), `SECURITY.md` (scope, in/out-of-scope issues, coordinated disclosure policy). `.github/CODEOWNERS` auto-routes PRs to `@joshuatownsend`. `.github/PULL_REQUEST_TEMPLATE.md` enforces the typecheck+test+build+docs+CHANGELOG checklist on every PR.
+  - **#46 CodeQL scanning**: `.github/workflows/codeql.yml` — JavaScript/TypeScript analysis on every push/PR to `main` plus weekly schedule. Note: tsgo (`@typescript/native-preview`) may not be fully supported by CodeQL's TS extractor; workflow comment documents the narrow-to-`javascript` fallback if needed.
+  - **#47 Release automation**: `.github/workflows/release.yml` — triggers on `v*` tag push, runs full CI gate (lint + typecheck + test + build), then creates a GitHub Release with auto-generated notes from squashed PR titles. Requires `contents: write` permission (set explicitly in workflow).
+  - **§10.7 `npm run setup-hooks`**: `scripts/setup-hooks.mjs` — Node script that writes the canonical pre-commit hook (`npm run typecheck && npm test -- --pool=forks`) to `.git/hooks/pre-commit` with `0o755` perms. Idempotent (compares content, no-op if already correct). Cross-platform (chmod failure silently ignored on Windows). Added to `package.json` scripts. 5 tests in `tests/setupHooks.test.ts`.
+  - **#45 Signed commits**: documented in `CONTRIBUTING.md` (GPG and SSH paths, GitHub docs link). Enabling "Require signed commits" in the branch ruleset is a manual GitHub UI step logged in `MANUAL_STEPS.md`.
+  - **GitHub templates**: `.github/ISSUE_TEMPLATE/bug_report.yml` and `feature_request.yml` (GitHub Issue Forms), `.github/ISSUE_TEMPLATE/config.yml` (link to docs/discussions/TODO.md). `.github/dependabot.yml` — weekly npm + GitHub Actions updates, grouped patch/minor, ignores major bumps.
+  - **`package.json` metadata**: added `description`, `author`, `license`, `homepage`, `repository`, `bugs` fields.
+
+### Added
 - **Wave 11.2b — Cluster Z (part 2): Curated template library and new-project wizard.**
   - **#77 Curated template library**: `/library` page with 16 production-ready library items (5 commands, 7 skills, 4 agents). Items are inlined as TypeScript strings in `src/lib/template/library/index.ts` — no runtime fs reads. Apply any item to an existing project via `source.kind: "library"` in the apply endpoint. New `applyFromLibrary` dispatcher writes content to a temp dir and re-enters the existing apply primitives; temp dir is always cleaned up. Filter by kind (Command/Skill/Agent), search by name/description/tag, Apply or Preview per item.
   - **#78 New-project wizard**: `/new-project` 4-step wizard: (1) name + folder; (2) stack selector (TypeScript / Python / Go / Rust); (3) library item selection with stack-based presets; (4) confirm → create. `POST /api/projects/new` bootstraps the directory, runs `git init`, and applies selected library items. Dashboard toolbar gets a **New** button; AppNav gets a **+ New** root link.
