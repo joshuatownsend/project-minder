@@ -1,0 +1,26 @@
+# Default behavior: auto-detect text files, normalize to LF in working tree.
+# Prevents Windows CRLF from breaking tools that expect Unix line endings
+# (e.g. Vitest 4's transformer chokes on .mjs files with CRLF).
+* text=auto eol=lf
+
+# Explicit text files where LF matters most
+*.mjs   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+
+# Binary files
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.db   binary
