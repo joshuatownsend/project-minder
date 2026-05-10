@@ -37,16 +37,15 @@ export function CacheEfficiencyCard() {
         <>
           <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
             <span
-              title={data.hitRate > 1 ? `Raw rate ${(data.hitRate * 100).toFixed(0)}% — clamped to 100% for display (cache reads exceeded billable tokens this period)` : undefined}
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "2.2rem",
                 fontWeight: 700,
-                color: hitRateColor(Math.min(1, data.hitRate)),
+                color: hitRateColor(data.hitRate),
                 lineHeight: 1,
               }}
             >
-              {Math.min(100, Math.round(data.hitRate * 100))}%
+              {Math.round(data.hitRate * 100)}%
             </span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--text-muted)" }}>
               cache hit rate
@@ -61,12 +60,10 @@ export function CacheEfficiencyCard() {
           </div>
 
           {data.daily.length > 1 && (
-            // overflow: hidden defensively clips the daily mini-bars at the
-            // container's 32px ceiling. Without it, a hitRate value > 1
-            // (which the API can return when cache reads exceed billable
-            // tokens) would scale the bar to 32 * hitRate pixels and burst
-            // out of the card. We also clamp hitRate per-day before
-            // multiplying to keep the visual tied to the [0, 1] domain.
+            // overflow: hidden is belt-and-suspenders defense in case the
+            // hitRate ever drifts outside [0, 1] again (the formula in
+            // otelQueries is bounded as of this commit, but it's a cheap
+            // guarantee that bad data can't burst out of the card).
             <div style={{ position: "relative", height: "32px", overflow: "hidden" }}>
               <div style={{
                 position: "absolute",
@@ -76,23 +73,20 @@ export function CacheEfficiencyCard() {
                 borderTop: "1px dashed rgba(245,158,11,0.4)",
               }} />
               <div style={{ display: "flex", gap: "2px", alignItems: "flex-end", height: "100%" }}>
-                {data.daily.map((d) => {
-                  const clamped = Math.max(0, Math.min(1, d.hitRate));
-                  return (
-                    <div
-                      key={d.day}
-                      title={`${d.day}: ${Math.round(d.hitRate * 100)}%${d.hitRate > 1 ? " (clamped)" : ""}`}
-                      style={{
-                        flex: 1,
-                        height: `${Math.max(2, clamped * 32)}px`,
-                        background: hitRateColor(clamped),
-                        borderRadius: "1px",
-                        opacity: 0.7,
-                        minWidth: "2px",
-                      }}
-                    />
-                  );
-                })}
+                {data.daily.map((d) => (
+                  <div
+                    key={d.day}
+                    title={`${d.day}: ${Math.round(d.hitRate * 100)}%`}
+                    style={{
+                      flex: 1,
+                      height: `${Math.max(2, d.hitRate * 32)}px`,
+                      background: hitRateColor(d.hitRate),
+                      borderRadius: "1px",
+                      opacity: 0.7,
+                      minWidth: "2px",
+                    }}
+                  />
+                ))}
               </div>
             </div>
           )}

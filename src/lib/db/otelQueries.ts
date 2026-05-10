@@ -314,19 +314,25 @@ export async function getCacheEfficiency(opts: { period: Period }): Promise<Cach
   if (rows.length === 0) return empty;
 
   const daily: CacheDay[] = [];
-  let sumCacheRead = 0, sumBillable = 0;
+  let sumCacheRead = 0, sumBillable = 0, sumTotalFlow = 0;
 
   for (const d of pivotTokenRows(rows)) {
-    // Denominator excludes cacheRead: "what fraction of full-price tokens were served from cache?"
+    // Hit rate is "what fraction of total token flow came from cache?"
+    // — bounded to [0, 1]. The denominator includes cacheRead so the ratio
+    // can't exceed 1 (an earlier formula divided cacheRead by billable
+    // tokens only and produced ratios of 1500%+ for sessions that re-read
+    // a large cached system prompt across many turns).
     const billable = d.input + d.output + d.cacheCreation;
-    const rate = billable > 0 ? d.cacheRead / billable : 0;
+    const totalFlow = billable + d.cacheRead;
+    const rate = totalFlow > 0 ? d.cacheRead / totalFlow : 0;
     daily.push({ day: d.day, hitRate: rate });
     sumCacheRead += d.cacheRead;
     sumBillable += billable;
+    sumTotalFlow += totalFlow;
   }
 
   return {
-    hitRate: sumBillable > 0 ? sumCacheRead / sumBillable : 0,
+    hitRate: sumTotalFlow > 0 ? sumCacheRead / sumTotalFlow : 0,
     daily,
     totalBillable: sumBillable,
     hasData: true,

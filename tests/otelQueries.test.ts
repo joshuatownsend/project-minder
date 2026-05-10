@@ -309,8 +309,11 @@ describe.skipIf(!driverAvailable)("getCacheEfficiency", () => {
 
       const result = await queries.getCacheEfficiency({ period: "7d" });
       expect(result.hasData).toBe(true);
-      // hitRate = cacheRead / (input + output + cacheCreation) = 400 / (800+200+100) = 400/1100 ≈ 0.364
-      expect(result.hitRate).toBeCloseTo(400 / 1100);
+      // hitRate = cacheRead / (cacheRead + input + output + cacheCreation)
+      //         = 400 / (400 + 800 + 200 + 100)
+      //         = 400 / 1500 ≈ 0.267
+      // (bounded to [0, 1] — see formula change in src/lib/db/otelQueries.ts)
+      expect(result.hitRate).toBeCloseTo(400 / 1500);
       expect(result.totalBillable).toBe(1100);
     } finally {
       vi.useRealTimers();
