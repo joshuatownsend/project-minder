@@ -59,6 +59,14 @@ describe("library item apply path derivation", () => {
     }
   });
 
+  it("skill apply key includes :standalone layout suffix", () => {
+    const skills = LIBRARY.filter((i) => i.kind === "skill");
+    for (const s of skills) {
+      const key = `${s.slug}:standalone`;
+      expect(key).toMatch(/^[a-z0-9-]+:standalone$/);
+    }
+  });
+
   it("commands map to .claude/commands/<slug>.md", () => {
     const commands = LIBRARY.filter((i) => i.kind === "command");
     for (const c of commands) {

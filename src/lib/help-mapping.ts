@@ -100,6 +100,8 @@ export const helpSlugs = [
   'kanban',
   'adapters',
   'mcp-security',
+  'library',
+  'new-project',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]
