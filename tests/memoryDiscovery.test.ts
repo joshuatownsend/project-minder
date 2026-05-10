@@ -169,18 +169,27 @@ describe("listMemoryFiles — preview + sorting", () => {
 });
 
 describe("encodeMemoryId / decodeMemoryId", () => {
-  it("round-trips absolute paths through base64url", async () => {
+  it("round-trips POSIX absolute paths through base64url", async () => {
     await reloadModule();
     const { encodeMemoryId, decodeMemoryId } = await import("@/lib/memory/safety");
-    const inputs = [
-      "C:\\dev\\project-minder\\CLAUDE.md",
-      "/Users/joshu/.claude/CLAUDE.md",
-      "/tmp/spaces in path/file.md",
-    ];
+    const inputs = ["/Users/joshu/.claude/CLAUDE.md", "/tmp/spaces in path/file.md"];
     for (const p of inputs) {
       expect(decodeMemoryId(encodeMemoryId(p))).toBe(p);
     }
   });
+
+  // path.isAbsolute is platform-aware: Windows-style paths only count as
+  // absolute on win32. Skip on POSIX CI to keep the round-trip semantic
+  // honest rather than swallowing the platform difference.
+  it.skipIf(process.platform !== "win32")(
+    "round-trips Windows absolute paths through base64url",
+    async () => {
+      await reloadModule();
+      const { encodeMemoryId, decodeMemoryId } = await import("@/lib/memory/safety");
+      const p = "C:\\dev\\project-minder\\CLAUDE.md";
+      expect(decodeMemoryId(encodeMemoryId(p))).toBe(p);
+    },
+  );
 
   it("rejects malformed ids", async () => {
     await reloadModule();

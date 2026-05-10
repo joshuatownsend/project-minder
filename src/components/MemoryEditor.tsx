@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownContent } from "./MarkdownContent";
 import { lineDiff } from "@/lib/usage/diff";
 import type { MemoryFileEntry } from "@/lib/types";
@@ -55,6 +55,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const saveCtrl = useRef<AbortController | null>(null);
 
   async function loadFile(signal?: AbortSignal): Promise<FileResponse> {
     const r = await fetch(`/api/memory/by-id/${encodeURIComponent(entry.id)}`, { signal });
@@ -77,11 +78,17 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
         if (e.name === "AbortError") return;
         setError(e.message);
       });
-    return () => ctrl.abort();
+    return () => {
+      ctrl.abort();
+      saveCtrl.current?.abort();
+    };
   }, [entry.id]);
 
   async function handleSave() {
     if (!data) return;
+    saveCtrl.current?.abort();
+    const ctrl = new AbortController();
+    saveCtrl.current = ctrl;
     setSaving(true);
     setError(null);
     try {
@@ -89,6 +96,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: draft, mtimeMs: data.mtimeMs }),
+        signal: ctrl.signal,
       });
       const body: { ok?: boolean; mtimeMs?: number; sizeBytes?: number; error?: { code: string; message?: string } } =
         await res.json().catch(() => ({}));
@@ -107,8 +115,10 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
       setTimeout(() => setSavedFlash(false), 1500);
       onSaved?.();
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
+      if (saveCtrl.current === ctrl) saveCtrl.current = null;
       setSaving(false);
     }
   }
@@ -153,10 +163,11 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
           </>
         )}
         {mode === "diff" && (
-          <button onClick={() => setMode("view")} style={btnStyle}>Close diff</button>
+          <button onClick={() => setMode(dirty ? "edit" : "view")} style={btnStyle}>Close diff</button>
         )}
         {mode === "edit" && (
           <>
+            <button onClick={() => setMode("diff")} style={btnStyle} title="Compare draft against last config-history snapshot">Diff</button>
             <button
               onClick={() => { setDraft(data.content); setMode("view"); setError(null); }}
               style={btnStyle}
@@ -187,7 +198,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
 
       {error && <p style={errorTextStyle}>{error}</p>}
 
-      {mode === "diff" && <DiffView entry={entry} draftContent={data.content} />}
+      {mode === "diff" && <DiffView entry={entry} draftContent={draft} />}
       {mode === "edit" && (
         <textarea
           value={draft}

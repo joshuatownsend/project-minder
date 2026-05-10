@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { createHash } from "crypto";
 import path from "path";
 import type { MemoryFileEntry, MemoryStaleness, ProjectData } from "../types";
 import { expandImports } from "../scanner/expandImports";
@@ -7,12 +8,11 @@ import { encodeMemoryId, userMemoryPath } from "./safety";
 
 const STALE_AGE_MS = 30 * 24 * 60 * 60_000;
 const PREVIEW_CHARS = 200;
-// Reads first N bytes for preview + broken-import detection. Imports must
-// resolve from disk anyway, so over-reading the entry file just wastes I/O.
-const PARTIAL_READ_BYTES = 8 * 1024;
 const CACHE_TTL = 60_000;
+const IMPORT_CACHE_MAX = 500;
 
 interface InventoryCache {
+  key: string;
   entries: MemoryFileEntry[];
   cachedAt: number;
 }
@@ -36,9 +36,22 @@ interface DiscoveryInput {
   projects: ProjectData[];
 }
 
+// Hash the project set so cache hits require both freshness AND a matching
+// project list. Without this, a list call after a rescan could return entries
+// for projects that are no longer present (which would then 400 on PUT
+// because /api/memory/by-id/[id] revalidates against the fresh list).
+function projectsKey(projects: ProjectData[]): string {
+  const h = createHash("sha256");
+  for (const p of projects) h.update(`${p.slug}\0${p.path}\n`);
+  return h.digest("hex").slice(0, 16);
+}
+
 export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFileEntry[]> {
+  const key = projectsKey(input.projects);
   const cached = g.__memoryInventoryCache;
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL) return cached.entries;
+  if (cached && cached.key === key && Date.now() - cached.cachedAt < CACHE_TTL) {
+    return cached.entries;
+  }
 
   const entries: MemoryFileEntry[] = [];
   const userEntry = await tryUser();
@@ -60,7 +73,7 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFile
     return a.displayName.localeCompare(b.displayName);
   });
 
-  g.__memoryInventoryCache = { entries, cachedAt: Date.now() };
+  g.__memoryInventoryCache = { key, entries, cachedAt: Date.now() };
   return entries;
 }
 
@@ -124,8 +137,17 @@ async function readEntry(
   }
   if (!stat.isFile()) return null;
 
-  const partial = await readHead(absPath, PARTIAL_READ_BYTES);
-  const stale = await computeStaleness(absPath, partial, stat.mtimeMs);
+  // Read full file: expandImports needs the whole entry so late `@import`
+  // directives aren't missed. The mtime-keyed import cache below ensures
+  // repeat list calls don't re-read or re-recurse when nothing changed.
+  let raw: string;
+  try {
+    raw = await fs.readFile(absPath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  const stale = await computeStaleness(absPath, raw, stat.mtimeMs);
 
   return {
     id: encodeMemoryId(absPath),
@@ -136,23 +158,9 @@ async function readEntry(
     displayName: meta.displayName,
     mtimeMs: stat.mtimeMs,
     sizeBytes: stat.size,
-    preview: makePreview(partial),
+    preview: makePreview(raw),
     stale,
   };
-}
-
-async function readHead(absPath: string, maxBytes: number): Promise<string> {
-  let handle: import("fs").promises.FileHandle | null = null;
-  try {
-    handle = await fs.open(absPath, "r");
-    const buf = Buffer.alloc(maxBytes);
-    const { bytesRead } = await handle.read(buf, 0, maxBytes, 0);
-    return buf.subarray(0, bytesRead).toString("utf-8");
-  } catch {
-    return "";
-  } finally {
-    if (handle) await handle.close().catch(() => {});
-  }
 }
 
 async function computeStaleness(
@@ -165,6 +173,9 @@ async function computeStaleness(
   const importCache = g.__memoryImportCache!;
   const cached = importCache.get(absPath);
   if (cached && cached.mtimeMs === mtimeMs) {
+    // LRU touch: re-insert to move to most-recently-used end of Map iteration order.
+    importCache.delete(absPath);
+    importCache.set(absPath, cached);
     return { ageOver30d, brokenImports: cached.brokenImports };
   }
 
@@ -176,6 +187,12 @@ async function computeStaleness(
       .map((i) => i.spec);
   } catch {
     // best-effort; leave brokenImports empty
+  }
+
+  if (importCache.size >= IMPORT_CACHE_MAX) {
+    // Evict oldest entry (Map preserves insertion order).
+    const oldest = importCache.keys().next().value;
+    if (oldest !== undefined) importCache.delete(oldest);
   }
   importCache.set(absPath, { mtimeMs, brokenImports });
   return { ageOver30d, brokenImports };
