@@ -59,7 +59,7 @@ export function DisabledHooksSection({ entries, loading, error, onChanged }: Pro
       <div>
         {entries.map((e) => (
           <div
-            key={e.hookId}
+            key={`${e.settingsPath}:${e.hookId}`}
             style={{
               display: "flex",
               alignItems: "center",

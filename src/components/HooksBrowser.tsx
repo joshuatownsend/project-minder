@@ -268,7 +268,7 @@ export function HooksBrowser() {
       )}
 
       {/* Virtualised list */}
-      {loading ? (
+      {loading || disabledLoading ? (
         <LoadingSkeleton />
       ) : sorted.length === 0 && disabledEntries.length === 0 ? (
         <Empty query={rawQuery} />

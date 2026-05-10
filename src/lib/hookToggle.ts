@@ -164,8 +164,19 @@ export async function disableHook(opts: {
     }
 
     const sidecar = await readSidecar();
-    if (sidecar.disabled.some((e) => e.hookId === opts.hookId)) {
-      throw new HookToggleError("ALREADY_DISABLED", `Hook ${opts.hookId} is already in the disabled stash.`);
+    // Scope by (hookId, settingsPath) — two settings files can legitimately
+    // carry the same `event+matcher+command` tuple (user vs local, or two
+    // projects with identical local hooks). makeHookKey() omits scope, so
+    // checking only hookId would falsely 409 the second one.
+    if (
+      sidecar.disabled.some(
+        (e) => e.hookId === opts.hookId && e.settingsPath === settingsPath,
+      )
+    ) {
+      throw new HookToggleError(
+        "ALREADY_DISABLED",
+        `Hook ${opts.hookId} from ${settingsPath} is already in the disabled stash.`,
+      );
     }
 
     await recordPreWrite(settingsPath, { label: "hookToggle:disable" }).catch(() => {});

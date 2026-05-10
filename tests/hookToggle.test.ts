@@ -239,6 +239,59 @@ describe("local scope (project's settings.local.json)", () => {
   });
 });
 
+describe("scope-isolated uniqueness", () => {
+  it("same hookId in user vs local can both be disabled (no false ALREADY_DISABLED)", async () => {
+    // makeHookKey omits scope/path, so the same event+matcher+command
+    // produces an identical hookId across settings files. Disabling the
+    // user copy must not block disabling the local copy — the sidecar
+    // ALREADY_DISABLED guard is keyed by (hookId, settingsPath).
+    const { disableHook, loadDisabledHooks } = await loadModule();
+    await writeJson(userSettings(), {
+      hooks: { Stop: [{ hooks: [sampleHook("ping")] }] },
+    });
+    await writeJson(localSettings(), {
+      hooks: { Stop: [{ hooks: [sampleHook("ping")] }] },
+    });
+
+    const hookId = makeHookKey("Stop", undefined, "ping");
+    await disableHook({ scope: "user", hookId });
+    await disableHook({ scope: "local", hookId, projectPath: tmpProject });
+
+    const entries = await loadDisabledHooks();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.scope).sort()).toEqual(["local", "user"]);
+  });
+});
+
+describe("loadDisabledHooks({ onlyExisting: true })", () => {
+  it("filters out entries whose source settings file no longer exists", async () => {
+    const { disableHook, loadDisabledHooks } = await loadModule();
+    await writeJson(userSettings(), {
+      hooks: { Stop: [{ hooks: [sampleHook("u")] }] },
+    });
+    await writeJson(localSettings(), {
+      hooks: { Stop: [{ hooks: [sampleHook("l")] }] },
+    });
+
+    await disableHook({ scope: "user", hookId: makeHookKey("Stop", undefined, "u") });
+    await disableHook({
+      scope: "local",
+      hookId: makeHookKey("Stop", undefined, "l"),
+      projectPath: tmpProject,
+    });
+
+    // Simulate the project being deleted out from under the sidecar entry.
+    await fs.rm(tmpProject, { recursive: true, force: true });
+
+    const allEntries = await loadDisabledHooks();
+    const liveEntries = await loadDisabledHooks({ onlyExisting: true });
+
+    expect(allEntries).toHaveLength(2);
+    expect(liveEntries).toHaveLength(1);
+    expect(liveEntries[0].scope).toBe("user");
+  });
+});
+
 describe("sidecar contents", () => {
   it("loadDisabledHooks reflects what disableHook just wrote", async () => {
     const { disableHook, loadDisabledHooks } = await loadModule();
