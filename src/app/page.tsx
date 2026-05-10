@@ -189,15 +189,20 @@ export default function HomePage() {
   const healthLabel =
     healthScore >= 85 ? "Healthy" : healthScore >= 60 ? "Fair" : healthScore >= 30 ? "Needs work" : "At risk";
 
-  // 7-day chart: last 7 daily buckets from the monthly fetch, [input, output]
+  // Token usage chart matches the active period toggle. For "today" we
+  // expand back to the last 3 days so a single bar doesn't sit awkwardly
+  // alone — three days gives enough context to read trend at a glance.
   const tokenDays = useMemo(() => {
     if (!usageMonth?.daily?.length) return [];
-    const last7 = usageMonth.daily.slice(-7);
-    return last7.map((d) => ({
+    const slice =
+      period === "today" ? usageMonth.daily.slice(-3)
+      : period === "week" ? usageMonth.daily.slice(-7)
+      : usageMonth.daily;
+    return slice.map((d) => ({
       label: d.date.slice(5).replace("-", "/"),
       values: [d.inputTokens, d.outputTokens],
     }));
-  }, [usageMonth]);
+  }, [period, usageMonth]);
 
   // Sparklines are always last 7 days regardless of toggle — they're a tiny
   // contextual read-out, not a primary metric.
@@ -361,7 +366,13 @@ export default function HomePage() {
         <Card>
           <CardHeader
             title="Token usage"
-            sub="last 7 days"
+            sub={
+              period === "today"
+                ? "last 3 days"
+                : period === "week"
+                  ? "last 7 days"
+                  : `last ${tokenDays.length || 30} days`
+            }
             right={
               <div style={{ display: "flex", gap: 14, fontSize: 11, color: "var(--text-3)" }}>
                 <span>
