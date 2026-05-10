@@ -405,18 +405,27 @@ export function StackedBars({
           const total = d.values.reduce((s, v) => s + v, 0);
           const cx = padding.left + i * columnW + columnW / 2;
           let stackY = padding.top + innerH;
+          // Token-usage stacks frequently have a 1:500+ input:output ratio,
+          // which would render the input segment at sub-pixel height and
+          // disappear visually (was HIGH-7 in the 2026-05-10 review). Any
+          // non-zero series gets a minimum visible height so the user can
+          // see two colors instead of one. Zero-valued series remain
+          // invisible (we don't want to fake bars where there's no data).
+          const MIN_VISIBLE = 2;
           return (
             <g key={d.label}>
               {d.values.map((v, j) => {
-                const h = (v / max) * innerH;
+                const raw = (v / max) * innerH;
+                const h = v > 0 ? Math.max(MIN_VISIBLE, raw) : 0;
                 stackY -= h;
+                if (v <= 0) return null;
                 return (
                   <rect
                     key={j}
                     x={cx - barW / 2}
                     y={stackY}
                     width={barW}
-                    height={Math.max(1, h)}
+                    height={h}
                     fill={colors[j % colors.length]}
                     rx={2}
                   />
