@@ -43,6 +43,8 @@ const slugTitles: Record<HelpSlug, string> = {
   kanban: "Mission Control Kanban",
   adapters: "Adapters",
   "mcp-security": "MCP Security Scanner",
+  library: "Library Browser",
+  "new-project": "New Project Wizard",
 };
 
 const iconBtnBase: React.CSSProperties = {

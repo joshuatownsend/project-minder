@@ -1,4 +1,5 @@
 import path from "path";
+import { promises as fs } from "fs";
 import {
   ApplyRequest,
   ApplyResult,
@@ -9,6 +10,7 @@ import {
   MinderConfig,
   ScanResult,
 } from "../types";
+import { LIBRARY } from "./library";
 import { readConfig } from "../config";
 import { getCachedScan, setCachedScan, invalidateCache as invalidateScanCache } from "../cache";
 import { scanAllProjects, toSlug } from "../scanner";
@@ -173,6 +175,10 @@ function resolveSource(source: ApplySource, scan: ScanResult): ResolvedSource | 
       // and live-source projects. Slug is a synthetic placeholder used only by
       // walkers when they construct entry ids.
       return { kind: "project", path: source.path, slug: "template" };
+    case "library":
+      // Library sources are intercepted by applyUnit before resolveSource is
+      // called, so this branch should never be reached.
+      return { error: { code: "UNEXPECTED_LIBRARY_SOURCE", message: "Library source reached resolveSource — this is a bug." } };
   }
 }
 
@@ -200,6 +206,52 @@ function resolveTarget(target: ApplyTarget, scan: ScanResult): { path: string } 
   }
 }
 
+/** Resolve a library source by writing item content to a temp dir, then
+ *  re-entering applyUnit with source.kind="path". The temp dir is cleaned up
+ *  after the apply completes (success or failure). */
+async function applyFromLibrary(
+  request: ApplyRequest,
+  safeTargetPath: string,
+): Promise<ApplyResult> {
+  const libSrc = request.source as { kind: "library"; libraryId: string };
+  const item = LIBRARY.find((i) => i.id === libSrc.libraryId);
+  if (!item) {
+    return errorResult("LIBRARY_ITEM_NOT_FOUND", `Library item "${libSrc.libraryId}" not found.`);
+  }
+
+  let relPath: string;
+  switch (item.kind) {
+    case "agent":   relPath = path.join(".claude", "agents",   `${item.slug}.md`); break;
+    case "skill":   relPath = path.join(".claude", "skills",   `${item.slug}.md`); break;
+    case "command": relPath = path.join(".claude", "commands", `${item.slug}.md`); break;
+    default:
+      return errorResult("UNSUPPORTED_LIBRARY_KIND", `Library kind "${(item as { kind: string }).kind}" is not supported for apply.`);
+  }
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-lib-"));
+  try {
+    const tmpFile = path.join(tmpDir, relPath);
+    await fs.mkdir(path.dirname(tmpFile), { recursive: true });
+    await fs.writeFile(tmpFile, item.content, "utf-8");
+
+    // Use path source/target to skip redundant resolution in the recursive call.
+    // Override unit.key for skills: the dispatcher's findSkill splits on ":" to get
+    // [slug, layout], so bare slugs produce layout=undefined and UNIT_NOT_FOUND.
+    const pathRequest: ApplyRequest = {
+      ...request,
+      unit: {
+        kind: item.kind,
+        key: item.kind === "skill" ? `${item.slug}:standalone` : item.slug,
+      },
+      source: { kind: "path", path: tmpDir },
+      target: { kind: "path", path: safeTargetPath },
+    };
+    return applyUnit(pathRequest);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 /**
  * Top-level orchestrator. Resolves source + target paths, dispatches to the
  * right primitive, and (on a successful non-dryRun) invalidates the caches
@@ -222,6 +274,11 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
       return errorResult(e.code, e.message);
     }
     throw e;
+  }
+
+  // Library source: write item content to a temp dir, then re-enter as path source.
+  if (request.source.kind === "library") {
+    return applyFromLibrary(request, safeTargetPath);
   }
 
   const sourceResolved = resolveSource(request.source, scan);

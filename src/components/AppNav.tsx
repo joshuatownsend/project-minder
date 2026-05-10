@@ -33,7 +33,7 @@ function item(href: string, label: string, extras: { badge?: BadgeKey; matchType
   return { href, path: href.split("?")[0], label, ...extras };
 }
 
-const ROOT_ITEMS: NavItem[] = [item("/", "Projects")];
+const ROOT_ITEMS: NavItem[] = [item("/", "Projects"), item("/new-project", "+ New")];
 
 const GROUPS: Group[] = [
   {
@@ -44,6 +44,7 @@ const GROUPS: Group[] = [
       item("/commands",  "Commands"),
       item("/plugins",   "Plugins"),
       item("/templates", "Templates"),
+      item("/library",   "Library"),
     ],
   },
   {

@@ -33,6 +33,8 @@ export const helpMapping: Record<string, string> = {
   '/hooks': 'hooks',
   '/plugins': 'plugins',
   '/sql': 'sql',
+  '/library': 'library',
+  '/new-project': 'new-project',
 }
 
 /**
@@ -98,6 +100,8 @@ export const helpSlugs = [
   'kanban',
   'adapters',
   'mcp-security',
+  'library',
+  'new-project',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

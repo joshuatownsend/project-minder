@@ -404,6 +404,24 @@ export function DashboardGrid({
           Quick Add
         </button>
 
+        {/* New Project */}
+        <Link
+          href="/new-project"
+          title="Create a new project"
+          className="toolbar-btn"
+          style={{
+            display: "flex", alignItems: "center", gap: "5px",
+            padding: "5px 11px", fontSize: "0.72rem", minHeight: "32px",
+            fontFamily: "var(--font-body)", letterSpacing: "0.03em",
+            color: "var(--text-secondary)", background: "var(--bg-surface)",
+            border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)",
+            cursor: "pointer", textDecoration: "none", flexShrink: 0,
+          }}
+        >
+          <Plus style={{ width: "11px", height: "11px" }} />
+          New
+        </Link>
+
         {/* Rescan */}
         <button
           onClick={onRescan}
