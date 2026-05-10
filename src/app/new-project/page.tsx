@@ -192,14 +192,17 @@ function Step3({
           {library.map((item) => {
             const checked = selectedIds.has(item.id);
             return (
-              <div
+              <button
                 key={item.id}
                 onClick={() => toggleId(item.id)}
+                role="checkbox"
+                aria-checked={checked}
                 style={{
                   display: "flex", alignItems: "center", gap: "10px",
                   padding: "9px 14px", cursor: "pointer",
                   borderBottom: "1px solid var(--border-subtle)",
                   background: checked ? "rgba(var(--accent-rgb,234,179,8),0.06)" : "transparent",
+                  border: "none", width: "100%", textAlign: "left",
                 }}
               >
                 <div style={{
@@ -222,7 +225,7 @@ function Step3({
                 <span style={{ fontSize: "0.72rem", fontFamily: "var(--font-body)", color: "var(--text-secondary)", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {item.description}
                 </span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -344,12 +347,12 @@ export default function NewProjectPage() {
   const [relPath, setRelPath] = useState("");
   const [stack, setStack] = useState<Stack | null>(null);
   const [library, setLibrary] = useState<LibraryIndexItem[] | null>(null);
-  const [, setStackPresets] = useState<Record<string, string[]>>({});
+  const [stackPresets, setStackPresets] = useState<Record<string, string[]>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<NewProjectResponse | null>(null);
 
-  // Fetch library when entering step 3
+  // Effect 1: fetch library once when reaching step 3
   useEffect(() => {
     if (step !== 3) return;
     if (library) return;
@@ -358,14 +361,16 @@ export default function NewProjectPage() {
       .then((data) => {
         setLibrary(data.items);
         setStackPresets(data.stackPresets);
-        // Pre-select based on stack
-        if (stack) {
-          const preset = data.stackPresets[stack] ?? data.stackPresets.generic ?? [];
-          setSelectedIds(new Set(preset));
-        }
       })
       .catch(() => {});
-  }, [step, library, stack]);
+  }, [step, library]);
+
+  // Effect 2: recompute preset whenever stack or library changes (on step 3)
+  useEffect(() => {
+    if (step !== 3 || !library || !stack) return;
+    const preset = stackPresets[stack] ?? stackPresets.generic ?? [];
+    setSelectedIds(new Set(preset));
+  }, [step, stack, library, stackPresets]);
 
   function toggleId(id: string) {
     setSelectedIds((prev) => {
@@ -451,7 +456,7 @@ export default function NewProjectPage() {
             selectedIds={selectedIds}
             submitting={submitting}
             result={result}
-            onBack={() => setStep(3)}
+            onBack={() => { setResult(null); setStep(3); }}
             onSubmit={() => void handleSubmit()}
           />
         )}
