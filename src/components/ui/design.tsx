@@ -279,15 +279,21 @@ export function Donut({
   const total = slices.reduce((s, x) => s + x.value, 0) || 1;
   const r = size / 2 - thick / 2;
   const circumference = 2 * Math.PI * r;
-  let offset = 0;
+  // Precompute cumulative offsets so we don't mutate a `let` accumulator
+  // inside the slice map — the React Compiler purity rule treats post-render
+  // reassignment as a violation. Same math, just done declaratively.
+  const sliceLengths = slices.map((s) => (s.value / total) * circumference);
+  const sliceOffsets = sliceLengths.reduce<number[]>(
+    (acc, _length, idx) => [...acc, idx === 0 ? 0 : acc[idx - 1] + sliceLengths[idx - 1]],
+    [],
+  );
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)" }}>
       <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--bg-elev-2)" strokeWidth={thick} fill="none" />
       {slices.map((s, i) => {
-        const length = (s.value / total) * circumference;
+        const length = sliceLengths[i];
         const dasharray = `${length} ${circumference - length}`;
-        const dashoffset = -offset;
-        offset += length;
+        const dashoffset = -sliceOffsets[i];
         return (
           <circle
             key={i}

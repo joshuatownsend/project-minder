@@ -127,7 +127,7 @@ function Step2({
         Primary language / stack
       </h2>
       <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontFamily: "var(--font-body)", margin: 0 }}>
-        We'll pre-select relevant library items. You can adjust the selection in the next step.
+        We&apos;ll pre-select relevant library items. You can adjust the selection in the next step.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
