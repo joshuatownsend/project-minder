@@ -1,16 +1,21 @@
-import { ComingSoon } from "@/components/ComingSoon";
+"use client";
+
+import { Brain } from "lucide-react";
+import { MemoryBrowser } from "@/components/MemoryBrowser";
 
 export default function MemoryPage() {
   return (
-    <ComingSoon
-      title="Memory"
-      blurb="A cross-project view of every memory file Claude is reading and writing — your CLAUDE.md hierarchy, .memory/ entries, and per-session memory state. Designed to make it obvious when context is missing or when an update never propagated to the project files Claude actually loads."
-      features={[
-        "All CLAUDE.md files across project, user, and plugin scopes",
-        "Stale-memory detection: entries that contradict current code",
-        "Quick edits without leaving the dashboard",
-        "Diff view for memory changes between sessions",
-      ]}
-    />
+    <div style={{ padding: "20px 24px 40px", display: "flex", flexDirection: "column", gap: "20px" }}>
+      <header style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <Brain size={20} style={{ color: "var(--accent)" }} />
+        <div>
+          <h1 style={{ margin: 0, fontSize: "1.05rem", color: "var(--text-primary)" }}>Memory</h1>
+          <p style={{ margin: "2px 0 0", fontSize: "0.74rem", color: "var(--text-muted)" }}>
+            Cross-tier inventory of every CLAUDE.md and auto-memory file Claude reads.
+          </p>
+        </div>
+      </header>
+      <MemoryBrowser />
+    </div>
   );
 }

@@ -142,6 +142,31 @@ export interface MemoryData {
   files: MemoryFile[];
 }
 
+export type MemoryScope = "user" | "project" | "auto";
+
+export interface MemoryStaleness {
+  ageOver30d: boolean;
+  brokenImports: string[]; // unresolved @import specs (from expandImports)
+}
+
+export interface MemoryFileEntry {
+  /** base64url(absPath) — opaque, path-traversal safe identifier. */
+  id: string;
+  scope: MemoryScope;
+  /** Project slug for `project` + `auto` scopes; undefined for `user`. */
+  projectSlug?: string;
+  /** Project name for display alongside slug; undefined for `user`. */
+  projectName?: string;
+  absPath: string;
+  /** Display name — basename for project/auto, "User CLAUDE.md" for user. */
+  displayName: string;
+  mtimeMs: number;
+  sizeBytes: number;
+  /** First ~200 chars of body, frontmatter stripped. */
+  preview: string;
+  stale: MemoryStaleness;
+}
+
 export interface PortMapping {
   service: string;
   host: number;
