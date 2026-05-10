@@ -4,11 +4,11 @@
  * tiles, ProjectScopeMenu modal entries, cost-by-project bars).
  *
  * The palette mirrors the dataviz tokens defined in globals.css. The
- * mapping is hash-based on slug (with optional index salt) so the same
- * project keeps the same color across pages and re-renders, but two
- * projects with the same first letter — e.g. `project-minder`,
- * `patchmaven`, `perfect-palette-monorepo` — get distinguishable hues
- * (was MEDIUM-8 in the 2026-05-10 review).
+ * mapping is hash-based on slug ONLY — no list-index salt — so the same
+ * slug always maps to the same palette entry across pages, sorts, and
+ * filters. Earlier versions accepted an `idx` salt that callers passed
+ * the array index from a .map(), which made colors flicker as ordering
+ * changed (PR #102 review: copilot called this out across 6 sites).
  */
 
 const PALETTE = [
@@ -22,8 +22,8 @@ const PALETTE = [
   "var(--danger)",
 ];
 
-export function projectColor(slug: string, idx = 0): string {
+export function projectColor(slug: string): string {
   let h = 0;
   for (const ch of slug) h = (h * 31 + ch.charCodeAt(0)) | 0;
-  return PALETTE[Math.abs(h + idx) % PALETTE.length];
+  return PALETTE[Math.abs(h) % PALETTE.length];
 }

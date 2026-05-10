@@ -402,9 +402,9 @@ export default function HomePage() {
             <EmptyChart label="No recent sessions" />
           ) : (
             <div>
-              {sessions.map((s, i) => (
+              {sessions.map((s) => (
                 <div key={s.sessionId} className="list-item">
-                  <ProjectGlyph name={s.projectName} color={projectColor(s.projectSlug, i)} size={24} />
+                  <ProjectGlyph name={s.projectName} color={projectColor(s.projectSlug)} size={24} />
                   <div className="li-text">
                     <div className="li-title">
                       {s.lastPrompt?.slice(0, 60) || s.initialPrompt?.slice(0, 60) || "(no prompt)"}
@@ -438,11 +438,11 @@ export default function HomePage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
           {recentProjects.length === 0
             ? Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
-            : recentProjects.map((p, i) => (
+            : recentProjects.map((p) => (
               <Link key={p.slug} href={`/project/${p.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="ds-card" style={{ padding: 14, cursor: "pointer", transition: "border-color .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <ProjectGlyph name={p.name} color={projectColor(p.slug, i)} />
+                    <ProjectGlyph name={p.name} color={projectColor(p.slug)} />
                     <div style={{ fontWeight: 600, fontSize: 13, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.name}>
                       {p.name}
                     </div>
@@ -485,15 +485,16 @@ export default function HomePage() {
           {costByProject.length === 0 ? (
             <EmptyChart label="No cost data for this period" />
           ) : (
-            costByProject.map((p, i) => {
+            costByProject.map((p) => {
               const pct = (p.cost / costTotal) * 100;
               const proj = projects.find((x) => x.slug === p.projectSlug || x.name === p.projectDirName);
+              const color = projectColor(proj?.slug ?? p.projectSlug);
               return (
                 <div
                   key={p.projectSlug}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--line-soft)" }}
                 >
-                  <ProjectGlyph name={proj?.name || p.projectDirName} color={projectColor(proj?.slug ?? p.projectSlug, i)} size={20} />
+                  <ProjectGlyph name={proj?.name || p.projectDirName} color={color} size={20} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
                       <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{proj?.name || p.projectDirName}</span>
@@ -502,7 +503,7 @@ export default function HomePage() {
                       </span>
                     </div>
                     <div style={{ height: 3, background: "var(--bg-elev-2)", borderRadius: 2 }}>
-                      <div style={{ height: "100%", background: projectColor(proj?.slug ?? p.projectSlug, i), width: `${pct}%`, borderRadius: 2 }} />
+                      <div style={{ height: "100%", background: color, width: `${pct}%`, borderRadius: 2 }} />
                     </div>
                   </div>
                 </div>

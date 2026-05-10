@@ -165,7 +165,7 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
                     ∞
                   </span>
                 ) : (
-                  <ProjectGlyph name={it.label} color={projectColor(it.key, idx)} size={18} />
+                  <ProjectGlyph name={it.label} color={projectColor(it.key)} size={18} />
                 )}
                 <span
                   className="label"
