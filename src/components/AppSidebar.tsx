@@ -57,7 +57,7 @@ const GROUPS: NavGroup[] = [
       { id: "kanban",       label: "Kanban",       href: "/kanban",       icon: ico(Columns3) },
       { id: "plans",        label: "Plans",        href: "/plans",        icon: ico(FileText) },
       { id: "manual-steps", label: "Manual steps", href: "/manual-steps", icon: ico(ListChecks), badge: "steps" },
-      { id: "schedule",     label: "Schedule",     href: "/schedule",     icon: ico(Calendar) },
+      { id: "schedule",     label: "Schedule",     href: "/schedule",     icon: ico(Calendar),    comingSoon: true },
       { id: "insights",     label: "Insights",     href: "/insights",     icon: ico(Lightbulb) },
     ],
   },
@@ -129,8 +129,17 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
   const { snapshot } = usePulse();
   const { scope } = useScope();
 
+  // Render badges only AFTER hydration. Server-rendered HTML can't know the
+  // current pulse counts (they'll always be zero on first paint anyway, but
+  // when this tree is wrapped in a Suspense boundary that flushes after the
+  // outer shell, React reports a mismatch between the SSR snapshot frame and
+  // the first client frame). Defer the badge UI to a post-mount paint and
+  // both sides agree on "no badges yet". Was HIGH-4 in the 2026-05-10 review.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+
   const badgeCount = (key: BadgeKey | undefined): number => {
-    if (!key) return 0;
+    if (!hydrated || !key) return 0;
     if (key === "steps") return snapshot.pendingSteps;
     if (key === "approval") return snapshot.approvalCount;
     if (key === "live") return snapshot.liveSlugs.length;
