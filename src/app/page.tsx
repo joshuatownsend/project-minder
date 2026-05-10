@@ -85,23 +85,29 @@ export default function HomePage() {
     return () => ctrl.abort();
   }, []);
 
+  // Sessions / insights / manual-steps all follow the global scope so the
+  // Home attention strip and live-activity feed agree with the scoped
+  // headline numbers. Earlier versions fetched once on mount and the
+  // attention counts stayed cross-project even while spend/tokens scoped to
+  // a single project (PR #102 codex P1).
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch("/api/sessions", { signal: ctrl.signal })
+    const url = `/api/sessions${scope !== "all" ? `?project=${encodeURIComponent(scope)}` : ""}`;
+    fetch(url, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        // /api/sessions returns a JSON array of SessionSummary directly. The
-        // earlier `d?.sessions && …` check meant we never set state.
+        // /api/sessions returns a JSON array of SessionSummary directly.
         if (!Array.isArray(d)) return;
         setSessions((d as SessionSummary[]).slice(0, 6));
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch("/api/insights", { signal: ctrl.signal })
+    const url = `/api/insights${scope !== "all" ? `?project=${encodeURIComponent(scope)}` : ""}`;
+    fetch(url, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: InsightsResponse | null) => {
         if (!d) return;
@@ -109,7 +115,7 @@ export default function HomePage() {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -117,10 +123,13 @@ export default function HomePage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         // /api/manual-steps?pending=true returns an array of project entries
-        // shaped { slug, name, manualSteps: { pendingSteps, … } }. Sum the
-        // pendingSteps across projects for the Home attention strip badge.
+        // shaped { slug, name, manualSteps: { pendingSteps, … } }. The route
+        // doesn't accept a project filter, so we filter by scope client-side.
         if (!Array.isArray(d)) return;
-        const total = (d as Array<{ manualSteps?: { pendingSteps?: number } }>).reduce(
+        const filtered = scope === "all"
+          ? d
+          : (d as Array<{ slug?: string }>).filter((p) => p.slug === scope);
+        const total = (filtered as Array<{ manualSteps?: { pendingSteps?: number } }>).reduce(
           (s, p) => s + (p.manualSteps?.pendingSteps ?? 0),
           0,
         );
@@ -128,7 +137,7 @@ export default function HomePage() {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, []);
+  }, [scope]);
 
   const now = new Date();
   const greeting = timeOfDayGreeting();

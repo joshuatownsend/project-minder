@@ -39,15 +39,20 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
   const urlScope = searchParams?.get("scope") ?? null;
   const [scope, setScopeState] = useState<Scope>(() => urlScope || readStored());
 
-  // If the URL changes scope (deep link, browser back), trust it.
+  // If the URL changes scope (deep link, browser back), trust it. This also
+  // covers the URL DROPPING ?scope= entirely — e.g., browser back to an
+  // unscoped view, or opening a deep link without a scope param. Earlier
+  // versions only reacted when urlScope was a non-empty different value, so
+  // navigating away from a scoped URL left the in-memory scope active and
+  // pages kept rendering filtered data (PR #102 codex P1).
   useEffect(() => {
-    if (urlScope && urlScope !== scope) {
-      setScopeState(urlScope);
-      try {
-        window.localStorage.setItem(STORAGE_KEY, urlScope);
-      } catch {
-        // ignore quota/private-browsing failures
-      }
+    const next = urlScope || "all";
+    if (next === scope) return;
+    setScopeState(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // ignore quota/private-browsing failures
     }
   }, [urlScope]); // eslint-disable-line react-hooks/exhaustive-deps
 

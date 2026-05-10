@@ -39,22 +39,25 @@ export function AppShell({ children, devRootLabel }: AppShellProps) {
     }
   }, []);
 
-  // Lazy-fetch projects the first time the scope picker opens. Cached for
-  // session lifetime; reload by reopening the picker after a rescan.
+  // Refetch /api/projects every time the scope picker opens so newly-created
+  // or freshly-scanned projects show up without a full page reload. Earlier
+  // versions short-circuited on `projects.length > 0` and the picker stayed
+  // stale for the rest of the session (PR #102 codex P2). The /api/projects
+  // route is already cache-backed, so a re-open during a soak window costs
+  // ~one cache hit, not a full filesystem rescan.
   useEffect(() => {
-    if (!scopeOpen || projects.length > 0) return;
-    let cancelled = false;
-    fetch("/api/projects")
+    if (!scopeOpen) return;
+    const ctrl = new AbortController();
+    fetch("/api/projects", { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d) => {
-        if (cancelled) return;
         setProjects(Array.isArray(d?.projects) ? d.projects : []);
       })
       .catch(() => {
         // Silently ignore — scope picker still works with the "All projects" entry.
       });
-    return () => { cancelled = true; };
-  }, [scopeOpen, projects.length]);
+    return () => ctrl.abort();
+  }, [scopeOpen]);
 
   // Global keyboard shortcut: Ctrl+B (or Cmd+B) toggles the sidebar.
   useEffect(() => {
