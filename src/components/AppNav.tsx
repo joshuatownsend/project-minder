@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { ChevronDown, Settings as SettingsIcon } from "lucide-react";
+import { ChevronDown, Settings as SettingsIcon, Search } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -10,6 +10,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { usePulse } from "./PulseProvider";
+import { useCommandPalette } from "./CommandPaletteProvider";
 
 type BadgeKey = "steps" | "approval";
 
@@ -50,11 +51,12 @@ const GROUPS: Group[] = [
   {
     label: "Sessions",
     children: [
-      item("/sessions", "Sessions"),
-      item("/plans",    "Plans"),
-      item("/stats",    "Stats"),
-      item("/usage",    "Usage"),
-      item("/sql",      "SQL"),
+      item("/sessions",        "Sessions"),
+      item("/plans",           "Plans"),
+      item("/stats",           "Stats"),
+      item("/usage",           "Usage"),
+      item("/sql",             "SQL"),
+      item("/insights-report", "Insights Report"),
     ],
   },
   {
@@ -92,6 +94,7 @@ export function AppNav() {
   const searchParams = useSearchParams();
   const currentType = searchParams?.get("type") ?? null;
   const { snapshot } = usePulse();
+  const { open: openPalette } = useCommandPalette();
   const badgeCounts: Record<BadgeKey, number> = {
     steps: snapshot.pendingSteps,
     approval: snapshot.approvalCount,
@@ -175,6 +178,29 @@ export function AppNav() {
       })}
 
       <span aria-hidden="true" style={{ flex: 1, minWidth: "8px" }} />
+
+      <button
+        onClick={openPalette}
+        title="Command palette (Ctrl+K)"
+        aria-label="Open command palette"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
+          padding: "4px 8px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border-subtle)",
+          background: "transparent",
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          fontSize: "0.65rem",
+          fontFamily: "var(--font-mono)",
+          letterSpacing: "0.02em",
+        }}
+      >
+        <Search style={{ width: "11px", height: "11px" }} />
+        <span>⌘K</span>
+      </button>
 
       <Link
         href="/settings"

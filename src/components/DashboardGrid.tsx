@@ -15,6 +15,8 @@ import {
   Layers, CircleDot, CirclePause, Archive, Clock, Bot, ArrowUpAZ,
 } from "lucide-react";
 import { useHelp } from "./HelpProvider";
+import { useEffectiveShortcuts } from "./ConfigProvider";
+import { isShortcutMatch } from "@/lib/keyboardShortcuts";
 import { usePathname } from "next/navigation";
 import { formatRelativeTime } from "@/lib/utils";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
@@ -222,27 +224,29 @@ export function DashboardGrid({
   }, [projects, search]);
 
   // Keyboard shortcuts
+  const shortcuts = useEffectiveShortcuts();
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const active = document.activeElement;
     const inField = active?.tagName === "INPUT" || active?.tagName === "TEXTAREA";
+    if (inField) return;
 
-    if (e.key === "/" && !e.ctrlKey && !e.metaKey && !inField) {
+    if (isShortcutMatch(shortcuts["focus-search"], e)) {
       e.preventDefault();
       document.getElementById("search-input")?.focus();
     }
-    if (e.key === "T" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !inField) {
+    if (isShortcutMatch(shortcuts["open-quick-add"], e)) {
       e.preventDefault();
       setQuickAddOpen(true);
     }
-    if (e.key === "v" && !e.ctrlKey && !e.metaKey && !e.altKey && !inField) {
+    if (isShortcutMatch(shortcuts["cycle-view-mode"], e)) {
       e.preventDefault();
       cycleViewMode();
     }
-    if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !inField) {
+    if (isShortcutMatch(shortcuts["rescan-projects"], e)) {
       e.preventDefault();
       onRescan();
     }
-  }, [cycleViewMode, onRescan]);
+  }, [shortcuts, cycleViewMode, onRescan]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

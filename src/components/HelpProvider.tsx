@@ -10,6 +10,8 @@ import {
 } from "react";
 import { usePathname } from "next/navigation";
 import { type HelpSlug, helpMapping } from "@/lib/help-mapping";
+import { useEffectiveShortcuts } from "./ConfigProvider";
+import { isShortcutMatch } from "@/lib/keyboardShortcuts";
 
 interface HelpContextValue {
   /** Currently open slug, or null if closed */
@@ -48,10 +50,12 @@ export function HelpProvider({ children }: { children: ReactNode }) {
     setActiveSlug(null);
   }, []);
 
-  // Global "?" keyboard shortcut to toggle help
+  const shortcuts = useEffectiveShortcuts();
+
+  // Global help keyboard shortcut to toggle help
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "?" && !e.ctrlKey && !e.metaKey) {
+      if (isShortcutMatch(shortcuts["open-help"], e)) {
         const active = document.activeElement;
         const tag = active?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -65,7 +69,7 @@ export function HelpProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeSlug, pathname, openHelpForRoute, closeHelp]);
+  }, [shortcuts, activeSlug, pathname, openHelpForRoute, closeHelp]);
 
   return (
     <HelpContext.Provider

@@ -7,6 +7,11 @@ import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
+import {
+  isShortcutActionId,
+  isValidCombo,
+  effectiveShortcuts,
+} from "@/lib/keyboardShortcuts";
 
 // Derived from the MinderConfig union types — update both together if options change
 const VALID_DEFAULT_SORTS: MinderConfig["defaultSort"][] = ["activity", "name", "claude"];
@@ -303,6 +308,45 @@ export async function PATCH(request: NextRequest) {
       }, { status: 400 });
     }
     patches.push((c) => { c.enabledAdapters = ids; });
+  }
+
+  if (body.keyboardShortcuts !== undefined) {
+    if (
+      typeof body.keyboardShortcuts !== "object" ||
+      body.keyboardShortcuts === null ||
+      Array.isArray(body.keyboardShortcuts)
+    ) {
+      return NextResponse.json({ error: "keyboardShortcuts must be a plain object" }, { status: 400 });
+    }
+    const overrides = body.keyboardShortcuts as Record<string, unknown>;
+    for (const [actionId, combo] of Object.entries(overrides)) {
+      if (!isShortcutActionId(actionId)) {
+        return NextResponse.json({ error: `Unknown shortcut action: "${actionId}"` }, { status: 400 });
+      }
+      if (typeof combo !== "string" || !isValidCombo(combo)) {
+        return NextResponse.json(
+          { error: `Invalid combo for "${actionId}". Use format like "Ctrl+K", "/", or "Shift+T"` },
+          { status: 400 }
+        );
+      }
+    }
+    // Check the full effective map (defaults + existing overrides + this patch) for duplicates.
+    const existing = await readConfig();
+    const merged = effectiveShortcuts({
+      ...existing.keyboardShortcuts,
+      ...(overrides as Record<string, string>),
+    });
+    const seen = new Map<string, string>();
+    for (const [id, combo] of Object.entries(merged)) {
+      if (seen.has(combo)) {
+        return NextResponse.json(
+          { error: `Combo conflict: "${combo}" is used by both "${seen.get(combo)}" and "${id}"` },
+          { status: 400 }
+        );
+      }
+      seen.set(combo, id);
+    }
+    patches.push((c) => { c.keyboardShortcuts = overrides as Record<string, string>; });
   }
 
   if (patches.length === 0) {
