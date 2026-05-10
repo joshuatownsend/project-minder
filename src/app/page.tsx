@@ -22,7 +22,11 @@ import { projectColor } from "@/lib/projectColor";
 import type { ProjectData, SessionSummary } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
 
-type Period = "today" | "week" | "month";
+// Match the standard period vocabulary in src/lib/usage/constants.ts.
+// Home doesn't currently surface the 'all' option in the toggle — the
+// daily-bucket array is already fetched with period=all and the four-way
+// toggle felt like more granularity than this overview surface needs.
+type Period = "today" | "7d" | "30d";
 
 // Shape of /api/insights — `{ insights: InsightEntry[], total: number }`.
 // Earlier this file declared a non-existent `{ results: …, total }` shape and
@@ -34,8 +38,8 @@ interface InsightsResponse {
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "Today" },
-  { value: "week", label: "7 days" },
-  { value: "month", label: "30 days" },
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
 ];
 
 function timeOfDayGreeting(): string {
@@ -155,19 +159,18 @@ export default function HomePage() {
   const liveProject = activeSlugs[0] ?? null;
 
   // Slice the full daily array based on the active period toggle.
-  // "today" = last 1 entry; "week" = last 7; "month" = last 30 — true
-  // rolling windows that match the toggle labels regardless of where in
-  // the calendar month we are.
+  // today=last 1, 7d=last 7, 30d=last 30 — true rolling windows that match
+  // the toggle labels regardless of where in the calendar month we are.
   const periodDays = useMemo(() => {
     if (!usageAll?.daily?.length) return [];
     const all = usageAll.daily;
     if (period === "today") return all.slice(-1);
-    if (period === "week") return all.slice(-7);
+    if (period === "7d") return all.slice(-7);
     return all.slice(-30);
   }, [period, usageAll]);
 
-  // Headline numbers come from the sliced daily buckets so they react to the
-  // toggle even when the calendar period (week/month) hasn't started yet.
+  // Headline numbers come from the sliced daily buckets so they react to
+  // the toggle deterministically.
   const headlineCost = useMemo(
     () => periodDays.reduce((s, d) => s + d.cost, 0),
     [periodDays],
@@ -203,7 +206,7 @@ export default function HomePage() {
     if (!usageAll?.daily?.length) return [];
     const slice =
       period === "today" ? usageAll.daily.slice(-3)
-      : period === "week" ? usageAll.daily.slice(-7)
+      : period === "7d" ? usageAll.daily.slice(-7)
       : usageAll.daily.slice(-30);
     return slice.map((d) => ({
       label: d.date.slice(5).replace("-", "/"),
@@ -256,7 +259,7 @@ export default function HomePage() {
 
   const periodSubtext =
     period === "today" ? `${now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}` :
-    period === "week" ? "Last 7 days" : "Last 30 days";
+    period === "7d" ? "Last 7 days" : "Last 30 days";
 
   return (
     <div className="shell-content wide">
@@ -293,7 +296,7 @@ export default function HomePage() {
           sub={
             period === "today"
               ? "today so far"
-              : period === "week"
+              : period === "7d"
                 ? "last 7 days"
                 : "last 30 days"
           }
@@ -378,7 +381,7 @@ export default function HomePage() {
             sub={
               period === "today"
                 ? "last 3 days"
-                : period === "week"
+                : period === "7d"
                   ? "last 7 days"
                   : "last 30 days"
             }
