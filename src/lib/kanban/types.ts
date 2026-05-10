@@ -66,7 +66,11 @@ export type KanbanCard =
 export type KanbanKindFilter = "all" | "sessions" | "tasks";
 export const KANBAN_KIND_FILTERS = ["all", "sessions", "tasks"] as const satisfies readonly KanbanKindFilter[];
 
-export type KanbanPeriod = "last24h" | "last7d" | "all";
+// Mirrors the standard period vocabulary in src/lib/usage/constants.ts.
+// All four options surface in the Kanban toolbar; the 'today' bucket maps
+// to a 24-hour rolling lookback (the same window the page used before the
+// vocabulary standardization, just renamed from 'last24h').
+export type KanbanPeriod = "today" | "7d" | "30d" | "all";
 
 export interface KanbanSnapshot {
   columns: Record<KanbanColumn, KanbanCard[]>;

@@ -229,7 +229,7 @@ function filterCards(
 }
 
 export function KanbanBoard() {
-  const [period, setPeriod] = useState<KanbanPeriod>("last24h");
+  const [period, setPeriod] = useState<KanbanPeriod>("today");
   const [kindFilter, setKindFilter] = useState<KanbanKindFilter>("all");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -391,8 +391,9 @@ export function KanbanBoard() {
             cursor: "pointer",
           }}
         >
-          <option value="last24h">Last 24 h</option>
-          <option value="last7d">Last 7 d</option>
+          <option value="today">Today</option>
+          <option value="7d">7 days</option>
+          <option value="30d">30 days</option>
           <option value="all">All time</option>
         </select>
 

@@ -553,7 +553,7 @@ function ChartLabel({ children }: { children: import("react").ReactNode }) {
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export function UsageDashboard() {
-  const [period, setPeriod] = useState<string>("month");
+  const [period, setPeriod] = useState<string>("30d");
   const [project, setProject] = useState<string | undefined>(undefined);
   const [breakdownMode, setBreakdownMode] = useState<"aggregate" | "by-project">("aggregate");
   const { data, loading } = useUsage(period, project);

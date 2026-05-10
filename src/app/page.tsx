@@ -19,10 +19,15 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useScope } from "@/components/ScopeProvider";
 import { usePulse } from "@/components/PulseProvider";
 import { projectColor } from "@/lib/projectColor";
+import type { HealthReport } from "@/lib/healthScore";
 import type { ProjectData, SessionSummary } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
 
-type Period = "today" | "week" | "month";
+// Match the standard period vocabulary in src/lib/usage/constants.ts.
+// Home doesn't currently surface the 'all' option in the toggle — the
+// daily-bucket array is already fetched with period=all and the four-way
+// toggle felt like more granularity than this overview surface needs.
+type Period = "today" | "7d" | "30d";
 
 // Shape of /api/insights — `{ insights: InsightEntry[], total: number }`.
 // Earlier this file declared a non-existent `{ results: …, total }` shape and
@@ -34,8 +39,8 @@ interface InsightsResponse {
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "Today" },
-  { value: "week", label: "7 days" },
-  { value: "month", label: "30 days" },
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
 ];
 
 function timeOfDayGreeting(): string {
@@ -68,6 +73,7 @@ export default function HomePage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
+  const [health, setHealth] = useState<HealthReport | null>(null);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -155,19 +161,18 @@ export default function HomePage() {
   const liveProject = activeSlugs[0] ?? null;
 
   // Slice the full daily array based on the active period toggle.
-  // "today" = last 1 entry; "week" = last 7; "month" = last 30 — true
-  // rolling windows that match the toggle labels regardless of where in
-  // the calendar month we are.
+  // today=last 1, 7d=last 7, 30d=last 30 — true rolling windows that match
+  // the toggle labels regardless of where in the calendar month we are.
   const periodDays = useMemo(() => {
     if (!usageAll?.daily?.length) return [];
     const all = usageAll.daily;
     if (period === "today") return all.slice(-1);
-    if (period === "week") return all.slice(-7);
+    if (period === "7d") return all.slice(-7);
     return all.slice(-30);
   }, [period, usageAll]);
 
-  // Headline numbers come from the sliced daily buckets so they react to the
-  // toggle even when the calendar period (week/month) hasn't started yet.
+  // Headline numbers come from the sliced daily buckets so they react to
+  // the toggle deterministically.
   const headlineCost = useMemo(
     () => periodDays.reduce((s, d) => s + d.cost, 0),
     [periodDays],
@@ -185,16 +190,30 @@ export default function HomePage() {
   // day-to-day.
   const cacheHitRate = usageAll?.cacheHitRate ?? 0;
 
-  // Health score: simple proxy = 100 - clamp(insights/issues per project)
-  const healthScore = useMemo(() => {
-    if (!projectCount) return 100;
-    const issues = insightCount + pendingStepsCount + (snapshot.approvalCount || 0);
-    const ratio = Math.min(1, issues / Math.max(1, projectCount * 4));
-    return Math.round(100 - ratio * 100);
-  }, [insightCount, pendingStepsCount, projectCount, snapshot.approvalCount]);
+  // Configuration health score is a weighted roll-up computed server-side
+  // by /api/home-health from real environment signals (project efficiency
+  // grades, cache utilization, MCP security findings, pending approvals,
+  // telemetry pressure, edit acceptance). See src/lib/healthScore.ts for
+  // the formula. We refetch when approvals change so the gauge moves
+  // immediately on approval action.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetch(`/api/home-health?approvals=${snapshot.approvalCount}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: HealthReport | null) => d && setHealth(d))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [snapshot.approvalCount]);
 
+  const healthScore = health?.score ?? 0;
+  const healthGrade = health?.grade ?? "—";
   const healthLabel =
-    healthScore >= 85 ? "Healthy" : healthScore >= 60 ? "Fair" : healthScore >= 30 ? "Needs work" : "At risk";
+    !health ? "—"
+    : healthScore >= 90 ? "Healthy"
+    : healthScore >= 75 ? "Good"
+    : healthScore >= 60 ? "Fair"
+    : healthScore >= 40 ? "Needs work"
+    : "At risk";
 
   // Token usage chart matches the active period toggle. For "today" we
   // expand back to the last 3 days so a single bar doesn't sit awkwardly
@@ -203,7 +222,7 @@ export default function HomePage() {
     if (!usageAll?.daily?.length) return [];
     const slice =
       period === "today" ? usageAll.daily.slice(-3)
-      : period === "week" ? usageAll.daily.slice(-7)
+      : period === "7d" ? usageAll.daily.slice(-7)
       : usageAll.daily.slice(-30);
     return slice.map((d) => ({
       label: d.date.slice(5).replace("-", "/"),
@@ -256,7 +275,7 @@ export default function HomePage() {
 
   const periodSubtext =
     period === "today" ? `${now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}` :
-    period === "week" ? "Last 7 days" : "Last 30 days";
+    period === "7d" ? "Last 7 days" : "Last 30 days";
 
   return (
     <div className="shell-content wide">
@@ -293,7 +312,7 @@ export default function HomePage() {
           sub={
             period === "today"
               ? "today so far"
-              : period === "week"
+              : period === "7d"
                 ? "last 7 days"
                 : "last 30 days"
           }
@@ -319,9 +338,13 @@ export default function HomePage() {
           sparkColor="var(--info)"
         />
         <Stat
-          label="Health score"
-          value={usageAll === null ? "—" : `${healthScore}%`}
-          sub={`${insightCount} insights · ${pendingStepsCount} steps`}
+          label="Config health"
+          value={health === null ? "—" : `${healthScore}%`}
+          sub={
+            health === null
+              ? "loading…"
+              : `${healthGrade} — ${healthLabel.toLowerCase()}`
+          }
           accent="var(--danger)"
         />
       </div>
@@ -378,7 +401,7 @@ export default function HomePage() {
             sub={
               period === "today"
                 ? "last 3 days"
-                : period === "week"
+                : period === "7d"
                   ? "last 7 days"
                   : "last 30 days"
             }
@@ -527,7 +550,11 @@ export default function HomePage() {
         <Card>
           <CardHeader
             title="Config health"
-            sub={`${insightCount + pendingStepsCount + snapshot.approvalCount} items`}
+            sub={
+              health === null
+                ? "loading…"
+                : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
+            }
             right={
               <Link href="/insights" style={{ textDecoration: "none" }}>
                 <Pill style={{ height: 26 }}>Open <ArrowRight width={12} height={12} /></Pill>
@@ -536,17 +563,54 @@ export default function HomePage() {
           />
           <div className="gauge-wrap" style={{ marginBottom: 18 }}>
             <div className="gauge">
-              <GaugeRing pct={healthScore} color={healthScore >= 60 ? "var(--good)" : "var(--accent)"} />
+              <GaugeRing
+                // While the health report is loading we show an empty
+                // ring at the neutral track color rather than 0% red — a
+                // brief "0%" red flash on every Home mount made it look
+                // like the environment was unhealthy when it was just
+                // waiting on the fetch.
+                pct={health === null ? 0 : healthScore}
+                color={
+                  health === null ? "var(--bg-elev-2)"
+                  : healthScore >= 75 ? "var(--good)"
+                  : healthScore >= 60 ? "var(--accent)"
+                  : "var(--danger)"
+                }
+              />
               <div className="center">
-                <div className="pct">{healthScore}%</div>
+                <div className="pct">{health === null ? "—" : `${healthScore}%`}</div>
                 <div className="lab">{healthLabel}</div>
               </div>
             </div>
             <div className="health-cat" style={{ flex: 1 }}>
-              <CategoryRow name="Approvals" pct={Math.min(100, snapshot.approvalCount * 25)} color="var(--danger)" count={`${snapshot.approvalCount}`} />
-              <CategoryRow name="Manual steps" pct={Math.min(100, pendingStepsCount * 10)} color="var(--warn)" count={`${pendingStepsCount}`} />
-              <CategoryRow name="Insights" pct={Math.min(100, insightCount * 5)} color="var(--info)" count={`${insightCount}`} />
-              <CategoryRow name="Sessions live" pct={Math.min(100, liveSessionCount * 25)} color="var(--good)" count={`${liveSessionCount}`} />
+              {health
+                ? health.components.map((c) => (
+                    <CategoryRow
+                      key={c.id}
+                      name={c.label}
+                      pct={c.score ?? 0}
+                      color={
+                        c.score === null
+                          ? "var(--bg-elev-2)"
+                          : c.score >= 75
+                            ? "var(--good)"
+                            : c.score >= 60
+                              ? "var(--accent)"
+                              : "var(--danger)"
+                      }
+                      count={c.score === null ? "—" : `${c.score}`}
+                      title={c.detail}
+                    />
+                  ))
+                : Array.from({ length: 6 }).map((_, i) => (
+                    <CategoryRow
+                      key={i}
+                      name=""
+                      pct={0}
+                      color="var(--bg-elev-2)"
+                      count=""
+                    />
+                  ))}
             </div>
           </div>
         </Card>
@@ -555,9 +619,22 @@ export default function HomePage() {
   );
 }
 
-function CategoryRow({ name, pct, color, count }: { name: string; pct: number; color: string; count: string }) {
+function CategoryRow({
+  name,
+  pct,
+  color,
+  count,
+  title,
+}: {
+  name: string;
+  pct: number;
+  color: string;
+  count: string;
+  /** Optional native tooltip — used to surface the component's `detail` line. */
+  title?: string;
+}) {
   return (
-    <div className="row">
+    <div className="row" title={title}>
       <span className="name">{name}</span>
       <div className="bar-wrap">
         <div className="seg-bar" style={{ width: `${pct}%`, background: color }} />

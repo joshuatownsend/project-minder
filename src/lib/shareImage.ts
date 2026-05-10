@@ -50,16 +50,20 @@ export function composeShareSvg(
   opts: ShareImageOptions = {},
 ): string {
   const theme = opts.theme ?? "dark";
-  const period = opts.period ?? "month";
+  const period = opts.period ?? "30d";
   const width = opts.width ?? WIDTH;
   const height = Math.round((width / WIDTH) * HEIGHT);
   const p = PALETTES[theme];
 
-  const periodLabel: Record<Period, string> = {
+  // Map periods to display labels. Includes legacy `week`/`month` keys for
+  // back-compat with stored ShareButton URLs that haven't been re-rendered.
+  const periodLabel: Record<string, string> = {
     today: "Today",
-    week: "This Week",
-    month: "This Month",
-    all: "All Time",
+    "7d": "Last 7 days",
+    "30d": "Last 30 days",
+    all: "All time",
+    week: "Last 7 days",
+    month: "Last 30 days",
   };
 
   const parts: string[] = [];

@@ -13,7 +13,7 @@ function emptySnapshot(): KanbanSnapshot {
   };
 }
 
-export function useKanban(period: KanbanPeriod = "last24h") {
+export function useKanban(period: KanbanPeriod = "today") {
   const [snapshot, setSnapshot] = useState<KanbanSnapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

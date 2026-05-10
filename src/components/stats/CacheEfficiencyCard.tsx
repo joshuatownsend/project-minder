@@ -36,14 +36,17 @@ export function CacheEfficiencyCard() {
       {!loading && data?.hasData && (
         <>
           <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
-            <span style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "2.2rem",
-              fontWeight: 700,
-              color: hitRateColor(data.hitRate),
-              lineHeight: 1,
-            }}>
-              {Math.round(data.hitRate * 100)}%
+            <span
+              title={data.hitRate > 1 || data.hitRate < 0 ? `Raw rate ${(data.hitRate * 100).toFixed(0)}% — clamped for display` : undefined}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "2.2rem",
+                fontWeight: 700,
+                color: hitRateColor(Math.max(0, Math.min(1, data.hitRate))),
+                lineHeight: 1,
+              }}
+            >
+              {Math.round(Math.max(0, Math.min(1, data.hitRate)) * 100)}%
             </span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--text-muted)" }}>
               cache hit rate
@@ -58,7 +61,11 @@ export function CacheEfficiencyCard() {
           </div>
 
           {data.daily.length > 1 && (
-            <div style={{ position: "relative", height: "32px" }}>
+            // overflow: hidden is belt-and-suspenders defense in case the
+            // hitRate ever drifts outside [0, 1] again (the formula in
+            // otelQueries is bounded as of this commit, but it's a cheap
+            // guarantee that bad data can't burst out of the card).
+            <div style={{ position: "relative", height: "32px", overflow: "hidden" }}>
               <div style={{
                 position: "absolute",
                 top: `${(1 - TARGET_HIT_RATE) * 32}px`,
@@ -67,16 +74,26 @@ export function CacheEfficiencyCard() {
                 borderTop: "1px dashed rgba(245,158,11,0.4)",
               }} />
               <div style={{ display: "flex", gap: "2px", alignItems: "flex-end", height: "100%" }}>
-                {data.daily.map((d) => (
-                  <div key={d.day} title={`${d.day}: ${Math.round(d.hitRate * 100)}%`} style={{
-                    flex: 1,
-                    height: `${Math.max(2, d.hitRate * 32)}px`,
-                    background: hitRateColor(d.hitRate),
-                    borderRadius: "1px",
-                    opacity: 0.7,
-                    minWidth: "2px",
-                  }} />
-                ))}
+                {data.daily.map((d) => {
+                  const clamped = Math.max(0, Math.min(1, d.hitRate));
+                  const tooltip = d.hitRate > 1 || d.hitRate < 0
+                    ? `${d.day}: ${Math.round(d.hitRate * 100)}% (clamped)`
+                    : `${d.day}: ${Math.round(d.hitRate * 100)}%`;
+                  return (
+                    <div
+                      key={d.day}
+                      title={tooltip}
+                      style={{
+                        flex: 1,
+                        height: `${Math.max(2, clamped * 32)}px`,
+                        background: hitRateColor(clamped),
+                        borderRadius: "1px",
+                        opacity: 0.7,
+                        minWidth: "2px",
+                      }}
+                    />
+                  );
+                })}
               </div>
             </div>
           )}

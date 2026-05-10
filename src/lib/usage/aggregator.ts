@@ -28,7 +28,11 @@ import type {
   SourceBreakdown,
 } from "./types";
 
-type Period = "today" | "week" | "month" | "all";
+// Local Period type kept loose so the aggregator accepts both the new
+// today/7d/30d/all vocabulary and legacy week/month strings — the periods.ts
+// switch normalizes both. validatePeriod() at the API boundary maps
+// week→7d, month→30d before this function ever sees the value.
+type Period = "today" | "7d" | "30d" | "all" | "week" | "month";
 
 export async function generateUsageReport(
   period: Period,
