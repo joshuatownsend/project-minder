@@ -9,9 +9,17 @@ export function msLabel(ms: number): string {
   return `${ms}ms`;
 }
 
-// Returns an ISO-8601 string for N days ago (default 7).
+// Returns an ISO-8601 string for N days ago (default 7), bucketed to the
+// current hour so consecutive calls within the same hour return the EXACT
+// same string. Without bucketing, every render gets a fresh millisecond and
+// any consumer that uses the result as a fetch URL or useEffect dep keeps
+// re-firing — observed as the Stats page rapidly re-fetching its telemetry
+// cards in a tight loop. For "data from 7 days ago" purposes, hour-level
+// precision is far more than enough.
 export function defaultSince(days = 7): string {
-  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const HOUR_MS = 60 * 60 * 1000;
+  const nowBucket = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  return new Date(nowBucket - days * 24 * HOUR_MS).toISOString();
 }
 
 // ── Cost formatting ──────────────────────────────────────────────────────────
