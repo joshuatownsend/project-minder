@@ -66,7 +66,12 @@ export type KanbanCard =
 export type KanbanKindFilter = "all" | "sessions" | "tasks";
 export const KANBAN_KIND_FILTERS = ["all", "sessions", "tasks"] as const satisfies readonly KanbanKindFilter[];
 
-export type KanbanPeriod = "last24h" | "last7d" | "all";
+// Mirrors the standard period vocabulary in src/lib/usage/constants.ts.
+// Kanban deliberately drops the "today" option (calendar boundary doesn't
+// match the rolling-window mental model the rest of this surface uses) and
+// keeps a 24-hour rolling lookback as the default. 'today' still validates
+// here as an alias for parity with other surfaces.
+export type KanbanPeriod = "today" | "7d" | "30d" | "all";
 
 export interface KanbanSnapshot {
   columns: Record<KanbanColumn, KanbanCard[]>;

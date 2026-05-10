@@ -9,13 +9,20 @@ import type { Task } from "@/lib/tasks/types";
 
 export const dynamic = "force-dynamic";
 
-const VALID_PERIODS = new Set<KanbanPeriod>(["last24h", "last7d", "all"]);
+const VALID_PERIODS = new Set<KanbanPeriod>(["today", "7d", "30d", "all"]);
+// Legacy aliases for URLs/clients still on the old kanban-specific keys.
+// Resolve them to the standard vocabulary at the API boundary.
+const LEGACY_PERIODS: Record<string, KanbanPeriod> = {
+  last24h: "today",
+  last7d: "7d",
+};
 
 // Polling cadence is intentionally 6 s on the client so this route hits
 // getLiveStatusPayload()'s 6 s cache as a near-100% cache hit.
 export async function GET(request: Request): Promise<NextResponse> {
   const url = new URL(request.url);
-  const periodParam = url.searchParams.get("period") ?? "last24h";
+  const raw = url.searchParams.get("period") ?? "today";
+  const periodParam = LEGACY_PERIODS[raw] ?? raw;
 
   if (!VALID_PERIODS.has(periodParam as KanbanPeriod)) {
     return NextResponse.json(
@@ -86,9 +93,10 @@ function filterTasksByPeriod(
 ) {
   if (period === "all") return tasks;
 
-  const cutoffMs = period === "last24h"
-    ? 24 * 60 * 60 * 1000
-    : 7 * 24 * 60 * 60 * 1000;
+  const cutoffMs =
+    period === "today" ? 24 * 60 * 60 * 1000 :
+    period === "7d"    ? 7 * 24 * 60 * 60 * 1000 :
+                         30 * 24 * 60 * 60 * 1000;
 
   const cutoff = Date.now() - cutoffMs;
 
