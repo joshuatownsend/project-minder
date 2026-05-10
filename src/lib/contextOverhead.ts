@@ -103,14 +103,32 @@ export function computeContextOverhead(
   input: ContextOverheadInputs
 ): ContextOverheadBreakdown {
   const mcpTokens = input.mcpServerCount * MCP_TOKENS_PER_SERVER;
-  const skillBytes = input.skills.reduce((acc, s) => acc + (s.fileBytes ?? 0), 0);
-  const skillCount = input.skills.length;
+
+  // Filter out skills under `~/.claude/skills-disabled/` — `walkUserSkills`
+  // returns both active and disabled in one list, but disabled skills aren't
+  // loaded by Claude Code and shouldn't inflate the known total.
+  const activeSkills = input.skills.filter((s) => s.disabled !== true);
+  const skillBytes = activeSkills.reduce((acc, s) => acc + (s.fileBytes ?? 0), 0);
+  const skillCount = activeSkills.length;
   const skillTokens = bytesToTokens(skillBytes);
+
   const hookCount = input.hookEntries.length;
+  // Strip Project Minder's local metadata (`source`, `sourcePath`) before
+  // sizing — Claude only sees `{ event, matcher, commands }`. Including
+  // absolute file paths in every entry inflates the count by ~50%.
   const hooksBytes =
     hookCount === 0
       ? 0
-      : Buffer.byteLength(JSON.stringify(input.hookEntries), "utf-8");
+      : Buffer.byteLength(
+          JSON.stringify(
+            input.hookEntries.map((h) => ({
+              event: h.event,
+              matcher: h.matcher,
+              commands: h.commands,
+            })),
+          ),
+          "utf-8",
+        );
   const hookTokens = bytesToTokens(hooksBytes);
   const memoryTokens = bytesToTokens(input.memoryBytes);
 

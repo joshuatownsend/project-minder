@@ -14,9 +14,9 @@ import type { HookEntry } from "@/lib/types";
  * `fileBytes` is what feeds the body-bytes ceiling; everything else is
  * present so the shape type-checks.
  */
-function fakeSkill(fileBytes: number): SkillEntry {
+function fakeSkill(fileBytes: number, opts: { disabled?: boolean } = {}): SkillEntry {
   return {
-    id: `skill:user:user:${fileBytes}`,
+    id: `skill:user:user:${fileBytes}-${opts.disabled ? "off" : "on"}`,
     kind: "skill",
     slug: "test",
     name: "test",
@@ -29,6 +29,7 @@ function fakeSkill(fileBytes: number): SkillEntry {
     layout: "bundled",
     provenance: { kind: "user-local" },
     fileBytes,
+    disabled: opts.disabled,
   };
 }
 
@@ -69,7 +70,13 @@ describe("computeContextOverhead", () => {
   it("produces a deterministic snapshot for a fixture portfolio", () => {
     const skills = Array.from({ length: 10 }, () => fakeSkill(4_000));
     const hookEntries = fakeHooks(4);
-    const hooksJsonBytes = Buffer.byteLength(JSON.stringify(hookEntries), "utf-8");
+    // Mirror the aggregator's metadata-stripping for the expected size.
+    const hooksJsonBytes = Buffer.byteLength(
+      JSON.stringify(
+        hookEntries.map((h) => ({ event: h.event, matcher: h.matcher, commands: h.commands })),
+      ),
+      "utf-8",
+    );
 
     const breakdown = computeContextOverhead({
       mcpServerCount: 3,
@@ -214,5 +221,70 @@ describe("computeContextOverhead", () => {
 
     const skillRow = breakdown.rows.find((r) => r.source === "skills")!;
     expect(skillRow.tokens).toBe(4_000 / BYTES_PER_TOKEN);
+  });
+
+  it("excludes disabled skills from byte and count totals", () => {
+    // walkUserSkills returns active + disabled in one list — disabled
+    // skills live under ~/.claude/skills-disabled and aren't loaded by
+    // Claude Code, so they shouldn't show up in the overhead estimate.
+    const skills: SkillEntry[] = [
+      fakeSkill(2_000),                      // active
+      fakeSkill(10_000, { disabled: true }), // archived — must not count
+      fakeSkill(2_000),                      // active
+    ];
+
+    const breakdown = computeContextOverhead({
+      mcpServerCount: 0,
+      skills,
+      hookEntries: [],
+      memoryBytes: 0,
+      observedSamples: [],
+    });
+
+    const skillRow = breakdown.rows.find((r) => r.source === "skills")!;
+    expect(skillRow.tokens).toBe(4_000 / BYTES_PER_TOKEN);
+    expect(skillRow.detail).toContain("2 skills");
+  });
+
+  it("strips local-only metadata before sizing the hook payload", () => {
+    // HookEntry carries `source` + `sourcePath` (absolute file path)
+    // for Project Minder attribution — Claude only ever sees
+    // { event, matcher, commands }. Including the local fields would
+    // overstate the hook payload (often by ~50% from the path alone).
+    const longPath = "/very/long/absolute/path/to/.claude/settings.json";
+    const entries: HookEntry[] = [
+      {
+        event: "PostToolUse",
+        matcher: "Edit",
+        commands: [{ type: "command", command: "echo done" }],
+        source: "user",
+        sourcePath: longPath,
+      },
+    ];
+
+    const breakdown = computeContextOverhead({
+      mcpServerCount: 0,
+      skills: [],
+      hookEntries: entries,
+      memoryBytes: 0,
+      observedSamples: [],
+    });
+
+    const hookRow = breakdown.rows.find((r) => r.source === "hooks")!;
+    // The expected size is the JSON of just { event, matcher, commands }.
+    const expectedBytes = Buffer.byteLength(
+      JSON.stringify([
+        {
+          event: "PostToolUse",
+          matcher: "Edit",
+          commands: [{ type: "command", command: "echo done" }],
+        },
+      ]),
+      "utf-8",
+    );
+    expect(hookRow.tokens).toBe(Math.round(expectedBytes / BYTES_PER_TOKEN));
+    // Sanity check: stripping the path actually reduced the count.
+    const fullBytes = Buffer.byteLength(JSON.stringify(entries), "utf-8");
+    expect(expectedBytes).toBeLessThan(fullBytes);
   });
 });
