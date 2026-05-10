@@ -3,8 +3,16 @@ import type { Provenance } from "@/lib/indexer/types";
 export function formatFrontmatterValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return "";
   if (Array.isArray(value)) return value.map((v) => formatFrontmatterValue(v)).join(", ");
-  return JSON.stringify(value);
+  // JSON.stringify returns undefined for functions/symbols and throws on
+  // circular refs / BigInt. YAML frontmatter shouldn't yield those, but the
+  // helper is exported and the type signature promises a string.
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**

@@ -30,6 +30,24 @@ describe("formatFrontmatterValue", () => {
   it("JSON.stringifies plain objects", () => {
     expect(formatFrontmatterValue({ a: 1 })).toBe('{"a":1}');
   });
+
+  it("returns '' for null and undefined (never leaks 'undefined' string)", () => {
+    expect(formatFrontmatterValue(null)).toBe("");
+    expect(formatFrontmatterValue(undefined)).toBe("");
+  });
+
+  it("never returns the literal string 'undefined' for non-stringifiable values", () => {
+    // JSON.stringify(() => {}) returns undefined; JSON.stringify(Symbol()) returns undefined.
+    // The helper's return type is string, so it must fall back to a safe value.
+    expect(formatFrontmatterValue(() => 1)).not.toBe("undefined");
+    expect(formatFrontmatterValue(Symbol("x"))).not.toBe("undefined");
+  });
+
+  it("falls back to String(value) on circular refs (JSON.stringify throws)", () => {
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+    expect(typeof formatFrontmatterValue(circular)).toBe("string");
+  });
 });
 
 describe("frontmatterTableEntries", () => {

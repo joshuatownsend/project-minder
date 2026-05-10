@@ -10,10 +10,10 @@ export default function SkillDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  useDocumentTitle(`Skill · ${decodeURIComponent(id)}`);
+  useDocumentTitle(`Skill · ${id}`);
   return (
     <div className="shell-content wide">
-      <SkillDetailView id={decodeURIComponent(id)} />
+      <SkillDetailView id={id} />
     </div>
   );
 }

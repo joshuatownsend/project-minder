@@ -10,10 +10,10 @@ export default function AgentDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  useDocumentTitle(`Agent · ${decodeURIComponent(id)}`);
+  useDocumentTitle(`Agent · ${id}`);
   return (
     <div className="shell-content wide">
-      <AgentDetailView id={decodeURIComponent(id)} />
+      <AgentDetailView id={id} />
     </div>
   );
 }
