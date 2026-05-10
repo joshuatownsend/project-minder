@@ -24,4 +24,3 @@
 *.ico  binary
 *.pdf  binary
 *.db   binary
-*.lock binary
