@@ -235,8 +235,14 @@ async function applyFromLibrary(
     await fs.writeFile(tmpFile, item.content, "utf-8");
 
     // Use path source/target to skip redundant resolution in the recursive call.
+    // Override unit.key for skills: the dispatcher's findSkill splits on ":" to get
+    // [slug, layout], so bare slugs produce layout=undefined and UNIT_NOT_FOUND.
     const pathRequest: ApplyRequest = {
       ...request,
+      unit: {
+        kind: item.kind,
+        key: item.kind === "skill" ? `${item.slug}:standalone` : item.slug,
+      },
       source: { kind: "path", path: tmpDir },
       target: { kind: "path", path: safeTargetPath },
     };

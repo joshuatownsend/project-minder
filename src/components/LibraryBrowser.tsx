@@ -68,7 +68,7 @@ function LibraryRow({ item, projects }: LibraryRowProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          unit: { kind: item.kind, key: item.slug },
+          unit: { kind: item.kind, key: item.kind === "skill" ? `${item.slug}:standalone` : item.slug },
           source: { kind: "library", libraryId: item.id },
           target: { kind: "existing", slug: targetSlug },
           conflict: "skip",
@@ -95,12 +95,14 @@ function LibraryRow({ item, projects }: LibraryRowProps) {
   return (
     <div style={{ borderBottom: "1px solid var(--border-subtle)" }}>
       {/* Row header */}
-      <div
+      <button
         onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
         style={{
           display: "flex", alignItems: "center", gap: "10px",
-          padding: "10px 14px", cursor: "pointer",
+          padding: "10px 14px", cursor: "pointer", width: "100%",
           background: expanded ? "var(--bg-elevated)" : "transparent",
+          border: "none", textAlign: "left",
         }}
       >
         {expanded
@@ -123,7 +125,7 @@ function LibraryRow({ item, projects }: LibraryRowProps) {
         }}>
           {item.description}
         </span>
-      </div>
+      </button>
 
       {/* Expanded panel */}
       {expanded && (
@@ -207,11 +209,11 @@ export function LibraryBrowser() {
     const controller = new AbortController();
     Promise.all([
       fetch("/api/library", { signal: controller.signal }).then((r) => r.json() as Promise<LibraryResponse>),
-      fetch("/api/projects", { signal: controller.signal }).then((r) => r.json() as Promise<Array<{ slug: string; name: string }>>),
+      fetch("/api/projects", { signal: controller.signal }).then((r) => r.json() as Promise<{ projects: Array<{ slug: string; name: string }> }>),
     ])
       .then(([lib, projs]) => {
         setData(lib);
-        setProjects(projs.map((p) => ({ slug: p.slug, name: p.name ?? p.slug })));
+        setProjects(projs.projects.map((p) => ({ slug: p.slug, name: p.name ?? p.slug })));
         setLoading(false);
       })
       .catch((e: unknown) => {

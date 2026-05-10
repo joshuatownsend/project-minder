@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "path";
 import { readConfig } from "@/lib/config";
 import { bootstrapNewProject } from "@/lib/template/bootstrap";
 import { applyUnit } from "@/lib/template/apply";
 import { invalidateCache } from "@/lib/cache";
 import { toSlug } from "@/lib/scanner";
+import { LIBRARY } from "@/lib/template/library";
 import type { ApplyResult } from "@/lib/types";
 
 export interface NewProjectRequest {
@@ -70,14 +72,16 @@ export async function POST(req: NextRequest) {
     } satisfies NewProjectResponse);
   }
 
-  const projectSlug = toSlug(relPath.split("/").pop() ?? relPath);
+  const projectSlug = toSlug(path.basename(bootstrap.createdPath));
 
   // Apply library items sequentially (simpler than parallel; each item is fast).
   const appliedItems: Array<{ id: string; result: ApplyResult }> = [];
   for (const libraryId of libraryIds) {
-    const [kind, slug] = libraryId.split("/") as [string, string];
+    const item = LIBRARY.find((i) => i.id === libraryId);
+    if (!item) continue;
+    const unitKey = item.kind === "skill" ? `${item.slug}:standalone` : item.slug;
     const result = await applyUnit({
-      unit: { kind: kind as "agent" | "skill" | "command", key: slug },
+      unit: { kind: item.kind, key: unitKey },
       source: { kind: "library", libraryId },
       target: { kind: "path", path: bootstrap.createdPath },
       conflict: "skip",
