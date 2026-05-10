@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Search, Webhook } from "lucide-react";
 import Link from "next/link";
 import { useHooks } from "@/hooks/useHooks";
+import { useDisabledHooks } from "@/hooks/useDisabledHooks";
 import { Pill, inlineCode, commandPreview } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
+import { HookToggleButton } from "./HookToggleButton";
+import { DisabledHooksSection } from "./DisabledHooksSection";
 import type { HookSource } from "@/lib/types";
 
 const SOURCE_OPTIONS = ["all", "project", "local", "user", "plugin"] as const;
@@ -30,7 +33,18 @@ export function HooksBrowser() {
     return () => clearTimeout(t);
   }, [rawQuery]);
 
-  const { data: allHooks, loading, error } = useHooks();
+  const { data: allHooks, loading, error, refresh: refreshHooks } = useHooks();
+  const {
+    data: disabledEntries,
+    loading: disabledLoading,
+    error: disabledError,
+    refresh: refreshDisabled,
+  } = useDisabledHooks();
+
+  const handleToggled = useCallback(() => {
+    refreshHooks();
+    refreshDisabled();
+  }, [refreshHooks, refreshDisabled]);
 
   const filtered = allHooks.filter((h) => {
     if (sourceFilter !== "all" && h.source !== sourceFilter) return false;
@@ -256,8 +270,12 @@ export function HooksBrowser() {
       {/* Virtualised list */}
       {loading ? (
         <LoadingSkeleton />
-      ) : sorted.length === 0 ? (
+      ) : sorted.length === 0 && disabledEntries.length === 0 ? (
         <Empty query={rawQuery} />
+      ) : sorted.length === 0 ? (
+        <div style={{ padding: "20px 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>
+          No active hooks. {disabledEntries.length} disabled below.
+        </div>
       ) : (
         <div
           ref={parentRef}
@@ -324,6 +342,15 @@ export function HooksBrowser() {
                       compact
                     />
                   ) : null}
+                  {(h.source === "user" || h.source === "local") && (
+                    <HookToggleButton
+                      hookId={h.unitKey}
+                      scope={h.source}
+                      projectPath={h.projectPath}
+                      disabled={false}
+                      onToggled={handleToggled}
+                    />
+                  )}
                   <SourceBadge projectSlug={h.projectSlug} projectName={h.projectName} />
                 </div>
               );
@@ -331,6 +358,13 @@ export function HooksBrowser() {
           </div>
         </div>
       )}
+
+      <DisabledHooksSection
+        entries={disabledEntries}
+        loading={disabledLoading}
+        error={disabledError}
+        onChanged={handleToggled}
+      />
     </div>
   );
 }

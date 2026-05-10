@@ -15,6 +15,8 @@ export type { ConfigType };
 export interface HookRow extends HookEntry {
   projectSlug?: string;
   projectName?: string;
+  /** Absolute project root for project/local-scope rows; absent for user/plugin. */
+  projectPath?: string;
   /** Stable key (event|matcher|sha256(command)) for the first command. */
   unitKey: string;
 }

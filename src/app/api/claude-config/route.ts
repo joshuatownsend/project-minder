@@ -19,6 +19,8 @@ const CACHE_TTL_MS = 2 * 60 * 1000;
 interface HookRow extends HookEntry {
   projectSlug?: string;
   projectName?: string;
+  /** Absolute project root for project/local-scope rows; absent for user/plugin. */
+  projectPath?: string;
   /** Stable key for the first command — used by Template Mode "↗ copy to project". */
   unitKey: string;
 }
@@ -174,6 +176,7 @@ function collectHooks(projects: ProjectData[]): HookRow[] {
           commands: [inv],
           projectSlug: p.slug,
           projectName: p.name,
+          projectPath: p.path,
           unitKey: makeHookKey(e.event, e.matcher, inv.command),
         });
       }
