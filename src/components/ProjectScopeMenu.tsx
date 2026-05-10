@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { ProjectGlyph } from "@/components/ui/design";
 import { useScope } from "./ScopeProvider";
@@ -20,10 +20,20 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
   const [filter, setFilter] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogId = useId();
+  // Capture whatever was focused before the modal opened so we can return
+  // focus on close — required for a screen-reader-friendly modal.
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
-  // Reset filter and focus input each open
+  // Reset filter and focus input each open. On close, return focus to
+  // whatever element opened the picker.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      previouslyFocusedRef.current?.focus();
+      previouslyFocusedRef.current = null;
+      return;
+    }
+    previouslyFocusedRef.current = (document.activeElement as HTMLElement) ?? null;
     setFilter("");
     setActiveIdx(0);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -89,6 +99,9 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${dialogId}-title`}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 520,
@@ -100,6 +113,22 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
           overflow: "hidden",
         }}
       >
+        <h2
+          id={`${dialogId}-title`}
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: "hidden",
+            clip: "rect(0,0,0,0)",
+            whiteSpace: "nowrap",
+            border: 0,
+          }}
+        >
+          Switch project scope
+        </h2>
         <div
           style={{
             padding: 14,
@@ -133,20 +162,38 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
           <span className="kbd">esc</span>
         </div>
 
-        <div style={{ maxHeight: 400, overflowY: "auto", padding: 6 }}>
+        <div
+          role="listbox"
+          aria-label="Projects"
+          aria-activedescendant={items[activeIdx] ? `${dialogId}-opt-${items[activeIdx].key}` : undefined}
+          style={{ maxHeight: 400, overflowY: "auto", padding: 6 }}
+        >
           {items.map((it, idx) => {
             const isActive = idx === activeIdx;
             const isCurrent = scope === (it.key === "all" ? "all" : it.key);
             return (
-              <div
+              <button
                 key={it.key}
+                type="button"
+                id={`${dialogId}-opt-${it.key}`}
+                role="option"
+                aria-selected={isCurrent}
                 onMouseEnter={() => setActiveIdx(idx)}
                 onClick={() => {
                   setScope(it.key === "all" ? "all" : it.key);
                   onClose();
                 }}
                 className={"nav-item" + (isActive ? " active" : "")}
-                style={{ margin: 2, cursor: "pointer" }}
+                style={{
+                  margin: 2,
+                  cursor: "pointer",
+                  width: "calc(100% - 4px)",
+                  background: "transparent",
+                  border: 0,
+                  textAlign: "left",
+                  font: "inherit",
+                  color: "inherit",
+                }}
               >
                 {it.key === "all" ? (
                   <span
@@ -181,7 +228,7 @@ export function ProjectScopeMenu({ open, onClose, projects }: ProjectScopeMenuPr
                 {isCurrent && (
                   <span style={{ marginLeft: 8, color: "var(--accent)", fontSize: 12 }}>✓</span>
                 )}
-              </div>
+              </button>
             );
           })}
           {items.length <= 1 && filter && (
