@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders, Key } from "lucide-react";
+import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders, Key, Camera } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useConfig, type HookRow, type McpRow, type CicdRow, type SettingsKeyRow } from "@/hooks/useConfig";
 import { CONFIG_TYPES, type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
+import dynamic from "next/dynamic";
+
+// Playground tab is lazy-loaded — its module only ships in the /config
+// chunk for users who actually click the tab. Saves a few KB on first
+// load for the dashboard.
+const ScreenshotToCodePlayground = dynamic(
+  () => import("./ScreenshotToCodePlayground").then((m) => m.ScreenshotToCodePlayground),
+  { ssr: false },
+);
 import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
@@ -16,7 +25,7 @@ import { ShieldAlert, RefreshCw } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { buildServerId } from "@/lib/scanner/mcp-security/ids";
 
-type TabKey = ConfigType | "settings";
+type TabKey = ConfigType | "settings" | "playground";
 
 const TABS: { key: TabKey; label: string; icon: typeof Webhook }[] = [
   { key: "settings",     label: "Settings",   icon: Sliders },
@@ -25,7 +34,10 @@ const TABS: { key: TabKey; label: string; icon: typeof Webhook }[] = [
   { key: "mcp",          label: "MCP",        icon: Server },
   { key: "cicd",         label: "CI / CD",    icon: WorkflowIcon },
   { key: "settingskeys", label: "Keys",       icon: Key },
+  { key: "playground",   label: "Playground", icon: Camera },
 ];
+
+const NON_CATALOG_TABS = new Set<TabKey>(["settings", "playground"]);
 
 export function ConfigBrowser() {
   const searchParams = useSearchParams();
@@ -51,8 +63,9 @@ export function ConfigBrowser() {
     return () => clearTimeout(t);
   }, [rawQuery]);
 
-  const catalogType: ConfigType | undefined =
-    activeTab === "settings" ? undefined : activeTab;
+  const catalogType: ConfigType | undefined = NON_CATALOG_TABS.has(activeTab)
+    ? undefined
+    : (activeTab as ConfigType);
   const { data, loading, refresh } = useConfig(catalogType, projectFilter, query || undefined);
 
   const effectiveMcp = useMemo(
@@ -121,7 +134,7 @@ export function ConfigBrowser() {
         })}
       </nav>
 
-      {activeTab !== "settings" && (
+      {!NON_CATALOG_TABS.has(activeTab) && (
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <div style={{ position: "relative", flex: "1 1 200px", maxWidth: "320px" }}>
           <Search
@@ -177,7 +190,7 @@ export function ConfigBrowser() {
       </div>
       )}
 
-      {activeTab !== "settings" && loading ? (
+      {!NON_CATALOG_TABS.has(activeTab) && loading ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {[...Array(6)].map((_, i) => (
             <div
@@ -240,6 +253,7 @@ function ActiveSection({
   onMcpToggle: (projectSlug: string, serverName: string, enabled: boolean) => Promise<void>;
 }) {
   if (type === "settings") return <ConfigDashboard />;
+  if (type === "playground") return <ScreenshotToCodePlayground />;
   if (type === "hooks") return <HooksList rows={data.hooks} effectiveStates={effectiveHooks} />;
   if (type === "plugins") return <PluginsList rows={data.plugins} />;
   if (type === "mcp") return <McpList rows={data.mcp} effectiveStates={effectiveMcp} onToggle={onMcpToggle} />;

@@ -54,3 +54,7 @@ docs/perf/report.json
 
 # worker bundle (built fresh by predev/prebuild via scripts/build-worker.mjs)
 workers/dist/
+
+# bundled MCP server artifact (built fresh via scripts/build-mcp-screenshot.mjs;
+# users run `npm run build:mcp-screenshot` once before `claude mcp add`)
+dist/

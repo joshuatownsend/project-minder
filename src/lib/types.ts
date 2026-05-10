@@ -416,6 +416,17 @@ export interface MinderConfig {
   enabledAdapters?: string[];
   /** User-defined keyboard shortcut overrides. Keys are ShortcutActionId strings. Wave 12.2. */
   keyboardShortcuts?: Record<string, string>;
+  /** Screenshot-to-React MCP server config (Phase 6 / TODO #238). API keys
+   *  are NEVER stored here — `apiKeyEnvVar` names the env var the MCP
+   *  server reads at request time. */
+  screenshotToCode?: {
+    /** Vendor whose REST API the MCP server will hit. */
+    provider: "gemini" | "openai" | "anthropic";
+    /** Vendor-specific model id (e.g. "gemini-2.5-flash", "gpt-4o", "claude-sonnet-4-5"). */
+    model: string;
+    /** Name of the env var holding the API key (e.g. "GOOGLE_API_KEY"). */
+    apiKeyEnvVar: string;
+  };
 }
 
 export interface ClaudeUsageStats {
