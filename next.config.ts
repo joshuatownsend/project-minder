@@ -12,6 +12,12 @@ const nextConfig: NextConfig = {
   // better-sqlite3 uses a .node binary; web-push is pulled into the same
   // module graph via dispatcher → sender → connection.
   serverExternalPackages: ["better-sqlite3", "web-push"],
+  // Move the Next.js dev indicator off the bottom-left, where it sits on top
+  // of the Settings nav row in the new sidebar (was MEDIUM-7 in the
+  // 2026-05-10 review). Production builds are unaffected.
+  devIndicators: {
+    position: "bottom-right",
+  },
 };
 
 export default nextConfig;

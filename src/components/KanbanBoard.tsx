@@ -491,6 +491,13 @@ export function KanbanBoard() {
             overflowX: "auto",
             paddingBottom: "8px",
             alignItems: "flex-start",
+            // min-width: 0 is essential when this div is a flex child of the
+            // outer column-flex root. Without it, flexbox can't shrink the
+            // container below its 5-columns-wide intrinsic width, so the
+            // overflow-x: auto scrollbar never kicks in and the rightmost
+            // column gets clipped (was MEDIUM-6 in the 2026-05-10 review).
+            minWidth: 0,
+            width: "100%",
           }}
         >
           {KANBAN_COLUMNS.map((col) => (

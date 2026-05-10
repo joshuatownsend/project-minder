@@ -40,24 +40,35 @@ const TITLE_MAP: Record<string, string> = {
   "/new-project":   "New project",
 };
 
-function deriveTitle(pathname: string, type: string | null): string {
+// Singular labels used for the parent crumb on dynamic-detail routes. Eg.
+// /project/<slug> reads "Project / <slug>" not "Projects / <slug>".
+const DETAIL_PARENT: Record<string, string> = {
+  "/project": "Project",
+  "/sessions": "Sessions",
+  "/templates": "Template",
+};
+
+function deriveCrumbs(pathname: string, type: string | null): { title: string; sub?: string } {
   // Direct match
-  if (TITLE_MAP[pathname]) return TITLE_MAP[pathname];
+  if (TITLE_MAP[pathname]) return { title: TITLE_MAP[pathname] };
   // Config sub-tabs: /config?type=mcp → "MCP"
   if (pathname === "/config") {
-    if (type === "mcp") return "MCP";
-    return "Config";
+    if (type === "mcp") return { title: "MCP" };
+    return { title: "Config" };
   }
-  // /project/[slug] etc — fall back to last segment, prettified
   const segments = pathname.split("/").filter(Boolean);
-  if (segments.length === 0) return "Home";
-  const last = segments[segments.length - 1];
-  // If it's a [slug]-style trailing segment, use the first segment instead
-  if (last.length > 24 || last.includes("-")) {
-    const root = "/" + segments[0];
-    if (TITLE_MAP[root]) return TITLE_MAP[root];
+  if (segments.length === 0) return { title: "Home" };
+  const root = "/" + segments[0];
+  // Dynamic detail page: "/project/<slug>" → title "Project", sub "<slug>".
+  // Earlier versions title-cased the slug into "Project-minder" which mangled
+  // hyphenated names (was MEDIUM-1 in the 2026-05-10 review).
+  if (segments.length > 1 && DETAIL_PARENT[root]) {
+    return { title: DETAIL_PARENT[root], sub: segments.slice(1).join("/") };
   }
-  return last.charAt(0).toUpperCase() + last.slice(1);
+  if (TITLE_MAP[root]) return { title: TITLE_MAP[root] };
+  // Unknown route — fall back to the raw last segment (no title-casing) so
+  // the breadcrumb doesn't lie about the URL the user is on.
+  return { title: segments[segments.length - 1] };
 }
 
 interface TopbarProps {
@@ -78,7 +89,7 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
   const { snapshot } = usePulse();
   const { scope } = useScope();
 
-  const title = deriveTitle(pathname, type);
+  const { title, sub: pathSub } = deriveCrumbs(pathname, type);
   const totalAlerts = snapshot.approvalCount + snapshot.pendingSteps;
 
   return (
@@ -97,6 +108,12 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
 
       <div className="topbar-crumbs">
         <span className="here">{title}</span>
+        {pathSub && (
+          <>
+            <span className="sep">/</span>
+            <span style={{ color: "var(--text-2)" }}>{pathSub}</span>
+          </>
+        )}
         {scope !== "all" && (
           <>
             <span className="sep">/</span>
