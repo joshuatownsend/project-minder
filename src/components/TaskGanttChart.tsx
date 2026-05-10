@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import * as d3 from "d3";
 import { D3Container } from "@/components/viz/D3Container";
 import { computeLayout, extractTaskCards, truncateTitle, STATUS_COLOR } from "@/lib/kanban/dependencyLayout";
@@ -35,7 +35,11 @@ export function TaskGanttChart({ snapshot }: Props) {
     return computeLayout(nodes, 1, ROW_H, 0, ROW_GAP);
   }, [taskCards]);
 
-  const now = useMemo(() => Date.now(), []);
+  // Capture "now" once at mount via lazy state init. useMemo(() => Date.now())
+  // violates the React Compiler purity rule (Date.now() is impure during
+  // render); useState's initializer runs exactly once and is exempt from the
+  // rule, giving us the same stable timestamp across renders.
+  const [now] = useState(() => Date.now());
 
   if (layout.nodes.length === 0) {
     return (

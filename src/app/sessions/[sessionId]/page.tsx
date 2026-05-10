@@ -11,5 +11,9 @@ export default function SessionDetailPage({
 }) {
   const { sessionId } = use(params);
   useDocumentTitle("Session");
-  return <SessionDetailView sessionId={sessionId} />;
+  return (
+    <div className="shell-content wide">
+      <SessionDetailView sessionId={sessionId} />
+    </div>
+  );
 }

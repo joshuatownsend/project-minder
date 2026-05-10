@@ -214,14 +214,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
       {/* ── Nav row ─────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingBottom: "20px" }}>
         <Link
-          href="/"
+          href="/projects"
           style={{
             display: "inline-flex", alignItems: "center", gap: "4px",
             fontSize: "0.72rem", color: "var(--text-secondary)", textDecoration: "none",
           }}
         >
           <ArrowLeft style={{ width: "12px", height: "12px" }} />
-          Dashboard
+          Projects
         </Link>
         <span style={{ fontSize: "0.72rem", color: "var(--border-default)" }}>/</span>
         <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>

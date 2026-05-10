@@ -1,33 +1,13 @@
 "use client";
 
 import { KanbanBoard } from "@/components/KanbanBoard";
-import { HelpButton } from "@/components/HelpButton";
+import { PageHeader } from "@/components/ui/design";
 
 export default function KanbanPage() {
   return (
-    <main style={{ padding: "24px", maxWidth: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          marginBottom: "20px",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "1.1rem",
-            fontWeight: 700,
-            letterSpacing: "-0.01em",
-            color: "var(--text-primary)",
-            margin: 0,
-          }}
-        >
-          Mission Control — Kanban
-        </h1>
-        <HelpButton />
-      </div>
+    <div className="shell-content wide">
+      <PageHeader title="Mission Control" sub="Kanban view of in-flight tasks across all projects" />
       <KanbanBoard />
-    </main>
+    </div>
   );
 }

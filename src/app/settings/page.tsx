@@ -3,7 +3,11 @@
 import { SettingsPage } from "@/components/SettingsPage";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
-export default function Settings() {
+export default function Page() {
   useDocumentTitle("Settings");
-  return <SettingsPage />;
+  return (
+    <div className="shell-content wide">
+      <SettingsPage />
+    </div>
+  );
 }

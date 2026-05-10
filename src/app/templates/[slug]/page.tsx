@@ -8,5 +8,9 @@ export default async function TemplateDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  return <TemplateDetail slug={slug} />;
+  return (
+    <div className="shell-content wide">
+      <TemplateDetail slug={slug} />
+    </div>
+  );
 }

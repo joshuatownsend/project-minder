@@ -28,7 +28,7 @@ export default function ProjectPage({
 
   if (loading) {
     return (
-      <div className="space-y-4">
+      <div className="shell-content wide space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-4 w-96" />
         <Skeleton className="h-64 w-full" />
@@ -38,7 +38,7 @@ export default function ProjectPage({
 
   if (!project) {
     return (
-      <div className="text-center py-12">
+      <div className="shell-content wide text-center py-12">
         <h2 className="text-xl font-semibold">Project not found</h2>
         <p className="text-[var(--muted-foreground)] mt-2">
           No project with slug &quot;{slug}&quot; was found.
@@ -48,6 +48,8 @@ export default function ProjectPage({
   }
 
   return (
-    <ProjectDetail project={project} onStatusChange={handleStatusChange} />
+    <div className="shell-content wide">
+      <ProjectDetail project={project} onStatusChange={handleStatusChange} />
+    </div>
   );
 }

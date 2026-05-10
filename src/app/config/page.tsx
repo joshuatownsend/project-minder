@@ -10,8 +10,10 @@ export default function ConfigPage() {
   // and the project filter from `?project=` (the dashboard CI badge deep-links
   // here). useSearchParams forces a Suspense boundary in Next.js 16 prerender.
   return (
-    <Suspense fallback={null}>
-      <ConfigBrowser />
-    </Suspense>
+    <div className="shell-content wide">
+      <Suspense fallback={null}>
+        <ConfigBrowser />
+      </Suspense>
+    </div>
   );
 }

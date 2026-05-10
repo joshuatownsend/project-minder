@@ -4,17 +4,16 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { HelpProvider } from "@/components/HelpProvider";
 import { HelpPanel } from "@/components/HelpPanel";
-import { HelpButton } from "@/components/HelpButton";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationListener } from "@/components/NotificationListener";
-import { AppNav } from "@/components/AppNav";
 import { PulseProvider } from "@/components/PulseProvider";
-import { PortConflictIndicator } from "@/components/PortConflictIndicator";
 import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { ConfigProvider } from "@/components/ConfigProvider";
 import { CommandPaletteProvider } from "@/components/CommandPaletteProvider";
+import { ScopeProvider } from "@/components/ScopeProvider";
+import { AppShell } from "@/components/AppShell";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -40,10 +39,12 @@ export default async function RootLayout({
 }) {
   const config = await readConfig();
   const devRoots = getDevRoots(config);
-  const rootLabel = devRoots.length === 1
-    ? devRoots[0]
-    : `${devRoots[0]} +${devRoots.length - 1} more`;
+  const rootLabel =
+    devRoots.length === 1
+      ? devRoots[0]
+      : `${devRoots[0]} +${devRoots.length - 1} more`;
   const taskDispatcherEnabled = getFlag(config.featureFlags, "taskDispatcher", false);
+
   return (
     <html
       lang="en"
@@ -52,86 +53,36 @@ export default async function RootLayout({
       <body suppressHydrationWarning>
         <ToastProvider>
           <ConfigProvider>
-          <PulseProvider>
-          <CommandPaletteProvider>
-          <HelpProvider>
-            <header
-              style={{
-                borderBottom: "1px solid var(--border-subtle)",
-                background: "var(--bg-base)",
-              }}
-            >
-              <div
-                style={{
-                  maxWidth: "1600px",
-                  margin: "0 auto",
-                  padding: "0 24px",
-                  height: "48px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "24px",
-                }}
-              >
-                {/* Wordmark */}
-                <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-                  <a
-                    href="/"
-                    style={{
-                      fontFamily: "var(--font-body)",
-                      fontWeight: 600,
-                      fontSize: "0.9rem",
-                      letterSpacing: "0.06em",
-                      textTransform: "uppercase",
-                      color: "var(--text-primary)",
-                      textDecoration: "none",
-                      lineHeight: 1,
-                    }}
-                  >
-                    Project Minder
-                  </a>
-
-                  {/* Nav — Suspense wraps AppNav because it reads
-                      useSearchParams() to compute /config?type= active state. */}
+            <PulseProvider>
+              <CommandPaletteProvider>
+                <HelpProvider>
+                  {/* Suspense wraps client providers that read useSearchParams() */}
                   <Suspense fallback={null}>
-                    <AppNav />
+                    <ScopeProvider>
+                      <AppShell devRootLabel={rootLabel}>
+                        {/* Floating emergency stop, only when task dispatcher is on */}
+                        {taskDispatcherEnabled && (
+                          <div
+                            style={{
+                              position: "fixed",
+                              top: 12,
+                              right: 12,
+                              zIndex: 30,
+                            }}
+                          >
+                            <EmergencyStopButton />
+                          </div>
+                        )}
+                        {children}
+                      </AppShell>
+                    </ScopeProvider>
                   </Suspense>
-                </div>
 
-                {/* Right side */}
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  {taskDispatcherEnabled && <EmergencyStopButton />}
-                  <PortConflictIndicator />
-                  <span
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "0.7rem",
-                      color: "var(--text-muted)",
-                      letterSpacing: "0.02em",
-                    }}
-                  >
-                    {rootLabel}
-                  </span>
-                  <HelpButton />
-                </div>
-              </div>
-            </header>
-
-            <main
-              style={{
-                maxWidth: "1600px",
-                margin: "0 auto",
-                padding: "24px",
-              }}
-            >
-              {children}
-            </main>
-
-            <HelpPanel />
-            <NotificationListener />
-          </HelpProvider>
-          </CommandPaletteProvider>
-          </PulseProvider>
+                  <HelpPanel />
+                  <NotificationListener />
+                </HelpProvider>
+              </CommandPaletteProvider>
+            </PulseProvider>
           </ConfigProvider>
         </ToastProvider>
       </body>

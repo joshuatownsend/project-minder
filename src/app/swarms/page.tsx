@@ -32,16 +32,21 @@ export default function SwarmsPage() {
 
   if (loading) {
     return (
-      <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-        Loading swarms…
+      <div className="shell-content">
+        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+          Loading swarms…
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: "24px", maxWidth: "900px", margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <h1 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 700 }}>Swarms</h1>
+    <div className="shell-content">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22 }}>
+        <div>
+          <h1 className="page-title">Swarms</h1>
+          <div className="page-sub">{swarms.length} swarm{swarms.length === 1 ? "" : "s"} · launch concurrent task batches</div>
+        </div>
         <button
           onClick={() => setComposerOpen(true)}
           style={{
@@ -52,7 +57,7 @@ export default function SwarmsPage() {
             cursor: "pointer",
             fontSize: "0.82rem",
             fontWeight: 600,
-            color: "#fff",
+            color: "var(--bg)",
           }}
         >
           Launch Swarm

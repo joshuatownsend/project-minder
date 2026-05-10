@@ -9,32 +9,44 @@ export interface CommandItem {
   badgeKey?: "inbox" | "decisions" | "approvals" | "steps";
 }
 
-// Static nav items — kept in sync with AppNav GROUPS
+// Static nav items — kept in sync with AppSidebar GROUPS (src/components/AppSidebar.tsx).
+// Sublabels match the sidebar group headings so palette results read the same as the nav.
 const NAV_COMMANDS: CommandItem[] = [
-  { id: "nav-/",           label: "Projects",       sublabel: "Dashboard", href: "/" },
-  { id: "nav-/new-project",label: "+ New Project",  sublabel: "Dashboard", href: "/new-project" },
-  { id: "nav-/agents",     label: "Agents",         sublabel: "Catalog",   href: "/agents" },
-  { id: "nav-/skills",     label: "Skills",         sublabel: "Catalog",   href: "/skills" },
-  { id: "nav-/commands",   label: "Commands",       sublabel: "Catalog",   href: "/commands" },
-  { id: "nav-/plugins",    label: "Plugins",        sublabel: "Catalog",   href: "/plugins" },
-  { id: "nav-/templates",  label: "Templates",      sublabel: "Catalog",   href: "/templates" },
-  { id: "nav-/library",    label: "Library",        sublabel: "Catalog",   href: "/library" },
-  { id: "nav-/sessions",   label: "Sessions",       sublabel: "Sessions",  href: "/sessions" },
-  { id: "nav-/plans",      label: "Plans",          sublabel: "Sessions",  href: "/plans" },
-  { id: "nav-/stats",      label: "Stats",          sublabel: "Sessions",  href: "/stats" },
-  { id: "nav-/usage",      label: "Usage",          sublabel: "Sessions",  href: "/usage" },
-  { id: "nav-/sql",        label: "SQL",            sublabel: "Sessions",  href: "/sql" },
-  { id: "nav-/insights-report", label: "Insights Report", sublabel: "Sessions", href: "/insights-report" },
-  { id: "nav-/kanban",     label: "Kanban",         sublabel: "Mission Control", href: "/kanban" },
-  { id: "nav-/tasks",      label: "Tasks",          sublabel: "Mission Control", href: "/tasks" },
-  { id: "nav-/swarms",     label: "Swarms",         sublabel: "Mission Control", href: "/swarms" },
-  { id: "nav-/schedule",   label: "Schedule",       sublabel: "Mission Control", href: "/schedule" },
-  { id: "nav-/hooks",      label: "Hooks",          sublabel: "Config",    href: "/hooks" },
-  { id: "nav-/settings",   label: "Settings",       sublabel: "Config",    href: "/settings" },
-  { id: "nav-/setup",      label: "Setup",          sublabel: "Config",    href: "/setup" },
-  { id: "nav-/status",     label: "Status",         sublabel: "Config",    href: "/status", badgeKey: "approvals" },
-  { id: "nav-/insights",   label: "Insights",       sublabel: "Config",    href: "/insights" },
-  { id: "nav-/manual-steps",label: "Manual Steps",  sublabel: "Config",    href: "/manual-steps", badgeKey: "steps" },
+  { id: "nav-/",            label: "Home",          sublabel: "Pinned", href: "/" },
+  { id: "nav-/projects",    label: "Projects",      sublabel: "Pinned", href: "/projects" },
+  { id: "nav-/status",      label: "Status",        sublabel: "Pinned", href: "/status", badgeKey: "approvals" },
+  { id: "nav-/new-project", label: "+ New Project", sublabel: "Pinned", href: "/new-project" },
+
+  { id: "nav-/tasks",        label: "Tasks",        sublabel: "Build", href: "/tasks" },
+  { id: "nav-/kanban",       label: "Kanban",       sublabel: "Build", href: "/kanban" },
+  { id: "nav-/plans",        label: "Plans",        sublabel: "Build", href: "/plans" },
+  { id: "nav-/manual-steps", label: "Manual Steps", sublabel: "Build", href: "/manual-steps", badgeKey: "steps" },
+  { id: "nav-/schedule",     label: "Schedule",     sublabel: "Build", href: "/schedule" },
+  { id: "nav-/insights",     label: "Insights",     sublabel: "Build", href: "/insights" },
+
+  { id: "nav-/sessions", label: "Sessions", sublabel: "Sessions", href: "/sessions" },
+  { id: "nav-/memory",   label: "Memory",   sublabel: "Sessions", href: "/memory" },
+  { id: "nav-/timeline", label: "Timeline", sublabel: "Sessions", href: "/timeline" },
+
+  { id: "nav-/agents",    label: "Agents",    sublabel: "Library", href: "/agents" },
+  { id: "nav-/skills",    label: "Skills",    sublabel: "Library", href: "/skills" },
+  { id: "nav-/commands",  label: "Commands",  sublabel: "Library", href: "/commands" },
+  { id: "nav-/plugins",   label: "Plugins",   sublabel: "Library", href: "/plugins" },
+  { id: "nav-/templates", label: "Templates", sublabel: "Library", href: "/templates" },
+  { id: "nav-/swarms",    label: "Swarms",    sublabel: "Library", href: "/swarms" },
+  { id: "nav-/library",   label: "Library",   sublabel: "Library", href: "/library" },
+
+  { id: "nav-/analytics",       label: "Analytics",       sublabel: "Review", href: "/analytics" },
+  { id: "nav-/stats",           label: "Stats",           sublabel: "Review", href: "/stats" },
+  { id: "nav-/usage",           label: "Usage & cost",    sublabel: "Review", href: "/usage" },
+  { id: "nav-/health",          label: "Health",          sublabel: "Review", href: "/health" },
+  { id: "nav-/hooks",           label: "Hooks",           sublabel: "Review", href: "/hooks" },
+  { id: "nav-/config-mcp",      label: "MCP",             sublabel: "Review", href: "/config?type=mcp" },
+  { id: "nav-/sql",             label: "SQL",             sublabel: "Review", href: "/sql" },
+  { id: "nav-/insights-report", label: "Insights Report", sublabel: "Review", href: "/insights-report" },
+
+  { id: "nav-/setup",    label: "Setup",    sublabel: "Footer", href: "/setup" },
+  { id: "nav-/settings", label: "Settings", sublabel: "Footer", href: "/settings" },
 ];
 
 const QUICK_ACTIONS: CommandItem[] = [

@@ -3,7 +3,11 @@
 import { ManualStepsDashboard } from "@/components/ManualStepsDashboard";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
-export default function ManualStepsPage() {
+export default function Page() {
   useDocumentTitle("Manual Steps");
-  return <ManualStepsDashboard />;
+  return (
+    <div className="shell-content wide">
+      <ManualStepsDashboard />
+    </div>
+  );
 }

@@ -3,5 +3,9 @@ import { CommandsBrowser } from "@/components/CommandsBrowser";
 export const dynamic = "force-dynamic";
 
 export default function CommandsPage() {
-  return <CommandsBrowser />;
+  return (
+    <div className="shell-content wide">
+      <CommandsBrowser />
+    </div>
+  );
 }
