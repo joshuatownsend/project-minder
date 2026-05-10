@@ -29,5 +29,5 @@ export function useHooks(query?: string) {
     fetch_();
   }, [fetch_]);
 
-  return { data, loading, error };
+  return { data, loading, error, refresh: fetch_ };
 }
