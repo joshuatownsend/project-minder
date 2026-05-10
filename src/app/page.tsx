@@ -53,15 +53,17 @@ export default function HomePage() {
   const { snapshot } = usePulse();
   const [period, setPeriod] = useState<Period>("today");
 
-  // We fetch a single broad report (period=month) and slice the daily array
-  // client-side to populate the Today / 7-day / 30-day toggle. Going through
-  // the API for each period was hitting a UX edge case: the API uses calendar
-  // boundaries (week=since-Sunday-midnight, month=since-the-1st), so on a
-  // Sunday or the 1st of the month the toggle showed identical numbers
-  // because "this week so far" and "today" collapsed to the same range.
-  // Rolling windows give meaningful differences regardless of calendar
-  // alignment, which matches the labels ("7 days", "30 days").
-  const [usageMonth, setUsageMonth] = useState<UsageReport | null>(null);
+  // We fetch a single broad report (period=all) and slice the daily array
+  // client-side to populate the Today / 7-day / 30-day toggle. The API uses
+  // calendar boundaries (week=since-Sunday-midnight, month=since-the-1st),
+  // so going through the API for each period meant on a Sunday or the 1st
+  // of the month the toggle showed identical numbers. period=all returns
+  // the full daily history; client-side slice(-N) gives a true rolling
+  // window for any N regardless of calendar alignment, matching the toggle
+  // labels ("7 days", "30 days"). Earlier this fetch used period=month
+  // which on the 5th of a month meant the "30 days" toggle returned only
+  // 5 days of data — copilot flagged the mismatch (PR #102).
+  const [usageAll, setUsageAll] = useState<UsageReport | null>(null);
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [insightCount, setInsightCount] = useState<number>(0);
@@ -69,9 +71,9 @@ export default function HomePage() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch(`/api/usage?period=month${scope !== "all" ? `&project=${encodeURIComponent(scope)}` : ""}`, { signal: ctrl.signal })
+    fetch(`/api/usage?period=all${scope !== "all" ? `&project=${encodeURIComponent(scope)}` : ""}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setUsageMonth(d as UsageReport))
+      .then((d) => d && setUsageAll(d as UsageReport))
       .catch(() => {});
     return () => ctrl.abort();
   }, [scope]);
@@ -152,15 +154,17 @@ export default function HomePage() {
   const liveSessionCount = activeSlugs.length;
   const liveProject = activeSlugs[0] ?? null;
 
-  // Slice the monthly daily array based on the active period toggle.
-  // "today" = last 1 entry; "week" = last 7; "month" = full array.
+  // Slice the full daily array based on the active period toggle.
+  // "today" = last 1 entry; "week" = last 7; "month" = last 30 — true
+  // rolling windows that match the toggle labels regardless of where in
+  // the calendar month we are.
   const periodDays = useMemo(() => {
-    if (!usageMonth?.daily?.length) return [];
-    const all = usageMonth.daily;
+    if (!usageAll?.daily?.length) return [];
+    const all = usageAll.daily;
     if (period === "today") return all.slice(-1);
     if (period === "week") return all.slice(-7);
-    return all;
-  }, [period, usageMonth]);
+    return all.slice(-30);
+  }, [period, usageAll]);
 
   // Headline numbers come from the sliced daily buckets so they react to the
   // toggle even when the calendar period (week/month) hasn't started yet.
@@ -176,10 +180,10 @@ export default function HomePage() {
     () => periodDays.reduce((s, d) => s + d.turns, 0),
     [periodDays],
   );
-  // Cache hit rate is reported globally for the whole period; safe to reuse
-  // the API's calendar-month value as a directional indicator. It doesn't
-  // need to swing on toggle since cache hit rate barely varies day-to-day.
-  const cacheHitRate = usageMonth?.cacheHitRate ?? 0;
+  // Cache hit rate is reported globally for the whole period; we keep it as
+  // an all-time directional indicator since cache hit rate barely varies
+  // day-to-day.
+  const cacheHitRate = usageAll?.cacheHitRate ?? 0;
 
   // Health score: simple proxy = 100 - clamp(insights/issues per project)
   const healthScore = useMemo(() => {
@@ -196,31 +200,31 @@ export default function HomePage() {
   // expand back to the last 3 days so a single bar doesn't sit awkwardly
   // alone — three days gives enough context to read trend at a glance.
   const tokenDays = useMemo(() => {
-    if (!usageMonth?.daily?.length) return [];
+    if (!usageAll?.daily?.length) return [];
     const slice =
-      period === "today" ? usageMonth.daily.slice(-3)
-      : period === "week" ? usageMonth.daily.slice(-7)
-      : usageMonth.daily;
+      period === "today" ? usageAll.daily.slice(-3)
+      : period === "week" ? usageAll.daily.slice(-7)
+      : usageAll.daily.slice(-30);
     return slice.map((d) => ({
       label: d.date.slice(5).replace("-", "/"),
       values: [d.inputTokens, d.outputTokens],
     }));
-  }, [period, usageMonth]);
+  }, [period, usageAll]);
 
   // Sparklines are always last 7 days regardless of toggle — they're a tiny
   // contextual read-out, not a primary metric.
   const costSpark = useMemo(() => {
-    if (!usageMonth?.daily?.length) return [];
-    return usageMonth.daily.slice(-7).map((d) => d.cost);
-  }, [usageMonth]);
+    if (!usageAll?.daily?.length) return [];
+    return usageAll.daily.slice(-7).map((d) => d.cost);
+  }, [usageAll]);
   const sessionsSpark = useMemo(() => {
-    if (!usageMonth?.daily?.length) return [];
-    return usageMonth.daily.slice(-7).map((d) => d.turns);
-  }, [usageMonth]);
+    if (!usageAll?.daily?.length) return [];
+    return usageAll.daily.slice(-7).map((d) => d.turns);
+  }, [usageAll]);
   const tokensSpark = useMemo(() => {
-    if (!usageMonth?.daily?.length) return [];
-    return usageMonth.daily.slice(-7).map((d) => d.inputTokens + d.outputTokens);
-  }, [usageMonth]);
+    if (!usageAll?.daily?.length) return [];
+    return usageAll.daily.slice(-7).map((d) => d.inputTokens + d.outputTokens);
+  }, [usageAll]);
 
   // Recent projects = sorted by lastActivity, capped at 6.
   const recentProjects = useMemo(() => {
@@ -232,12 +236,11 @@ export default function HomePage() {
     return sorted.slice(0, 6);
   }, [projects]);
 
-  // Cost by project. The API's byProject is calendar-period-aligned so we
-  // pull it from usageMonth (the broadest fetch) and treat the share as
-  // "this month so far". Slicing by rolling-window for byProject is harder
-  // since byProject doesn't carry per-day data; the calendar month gives a
-  // close-enough portfolio split.
-  const costByProject = usageMonth?.byProject?.slice(0, 6) ?? [];
+  // Cost by project. byProject is the API's portfolio split — we pull it
+  // from the all-time fetch and label the card "all-time" to match.
+  // Slicing by rolling-window per-project is impractical since byProject
+  // doesn't carry per-day data.
+  const costByProject = usageAll?.byProject?.slice(0, 6) ?? [];
   const costTotal = useMemo(
     () => costByProject.reduce((s, p) => s + p.cost, 0) || 1,
     [costByProject],
@@ -286,13 +289,13 @@ export default function HomePage() {
       <div className="stat-grid">
         <Stat
           label="Spend"
-          value={usageMonth === null ? "—" : `$${headlineCost.toFixed(2)}`}
+          value={usageAll === null ? "—" : `$${headlineCost.toFixed(2)}`}
           sub={
             period === "today"
               ? "today so far"
               : period === "week"
-                ? `last ${periodDays.length || 7} days`
-                : `last ${periodDays.length || 30} days`
+                ? "last 7 days"
+                : "last 30 days"
           }
           accent="var(--accent)"
           spark={costSpark}
@@ -301,7 +304,7 @@ export default function HomePage() {
         />
         <Stat
           label="Turns"
-          value={usageMonth === null ? "—" : formatCount(headlineTurns)}
+          value={usageAll === null ? "—" : formatCount(headlineTurns)}
           sub={`${liveSessionCount} active now`}
           accent="var(--good)"
           spark={sessionsSpark}
@@ -309,15 +312,15 @@ export default function HomePage() {
         />
         <Stat
           label="Tokens"
-          value={usageMonth === null ? "—" : formatCount(headlineTokens)}
-          sub={usageMonth === null ? "loading…" : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          value={usageAll === null ? "—" : formatCount(headlineTokens)}
+          sub={usageAll === null ? "loading…" : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
         />
         <Stat
           label="Health score"
-          value={usageMonth === null ? "—" : `${healthScore}%`}
+          value={usageAll === null ? "—" : `${healthScore}%`}
           sub={`${insightCount} insights · ${pendingStepsCount} steps`}
           accent="var(--danger)"
         />
@@ -377,7 +380,7 @@ export default function HomePage() {
                 ? "last 3 days"
                 : period === "week"
                   ? "last 7 days"
-                  : `last ${tokenDays.length || 30} days`
+                  : "last 30 days"
             }
             right={
               <div style={{ display: "flex", gap: 14, fontSize: 11, color: "var(--text-3)" }}>
@@ -489,7 +492,7 @@ export default function HomePage() {
         <Card>
           <CardHeader
             title="Cost by project"
-            sub={`$${costTotal.toFixed(2)} this month`}
+            sub={`$${costTotal.toFixed(2)} all-time`}
           />
           {costByProject.length === 0 ? (
             <EmptyChart label="No cost data for this period" />
