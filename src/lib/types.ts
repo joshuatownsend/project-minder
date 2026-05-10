@@ -756,6 +756,7 @@ export type ConflictPolicy = "skip" | "overwrite" | "merge" | "rename";
 export type ApplySource =
   | { kind: "project"; slug: string }
   | { kind: "user" }
+  | { kind: "library"; libraryId: string }
   /** Internal-only: direct path to a "virtual project root" — used by the
    *  template apply layer. Never accepted by the public API validator
    *  (would be a path-safety hole). */

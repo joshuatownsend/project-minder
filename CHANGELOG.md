@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Wave 11.2b — Cluster Z (part 2): Curated template library and new-project wizard.**
+  - **#77 Curated template library**: `/library` page with 16 production-ready library items (5 commands, 7 skills, 4 agents). Items are inlined as TypeScript strings in `src/lib/template/library/index.ts` — no runtime fs reads. Apply any item to an existing project via `source.kind: "library"` in the apply endpoint. New `applyFromLibrary` dispatcher writes content to a temp dir and re-enters the existing apply primitives; temp dir is always cleaned up. Filter by kind (Command/Skill/Agent), search by name/description/tag, Apply or Preview per item.
+  - **#78 New-project wizard**: `/new-project` 4-step wizard: (1) name + folder; (2) stack selector (TypeScript / Python / Go / Rust); (3) library item selection with stack-based presets; (4) confirm → create. `POST /api/projects/new` bootstraps the directory, runs `git init`, and applies selected library items. Dashboard toolbar gets a **New** button; AppNav gets a **+ New** root link.
+
 - **Wave 11.2a — Cluster Z (part 1): Plugin-bundled hooks, bundled-skill UI polish, shareable stats image, GSD project planning tab.**
   - **#76 Plugin-bundled hooks**: Plugins can ship `hooks/hooks.json`; entries surface with a `plugin` provenance badge and are read-only. Wired via new `src/lib/scanner/pluginHooks.ts` (mirrors `pluginMcp.ts`). `HookSource` union widened to `"project" | "local" | "user" | "plugin"`.
   - **#70 Bundled-skill UI polish**: `ApplyResult` gains a structured `bundle?: { rootName, files, totalBytes }` field. `applyDirectory` populates it on both dry-run and real apply. `ApplyUnitButton` and `ApplyTemplateModal` render a `BundleTree` (📁/📄 file tree) when `bundle` is present, replacing the `<pre>` text wall.

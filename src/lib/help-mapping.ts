@@ -33,6 +33,8 @@ export const helpMapping: Record<string, string> = {
   '/hooks': 'hooks',
   '/plugins': 'plugins',
   '/sql': 'sql',
+  '/library': 'library',
+  '/new-project': 'new-project',
 }
 
 /**

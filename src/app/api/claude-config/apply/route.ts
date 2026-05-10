@@ -57,8 +57,12 @@ function validateRequest(body: unknown):
     if (typeof s.slug !== "string" || s.slug.length === 0) {
       return err("INVALID_SOURCE_SLUG", "source.slug must be a non-empty string.");
     }
+  } else if (s.kind === "library") {
+    if (typeof s.libraryId !== "string" || s.libraryId.length === 0) {
+      return err("INVALID_LIBRARY_ID", "source.libraryId must be a non-empty string.");
+    }
   } else if (s.kind !== "user") {
-    return err("INVALID_SOURCE_KIND", 'source.kind must be "project" or "user".');
+    return err("INVALID_SOURCE_KIND", 'source.kind must be "project", "user", or "library".');
   }
 
   // target
@@ -85,6 +89,8 @@ function validateRequest(body: unknown):
       source:
         s.kind === "project"
           ? { kind: "project", slug: s.slug as string }
+          : s.kind === "library"
+          ? { kind: "library", libraryId: s.libraryId as string }
           : { kind: "user" },
       target: { kind: "existing", slug: t.slug as string },
       conflict: b.conflict as ConflictPolicy,
