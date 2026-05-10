@@ -35,7 +35,7 @@ export async function GET(
   if (!absPath) return errorResponse("INVALID_ID", 400, "Could not decode id.");
 
   const projects = await getProjects();
-  const allowed = classifyMemoryPath(absPath, projects);
+  const allowed = await classifyMemoryPath(absPath, projects);
   if (!allowed) {
     return errorResponse(
       "PATH_NOT_ALLOWED",
@@ -77,7 +77,7 @@ export async function PUT(
   if (!absPath) return errorResponse("INVALID_ID", 400, "Could not decode id.");
 
   const projects = await getProjects();
-  const allowed = classifyMemoryPath(absPath, projects);
+  const allowed = await classifyMemoryPath(absPath, projects);
   if (!allowed) {
     return errorResponse(
       "PATH_NOT_ALLOWED",

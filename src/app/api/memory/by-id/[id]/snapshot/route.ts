@@ -21,7 +21,7 @@ export async function GET(
     scan = await scanAllProjects();
     setCachedScan(scan);
   }
-  const allowed = classifyMemoryPath(absPath, scan.projects);
+  const allowed = await classifyMemoryPath(absPath, scan.projects);
   if (!allowed) {
     return NextResponse.json(
       { error: { code: "PATH_NOT_ALLOWED" } },
