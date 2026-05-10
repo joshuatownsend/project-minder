@@ -15,13 +15,18 @@ export type Period = (typeof VALID_PERIODS)[number]["value"];
 // Legacy aliases — prior versions of the API and stored URLs may pass
 // `week` or `month`. We normalize them to the rolling-window equivalents
 // rather than reject so deep links keep working.
-const LEGACY_ALIASES: Record<string, Period> = {
-  week: "7d",
-  month: "30d",
-};
+//
+// Use a Map (not a plain object) for the lookup so untrusted query input
+// like ?period=__proto__ or ?period=toString can't return inherited keys
+// and bypass validation (PR #103 codex P2).
+const LEGACY_ALIASES = new Map<string, Period>([
+  ["week", "7d"],
+  ["month", "30d"],
+]);
 
 export function validatePeriod(input: string): Period {
-  if (LEGACY_ALIASES[input]) return LEGACY_ALIASES[input];
+  const aliased = LEGACY_ALIASES.get(input);
+  if (aliased) return aliased;
   const valid = VALID_PERIODS.map((p) => p.value as string);
   return valid.includes(input) ? (input as Period) : "30d";
 }

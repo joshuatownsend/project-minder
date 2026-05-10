@@ -37,11 +37,19 @@ export async function GET(request: Request): Promise<NextResponse> {
   })();
 
   // Pull the async signals in parallel. If any fails individually, fall back
-  // to the "no data" shape so the rest of the report still renders.
-  const [cache, mcpFindings, mcpRun, pressure, edit] = await Promise.all([
+  // to the "no data" shape so the rest of the report still renders. We
+  // resolve the latest scan run first so the findings query can be scoped
+  // to that run only — `mcp_scan_findings` stores rows per run, so an
+  // unscoped query accumulates fixed findings across history and the
+  // health score would drift downward over time even as issues get fixed
+  // (PR #103 codex P1).
+  const mcpRun = await safeAwait(getLatestRun(), null);
+  const [cache, mcpFindings, pressure, edit] = await Promise.all([
     safeAwait(getCacheEfficiency({ period: "7d" }), null),
-    safeAwait(getAllFindings(), [] as Awaited<ReturnType<typeof getAllFindings>>),
-    safeAwait(getLatestRun(), null),
+    safeAwait(
+      mcpRun ? getAllFindings(undefined, mcpRun.id) : Promise.resolve([]),
+      [] as Awaited<ReturnType<typeof getAllFindings>>,
+    ),
     safeAwait(getPressureSnapshot({ since }), null),
     safeAwait(getEditAcceptance({ since }), null),
   ]);
