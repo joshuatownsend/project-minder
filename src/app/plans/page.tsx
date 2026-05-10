@@ -3,7 +3,11 @@
 import { PlansBrowser } from "@/components/PlansBrowser";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
-export default function PlansPage() {
+export default function Page() {
   useDocumentTitle("Plans");
-  return <PlansBrowser />;
+  return (
+    <div className="shell-content wide">
+      <PlansBrowser />
+    </div>
+  );
 }

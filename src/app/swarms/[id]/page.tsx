@@ -63,22 +63,26 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
 
   if (loading) {
     return (
-      <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-        Loading…
+      <div className="shell-content">
+        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+          Loading…
+        </div>
       </div>
     );
   }
 
   if (error || !swarm) {
     return (
-      <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--error)", fontSize: "0.85rem" }}>
-        {error ?? "Swarm not found"}
+      <div className="shell-content">
+        <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--danger)", fontSize: "0.85rem" }}>
+          {error ?? "Swarm not found"}
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: "24px", maxWidth: "900px", margin: "0 auto" }}>
+    <div className="shell-content">
       {/* Header */}
       <div style={{ marginBottom: "20px" }}>
         <Link href="/swarms" style={{ fontSize: "0.75rem", color: "var(--text-muted)", textDecoration: "none" }}>

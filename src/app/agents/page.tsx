@@ -5,5 +5,9 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function AgentsPage() {
   useDocumentTitle("Agents");
-  return <AgentsBrowser />;
+  return (
+    <div className="shell-content wide">
+      <AgentsBrowser />
+    </div>
+  );
 }

@@ -5,5 +5,9 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function SkillsPage() {
   useDocumentTitle("Skills");
-  return <SkillsBrowser />;
+  return (
+    <div className="shell-content wide">
+      <SkillsBrowser />
+    </div>
+  );
 }

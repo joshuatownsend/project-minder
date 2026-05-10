@@ -3,5 +3,9 @@
 import { LibraryBrowser } from "@/components/LibraryBrowser";
 
 export default function LibraryPage() {
-  return <LibraryBrowser />;
+  return (
+    <div className="shell-content wide">
+      <LibraryBrowser />
+    </div>
+  );
 }

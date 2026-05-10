@@ -408,7 +408,7 @@ export default function NewProjectPage() {
   }
 
   return (
-    <div style={{ maxWidth: "560px", margin: "0 auto" }}>
+    <div className="shell-content" style={{ maxWidth: 720, margin: "0 auto" }}>
       {/* Page header */}
       <header style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "28px" }}>
         <BookOpen style={{ width: 14, height: 14, color: "var(--text-muted)" }} />

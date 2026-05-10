@@ -3,7 +3,11 @@
 import { SetupGuide } from "@/components/SetupGuide";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
-export default function SetupPage() {
+export default function Page() {
   useDocumentTitle("Setup");
-  return <SetupGuide />;
+  return (
+    <div className="shell-content wide">
+      <SetupGuide />
+    </div>
+  );
 }

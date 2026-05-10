@@ -3,7 +3,11 @@
 import { PluginsBrowser } from "@/components/PluginsBrowser";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
-export default function PluginsPage() {
+export default function Page() {
   useDocumentTitle("Plugins");
-  return <PluginsBrowser />;
+  return (
+    <div className="shell-content wide">
+      <PluginsBrowser />
+    </div>
+  );
 }

@@ -48,26 +48,32 @@ export default function TasksPage() {
 
   if (loading) {
     return (
-      <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-        Loading tasks…
+      <div className="shell-content wide">
+        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+          Loading tasks…
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ padding: "48px 0", textAlign: "center", color: "var(--error)", fontSize: "0.85rem" }}>
-        {error}
+      <div className="shell-content wide">
+        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--danger)", fontSize: "0.85rem" }}>
+          {error}
+        </div>
       </div>
     );
   }
 
   return (
-    <TasksBrowser
-      tasks={tasks}
-      schedules={schedules}
-      decisionCounts={decisionCounts}
-      onRefresh={load}
-    />
+    <div className="shell-content wide">
+      <TasksBrowser
+        tasks={tasks}
+        schedules={schedules}
+        decisionCounts={decisionCounts}
+        onRefresh={load}
+      />
+    </div>
   );
 }

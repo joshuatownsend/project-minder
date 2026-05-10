@@ -4,5 +4,9 @@ import { InsightsReportViewer } from "@/components/InsightsReportViewer";
 export const metadata: Metadata = { title: "Insights Report — Project Minder" };
 
 export default function InsightsReportPage() {
-  return <InsightsReportViewer />;
+  return (
+    <div className="shell-content wide">
+      <InsightsReportViewer />
+    </div>
+  );
 }

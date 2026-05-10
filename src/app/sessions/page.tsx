@@ -5,5 +5,9 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export default function SessionsPage() {
   useDocumentTitle("Sessions");
-  return <SessionsBrowser />;
+  return (
+    <div className="shell-content wide">
+      <SessionsBrowser />
+    </div>
+  );
 }
