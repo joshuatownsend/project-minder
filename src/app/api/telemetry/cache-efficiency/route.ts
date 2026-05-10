@@ -7,8 +7,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get("period") ?? "7d") as Period;
 
-  if (!["today", "7d", "30d"].includes(period)) {
-    return NextResponse.json({ error: "period must be today|7d|30d" }, { status: 400 });
+  if (!["today", "7d", "30d", "all"].includes(period)) {
+    return NextResponse.json({ error: "period must be today|7d|30d|all" }, { status: 400 });
   }
 
   try {

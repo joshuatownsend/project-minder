@@ -58,7 +58,7 @@ import { getDb, prepCached } from "./connection";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-export type Period = "today" | "7d" | "30d";
+export type Period = "today" | "7d" | "30d" | "all";
 
 function periodToMs(period: Period): number {
   const now = Date.now();
@@ -68,7 +68,9 @@ function periodToMs(period: Period): number {
     return d.getTime();
   }
   if (period === "7d")  return now - 7 * 24 * 60 * 60 * 1000;
-  return now - 30 * 24 * 60 * 60 * 1000;
+  if (period === "30d") return now - 30 * 24 * 60 * 60 * 1000;
+  // "all" — return 0 so the SQL `WHERE timestamp >= ?` matches every row.
+  return 0;
 }
 
 // otel_events.ts is TEXT (ISO-8601); comparison with toISOString() strings is safe.
