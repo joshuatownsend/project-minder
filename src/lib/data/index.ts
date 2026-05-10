@@ -22,7 +22,12 @@ import type {
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
-import type { SessionDetail, SessionSummary, ClaudeUsageStats } from "@/lib/types";
+import type {
+  SessionDetail,
+  SessionSummary,
+  ClaudeUsageStats,
+  InitStatus,
+} from "@/lib/types";
 
 // Read-side data façade for /api/usage, /api/sessions, and friends.
 // Backend selection is `MINDER_USE_DB`; the default is on. Set
@@ -80,70 +85,291 @@ export class DbUnavailableError extends Error {
   }
 }
 
-// Schema-readiness gate. `initDb()` runs `quick_check` plus a
-// `meta`/`sqlite_master` lookup, which we don't want on every
-// /api/usage hit. Cache the *promise* so concurrent first requests
-// share one in-flight init. Same pattern as `/api/sql/route.ts`'s
-// `ensureSchemaReady`.
+// Schema-readiness state machine for `initDb()`. Replaces the prior
+// `cached: { promise, failedAt }` cache.
 //
-// **Failure handling**: P2c established that we must not cache
-// failures forever (a single transient EBUSY would silently downgrade
-// every route to file-parse for the rest of the dev session). P2c
-// cleared the cache on EVERY failure, which solved that bug but
-// introduced a new one: a real outage (e.g. disk full, missing native
-// binary) makes every subsequent call re-run `initDb()` end-to-end,
-// hammering the DB layer on every dashboard poll.
+// **Why a state machine?** The 30s-TTL failure cache that Wave 1.2
+// introduced solved one bug (a real outage hammering initDb on every
+// poll) but missed the inverse: a *transient* EBUSY (Windows file-
+// lock-release lag during ingest write contention) would surface to
+// every caller for the next 30s, downgrading the dashboard for no
+// reason. The fix is to classify each failure and treat transient
+// errors with a short internal retry loop — only after the retry
+// budget is exhausted does the failure get cached.
 //
-// Wave 1.2 splits the difference with a 30s TTL on failed results:
-// successful inits cache as before (until process exit), failed inits
-// cache for up to 30s before the next caller is allowed to re-attempt.
-// In-flight callers always share the same promise. The retry only
-// kicks in after the failed promise has resolved AND the TTL has
-// expired — concurrent failed callers within the TTL get the cached
-// failure handed back without re-running initDb.
+// **States**:
+//   - `idle` — no attempt yet, or last failure's TTL expired.
+//   - `in-flight` — an attempt is running; concurrent callers share the
+//     same promise.
+//   - `success` — last attempt succeeded; cached until process exit.
+//   - `transient-failed` — retry budget exhausted on transient errors.
+//     Cached for 30s, then a fresh attempt is allowed.
+//   - `permanent-failed` — the rebuild itself isn't recovering
+//     (cumulative `quarantineRuns >= 2`). Sticky until process exit;
+//     external operator action is the only path forward.
 //
-// Departure from plan: §5.1.2 specifies "schema corrupt → cache
-// forever; init raced → retry up to 3× with 100ms backoff." The
-// rename-retry half is already done by `renameWithRetry` (10× linear
-// backoff on EBUSY/EPERM in `atomicWrite.ts`). The "cache forever"
-// half conflicts with the same plan line that says "the cached
-// failure now has a TTL; after 30s, next call retries." Picking the
-// simpler design — a uniform 30s TTL — because (a) corruption can be
-// repaired externally (operator deletes index.db) and we want to
-// notice on the next retry, (b) categorizing failures to apply
-// different cache policies is brittle (init can fail at multiple
-// stages with similar symptoms), and (c) 30s is short enough that a
-// genuinely permanent failure surfaces in any reasonable diagnostic
-// window. Logged in CHANGELOG.
-const FAILURE_TTL_MS = 30_000;
-type CachedInit = {
-  promise: Promise<InitResult>;
-  /** Wall-clock when initDb() resolved with available=false (or rejected).
-   *  null while in-flight or after a successful resolve. */
-  failedAt: number | null;
-};
-let cached: CachedInit | null = null;
+// **Classification** (`error.code`):
+//   - `EBUSY/EPERM/ENOENT/ENOTEMPTY/SQLITE_BUSY/SQLITE_LOCKED` → transient.
+//     Retried up to 3× with 100/300/900 ms backoff.
+//   - Everything else (including unrecognized rejections) → fail fast,
+//     cache as `transient-failed` for 30s. Retrying an unknown error
+//     class without evidence it's lock contention is more likely to
+//     hammer a sick DB than to recover.
+//   - `result.quarantined !== null` is counted across the state
+//     machine's lifetime; the 2nd cumulative observation flips
+//     `permanent-failed`. Two rebuild-and-still-failing rounds is the
+//     strongest signal we have that retrying further won't help.
+//
+// **Cache reset between tests**: existing tests use `vi.resetModules()`
+// which gives a fresh module-scope `initState`. Same mechanism as the
+// prior `cached` variable.
+
+const RETRY_DELAYS_MS = [100, 300, 900] as const;
+const TRANSIENT_TTL_MS = 30_000;
+
+// Test-only override for retry backoff. Production code never sets this;
+// tests inject `[0, 0, 0]` so the retry loop runs without scheduling
+// any real setTimeouts. Using a module-level override (instead of an
+// env var) keeps the production hot path read-only and trivially
+// constant-folded.
+let _retryDelaysOverride: readonly number[] | null = null;
+/** @internal Test-only: shorten retry backoff for unit tests. */
+export function __setRetryDelaysForTests(delays: readonly number[] | null): void {
+  _retryDelaysOverride = delays;
+}
+/** @internal Test-only: force the state machine back to `idle`. */
+export function __resetInitStateForTests(): void {
+  initState = { kind: "idle", quarantineRuns: 0 };
+}
+
+const TRANSIENT_CODES = new Set([
+  "EBUSY",
+  "EPERM",
+  "ENOENT",
+  "ENOTEMPTY",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+]);
+
+type InitState =
+  | { kind: "idle"; quarantineRuns: number }
+  | {
+      kind: "in-flight";
+      promise: Promise<InitResult>;
+      attempts: number;
+      quarantineRuns: number;
+    }
+  | {
+      kind: "success";
+      result: InitResult;
+      attempts: number;
+      quarantineRuns: number;
+    }
+  | {
+      kind: "transient-failed";
+      failedAt: number;
+      attempts: number;
+      quarantineRuns: number;
+      lastError: Error;
+    }
+  | {
+      kind: "permanent-failed";
+      failedAt: number;
+      attempts: number;
+      quarantineRuns: number;
+      lastError: Error;
+    };
+
+let initState: InitState = { kind: "idle", quarantineRuns: 0 };
+
+function getErrCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
+}
+
+function isTransientError(err: Error | null): boolean {
+  if (!err) return false;
+  const code = getErrCode(err);
+  if (code && TRANSIENT_CODES.has(code)) return true;
+  // Some call paths wrap and lose the `.code` attribute — fall back to
+  // a substring match on the message so a transient-by-name error still
+  // gets retried. Keeps tests that throw `new Error("simulated EBUSY")`
+  // (no `.code` field) classified as transient.
+  const msg = err.message ?? "";
+  for (const c of TRANSIENT_CODES) {
+    if (msg.includes(c)) return true;
+  }
+  return false;
+}
+
+function synthFailureResult(error: Error): InitResult {
+  return {
+    available: false,
+    appliedMigrations: [],
+    schemaVersion: 0,
+    quarantined: null,
+    error,
+  };
+}
+
+type InFlightState = Extract<InitState, { kind: "in-flight" }>;
+
+async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> {
+  let lastResult: InitResult | null = null;
+  let lastError: Error | null = null;
+  let permanent = false;
+
+  const delays = _retryDelaysOverride ?? RETRY_DELAYS_MS;
+  for (let attemptIdx = 0; attemptIdx <= delays.length; attemptIdx++) {
+    if (attemptIdx > 0) {
+      const delayMs = delays[attemptIdx - 1];
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    // Mutate the in-flight state object so getInitStatus() can report
+    // live attempt/quarantine counts during long retries — the in-flight
+    // object IS the current `initState` until terminal commit below.
+    inFlight.attempts = attemptIdx + 1;
+
+    let result: InitResult | null = null;
+    let thrown: Error | null = null;
+    try {
+      result = await initDb();
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    // Tally quarantines BEFORE classifying success/failure so success-
+    // with-quarantine and failure-with-quarantine both observe the same
+    // updated count. The 2-cumulative-quarantine permanent rule only
+    // fires on the failure branch.
+    if (result?.quarantined) inFlight.quarantineRuns += 1;
+
+    if (result?.available) {
+      initState = {
+        kind: "success",
+        result,
+        attempts: inFlight.attempts,
+        quarantineRuns: inFlight.quarantineRuns,
+      };
+      return result;
+    }
+
+    lastResult = result;
+    lastError = thrown ?? result?.error ?? null;
+
+    // 2nd cumulative quarantine + still-failing → rebuild itself isn't
+    // recovering. Mark permanent. Process-exit only.
+    if (inFlight.quarantineRuns >= 2) {
+      permanent = true;
+      break;
+    }
+
+    if (!isTransientError(lastError)) break;
+    // transient — fall through to next retry iteration.
+  }
+
+  const finalError =
+    lastError ?? new Error("initDb failed without surfacing an error");
+  initState = {
+    kind: permanent ? "permanent-failed" : "transient-failed",
+    failedAt: Date.now(),
+    attempts: inFlight.attempts,
+    quarantineRuns: inFlight.quarantineRuns,
+    lastError: finalError,
+  };
+  return lastResult ?? synthFailureResult(finalError);
+}
 
 function ensureSchemaReady(): Promise<InitResult> {
-  if (cached) {
-    if (cached.failedAt === null) return cached.promise;
-    if (Date.now() - cached.failedAt < FAILURE_TTL_MS) return cached.promise;
-    // TTL expired — fall through to a fresh attempt.
-    cached = null;
-  }
-  const promise = initDb();
-  const slot: CachedInit = { promise, failedAt: null };
-  cached = slot;
-  promise
-    .then((result) => {
-      if (!result.available && cached === slot) {
-        slot.failedAt = Date.now();
+  switch (initState.kind) {
+    case "success":
+      return Promise.resolve(initState.result);
+    case "in-flight":
+      return initState.promise;
+    case "permanent-failed":
+      return Promise.resolve(synthFailureResult(initState.lastError));
+    case "transient-failed":
+      if (Date.now() - initState.failedAt < TRANSIENT_TTL_MS) {
+        return Promise.resolve(synthFailureResult(initState.lastError));
       }
-    })
-    .catch(() => {
-      if (cached === slot) slot.failedAt = Date.now();
-    });
-  return promise;
+      // TTL expired — start a fresh attempt. Carry forward the
+      // cumulative quarantine count so a transient-failed→retry that
+      // tips into a 2nd quarantine still escalates to permanent.
+      break;
+    case "idle":
+      break;
+  }
+
+  // Construct the in-flight state object first so `runInitWithRetries`
+  // can mutate `attempts`/`quarantineRuns` on it as the loop progresses
+  // — that way getInitStatus() reports live counts mid-flight rather
+  // than a frozen `attempts: 0` snapshot.
+  const inFlight: InFlightState = {
+    kind: "in-flight",
+    promise: undefined as unknown as Promise<InitResult>,
+    attempts: 0,
+    quarantineRuns: initState.quarantineRuns,
+  };
+  initState = inFlight;
+  inFlight.promise = runInitWithRetries(inFlight);
+  return inFlight.promise;
+}
+
+/**
+ * Drive the schema-readiness state machine forward and return the
+ * resulting status. Intended for external probes (`/api/health`) that
+ * want an active health signal rather than a stale snapshot. Idempotent
+ * — `success` and within-TTL `transient-failed` / `permanent-failed`
+ * states return immediately without re-running `initDb()`.
+ */
+export async function probeInitStatus(): Promise<InitStatus> {
+  if (!dbModeRequested()) return getInitStatus();
+  await ensureSchemaReady();
+  return getInitStatus();
+}
+
+export function getInitStatus(): InitStatus {
+  const s = initState;
+  switch (s.kind) {
+    case "idle":
+      return {
+        state: "idle",
+        attempts: 0,
+        quarantineRuns: s.quarantineRuns,
+        failedAt: null,
+        lastError: null,
+      };
+    case "in-flight":
+      return {
+        state: "in-flight",
+        attempts: s.attempts,
+        quarantineRuns: s.quarantineRuns,
+        failedAt: null,
+        lastError: null,
+      };
+    case "success":
+      return {
+        state: "success",
+        attempts: s.attempts,
+        quarantineRuns: s.quarantineRuns,
+        failedAt: null,
+        lastError: null,
+      };
+    case "transient-failed":
+    case "permanent-failed": {
+      const code = getErrCode(s.lastError);
+      return {
+        state: s.kind,
+        attempts: s.attempts,
+        quarantineRuns: s.quarantineRuns,
+        failedAt: s.failedAt,
+        lastError: code
+          ? { message: s.lastError.message, code }
+          : { message: s.lastError.message },
+      };
+    }
+  }
 }
 
 // Light, throttled logging for the two INTENTIONAL fall-through

@@ -71,55 +71,69 @@ afterEach(async () => {
 
 describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on failure", () => {
   it("caches an init failure for 30s, then retries on the next call", async () => {
-    // Wave 1.2 contract: P2c cleared the cache on every failure (so
-    // every dashboard poll re-ran `initDb()` end-to-end during a real
-    // outage). The new contract caches the failure result for 30s and
-    // serves it back to subsequent callers in that window — then
-    // expires the cache so a recovered DB picks up on the next call.
+    // Phase-1 contract update: the state machine now retries transient
+    // failures up to 4 attempts (initial + 3 backoffs) BEFORE caching
+    // as `transient-failed`. So the test mocks 4 consecutive failures
+    // to drive the cache into the failed state, then asserts the
+    // 30s-TTL contract.
+    //
+    // Older contract (Wave 1.2 single-failure cache) is now expressed
+    // by `tests/initDb.test.ts`'s "single transient failure recovers
+    // on retry" case.
     process.env.MINDER_USE_DB = "1";
     const { facade, mig } = await reloadModules();
+    // Use [0,0,0] retry delays so the retry loop runs without
+    // scheduling real setTimeouts — keeps the test snappy under fake
+    // timers.
+    facade.__setRetryDelaysForTests([0, 0, 0]);
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    // try/finally guarantees real timers are restored even when an
-    // assertion throws — otherwise fake timers leak into later tests
-    // in the same file/run and produce confusing async hangs.
     try {
       const initSpy = vi.spyOn(mig, "initDb");
-      initSpy.mockResolvedValueOnce({
-        available: false,
+      // 4 mocked failures = exhausts the retry budget. The error
+      // message includes "EBUSY" so the substring classifier marks
+      // each as transient and the loop runs all 4 attempts.
+      const failure = {
+        available: false as const,
         error: new Error("simulated EBUSY: rename failed"),
         appliedMigrations: [],
         schemaVersion: 0,
         quarantined: null,
-      });
+      };
+      initSpy
+        .mockResolvedValueOnce(failure)
+        .mockResolvedValueOnce(failure)
+        .mockResolvedValueOnce(failure)
+        .mockResolvedValueOnce(failure);
 
-      // First call: init fails → throws DbUnavailableError. initDb ran 1×.
+      // First call: 4 retries fail → throws DbUnavailableError.
       await expect(facade.getUsage("all")).rejects.toMatchObject({
         name: "DbUnavailableError",
         reason: "init-failed",
       });
-      expect(initSpy).toHaveBeenCalledTimes(1);
+      expect(initSpy).toHaveBeenCalledTimes(4);
 
-      // Second call within the 30s TTL: must NOT re-run initDb. The
-      // cached failure is reused so a real outage doesn't hammer the DB
-      // layer on every poll. Caller still gets DbUnavailableError.
+      // Second call within the 30s TTL: cached failure is served back
+      // without another initDb invocation, so a real outage doesn't
+      // hammer the DB layer on every poll.
       await expect(facade.getUsage("all")).rejects.toMatchObject({
         name: "DbUnavailableError",
         reason: "init-failed",
       });
-      expect(initSpy).toHaveBeenCalledTimes(1);
+      expect(initSpy).toHaveBeenCalledTimes(4);
 
-      // Advance past the 30s TTL → next call re-attempts initDb. The
-      // unmocked initDb succeeds against the writable tmpHome; with no
-      // JSONL files the empty index makes the façade fall back to
-      // file-parse (intentional empty-index fall-through). Either
-      // backend is acceptable — what we're pinning is that the retry
-      // happened.
+      // Advance past the 30s TTL → next call re-attempts. Mocks are
+      // exhausted, so the unmocked initDb runs against the writable
+      // tmpHome and succeeds; an empty corpus makes the façade fall
+      // back to file-parse (intentional empty-index fall-through).
+      // Either backend is acceptable — what we're pinning is that the
+      // retry happened.
       vi.advanceTimersByTime(31_000);
       const third = await facade.getUsage("all");
-      expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(initSpy.mock.calls.length).toBeGreaterThanOrEqual(5);
       expect(["db", "file"]).toContain(third.meta.backend);
     } finally {
       vi.useRealTimers();
+      facade.__setRetryDelaysForTests(null);
     }
   });
 
