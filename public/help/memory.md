@@ -1,5 +1,34 @@
 # Memory Browser
 
+Project Minder ships two complementary memory views:
+
+- **`/memory`** — cross-tier browser that lists every CLAUDE.md and auto-memory file across all scopes in one place. Edit any of them inline.
+- **Project detail → Memory tab** — per-project view scoped to one project's auto-memory directory.
+
+This page documents both.
+
+## Cross-tier `/memory` page
+
+The `/memory` page unifies three scopes:
+
+- **User** — `~/.claude/CLAUDE.md`
+- **Project** — `<project>/CLAUDE.md` for every scanned project
+- **Auto-memory** — every `.md` file inside `~/.claude/projects/<encoded>/memory/` for every scanned project
+
+Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old or contains broken `@import` references. Filter by scope or stale status with the chips above the list.
+
+Click any row to open it in the right pane. **Edit** switches into a textarea; **Save** writes back atomically. The editor takes a snapshot via `~/.minder/config-history/` before every save so you can roll back from the Config History page. **Diff** compares your draft against the most recent snapshot.
+
+If a file changes externally between the time you opened it and when you click Save, the editor surfaces a **File changed externally — Reload** banner instead of silently overwriting.
+
+### Path-safety guarantees
+
+The editor refuses to write to anything outside the allowlist (user CLAUDE.md, a scanned project's CLAUDE.md, or an `*.md` file directly inside an auto-memory directory). Attempts to PUT a fabricated id resolve to **400 PATH_NOT_ALLOWED**. The 2 MB content cap returns **413 TOO_LARGE**. mtime conflicts return **409 MTIME_CONFLICT**.
+
+---
+
+## Per-project Memory tab
+
 The **Memory** tab on each project detail page lets you browse Claude Code's auto-memory files for that project without leaving Project Minder.
 
 ## What are memory files?

@@ -67,7 +67,7 @@ const GROUPS: NavGroup[] = [
     hint: "What Claude Code is doing right now",
     children: [
       { id: "sessions", label: "Sessions", href: "/sessions", icon: ico(Layers), badge: "live" },
-      { id: "memory",   label: "Memory",   href: "/memory",   icon: ico(Brain),   comingSoon: true },
+      { id: "memory",   label: "Memory",   href: "/memory",   icon: ico(Brain) },
       { id: "timeline", label: "Timeline", href: "/timeline", icon: ico(Clock),   comingSoon: true },
     ],
   },

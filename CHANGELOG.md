@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`renameWithRetry`** (`src/lib/atomicWrite.ts`) — extends retry-eligible code list to include `ENOTEMPTY` (Windows directory-handle release lag).
 
 ### Added
+- **Phase 2 (#193) — Memory file browser at `/memory`.** Replaces the ComingSoon stub with a cross-tier inventory + inline editor that unifies three scopes: user (`~/.claude/CLAUDE.md`), project (`<project>/CLAUDE.md`), and auto-memory (`~/.claude/projects/<encoded>/memory/*.md`).
+  - **Discovery (`src/lib/memory/index.ts`)**: `listMemoryFiles({ projects })` walks all three tiers with a 60 s in-module cache. Each entry carries `{ id, scope, projectSlug?, projectName?, absPath, mtimeMs, sizeBytes, preview, stale }`. The `id` is `base64url(absPath)` — opaque + path-traversal safe. Stale heuristic flags `ageOver30d` and `brokenImports[]` (the latter reuses `expandImports` from the audit pipeline so semantics match `ClaudeMdAuditPanel`).
+  - **Path-safety allowlist (`src/lib/memory/safety.ts`)**: `classifyMemoryPath(absPath, projects)` returns scope info only when the resolved path is exactly `~/.claude/CLAUDE.md`, a scanned project's `CLAUDE.md`, or an `*.md` file directly inside that project's auto-memory dir (no dotfiles, no subdir traversal). PUT rejects with **400 PATH_NOT_ALLOWED** before any snapshot or write.
+  - **`GET /api/memory`** — cross-tier list.
+  - **`GET /api/memory/by-id/[id]`** — `{ content, mtimeMs, sizeBytes, scope, projectSlug? }`. Routed under `by-id/` so the existing `/api/memory/[slug]` per-project route stays untouched.
+  - **`PUT /api/memory/by-id/[id]`** — body `{ content: string, mtimeMs: number }`. Validates allowlist → enforces 2 MB cap (413 TOO_LARGE) → checks mtime under `withFileLock` (409 MTIME_CONFLICT on drift > 1 ms) → records configHistory snapshot (label `memoryEditor`) → atomic write → invalidates inventory cache and the per-project `scanMemory` cache when the target is auto-tier.
+  - **`GET /api/memory/by-id/[id]/snapshot`** — most recent configHistory snapshot for this file, used by the editor's diff view.
+  - **`MemoryBrowser.tsx`** — left rail grouped by scope with search, scope chips, and a stale filter; right pane mounts `MemoryEditor.tsx` (view → edit → save → optional diff toggle showing a hand-rolled LCS-based unified diff against the latest config-history snapshot). 409 surfaces a "File changed externally — Reload" banner.
+  - **AppSidebar**: `/memory` row no longer carries `comingSoon`.
+  - **18 new tests** across `tests/memoryDiscovery.test.ts` (10) and `tests/memoryByIdRoute.test.ts` (8).
 - **`GET /api/health`** — lightweight endpoint returning the schema-readiness state-machine snapshot (`{ ok, db: { state, attempts, quarantineRuns, failedAt, lastError } }`). 200 when healthy/initializing, 503 when in transient/permanent failure. No-store cache header.
 - **Settings → DB status row** — always-visible footer in the Settings page polls `/api/health` every 15 s and renders state, attempts count, quarantine count, and last error message.
 - **Wave 12.2 — Cluster AA (part 2): Command palette, keyboard shortcut customization, Insights Report viewer.** TODO #9 kbd, #10, #48.
