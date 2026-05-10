@@ -194,6 +194,24 @@ function SkillRowItem({
             flexShrink: 0,
           }}
         >
+          {row.entry?.id && (
+            <Link
+              href={`/skills/${encodeURIComponent(row.entry.id)}`}
+              onClick={(e: React.MouseEvent) => e.stopPropagation()}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "3px",
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6rem",
+                color: "var(--text-muted)",
+                textDecoration: "none",
+              }}
+            >
+              Open
+              <ExternalLink style={{ width: "9px", height: "9px" }} />
+            </Link>
+          )}
           {row.usage && row.usage.invocations > 0 && (
             <span
               style={{
