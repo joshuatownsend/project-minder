@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useSearchParams } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Bell, Filter, Search, Menu } from "lucide-react";
 import { useCommandPalette } from "./CommandPaletteProvider";
 import { usePulse } from "./PulseProvider";
@@ -70,6 +70,7 @@ interface TopbarProps {
 }
 
 export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle, devRootLabel }: TopbarProps) {
+  const router = useRouter();
   const pathname = usePathname() ?? "/";
   const searchParams = useSearchParams();
   const type = searchParams?.get("type") ?? null;
@@ -139,7 +140,8 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
         type="button"
         className="icon-btn"
         aria-label="Notifications"
-        title={totalAlerts > 0 ? `${totalAlerts} pending` : "No new notifications"}
+        title={totalAlerts > 0 ? `${totalAlerts} pending — open Status` : "No new notifications — open Status"}
+        onClick={() => router.push("/status")}
       >
         <Bell width={16} height={16} />
         {totalAlerts > 0 && (

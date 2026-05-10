@@ -1,14 +1,18 @@
+"use client";
+
 /**
- * Claudoscope design primitives — small, framework-agnostic React building
- * blocks that mirror the visual language defined in globals.css. Each
- * component intentionally maps to a CSS class so styling lives in one place
- * and components stay layout-only.
+ * Claudoscope design primitives — small React building blocks that mirror
+ * the visual language defined in globals.css. Each component intentionally
+ * maps to a CSS class so styling lives in one place and components stay
+ * layout-only.
  *
- * These are presentational and stateless — no "use client" pragma so they
- * can be imported by either server or client parents without forcing client
- * boundary semantics on themselves.
+ * Marked "use client" because StackedBars uses ResizeObserver to make the
+ * chart width-responsive. The other primitives are presentational but they
+ * already only render under client parents (every page in src/app uses
+ * client components).
  */
 
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode, CSSProperties } from "react";
 
 /* ---------- Page header ---------- */
@@ -341,6 +345,16 @@ export function GaugeRing({
 
 /* ---------- StackedBars ---------- */
 
+/**
+ * Width-responsive stacked bar chart.
+ *
+ * Implementation note: an earlier version used `preserveAspectRatio="none"`
+ * with a fixed-pixel viewBox, which made the SVG scale uniformly to fill
+ * the parent — including the x-axis date text, which ended up horizontally
+ * stretched. We now measure the parent's width via ResizeObserver and
+ * size the SVG in pixel-space, so bars stay at a fixed 36px and text
+ * stays crisp at 1:1.
+ */
 export function StackedBars({
   data,
   height = 200,
@@ -350,58 +364,79 @@ export function StackedBars({
   height?: number;
   colors?: string[];
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(640);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      if (w > 0) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const padding = { top: 16, bottom: 24, left: 32, right: 8 };
   const max = Math.max(1, ...data.map((d) => d.values.reduce((s, v) => s + v, 0)));
   const innerH = height - padding.top - padding.bottom;
+  const innerW = Math.max(60, width - padding.left - padding.right);
+  // Distribute columns evenly. Bar width = column width minus a small gap,
+  // capped at 36px so wide containers keep clean rectangles instead of slabs.
+  const columnW = data.length > 0 ? innerW / data.length : innerW;
+  const barW = Math.max(4, Math.min(36, columnW - 8));
+
   return (
-    <svg viewBox={`0 0 ${data.length * 60 + padding.left + padding.right} ${height}`} preserveAspectRatio="none" width="100%" height={height}>
-      {/* Y-axis baseline */}
-      <line
-        x1={padding.left}
-        x2={data.length * 60 + padding.left}
-        y1={padding.top + innerH}
-        y2={padding.top + innerH}
-        stroke="var(--line-soft)"
-        strokeWidth={1}
-      />
-      {data.map((d, i) => {
-        const total = d.values.reduce((s, v) => s + v, 0);
-        const totalH = (total / max) * innerH;
-        const x = padding.left + i * 60 + 12;
-        let stackY = padding.top + innerH;
-        return (
-          <g key={d.label}>
-            {d.values.map((v, j) => {
-              const h = (v / max) * innerH;
-              stackY -= h;
-              return (
-                <rect
-                  key={j}
-                  x={x}
-                  y={stackY}
-                  width={36}
-                  height={Math.max(1, h)}
-                  fill={colors[j % colors.length]}
-                  rx={2}
-                />
-              );
-            })}
-            <text
-              x={x + 18}
-              y={padding.top + innerH + 14}
-              textAnchor="middle"
-              fontSize={10}
-              fill="var(--text-3)"
-              fontFamily="var(--font-mono)"
-            >
-              {d.label}
-            </text>
-            <title>{`${d.label}: ${total}`}</title>
-            {/* Suppress unused var warning */}
-            <desc>{totalH}</desc>
-          </g>
-        );
-      })}
-    </svg>
+    <div ref={containerRef} style={{ width: "100%", height }}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
+        {/* Y-axis baseline */}
+        <line
+          x1={padding.left}
+          x2={padding.left + innerW}
+          y1={padding.top + innerH}
+          y2={padding.top + innerH}
+          stroke="var(--line-soft)"
+          strokeWidth={1}
+        />
+        {data.map((d, i) => {
+          const total = d.values.reduce((s, v) => s + v, 0);
+          const cx = padding.left + i * columnW + columnW / 2;
+          let stackY = padding.top + innerH;
+          return (
+            <g key={d.label}>
+              {d.values.map((v, j) => {
+                const h = (v / max) * innerH;
+                stackY -= h;
+                return (
+                  <rect
+                    key={j}
+                    x={cx - barW / 2}
+                    y={stackY}
+                    width={barW}
+                    height={Math.max(1, h)}
+                    fill={colors[j % colors.length]}
+                    rx={2}
+                  />
+                );
+              })}
+              <text
+                x={cx}
+                y={padding.top + innerH + 14}
+                textAnchor="middle"
+                fontSize={10}
+                fill="var(--text-3)"
+                fontFamily="var(--font-mono)"
+              >
+                {d.label}
+              </text>
+              <title>{`${d.label}: ${total}`}</title>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
