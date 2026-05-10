@@ -29,7 +29,7 @@ if (!globalForUsage.__usageCache) {
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const safePeriod = validatePeriod(params.get("period") || "month");
+  const safePeriod = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
   const source = params.get("source") || undefined;
 

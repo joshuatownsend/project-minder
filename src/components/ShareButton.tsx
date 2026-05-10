@@ -17,7 +17,7 @@ export function ShareButton({ period, project, source }: ShareButtonProps) {
   const [previewPeriod, setPreviewPeriod] = useState<Period>(
     (VALID_PERIODS.map((p) => p.value) as string[]).includes(period)
       ? (period as Period)
-      : "month",
+      : "30d",
   );
 
   const svgUrl = buildUrl({ period: previewPeriod, theme, project, source });

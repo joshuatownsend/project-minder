@@ -272,7 +272,7 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * migration.
  */
 async function runFileUsage(
-  period: "today" | "week" | "month" | "all",
+  period: "today" | "7d" | "30d" | "all" | "week" | "month",
   project: string | undefined,
   source: string | undefined
 ): Promise<UsageResult> {
@@ -292,7 +292,7 @@ async function runFileUsage(
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
-  period: "today" | "week" | "month" | "all",
+  period: "today" | "7d" | "30d" | "all" | "week" | "month",
   project?: string,
   source?: string
 ): Promise<UsageResult> {
