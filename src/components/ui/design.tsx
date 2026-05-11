@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, CSSProperties } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, AlertOctagon, AlertTriangle, Info } from "lucide-react";
 
 /* ---------- Page header ---------- */
 
@@ -185,6 +185,44 @@ export function Seg<T extends string>({
     </div>
   );
 }
+
+/* ---------- Severity tokens (shared by FindingCard + group headers) ---------- */
+
+/** Canonical severity tone, shared across panels that surface findings.
+ *
+ *  Three tones are sufficient for every consumer today:
+ *   - `crit`   — highest urgency (red).      Maps from DiagnosisPanel `P0`, EfficiencyTab `high`,    ClaudeMdAudit `P0`.
+ *   - `high`   — second tier (amber/accent). Maps from DiagnosisPanel `P1`, EfficiencyTab `medium`,  ClaudeMdAudit `P1`.
+ *   - `med`    — informational (muted).      Maps from DiagnosisPanel `P2`, EfficiencyTab `low`,     ClaudeMdAudit `P2`.
+ *
+ *  Add new tones only when a fourth class actually shows up — keeping the
+ *  set small means we never have to invent a fifth-rank visual treatment
+ *  that no consumer needs. */
+export type SeverityTone = "crit" | "high" | "med";
+
+export const severityTokens: Record<
+  SeverityTone,
+  { bg: string; border: string; text: string; icon: ReactNode }
+> = {
+  crit: {
+    bg: "var(--status-error-bg)",
+    border: "var(--status-error-border)",
+    text: "var(--status-error-text)",
+    icon: <AlertOctagon style={{ width: "12px", height: "12px" }} />,
+  },
+  high: {
+    bg: "var(--accent-bg)",
+    border: "var(--accent-border)",
+    text: "var(--accent)",
+    icon: <AlertTriangle style={{ width: "12px", height: "12px" }} />,
+  },
+  med: {
+    bg: "var(--bg-elevated)",
+    border: "var(--border-subtle)",
+    text: "var(--text-secondary)",
+    icon: <Info style={{ width: "12px", height: "12px" }} />,
+  },
+};
 
 /* ---------- ErrorBanner (red alert row with optional label) ---------- */
 

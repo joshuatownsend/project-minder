@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertOctagon, AlertTriangle, Info, Activity, Lightbulb } from "lucide-react";
+import { Activity, Lightbulb } from "lucide-react";
 import type {
   DiagnosisReport,
   DiagnosisFinding,
@@ -9,40 +9,16 @@ import type {
   SessionOutcome,
 } from "@/lib/usage/sessionDiagnosis";
 import { formatDurationSeconds, formatPct } from "@/lib/format";
+import { FindingCard } from "./ui/FindingCard";
+import type { SeverityTone } from "./ui/design";
 
-// ── Severity styling ──────────────────────────────────────────────────────────
-
-function severityStyle(severity: DiagnosisSeverity): {
-  bg: string;
-  border: string;
-  text: string;
-  icon: React.ReactNode;
-} {
-  switch (severity) {
-    case "P0":
-      return {
-        bg: "var(--status-error-bg)",
-        border: "var(--status-error-border)",
-        text: "var(--status-error-text)",
-        icon: <AlertOctagon style={{ width: "12px", height: "12px" }} />,
-      };
-    case "P1":
-      return {
-        bg: "var(--accent-bg)",
-        border: "var(--accent-border)",
-        text: "var(--accent)",
-        icon: <AlertTriangle style={{ width: "12px", height: "12px" }} />,
-      };
-    case "P2":
-    default:
-      return {
-        bg: "var(--bg-elevated)",
-        border: "var(--border-subtle)",
-        text: "var(--text-secondary)",
-        icon: <Info style={{ width: "12px", height: "12px" }} />,
-      };
-  }
-}
+/** Mapping from this panel's `P0/P1/P2` taxonomy onto the canonical
+ *  `crit/high/med` tones consumed by `severityTokens`. */
+const TONE_BY_SEVERITY: Record<DiagnosisSeverity, SeverityTone> = {
+  P0: "crit",
+  P1: "high",
+  P2: "med",
+};
 
 function outcomeStyle(outcome: SessionOutcome): { label: string; color: string } {
   switch (outcome) {
@@ -65,61 +41,29 @@ function formatUsd(n: number): string {
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
 
-function FindingCard({ finding }: { finding: DiagnosisFinding }) {
-  const style = severityStyle(finding.severity);
+function DiagnosisFindingCard({ finding }: { finding: DiagnosisFinding }) {
+  const hasImpact =
+    finding.estimatedImpactUsd !== undefined && finding.estimatedImpactUsd > 0;
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "6px",
-        padding: "11px 14px",
-        background: style.bg,
-        border: `1px solid ${style.border}`,
-        borderRadius: "var(--radius)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "4px",
-            color: style.text,
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.62rem",
-            fontWeight: 600,
-            letterSpacing: "0.04em",
-          }}
-        >
-          {style.icon}
-          {finding.severity}
-        </span>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.62rem",
-            color: "var(--text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {finding.category}
-        </span>
-        {finding.estimatedImpactUsd !== undefined && finding.estimatedImpactUsd > 0 && (
+    <FindingCard
+      tone={TONE_BY_SEVERITY[finding.severity]}
+      toneLabel={finding.severity}
+      tag={finding.category}
+      rightSlot={
+        hasImpact ? (
           <span
+            title="Approximate dollar impact"
             style={{
-              marginLeft: "auto",
               fontFamily: "var(--font-mono)",
               fontSize: "0.65rem",
               color: "var(--text-secondary)",
             }}
-            title="Approximate dollar impact"
           >
-            ~{formatUsd(finding.estimatedImpactUsd)}
+            ~{formatUsd(finding.estimatedImpactUsd!)}
           </span>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
       <p
         style={{
           fontSize: "0.82rem",
@@ -140,7 +84,7 @@ function FindingCard({ finding }: { finding: DiagnosisFinding }) {
       >
         {finding.advice}
       </p>
-    </div>
+    </FindingCard>
   );
 }
 
@@ -421,7 +365,7 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
             </span>
           </div>
         ) : (
-          report.findings.map((f) => <FindingCard key={f.category} finding={f} />)
+          report.findings.map((f) => <DiagnosisFindingCard key={f.category} finding={f} />)
         )}
       </div>
 

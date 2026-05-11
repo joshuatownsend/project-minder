@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertOctagon, AlertTriangle, Info, Activity } from "lucide-react";
+import { Activity } from "lucide-react";
 import { StackedStrip } from "@/components/stats/StackedStrip";
 import type {
   WasteOptimizerInfo,
@@ -12,6 +12,22 @@ import type {
 import type { YieldResult, YieldOutcome } from "@/lib/usage/yieldAnalysis";
 import { WORK_MODE_DISPLAY, workModeToSegments, type WorkMode, type WorkModeBreakdown } from "@/lib/usage/workMode";
 import { formatPct, formatTokensOrDash } from "@/lib/format";
+import { FindingCard } from "./ui/FindingCard";
+import type { SeverityTone } from "./ui/design";
+
+/** Mapping from waste optimizer's `high/medium/low` taxonomy onto the
+ *  canonical `crit/high/med` tones consumed by `severityTokens`. */
+const TONE_BY_SEVERITY: Record<WasteSeverity, SeverityTone> = {
+  high: "crit",
+  medium: "high",
+  low: "med",
+};
+
+const SEVERITY_LABEL: Record<WasteSeverity, string> = {
+  high: "HIGH",
+  medium: "MEDIUM",
+  low: "LOW",
+};
 
 interface EfficiencyResponse {
   slug: string;
@@ -37,35 +53,6 @@ function gradeColor(grade: WasteGrade): string {
   }
 }
 
-function severityStyle(severity: WasteSeverity) {
-  switch (severity) {
-    case "high":
-      return {
-        bg: "var(--status-error-bg)",
-        border: "var(--status-error-border)",
-        text: "var(--status-error-text)",
-        icon: <AlertOctagon style={{ width: "12px", height: "12px" }} />,
-        label: "HIGH",
-      };
-    case "medium":
-      return {
-        bg: "var(--accent-bg)",
-        border: "var(--accent-border)",
-        text: "var(--accent)",
-        icon: <AlertTriangle style={{ width: "12px", height: "12px" }} />,
-        label: "MEDIUM",
-      };
-    case "low":
-      return {
-        bg: "var(--bg-elevated)",
-        border: "var(--border-subtle)",
-        text: "var(--text-secondary)",
-        icon: <Info style={{ width: "12px", height: "12px" }} />,
-        label: "LOW",
-      };
-  }
-}
-
 function outcomeColor(o: YieldOutcome): string {
   switch (o) {
     case "productive": return "var(--status-active-text)";
@@ -83,57 +70,33 @@ function formatUsd(n: number): string {
 // ── Subcomponents ────────────────────────────────────────────────────────────
 
 function FindingRow({ finding }: { finding: WasteFinding }) {
-  const s = severityStyle(finding.severity);
   return (
-    <div
-      style={{
-        padding: "11px 14px",
-        background: s.bg,
-        border: `1px solid ${s.border}`,
-        borderRadius: "var(--radius)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "5px" }}>
+    <FindingCard
+      tone={TONE_BY_SEVERITY[finding.severity]}
+      toneLabel={SEVERITY_LABEL[finding.severity]}
+      tag={finding.code}
+      rightSlot={
         <span
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "4px",
-            color: s.text,
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.62rem",
-            fontWeight: 600,
-            letterSpacing: "0.04em",
-          }}
-        >
-          {s.icon}
-          {s.label}
-        </span>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.62rem",
+            fontSize: "0.7rem",
             color: "var(--text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
+            fontFamily: "var(--font-mono)",
           }}
         >
-          {finding.code}
-        </span>
-        <span style={{ marginLeft: "auto", fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
           ~{formatTokensOrDash(finding.tokensSaveable)} tokens
         </span>
-      </div>
-      <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+      }
+    >
+      <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>
         {finding.title}
       </div>
-      <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: "6px", lineHeight: 1.5 }}>
+      <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
         {finding.explanation}
       </div>
       <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5, fontStyle: "italic" }}>
         Fix: {finding.fix}
       </div>
-    </div>
+    </FindingCard>
   );
 }
 
