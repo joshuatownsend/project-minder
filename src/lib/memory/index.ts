@@ -20,7 +20,11 @@ const IMPORT_CACHE_MAX = 500;
 
 export interface MemoryListResult {
   entries: MemoryFileEntry[];
-  /** One summary per scanned project that has a memory dir. */
+  /**
+   * One summary per scanned project whose memory dir actually contains a
+   * MEMORY.md. Projects with a memory dir but no index file don't appear
+   * here — bodies still come through in `entries` with `indexed: undefined`.
+   */
   indexSummaries: MemoryIndexSummary[];
 }
 

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import os from "os";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   aggregateMemoryReads,
   canonicalMemoryKey,
@@ -95,6 +96,34 @@ describe("isMemoryPath", () => {
         projectClaudeMdSet([]),
       ),
     ).toBe(false);
+  });
+});
+
+describe("canonicalMemoryKey", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("expands ~/ to OS homedir so JSONL refs key under the real path", () => {
+    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\joshu");
+    // Without expansion, path.resolve("~/...") would resolve relative to CWD
+    // and the lookup would silently miss for every real Read event.
+    expect(canonicalMemoryKey("~/.claude/CLAUDE.md")).toBe(
+      "c:/users/joshu/.claude/claude.md",
+    );
+  });
+
+  it("also expands ~\\ on Windows-style separators", () => {
+    vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\joshu");
+    expect(canonicalMemoryKey("~\\.claude\\CLAUDE.md")).toBe(
+      "c:/users/joshu/.claude/claude.md",
+    );
+  });
+
+  it("leaves absolute paths untouched (slash + lowercase)", () => {
+    expect(canonicalMemoryKey("C:\\Dev\\Foo\\CLAUDE.md")).toBe(
+      "c:/dev/foo/claude.md",
+    );
   });
 });
 

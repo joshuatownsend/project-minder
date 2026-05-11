@@ -49,7 +49,12 @@ export function joinMemoryIndex(
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) continue;
     if (target.startsWith("#")) continue;
     if (target.startsWith("/") || target.startsWith("\\")) continue;
-    const cleaned = target.split("#")[0].split("?")[0].trim();
+    // Strip leading `./` (and `.\`) so `- [Foo](./foo.md)` matches `foo.md`
+    // on disk. Markdown link conventions commonly use the explicit
+    // current-dir prefix; without normalization those entries surface as
+    // false dangling links while the real file is flagged as orphan.
+    const stripped = target.replace(/^\.[/\\]+/, "");
+    const cleaned = stripped.split("#")[0].split("?")[0].trim();
     if (!cleaned.toLowerCase().endsWith(".md")) continue;
     const lower = cleaned.toLowerCase();
     linkedNames.add(lower);

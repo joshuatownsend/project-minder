@@ -132,6 +132,24 @@ describe("joinMemoryIndex", () => {
     expect(r.orphans).toEqual([]);
     expect(r.dangling).toEqual([]);
   });
+
+  it("strips ./ prefix so explicit current-dir links match plain basenames", () => {
+    const r = joinMemoryIndex(
+      [{ title: "Foo", target: "./foo.md", hook: "h" }],
+      ["foo.md"],
+    );
+    expect(r.dangling).toEqual([]);
+    expect(r.orphans).toEqual([]);
+  });
+
+  it("also strips .\\ on Windows-style markdown", () => {
+    const r = joinMemoryIndex(
+      [{ title: "Foo", target: ".\\foo.md", hook: "h" }],
+      ["foo.md"],
+    );
+    expect(r.dangling).toEqual([]);
+    expect(r.orphans).toEqual([]);
+  });
 });
 
 describe("summarizeMemoryIndex", () => {

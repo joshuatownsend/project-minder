@@ -1,4 +1,5 @@
 import path from "path";
+import os from "os";
 import { parseAllSessions } from "@/lib/usage/parser";
 import { normalizePath as toForwardSlashes } from "@/lib/platform";
 import type { UsageTurn } from "@/lib/usage/types";
@@ -71,9 +72,16 @@ export async function getMemoryUsage(
  * case the user typed) hash to the same bucket. Lookup sites MUST use this
  * function — comparing a raw absPath against a normalized key silently
  * misses on Windows.
+ *
+ * Expands `~/` to the OS homedir before resolution. Claude Code routinely
+ * records `file_path: "~/.claude/CLAUDE.md"` in JSONL; without expansion the
+ * resolve happens relative to the server CWD and the usage join misses.
  */
 export function canonicalMemoryKey(absPath: string): string {
-  return toForwardSlashes(path.resolve(absPath)).toLowerCase();
+  const expanded = absPath.startsWith("~/") || absPath.startsWith("~\\")
+    ? path.join(os.homedir(), absPath.slice(2))
+    : absPath;
+  return toForwardSlashes(path.resolve(expanded)).toLowerCase();
 }
 
 /**

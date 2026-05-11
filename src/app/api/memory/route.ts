@@ -17,9 +17,12 @@ export async function GET(request: NextRequest) {
     getMemoryUsage(scan.projects),
   ]);
 
+  // listMemoryFiles caches entries by reference, so assignment here would
+  // bleed `usage` into subsequent requests after the usage cache invalidated
+  // (e.g. JSONL pruning). Set explicitly on every iteration — undefined if
+  // no stat — so the response always reflects the current telemetry state.
   for (const e of entries) {
-    const stat = usage.get(canonicalMemoryKey(e.absPath));
-    if (stat) e.usage = stat;
+    e.usage = usage.get(canonicalMemoryKey(e.absPath));
   }
 
   let filtered = entries;
