@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import path from "path";
 import {
   aggregateMemoryReads,
+  canonicalMemoryKey,
   isMemoryPath,
 } from "@/lib/memory/usageTracker";
 import type { UsageTurn } from "@/lib/usage/types";
@@ -46,56 +46,61 @@ function makeAssistantTurn(
   };
 }
 
+function projectClaudeMdSet(paths: string[]): Set<string> {
+  return new Set(paths.map((p) => `${p.replace(/\\/g, "/").toLowerCase()}/claude.md`));
+}
+
 describe("isMemoryPath", () => {
   it("matches user CLAUDE.md (home-relative shape)", () => {
-    expect(isMemoryPath("C:\\Users\\joshu\\.claude\\CLAUDE.md", [])).toBe(true);
-    expect(isMemoryPath("/home/josh/.claude/CLAUDE.md", [])).toBe(true);
+    expect(isMemoryPath("C:\\Users\\joshu\\.claude\\CLAUDE.md", projectClaudeMdSet([]))).toBe(true);
+    expect(isMemoryPath("/home/josh/.claude/CLAUDE.md", projectClaudeMdSet([]))).toBe(true);
   });
 
   it("matches auto-memory body files", () => {
     expect(
       isMemoryPath(
         "C:\\Users\\joshu\\.claude\\projects\\C--dev-foo\\memory\\feedback_design.md",
-        [],
+        projectClaudeMdSet([]),
       ),
     ).toBe(true);
     expect(
       isMemoryPath(
         "/home/josh/.claude/projects/abc/memory/user_role.md",
-        [],
+        projectClaudeMdSet([]),
       ),
     ).toBe(true);
   });
 
   it("matches a scanned project's CLAUDE.md", () => {
-    expect(isMemoryPath("C:\\dev\\foo\\CLAUDE.md", ["C:\\dev\\foo"])).toBe(true);
-    expect(isMemoryPath("/repos/foo/CLAUDE.md", ["/repos/foo"])).toBe(true);
+    expect(isMemoryPath("C:\\dev\\foo\\CLAUDE.md", projectClaudeMdSet(["C:\\dev\\foo"]))).toBe(true);
+    expect(isMemoryPath("/repos/foo/CLAUDE.md", projectClaudeMdSet(["/repos/foo"]))).toBe(true);
   });
 
   it("is case-insensitive on the basename + extension", () => {
     expect(
-      isMemoryPath("C:\\Users\\joshu\\.CLAUDE\\claude.md", []),
+      isMemoryPath("C:\\Users\\joshu\\.CLAUDE\\claude.md", projectClaudeMdSet([])),
     ).toBe(true);
   });
 
   it("rejects non-memory paths", () => {
-    expect(isMemoryPath("C:\\dev\\foo\\src\\index.ts", ["C:\\dev\\foo"])).toBe(false);
-    expect(isMemoryPath("/home/josh/.claude/projects/abc/sessions/x.jsonl", [])).toBe(false);
-    expect(isMemoryPath("", [])).toBe(false);
+    expect(isMemoryPath("C:\\dev\\foo\\src\\index.ts", projectClaudeMdSet(["C:\\dev\\foo"]))).toBe(false);
+    expect(isMemoryPath("/home/josh/.claude/projects/abc/sessions/x.jsonl", projectClaudeMdSet([]))).toBe(false);
+    expect(isMemoryPath("", projectClaudeMdSet([]))).toBe(false);
   });
 
   it("rejects auto-memory paths that aren't .md", () => {
     expect(
       isMemoryPath(
         "/home/josh/.claude/projects/abc/memory/notes.txt",
-        [],
+        projectClaudeMdSet([]),
       ),
     ).toBe(false);
   });
 });
 
 describe("aggregateMemoryReads", () => {
-  const memPath = path.resolve("C:\\Users\\joshu\\.claude\\projects\\C--dev-foo\\memory\\user_role.md");
+  const memPath = "C:\\Users\\joshu\\.claude\\projects\\C--dev-foo\\memory\\user_role.md";
+  const memKey = canonicalMemoryKey(memPath);
 
   it("counts Read events targeting memory files", () => {
     const sessions = new Map<string, UsageTurn[]>([
@@ -108,7 +113,7 @@ describe("aggregateMemoryReads", () => {
       ],
     ]);
     const result = aggregateMemoryReads(sessions, []);
-    const stat = result.get(memPath);
+    const stat = result.get(memKey);
     expect(stat?.readCount).toBe(2);
     expect(stat?.lastReadAt).toBe("2026-05-10T11:00:00Z");
   });
@@ -160,8 +165,8 @@ describe("aggregateMemoryReads", () => {
       ],
     ]);
     const result = aggregateMemoryReads(sessions, []);
-    expect(result.get(memPath)?.readCount).toBe(3);
-    expect(result.get(memPath)?.lastReadAt).toBe("2026-05-11T08:00:00Z");
+    expect(result.get(memKey)?.readCount).toBe(3);
+    expect(result.get(memKey)?.lastReadAt).toBe("2026-05-11T08:00:00Z");
   });
 
   it("skips assistant turns whose Read args lack file_path", () => {
@@ -183,7 +188,7 @@ describe("aggregateMemoryReads", () => {
       ],
     ]);
     const result = aggregateMemoryReads(sessions, [project("foo", "C:\\dev\\foo")]);
-    expect(result.get(path.resolve(projectClaudeMd))?.readCount).toBe(1);
+    expect(result.get(canonicalMemoryKey(projectClaudeMd))?.readCount).toBe(1);
   });
 
   it("ignores user-role turns (defensive — non-assistant tool calls shouldn't exist but check anyway)", () => {

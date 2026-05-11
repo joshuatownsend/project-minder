@@ -8,8 +8,9 @@ import {
   MEMORY_INDEX_LINE_CAP,
   MEMORY_TOTAL_BODY_BUDGET_BYTES,
   budgetTone,
-  formatBytes,
 } from "@/lib/memory/budget";
+import { formatKB } from "@/lib/utils";
+import { Chip } from "./ui/chip";
 import { MemoryEditor } from "./MemoryEditor";
 
 const SCOPE_LABEL: Record<MemoryScope, string> = {
@@ -32,12 +33,11 @@ export function MemoryBrowser() {
   const [showStaleOnly, setShowStaleOnly] = useState(false);
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
 
-  async function reload(signal?: AbortSignal) {
+  // Unread filter rides in the URL so the server's 30d cutoff is the single
+  // source of truth — the client never recomputes "what counts as unread".
+  async function reload(unread: boolean, signal?: AbortSignal) {
     try {
-      // Drop unread filter into the URL so the server's 30d cutoff is the
-      // single source of truth; the client doesn't recompute "what counts
-      // as unread" — that contract lives in /api/memory.
-      const url = showUnreadOnly ? "/api/memory?unread=true" : "/api/memory";
+      const url = unread ? "/api/memory?unread=true" : "/api/memory";
       const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const json = (await r.json()) as {
@@ -55,9 +55,8 @@ export function MemoryBrowser() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    reload(ctrl.signal);
+    reload(showUnreadOnly, ctrl.signal);
     return () => ctrl.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showUnreadOnly]);
 
   const filtered = useMemo(() => {
@@ -113,12 +112,8 @@ export function MemoryBrowser() {
   }, [indexSummaries]);
 
   const budgetRollup = useMemo(() => {
-    // Total bytes-on-disk across every always-loaded memory surface --
-    // ~/.claude/CLAUDE.md, each scanned project's CLAUDE.md, and every
-    // auto-memory body. This is the aggregate the article frames as the
-    // soft Hermes-style budget (~32KB). Per-file Phase 1 D2 we also
-    // surface a chip on individual rows > 4KB. No tone on the aggregate
-    // -- it's informational; the alarm signal is the per-row chip.
+    // No tone on the aggregate -- it's informational; the alarm signal
+    // lives on per-row chips for files over the large-file threshold.
     if (!entries) return { totalBytes: 0, largeFileCount: 0 };
     let totalBytes = 0;
     let largeFileCount = 0;
@@ -216,7 +211,7 @@ export function MemoryBrowser() {
           )}
         </div>
         {selected ? (
-          <MemoryEditor entry={selected} onSaved={reload} />
+          <MemoryEditor entry={selected} onSaved={() => reload(showUnreadOnly)} />
         ) : (
           <div
             style={{
@@ -237,12 +232,8 @@ export function MemoryBrowser() {
   );
 }
 
-// Article principle 3 + 4: surface the always-loaded index size, the cost of
-// bad bookkeeping (orphans / dangling links), and the budget envelope in a
-// single glance so the user can see whether MEMORY.md is healthy without
-// opening every file. The line-count chip turns amber at 80% of the 200-line
-// truncation cap and red at 95% (data-loss imminent). The total-bytes chip is
-// informational only -- alarm signal lives on the per-row chip for >4KB files.
+// Line-count chip turns amber at 80% of the 200-line index truncation cap
+// and red at 95% (data-loss imminent — Claude Code drops content past 200).
 function IndexBanner({
   rollup,
   budget,
@@ -293,13 +284,13 @@ function IndexBanner({
         </>
       )}
       <span
-        title={`Soft target ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)}; informational only`}
+        title={`Soft target ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)}; informational only`}
       >
-        total {formatBytes(budget.totalBytes)}
-        {budget.totalBytes > 0 && ` (~${totalBudgetPct}% of ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)})`}
+        total {formatKB(budget.totalBytes)}
+        {budget.totalBytes > 0 && ` (~${totalBudgetPct}% of ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)})`}
       </span>
       {budget.largeFileCount > 0 && (
-        <span title={`Files larger than ${formatBytes(MEMORY_FILE_LARGE_BYTES)}`}>
+        <span title={`Files larger than ${formatKB(MEMORY_FILE_LARGE_BYTES)}`}>
           {budget.largeFileCount} large file{budget.largeFileCount === 1 ? "" : "s"}
         </span>
       )}
@@ -410,7 +401,11 @@ function MemoryRow({
           {entry.displayName}
         </span>
         {entry.sizeBytes > MEMORY_FILE_LARGE_BYTES && (
-          <SizeChip bytes={entry.sizeBytes} />
+          <Chip
+            label={formatKB(entry.sizeBytes)}
+            muted
+            title={`File size exceeds ${formatKB(MEMORY_FILE_LARGE_BYTES)}; soft total-body target is ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)}`}
+          />
         )}
         {stale && <StaleChip entry={entry} />}
       </div>
@@ -454,10 +449,7 @@ function MemoryRow({
         {entry.usage && (
           <>
             {" · "}
-            <span title={`Last read ${formatDistanceToNow(new Date(entry.usage.lastReadAt), { addSuffix: true })}`}>
-              Read {entry.usage.readCount}× ·{" "}
-              {formatDistanceToNow(new Date(entry.usage.lastReadAt), { addSuffix: true })}
-            </span>
+            <UsageBadge usage={entry.usage} />
           </>
         )}
       </span>
@@ -465,34 +457,18 @@ function MemoryRow({
   );
 }
 
-// Per-file size hint (Feature D2). Shown only when sizeBytes > 4KB so the
-// row gutter doesn't get noisy with size info on routine 200-byte memories.
-// Same tooltip pattern as StaleChip -- the chip itself is terse, hover gives
-// the soft-budget context.
-function SizeChip({ bytes }: { bytes: number }) {
+function UsageBadge({ usage }: { usage: NonNullable<MemoryFileEntry["usage"]> }) {
+  const rel = formatDistanceToNow(new Date(usage.lastReadAt), { addSuffix: true });
   return (
-    <span
-      title={`File size exceeds ${formatBytes(MEMORY_FILE_LARGE_BYTES)}; soft total-body target is ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)}`}
-      style={{
-        fontSize: "0.58rem",
-        fontFamily: "var(--font-mono)",
-        color: "var(--text-muted)",
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "3px",
-        padding: "1px 5px",
-        letterSpacing: "0.04em",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {formatBytes(bytes)}
+    <span title={`Last read ${rel}`}>
+      Read {usage.readCount}× · {rel}
     </span>
   );
 }
 
 function StaleChip({ entry }: { entry: MemoryFileEntry }) {
   const reasons: string[] = [];
-  const refs = entry.stale.brokenRefs ?? [];
+  const refs = entry.stale.brokenRefs;
   if (entry.stale.brokenImports.length > 0) {
     const n = entry.stale.brokenImports.length;
     reasons.push(`${n} broken @import${n === 1 ? "" : "s"}`);
@@ -532,6 +508,6 @@ function isStale(entry: MemoryFileEntry): boolean {
   return (
     entry.stale.ageOver30d ||
     entry.stale.brokenImports.length > 0 ||
-    (entry.stale.brokenRefs?.length ?? 0) > 0
+    entry.stale.brokenRefs.length > 0
   );
 }

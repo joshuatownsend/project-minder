@@ -1,13 +1,17 @@
 import path from "path";
 import { parseAllSessions } from "@/lib/usage/parser";
+import { normalizePath as toForwardSlashes } from "@/lib/platform";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { ProjectData } from "@/lib/types";
 
-// Memory Observatory Phase 1, Feature B. Replay session JSONLs to count how
-// often each memory file (user CLAUDE.md, project CLAUDE.md, auto-memory
-// body) has been opened by Claude Code. The aggregation runs over the
-// existing `parseAllSessions()` cache — no second JSONL pass, no parser
-// modification. Write-through to SQLite (migration v13) for durable storage.
+// Replay session JSONLs to count how often each memory file (user CLAUDE.md,
+// project CLAUDE.md, auto-memory body) has been opened by Claude Code. The
+// aggregation runs over the existing `parseAllSessions()` cache — no second
+// JSONL pass, no parser modification. Write-through to SQLite (memory_usage
+// table) for durable storage across restarts.
+
+const USER_CLAUDE_MD_RE = /\/\.claude\/claude\.md$/;
+const AUTO_MEMORY_RE = /\/\.claude\/projects\/[^/]+\/memory\/[^/]+\.md$/;
 
 export interface MemoryUsageStat {
   readCount: number;
@@ -47,7 +51,10 @@ export async function getMemoryUsage(
       const result = aggregateMemoryReads(sessions, projects);
       g.__memoryUsageCache = { data: result, cachedAt: Date.now() };
       // Write-through is best-effort: a DB outage shouldn't break /memory.
-      void persistUsageMap(result).catch(() => {});
+      // Log the failure so a broken migration isn't invisible in the field.
+      void persistUsageMap(result).catch((err) => {
+        console.warn("[memory] usage write-through to SQLite failed:", err);
+      });
       return result;
     } finally {
       g.__memoryUsageInFlight = undefined;
@@ -58,19 +65,32 @@ export async function getMemoryUsage(
 }
 
 /**
+ * Map key used by the usage map. Lowercased forward-slash form so the
+ * scanner's `path.resolve(...)` output (Windows preserves case but compares
+ * case-insensitively) and Claude Code's JSONL `file_path` argument (whatever
+ * case the user typed) hash to the same bucket. Lookup sites MUST use this
+ * function — comparing a raw absPath against a normalized key silently
+ * misses on Windows.
+ */
+export function canonicalMemoryKey(absPath: string): string {
+  return toForwardSlashes(path.resolve(absPath)).toLowerCase();
+}
+
+/**
  * Pure aggregator. Walks every assistant turn's tool_use blocks and counts
  * Read events whose `file_path` argument is a memory path. Grep + Glob
- * targeting memory dirs are NOT counted per-file (their `path` argument is
- * a directory, not a file — there's no specific row to attribute the read
- * to). They show up in the existing tool-usage analytics on /usage instead.
+ * targeting memory dirs are excluded — their `path` argument is a directory,
+ * not a file, so there's no per-row target to attribute the read to.
  *
- * Exported for unit testing — `getMemoryUsage` is the production entry point.
+ * Exported for unit testing; `getMemoryUsage` is the production entry point.
  */
 export function aggregateMemoryReads(
   sessions: Map<string, UsageTurn[]>,
   projects: ProjectData[],
 ): Map<string, MemoryUsageStat> {
-  const projectPaths = projects.map((p) => p.path);
+  const projectClaudeMdSet = new Set(
+    projects.map((p) => `${toForwardSlashes(p.path).toLowerCase()}/claude.md`),
+  );
   const result = new Map<string, MemoryUsageStat>();
 
   for (const turns of sessions.values()) {
@@ -80,11 +100,11 @@ export function aggregateMemoryReads(
         if (tc.name !== "Read") continue;
         const filePath = tc.arguments?.file_path;
         if (typeof filePath !== "string" || !filePath) continue;
-        if (!isMemoryPath(filePath, projectPaths)) continue;
-        const norm = normalizePath(filePath);
-        const existing = result.get(norm);
+        if (!isMemoryPath(filePath, projectClaudeMdSet)) continue;
+        const key = canonicalMemoryKey(filePath);
+        const existing = result.get(key);
         if (!existing) {
-          result.set(norm, { readCount: 1, lastReadAt: turn.timestamp });
+          result.set(key, { readCount: 1, lastReadAt: turn.timestamp });
         } else {
           existing.readCount++;
           if (turn.timestamp > existing.lastReadAt) {
@@ -104,30 +124,17 @@ export function aggregateMemoryReads(
  *   2. `~/.claude/projects/<encoded>/memory/<anything>.md` (auto scope)
  *   3. A scanned project's `<projectPath>/CLAUDE.md` (project scope)
  *
- * Case-insensitive on Windows. Normalizes back/forward slashes so the same
- * JSONL emitted on either platform classifies the same way.
+ * The `.claude` substring guard is the cheap early-out — 99% of Read events
+ * in a typical session target source files, not memory, and we'd rather
+ * skip those with an `indexOf` than a regex test.
  */
-export function isMemoryPath(absPath: string, projectPaths: string[]): boolean {
+export function isMemoryPath(absPath: string, projectClaudeMdSet: Set<string>): boolean {
   if (!absPath) return false;
-  const norm = absPath.replace(/\\/g, "/");
-  const lower = norm.toLowerCase();
-  // User CLAUDE.md
-  if (/\/\.claude\/claude\.md$/.test(lower)) return true;
-  // Auto-memory body file
-  if (/\/\.claude\/projects\/[^/]+\/memory\/[^/]+\.md$/.test(lower)) return true;
-  // Project CLAUDE.md
-  for (const p of projectPaths) {
-    const projNorm = p.replace(/\\/g, "/").toLowerCase();
-    if (lower === `${projNorm}/claude.md`) return true;
-  }
-  return false;
-}
-
-function normalizePath(p: string): string {
-  // Use path.resolve to canonicalize separators, then return as-is. We don't
-  // realpath (no symlink resolution) — abs_path is the literal file_path
-  // argument Claude Code emitted, which is what the user actually edited.
-  return path.resolve(p);
+  const lower = toForwardSlashes(absPath).toLowerCase();
+  if (!lower.includes("/.claude") && !projectClaudeMdSet.has(lower)) return false;
+  if (USER_CLAUDE_MD_RE.test(lower)) return true;
+  if (AUTO_MEMORY_RE.test(lower)) return true;
+  return projectClaudeMdSet.has(lower);
 }
 
 async function persistUsageMap(data: Map<string, MemoryUsageStat>): Promise<void> {

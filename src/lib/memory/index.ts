@@ -125,12 +125,11 @@ function scopeOrder(scope: MemoryFileEntry["scope"]): number {
 }
 
 async function tryUser(ctx: ListContext): Promise<MemoryFileEntry | null> {
-  // User CLAUDE.md has no parent project. Refs in it are checked against
-  // every scanned project; first hit wins.
+  // User CLAUDE.md has no parent project; refs check against every project.
   return readEntry(
     userMemoryPath(),
     { scope: "user", displayName: "User CLAUDE.md" },
-    { parent: null, all: ctx.allProjectPaths },
+    null,
     ctx,
   );
 }
@@ -144,7 +143,7 @@ async function tryProject(p: ProjectData, ctx: ListContext): Promise<MemoryFileE
       projectName: p.name,
       displayName: "CLAUDE.md",
     },
-    { parent: p.path, all: ctx.allProjectPaths },
+    p.path,
     ctx,
   );
 }
@@ -202,7 +201,7 @@ async function tryAuto(p: ProjectData, ctx: ListContext): Promise<AutoResult | n
           projectName: p.name,
           displayName: name,
         },
-        { parent: p.path, all: ctx.allProjectPaths },
+        p.path,
         ctx,
       );
       if (!entry) return null;
@@ -226,7 +225,7 @@ interface PartialEntry {
 async function readEntry(
   absPath: string,
   meta: PartialEntry,
-  projects: { parent: string | null; all: string[] },
+  parentProject: string | null,
   ctx: ListContext,
 ): Promise<MemoryFileEntry | null> {
   let stat: Awaited<ReturnType<typeof fs.stat>>;
@@ -247,7 +246,7 @@ async function readEntry(
     return null;
   }
 
-  const stale = await computeStaleness(absPath, raw, stat.mtimeMs, projects, ctx);
+  const stale = await computeStaleness(absPath, raw, stat.mtimeMs, parentProject, ctx);
 
   return {
     id: encodeMemoryId(absPath),
@@ -267,7 +266,7 @@ async function computeStaleness(
   absPath: string,
   raw: string,
   mtimeMs: number,
-  projects: { parent: string | null; all: string[] },
+  parentProject: string | null,
   ctx: ListContext,
 ): Promise<MemoryStaleness> {
   const ageOver30d = Date.now() - mtimeMs > STALE_AGE_MS;
@@ -302,7 +301,11 @@ async function computeStaleness(
   let brokenRefs: string[] = [];
   try {
     const candidates = extractRefCandidates(raw);
-    brokenRefs = await verifyRefs(candidates, projects, ctx.existsMemo);
+    brokenRefs = await verifyRefs(
+      candidates,
+      { parent: parentProject, all: ctx.allProjectPaths },
+      ctx.existsMemo,
+    );
   } catch {
     // best-effort; leave brokenRefs empty
   }
