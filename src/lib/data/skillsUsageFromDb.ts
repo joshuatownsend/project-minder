@@ -40,9 +40,15 @@ interface Row {
  * `[]` when no Skill invocations are indexed; caller's façade promotes
  * this to a fall-through so a brand-new install with the indexer still
  * warming up doesn't show "no skills used" when JSONL files exist.
+ *
+ * @param sinceIso Optional ISO8601 lower bound on `tu.ts`. Filters
+ *   invocations to those at or after the timestamp. `tu.ts` is stored
+ *   as ISO8601 TEXT and sorts lexicographically, so the predicate is
+ *   index-friendly. Omit for all-time stats.
  */
-export function loadSkillUsageFromDb(db: DatabaseT.Database): SkillStats[] {
-  const rows = prepCached(
+export function loadSkillUsageFromDb(db: DatabaseT.Database, sinceIso?: string): SkillStats[] {
+  const sinceClause = sinceIso ? " AND tu.ts >= ?" : "";
+  const stmt = prepCached(
     db,
     `SELECT tu.skill_name AS skill_name,
             s.project_slug AS project_slug,
@@ -52,9 +58,10 @@ export function loadSkillUsageFromDb(db: DatabaseT.Database): SkillStats[] {
             MAX(tu.ts) AS last_ts
      FROM tool_uses tu
      JOIN sessions s USING (session_id)
-     WHERE tu.tool_name = 'Skill' AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
+     WHERE tu.tool_name = 'Skill' AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''${sinceClause}
      GROUP BY tu.skill_name, s.project_slug, tu.session_id`
-  ).all() as Row[];
+  );
+  const rows = (sinceIso ? stmt.all(sinceIso) : stmt.all()) as Row[];
 
   if (rows.length === 0) return [];
 

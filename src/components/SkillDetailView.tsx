@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ProvenanceBadge, ProvenanceDetails } from "./ProvenanceBadge";
@@ -16,11 +16,13 @@ import {
 } from "./CatalogItemDetail";
 import type { SkillEntry } from "@/lib/indexer/types";
 import type { ItemUsageStats } from "./ItemUsageBreakdown";
+import type { UsagePeriod } from "@/lib/usage/period";
 
 interface SkillDetailResponse {
   entry: SkillEntry;
   bodyFull: string;
   usage?: ItemUsageStats;
+  period: UsagePeriod;
 }
 
 interface Props {
@@ -32,14 +34,22 @@ export function SkillDetailView({ id }: Props) {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<UsagePeriod>("all");
+  const prevIdRef = useRef(id);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     setNotFound(false);
     setError(null);
+    // See AgentDetailView for the rationale — clear stale data on id
+    // navigation; preserve it on period-only changes (Codex P2 on PR #113).
+    if (prevIdRef.current !== id) {
+      setData(null);
+      prevIdRef.current = id;
+    }
 
-    fetch(`/api/skills/${encodeURIComponent(id)}`, { signal: ctrl.signal })
+    fetch(`/api/skills/${encodeURIComponent(id)}?period=${period}`, { signal: ctrl.signal })
       .then(async (r) => {
         if (r.status === 404) {
           setNotFound(true);
@@ -61,9 +71,9 @@ export function SkillDetailView({ id }: Props) {
       });
 
     return () => ctrl.abort();
-  }, [id]);
+  }, [id, period]);
 
-  if (loading) return <Skeleton className="h-96" />;
+  if (loading && !data) return <Skeleton className="h-96" />;
 
   if (notFound) {
     return (
@@ -117,7 +127,12 @@ export function SkillDetailView({ id }: Props) {
           <BodyTab content={bodyFull || entry.bodyExcerpt} filePath={entry.filePath} />
         </TabsContent>
         <TabsContent value="usage">
-          <ItemUsageBreakdown usage={usage} />
+          <ItemUsageBreakdown
+            usage={usage}
+            period={period}
+            onPeriodChange={setPeriod}
+            loading={loading}
+          />
         </TabsContent>
         <TabsContent value="versions">
           <VersionsTab provenance={entry.provenance} />

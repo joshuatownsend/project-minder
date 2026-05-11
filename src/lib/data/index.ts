@@ -22,6 +22,9 @@ import type {
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
+import { getPeriodStart } from "@/lib/usage/periods";
+import type { Period } from "@/lib/usage/constants";
+import type { AggregatorPeriod } from "@/lib/usage/period";
 import type {
   SessionDetail,
   SessionSummary,
@@ -498,7 +501,7 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * migration.
  */
 async function runFileUsage(
-  period: "today" | "7d" | "30d" | "all" | "week" | "month",
+  period: AggregatorPeriod,
   project: string | undefined,
   source: string | undefined
 ): Promise<UsageResult> {
@@ -518,7 +521,7 @@ async function runFileUsage(
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
-  period: "today" | "7d" | "30d" | "all" | "week" | "month",
+  period: AggregatorPeriod,
   project?: string,
   source?: string
 ): Promise<UsageResult> {
@@ -722,24 +725,38 @@ export interface AgentUsageResult {
  * In both backends, per-agent cost is computed via a parallel sidechain
  * file-parse (no schema migration required) and merged into the stats.
  */
-export async function getAgentUsage(): Promise<AgentUsageResult> {
+export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageResult> {
   const { computeAgentCostFromFiles } = await import("@/lib/usage/agentCost");
 
+  // Per-agent cost is computed by walking sidechain JSONL turns and does
+  // not currently honor a period filter. When the caller requests a
+  // bounded window we deliberately skip the cost merge — the Cost tile
+  // in ItemUsageBreakdown is already conditional on `costUsd > 0`, so it
+  // simply hides rather than reporting all-time cost against bounded
+  // invocations. All-time (period="all") keeps the existing behavior.
   async function withCost(stats: AgentStats[], meta: AgentUsageResult["meta"]): Promise<AgentUsageResult> {
+    if (period !== "all") return { stats, meta };
     const costMap = await computeAgentCostFromFiles();
     return { stats: mergeAgentCost(stats, costMap), meta };
   }
 
   if (!dbModeRequested()) {
-    const { stats, meta } = await runFileAgentUsage();
+    const { stats, meta } = await runFileAgentUsage(period);
     return withCost(stats, meta);
   }
 
   const db = await getReadyDb();
-  const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db));
-  if (stats.length === 0) {
+  const sinceIso = getPeriodStart(period)?.toISOString();
+  const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db, sinceIso));
+  // Cold-index fall-through ONLY applies to the all-time window. With
+  // a bounded period (24h / 7d / 30d), an empty result is a legitimate
+  // "no recent invocations" answer — falling back to file-parse would
+  // pay the full JSONL walk cost per toggle click for that common
+  // no-data case and would also flap the response backend between
+  // `db` and `file`. See Codex P1 on PR #113.
+  if (stats.length === 0 && period === "all") {
     logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
-    const { stats: fileStats, meta } = await runFileAgentUsage();
+    const { stats: fileStats, meta } = await runFileAgentUsage(period);
     return withCost(fileStats, meta);
   }
   return withCost(stats, { backend: "db" });
@@ -757,7 +774,7 @@ function mergeAgentCost(
   });
 }
 
-async function runFileAgentUsage(): Promise<AgentUsageResult> {
+async function runFileAgentUsage(period: Period = "all"): Promise<AgentUsageResult> {
   // Lazy-import the file-parse pipeline to keep the DB happy-path off
   // the import graph for `parseAllSessions` / `groupAgentCalls` —
   // under normal operation we never load them.
@@ -765,7 +782,8 @@ async function runFileAgentUsage(): Promise<AgentUsageResult> {
   const { groupAgentCalls } = await import("@/lib/usage/agentParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
-  const stats = groupAgentCalls(allTurns);
+  const sinceMs = getPeriodStart(period)?.getTime();
+  const stats = groupAgentCalls(allTurns, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 
@@ -784,24 +802,29 @@ export interface SkillUsageResult {
  * - DB mode + zero Skill rows: file-parse fallback (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
-export async function getSkillUsage(): Promise<SkillUsageResult> {
-  if (!dbModeRequested()) return runFileSkillUsage();
+export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
+  if (!dbModeRequested()) return runFileSkillUsage(period);
 
   const db = await getReadyDb();
-  const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db));
-  if (stats.length === 0) {
+  const sinceIso = getPeriodStart(period)?.toISOString();
+  const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db, sinceIso));
+  // Same cold-index fall-through guard as `getAgentUsage` — empty rows
+  // for a bounded period is a legitimate answer, not an indexer warmup
+  // signal. See Codex P1 on PR #113.
+  if (stats.length === 0 && period === "all") {
     logIntentionalFallthrough("getSkillUsage", "DB has zero Skill rows (indexer warming up?)");
-    return runFileSkillUsage();
+    return runFileSkillUsage(period);
   }
   return { stats, meta: { backend: "db" } };
 }
 
-async function runFileSkillUsage(): Promise<SkillUsageResult> {
+async function runFileSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
   const { parseAllSessions } = await import("@/lib/usage/parser");
   const { groupSkillCalls } = await import("@/lib/usage/skillParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
-  const stats = groupSkillCalls(allTurns);
+  const sinceMs = getPeriodStart(period)?.getTime();
+  const stats = groupSkillCalls(allTurns, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 

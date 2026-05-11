@@ -41,9 +41,16 @@ interface Row {
  * `[]` when no Agent invocations are indexed; caller's façade promotes
  * this to a fall-through so a brand-new install with the indexer still
  * warming up doesn't show "no agents used" when JSONL files exist.
+ *
+ * @param sinceIso Optional ISO8601 lower bound on `tu.ts`. Filters
+ *   invocations to those at or after the timestamp. `tu.ts` is stored
+ *   as ISO8601 TEXT in the schema and sorts lexicographically, so the
+ *   predicate is index-friendly. Omit (or pass `undefined`) for
+ *   all-time stats — preserves the existing route behavior.
  */
-export function loadAgentUsageFromDb(db: DatabaseT.Database): AgentStats[] {
-  const rows = prepCached(
+export function loadAgentUsageFromDb(db: DatabaseT.Database, sinceIso?: string): AgentStats[] {
+  const sinceClause = sinceIso ? " AND tu.ts >= ?" : "";
+  const stmt = prepCached(
     db,
     `SELECT tu.agent_name AS agent_name,
             s.project_slug AS project_slug,
@@ -53,9 +60,10 @@ export function loadAgentUsageFromDb(db: DatabaseT.Database): AgentStats[] {
             MAX(tu.ts) AS last_ts
      FROM tool_uses tu
      JOIN sessions s USING (session_id)
-     WHERE tu.tool_name = 'Agent' AND tu.agent_name IS NOT NULL AND tu.agent_name <> ''
+     WHERE tu.tool_name = 'Agent' AND tu.agent_name IS NOT NULL AND tu.agent_name <> ''${sinceClause}
      GROUP BY tu.agent_name, s.project_slug, tu.session_id`
-  ).all() as Row[];
+  );
+  const rows = (sinceIso ? stmt.all(sinceIso) : stmt.all()) as Row[];
 
   if (rows.length === 0) return [];
 

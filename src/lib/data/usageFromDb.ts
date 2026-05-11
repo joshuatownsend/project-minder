@@ -13,7 +13,7 @@ import type {
 } from "@/lib/usage/types";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
-import { getPeriodStart } from "@/lib/usage/periods";
+import { periodSinceIso } from "@/lib/usage/period";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay } from "@/lib/usage/activityBuckets";
@@ -47,10 +47,11 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 //    path includes the whole session. period=all has zero divergence;
 //    bounded periods over-count boundary sessions slightly.
 
-/** Convert a Period token to an inclusive ISO start timestamp, or null for "all". */
-export function periodStartIso(period: string, now: Date = new Date()): string | null {
-  return getPeriodStart(period, now)?.toISOString() ?? null;
-}
+/** Convert a Period token to an inclusive ISO start timestamp, or null for "all".
+ *  Re-export of `periodSinceIso` from `usage/period.ts` so existing call sites
+ *  in this file keep their familiar name. The single source of the helper
+ *  is `period.ts`; this name remains here for back-compat. */
+export const periodStartIso = periodSinceIso;
 
 /**
  * Max `file_mtime_ms` across all sessions. Analog of `getJsonlMaxMtime`

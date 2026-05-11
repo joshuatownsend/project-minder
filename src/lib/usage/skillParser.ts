@@ -1,12 +1,24 @@
 import type { SkillStats, UsageTurn } from "./types";
 
-export function groupSkillCalls(turns: UsageTurn[]): SkillStats[] {
+/**
+ * Aggregate Skill calls across the given UsageTurn[].
+ *
+ * @param turns All parsed JSONL turns.
+ * @param sinceMs Optional Unix-ms lower bound. Turns with a timestamp
+ *   strictly before this are skipped — matches the SQL `tu.ts >= ?`
+ *   predicate on the DB-backed path. Omit for all-time stats.
+ */
+export function groupSkillCalls(turns: UsageTurn[], sinceMs?: number): SkillStats[] {
   const statsMap = new Map<string, SkillStats>();
   // Per-skill: sessionId → latest timestamp seen in that session (for sort + dedup)
   const sessionTimes = new Map<string, Map<string, string>>();
 
   for (const turn of turns) {
     if (turn.role !== "assistant") continue;
+    if (sinceMs !== undefined) {
+      const t = turn.timestamp ? Date.parse(turn.timestamp) : NaN;
+      if (!Number.isFinite(t) || t < sinceMs) continue;
+    }
 
     for (const tc of turn.toolCalls) {
       if (tc.name !== "Skill") continue;

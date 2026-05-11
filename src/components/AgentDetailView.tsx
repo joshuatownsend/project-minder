@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ProvenanceBadge, ProvenanceDetails } from "./ProvenanceBadge";
@@ -16,11 +16,13 @@ import {
 } from "./CatalogItemDetail";
 import type { AgentEntry } from "@/lib/indexer/types";
 import type { ItemUsageStats } from "./ItemUsageBreakdown";
+import type { UsagePeriod } from "@/lib/usage/period";
 
 interface AgentDetailResponse {
   entry: AgentEntry;
   bodyFull: string;
   usage?: ItemUsageStats;
+  period: UsagePeriod;
 }
 
 interface Props {
@@ -32,14 +34,25 @@ export function AgentDetailView({ id }: Props) {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<UsagePeriod>("all");
+  const prevIdRef = useRef(id);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     setNotFound(false);
     setError(null);
+    // Clear stale agent details when navigating between ids — otherwise
+    // the `if (loading && !data)` gate below keeps showing the previous
+    // agent's body/usage under the new URL until the fetch resolves
+    // (Codex P2 on PR #113). Period-only changes preserve `data` so
+    // the user doesn't see a skeleton flash on every toggle click.
+    if (prevIdRef.current !== id) {
+      setData(null);
+      prevIdRef.current = id;
+    }
 
-    fetch(`/api/agents/${encodeURIComponent(id)}`, { signal: ctrl.signal })
+    fetch(`/api/agents/${encodeURIComponent(id)}?period=${period}`, { signal: ctrl.signal })
       .then(async (r) => {
         if (r.status === 404) {
           setNotFound(true);
@@ -61,9 +74,9 @@ export function AgentDetailView({ id }: Props) {
       });
 
     return () => ctrl.abort();
-  }, [id]);
+  }, [id, period]);
 
-  if (loading) return <Skeleton className="h-96" />;
+  if (loading && !data) return <Skeleton className="h-96" />;
 
   if (notFound) {
     return (
@@ -128,7 +141,13 @@ export function AgentDetailView({ id }: Props) {
           <BodyTab content={bodyFull || entry.bodyExcerpt} filePath={entry.filePath} />
         </TabsContent>
         <TabsContent value="usage">
-          <ItemUsageBreakdown usage={usage} showCost />
+          <ItemUsageBreakdown
+            usage={usage}
+            showCost
+            period={period}
+            onPeriodChange={setPeriod}
+            loading={loading}
+          />
         </TabsContent>
         <TabsContent value="versions">
           <VersionsTab provenance={entry.provenance} />
