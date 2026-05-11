@@ -169,6 +169,37 @@ describe("generateSeedCandidates", () => {
     }
   });
 
+  it("tolerates Date objects in lastActivity (cached scans hold non-string dates)", () => {
+    // Repro of the production 500 on /memory/seed: the in-memory scan cache
+    // can carry Date instances even though ProjectData.lastActivity is typed
+    // as string. The generator must coerce defensively.
+    const out = generateSeedCandidates({
+      userClaudeMd: null,
+      projects: [
+        project({
+          slug: "a",
+          path: "C:\\dev\\a",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          lastActivity: new Date("2026-05-10T00:00:00Z") as any,
+        }),
+        project({
+          slug: "b",
+          path: "C:\\dev\\b",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          lastActivity: new Date("2026-05-11T00:00:00Z") as any,
+        }),
+      ],
+      sessionCategories: new Map(),
+    });
+    const seeds = out.filter((c) => c.fileName.startsWith("project_"));
+    expect(seeds).toHaveLength(2);
+    // b sorts before a (more-recent date wins)
+    expect(seeds[0].fileName).toBe("project_b.md");
+    expect(seeds[1].fileName).toBe("project_a.md");
+    // ISO-stringified into the body, not "[object Date]"
+    expect(seeds[0].body).toContain("2026-05-11T00:00:00.000Z");
+  });
+
   it("composed bodies pass prefix↔type validation (writer would accept)", async () => {
     const { validateTypedMemory } = await import("@/lib/memory/memoryFrontmatter");
     const out = generateSeedCandidates({

@@ -41,14 +41,16 @@ export function generateSeedCandidates(input: GeneratorInput): SeedCandidate[] {
 }
 
 function pickTopProjects(projects: ProjectData[]): ProjectData[] {
-  // Active projects first, sorted by most-recent activity. Archived/paused
-  // skipped -- seeding stale memory is more harmful than seeding none.
+  // Active projects with a CLAUDE.md first, sorted by most-recent activity.
+  // Use `new Date(x).getTime()` instead of string compare: the type declares
+  // lastActivity as string, but the in-memory cached scan can hold Date
+  // objects (mirrors the defensive pattern in src/lib/scanner/index.ts:273).
   return projects
     .filter((p) => p.status === "active" && p.claudeMdAudit.hasClaudeMd)
     .sort((a, b) => {
-      const ta = a.lastActivity ?? "";
-      const tb = b.lastActivity ?? "";
-      return tb.localeCompare(ta);
+      const ta = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+      const tb = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+      return tb - ta;
     })
     .slice(0, TOP_PROJECTS_LIMIT);
 }
@@ -217,7 +219,11 @@ function synthProjectSeed(p: ProjectData): SeedCandidate {
   if (p.devPort) partsList.push(`- **Dev port**: ${p.devPort}`);
   if (p.database?.type) partsList.push(`- **Database**: ${p.database.type}`);
   if (p.git?.branch) partsList.push(`- **Default branch**: ${p.git.branch}`);
-  if (p.lastActivity) partsList.push(`- **Last activity**: ${p.lastActivity}`);
+  if (p.lastActivity) {
+    // ISO-stringify defensively -- cached scans may carry Date objects.
+    const iso = new Date(p.lastActivity as unknown as string | number | Date).toISOString();
+    partsList.push(`- **Last activity**: ${iso}`);
+  }
   const body = `Project-scoped seed for ${p.name}. Verify with the project's CLAUDE.md before relying on conventions.
 
 ${partsList.join("\n")}
