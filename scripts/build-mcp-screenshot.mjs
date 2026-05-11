@@ -1,7 +1,8 @@
 // Bundles the screenshot-to-code stdio MCP server into a single ESM file
-// at `dist/mcp/screenshot-to-code/index.js` with a `#!/usr/bin/env node`
-// shebang so `claude mcp add screenshot-to-code -- node …/index.js` can
-// spawn it directly.
+// at `dist/mcp/screenshot-to-code/index.mjs` with a `#!/usr/bin/env node`
+// shebang so `claude mcp add screenshot-to-code -- node …/index.mjs` can
+// spawn it directly. The `.mjs` extension forces Node to load it as ESM
+// regardless of the dist folder's (absent) package.json.
 //
 // The MCP SDK is dual-published (ESM + CJS); we bundle as ESM to match the
 // SDK's primary entry. The spawned process inherits its env from Claude

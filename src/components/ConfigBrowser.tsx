@@ -1,11 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Settings, Search, Webhook, Server, Workflow as WorkflowIcon, Cloud, Box, Sliders, Key, Camera } from "lucide-react";
+import {
+  Box,
+  Camera,
+  Cloud,
+  Key,
+  RefreshCw,
+  Search,
+  Server,
+  Settings,
+  ShieldAlert,
+  Sliders,
+  Webhook,
+  Workflow as WorkflowIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useConfig, type HookRow, type McpRow, type CicdRow, type SettingsKeyRow } from "@/hooks/useConfig";
-import { CONFIG_TYPES, type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
+import { type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
 import dynamic from "next/dynamic";
 
@@ -21,7 +34,6 @@ import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
 import { computeEffectiveMcp, computeEffectiveHooks, type EffectiveState } from "@/lib/effectiveConfig";
 import type { McpFinding, McpFindingSeverity } from "@/lib/types";
-import { ShieldAlert, RefreshCw } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { buildServerId } from "@/lib/scanner/mcp-security/ids";
 
@@ -48,7 +60,7 @@ export function ConfigBrowser() {
   const initialTab: TabKey = (() => {
     const t = searchParams?.get("type");
     if (!t) return "settings";
-    if ((CONFIG_TYPES as readonly string[]).includes(t)) return t as TabKey;
+    if (TABS.some((tab) => tab.key === t)) return t as TabKey;
     return "settings";
   })();
   const projectFilter = searchParams?.get("project") || undefined;

@@ -88,16 +88,19 @@ describe("handleCall", () => {
     expect(mockedCallProvider.mock.calls[0][1].prompt).toMatch(/inline `style=/);
   });
 
-  it("surfaces ProviderError as an isError result", async () => {
+  it("surfaces ProviderError as an isError result with message passed through verbatim", async () => {
+    // ProviderError.message is built by vendorPost as "<Label> <status>: <body>"
+    // (e.g. "Gemini 429: Quota exhausted"). The handler used to prefix
+    // "<provider> provider error:" again — we removed that to avoid
+    // duplicating the vendor label.
     process.env.TEST_API_KEY = "k";
     mockedCallProvider.mockRejectedValueOnce(
-      new providers.ProviderError("gemini", "Quota exhausted", 429),
+      new providers.ProviderError("gemini", "Gemini 429: Quota exhausted", 429),
     );
 
     const r = await handleCall({ image: "AAA=" }, config);
     expect(r.isError).toBe(true);
-    expect((r.content[0] as { text: string }).text).toMatch(/gemini/);
-    expect((r.content[0] as { text: string }).text).toMatch(/Quota/);
+    expect((r.content[0] as { text: string }).text).toBe("Gemini 429: Quota exhausted");
   });
 
   it("surfaces a generic Error as an isError result", async () => {
@@ -106,5 +109,16 @@ describe("handleCall", () => {
     const r = await handleCall({ image: "AAA=" }, config);
     expect(r.isError).toBe(true);
     expect((r.content[0] as { text: string }).text).toMatch(/network down/);
+  });
+
+  it("returns isError when image exceeds the 6 MB cap (matches API route guard)", async () => {
+    // Without this guard, a multi-MB paste could pin the spawned MCP
+    // process and rack up an unintended provider bill.
+    process.env.TEST_API_KEY = "k";
+    const huge = "A".repeat(10 * 1024 * 1024); // ~7.5 MB raw, over the cap
+    const r = await handleCall({ image: huge }, config);
+    expect(r.isError).toBe(true);
+    expect((r.content[0] as { text: string }).text).toMatch(/exceeds.*MB cap/);
+    expect(mockedCallProvider).not.toHaveBeenCalled();
   });
 });

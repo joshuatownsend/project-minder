@@ -124,17 +124,46 @@ describe("POST /api/screenshot-to-code", () => {
     expect(input.apiKey).toBe("k");
   });
 
-  it("maps ProviderError status onto the response", async () => {
+  it("maps ProviderError status onto the response without double-prefixing the vendor label", async () => {
     process.env.GOOGLE_API_KEY = "k";
     mockedReadConfig.mockResolvedValueOnce(baseConfig);
+    // ProviderError.message already starts with the vendor label
+    // (callers in providers.ts always do `${labelFor(provider)} <status>:`).
+    // The route used to prefix `${err.provider}:` again, producing
+    // `gemini: Gemini 401: …`. Verify the double-prefix is gone.
     mockedCallProvider.mockRejectedValueOnce(
-      new providers.ProviderError("gemini", "Quota exhausted", 429),
+      new providers.ProviderError("gemini", "Gemini 429: Quota exhausted", 429),
     );
 
     const res = await POST(makeRequest({ image: "AAA=" }));
     expect(res.status).toBe(429);
-    const body = (await res.json()) as { error: { code: string } };
+    const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("PROVIDER_ERROR");
+    expect(body.error.message).toBe("Gemini 429: Quota exhausted");
+    expect(body.error.message).not.toMatch(/^gemini:/);
+  });
+
+  it("re-validates config.screenshotToCode.provider against PROVIDER_SET (typo falls back to gemini)", async () => {
+    // .minder.json could legally hold any string; an invalid provider
+    // would otherwise cascade into undefined model/env-var lookups
+    // and produce a misleading API_KEY_MISSING.
+    process.env.GOOGLE_API_KEY = "k";
+    mockedReadConfig.mockResolvedValueOnce({
+      ...baseConfig,
+      screenshotToCode: {
+        provider: "open-ai" as unknown as "openai",
+        model: "gpt-4o",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+      },
+    });
+    mockedCallProvider.mockResolvedValueOnce("ok");
+
+    const res = await POST(makeRequest({ image: "AAA=" }));
+    expect(res.status).toBe(200);
+    const [providerArg, input] = mockedCallProvider.mock.calls[0];
+    expect(providerArg).toBe("gemini");
+    expect(input.model).toBe("gemini-2.5-flash");
+    expect(input.apiKey).toBe("k");
   });
 
   it("returns 413 when image exceeds the size cap", async () => {

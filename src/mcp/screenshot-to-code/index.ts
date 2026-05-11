@@ -28,6 +28,7 @@ import {
 } from "./providers.js";
 
 const TOOL_NAME = "convert_screenshot_to_react";
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024; // matches the /api/screenshot-to-code proxy cap
 
 const TOOL_INPUT_SHAPE = {
   image: z
@@ -68,15 +69,23 @@ export interface ServerConfig {
   apiKeyEnvVar: string;
 }
 
+/** Treat empty strings the same as unset — `??` would let `FOO=""` win
+ *  over the default and produce an invalid model id / env-var name. */
+function envOr(name: string, fallback: string): string {
+  const v = process.env[name];
+  return v && v.length > 0 ? v : fallback;
+}
+
 export function resolveConfig(): ServerConfig {
-  const provider = (process.env.SCREENSHOT_PROVIDER ?? "gemini") as ProviderId;
-  if (provider !== "gemini" && provider !== "openai" && provider !== "anthropic") {
+  const rawProvider = envOr("SCREENSHOT_PROVIDER", "gemini");
+  if (rawProvider !== "gemini" && rawProvider !== "openai" && rawProvider !== "anthropic") {
     throw new Error(
-      `Unknown SCREENSHOT_PROVIDER "${provider}". Expected one of: gemini, openai, anthropic.`,
+      `Unknown SCREENSHOT_PROVIDER "${rawProvider}". Expected one of: gemini, openai, anthropic.`,
     );
   }
-  const model = process.env.SCREENSHOT_MODEL ?? DEFAULT_MODEL[provider];
-  const apiKeyEnvVar = process.env.SCREENSHOT_API_KEY_ENV ?? DEFAULT_ENV_VAR[provider];
+  const provider = rawProvider as ProviderId;
+  const model = envOr("SCREENSHOT_MODEL", DEFAULT_MODEL[provider]);
+  const apiKeyEnvVar = envOr("SCREENSHOT_API_KEY_ENV", DEFAULT_ENV_VAR[provider]);
   return { provider, model, apiKeyEnvVar };
 }
 
@@ -91,6 +100,14 @@ export async function handleCall(rawArgs: unknown, config: ServerConfig): Promis
   const args = rawArgs as ToolArgs;
   if (typeof args.image !== "string" || args.image.length === 0) {
     return errorResult("`image` is required and must be a base64 string.");
+  }
+  // Approximate raw byte size: base64 length × 3/4. Same guard the API
+  // route enforces — without it a multi-MB paste could pin the spawned
+  // MCP process and rack up an unintended provider bill.
+  if ((args.image.length * 3) / 4 > MAX_IMAGE_BYTES) {
+    return errorResult(
+      `Image exceeds the ${MAX_IMAGE_BYTES / (1024 * 1024)} MB cap. Re-encode at lower resolution and retry.`,
+    );
   }
 
   const apiKey = process.env[config.apiKeyEnvVar];
@@ -121,7 +138,8 @@ export async function handleCall(rawArgs: unknown, config: ServerConfig): Promis
     };
   } catch (err) {
     if (err instanceof ProviderError) {
-      return errorResult(`${err.provider} provider error: ${err.message}`);
+      // err.message already starts with the vendor label (e.g. "Gemini 401: …").
+      return errorResult(err.message);
     }
     return errorResult(`Tool execution failed: ${(err as Error).message}`);
   }
