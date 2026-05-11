@@ -15,6 +15,15 @@ vi.mock("os", () => ({
 
 import { promises as fs } from "fs";
 import { auditClaudeMd } from "@/lib/scanner/claudeMdAudit";
+import type { ClaudeMdAuditInfo, ClaudeMdAuditPresent } from "@/lib/types";
+
+/** Narrow the discriminated union to the Present variant. Tests that
+ *  feed CLAUDE.md content to the scanner expect Present back; failing
+ *  loudly here is more useful than a TS-only "property does not exist". */
+function expectPresent(audit: ClaudeMdAuditInfo): ClaudeMdAuditPresent {
+  if (!audit.hasClaudeMd) throw new Error("expected hasClaudeMd to be true");
+  return audit;
+}
 
 const mockReadFile = vi.mocked(fs.readFile);
 const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
@@ -33,14 +42,12 @@ describe("auditClaudeMd", () => {
     mockReadFile.mockRejectedValueOnce(new Error("ENOENT"));
     const result = await auditClaudeMd("C:\\dev\\proj-empty");
     expect(result.hasClaudeMd).toBe(false);
-    expect(result.score).toBe(0);
     expect(result.findings[0].code).toBe("no-claude-md");
   });
 
   it("scores 100 for a tiny single-section CLAUDE.md", async () => {
     mockReadFile.mockResolvedValueOnce("# Project\n\nA short index." as never);
-    const result = await auditClaudeMd("C:\\dev\\proj-tiny");
-    expect(result.hasClaudeMd).toBe(true);
+    const result = expectPresent(await auditClaudeMd("C:\\dev\\proj-tiny"));
     expect(result.score).toBe(100);
     expect(result.findings).toHaveLength(0);
   });
@@ -160,7 +167,7 @@ describe("auditClaudeMd", () => {
       throw new Error("ENOENT");
     });
     mockReaddir.mockResolvedValueOnce(["ARCHITECTURE.md"] as never);
-    const result = await auditClaudeMd("C:\\dev\\proj-userscope");
+    const result = expectPresent(await auditClaudeMd("C:\\dev\\proj-userscope"));
     expect(result.projectLines).toBe(100);
     expect(result.findings.find((f) => f.code === "long-index")).toBeUndefined();
   });
@@ -209,7 +216,7 @@ describe("auditClaudeMd", () => {
     mockReadFile
       .mockResolvedValueOnce(withImports as never)
       .mockResolvedValueOnce("api detail" as never);
-    const result = await auditClaudeMd("C:\\dev\\proj-imports");
+    const result = expectPresent(await auditClaudeMd("C:\\dev\\proj-imports"));
     const missing = result.findings.find((f) => f.code === "missing-topic-files");
     expect(missing).toBeUndefined();
     expect(result.importCount).toBe(1);
@@ -231,7 +238,7 @@ describe("auditClaudeMd", () => {
       }
       return [] as never;
     });
-    const result = await auditClaudeMd("C:\\dev\\proj-rules");
+    const result = expectPresent(await auditClaudeMd("C:\\dev\\proj-rules"));
     const vol = result.findings.find((f) => f.code === "rules-volume");
     expect(vol).toBeDefined();
     expect(result.rulesLines).toBeGreaterThan(2000);
@@ -264,7 +271,7 @@ describe("auditClaudeMd", () => {
       i % 9 === 0 ? `# Section ${i / 9}` : `bullet ${i}`
     );
     mockReadFile.mockResolvedValueOnce(lines.join("\n") as never);
-    const result = await auditClaudeMd("C:\\dev\\proj-disaster");
+    const result = expectPresent(await auditClaudeMd("C:\\dev\\proj-disaster"));
     expect(result.score).toBeGreaterThanOrEqual(0);
     expect(result.score).toBeLessThanOrEqual(100);
   });

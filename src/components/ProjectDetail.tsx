@@ -480,9 +480,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── CONTEXT ───────────────────────────────────────────────── */}
           {activeTab === "context" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-              {project.claudeMdAudit && (
-                <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
-              )}
+              <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
               <ContextBudgetPanel slug={project.slug} />
               {project.claude?.claudeMdSummary ? (
                 <div>
@@ -490,7 +488,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   <MarkdownContent content={project.claude.claudeMdSummary} />
                 </div>
               ) : (
-                !project.claudeMdAudit?.hasClaudeMd && (
+                !project.claudeMdAudit.hasClaudeMd && (
                   <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
                     No CLAUDE.md found for this project.
                   </p>

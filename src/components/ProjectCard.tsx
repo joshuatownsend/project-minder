@@ -371,15 +371,17 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
 
         {/* ── Row 2 (conditional): attention signals ────────────────────── */}
         {(() => {
-          const auditChip =
-            project.claudeMdAudit?.hasClaudeMd && project.claudeMdAudit.score < 80;
+          const audit = project.claudeMdAudit;
+          // TS narrows audit to ClaudeMdAuditPresent inside the branch —
+          // no `!` needed to read .score.
+          const auditChip = audit.hasClaudeMd && audit.score < 80;
           const gradeStyle = efficiencyGrade ? GRADE_STYLE[efficiencyGrade] : null;
           if (!hasAttention && insightsTotal === 0 && !auditChip && !gradeStyle) return null;
           return (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            {auditChip && (
+            {auditChip && audit.hasClaudeMd && (
               <ClaudeMdHealthBadge
-                score={project.claudeMdAudit!.score}
+                score={audit.score}
                 hasClaudeMd={true}
               />
             )}

@@ -154,12 +154,6 @@ export async function auditClaudeMd(
 
   if (!raw) {
     return {
-      score: 0,
-      projectLines: 0,
-      importCount: 0,
-      fileBytes: 0,
-      rulesLines: 0,
-      rulesFileCount: 0,
       hasClaudeMd: false,
       findings: [
         {
