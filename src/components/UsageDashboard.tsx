@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useUsage } from "@/hooks/useUsage";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCell } from "@/components/ui/StatCell";
 
 const ToolExecutionFlow = dynamic(
   () => import("./viz/ToolExecutionFlow").then((m) => m.ToolExecutionFlow),
@@ -75,49 +76,7 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-// ── Stat Cell ──────────────────────────────────────────────────────────────
-
-function StatCell({ label, value, detail, accent, last }: {
-  label: string; value: string | number; detail?: string;
-  accent?: "error" | "warn" | "good"; last?: boolean;
-}) {
-  const valueColor =
-    accent === "error" ? "var(--status-error-text)" :
-    accent === "warn"  ? "var(--accent)" :
-    accent === "good"  ? "var(--status-active-text)" :
-    "var(--text-primary)";
-
-  return (
-    <div style={{
-      display: "flex", flexDirection: "column", gap: "3px",
-      padding: "14px 20px",
-      borderRight: last ? "none" : "1px solid var(--border-subtle)",
-      minWidth: "90px", flex: "1 1 90px",
-    }}>
-      <span style={{
-        fontSize: "0.6rem", fontWeight: 600, letterSpacing: "0.08em",
-        textTransform: "uppercase", color: "var(--text-muted)",
-        fontFamily: "var(--font-body)",
-      }}>
-        {label}
-      </span>
-      <span style={{
-        fontFamily: "var(--font-mono)", fontSize: "1.25rem", fontWeight: 600,
-        color: valueColor, lineHeight: 1.1,
-      }}>
-        {value}
-      </span>
-      {detail && (
-        <span style={{
-          fontSize: "0.62rem", color: "var(--text-muted)",
-          fontFamily: "var(--font-mono)", lineHeight: 1.4,
-        }}>
-          {detail}
-        </span>
-      )}
-    </div>
-  );
-}
+// Stat-strip cell now uses the shared primitive — see src/components/ui/StatCell.tsx.
 
 // ── Cost Bar Row ───────────────────────────────────────────────────────────
 

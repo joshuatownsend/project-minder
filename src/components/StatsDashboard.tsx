@@ -5,13 +5,13 @@ import { useStats } from "@/hooks/useStats";
 import { BarChart } from "./stats/BarChart";
 import { HealthBar } from "./stats/HealthBar";
 import { Skeleton } from "./ui/skeleton";
+import { StatCell } from "./ui/StatCell";
 
 const SessionComplexityChart = dynamic(
   () => import("./viz/SessionComplexityChart").then((m) => m.SessionComplexityChart),
   { ssr: false, loading: () => <Skeleton className="h-96" /> }
 );
 import { FolderOpen, Bot, CheckCircle2, ClipboardList, DollarSign, Cpu } from "lucide-react";
-import type { ReactNode } from "react";
 import { ChartBlock } from "./stats/ChartBlock";
 import { EditAcceptanceCard } from "./stats/EditAcceptanceCard";
 import { ToolLatencyCard } from "./stats/ToolLatencyCard";
@@ -43,48 +43,9 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-interface StatCellProps {
-  label: string;
-  value: ReactNode;
-  detail?: string;
-  icon?: ReactNode;
-  last?: boolean;
-}
-
-function StatCell({ label, value, detail, icon, last }: StatCellProps) {
-  return (
-    <div style={{
-      flex: 1,
-      padding: "12px 16px",
-      borderRight: last ? "none" : "1px solid var(--border-subtle)",
-      display: "flex",
-      flexDirection: "column",
-      gap: "3px",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{
-          fontSize: "0.62rem",
-          fontFamily: "var(--font-mono)",
-          fontWeight: 600,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: "var(--text-muted)",
-        }}>
-          {label}
-        </span>
-        {icon && <span style={{ color: "var(--text-muted)", opacity: 0.6 }}>{icon}</span>}
-      </div>
-      <div style={{ fontSize: "1.35rem", fontFamily: "var(--font-mono)", fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.1 }}>
-        {value}
-      </div>
-      {detail && (
-        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-          {detail}
-        </div>
-      )}
-    </div>
-  );
-}
+// Stat cells now use the shared primitive — see src/components/ui/StatCell.tsx.
+// StatsDashboard call sites pass `size="feature"` for the larger marquee
+// treatment used on the landing-page stats strips.
 
 export function StatsDashboard() {
   const { data, loading } = useStats();
@@ -122,32 +83,32 @@ export function StatsDashboard() {
           overflow: "hidden",
           background: "var(--bg-surface)",
         }}>
-          <StatCell
+          <StatCell size="feature"
             label="Projects"
             value={data.projectCount}
             icon={<FolderOpen style={{ width: "13px", height: "13px" }} />}
             detail={data.hiddenCount > 0 ? `${data.hiddenCount} hidden` : undefined}
           />
-          <StatCell
+          <StatCell size="feature"
             label="Sessions"
             value={data.claudeSessions.total}
             icon={<Bot style={{ width: "13px", height: "13px" }} />}
             detail={`${data.claudeSessions.projectsWithSessions} projects`}
           />
-          <StatCell
+          <StatCell size="feature"
             label="Pending TODOs"
             value={data.todoHealth.pending}
             icon={<CheckCircle2 style={{ width: "13px", height: "13px" }} />}
             detail={`${data.todoHealth.completed} done`}
           />
-          <StatCell
+          <StatCell size="feature"
             label="Manual Steps"
             value={data.manualStepsHealth.pending}
             icon={<ClipboardList style={{ width: "13px", height: "13px" }} />}
             detail={`${data.manualStepsHealth.completed} done`}
           />
           {cu ? (
-            <StatCell
+            <StatCell size="feature"
               label="Est. Cost"
               value={formatCost(cu.costEstimate, currency, fxRate)}
               icon={<DollarSign style={{ width: "13px", height: "13px" }} />}
@@ -155,7 +116,7 @@ export function StatsDashboard() {
               last
             />
           ) : (
-            <StatCell label="Est. Cost" value="—" last />
+            <StatCell size="feature" label="Est. Cost" value="—" last />
           )}
         </div>
       </section>
@@ -173,21 +134,21 @@ export function StatsDashboard() {
               overflow: "hidden",
               background: "var(--bg-surface)",
             }}>
-              <StatCell
+              <StatCell size="feature"
                 label="Input"
                 value={formatTokens(cu.inputTokens)}
                 icon={<Cpu style={{ width: "13px", height: "13px" }} />}
               />
-              <StatCell
+              <StatCell size="feature"
                 label="Output"
                 value={formatTokens(cu.outputTokens)}
               />
-              <StatCell
+              <StatCell size="feature"
                 label="Cache Read"
                 value={formatTokens(cu.cacheReadTokens)}
                 detail={`${formatTokens(cu.cacheCreateTokens)} written`}
               />
-              <StatCell
+              <StatCell size="feature"
                 label="Turns"
                 value={cu.totalTurns}
                 detail={`${cu.errorCount} errors`}
