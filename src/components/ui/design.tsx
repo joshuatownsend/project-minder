@@ -193,9 +193,10 @@ export function Seg<T extends string>({
  *  playground's convert API errors and the preview iframe's compile/runtime
  *  errors).
  *
- *  `label` is shown as a small uppercase header above the message —
- *  callers use this to disambiguate when multiple banners can appear in
- *  the same panel (e.g. "PREVIEW ERROR" vs the bare network error). */
+ *  `label` renders as a small monospace header above the message —
+ *  callers pass it pre-cased (the component does NOT force uppercase) so
+ *  the label can be used for any short disambiguator, e.g. "PREVIEW
+ *  ERROR" vs a bare network error label. */
 export function ErrorBanner({
   message,
   label,

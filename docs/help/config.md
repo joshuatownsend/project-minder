@@ -104,7 +104,9 @@ After a successful conversion, the output appears with two view tabs:
 - **Code** — the raw TSX with a one-click copy button.
 - **Preview** — a live render of the generated component inside a sandboxed iframe.
 
-The preview iframe loads Babel (TSX compilation), Tailwind v4 (utility-class JIT), and React 18 UMD from CDN. The iframe uses `sandbox="allow-scripts"` without `allow-same-origin`, which gives it an opaque origin: it cannot read the host's cookies, localStorage, or DOM. Compile errors and runtime exceptions surface as a red banner under the preview frame; the same message is also rendered inside the iframe so you can see it without leaving the preview.
+The preview iframe loads Babel (TSX compilation), Tailwind v4 (utility-class JIT), and React 18 UMD from CDN. The iframe uses `sandbox="allow-scripts"` without `allow-same-origin`, which gives it an opaque origin: it cannot read the host's cookies, localStorage, or DOM. Compile errors and runtime exceptions surface as a red banner under the preview frame so the preview canvas stays visible alongside the error message.
+
+The iframe is **deferred** — it does not mount until you click the Preview tab. A code-only workflow never pays the CDN download cost. Once you open Preview, the iframe stays mounted while you toggle between Code and Preview; running Convert again resets the deferral so the next conversion starts fresh.
 
 Notes on the preview:
 

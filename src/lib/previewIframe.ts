@@ -24,27 +24,58 @@
 //   regex pre-pass and exposing React + common hooks on `window` is the
 //   cleanest workaround.
 
-/** ES-module `import` statement matcher.
+/** Single ES-module `import` statement matcher, applied only inside the
+ *  module's header region (see `stripImports` for why).
  *
  *  Handles:
  *   - single-line default / named / namespace imports
  *   - multi-line named imports (`import {\n  ...\n} from "x";`)
  *   - bare side-effect imports (`import "./styles.css";`)
  *
- *  Anchored to line-start with `^` under the `m` flag so string literals
- *  containing the word `import` in user code are left alone. The negative
- *  lookahead `(?!\s*\()` prevents matching dynamic `import("…")` calls,
- *  which superficially look the same to a regex but are runtime
- *  expressions, not module declarations. */
-const IMPORT_RE =
-  /^[ \t]*import\b(?!\s*\()[\s\S]*?["'][^"']*["'][ \t]*;?[ \t]*(?=\n|$)/gm;
+ *  The negative lookahead `(?!\s*\()` prevents matching dynamic
+ *  `import("…")` calls, which superficially look the same to a regex but
+ *  are runtime expressions, not module declarations. */
+const IMPORT_STMT_RE =
+  /^[ \t]*import\b(?!\s*\()[\s\S]*?["'][^"']*["'][ \t]*;?[ \t]*(?:\n|$)/;
 
-/** Strip every ES-module `import` statement from a TSX/JSX/TS/JS source.
+/** Lines that may legitimately appear between / before imports at the
+ *  top of a module: blank, line comment, block-comment start, or a
+ *  string-only directive like `"use client"`. */
+const HEADER_NOOP_RE = /^[ \t]*(?:\/\/.*|\/\*[\s\S]*?\*\/|["'][^"']*["'][ \t]*;?[ \t]*)?$/;
+
+/** Strip top-level ES-module `import` statements from a TSX/JSX/TS/JS source.
  *
- *  Leaves dynamic `import()` calls, the word `import` in string literals,
- *  and `export` statements alone. */
+ *  The scan stops at the first non-import / non-noop line so an `import`
+ *  appearing inside a multiline template literal further down (e.g. an
+ *  LLM-generated code sample) is not stripped — earlier versions used a
+ *  global regex that mutated string-literal bodies and produced confusing
+ *  compile errors in the preview iframe.
+ *
+ *  Anchored to line-start so the word `import` appearing mid-line in
+ *  user code is also left alone. */
 export function stripImports(code: string): string {
-  return code.replace(IMPORT_RE, "").replace(/^\s*\n+/, "");
+  let cursor = 0;
+  for (;;) {
+    if (cursor >= code.length) break;
+    const remaining = code.slice(cursor);
+    const importMatch = remaining.match(IMPORT_STMT_RE);
+    if (importMatch && remaining.startsWith(importMatch[0])) {
+      // Strip this import statement (including its trailing newline).
+      code = code.slice(0, cursor) + code.slice(cursor + importMatch[0].length);
+      // Cursor stays at the same position — the next character is now what
+      // was after the deleted import.
+      continue;
+    }
+    // Not an import. If the line is a noop (blank, comment, or a leading
+    // string directive like "use client"), skip past it and keep scanning;
+    // otherwise we've reached real code and stop.
+    const nlIdx = code.indexOf("\n", cursor);
+    const lineEnd = nlIdx === -1 ? code.length : nlIdx;
+    const line = code.slice(cursor, lineEnd);
+    if (!HEADER_NOOP_RE.test(line)) break;
+    cursor = lineEnd === code.length ? code.length : nlIdx + 1;
+  }
+  return code.replace(/^\s*\n+/, "");
 }
 
 // Module-scope regex literals so each `rewriteDefaultExport` call doesn't

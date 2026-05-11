@@ -41,6 +41,40 @@ describe("stripImports", () => {
     const src = `const m = await import("./thing");`;
     expect(stripImports(src)).toBe(src);
   });
+
+  it("leaves an import-looking line inside a multiline template literal alone (Codex P1 case)", () => {
+    const src = [
+      `import React from "react";`,
+      ``,
+      `export default function Sample() {`,
+      "  const code = `function Foo() {",
+      `  import "react"; // example from a documentation screenshot`,
+      "}`;",
+      `  return <pre>{code}</pre>;`,
+      `}`,
+    ].join("\n");
+    const out = stripImports(src);
+    // Top-level import line is removed…
+    expect(out).not.toMatch(/^[ \t]*import React/m);
+    // …but the embedded "import" inside the template literal is preserved.
+    expect(out).toContain('  import "react"; // example from a documentation screenshot');
+  });
+
+  it("preserves a leading 'use client' directive and stops scanning at real code", () => {
+    const src = [
+      `"use client";`,
+      `import React from "react";`,
+      `const x = 1;`,
+      `import laterShouldNotMatch from "no";`,
+    ].join("\n");
+    const out = stripImports(src);
+    expect(out).toMatch(/^"use client";/);
+    expect(out).not.toMatch(/^import React/m);
+    // After `const x = 1;` we've hit real code; any later import-looking line
+    // is left alone (it's syntactically not a valid top-level import past
+    // the first non-noop statement anyway).
+    expect(out).toContain(`import laterShouldNotMatch from "no";`);
+  });
 });
 
 describe("rewriteDefaultExport", () => {
@@ -132,11 +166,12 @@ describe("buildPreviewSrcDoc", () => {
     const doc = buildPreviewSrcDoc(src);
     // The literal string from user code is escaped; the only "</script>" tokens
     // that survive are the harness's own closing tags.
-    const userCodeClosers = doc.match(/<\/script>/g) ?? [];
-    // The HTML has 4 legitimate </script> tags (tailwind, react, react-dom, babel,
-    // the error reporter, and the babel-typed user script) — exactly 6. The
-    // important assertion is that the user-code literal does NOT add an extra one.
-    expect(userCodeClosers.length).toBe(6);
+    const closers = doc.match(/<\/script>/g) ?? [];
+    // The HTML has 6 legitimate </script> tags: Tailwind CDN script, React UMD,
+    // ReactDOM UMD, Babel standalone, the inline error-reporter script, and the
+    // babel-typed user-code script. The important assertion is that the
+    // user-code literal does NOT add an extra one — its `</script>` is escaped.
+    expect(closers.length).toBe(6);
     expect(doc).toContain("<\\/script>");
   });
 

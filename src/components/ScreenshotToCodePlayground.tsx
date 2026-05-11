@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Camera } from "lucide-react";
 import { CodeBlock } from "./ui/code-block";
 import { ErrorBanner, Seg } from "./ui/design";
@@ -228,9 +228,14 @@ export function ScreenshotToCodePlayground() {
   );
 }
 
-/** Code/Preview toggle. Both panels stay mounted (CSS visibility toggle)
- *  so switching tabs doesn't tear down the iframe and re-fetch its CDN
- *  scripts. */
+/** Code/Preview toggle.
+ *
+ *  Mount lifecycle: the iframe is **deferred** until the user opens Preview
+ *  for the first time (avoids downloading Babel/React/Tailwind from CDN
+ *  when the user only wants the raw code). After first open, the iframe
+ *  stays mounted via CSS `display:none` so subsequent toggles don't tear
+ *  it down and re-fetch its scripts. A fresh conversion (new `code`)
+ *  resets the flag so the next round starts deferred again. */
 function OutputPanel({
   code,
   view,
@@ -240,6 +245,21 @@ function OutputPanel({
   view: OutputView;
   onViewChange: (v: OutputView) => void;
 }) {
+  const [hasOpenedPreview, setHasOpenedPreview] = useState(false);
+
+  // Reset sticky-mount flag on each fresh conversion so a code-only
+  // workflow never pays the iframe-startup cost.
+  useEffect(() => {
+    setHasOpenedPreview(false);
+  }, [code]);
+
+  // Sticky-on once Preview is selected for this code.
+  useEffect(() => {
+    if (view === "preview") setHasOpenedPreview(true);
+  }, [view]);
+
+  const shouldMountPreview = view === "preview" || hasOpenedPreview;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start", width: "100%" }}>
       <Seg<OutputView>
@@ -251,7 +271,7 @@ function OutputPanel({
         <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />
       </div>
       <div style={{ display: view === "preview" ? "block" : "none", width: "100%" }}>
-        <ScreenshotToCodePreview code={code} />
+        {shouldMountPreview && <ScreenshotToCodePreview code={code} />}
       </div>
     </div>
   );
