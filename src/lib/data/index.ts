@@ -748,7 +748,13 @@ export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageR
   const db = await getReadyDb();
   const sinceIso = getPeriodStart(period)?.toISOString();
   const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db, sinceIso));
-  if (stats.length === 0) {
+  // Cold-index fall-through ONLY applies to the all-time window. With
+  // a bounded period (24h / 7d / 30d), an empty result is a legitimate
+  // "no recent invocations" answer — falling back to file-parse would
+  // pay the full JSONL walk cost per toggle click for that common
+  // no-data case and would also flap the response backend between
+  // `db` and `file`. See Codex P1 on PR #113.
+  if (stats.length === 0 && period === "all") {
     logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
     const { stats: fileStats, meta } = await runFileAgentUsage(period);
     return withCost(fileStats, meta);
@@ -802,7 +808,10 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
   const db = await getReadyDb();
   const sinceIso = getPeriodStart(period)?.toISOString();
   const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db, sinceIso));
-  if (stats.length === 0) {
+  // Same cold-index fall-through guard as `getAgentUsage` — empty rows
+  // for a bounded period is a legitimate answer, not an indexer warmup
+  // signal. See Codex P1 on PR #113.
+  if (stats.length === 0 && period === "all") {
     logIntentionalFallthrough("getSkillUsage", "DB has zero Skill rows (indexer warming up?)");
     return runFileSkillUsage(period);
   }

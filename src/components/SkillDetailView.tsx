@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ProvenanceBadge, ProvenanceDetails } from "./ProvenanceBadge";
@@ -35,12 +35,19 @@ export function SkillDetailView({ id }: Props) {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<UsagePeriod>("all");
+  const prevIdRef = useRef(id);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     setNotFound(false);
     setError(null);
+    // See AgentDetailView for the rationale — clear stale data on id
+    // navigation; preserve it on period-only changes (Codex P2 on PR #113).
+    if (prevIdRef.current !== id) {
+      setData(null);
+      prevIdRef.current = id;
+    }
 
     fetch(`/api/skills/${encodeURIComponent(id)}?period=${period}`, { signal: ctrl.signal })
       .then(async (r) => {

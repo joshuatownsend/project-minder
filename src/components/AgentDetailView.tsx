@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ProvenanceBadge, ProvenanceDetails } from "./ProvenanceBadge";
@@ -35,12 +35,22 @@ export function AgentDetailView({ id }: Props) {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<UsagePeriod>("all");
+  const prevIdRef = useRef(id);
 
   useEffect(() => {
     const ctrl = new AbortController();
     setLoading(true);
     setNotFound(false);
     setError(null);
+    // Clear stale agent details when navigating between ids — otherwise
+    // the `if (loading && !data)` gate below keeps showing the previous
+    // agent's body/usage under the new URL until the fetch resolves
+    // (Codex P2 on PR #113). Period-only changes preserve `data` so
+    // the user doesn't see a skeleton flash on every toggle click.
+    if (prevIdRef.current !== id) {
+      setData(null);
+      prevIdRef.current = id;
+    }
 
     fetch(`/api/agents/${encodeURIComponent(id)}?period=${period}`, { signal: ctrl.signal })
       .then(async (r) => {

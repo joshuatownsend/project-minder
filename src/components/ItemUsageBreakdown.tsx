@@ -101,9 +101,13 @@ function PeriodToggle({
   value: UsagePeriod;
   onChange: (period: UsagePeriod) => void;
 }) {
+  // ARIA-wise this is a segmented control (mutually-exclusive buttons),
+  // not a tab list — there are no tab panels being toggled. Use
+  // `role="group"` + `aria-pressed` on each button so AT announces the
+  // semantic correctly. (Copilot finding on PR #113.)
   return (
     <div
-      role="tablist"
+      role="group"
       aria-label="Time window"
       style={{
         display: "inline-flex",
@@ -121,8 +125,7 @@ function PeriodToggle({
           <button
             key={p.value}
             type="button"
-            role="tab"
-            aria-selected={active}
+            aria-pressed={active}
             onClick={() => onChange(p.value)}
             style={{
               padding: "4px 10px",

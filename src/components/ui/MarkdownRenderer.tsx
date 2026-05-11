@@ -31,15 +31,22 @@ export function MarkdownRenderer({ content, onLinkClick }: MarkdownRendererProps
   // otherwise re-walk every line and re-allocate the entire React tree.
   const elements = useMemo(() => parseMarkdown(content), [content]);
 
-  const handleClick = onLinkClick
-    ? (e: React.MouseEvent) => {
-        const target = e.target as HTMLElement;
-        const anchor = target.closest("a");
-        if (!anchor) return;
-        const href = anchor.getAttribute("data-href") ?? "";
-        if (onLinkClick(href, e)) e.preventDefault();
-      }
-    : undefined;
+  // Anchors render with a real `href` (keyboard-focusable, AT-friendly).
+  // We always intercept link clicks here: if `onLinkClick` is wired, we
+  // delegate and let the host decide whether to consume the click; if
+  // not, we suppress the navigation (BodyTab markdown is informational,
+  // not navigational — relative links would 404 in dev anyway).
+  const handleClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const anchor = target.closest("a");
+    if (!anchor) return;
+    if (!onLinkClick) {
+      e.preventDefault();
+      return;
+    }
+    const href = anchor.getAttribute("href") ?? "";
+    if (onLinkClick(href, e)) e.preventDefault();
+  };
 
   return (
     <div
@@ -53,7 +60,10 @@ export function MarkdownRenderer({ content, onLinkClick }: MarkdownRendererProps
 }
 
 export function parseMarkdown(md: string): React.ReactNode[] {
-  const lines = md.split("\n");
+  // Split on `\r?\n` so CRLF-authored content (e.g. memory files saved
+  // on Windows) doesn't leave a trailing `\r` on each line — that
+  // would break `line.endsWith("|")` (tables) and the fence regex.
+  const lines = md.split(/\r?\n/);
   const elements: React.ReactNode[] = [];
   let inTable = false;
   let tableHeaders: string[] = [];
@@ -405,7 +415,7 @@ export function inlineToReact(text: string): React.ReactNode {
       parts.push(
         <a
           key={partKey++}
-          data-href={match[5]}
+          href={match[5]}
           style={{
             color: "var(--accent)",
             textDecoration: "underline",

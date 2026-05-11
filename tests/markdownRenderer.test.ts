@@ -108,13 +108,24 @@ describe("inlineToReact — span-level", () => {
     expect(nodeTypeOf(parts[1])).toBe("code");
   });
 
-  it("wraps [label](href) in an <a> with a data-href attribute", () => {
+  it("wraps [label](href) in an <a> with an href attribute", () => {
     const out = inlineToReact("[click](memory.md)");
     // Single match returns the bare element (no trailing string)
     expect(React.isValidElement(out)).toBe(true);
-    const el = out as React.ReactElement<{ "data-href": string }>;
+    const el = out as React.ReactElement<{ href: string }>;
     expect(nodeTypeOf(el)).toBe("a");
-    expect(el.props["data-href"]).toBe("memory.md");
+    expect(el.props.href).toBe("memory.md");
+  });
+
+  it("splits CRLF-authored content the same as LF (no trailing \\r)", () => {
+    // Regression for Copilot's CRLF finding on PR #113 — a Windows-saved
+    // markdown body with CRLF endings used to leave `\r` on each line,
+    // breaking `line.endsWith("|")` and the fence regex.
+    const md = "| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n";
+    const out = parseMarkdown(md);
+    // Table renders as a single wrapper div (not a paragraph with literal pipes).
+    expect(out).toHaveLength(1);
+    expect(nodeTypeOf(out[0])).toBe("div");
   });
 
   it("handles multiple inline markers in one line", () => {
