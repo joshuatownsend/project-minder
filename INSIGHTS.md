@@ -1,5 +1,57 @@
 # Insights
 
+<!-- insight:6dec0ced6617 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T17:26:11.231Z -->
+## ★ Insight
+- **Reuse-first wins that the simplify pass found**: the `Seg<T>` primitive in `design.tsx` and the lifted `ErrorBanner` together cut ~54 LOC. The lesson is the same as Phase 7's format-helper consolidation: when adding a new UI surface, grep `src/components/ui/design.tsx` and `globals.css` first — there's usually already an analog.
+- **Catching the duplicate-error UX bug**: Agent 2 (code quality) noticed that the iframe was showing the error twice — once inside the frame (red overlay covering the canvas) and once outside (parent banner). Dropping the in-frame overlay keeps the partial preview visible alongside the error, which is the actually-useful debug surface.
+- **`event.source` reference matching for sandboxed iframes**: this gotcha (origin is `"null"`, not the iframe's URL) is one of those things you only learn once you've debugged a flaky postMessage filter. Worth a comment in source.
+
+---
+
+<!-- insight:8733b7d156f5 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T17:00:00.965Z -->
+## ★ Insight
+- The component uses `useMemo` for `srcDoc` keyed on `code` — rebuilding the HTML on every parent re-render would tear down + recreate the iframe and re-download all four CDN scripts. The memo keeps the iframe stable across UI state changes (provider, model, etc.).
+- The postMessage listener filters by `event.source === iframeRef.current?.contentWindow` rather than `event.origin === ...`. Sandboxed iframes without `allow-same-origin` always report `origin === "null"`, so source-reference matching is the only way to distinguish "our iframe" from any other postMessage source (extensions, ads, etc.) — defensive even in a local-only app.
+- React's `srcDoc` prop is reactive: when the string changes, the browser reloads the iframe automatically. No `key={code}` needed; just letting the memo update is sufficient.
+
+---
+
+<!-- insight:64abdad1d460 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T16:55:01.049Z -->
+## ★ Insight
+- **Why React 18 UMD over React 19 ESM**: React 19 deliberately dropped UMD builds, only shipping ESM. Using ESM via importmap forces Babel's TSX output to be ES modules, which complicates the in-iframe compile-and-mount loop. For a preview tool (no production runtime semantics), React 18 UMD is the smallest path that works.
+- **Why strip imports rather than configure module resolution**: `@babel/standalone` doesn't ship a module resolver — `import "react"` throws at runtime. The cleanest fix is to nuke the import lines in a 5-line regex pre-pass and put `React`/`useState`/etc on `window` before Babel runs.
+- **Why `sandbox="allow-scripts"` without `allow-same-origin`**: this makes the iframe's origin an opaque "null", which means (a) it can't touch parent cookies/localStorage, (b) `event.origin === "null"` for postMessage — so the parent must match by `event.source` reference, not origin string.
+
+---
+
+<!-- insight:6a33d09d5d16 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T16:49:56.997Z -->
+## ★ Insight
+- The existing playground already has the `code` state populated from the LLM. Live-preview is purely a presentation-layer add: it consumes `code` and renders it in a sandboxed iframe.
+- A key architectural decision: do we pull `@babel/standalone` into the **parent bundle** (~3 MB), or push it into the **iframe** as `srcdoc` + CDN scripts? The latter keeps client bundle weight flat — the iframe is a separate browsing context that doesn't count toward our Next bundle.
+- Using `sandbox="allow-scripts"` (intentionally NOT `allow-same-origin`) gives the iframe a unique opaque origin: scripts run, but can't touch parent's cookies, localStorage, or DOM. This is the standard React-Babel playground pattern.
+
+---
+
+<!-- insight:ba61ce38d73c | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T16:48:29.169Z -->
+## ★ Insight
+- Phase 6.1's scope: ship a live-preview iframe for the screenshot-to-React playground (deferred from Phase 6 per the Risks section, line 347).
+- Three engineering hazards the original Phase 6 noted: (1) `@babel/standalone` is ~3 MB, (2) sandboxing arbitrary LLM-generated TSX, (3) Tailwind class scanning at runtime. We need a strategy for each before writing code.
+- The iframe should sit alongside the existing code+copy MVP, not replace it — degrades gracefully when compilation/render fails.
+
+---
+
+<!-- insight:171fee4cba6c | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T16:17:01.907Z -->
+## ★ Insight
+F1's lesson is general: a TypeScript type guard's narrowed return type (`s is "user" | "local"`) is hand-written and won't auto-update when the input union grows. To get true compile-time exhaustiveness, the *runtime predicate body* needs to consult a complete table — `as const satisfies Record<T, ...>` is the canonical pattern. The narrowed return type stays informational; the satisfies clause is what refuses to compile. The Phase 5.1 changelog originally claimed "compile-time prompt" but the implementation didn't deliver it — Copilot caught the gap honestly.
+
+---
+
+<!-- insight:aee136c22766 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T16:02:49.641Z -->
+## ★ Insight
+The simplify pass turned an early code-quality finding into a structural improvement: by moving `useDisabledHooks` from `ConfigBrowser` top level into `HooksList`, we resolved both reviewers' concerns (Efficiency F3 "unconditional fetch" + Quality F4 "parameter sprawl") with a single edit. Lazy-load-on-demand is the codebase's existing per-tab gating pattern (`catalogType` already drives this for `useConfig`), so the fix also aligned with house style. Worth remembering: when two reviews flag adjacent symptoms, look for the single underlying cause first.
+
+---
+
 <!-- insight:465020079300 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T15:34:03.822Z -->
 ## ★ Insight
 Phase 5's design hinged on Claude Code's runtime contract: MCP toggles work via the native `disabledMcpjsonServers` key, but hooks are **additive** (line 106 of `effectiveConfig.ts`). Without a runtime affordance, any "disable" mechanism Project Minder invents would either lie (hook still fires) or mutate the git-tracked file. This is why Phase 5 chose to refuse project-shared scope — the constraint isn't laziness, it's architectural.
