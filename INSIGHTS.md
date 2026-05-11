@@ -1,5 +1,37 @@
 # Insights
 
+<!-- insight:a44fa1b289fe | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:05:09.494Z -->
+## ★ Insight
+- SessionDetailView and UsageDashboard have **identical** StatCell DOM/styling — only difference is UsageDashboard's `"good"` accent. The two collapse trivially. StatsDashboard is the genuinely different one (1.35rem vs 1.25rem font, 12×16 vs 14×20 padding, also adds an `icon` slot).
+- The right abstraction is `size: "compact" | "feature"` (default `"compact"`, the more common shape used by 2 of 3 sites). Keeps both visual treatments distinct while collapsing the shared shape.
+- Accent and icon are both optional and orthogonal to size, so they can both be supported at either size without combinatorial prop explosion.
+
+---
+
+<!-- insight:15c191a3bdd5 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:00:03.896Z -->
+## ★ Insight
+- The `children` prop pattern is the cleanest way to keep two consumers visually distinct while sharing the outer shell + header — DiagnosisPanel passes `<p>finding</p><p>advice</p>`, EfficiencyTab passes `<div>title</div><div>explanation</div><div>Fix: ...</div>`. The shared card never sees the body's typography.
+- I'm imposing a `gap: 6px` flex-column rhythm on children, which will shift EfficiencyTab's spacing by 1–2px (its current marginBottom values are 5/4/6 rather than uniform 6). Documenting this in the PR description as an acceptable consolidation outcome; visible only on direct visual diff.
+- For `rightSlot: ReactNode`, accepting any node means each consumer keeps its exact font-size/color (0.65rem `text-secondary` vs 0.7rem `text-muted`) by wrapping its meta in a `<span>` with its own styling. The shared card only provides `marginLeft: auto` positioning.
+
+---
+
+<!-- insight:68191c43e968 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T17:48:16.608Z -->
+## ★ Insight
+- **Why Codex P1 caught what /simplify missed**: the three /simplify agents focused on the diff (reuse, quality, efficiency) but didn't simulate adversarial input. Codex framed F6 as "this is what a realistic LLM output looks like" and ran the regex against it mentally. Different review modes catch different bug classes — adversarial input testing is its own discipline.
+- **The deferred-mount fix is also a UX win, not just a perf win**: even on a fast connection, when a user clicks Convert and just wants to copy the code, the visible Code tab now renders immediately without the network panel filling with CDN requests. Less visual noise, faster perceived load.
+- **Six-commit squash is cleaner than three rounds of force-pushes**: by keeping each round (initial → simplify → review-fix → chore) as separate commits and letting squash-merge collapse them, the PR history stays bisectable on the branch while the main commit is a single tidy line.
+
+---
+
+<!-- insight:198023a9ec1f | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T17:42:05.130Z -->
+## ★ Insight
+- **Codex P1 (F6) was a real correctness gap** — my original regex was line-anchored but applied globally, so it matched lines that happened to start with whitespace + `import` even inside a multiline template literal. The fix is a top-of-file walker that stops at the first real statement. This is the kind of bug that only shows up when the LLM emits a screenshot of a doc page that has code samples in it.
+- **Codex P2 (F7) reversed my "intentional eager" call from the /simplify pass.** Agent 3 had flagged the same thing; I weighted it as "intentional" because the design was "mount once, keep mounted across toggles". Codex's framing was sharper: "every conversion still downloads Babel/React/Tailwind even if Preview is never opened." The cost-on-every-Convert framing made the right tradeoff obvious. Lesson: when two reviewers raise the same concern through different framings, trust the more-cost-specific framing.
+- **The header-only walker is also simpler than the global regex.** Once you accept "imports only matter in the file's header region", the implementation becomes a linear scan with three line-classifiers (import / noop / real-code-stop), which is easier to reason about than a global regex with negative lookahead.
+
+---
+
 <!-- insight:6dec0ced6617 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T17:26:11.231Z -->
 ## ★ Insight
 - **Reuse-first wins that the simplify pass found**: the `Seg<T>` primitive in `design.tsx` and the lifted `ErrorBanner` together cut ~54 LOC. The lesson is the same as Phase 7's format-helper consolidation: when adding a new UI surface, grep `src/components/ui/design.tsx` and `globals.css` first — there's usually already an analog.
