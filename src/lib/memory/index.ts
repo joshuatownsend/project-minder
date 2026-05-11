@@ -1,25 +1,45 @@
 import { promises as fs } from "fs";
 import { createHash } from "crypto";
 import path from "path";
-import type { MemoryFileEntry, MemoryStaleness, ProjectData } from "../types";
+import type {
+  MemoryFileEntry,
+  MemoryIndexSummary,
+  MemoryStaleness,
+  ProjectData,
+} from "../types";
 import { expandImports } from "../scanner/expandImports";
 import { memoryDirFor } from "../scanner/memoryWriter";
 import { encodeMemoryId, userMemoryPath } from "./safety";
+import { summarizeMemoryIndex } from "./memoryIndex";
+import { extractRefCandidates, verifyRefs } from "./staleRefs";
 
 const STALE_AGE_MS = 30 * 24 * 60 * 60_000;
 const PREVIEW_CHARS = 200;
 const CACHE_TTL = 60_000;
 const IMPORT_CACHE_MAX = 500;
 
+export interface MemoryListResult {
+  entries: MemoryFileEntry[];
+  /**
+   * One summary per scanned project whose memory dir actually contains a
+   * MEMORY.md. Projects with a memory dir but no index file don't appear
+   * here — bodies still come through in `entries` with `indexed: undefined`.
+   */
+  indexSummaries: MemoryIndexSummary[];
+}
+
 interface InventoryCache {
   key: string;
-  entries: MemoryFileEntry[];
+  result: MemoryListResult;
   cachedAt: number;
 }
 
 interface ImportCacheEntry {
   mtimeMs: number;
+  /** Hash of the project set when refs were last verified — invalidate if it changes. */
+  projectsKey: string;
   brokenImports: string[];
+  brokenRefs: string[];
 }
 
 const g = globalThis as unknown as {
@@ -36,6 +56,17 @@ interface DiscoveryInput {
   projects: ProjectData[];
 }
 
+/**
+ * Per-call context threaded through every `tryX` so we don't recompute the
+ * project list hash or re-stat refs that another memory file already proved
+ * exist. Lives only for one `listMemoryFiles` invocation.
+ */
+interface ListContext {
+  projectsKey: string;
+  allProjectPaths: string[];
+  existsMemo: Map<string, boolean>;
+}
+
 // Hash the project set so cache hits require both freshness AND a matching
 // project list. Without this, a list call after a rescan could return entries
 // for projects that are no longer present (which would then 400 on PUT
@@ -46,23 +77,36 @@ function projectsKey(projects: ProjectData[]): string {
   return h.digest("hex").slice(0, 16);
 }
 
-export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFileEntry[]> {
+export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryListResult> {
   const key = projectsKey(input.projects);
   const cached = g.__memoryInventoryCache;
   if (cached && cached.key === key && Date.now() - cached.cachedAt < CACHE_TTL) {
-    return cached.entries;
+    return cached.result;
   }
 
   const entries: MemoryFileEntry[] = [];
-  const userEntry = await tryUser();
+  const indexSummaries: MemoryIndexSummary[] = [];
+
+  // Shared across every memory file's ref-verification pass so repeated
+  // references to the same `(project, candidate)` pair don't re-stat. Lives
+  // only for the duration of this listMemoryFiles call.
+  const existsMemo = new Map<string, boolean>();
+  const allProjectPaths = input.projects.map((p) => p.path).sort();
+
+  const ctx: ListContext = { projectsKey: key, allProjectPaths, existsMemo };
+
+  const userEntry = await tryUser(ctx);
   if (userEntry) entries.push(userEntry);
 
   await Promise.all(
     input.projects.map(async (p) => {
-      const proj = await tryProject(p);
+      const proj = await tryProject(p, ctx);
       if (proj) entries.push(proj);
-      const auto = await tryAuto(p);
-      entries.push(...auto);
+      const auto = await tryAuto(p, ctx);
+      if (auto) {
+        entries.push(...auto.entries);
+        if (auto.summary) indexSummaries.push(auto.summary);
+      }
     }),
   );
 
@@ -73,49 +117,106 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFile
     return a.displayName.localeCompare(b.displayName);
   });
 
-  g.__memoryInventoryCache = { key, entries, cachedAt: Date.now() };
-  return entries;
+  indexSummaries.sort((a, b) => a.projectName.localeCompare(b.projectName));
+
+  const result: MemoryListResult = { entries, indexSummaries };
+  g.__memoryInventoryCache = { key, result, cachedAt: Date.now() };
+  return result;
 }
 
 function scopeOrder(scope: MemoryFileEntry["scope"]): number {
   return scope === "user" ? 0 : scope === "project" ? 1 : 2;
 }
 
-async function tryUser(): Promise<MemoryFileEntry | null> {
-  return readEntry(userMemoryPath(), { scope: "user", displayName: "User CLAUDE.md" });
+async function tryUser(ctx: ListContext): Promise<MemoryFileEntry | null> {
+  // User CLAUDE.md has no parent project; refs check against every project.
+  return readEntry(
+    userMemoryPath(),
+    { scope: "user", displayName: "User CLAUDE.md" },
+    null,
+    ctx,
+  );
 }
 
-async function tryProject(p: ProjectData): Promise<MemoryFileEntry | null> {
-  return readEntry(path.resolve(path.join(p.path, "CLAUDE.md")), {
-    scope: "project",
-    projectSlug: p.slug,
-    projectName: p.name,
-    displayName: "CLAUDE.md",
-  });
+async function tryProject(p: ProjectData, ctx: ListContext): Promise<MemoryFileEntry | null> {
+  return readEntry(
+    path.resolve(path.join(p.path, "CLAUDE.md")),
+    {
+      scope: "project",
+      projectSlug: p.slug,
+      projectName: p.name,
+      displayName: "CLAUDE.md",
+    },
+    p.path,
+    ctx,
+  );
 }
 
-async function tryAuto(p: ProjectData): Promise<MemoryFileEntry[]> {
+interface AutoResult {
+  entries: MemoryFileEntry[];
+  /** Null when this project's memory dir has no MEMORY.md (still index-able). */
+  summary: MemoryIndexSummary | null;
+}
+
+async function tryAuto(p: ProjectData, ctx: ListContext): Promise<AutoResult | null> {
   const memDir = memoryDirFor(p.path);
   let names: string[];
   try {
     names = await fs.readdir(memDir);
   } catch {
-    return [];
+    return null;
   }
   const mdNames = names.filter(
     (n) => n.toLowerCase().endsWith(".md") && !n.startsWith("."),
   );
+
+  // Read MEMORY.md (case-insensitive) once and parse, so we can stamp each
+  // body entry's `indexed` flag in a single pass instead of re-reading later.
+  const indexName = mdNames.find((n) => n.toLowerCase() === "memory.md") ?? null;
+  let indexContent: string | null = null;
+  if (indexName) {
+    try {
+      indexContent = await fs.readFile(path.join(memDir, indexName), "utf-8");
+    } catch {
+      indexContent = null;
+    }
+  }
+  const bodyFilenames = mdNames.filter((n) => n.toLowerCase() !== "memory.md");
+  const summary = summarizeMemoryIndex({
+    projectSlug: p.slug,
+    projectName: p.name,
+    indexContent,
+    bodyFilenames,
+  });
+  // Index awareness only makes sense when MEMORY.md exists. Without it we
+  // still return every body file but leave `indexed` undefined so the UI can
+  // show a neutral state instead of misleading "orphan" badges everywhere.
+  const linkedSet = summary.present
+    ? new Set(summary.linkedNames)
+    : null;
+
   const out = await Promise.all(
-    mdNames.map((name) =>
-      readEntry(path.resolve(path.join(memDir, name)), {
-        scope: "auto",
-        projectSlug: p.slug,
-        projectName: p.name,
-        displayName: name,
-      }),
-    ),
+    mdNames.map(async (name) => {
+      const entry = await readEntry(
+        path.resolve(path.join(memDir, name)),
+        {
+          scope: "auto",
+          projectSlug: p.slug,
+          projectName: p.name,
+          displayName: name,
+        },
+        p.path,
+        ctx,
+      );
+      if (!entry) return null;
+      if (name.toLowerCase() === "memory.md") return entry;
+      if (linkedSet) entry.indexed = linkedSet.has(name.toLowerCase());
+      return entry;
+    }),
   );
-  return out.filter((e): e is MemoryFileEntry => e !== null);
+
+  const entries = out.filter((e): e is MemoryFileEntry => e !== null);
+  return { entries, summary: summary.present ? summary : null };
 }
 
 interface PartialEntry {
@@ -128,6 +229,8 @@ interface PartialEntry {
 async function readEntry(
   absPath: string,
   meta: PartialEntry,
+  parentProject: string | null,
+  ctx: ListContext,
 ): Promise<MemoryFileEntry | null> {
   let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
@@ -147,7 +250,7 @@ async function readEntry(
     return null;
   }
 
-  const stale = await computeStaleness(absPath, raw, stat.mtimeMs);
+  const stale = await computeStaleness(absPath, raw, stat.mtimeMs, parentProject, ctx);
 
   return {
     id: encodeMemoryId(absPath),
@@ -167,16 +270,26 @@ async function computeStaleness(
   absPath: string,
   raw: string,
   mtimeMs: number,
+  parentProject: string | null,
+  ctx: ListContext,
 ): Promise<MemoryStaleness> {
   const ageOver30d = Date.now() - mtimeMs > STALE_AGE_MS;
 
   const importCache = g.__memoryImportCache!;
   const cached = importCache.get(absPath);
-  if (cached && cached.mtimeMs === mtimeMs) {
+  // Cache hit requires the file is unchanged AND the project set is unchanged.
+  // Ref existence depends on which projects exist, so a rescan that adds /
+  // removes projects must re-verify even when the memory file itself hasn't
+  // changed. Imports don't depend on project set but share the same cache.
+  if (cached && cached.mtimeMs === mtimeMs && cached.projectsKey === ctx.projectsKey) {
     // LRU touch: re-insert to move to most-recently-used end of Map iteration order.
     importCache.delete(absPath);
     importCache.set(absPath, cached);
-    return { ageOver30d, brokenImports: cached.brokenImports };
+    return {
+      ageOver30d,
+      brokenImports: cached.brokenImports,
+      brokenRefs: cached.brokenRefs,
+    };
   }
 
   let brokenImports: string[] = [];
@@ -189,13 +302,30 @@ async function computeStaleness(
     // best-effort; leave brokenImports empty
   }
 
+  let brokenRefs: string[] = [];
+  try {
+    const candidates = extractRefCandidates(raw);
+    brokenRefs = await verifyRefs(
+      candidates,
+      { parent: parentProject, all: ctx.allProjectPaths },
+      ctx.existsMemo,
+    );
+  } catch {
+    // best-effort; leave brokenRefs empty
+  }
+
   if (importCache.size >= IMPORT_CACHE_MAX) {
     // Evict oldest entry (Map preserves insertion order).
     const oldest = importCache.keys().next().value;
     if (oldest !== undefined) importCache.delete(oldest);
   }
-  importCache.set(absPath, { mtimeMs, brokenImports });
-  return { ageOver30d, brokenImports };
+  importCache.set(absPath, {
+    mtimeMs,
+    projectsKey: ctx.projectsKey,
+    brokenImports,
+    brokenRefs,
+  });
+  return { ageOver30d, brokenImports, brokenRefs };
 }
 
 function makePreview(raw: string): string {

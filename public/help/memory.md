@@ -15,7 +15,41 @@ The `/memory` page unifies three scopes:
 - **Project** — `<project>/CLAUDE.md` for every scanned project
 - **Auto-memory** — every `.md` file inside `~/.claude/projects/<encoded>/memory/` for every scanned project
 
-Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old or contains broken `@import` references. Filter by scope or stale status with the chips above the list.
+Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old, contains broken `@import` references, or names source files in its body that no longer exist on disk. Filter by scope or stale status with the chips above the list.
+
+### Read telemetry
+
+Each row also carries a `Read N× · <relative-time>` indicator when Claude Code has actually opened the file in a past session. The data comes from replaying every session JSONL under `~/.claude/projects/*/` and counting `Read({file_path})` tool calls whose target is a memory path. Lookup runs once per server lifetime (or after a 5-minute cache window) and is persisted to the SQLite index for cross-restart durability.
+
+Only `Read` events are counted at the file level — `Grep` and `Glob` against memory directories target the directory, not a specific file, so they show up in the existing `/usage` analytics but aren't attributed per row here.
+
+The **Unread (30d)** filter chip narrows the list to memories that Claude Code either has never opened (no record on file) or hasn't opened in the past 30 days. The 30-day cutoff matches the existing age-based staleness signal so both filters tell a consistent story.
+
+### What counts as "stale"
+
+Three signals can flip a row into the stale set, and hover the `STALE` chip to see which ones fired:
+
+- **`N broken @imports`** — the body contains `@import ./relative.md` directives that don't resolve. This catches structured cross-file references whose targets were moved or deleted.
+- **`N stale refs`** — the body mentions source-file paths (e.g. ``src/lib/foo.ts``, ``app/api/users/route.ts``, ``~/.claude/CLAUDE.md``) that don't exist on disk. Only paths with a `/` and a recognized extension (`ts`/`tsx`/`js`/`jsx`/`mjs`/`cjs`/`md`/`json`/`sql`/`yml`/`yaml`/`toml`/`sh`/`py`/`go`/`rs`) are scanned. Refs are resolved against the memory's parent project first, then against every other scanned project — first match wins. Triple-fenced code blocks and URLs are stripped before scanning so example code and `https://github.com/foo/bar.ts` don't false-positive.
+- **`Nd old`** — the file's mtime is more than 30 days in the past.
+
+### Memory budget banner
+
+Above the scope filters, a **memory budget banner** aggregates index health and the total budget envelope across every scanned project:
+
+- **Projects indexed** — count of projects that have a `MEMORY.md`
+- **Entries** — total bullet-link entries parsed across all indexes
+- **Max N/200 lines** — the largest index's line count, compared against Claude Code's documented 200-line cap. The number turns amber at ≥160 (80% of cap) and red at ≥190 (95% of cap), so a runaway index that risks truncation is visible at a glance
+- **Total N KB (~M% of 32.0 KB)** — bytes-on-disk across every memory file (user CLAUDE.md, project CLAUDE.md, every auto-memory body). Compared informationally against the article's soft Hermes-style budget of 32 KB. No color tone on the aggregate — the alarm signal lives on the per-row chip
+- **N large files** — count of memory files larger than 4 KB. Hover for the threshold
+- **Orphans** — body files inside an auto-memory dir that aren't referenced by that project's `MEMORY.md`
+- **Dangling links** — `MEMORY.md` entries whose target file doesn't exist on disk
+
+Each auto-memory row carries an `indexed` flag (`true` if the project's `MEMORY.md` references the file, `false` if not). When a project's auto-memory dir has no `MEMORY.md`, rows in that dir leave the flag undefined — neutral state rather than "everything is orphaned".
+
+### Per-row size chip
+
+Rows for files larger than 4 KB show an inline size chip next to the display name (e.g. `5.2 KB`). The threshold matches Claude Code's "soft target per memory body" heuristic — most well-tuned memories stay well under it. Files below 4 KB show no chip so the row gutter stays quiet for the routine case.
 
 Click any row to open it in the right pane. **Edit** switches into a textarea; **Save** writes back atomically. The editor takes a snapshot via `~/.minder/config-history/` before every save so you can roll back from the Config History page. **Diff** compares your draft against the most recent snapshot.
 

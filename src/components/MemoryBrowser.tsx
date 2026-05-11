@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import type { MemoryFileEntry, MemoryScope } from "@/lib/types";
+import type { MemoryFileEntry, MemoryIndexSummary, MemoryScope } from "@/lib/types";
+import {
+  MEMORY_FILE_LARGE_BYTES,
+  MEMORY_INDEX_LINE_CAP,
+  MEMORY_TOTAL_BODY_BUDGET_BYTES,
+  budgetTone,
+} from "@/lib/memory/budget";
+import { formatKB } from "@/lib/utils";
+import { Chip } from "./ui/chip";
 import { MemoryEditor } from "./MemoryEditor";
 
 const SCOPE_LABEL: Record<MemoryScope, string> = {
@@ -17,18 +25,27 @@ type ScopeFilter = MemoryScope | "all";
 
 export function MemoryBrowser() {
   const [entries, setEntries] = useState<MemoryFileEntry[] | null>(null);
+  const [indexSummaries, setIndexSummaries] = useState<MemoryIndexSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [showStaleOnly, setShowStaleOnly] = useState(false);
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
 
-  async function reload(signal?: AbortSignal) {
+  // Unread filter rides in the URL so the server's 30d cutoff is the single
+  // source of truth — the client never recomputes "what counts as unread".
+  async function reload(unread: boolean, signal?: AbortSignal) {
     try {
-      const r = await fetch("/api/memory", { signal });
+      const url = unread ? "/api/memory?unread=true" : "/api/memory";
+      const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const json = (await r.json()) as { entries: MemoryFileEntry[] };
+      const json = (await r.json()) as {
+        entries: MemoryFileEntry[];
+        indexSummaries?: MemoryIndexSummary[];
+      };
       setEntries(json.entries);
+      setIndexSummaries(json.indexSummaries ?? []);
       setError(null);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -38,9 +55,9 @@ export function MemoryBrowser() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    reload(ctrl.signal);
+    reload(showUnreadOnly, ctrl.signal);
     return () => ctrl.abort();
-  }, []);
+  }, [showUnreadOnly]);
 
   const filtered = useMemo(() => {
     if (!entries) return [];
@@ -76,6 +93,37 @@ export function MemoryBrowser() {
     return { scopeCounts: counts, staleCount: stale };
   }, [entries]);
 
+  const indexRollup = useMemo(() => {
+    let projects = 0;
+    let entryCount = 0;
+    let lineCount = 0;
+    let orphans = 0;
+    let dangling = 0;
+    let maxLineCount = 0;
+    for (const s of indexSummaries) {
+      projects++;
+      entryCount += s.entryCount;
+      lineCount += s.lineCount;
+      orphans += s.orphans.length;
+      dangling += s.dangling.length;
+      if (s.lineCount > maxLineCount) maxLineCount = s.lineCount;
+    }
+    return { projects, entryCount, lineCount, orphans, dangling, maxLineCount };
+  }, [indexSummaries]);
+
+  const budgetRollup = useMemo(() => {
+    // No tone on the aggregate -- it's informational; the alarm signal
+    // lives on per-row chips for files over the large-file threshold.
+    if (!entries) return { totalBytes: 0, largeFileCount: 0 };
+    let totalBytes = 0;
+    let largeFileCount = 0;
+    for (const e of entries) {
+      totalBytes += e.sizeBytes;
+      if (e.sizeBytes > MEMORY_FILE_LARGE_BYTES) largeFileCount++;
+    }
+    return { totalBytes, largeFileCount };
+  }, [entries]);
+
   const selected = entries?.find((e) => e.id === selectedId) ?? null;
 
   if (error) {
@@ -87,6 +135,9 @@ export function MemoryBrowser() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {(indexRollup.projects > 0 || budgetRollup.totalBytes > 0) && (
+        <IndexBanner rollup={indexRollup} budget={budgetRollup} />
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
         <input
           value={search}
@@ -120,6 +171,11 @@ export function MemoryBrowser() {
           active={showStaleOnly}
           onClick={() => setShowStaleOnly((v) => !v)}
           variant="warn"
+        />
+        <ScopeChip
+          label="Unread (30d)"
+          active={showUnreadOnly}
+          onClick={() => setShowUnreadOnly((v) => !v)}
         />
       </div>
 
@@ -155,7 +211,7 @@ export function MemoryBrowser() {
           )}
         </div>
         {selected ? (
-          <MemoryEditor entry={selected} onSaved={reload} />
+          <MemoryEditor entry={selected} onSaved={() => reload(showUnreadOnly)} />
         ) : (
           <div
             style={{
@@ -172,6 +228,80 @@ export function MemoryBrowser() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Line-count chip turns amber at 80% of the 200-line index truncation cap
+// and red at 95% (data-loss imminent — Claude Code drops content past 200).
+function IndexBanner({
+  rollup,
+  budget,
+}: {
+  rollup: {
+    projects: number;
+    entryCount: number;
+    lineCount: number;
+    orphans: number;
+    dangling: number;
+    maxLineCount: number;
+  };
+  budget: { totalBytes: number; largeFileCount: number };
+}) {
+  const lineTone = budgetTone(rollup.maxLineCount, MEMORY_INDEX_LINE_CAP);
+  const lineToneColor =
+    lineTone === "alarm" || lineTone === "warn" ? "var(--accent)" : "var(--text-muted)";
+  const totalBudgetPct = Math.round(
+    (budget.totalBytes / MEMORY_TOTAL_BODY_BUDGET_BYTES) * 100,
+  );
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "14px",
+        padding: "10px 14px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+        fontSize: "0.72rem",
+        fontFamily: "var(--font-body)",
+        color: "var(--text-secondary)",
+      }}
+    >
+      <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        Memory budget
+      </span>
+      {rollup.projects > 0 && (
+        <>
+          <span>
+            {rollup.projects} {rollup.projects === 1 ? "project" : "projects"} indexed
+          </span>
+          <span>{rollup.entryCount} entries</span>
+          <span style={{ color: lineToneColor }}>
+            max {rollup.maxLineCount}/{MEMORY_INDEX_LINE_CAP} lines
+          </span>
+        </>
+      )}
+      <span
+        title={`Soft target ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)}; informational only`}
+      >
+        total {formatKB(budget.totalBytes)}
+        {budget.totalBytes > 0 && ` (~${totalBudgetPct}% of ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)})`}
+      </span>
+      {budget.largeFileCount > 0 && (
+        <span title={`Files larger than ${formatKB(MEMORY_FILE_LARGE_BYTES)}`}>
+          {budget.largeFileCount} large file{budget.largeFileCount === 1 ? "" : "s"}
+        </span>
+      )}
+      {rollup.orphans > 0 && (
+        <span style={{ color: "var(--accent)" }}>{rollup.orphans} orphan{rollup.orphans === 1 ? "" : "s"}</span>
+      )}
+      {rollup.dangling > 0 && (
+        <span style={{ color: "var(--accent)" }}>
+          {rollup.dangling} dangling link{rollup.dangling === 1 ? "" : "s"}
+        </span>
+      )}
     </div>
   );
 }
@@ -270,6 +400,13 @@ function MemoryRow({
         >
           {entry.displayName}
         </span>
+        {entry.sizeBytes > MEMORY_FILE_LARGE_BYTES && (
+          <Chip
+            label={formatKB(entry.sizeBytes)}
+            muted
+            title={`File size exceeds ${formatKB(MEMORY_FILE_LARGE_BYTES)}; soft total-body target is ${formatKB(MEMORY_TOTAL_BODY_BUDGET_BYTES)}`}
+          />
+        )}
         {stale && <StaleChip entry={entry} />}
       </div>
       {entry.projectName && (
@@ -308,17 +445,42 @@ function MemoryRow({
           fontFamily: "var(--font-mono)",
         }}
       >
-        {rel} · {(entry.sizeBytes / 1024).toFixed(1)} KB
+        {rel}
+        {entry.usage && (
+          <>
+            {" · "}
+            <UsageBadge usage={entry.usage} />
+          </>
+        )}
       </span>
     </button>
   );
 }
 
+function UsageBadge({ usage }: { usage: NonNullable<MemoryFileEntry["usage"]> }) {
+  const rel = formatDistanceToNow(new Date(usage.lastReadAt), { addSuffix: true });
+  return (
+    <span title={`Last read ${rel}`}>
+      Read {usage.readCount}× · {rel}
+    </span>
+  );
+}
+
 function StaleChip({ entry }: { entry: MemoryFileEntry }) {
   const reasons: string[] = [];
-  if (entry.stale.ageOver30d) reasons.push("age > 30d");
+  const refs = entry.stale.brokenRefs;
   if (entry.stale.brokenImports.length > 0) {
-    reasons.push(`${entry.stale.brokenImports.length} broken @import`);
+    const n = entry.stale.brokenImports.length;
+    reasons.push(`${n} broken @import${n === 1 ? "" : "s"}`);
+  }
+  if (refs.length > 0) {
+    reasons.push(`${refs.length} stale ref${refs.length === 1 ? "" : "s"}`);
+  }
+  if (entry.stale.ageOver30d) {
+    // Age in days at row-render time. Avoids storing a derived field on the
+    // entry just to render a chip — the wall-clock delta is tiny anyway.
+    const days = Math.floor((Date.now() - entry.mtimeMs) / 86_400_000);
+    reasons.push(`${days}d old`);
   }
   return (
     <span
@@ -343,5 +505,9 @@ function StaleChip({ entry }: { entry: MemoryFileEntry }) {
 }
 
 function isStale(entry: MemoryFileEntry): boolean {
-  return entry.stale.ageOver30d || entry.stale.brokenImports.length > 0;
+  return (
+    entry.stale.ageOver30d ||
+    entry.stale.brokenImports.length > 0 ||
+    entry.stale.brokenRefs.length > 0
+  );
 }
