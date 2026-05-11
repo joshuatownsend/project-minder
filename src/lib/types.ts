@@ -622,6 +622,18 @@ export interface SessionDetail extends SessionSummary {
 
 export type HookSource = "project" | "local" | "user" | "plugin";
 
+// Toggleability lives with the type so new HookSource members raise a
+// compile-time prompt rather than silently slipping past the inline checks
+// in HooksBrowser / ConfigBrowser. "user" + "local" round-trip via the
+// sidecar; "project" is git-tracked + Claude Code has no disabledHooks
+// affordance (see effectiveConfig.ts); "plugin" is owned by the plugin author.
+export function isToggleableHookSource(s: HookSource): s is "user" | "local" {
+  return s === "user" || s === "local";
+}
+export function isProjectSharedHookSource(s: HookSource): s is "project" {
+  return s === "project";
+}
+
 export interface HookCommand {
   type: "command";
   command: string;

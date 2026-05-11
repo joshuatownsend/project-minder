@@ -18,8 +18,11 @@ import {
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useConfig, type HookRow, type McpRow, type CicdRow, type SettingsKeyRow } from "@/hooks/useConfig";
-import { type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
+import { useDisabledHooks } from "@/hooks/useDisabledHooks";
+import { isProjectSharedHookSource, isToggleableHookSource, type ConfigType, type PluginEntry, type Workflow } from "@/lib/types";
 import { ConfigDashboard } from "./ConfigDashboard";
+import { HookToggleButton } from "./HookToggleButton";
+import { DisabledHooksSection } from "./DisabledHooksSection";
 import dynamic from "next/dynamic";
 
 // Playground tab is lazy-loaded — its module only ships in the /config
@@ -29,7 +32,7 @@ const ScreenshotToCodePlayground = dynamic(
   () => import("./ScreenshotToCodePlayground").then((m) => m.ScreenshotToCodePlayground),
   { ssr: false },
 );
-import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, type PillTone } from "./config/primitives";
+import { Pill, inlineCode, mutedMono, commandPreview, fileBasename, ProjectSharedHookChip, type PillTone } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
 import { computeEffectiveMcp, computeEffectiveHooks, type EffectiveState } from "@/lib/effectiveConfig";
@@ -222,6 +225,7 @@ export function ConfigBrowser() {
           data={data}
           effectiveMcp={effectiveMcp}
           effectiveHooks={effectiveHooks}
+          onActiveHooksChanged={refresh}
           onMcpToggle={async (projectSlug, serverName, enabled) => {
             const res = await fetch(`/api/projects/${encodeURIComponent(projectSlug)}/mcp-toggle`, {
               method: "POST",
@@ -256,17 +260,26 @@ function ActiveSection({
   data,
   effectiveMcp,
   effectiveHooks,
+  onActiveHooksChanged,
   onMcpToggle,
 }: {
   type: TabKey;
   data: ReturnType<typeof useConfig>["data"];
   effectiveMcp: Map<string, EffectiveState> | null;
   effectiveHooks: Map<string, EffectiveState> | null;
+  onActiveHooksChanged: () => void;
   onMcpToggle: (projectSlug: string, serverName: string, enabled: boolean) => Promise<void>;
 }) {
   if (type === "settings") return <ConfigDashboard />;
   if (type === "playground") return <ScreenshotToCodePlayground />;
-  if (type === "hooks") return <HooksList rows={data.hooks} effectiveStates={effectiveHooks} />;
+  if (type === "hooks")
+    return (
+      <HooksList
+        rows={data.hooks}
+        effectiveStates={effectiveHooks}
+        onActiveChanged={onActiveHooksChanged}
+      />
+    );
   if (type === "plugins") return <PluginsList rows={data.plugins} />;
   if (type === "mcp") return <McpList rows={data.mcp} effectiveStates={effectiveMcp} onToggle={onMcpToggle} />;
   if (type === "settingskeys") return <SettingsKeyList rows={data.settingsKeys} />;
@@ -275,8 +288,35 @@ function ActiveSection({
 
 // ─── Lists ───────────────────────────────────────────────────────────────────
 
-function HooksList({ rows, effectiveStates }: { rows: HookRow[]; effectiveStates: Map<string, EffectiveState> | null }) {
-  if (rows.length === 0) return <Empty label="No hooks configured." />;
+function HooksList({
+  rows,
+  effectiveStates,
+  onActiveChanged,
+}: {
+  rows: HookRow[];
+  effectiveStates: Map<string, EffectiveState> | null;
+  /** Called after a successful toggle so the parent can re-fetch the active
+   *  hooks list. The disabled-sidecar list is owned and refreshed locally. */
+  onActiveChanged: () => void;
+}) {
+  // useDisabledHooks lives inside HooksList rather than at the ConfigBrowser
+  // level so it only fires when the user actually opens the Hooks tab. Pairs
+  // with `onActiveChanged` from the parent: a toggle re-fetches both lists.
+  const {
+    data: disabledEntries,
+    loading: disabledLoading,
+    error: disabledError,
+    refresh: refreshDisabled,
+  } = useDisabledHooks();
+
+  const handleToggled = () => {
+    onActiveChanged();
+    refreshDisabled();
+  };
+
+  if (rows.length === 0 && disabledEntries.length === 0) {
+    return <Empty label="No hooks configured." />;
+  }
   return (
     <div>
       {rows.map((h, i) => {
@@ -315,10 +355,26 @@ function HooksList({ rows, effectiveStates }: { rows: HookRow[]; effectiveStates
               compact
             />
           ) : null}
+          {isToggleableHookSource(h.source) && (
+            <HookToggleButton
+              hookId={h.unitKey}
+              scope={h.source}
+              projectPath={h.projectPath}
+              disabled={false}
+              onToggled={handleToggled}
+            />
+          )}
+          {isProjectSharedHookSource(h.source) && <ProjectSharedHookChip />}
           <SourceBadge projectSlug={h.projectSlug} projectName={h.projectName} />
         </div>
         );
       })}
+      <DisabledHooksSection
+        entries={disabledEntries}
+        loading={disabledLoading}
+        error={disabledError}
+        onChanged={handleToggled}
+      />
     </div>
   );
 }
