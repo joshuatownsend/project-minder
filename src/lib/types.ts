@@ -165,6 +165,42 @@ export interface MemoryFileEntry {
   /** First ~200 chars of body, frontmatter stripped. */
   preview: string;
   stale: MemoryStaleness;
+  /**
+   * For `auto` scope only: true if this file is referenced by the project's
+   * MEMORY.md index. `undefined` for user/project scope (no index concept) and
+   * for auto-scope rows when MEMORY.md is missing entirely.
+   */
+  indexed?: boolean;
+}
+
+/** Single bullet-link entry parsed out of a MEMORY.md index. */
+export interface MemoryIndexEntry {
+  title: string;
+  /** Raw href as written in the markdown link (basename of a body file). */
+  target: string;
+  /** Free-text hook (em-dash side of `- [t](f.md) — hook`). */
+  hook: string;
+}
+
+/**
+ * Per-project rollup of MEMORY.md index state. One per project that has a
+ * memory dir; consumed by the `/memory` summary banner and budget chips.
+ */
+export interface MemoryIndexSummary {
+  projectSlug: string;
+  projectName: string;
+  /** True if MEMORY.md exists in this project's memory dir. */
+  present: boolean;
+  /** Line count of MEMORY.md (trailing blanks ignored). */
+  lineCount: number;
+  /** Number of valid bullet-link entries parsed out of the index. */
+  entryCount: number;
+  /** Body files in the dir not referenced from MEMORY.md. */
+  orphans: string[];
+  /** Index entries whose target file doesn't exist in the dir. */
+  dangling: string[];
+  /** Lowercased basenames the index actually points at (debug/audit). */
+  linkedNames: string[];
 }
 
 export interface PortMapping {

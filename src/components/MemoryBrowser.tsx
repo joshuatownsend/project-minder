@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import type { MemoryFileEntry, MemoryScope } from "@/lib/types";
+import type { MemoryFileEntry, MemoryIndexSummary, MemoryScope } from "@/lib/types";
 import { MemoryEditor } from "./MemoryEditor";
 
 const SCOPE_LABEL: Record<MemoryScope, string> = {
@@ -17,6 +17,7 @@ type ScopeFilter = MemoryScope | "all";
 
 export function MemoryBrowser() {
   const [entries, setEntries] = useState<MemoryFileEntry[] | null>(null);
+  const [indexSummaries, setIndexSummaries] = useState<MemoryIndexSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -27,8 +28,12 @@ export function MemoryBrowser() {
     try {
       const r = await fetch("/api/memory", { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const json = (await r.json()) as { entries: MemoryFileEntry[] };
+      const json = (await r.json()) as {
+        entries: MemoryFileEntry[];
+        indexSummaries?: MemoryIndexSummary[];
+      };
       setEntries(json.entries);
+      setIndexSummaries(json.indexSummaries ?? []);
       setError(null);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -76,6 +81,24 @@ export function MemoryBrowser() {
     return { scopeCounts: counts, staleCount: stale };
   }, [entries]);
 
+  const indexRollup = useMemo(() => {
+    let projects = 0;
+    let entryCount = 0;
+    let lineCount = 0;
+    let orphans = 0;
+    let dangling = 0;
+    let maxLineCount = 0;
+    for (const s of indexSummaries) {
+      projects++;
+      entryCount += s.entryCount;
+      lineCount += s.lineCount;
+      orphans += s.orphans.length;
+      dangling += s.dangling.length;
+      if (s.lineCount > maxLineCount) maxLineCount = s.lineCount;
+    }
+    return { projects, entryCount, lineCount, orphans, dangling, maxLineCount };
+  }, [indexSummaries]);
+
   const selected = entries?.find((e) => e.id === selectedId) ?? null;
 
   if (error) {
@@ -87,6 +110,7 @@ export function MemoryBrowser() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {indexRollup.projects > 0 && <IndexBanner rollup={indexRollup} />}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
         <input
           value={search}
@@ -172,6 +196,65 @@ export function MemoryBrowser() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Article principle 3 + 4: surface the always-loaded index size and the cost
+// of bad bookkeeping (orphans / dangling links) in a single glance so the user
+// can see whether MEMORY.md is healthy without opening every file.
+function IndexBanner({
+  rollup,
+}: {
+  rollup: {
+    projects: number;
+    entryCount: number;
+    lineCount: number;
+    orphans: number;
+    dangling: number;
+    maxLineCount: number;
+  };
+}) {
+  const cap = 200;
+  const capPct = rollup.maxLineCount / cap;
+  // 80% amber, 95% red per the locked Phase 1 budget thresholds.
+  const tone: "ok" | "warn" | "alarm" =
+    capPct >= 0.95 ? "alarm" : capPct >= 0.8 ? "warn" : "ok";
+  const toneColor =
+    tone === "alarm" ? "var(--accent)" : tone === "warn" ? "var(--accent)" : "var(--text-muted)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "14px",
+        padding: "10px 14px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+        fontSize: "0.72rem",
+        fontFamily: "var(--font-body)",
+        color: "var(--text-secondary)",
+      }}
+    >
+      <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        MEMORY.md index
+      </span>
+      <span>
+        {rollup.projects} {rollup.projects === 1 ? "project" : "projects"}
+      </span>
+      <span>{rollup.entryCount} entries</span>
+      <span style={{ color: toneColor }}>
+        max {rollup.maxLineCount}/{cap} lines
+      </span>
+      {rollup.orphans > 0 && (
+        <span style={{ color: "var(--accent)" }}>{rollup.orphans} orphan{rollup.orphans === 1 ? "" : "s"}</span>
+      )}
+      {rollup.dangling > 0 && (
+        <span style={{ color: "var(--accent)" }}>
+          {rollup.dangling} dangling link{rollup.dangling === 1 ? "" : "s"}
+        </span>
+      )}
     </div>
   );
 }

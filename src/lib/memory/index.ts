@@ -1,19 +1,31 @@
 import { promises as fs } from "fs";
 import { createHash } from "crypto";
 import path from "path";
-import type { MemoryFileEntry, MemoryStaleness, ProjectData } from "../types";
+import type {
+  MemoryFileEntry,
+  MemoryIndexSummary,
+  MemoryStaleness,
+  ProjectData,
+} from "../types";
 import { expandImports } from "../scanner/expandImports";
 import { memoryDirFor } from "../scanner/memoryWriter";
 import { encodeMemoryId, userMemoryPath } from "./safety";
+import { summarizeMemoryIndex } from "./memoryIndex";
 
 const STALE_AGE_MS = 30 * 24 * 60 * 60_000;
 const PREVIEW_CHARS = 200;
 const CACHE_TTL = 60_000;
 const IMPORT_CACHE_MAX = 500;
 
+export interface MemoryListResult {
+  entries: MemoryFileEntry[];
+  /** One summary per scanned project that has a memory dir. */
+  indexSummaries: MemoryIndexSummary[];
+}
+
 interface InventoryCache {
   key: string;
-  entries: MemoryFileEntry[];
+  result: MemoryListResult;
   cachedAt: number;
 }
 
@@ -46,14 +58,16 @@ function projectsKey(projects: ProjectData[]): string {
   return h.digest("hex").slice(0, 16);
 }
 
-export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFileEntry[]> {
+export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryListResult> {
   const key = projectsKey(input.projects);
   const cached = g.__memoryInventoryCache;
   if (cached && cached.key === key && Date.now() - cached.cachedAt < CACHE_TTL) {
-    return cached.entries;
+    return cached.result;
   }
 
   const entries: MemoryFileEntry[] = [];
+  const indexSummaries: MemoryIndexSummary[] = [];
+
   const userEntry = await tryUser();
   if (userEntry) entries.push(userEntry);
 
@@ -62,7 +76,10 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFile
       const proj = await tryProject(p);
       if (proj) entries.push(proj);
       const auto = await tryAuto(p);
-      entries.push(...auto);
+      if (auto) {
+        entries.push(...auto.entries);
+        if (auto.summary) indexSummaries.push(auto.summary);
+      }
     }),
   );
 
@@ -73,8 +90,11 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryFile
     return a.displayName.localeCompare(b.displayName);
   });
 
-  g.__memoryInventoryCache = { key, entries, cachedAt: Date.now() };
-  return entries;
+  indexSummaries.sort((a, b) => a.projectName.localeCompare(b.projectName));
+
+  const result: MemoryListResult = { entries, indexSummaries };
+  g.__memoryInventoryCache = { key, result, cachedAt: Date.now() };
+  return result;
 }
 
 function scopeOrder(scope: MemoryFileEntry["scope"]): number {
@@ -94,28 +114,66 @@ async function tryProject(p: ProjectData): Promise<MemoryFileEntry | null> {
   });
 }
 
-async function tryAuto(p: ProjectData): Promise<MemoryFileEntry[]> {
+interface AutoResult {
+  entries: MemoryFileEntry[];
+  /** Null when this project's memory dir has no MEMORY.md (still index-able). */
+  summary: MemoryIndexSummary | null;
+}
+
+async function tryAuto(p: ProjectData): Promise<AutoResult | null> {
   const memDir = memoryDirFor(p.path);
   let names: string[];
   try {
     names = await fs.readdir(memDir);
   } catch {
-    return [];
+    return null;
   }
   const mdNames = names.filter(
     (n) => n.toLowerCase().endsWith(".md") && !n.startsWith("."),
   );
+
+  // Read MEMORY.md (case-insensitive) once and parse, so we can stamp each
+  // body entry's `indexed` flag in a single pass instead of re-reading later.
+  const indexName = mdNames.find((n) => n.toLowerCase() === "memory.md") ?? null;
+  let indexContent: string | null = null;
+  if (indexName) {
+    try {
+      indexContent = await fs.readFile(path.join(memDir, indexName), "utf-8");
+    } catch {
+      indexContent = null;
+    }
+  }
+  const bodyFilenames = mdNames.filter((n) => n.toLowerCase() !== "memory.md");
+  const summary = summarizeMemoryIndex({
+    projectSlug: p.slug,
+    projectName: p.name,
+    indexContent,
+    bodyFilenames,
+  });
+  // Index awareness only makes sense when MEMORY.md exists. Without it we
+  // still return every body file but leave `indexed` undefined so the UI can
+  // show a neutral state instead of misleading "orphan" badges everywhere.
+  const linkedSet = summary.present
+    ? new Set(summary.linkedNames)
+    : null;
+
   const out = await Promise.all(
-    mdNames.map((name) =>
-      readEntry(path.resolve(path.join(memDir, name)), {
+    mdNames.map(async (name) => {
+      const entry = await readEntry(path.resolve(path.join(memDir, name)), {
         scope: "auto",
         projectSlug: p.slug,
         projectName: p.name,
         displayName: name,
-      }),
-    ),
+      });
+      if (!entry) return null;
+      if (name.toLowerCase() === "memory.md") return entry;
+      if (linkedSet) entry.indexed = linkedSet.has(name.toLowerCase());
+      return entry;
+    }),
   );
-  return out.filter((e): e is MemoryFileEntry => e !== null);
+
+  const entries = out.filter((e): e is MemoryFileEntry => e !== null);
+  return { entries, summary: summary.present ? summary : null };
 }
 
 interface PartialEntry {

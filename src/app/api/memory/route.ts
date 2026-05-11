@@ -9,6 +9,6 @@ export async function GET() {
     scan = await scanAllProjects();
     setCachedScan(scan);
   }
-  const entries = await listMemoryFiles({ projects: scan.projects });
-  return NextResponse.json({ entries });
+  const { entries, indexSummaries } = await listMemoryFiles({ projects: scan.projects });
+  return NextResponse.json({ entries, indexSummaries });
 }

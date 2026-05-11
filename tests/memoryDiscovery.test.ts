@@ -61,14 +61,14 @@ describe("listMemoryFiles — discovery", () => {
   it("includes user CLAUDE.md when present", async () => {
     await fs.writeFile(path.join(tmpHome, ".claude", "CLAUDE.md"), "# user\n");
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [] });
+    const { entries } = await listMemoryFiles({ projects: [] });
     expect(entries.filter((e) => e.scope === "user")).toHaveLength(1);
     expect(entries[0].displayName).toBe("User CLAUDE.md");
   });
 
   it("skips user scope when ~/.claude/CLAUDE.md is missing", async () => {
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [] });
+    const { entries } = await listMemoryFiles({ projects: [] });
     expect(entries.filter((e) => e.scope === "user")).toHaveLength(0);
   });
 
@@ -79,7 +79,7 @@ describe("listMemoryFiles — discovery", () => {
     await fs.writeFile(path.join(a, "CLAUDE.md"), "# A\n");
     // B has no CLAUDE.md
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [project("a", a), project("b", b)] });
+    const { entries } = await listMemoryFiles({ projects: [project("a", a), project("b", b)] });
     const proj = entries.filter((e) => e.scope === "project");
     expect(proj).toHaveLength(1);
     expect(proj[0].projectSlug).toBe("a");
@@ -99,10 +99,73 @@ describe("listMemoryFiles — discovery", () => {
     await fs.writeFile(path.join(memDir, ".hidden.md"), "hidden");
 
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [project("a", a)] });
+    const { entries } = await listMemoryFiles({ projects: [project("a", a)] });
     const auto = entries.filter((e) => e.scope === "auto");
     expect(auto.map((e) => e.displayName).sort()).toEqual(["feedback.md", "user_role.md"]);
     for (const e of auto) expect(e.projectSlug).toBe("a");
+  });
+});
+
+describe("listMemoryFiles — MEMORY.md index awareness", () => {
+  it("returns an indexSummary per project with a memory dir", async () => {
+    const a = path.join(tmpHome, "projA");
+    await fs.mkdir(a);
+    const { encodePath } = await import("@/lib/scanner/claudeConversations");
+    const memDir = path.join(tmpHome, ".claude", "projects", encodePath(a), "memory");
+    await fs.mkdir(memDir, { recursive: true });
+    await fs.writeFile(path.join(memDir, "MEMORY.md"), "- [Alpha](alpha.md) — first\n");
+    await fs.writeFile(path.join(memDir, "alpha.md"), "alpha body");
+    await fs.writeFile(path.join(memDir, "orphan.md"), "orphan body");
+
+    const { listMemoryFiles } = await reloadModule();
+    const { entries, indexSummaries } = await listMemoryFiles({ projects: [project("a", a)] });
+
+    expect(indexSummaries).toHaveLength(1);
+    expect(indexSummaries[0].projectSlug).toBe("a");
+    expect(indexSummaries[0].present).toBe(true);
+    expect(indexSummaries[0].entryCount).toBe(1);
+    expect(indexSummaries[0].orphans).toEqual(["orphan.md"]);
+    expect(indexSummaries[0].dangling).toEqual([]);
+
+    const alpha = entries.find((e) => e.displayName === "alpha.md");
+    const orphan = entries.find((e) => e.displayName === "orphan.md");
+    expect(alpha?.indexed).toBe(true);
+    expect(orphan?.indexed).toBe(false);
+  });
+
+  it("omits indexSummary when project has memory dir but no MEMORY.md", async () => {
+    const a = path.join(tmpHome, "projA");
+    await fs.mkdir(a);
+    const { encodePath } = await import("@/lib/scanner/claudeConversations");
+    const memDir = path.join(tmpHome, ".claude", "projects", encodePath(a), "memory");
+    await fs.mkdir(memDir, { recursive: true });
+    await fs.writeFile(path.join(memDir, "user_role.md"), "stuff");
+
+    const { listMemoryFiles } = await reloadModule();
+    const { entries, indexSummaries } = await listMemoryFiles({ projects: [project("a", a)] });
+
+    expect(indexSummaries).toHaveLength(0);
+    const auto = entries.find((e) => e.scope === "auto");
+    // Without an index we leave `indexed` undefined — UI shows neutral state.
+    expect(auto?.indexed).toBeUndefined();
+  });
+
+  it("detects dangling links when MEMORY.md points at missing files", async () => {
+    const a = path.join(tmpHome, "projA");
+    await fs.mkdir(a);
+    const { encodePath } = await import("@/lib/scanner/claudeConversations");
+    const memDir = path.join(tmpHome, ".claude", "projects", encodePath(a), "memory");
+    await fs.mkdir(memDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memDir, "MEMORY.md"),
+      "- [Gone](missing.md) — points at nothing\n",
+    );
+
+    const { listMemoryFiles } = await reloadModule();
+    const { indexSummaries } = await listMemoryFiles({ projects: [project("a", a)] });
+
+    expect(indexSummaries[0].dangling).toEqual(["missing.md"]);
+    expect(indexSummaries[0].orphans).toEqual([]);
   });
 });
 
@@ -113,7 +176,7 @@ describe("listMemoryFiles — staleness", () => {
     const old = (Date.now() - 31 * 24 * 60 * 60_000) / 1000;
     await fs.utimes(userMd, old, old);
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [] });
+    const { entries } = await listMemoryFiles({ projects: [] });
     expect(entries[0].stale.ageOver30d).toBe(true);
   });
 
@@ -125,7 +188,7 @@ describe("listMemoryFiles — staleness", () => {
       "# project\n\n@import ./missing-target.md\n",
     );
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [project("a", a)] });
+    const { entries } = await listMemoryFiles({ projects: [project("a", a)] });
     const proj = entries.find((e) => e.scope === "project");
     expect(proj?.stale.brokenImports).toEqual(["./missing-target.md"]);
   });
@@ -139,7 +202,7 @@ describe("listMemoryFiles — staleness", () => {
       "# project\n\n@import ./rules.md\n",
     );
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [project("a", a)] });
+    const { entries } = await listMemoryFiles({ projects: [project("a", a)] });
     const proj = entries.find((e) => e.scope === "project");
     expect(proj?.stale.brokenImports).toEqual([]);
   });
@@ -152,7 +215,7 @@ describe("listMemoryFiles — preview + sorting", () => {
       "---\nname: x\n---\nThe real content starts here.\n",
     );
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [] });
+    const { entries } = await listMemoryFiles({ projects: [] });
     expect(entries[0].preview).toMatch(/^The real content/);
   });
 
@@ -166,7 +229,7 @@ describe("listMemoryFiles — preview + sorting", () => {
     await fs.mkdir(memDir, { recursive: true });
     await fs.writeFile(path.join(memDir, "x.md"), "auto");
     const { listMemoryFiles } = await reloadModule();
-    const entries = await listMemoryFiles({ projects: [project("a", a)] });
+    const { entries } = await listMemoryFiles({ projects: [project("a", a)] });
     expect(entries.map((e) => e.scope)).toEqual(["user", "project", "auto"]);
   });
 });
