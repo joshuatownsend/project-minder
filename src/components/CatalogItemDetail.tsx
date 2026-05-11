@@ -9,6 +9,7 @@ import {
   frontmatterTableEntries,
   versionRows,
 } from "@/lib/catalogDetail";
+import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 
 export function BackLink({ href, label }: { href: string; label: string }) {
   return (
@@ -231,7 +232,7 @@ export function BodyTab({ content, filePath }: { content: string; filePath: stri
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px", paddingTop: "12px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px", paddingTop: "12px" }}>
       <span
         style={{
           fontFamily: "var(--font-mono)",
@@ -244,24 +245,16 @@ export function BodyTab({ content, filePath }: { content: string; filePath: stri
       >
         {filePath}
       </span>
-      <pre
+      <div
         style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.72rem",
-          color: "var(--text-secondary)",
           background: "var(--bg-surface)",
           border: "1px solid var(--border-subtle)",
           borderRadius: "var(--radius)",
-          padding: "12px 14px",
-          margin: 0,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          overflowX: "auto",
-          lineHeight: 1.5,
+          padding: "14px 16px",
         }}
       >
-        {content}
-      </pre>
+        <MarkdownRenderer content={content} />
+      </div>
     </div>
   );
 }
