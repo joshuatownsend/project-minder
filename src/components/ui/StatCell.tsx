@@ -10,9 +10,12 @@ interface StatCellProps {
   value: ReactNode;
   /** Optional sub-line under the value (e.g. units, percentages, qualifier). */
   detail?: string;
-  /** Optional right-aligned glyph in the header row (StatsDashboard uses
-   *  this for its small Lucide icons; the compact variant ignores `icon`
-   *  layout-wise but still renders it inline if passed). */
+  /** Optional right-aligned glyph in the header row, rendered on the
+   *  opposite end of the label via `justifyContent: space-between`.
+   *  StatsDashboard uses this for its small Lucide icons. The layout is
+   *  identical at both sizes — `compact` renders the icon in the same
+   *  header row as `feature` if one is passed; the consumer just rarely
+   *  has reason to do so. */
   icon?: ReactNode;
   /** Tone override for the value text. Default is `var(--text-primary)`.
    *  Stat strips on session / usage pages use this to flag a degraded or

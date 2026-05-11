@@ -28,22 +28,33 @@ interface FindingCardProps {
    *  as three). This preserves per-consumer typography without
    *  expanding the props surface to cover every variant. */
   children: ReactNode;
+  /** Horizontal gap between header items (tone label, tag, right slot).
+   *  Defaults to 8px — DiagnosisPanel's original treatment. EfficiencyTab
+   *  passes 10 to preserve its prior `FindingRow` spacing. */
+  headerGap?: number;
 }
 
 /** Outer shell + header row for a severity-tinted finding card.
  *
- *  Shared by `DiagnosisPanel`'s `FindingCard` and `EfficiencyTab`'s
- *  `FindingRow`. The card itself is the same shape in both — tone-tinted
- *  background, header row with icon + tone label + category tag + optional
- *  right-aligned meta, then a body block — only the body's typography
- *  differs, which is why `children` is the right abstraction (not a
- *  larger prop union).
+ *  Shared by `DiagnosisPanel`'s `DiagnosisFindingCard` wrapper and
+ *  `EfficiencyTab`'s `FindingRow`. The card itself is the same shape in
+ *  both — tone-tinted background, header row with icon + tone label +
+ *  category tag + optional right-aligned meta, then a body block — only
+ *  the body's typography differs, which is why `children` is the right
+ *  abstraction (not a larger prop union).
  *
  *  `ClaudeMdAuditPanel` does NOT use this component: its cards are
  *  uniform-neutral, with severity expressed by the group header instead
  *  of per-card color. See `severityTokens` documentation for the tone
  *  mapping table. */
-export function FindingCard({ tone, toneLabel, tag, rightSlot, children }: FindingCardProps) {
+export function FindingCard({
+  tone,
+  toneLabel,
+  tag,
+  rightSlot,
+  children,
+  headerGap = 8,
+}: FindingCardProps) {
   const t = severityTokens[tone];
   const label = toneLabel ?? tone.toUpperCase();
   return (
@@ -58,7 +69,7 @@ export function FindingCard({ tone, toneLabel, tag, rightSlot, children }: Findi
         borderRadius: "var(--radius)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: `${headerGap}px` }}>
         <span
           style={{
             display: "inline-flex",

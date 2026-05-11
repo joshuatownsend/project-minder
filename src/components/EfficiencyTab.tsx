@@ -75,6 +75,7 @@ function FindingRow({ finding }: { finding: WasteFinding }) {
       tone={TONE_BY_SEVERITY[finding.severity]}
       toneLabel={SEVERITY_LABEL[finding.severity]}
       tag={finding.code}
+      headerGap={10}
       rightSlot={
         <span
           style={{
