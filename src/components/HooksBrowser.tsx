@@ -6,11 +6,11 @@ import { Search, Webhook } from "lucide-react";
 import Link from "next/link";
 import { useHooks } from "@/hooks/useHooks";
 import { useDisabledHooks } from "@/hooks/useDisabledHooks";
-import { Pill, inlineCode, commandPreview } from "./config/primitives";
+import { Pill, inlineCode, commandPreview, ProjectSharedHookChip } from "./config/primitives";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { HookToggleButton } from "./HookToggleButton";
 import { DisabledHooksSection } from "./DisabledHooksSection";
-import type { HookSource } from "@/lib/types";
+import { isProjectSharedHookSource, isToggleableHookSource, type HookSource } from "@/lib/types";
 
 const SOURCE_OPTIONS = ["all", "project", "local", "user", "plugin"] as const;
 type SourceFilter = (typeof SOURCE_OPTIONS)[number];
@@ -342,7 +342,7 @@ export function HooksBrowser() {
                       compact
                     />
                   ) : null}
-                  {(h.source === "user" || h.source === "local") && (
+                  {isToggleableHookSource(h.source) && (
                     <HookToggleButton
                       hookId={h.unitKey}
                       scope={h.source}
@@ -351,6 +351,7 @@ export function HooksBrowser() {
                       onToggled={handleToggled}
                     />
                   )}
+                  {isProjectSharedHookSource(h.source) && <ProjectSharedHookChip />}
                   <SourceBadge projectSlug={h.projectSlug} projectName={h.projectName} />
                 </div>
               );

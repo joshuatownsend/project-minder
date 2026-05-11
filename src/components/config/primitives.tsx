@@ -63,3 +63,34 @@ export function commandPreview(text: string | undefined, total: number, max = 80
 export function fileBasename(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
 }
+
+// Project-shared hooks live in `.claude/settings.json`, which is git-tracked.
+// Phase 5's toggle deliberately refuses that scope: mutating it would dirty the
+// repo for teammates, and Claude Code has no `disabledHooks` runtime affordance
+// (hooks are additive — see effectiveConfig.ts:computeEffectiveHooks). A
+// `settings.local.json` shadow doesn't work for the same reason. Surface that
+// constraint to the user via a faded chip on project-source rows.
+export function ProjectSharedHookChip() {
+  return (
+    <span
+      title={
+        "Project-shared hooks are git-tracked. Edit .claude/settings.json directly to disable. " +
+        "Hooks are additive in Claude Code, so settings.local.json cannot shadow them."
+      }
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.6rem",
+        color: "var(--text-muted)",
+        border: "1px dashed var(--border-subtle)",
+        borderRadius: "3px",
+        padding: "1px 5px",
+        letterSpacing: "0.04em",
+        flexShrink: 0,
+        opacity: 0.75,
+        cursor: "help",
+      }}
+    >
+      edit settings.json
+    </span>
+  );
+}

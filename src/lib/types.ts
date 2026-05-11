@@ -622,6 +622,30 @@ export interface SessionDetail extends SessionSummary {
 
 export type HookSource = "project" | "local" | "user" | "plugin";
 
+// `satisfies Record<HookSource, ...>` is the compile-time prompt — adding a
+// new HookSource member without extending this table is a type error. The
+// inline string checks `s === "user"` we replaced silently returned false
+// for new members; this table refuses to compile until you decide.
+//
+//   - toggleable:    round-trips via the sidecar (~/.claude/.minder/disabled-hooks.json)
+//   - projectShared: git-tracked, can't be safely mutated from the dashboard
+//                    (hooks are additive — see effectiveConfig.ts:106)
+//
+// `plugin` is owned by the plugin author and intentionally inert in both flags.
+const HOOK_SOURCE_FLAGS = {
+  project: { toggleable: false, projectShared: true },
+  local:   { toggleable: true,  projectShared: false },
+  user:    { toggleable: true,  projectShared: false },
+  plugin:  { toggleable: false, projectShared: false },
+} as const satisfies Record<HookSource, { toggleable: boolean; projectShared: boolean }>;
+
+export function isToggleableHookSource(s: HookSource): s is "user" | "local" {
+  return HOOK_SOURCE_FLAGS[s].toggleable;
+}
+export function isProjectSharedHookSource(s: HookSource): s is "project" {
+  return HOOK_SOURCE_FLAGS[s].projectShared;
+}
+
 export interface HookCommand {
   type: "command";
   command: string;
