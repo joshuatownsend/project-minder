@@ -19,16 +19,8 @@ import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
 import { ShareButton } from "./ShareButton";
 
-import { formatCost, formatCostCompact } from "@/lib/format";
+import { formatCost, formatCostCompact, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
-
-// ── Formatters ─────────────────────────────────────────────────────────────
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 // ── Project name decode ────────────────────────────────────────────────────
 // Claude encodes paths as: C:\dev\project-minder → C--dev-project-minder

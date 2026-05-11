@@ -21,14 +21,8 @@ import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
 import { ContextOverheadPanel } from "./ContextOverheadPanel";
 
-import { formatCost } from "@/lib/format";
+import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 function SectionHeader({ label }: { label: string }) {
   return (

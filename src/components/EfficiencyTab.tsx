@@ -11,6 +11,7 @@ import type {
 } from "@/lib/scanner/wasteOptimizer";
 import type { YieldResult, YieldOutcome } from "@/lib/usage/yieldAnalysis";
 import { WORK_MODE_DISPLAY, workModeToSegments, type WorkMode, type WorkModeBreakdown } from "@/lib/usage/workMode";
+import { formatPct, formatTokensOrDash } from "@/lib/format";
 
 interface EfficiencyResponse {
   slug: string;
@@ -73,17 +74,6 @@ function outcomeColor(o: YieldOutcome): string {
   }
 }
 
-function formatPct(n: number): string {
-  return `${(n * 100).toFixed(0)}%`;
-}
-
-function formatTokens(n: number | null): string {
-  if (n === null || n === 0) return "—";
-  if (n < 1_000) return `${n}`;
-  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
 function formatUsd(n: number): string {
   if (n < 0.01) return `$${n.toFixed(4)}`;
   if (n < 1) return `$${n.toFixed(3)}`;
@@ -131,7 +121,7 @@ function FindingRow({ finding }: { finding: WasteFinding }) {
           {finding.code}
         </span>
         <span style={{ marginLeft: "auto", fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-          ~{formatTokens(finding.tokensSaveable)} tokens
+          ~{formatTokensOrDash(finding.tokensSaveable)} tokens
         </span>
       </div>
       <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>

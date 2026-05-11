@@ -1,4 +1,5 @@
 import type { UsageTurn } from "./types";
+import { formatDurationSeconds as formatDuration } from "../format";
 import {
   computeSessionQuality,
   getModelContextWindow,
@@ -448,11 +449,3 @@ function pickTopAdvice(findings: DiagnosisFinding[], max: number): string[] {
     .map((s) => s.f.advice);
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const m = Math.round(seconds / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return `${h}h ${rm}m`;
-}
