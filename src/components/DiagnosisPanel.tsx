@@ -8,6 +8,7 @@ import type {
   DiagnosisSeverity,
   SessionOutcome,
 } from "@/lib/usage/sessionDiagnosis";
+import { formatDurationSeconds, formatPct } from "@/lib/format";
 
 // ── Severity styling ──────────────────────────────────────────────────────────
 
@@ -54,20 +55,6 @@ function outcomeStyle(outcome: SessionOutcome): { label: string; color: string }
     case "stuck":
       return { label: "Stuck", color: "var(--status-error-text)" };
   }
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const m = Math.round(seconds / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return `${h}h ${rm}m`;
-}
-
-function formatPct(n: number | null): string {
-  if (n === null) return "—";
-  return `${(n * 100).toFixed(0)}%`;
 }
 
 function formatUsd(n: number): string {
@@ -349,7 +336,7 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
         />
         <HeaderStat
           label="Idle"
-          value={formatDuration(report.totalIdleSeconds)}
+          value={formatDurationSeconds(report.totalIdleSeconds)}
         />
       </div>
 

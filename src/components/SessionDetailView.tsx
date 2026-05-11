@@ -47,7 +47,7 @@ import {
 import Link from "next/link";
 import { Modal } from "@/components/ui/modal";
 import { downloadBlob } from "@/lib/downloadBlob";
-import { formatCost } from "@/lib/format";
+import { formatCost, formatDurationMs, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { SourceBadge } from "@/components/SourceBadge";
 
@@ -68,20 +68,6 @@ const resumeBtnBase: React.CSSProperties = {
   lineHeight: 1, flexShrink: 0,
 };
 
-function formatDuration(ms?: number): string {
-  if (!ms) return "—";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 // ── Resume / terminal split button ───────────────────────────────────────────
 function ResumeButton({ sessionId }: { sessionId: string }) {
@@ -321,7 +307,7 @@ function ExportModal({
       `**Project:** ${data.projectName}`,
       `**Date:** ${date}`,
       data.gitBranch ? `**Branch:** ${data.gitBranch}` : "",
-      `**Duration:** ${data.durationMs ? formatDuration(data.durationMs) : "—"}`,
+      `**Duration:** ${data.durationMs ? formatDurationMs(data.durationMs) : "—"}`,
       `**Cost:** ${formatCost(data.costEstimate, currency, fxRate)}`,
       `**Session ID:** \`${data.sessionId}\``,
       "",
@@ -628,7 +614,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   ];
 
   const statCells = [
-    { label: "Duration",   value: formatDuration(data.durationMs) },
+    { label: "Duration",   value: formatDurationMs(data.durationMs) },
     { label: "Messages",   value: data.messageCount,  detail: `${data.userMessageCount}u · ${data.assistantMessageCount}a` },
     { label: "Tokens",     value: formatTokens(data.inputTokens + data.outputTokens), detail: `${formatTokens(data.inputTokens)} in · ${formatTokens(data.outputTokens)} out` },
     { label: "Cost",       value: formatCost(data.costEstimate, currency, fxRate) },

@@ -43,6 +43,9 @@ function makeProject(name: string, dirPath: string): ProjectData {
     dockerPorts: [],
     externalServices: [],
     scannedAt: new Date().toISOString(),
+    // Discriminated union — absent variant is the "no CLAUDE.md scanned"
+    // default for tests that don't care about audit data.
+    claudeMdAudit: { hasClaudeMd: false, findings: [] },
   };
 }
 

@@ -18,24 +18,8 @@ import {
   Layers,
 } from "lucide-react";
 import Link from "next/link";
-import { formatCost } from "@/lib/format";
+import { formatCost, formatDurationMsCompact as formatDuration, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
-
-function formatDuration(ms?: number): string {
-  if (!ms) return "—";
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";

@@ -24,22 +24,13 @@ import {
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
 import { FILE_OP_BY_TOOL, isFileWriteOp } from "@/lib/usage/toolNames";
-import { formatCost, formatTokens } from "@/lib/format";
+import { formatCost, formatDurationMsCompact as formatDuration, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 
 type SortOption = "recent" | "longest" | "tokens" | "oneshot";
-
-function formatDuration(ms?: number): string {
-  if (!ms) return "—";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";

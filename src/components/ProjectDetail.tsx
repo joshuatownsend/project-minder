@@ -480,6 +480,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── CONTEXT ───────────────────────────────────────────────── */}
           {activeTab === "context" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              {/* Optional chain guards against the HMR/cache-transition
+                  window where a pre-Phase-7 cached scan still in memory
+                  may not have populated this field. The TypeScript "required"
+                  contract holds for fresh scans; runtime defensive guard
+                  costs nothing and avoids a hard crash on hot-reload. */}
               {project.claudeMdAudit && (
                 <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
               )}

@@ -327,4 +327,79 @@ describe("computeSessionQuality + turnContextFill", () => {
     expect(summary.toolFailureStreaks).toEqual([]);
     expect(summary.maxContextFill).toBeGreaterThan(0.75);
   });
+
+  it("golden vector: all 4 detectors firing in one mixed session", () => {
+    // Pinned-output baseline captured from the current per-detector
+    // implementation. Exists so any future single-pass fusion of the
+    // walk loop can be validated byte-equal — a subtle ordering or
+    // window-boundary bug in the refactor would surface here.
+    //
+    // The fixture is deliberately mixed:
+    //   - turns 0..5  : 6 turns of grace (streak detector skips first 6)
+    //   - turns 6..14 : 9 user turns carrying tool_result text — 6 are
+    //                   error-bearing, 3 are clean → a 9-turn streak
+    //                   with 6/9 ≈ 0.67 failure rate (>0.5 threshold)
+    //   - turns 15..19: 5 high-input assistant turns with low variance
+    //                   and ~80% fill → compaction-loop run of 4 pairs
+    //   - turns 20..24: 5 healthy heavy-cache assistant turns to seed
+    //                   cache hit-ratio above 0
+    const turns: UsageTurn[] = [];
+    // grace block — 3 user / 3 assistant alternating, no tool-result text
+    for (let i = 0; i < 3; i++) {
+      turns.push(user({ inputTokens: 50 }));
+      turns.push(assistant({ inputTokens: 1000, cacheReadTokens: 0, cacheCreateTokens: 0 }));
+    }
+    // tool-failure streak — 9 user turns with toolResultText, mostly errors
+    const errorMarkers = ["Error: nope", "operation failed", "file not found"];
+    const cleanMarkers = ["ok", "completed", "done"];
+    for (let i = 0; i < 9; i++) {
+      // 6 errors, 3 clean — interleaved
+      const text = i % 3 === 2 ? cleanMarkers[Math.floor(i / 3)] : errorMarkers[i % 3];
+      turns.push(user({ inputTokens: 100, toolResultText: text }));
+    }
+    // compaction-loop run — 5 high-input assistant turns
+    for (let i = 0; i < 5; i++) {
+      turns.push(
+        assistant({
+          inputTokens: 160_000 + i * 200, // <10% variance
+          cacheCreateTokens: 0,
+          cacheReadTokens: 0,
+        }),
+      );
+    }
+    // healthy cached assistant turns
+    for (let i = 0; i < 5; i++) {
+      turns.push(
+        assistant({
+          inputTokens: 200,
+          cacheReadTokens: 50_000,
+          cacheCreateTokens: 5_000,
+        }),
+      );
+    }
+
+    const summary = computeSessionQuality(turns);
+
+    // cache: 5 assistant grace turns contribute 0/0; 5 compaction turns
+    // contribute 0/0 (no cache); 5 healthy turns contribute 50K read +
+    // 5K create each → 250K read / 25K create total.
+    expect(summary.cache.cacheReadTokens).toBe(250_000);
+    expect(summary.cache.cacheCreateTokens).toBe(25_000);
+    expect(summary.cache.hitRatio).toBeCloseTo(250_000 / 275_000, 4);
+
+    // compaction: one run spanning all 5 high-input turns → 4 qualifying pairs
+    expect(summary.compactionLoops.length).toBe(1);
+    expect(summary.compactionLoops[0].pairCount).toBe(4);
+    expect(summary.compactionLoops[0].peakFill).toBeGreaterThan(0.8);
+
+    // tool-failure streak: 9 evaluable turns, 6 errors → 1 finding,
+    // failure rate ≈ 0.67
+    expect(summary.toolFailureStreaks.length).toBe(1);
+    expect(summary.toolFailureStreaks[0].windowSize).toBe(9);
+    expect(summary.toolFailureStreaks[0].failureCount).toBe(6);
+    expect(summary.toolFailureStreaks[0].failureRate).toBeCloseTo(6 / 9, 4);
+
+    // max fill: peak input is 160_800 / 200_000 = 0.804
+    expect(summary.maxContextFill).toBeCloseTo(160_800 / 200_000, 4);
+  });
 });

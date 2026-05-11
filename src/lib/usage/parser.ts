@@ -14,6 +14,7 @@ import {
   extractCommandNames,
 } from "./contentBlocks";
 import { categorizeToolError } from "./toolErrorCategorizer";
+import { resolveSessionJsonl } from "./sessionPath";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -84,10 +85,11 @@ export function mostFrequent<K>(m: Map<K, number>): K | null {
   return best;
 }
 
-/** Validates a session ID string — UUID hex characters and hyphens only. */
-export function isValidSessionId(id: string): boolean {
-  return /^[a-f0-9-]+$/i.test(id);
-}
+// Re-exported from sessionPath.ts so the validation regex lives in
+// one place. External callers (the /api/sessions/[sessionId]/* routes)
+// import from `@/lib/usage/parser` historically; the re-export keeps
+// those imports working without touching every callsite.
+export { isValidSessionId } from "./sessionPath";
 
 // ── Single-file parser ────────────────────────────────────────────────────────
 
@@ -670,26 +672,10 @@ export async function loadSessionTurnsBySessionId(
 export async function findSessionFile(
   sessionId: string
 ): Promise<{ filePath: string; projectDirName: string } | null> {
-  if (!isValidSessionId(sessionId)) return null;
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  let dirs: string[];
-  try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
-    throw err;
-  }
-  for (const dir of dirs) {
-    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-    try {
-      await fs.access(candidate);
-      return { filePath: candidate, projectDirName: dir };
-    } catch {
-      // not in this dir
-    }
-  }
-  return null;
+  // Thin shim — the implementation lives in sessionPath.ts so the
+  // claudeConversations scanner can share the same fs-walk fallback
+  // without duplicating the directory traversal.
+  return resolveSessionJsonl(sessionId);
 }
 
 /**
