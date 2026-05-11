@@ -22,6 +22,7 @@ import type {
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
+import { periodSinceIso, periodSinceMs, type UsagePeriod } from "@/lib/usage/period";
 import type {
   SessionDetail,
   SessionSummary,
@@ -722,24 +723,32 @@ export interface AgentUsageResult {
  * In both backends, per-agent cost is computed via a parallel sidechain
  * file-parse (no schema migration required) and merged into the stats.
  */
-export async function getAgentUsage(): Promise<AgentUsageResult> {
+export async function getAgentUsage(period: UsagePeriod = "all"): Promise<AgentUsageResult> {
   const { computeAgentCostFromFiles } = await import("@/lib/usage/agentCost");
 
+  // Per-agent cost is computed by walking sidechain JSONL turns and does
+  // not currently honor a period filter. When the caller requests a
+  // bounded window we deliberately skip the cost merge — the Cost tile
+  // in ItemUsageBreakdown is already conditional on `costUsd > 0`, so it
+  // simply hides rather than reporting all-time cost against bounded
+  // invocations. All-time (period="all") keeps the existing behavior.
   async function withCost(stats: AgentStats[], meta: AgentUsageResult["meta"]): Promise<AgentUsageResult> {
+    if (period !== "all") return { stats, meta };
     const costMap = await computeAgentCostFromFiles();
     return { stats: mergeAgentCost(stats, costMap), meta };
   }
 
   if (!dbModeRequested()) {
-    const { stats, meta } = await runFileAgentUsage();
+    const { stats, meta } = await runFileAgentUsage(period);
     return withCost(stats, meta);
   }
 
   const db = await getReadyDb();
-  const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db));
+  const sinceIso = periodSinceIso(period) ?? undefined;
+  const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db, sinceIso));
   if (stats.length === 0) {
     logIntentionalFallthrough("getAgentUsage", "DB has zero Agent rows (indexer warming up?)");
-    const { stats: fileStats, meta } = await runFileAgentUsage();
+    const { stats: fileStats, meta } = await runFileAgentUsage(period);
     return withCost(fileStats, meta);
   }
   return withCost(stats, { backend: "db" });
@@ -757,7 +766,7 @@ function mergeAgentCost(
   });
 }
 
-async function runFileAgentUsage(): Promise<AgentUsageResult> {
+async function runFileAgentUsage(period: UsagePeriod = "all"): Promise<AgentUsageResult> {
   // Lazy-import the file-parse pipeline to keep the DB happy-path off
   // the import graph for `parseAllSessions` / `groupAgentCalls` —
   // under normal operation we never load them.
@@ -765,7 +774,8 @@ async function runFileAgentUsage(): Promise<AgentUsageResult> {
   const { groupAgentCalls } = await import("@/lib/usage/agentParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
-  const stats = groupAgentCalls(allTurns);
+  const sinceMs = periodSinceMs(period) ?? undefined;
+  const stats = groupAgentCalls(allTurns, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 
@@ -784,24 +794,26 @@ export interface SkillUsageResult {
  * - DB mode + zero Skill rows: file-parse fallback (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
-export async function getSkillUsage(): Promise<SkillUsageResult> {
-  if (!dbModeRequested()) return runFileSkillUsage();
+export async function getSkillUsage(period: UsagePeriod = "all"): Promise<SkillUsageResult> {
+  if (!dbModeRequested()) return runFileSkillUsage(period);
 
   const db = await getReadyDb();
-  const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db));
+  const sinceIso = periodSinceIso(period) ?? undefined;
+  const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db, sinceIso));
   if (stats.length === 0) {
     logIntentionalFallthrough("getSkillUsage", "DB has zero Skill rows (indexer warming up?)");
-    return runFileSkillUsage();
+    return runFileSkillUsage(period);
   }
   return { stats, meta: { backend: "db" } };
 }
 
-async function runFileSkillUsage(): Promise<SkillUsageResult> {
+async function runFileSkillUsage(period: UsagePeriod = "all"): Promise<SkillUsageResult> {
   const { parseAllSessions } = await import("@/lib/usage/parser");
   const { groupSkillCalls } = await import("@/lib/usage/skillParser");
   const sessionMap = await parseAllSessions();
   const allTurns = Array.from(sessionMap.values()).flat();
-  const stats = groupSkillCalls(allTurns);
+  const sinceMs = periodSinceMs(period) ?? undefined;
+  const stats = groupSkillCalls(allTurns, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 

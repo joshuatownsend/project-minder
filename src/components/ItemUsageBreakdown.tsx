@@ -5,6 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
+import { USAGE_PERIODS, type UsagePeriod } from "@/lib/usage/period";
 
 export interface ItemUsageStats {
   name: string;
@@ -18,36 +19,123 @@ export interface ItemUsageStats {
   outputTokens?: number;
 }
 
+const PERIOD_LABEL: Record<UsagePeriod, string> = {
+  "24h": "24h",
+  "7d": "7d",
+  "30d": "30d",
+  all: "All",
+};
+
+const PERIOD_EMPTY_MESSAGE: Record<UsagePeriod, string> = {
+  "24h": "No invocations in the last 24 hours.",
+  "7d": "No invocations in the last 7 days.",
+  "30d": "No invocations in the last 30 days.",
+  all: "No usage recorded yet.",
+};
+
 interface Props {
   usage?: ItemUsageStats;
   /** Render the cost tile when usage carries a non-zero costUsd. Skills omit. */
   showCost?: boolean;
+  /** Currently-selected window. Controls the toggle highlight + empty-state copy. */
+  period?: UsagePeriod;
+  /** Called when the user picks a different window. Omit to hide the toggle. */
+  onPeriodChange?: (period: UsagePeriod) => void;
+  /** When true, the parent is refetching for a new period — dims the body
+   *  so the user sees the change registered without an empty flash. */
+  loading?: boolean;
 }
 
-export function ItemUsageBreakdown({ usage, showCost = false }: Props) {
+export function ItemUsageBreakdown({
+  usage,
+  showCost = false,
+  period = "all",
+  onPeriodChange,
+  loading = false,
+}: Props) {
   const { currency, fxRate } = useCurrency();
+
+  const toggle = onPeriodChange ? (
+    <PeriodToggle value={period} onChange={onPeriodChange} />
+  ) : null;
 
   if (!usage || usage.invocations === 0) {
     return (
-      <div
-        style={{
-          padding: "20px",
-          color: "var(--text-muted)",
-          fontFamily: "var(--font-mono)",
-          fontSize: "0.78rem",
-          textAlign: "center",
-        }}
-      >
-        No usage recorded yet.
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        {toggle}
+        <div
+          style={{
+            padding: "20px",
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+            fontSize: "0.78rem",
+            textAlign: "center",
+            opacity: loading ? 0.5 : 1,
+          }}
+        >
+          {PERIOD_EMPTY_MESSAGE[period]}
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px", opacity: loading ? 0.6 : 1 }}>
+      {toggle}
       <HeaderTiles usage={usage} showCost={showCost} currency={currency} fxRate={fxRate} />
       <ProjectBar projects={usage.projects} />
       <SessionList sessions={usage.sessions} />
+    </div>
+  );
+}
+
+function PeriodToggle({
+  value,
+  onChange,
+}: {
+  value: UsagePeriod;
+  onChange: (period: UsagePeriod) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Time window"
+      style={{
+        display: "inline-flex",
+        gap: "4px",
+        padding: "3px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+        alignSelf: "flex-start",
+      }}
+    >
+      {USAGE_PERIODS.map((p) => {
+        const active = p === value;
+        return (
+          <button
+            key={p}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(p)}
+            style={{
+              padding: "4px 10px",
+              fontSize: "0.7rem",
+              fontFamily: "var(--font-mono)",
+              fontWeight: active ? 600 : 400,
+              color: active ? "var(--text-primary)" : "var(--text-muted)",
+              background: active ? "var(--bg-elevated)" : "transparent",
+              border: "none",
+              borderRadius: "calc(var(--radius) - 2px)",
+              cursor: "pointer",
+              letterSpacing: "0.02em",
+            }}
+          >
+            {PERIOD_LABEL[p]}
+          </button>
+        );
+      })}
     </div>
   );
 }
