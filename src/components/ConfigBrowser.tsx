@@ -225,6 +225,7 @@ export function ConfigBrowser() {
           data={data}
           effectiveMcp={effectiveMcp}
           effectiveHooks={effectiveHooks}
+          projectFilter={projectFilter}
           onActiveHooksChanged={refresh}
           onMcpToggle={async (projectSlug, serverName, enabled) => {
             const res = await fetch(`/api/projects/${encodeURIComponent(projectSlug)}/mcp-toggle`, {
@@ -260,6 +261,7 @@ function ActiveSection({
   data,
   effectiveMcp,
   effectiveHooks,
+  projectFilter,
   onActiveHooksChanged,
   onMcpToggle,
 }: {
@@ -267,6 +269,7 @@ function ActiveSection({
   data: ReturnType<typeof useConfig>["data"];
   effectiveMcp: Map<string, EffectiveState> | null;
   effectiveHooks: Map<string, EffectiveState> | null;
+  projectFilter: string | undefined;
   onActiveHooksChanged: () => void;
   onMcpToggle: (projectSlug: string, serverName: string, enabled: boolean) => Promise<void>;
 }) {
@@ -277,6 +280,7 @@ function ActiveSection({
       <HooksList
         rows={data.hooks}
         effectiveStates={effectiveHooks}
+        projectFilter={projectFilter}
         onActiveChanged={onActiveHooksChanged}
       />
     );
@@ -291,10 +295,15 @@ function ActiveSection({
 function HooksList({
   rows,
   effectiveStates,
+  projectFilter,
   onActiveChanged,
 }: {
   rows: HookRow[];
   effectiveStates: Map<string, EffectiveState> | null;
+  /** Slug from `?project=` URL param. When set, restricts both the active row
+   *  set (via useConfig) AND the disabled-stash to that project's local-scope
+   *  entries — keeps a project deep-link from leaking other projects' state. */
+  projectFilter: string | undefined;
   /** Called after a successful toggle so the parent can re-fetch the active
    *  hooks list. The disabled-sidecar list is owned and refreshed locally. */
   onActiveChanged: () => void;
@@ -314,7 +323,15 @@ function HooksList({
     refreshDisabled();
   };
 
-  if (rows.length === 0 && disabledEntries.length === 0) {
+  // Only short-circuit to the Empty state once the disabled-stash fetch has
+  // resolved without error — otherwise we'd flash "No hooks configured" while
+  // the sidecar is still loading, or hide a stash-fetch error from the user.
+  if (
+    rows.length === 0 &&
+    !disabledLoading &&
+    !disabledError &&
+    disabledEntries.length === 0
+  ) {
     return <Empty label="No hooks configured." />;
   }
   return (
@@ -373,6 +390,7 @@ function HooksList({
         entries={disabledEntries}
         loading={disabledLoading}
         error={disabledError}
+        projectFilter={projectFilter}
         onChanged={handleToggled}
       />
     </div>

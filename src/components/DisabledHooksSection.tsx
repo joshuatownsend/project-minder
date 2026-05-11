@@ -16,6 +16,12 @@ interface Props {
   entries: DisabledHookEntry[];
   loading: boolean;
   error: string | null;
+  /** Optional project-slug filter (= URL `?project=` slug). When set, only
+   *  `local`-scope entries whose project root basename matches are shown;
+   *  user-scope entries are hidden because they aren't project-bound. Without
+   *  the filter the section would leak other projects' disabled hooks into
+   *  a `/config?project=X` deep-link. */
+  projectFilter?: string;
   /** Called after a successful re-enable so the parent can refresh both
    *  active hooks and disabled stash lists. */
   onChanged: () => void;
@@ -23,8 +29,16 @@ interface Props {
 
 /** "Disabled (N)" section under the active-hooks list. Sourced from the
  *  ~/.claude/.minder/disabled-hooks.json sidecar. */
-export function DisabledHooksSection({ entries, loading, error, onChanged }: Props) {
-  if (loading || (entries.length === 0 && !error)) return null;
+export function DisabledHooksSection({ entries, loading, error, projectFilter, onChanged }: Props) {
+  const visible = projectFilter
+    ? entries.filter(
+        (e) =>
+          e.scope === "local" &&
+          fileBasename(projectRootFromSettings(e.settingsPath)) === projectFilter,
+      )
+    : entries;
+
+  if (loading || (visible.length === 0 && !error)) return null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
@@ -39,7 +53,7 @@ export function DisabledHooksSection({ entries, loading, error, onChanged }: Pro
           margin: 0,
         }}
       >
-        Disabled ({entries.length})
+        Disabled ({visible.length})
       </h2>
 
       {error && (
@@ -57,7 +71,7 @@ export function DisabledHooksSection({ entries, loading, error, onChanged }: Pro
       )}
 
       <div>
-        {entries.map((e) => (
+        {visible.map((e) => (
           <div
             key={`${e.settingsPath}:${e.hookId}`}
             style={{
