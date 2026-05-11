@@ -11,6 +11,7 @@ import { expandImports } from "../scanner/expandImports";
 import { memoryDirFor } from "../scanner/memoryWriter";
 import { encodeMemoryId, userMemoryPath } from "./safety";
 import { summarizeMemoryIndex } from "./memoryIndex";
+import { extractRefCandidates, verifyRefs } from "./staleRefs";
 
 const STALE_AGE_MS = 30 * 24 * 60 * 60_000;
 const PREVIEW_CHARS = 200;
@@ -31,7 +32,10 @@ interface InventoryCache {
 
 interface ImportCacheEntry {
   mtimeMs: number;
+  /** Hash of the project set when refs were last verified — invalidate if it changes. */
+  projectsKey: string;
   brokenImports: string[];
+  brokenRefs: string[];
 }
 
 const g = globalThis as unknown as {
@@ -46,6 +50,17 @@ export function invalidateMemoryInventoryCache(): void {
 
 interface DiscoveryInput {
   projects: ProjectData[];
+}
+
+/**
+ * Per-call context threaded through every `tryX` so we don't recompute the
+ * project list hash or re-stat refs that another memory file already proved
+ * exist. Lives only for one `listMemoryFiles` invocation.
+ */
+interface ListContext {
+  projectsKey: string;
+  allProjectPaths: string[];
+  existsMemo: Map<string, boolean>;
 }
 
 // Hash the project set so cache hits require both freshness AND a matching
@@ -68,14 +83,22 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryList
   const entries: MemoryFileEntry[] = [];
   const indexSummaries: MemoryIndexSummary[] = [];
 
-  const userEntry = await tryUser();
+  // Shared across every memory file's ref-verification pass so repeated
+  // references to the same `(project, candidate)` pair don't re-stat. Lives
+  // only for the duration of this listMemoryFiles call.
+  const existsMemo = new Map<string, boolean>();
+  const allProjectPaths = input.projects.map((p) => p.path).sort();
+
+  const ctx: ListContext = { projectsKey: key, allProjectPaths, existsMemo };
+
+  const userEntry = await tryUser(ctx);
   if (userEntry) entries.push(userEntry);
 
   await Promise.all(
     input.projects.map(async (p) => {
-      const proj = await tryProject(p);
+      const proj = await tryProject(p, ctx);
       if (proj) entries.push(proj);
-      const auto = await tryAuto(p);
+      const auto = await tryAuto(p, ctx);
       if (auto) {
         entries.push(...auto.entries);
         if (auto.summary) indexSummaries.push(auto.summary);
@@ -101,17 +124,29 @@ function scopeOrder(scope: MemoryFileEntry["scope"]): number {
   return scope === "user" ? 0 : scope === "project" ? 1 : 2;
 }
 
-async function tryUser(): Promise<MemoryFileEntry | null> {
-  return readEntry(userMemoryPath(), { scope: "user", displayName: "User CLAUDE.md" });
+async function tryUser(ctx: ListContext): Promise<MemoryFileEntry | null> {
+  // User CLAUDE.md has no parent project. Refs in it are checked against
+  // every scanned project; first hit wins.
+  return readEntry(
+    userMemoryPath(),
+    { scope: "user", displayName: "User CLAUDE.md" },
+    { parent: null, all: ctx.allProjectPaths },
+    ctx,
+  );
 }
 
-async function tryProject(p: ProjectData): Promise<MemoryFileEntry | null> {
-  return readEntry(path.resolve(path.join(p.path, "CLAUDE.md")), {
-    scope: "project",
-    projectSlug: p.slug,
-    projectName: p.name,
-    displayName: "CLAUDE.md",
-  });
+async function tryProject(p: ProjectData, ctx: ListContext): Promise<MemoryFileEntry | null> {
+  return readEntry(
+    path.resolve(path.join(p.path, "CLAUDE.md")),
+    {
+      scope: "project",
+      projectSlug: p.slug,
+      projectName: p.name,
+      displayName: "CLAUDE.md",
+    },
+    { parent: p.path, all: ctx.allProjectPaths },
+    ctx,
+  );
 }
 
 interface AutoResult {
@@ -120,7 +155,7 @@ interface AutoResult {
   summary: MemoryIndexSummary | null;
 }
 
-async function tryAuto(p: ProjectData): Promise<AutoResult | null> {
+async function tryAuto(p: ProjectData, ctx: ListContext): Promise<AutoResult | null> {
   const memDir = memoryDirFor(p.path);
   let names: string[];
   try {
@@ -159,12 +194,17 @@ async function tryAuto(p: ProjectData): Promise<AutoResult | null> {
 
   const out = await Promise.all(
     mdNames.map(async (name) => {
-      const entry = await readEntry(path.resolve(path.join(memDir, name)), {
-        scope: "auto",
-        projectSlug: p.slug,
-        projectName: p.name,
-        displayName: name,
-      });
+      const entry = await readEntry(
+        path.resolve(path.join(memDir, name)),
+        {
+          scope: "auto",
+          projectSlug: p.slug,
+          projectName: p.name,
+          displayName: name,
+        },
+        { parent: p.path, all: ctx.allProjectPaths },
+        ctx,
+      );
       if (!entry) return null;
       if (name.toLowerCase() === "memory.md") return entry;
       if (linkedSet) entry.indexed = linkedSet.has(name.toLowerCase());
@@ -186,6 +226,8 @@ interface PartialEntry {
 async function readEntry(
   absPath: string,
   meta: PartialEntry,
+  projects: { parent: string | null; all: string[] },
+  ctx: ListContext,
 ): Promise<MemoryFileEntry | null> {
   let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
@@ -205,7 +247,7 @@ async function readEntry(
     return null;
   }
 
-  const stale = await computeStaleness(absPath, raw, stat.mtimeMs);
+  const stale = await computeStaleness(absPath, raw, stat.mtimeMs, projects, ctx);
 
   return {
     id: encodeMemoryId(absPath),
@@ -225,16 +267,26 @@ async function computeStaleness(
   absPath: string,
   raw: string,
   mtimeMs: number,
+  projects: { parent: string | null; all: string[] },
+  ctx: ListContext,
 ): Promise<MemoryStaleness> {
   const ageOver30d = Date.now() - mtimeMs > STALE_AGE_MS;
 
   const importCache = g.__memoryImportCache!;
   const cached = importCache.get(absPath);
-  if (cached && cached.mtimeMs === mtimeMs) {
+  // Cache hit requires the file is unchanged AND the project set is unchanged.
+  // Ref existence depends on which projects exist, so a rescan that adds /
+  // removes projects must re-verify even when the memory file itself hasn't
+  // changed. Imports don't depend on project set but share the same cache.
+  if (cached && cached.mtimeMs === mtimeMs && cached.projectsKey === ctx.projectsKey) {
     // LRU touch: re-insert to move to most-recently-used end of Map iteration order.
     importCache.delete(absPath);
     importCache.set(absPath, cached);
-    return { ageOver30d, brokenImports: cached.brokenImports };
+    return {
+      ageOver30d,
+      brokenImports: cached.brokenImports,
+      brokenRefs: cached.brokenRefs,
+    };
   }
 
   let brokenImports: string[] = [];
@@ -247,13 +299,26 @@ async function computeStaleness(
     // best-effort; leave brokenImports empty
   }
 
+  let brokenRefs: string[] = [];
+  try {
+    const candidates = extractRefCandidates(raw);
+    brokenRefs = await verifyRefs(candidates, projects, ctx.existsMemo);
+  } catch {
+    // best-effort; leave brokenRefs empty
+  }
+
   if (importCache.size >= IMPORT_CACHE_MAX) {
     // Evict oldest entry (Map preserves insertion order).
     const oldest = importCache.keys().next().value;
     if (oldest !== undefined) importCache.delete(oldest);
   }
-  importCache.set(absPath, { mtimeMs, brokenImports });
-  return { ageOver30d, brokenImports };
+  importCache.set(absPath, {
+    mtimeMs,
+    projectsKey: ctx.projectsKey,
+    brokenImports,
+    brokenRefs,
+  });
+  return { ageOver30d, brokenImports, brokenRefs };
 }
 
 function makePreview(raw: string): string {

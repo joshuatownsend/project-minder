@@ -193,6 +193,22 @@ describe("listMemoryFiles — staleness", () => {
     expect(proj?.stale.brokenImports).toEqual(["./missing-target.md"]);
   });
 
+  it("flags broken prose refs as brokenRefs", async () => {
+    const a = path.join(tmpHome, "projA");
+    await fs.mkdir(a);
+    // Two refs in the body: one resolves, one doesn't.
+    await fs.mkdir(path.join(a, "src"));
+    await fs.writeFile(path.join(a, "src", "ok.ts"), "x");
+    await fs.writeFile(
+      path.join(a, "CLAUDE.md"),
+      "see src/ok.ts (exists) and src/missing.ts (gone)\n",
+    );
+    const { listMemoryFiles } = await reloadModule();
+    const { entries } = await listMemoryFiles({ projects: [project("a", a)] });
+    const proj = entries.find((e) => e.scope === "project");
+    expect(proj?.stale.brokenRefs).toEqual(["src/missing.ts"]);
+  });
+
   it("does not flag working @import refs", async () => {
     const a = path.join(tmpHome, "projA");
     await fs.mkdir(a);

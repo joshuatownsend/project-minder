@@ -147,6 +147,14 @@ export type MemoryScope = "user" | "project" | "auto";
 export interface MemoryStaleness {
   ageOver30d: boolean;
   brokenImports: string[]; // unresolved @import specs (from expandImports)
+  /**
+   * Candidate file refs extracted from the memory body (e.g. `src/lib/foo.ts`,
+   * `~/.claude/CLAUDE.md`) that don't resolve to a real file under either the
+   * parent project's tree or any other scanned project. Distinct from
+   * brokenImports — that's the structured `@import` directive; this is
+   * free-prose path mentions.
+   */
+  brokenRefs: string[];
 }
 
 export interface MemoryFileEntry {

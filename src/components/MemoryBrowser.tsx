@@ -399,9 +399,19 @@ function MemoryRow({
 
 function StaleChip({ entry }: { entry: MemoryFileEntry }) {
   const reasons: string[] = [];
-  if (entry.stale.ageOver30d) reasons.push("age > 30d");
+  const refs = entry.stale.brokenRefs ?? [];
   if (entry.stale.brokenImports.length > 0) {
-    reasons.push(`${entry.stale.brokenImports.length} broken @import`);
+    const n = entry.stale.brokenImports.length;
+    reasons.push(`${n} broken @import${n === 1 ? "" : "s"}`);
+  }
+  if (refs.length > 0) {
+    reasons.push(`${refs.length} stale ref${refs.length === 1 ? "" : "s"}`);
+  }
+  if (entry.stale.ageOver30d) {
+    // Age in days at row-render time. Avoids storing a derived field on the
+    // entry just to render a chip — the wall-clock delta is tiny anyway.
+    const days = Math.floor((Date.now() - entry.mtimeMs) / 86_400_000);
+    reasons.push(`${days}d old`);
   }
   return (
     <span
@@ -426,5 +436,9 @@ function StaleChip({ entry }: { entry: MemoryFileEntry }) {
 }
 
 function isStale(entry: MemoryFileEntry): boolean {
-  return entry.stale.ageOver30d || entry.stale.brokenImports.length > 0;
+  return (
+    entry.stale.ageOver30d ||
+    entry.stale.brokenImports.length > 0 ||
+    (entry.stale.brokenRefs?.length ?? 0) > 0
+  );
 }

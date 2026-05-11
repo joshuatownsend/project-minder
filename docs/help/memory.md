@@ -15,7 +15,15 @@ The `/memory` page unifies three scopes:
 - **Project** — `<project>/CLAUDE.md` for every scanned project
 - **Auto-memory** — every `.md` file inside `~/.claude/projects/<encoded>/memory/` for every scanned project
 
-Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old or contains broken `@import` references. Filter by scope or stale status with the chips above the list.
+Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old, contains broken `@import` references, or names source files in its body that no longer exist on disk. Filter by scope or stale status with the chips above the list.
+
+### What counts as "stale"
+
+Three signals can flip a row into the stale set, and hover the `STALE` chip to see which ones fired:
+
+- **`N broken @imports`** — the body contains `@import ./relative.md` directives that don't resolve. This catches structured cross-file references whose targets were moved or deleted.
+- **`N stale refs`** — the body mentions source-file paths (e.g. ``src/lib/foo.ts``, ``app/api/users/route.ts``, ``~/.claude/CLAUDE.md``) that don't exist on disk. Only paths with a `/` and a recognized extension (`ts`/`tsx`/`js`/`jsx`/`mjs`/`cjs`/`md`/`json`/`sql`/`yml`/`yaml`/`toml`/`sh`/`py`/`go`/`rs`) are scanned. Refs are resolved against the memory's parent project first, then against every other scanned project — first match wins. Triple-fenced code blocks and URLs are stripped before scanning so example code and `https://github.com/foo/bar.ts` don't false-positive.
+- **`Nd old`** — the file's mtime is more than 30 days in the past.
 
 ### MEMORY.md index banner
 
