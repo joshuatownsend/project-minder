@@ -5,7 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
-import { USAGE_PERIODS, type UsagePeriod } from "@/lib/usage/period";
+import { DETAIL_PERIODS, type UsagePeriod } from "@/lib/usage/period";
 
 export interface ItemUsageStats {
   name: string;
@@ -19,14 +19,19 @@ export interface ItemUsageStats {
   outputTokens?: number;
 }
 
-const PERIOD_LABEL: Record<UsagePeriod, string> = {
+// Detail-page-only — the canonical 5-option set lives in
+// VALID_PERIODS (constants.ts); the agent/skill detail page renders
+// the 4-option subset (DETAIL_PERIODS in period.ts) and uses these
+// shorthand labels in the toggle. Empty-state copy is rolling-window
+// phrased because the toggle excludes calendar-today.
+const PERIOD_TOGGLE_LABEL: Partial<Record<UsagePeriod, string>> = {
   "24h": "24h",
   "7d": "7d",
   "30d": "30d",
   all: "All",
 };
 
-const PERIOD_EMPTY_MESSAGE: Record<UsagePeriod, string> = {
+const PERIOD_EMPTY_MESSAGE: Partial<Record<UsagePeriod, string>> = {
   "24h": "No invocations in the last 24 hours.",
   "7d": "No invocations in the last 7 days.",
   "30d": "No invocations in the last 30 days.",
@@ -73,7 +78,7 @@ export function ItemUsageBreakdown({
             opacity: loading ? 0.5 : 1,
           }}
         >
-          {PERIOD_EMPTY_MESSAGE[period]}
+          {PERIOD_EMPTY_MESSAGE[period] ?? "No usage recorded in this window."}
         </div>
       </div>
     );
@@ -110,15 +115,15 @@ function PeriodToggle({
         alignSelf: "flex-start",
       }}
     >
-      {USAGE_PERIODS.map((p) => {
-        const active = p === value;
+      {DETAIL_PERIODS.map((p) => {
+        const active = p.value === value;
         return (
           <button
-            key={p}
+            key={p.value}
             type="button"
             role="tab"
             aria-selected={active}
-            onClick={() => onChange(p)}
+            onClick={() => onChange(p.value)}
             style={{
               padding: "4px 10px",
               fontSize: "0.7rem",
@@ -132,7 +137,7 @@ function PeriodToggle({
               letterSpacing: "0.02em",
             }}
           >
-            {PERIOD_LABEL[p]}
+            {PERIOD_TOGGLE_LABEL[p.value] ?? p.label}
           </button>
         );
       })}

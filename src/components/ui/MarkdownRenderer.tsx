@@ -1,23 +1,16 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 
 // Hand-rolled markdown → React renderer. Originally lived inside
 // `HelpPanel.tsx` and was extracted for reuse by the agents/skills
-// Body tab (Phase 4.1). Supports a subset of GFM:
-//
-//   - ATX headings `#`/`##`/`###` (H2 is rendered as a section divider —
-//     uppercase muted label + horizontal rule)
-//   - Fenced code blocks with optional language tag
-//   - Bullet lists (`-`/`*`)
-//   - Pipe tables with `|---|` separator
-//   - Inline: `**bold**`, `` `code` ``, `[label](href)`
+// Body tab (Phase 4.1). Supports a subset of GFM: ATX headings,
+// fenced code blocks, bullet lists, pipe tables, inline bold/code/links.
 //
 // The link handler is opt-in: HelpPanel passes `onLinkClick` to wire
 // `*.md` links into its slug router; Body tab omits it so links are
-// inert (the markdown is informational, not navigational). Either way
-// the rendered anchor still exposes a `data-href` attribute so callers
-// can attach their own click delegation.
+// inert. The rendered anchor always exposes `data-href` so callers can
+// attach their own click delegation.
 
 export interface MarkdownRendererProps {
   content: string;
@@ -28,7 +21,10 @@ export interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, onLinkClick }: MarkdownRendererProps) {
-  const elements = parseMarkdown(content);
+  // Memoize the parse — agent/skill bodies are multi-KB and a parent
+  // re-render (e.g. period-toggle dim flag in ItemUsageBreakdown) would
+  // otherwise re-walk every line and re-allocate the entire React tree.
+  const elements = useMemo(() => parseMarkdown(content), [content]);
 
   const handleClick = onLinkClick
     ? (e: React.MouseEvent) => {

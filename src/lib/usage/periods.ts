@@ -7,16 +7,22 @@
 // `now` is injectable so tests can pin the boundary deterministically;
 // production callers omit it and get `new Date()`.
 //
-// Period vocabulary is rolling-window (today / 7d / 30d / all), matching
-// the labels users see on the toggle. Legacy `week` / `month` keys still
-// resolve here as aliases for `7d` / `30d` so old URLs keep working;
-// validatePeriod() in constants.ts normalizes incoming requests at the
-// API boundary.
+// Period vocabulary is rolling-window plus calendar-today (24h / today /
+// 7d / 30d / all), matching the labels users see on the toggle. Legacy
+// `week` / `month` keys still resolve here as aliases for `7d` / `30d`
+// so old URLs keep working; validatePeriod() in constants.ts normalizes
+// incoming requests at the API boundary.
+//
+// "24h" is rolling-24h (now − 24h, inclusive). "today" is calendar
+// midnight-of-today. They differ at the boundary — a session that ran
+// at 11pm yesterday is in "24h" but not in "today" if called after 11pm.
 
-export type Period = "today" | "7d" | "30d" | "all" | string;
+export type Period = "24h" | "today" | "7d" | "30d" | "all" | string;
 
 export function getPeriodStart(period: Period, now: Date = new Date()): Date | null {
   switch (period) {
+    case "24h":
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
     case "today": {
       const start = new Date(now);
       start.setHours(0, 0, 0, 0);

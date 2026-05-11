@@ -28,11 +28,13 @@ import type {
   SourceBreakdown,
 } from "./types";
 
-// Local Period type kept loose so the aggregator accepts both the new
-// today/7d/30d/all vocabulary and legacy week/month strings — the periods.ts
-// switch normalizes both. validatePeriod() at the API boundary maps
-// week→7d, month→30d before this function ever sees the value.
-type Period = "today" | "7d" | "30d" | "all" | "week" | "month";
+// Local Period type kept loose so the aggregator accepts the full app
+// vocabulary (24h/today/7d/30d/all) plus legacy week/month strings — the
+// periods.ts switch normalizes all of them. validatePeriod() at the API
+// boundary maps week→7d, month→30d before this function ever sees the
+// value. "24h" was added in Phase 4.1 for the agent/skill detail page;
+// the aggregator handles it transparently via getPeriodStart.
+type Period = "24h" | "today" | "7d" | "30d" | "all" | "week" | "month";
 
 export async function generateUsageReport(
   period: Period,
