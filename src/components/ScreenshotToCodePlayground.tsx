@@ -1,17 +1,23 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { Camera, AlertCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Camera } from "lucide-react";
 import { CodeBlock } from "./ui/code-block";
+import { ErrorBanner, Seg } from "./ui/design";
+import { ScreenshotToCodePreview } from "./ScreenshotToCodePreview";
 import {
   PROVIDERS,
   PROVIDER_DEFAULT_MODEL,
-  FRAMEWORKS,
-  VARIANTS,
   type Provider,
   type Framework,
   type Variant,
 } from "@/mcp/screenshot-to-code/constants";
+
+/** Output panel toggle. Source of truth for the union — the array
+ *  literal both drives the segmented control's options and feeds the
+ *  string-union type, so adding a third view requires only one edit. */
+const OUTPUT_VIEWS = ["code", "preview"] as const;
+type OutputView = (typeof OUTPUT_VIEWS)[number];
 
 const ACCEPTED_MIME = new Set<"image/png" | "image/jpeg" | "image/webp">([
   "image/png",
@@ -67,6 +73,7 @@ export function ScreenshotToCodePlayground() {
   const [pending, setPending] = useState(false);
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<OutputView>("code");
 
   const imageDataUrl = imageBase64 ? `data:${imageMediaType};base64,${imageBase64}` : null;
 
@@ -210,7 +217,62 @@ export function ScreenshotToCodePlayground() {
       </div>
 
       {error && <ErrorBanner message={error} />}
-      {code !== null && <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />}
+      {code !== null && (
+        <OutputPanel
+          code={code}
+          view={view}
+          onViewChange={setView}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Code/Preview toggle.
+ *
+ *  Mount lifecycle: the iframe is **deferred** until the user opens Preview
+ *  for the first time (avoids downloading Babel/React/Tailwind from CDN
+ *  when the user only wants the raw code). After first open, the iframe
+ *  stays mounted via CSS `display:none` so subsequent toggles don't tear
+ *  it down and re-fetch its scripts. A fresh conversion (new `code`)
+ *  resets the flag so the next round starts deferred again. */
+function OutputPanel({
+  code,
+  view,
+  onViewChange,
+}: {
+  code: string;
+  view: OutputView;
+  onViewChange: (v: OutputView) => void;
+}) {
+  const [hasOpenedPreview, setHasOpenedPreview] = useState(false);
+
+  // Reset sticky-mount flag on each fresh conversion so a code-only
+  // workflow never pays the iframe-startup cost.
+  useEffect(() => {
+    setHasOpenedPreview(false);
+  }, [code]);
+
+  // Sticky-on once Preview is selected for this code.
+  useEffect(() => {
+    if (view === "preview") setHasOpenedPreview(true);
+  }, [view]);
+
+  const shouldMountPreview = view === "preview" || hasOpenedPreview;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start", width: "100%" }}>
+      <Seg<OutputView>
+        value={view}
+        options={OUTPUT_VIEWS.map((v) => ({ value: v, label: v }))}
+        onChange={onViewChange}
+      />
+      <div style={{ display: view === "code" ? "block" : "none", width: "100%" }}>
+        <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />
+      </div>
+      <div style={{ display: view === "preview" ? "block" : "none", width: "100%" }}>
+        {shouldMountPreview && <ScreenshotToCodePreview code={code} />}
+      </div>
     </div>
   );
 }
@@ -367,26 +429,6 @@ function Dropzone(props: {
           />
         </label>
       )}
-    </div>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: "8px",
-        alignItems: "flex-start",
-        padding: "8px 12px",
-        background: "var(--error-bg, #2a0000)",
-        borderRadius: "var(--radius)",
-        fontSize: "0.78rem",
-        color: "var(--error, #f87171)",
-      }}
-    >
-      <AlertCircle style={{ width: "14px", height: "14px", flex: "0 0 14px", marginTop: "2px" }} />
-      <span style={{ fontFamily: "var(--font-mono)" }}>{message}</span>
     </div>
   );
 }

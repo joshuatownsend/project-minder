@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, CSSProperties } from "react";
+import { AlertCircle } from "lucide-react";
 
 /* ---------- Page header ---------- */
 
@@ -181,6 +182,51 @@ export function Seg<T extends string>({
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/* ---------- ErrorBanner (red alert row with optional label) ---------- */
+
+/** Inline error banner. Used in places where a panel-local error needs to
+ *  surface without disrupting the page layout (e.g. the screenshot
+ *  playground's convert API errors and the preview iframe's compile/runtime
+ *  errors).
+ *
+ *  `label` renders as a small monospace header above the message —
+ *  callers pass it pre-cased (the component does NOT force uppercase) so
+ *  the label can be used for any short disambiguator, e.g. "PREVIEW
+ *  ERROR" vs a bare network error label. */
+export function ErrorBanner({
+  message,
+  label,
+}: {
+  message: string;
+  label?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: "flex",
+        gap: "8px",
+        alignItems: "flex-start",
+        padding: "8px 12px",
+        background: "var(--error-bg, #2a0000)",
+        borderRadius: "var(--radius)",
+        fontSize: "0.78rem",
+        color: "var(--error, #f87171)",
+      }}
+    >
+      <AlertCircle style={{ width: "14px", height: "14px", flex: "0 0 14px", marginTop: "2px" }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+        {label && (
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", letterSpacing: "0.04em" }}>
+            {label}
+          </span>
+        )}
+        <span style={{ fontFamily: "var(--font-mono)", wordBreak: "break-word" }}>{message}</span>
+      </div>
     </div>
   );
 }
