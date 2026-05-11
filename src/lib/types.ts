@@ -179,6 +179,17 @@ export interface MemoryFileEntry {
    * for auto-scope rows when MEMORY.md is missing entirely.
    */
   indexed?: boolean;
+  /**
+   * Read telemetry derived from session JSONL replay. `undefined` when the
+   * tracker hasn't been refreshed yet, or when this file has no recorded
+   * reads. `readCount` is the lifetime count of `Read({file_path})` events
+   * Claude Code emitted against this path; `lastReadAt` is the ISO 8601
+   * timestamp of the most recent one.
+   */
+  usage?: {
+    readCount: number;
+    lastReadAt: string;
+  };
 }
 
 /** Single bullet-link entry parsed out of a MEMORY.md index. */

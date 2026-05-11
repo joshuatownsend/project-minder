@@ -382,6 +382,29 @@ const MIGRATIONS: Migration[] = [
       `).run();
     },
   },
+  {
+    version: 13,
+    name: "memory observatory: memory_usage table for memory read telemetry",
+    up: (db) => {
+      // Memory Observatory Phase 1, Feature B. Tracks how often each
+      // CLAUDE.md / auto-memory file is opened by Claude Code (Read events
+      // targeting memory paths in session JSONLs). Write-through from the
+      // tracker; reads come from the in-memory cache, so the table is
+      // currently a durable backing store for future trend queries rather
+      // than a primary read path.
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS memory_usage (
+          abs_path         TEXT PRIMARY KEY,
+          read_count       INTEGER NOT NULL DEFAULT 0,
+          last_read_at     TEXT,
+          last_updated_at  TEXT NOT NULL
+        )
+      `).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_memory_usage_last_read ON memory_usage(last_read_at DESC)"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

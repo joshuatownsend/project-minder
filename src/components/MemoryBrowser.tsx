@@ -23,10 +23,15 @@ export function MemoryBrowser() {
   const [search, setSearch] = useState("");
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [showStaleOnly, setShowStaleOnly] = useState(false);
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
 
   async function reload(signal?: AbortSignal) {
     try {
-      const r = await fetch("/api/memory", { signal });
+      // Drop unread filter into the URL so the server's 30d cutoff is the
+      // single source of truth; the client doesn't recompute "what counts
+      // as unread" — that contract lives in /api/memory.
+      const url = showUnreadOnly ? "/api/memory?unread=true" : "/api/memory";
+      const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const json = (await r.json()) as {
         entries: MemoryFileEntry[];
@@ -45,7 +50,8 @@ export function MemoryBrowser() {
     const ctrl = new AbortController();
     reload(ctrl.signal);
     return () => ctrl.abort();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUnreadOnly]);
 
   const filtered = useMemo(() => {
     if (!entries) return [];
@@ -144,6 +150,11 @@ export function MemoryBrowser() {
           active={showStaleOnly}
           onClick={() => setShowStaleOnly((v) => !v)}
           variant="warn"
+        />
+        <ScopeChip
+          label="Unread (30d)"
+          active={showUnreadOnly}
+          onClick={() => setShowUnreadOnly((v) => !v)}
         />
       </div>
 
@@ -392,6 +403,15 @@ function MemoryRow({
         }}
       >
         {rel} · {(entry.sizeBytes / 1024).toFixed(1)} KB
+        {entry.usage && (
+          <>
+            {" · "}
+            <span title={`Last read ${formatDistanceToNow(new Date(entry.usage.lastReadAt), { addSuffix: true })}`}>
+              Read {entry.usage.readCount}× ·{" "}
+              {formatDistanceToNow(new Date(entry.usage.lastReadAt), { addSuffix: true })}
+            </span>
+          </>
+        )}
       </span>
     </button>
   );

@@ -17,6 +17,14 @@ The `/memory` page unifies three scopes:
 
 Each row shows the display name, owning project (where applicable), preview text, modification time, and a `STALE` badge when the file is over 30 days old, contains broken `@import` references, or names source files in its body that no longer exist on disk. Filter by scope or stale status with the chips above the list.
 
+### Read telemetry
+
+Each row also carries a `Read N× · <relative-time>` indicator when Claude Code has actually opened the file in a past session. The data comes from replaying every session JSONL under `~/.claude/projects/*/` and counting `Read({file_path})` tool calls whose target is a memory path. Lookup runs once per server lifetime (or after a 5-minute cache window) and is persisted to the SQLite index for cross-restart durability.
+
+Only `Read` events are counted at the file level — `Grep` and `Glob` against memory directories target the directory, not a specific file, so they show up in the existing `/usage` analytics but aren't attributed per row here.
+
+The **Unread (30d)** filter chip narrows the list to memories that Claude Code either has never opened (no record on file) or hasn't opened in the past 30 days. The 30-day cutoff matches the existing age-based staleness signal so both filters tell a consistent story.
+
 ### What counts as "stale"
 
 Three signals can flip a row into the stale set, and hover the `STALE` chip to see which ones fired:
