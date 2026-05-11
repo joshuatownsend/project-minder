@@ -37,6 +37,16 @@ interface InsightsResponse {
   total: number;
 }
 
+// Subset of the `InitStatus` shape returned under `db` by `/api/health`.
+// We only need state + the last-error fields to drive the banner copy.
+interface DbHealthSnapshot {
+  state: "idle" | "in-flight" | "success" | "transient-failed" | "permanent-failed";
+  attempts: number;
+  quarantineRuns: number;
+  failedAt: number | null;
+  lastError: { code?: string; message?: string } | null;
+}
+
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "Today" },
   { value: "7d", label: "7 days" },
@@ -74,6 +84,15 @@ export default function HomePage() {
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  // DB readiness from the data-layer state machine. We only render a banner
+  // for `permanent-failed` — that state only fires after 2+ cumulative
+  // quarantines fail to recover, so it's an honest "needs human" signal.
+  // `transient-failed` (EBUSY / SQLITE_BUSY etc.) is intentionally NOT
+  // surfaced — the state machine retries those with `[100, 300, 900]ms`
+  // backoff and they usually clear themselves. Showing a "DB unavailable"
+  // banner on every routine startup race would be alarmist and offer no
+  // useful action. See `src/lib/data/index.ts` for the state machine.
+  const [dbHealth, setDbHealth] = useState<DbHealthSnapshot | null>(null);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -205,6 +224,24 @@ export default function HomePage() {
     return () => ctrl.abort();
   }, [snapshot.approvalCount]);
 
+  // DB readiness probe. `/api/health` actively drives the state machine
+  // forward; the call is idempotent on `success` / within-TTL `*-failed`
+  // states, so we don't worry about re-probing on every mount. We fetch
+  // once on mount — the only state we render is `permanent-failed`, which
+  // only resets on process exit, so polling buys us nothing here. A
+  // 200 OK response means `success`; a 503 still carries the body and is
+  // what we read when state is not `success`.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetch("/api/health", { signal: ctrl.signal })
+      .then((r) => (r.status === 200 || r.status === 503 ? r.json() : null))
+      .then((d: { db?: DbHealthSnapshot } | null) => {
+        if (d?.db) setDbHealth(d.db);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, []);
+
   const healthScore = health?.score ?? 0;
   const healthGrade = health?.grade ?? "—";
   const healthLabel =
@@ -264,6 +301,8 @@ export default function HomePage() {
     () => costByProject.reduce((s, p) => s + p.cost, 0) || 1,
     [costByProject],
   );
+
+  const dbBroken = dbHealth?.state === "permanent-failed";
 
   const attentionItems: { tag: "danger" | "warn"; label: string; href: string }[] = [];
   if (snapshot.approvalCount > 0)
@@ -348,6 +387,66 @@ export default function HomePage() {
           accent="var(--danger)"
         />
       </div>
+
+      {/* Local index DB has given up (2+ quarantine cycles failed). Only
+          permanent-failed shows here — transient EBUSY/SQLITE_BUSY is
+          retried by the state machine and would just flicker an alarmist
+          banner on routine startup races. The state only clears on a
+          process restart, so the action copy says exactly that. */}
+      {dbBroken && (
+        <Card
+          style={{
+            padding: 14,
+            marginBottom: 14,
+            borderColor: "color-mix(in oklch, var(--danger) 55%, transparent)",
+            background: "linear-gradient(90deg, color-mix(in oklch, var(--danger) 12%, transparent), transparent 65%)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: "color-mix(in oklch, var(--danger) 22%, transparent)",
+                color: "var(--danger)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <AlertTriangle width={16} height={16} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                Local index database is unavailable
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>
+                The state machine retried and gave up after{" "}
+                <span className="mono">{dbHealth?.quarantineRuns ?? 0}</span>{" "}
+                quarantine attempts. Restart the dev server (Ctrl-C in the
+                terminal, then <span className="mono">npm run dev</span>) to
+                recover — the index rebuilds from JSONL on startup.
+                {dbHealth?.lastError?.message && (
+                  <>
+                    <br />
+                    <span style={{ color: "var(--text-4)" }}>
+                      Last error:{" "}
+                      <span className="mono" title={dbHealth.lastError.message}>
+                        {dbHealth.lastError.code ?? "ERR"}
+                        {" — "}
+                        {dbHealth.lastError.message.slice(0, 120)}
+                        {dbHealth.lastError.message.length > 120 ? "…" : ""}
+                      </span>
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Attention strip */}
       {attentionItems.length > 0 && (

@@ -230,6 +230,52 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("extracts initial_prompt / last_prompt from string message.content (real Claude Code user-turn shape)", async () => {
+    // Real Claude Code JSONL stores human-typed user turns with
+    // `message.content` as a STRING (not an array of typed blocks like
+    // assistant turns use). Earlier the DB ingest pipeline ran
+    // `extractText()` — which is array-only — on the string and got back
+    // "", so `initial_prompt` / `last_prompt` ended up empty for every
+    // real session and Home's Live activity card read "(no prompt)" for
+    // all of them. This test asserts the string-content path now lands
+    // the prompt on the sessions row. The pre-existing `userTurn()` helper
+    // in this file uses ARRAY content, so the array path is also still
+    // covered by every other test in this suite.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-strprompt", "str-session.jsonl");
+    await writeJsonl(sessionFile, [
+      {
+        type: "user",
+        timestamp: "2026-04-30T10:00:00Z",
+        message: { content: "fix the build please" },
+      },
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "On it.",
+        [],
+        { input_tokens: 50, output_tokens: 20 }
+      ),
+      {
+        type: "user",
+        timestamp: "2026-04-30T10:00:05Z",
+        message: { content: "actually also add a test" },
+      },
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    const stats = await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    expect(stats.errors).toBe(0);
+
+    const session = db
+      .prepare("SELECT initial_prompt, last_prompt FROM sessions WHERE session_id = 'str-session'")
+      .get() as { initial_prompt: string | null; last_prompt: string | null };
+    expect(session.initial_prompt).toBe("fix the build please");
+    expect(session.last_prompt).toBe("actually also add a test");
+
+    reloaded.conn.closeDb();
+  });
+
   it("is idempotent: re-running reconcile with no file changes writes 0 rows", async () => {
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-x", "s1.jsonl");

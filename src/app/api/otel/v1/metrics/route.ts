@@ -1,7 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestMetric, isOtelDbReady } from "@/lib/db/otelIngest";
-import { initDb } from "@/lib/db/migrations";
+import { ensureSchemaReady } from "@/lib/data";
 import type { OtlpMetric, OtlpResource } from "@/lib/db/otelIngest";
 
 // OTLP/HTTP JSON metrics receiver.
@@ -14,14 +14,26 @@ import type { OtlpMetric, OtlpResource } from "@/lib/db/otelIngest";
 // (exportMetricsServiceResponse):
 //
 //   { partialSuccess: { rejectedDataPoints: N, errorMessage: "..." } }
-
-let initPromise: Promise<{ available: boolean }> | null = null;
+//
+// DB readiness goes through `ensureSchemaReady()` (the data-layer state
+// machine) rather than `initDb()` directly. The state machine classifies
+// EBUSY/EPERM/SQLITE_BUSY as transient errors with `[100, 300, 900]ms`
+// backoff and caches `transient-failed` for 30s, so a momentary file
+// lock returns a 503 instead of 500-ing the OTEL endpoint. The earlier
+// direct-`initDb()` path raced with the indexer's open and threw EBUSY
+// out of the unhandled `await initPromise` (2026-05-11 incident).
+//
+// `ensureSchemaReady()` rather than `probeInitStatus()` because the
+// latter intentionally short-circuits when `MINDER_USE_DB=0` (the
+// read-path file-parse fallback flag), and OTEL is write-side — it
+// needs the DB regardless of which read backend is selected. Using
+// `probeInitStatus()` here would 503 every OTEL POST under
+// `MINDER_USE_DB=0` (Copilot PR #117 P2 finding).
 
 async function ensureReady(): Promise<boolean> {
   if (!isOtelDbReady()) return false;
-  if (!initPromise) initPromise = initDb();
-  const { available } = await initPromise;
-  return available;
+  const result = await ensureSchemaReady();
+  return result.available;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {

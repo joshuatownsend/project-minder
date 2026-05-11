@@ -284,7 +284,22 @@ async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> 
   return lastResult ?? synthFailureResult(finalError);
 }
 
-function ensureSchemaReady(): Promise<InitResult> {
+/**
+ * Drive the schema-readiness state machine forward and return the
+ * resulting `InitResult`. Idempotent — `success` and within-TTL
+ * `transient-failed` / `permanent-failed` states resolve immediately
+ * without re-running `initDb()`.
+ *
+ * Distinct from `probeInitStatus()` in one important way: this function
+ * **does not** check `dbModeRequested()`. Callers that need the schema
+ * regardless of the `MINDER_USE_DB` flag (OTEL write-side ingest,
+ * indexer worker startup) should use this. `probeInitStatus()`
+ * intentionally short-circuits when DB mode isn't requested so
+ * `/api/health` reports `idle` instead of actively probing — that's
+ * correct for a passive health surface but wrong for callers that
+ * write to the DB independent of the read-path flag.
+ */
+export function ensureSchemaReady(): Promise<InitResult> {
   switch (initState.kind) {
     case "success":
       return Promise.resolve(initState.result);

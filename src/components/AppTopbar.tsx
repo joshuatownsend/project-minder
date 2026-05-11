@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Bell, Filter, Search, Menu } from "lucide-react";
 import { useCommandPalette } from "./CommandPaletteProvider";
@@ -89,8 +90,17 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
   const { snapshot } = usePulse();
   const { scope } = useScope();
 
+  // Defer pulse-derived UI (bell badge + tooltip) until after the first client
+  // paint. The pulse snapshot starts at zeros on both server and client, but
+  // PulseProvider's poll() can resolve before hydration completes in dev mode
+  // and trigger a re-render with real counts (e.g. 242 pending steps) — React
+  // then reports a hydration mismatch against the SSR HTML. Matches the
+  // pattern already used in AppSidebar for the sidebar badges.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+
   const { title, sub: pathSub } = deriveCrumbs(pathname, type);
-  const totalAlerts = snapshot.approvalCount + snapshot.pendingSteps;
+  const totalAlerts = hydrated ? snapshot.approvalCount + snapshot.pendingSteps : 0;
 
   return (
     <header className="shell-topbar">

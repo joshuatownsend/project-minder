@@ -663,7 +663,21 @@ async function readJsonlSession(
       const messageContent = entry.message?.content ?? [];
       const topLevelContent = (entry.content ?? []) as any[];
       const textSource = messageContent.length > 0 ? messageContent : topLevelContent;
-      const userText = extractText(textSource).slice(0, USAGE_USER_TEXT_LIMIT);
+      // Claude Code stores HUMAN-typed user turns as raw strings on
+      // `message.content` (assistant turns and tool-result turns use arrays
+      // of typed blocks). `extractText()` is intentionally array-only — its
+      // job is to walk `{type, text}` block lists — so a string `textSource`
+      // would silently return `""` and we'd never extract `initialPrompt` /
+      // `lastPrompt` for real human prompts. The file-parse path side-stepped
+      // this via its own `extractHumanText` (which handles strings), and the
+      // DB path didn't, which is why /api/sessions returned populated
+      // `searchableText` (built from assistant array blocks) alongside
+      // empty prompt fields and Home's Live activity card read "(no prompt)"
+      // for every session. Slicing applies to either shape.
+      const userText = (typeof textSource === "string"
+        ? textSource
+        : extractText(textSource)
+      ).slice(0, USAGE_USER_TEXT_LIMIT);
       const toolResultText = extractToolResults(textSource).slice(0, USAGE_TOOL_RESULT_LIMIT);
       const previewSource = userText || toolResultText;
       const textPreview = truncateText(previewSource, TEXT_PREVIEW_LIMIT);

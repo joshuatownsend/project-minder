@@ -186,7 +186,6 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
   };
 
   const scopeLabel = scope === "all" ? "All projects" : scope;
-  const scopeInitial = scope === "all" ? "∞" : scope[0].toUpperCase();
 
   return (
     <aside className="sidebar" data-collapsed={collapsed}>
@@ -196,10 +195,21 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
         className="proj-switcher"
         onClick={onOpenScopePicker}
         title={collapsed ? `Project: ${scopeLabel}` : undefined}
+        // aria-label is always set (not just when collapsed) so screen readers
+        // get a dependable name. When expanded, the visible `.scope-label` +
+        // `.scope-name` text would normally provide the accessible name, but
+        // the brand glyph being `aria-hidden` means a strict AT walk could
+        // miss the scope context on the collapsed control — `title` alone
+        // is not consistently announced. Closes Copilot PR #117 a11y finding.
+        aria-label={`Project: ${scopeLabel}. Click to switch project.`}
         style={collapsed ? { padding: 6 } : undefined}
       >
         <div className="row">
-          <div className="glyph">{scopeInitial}</div>
+          {/* Fixed brand mark — was previously the first letter of the
+              selected scope ("∞" for all-projects). Pinning to "PM" treats
+              the glyph as a constant brand affordance; the active scope
+              still reads from `.scope-name` next to it. */}
+          <div className="glyph" aria-hidden="true">PM</div>
           {!collapsed && (
             <>
               <div className="meta">
