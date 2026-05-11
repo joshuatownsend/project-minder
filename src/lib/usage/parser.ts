@@ -14,6 +14,7 @@ import {
   extractCommandNames,
 } from "./contentBlocks";
 import { categorizeToolError } from "./toolErrorCategorizer";
+import { resolveSessionJsonl } from "./sessionPath";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -670,26 +671,10 @@ export async function loadSessionTurnsBySessionId(
 export async function findSessionFile(
   sessionId: string
 ): Promise<{ filePath: string; projectDirName: string } | null> {
-  if (!isValidSessionId(sessionId)) return null;
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  let dirs: string[];
-  try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
-    throw err;
-  }
-  for (const dir of dirs) {
-    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-    try {
-      await fs.access(candidate);
-      return { filePath: candidate, projectDirName: dir };
-    } catch {
-      // not in this dir
-    }
-  }
-  return null;
+  // Thin shim — the implementation lives in sessionPath.ts so the
+  // claudeConversations scanner can share the same fs-walk fallback
+  // without duplicating the directory traversal.
+  return resolveSessionJsonl(sessionId);
 }
 
 /**

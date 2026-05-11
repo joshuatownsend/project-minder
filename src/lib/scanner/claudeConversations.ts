@@ -16,6 +16,7 @@ import { computeSessionQuality } from "../usage/sessionQuality";
 import { classifyTurn } from "../usage/classifier";
 import { aggregateWorkMode } from "../usage/workMode";
 import { readSubagentMeta } from "./subagentMeta";
+import { resolveSessionJsonl } from "../usage/sessionPath";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import { loadPricing, getModelPricing } from "../usage/costCalculator";
@@ -489,8 +490,6 @@ export async function scanSessionDetail(
     return null;
   }
 
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-
   // Check session index first (populated by scanAllSessions)
   let filePath: string | null = null;
   let projectDirName = "";
@@ -499,22 +498,12 @@ export async function scanSessionDetail(
     filePath = indexed.filePath;
     projectDirName = indexed.projectDirName;
   } else {
-    // Fallback: scan directories to find the session file
-    try {
-      const dirs = await fs.readdir(projectsDir);
-      for (const dir of dirs) {
-        const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-        try {
-          await fs.access(candidate);
-          filePath = candidate;
-          projectDirName = dir;
-          break;
-        } catch {
-          // Not in this directory
-        }
-      }
-    } catch {
-      return null;
+    // Fallback: shared session-id → jsonl resolver. Walks
+    // ~/.claude/projects/<dir>/<sessionId>.jsonl until the first match.
+    const resolved = await resolveSessionJsonl(sessionId);
+    if (resolved) {
+      filePath = resolved.filePath;
+      projectDirName = resolved.projectDirName;
     }
   }
 

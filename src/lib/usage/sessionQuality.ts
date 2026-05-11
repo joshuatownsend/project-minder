@@ -131,6 +131,14 @@ export interface CompactionFinding {
 const COMPACTION_LOOP_VARIANCE = 0.10;
 const COMPACTION_LOOP_FILL_THRESHOLD = 0.75;
 
+/** Compact projection of the assistant turns the compaction-loop scan
+ *  cares about. Built once during the bundled fused pass and reused. */
+interface AssistantFillRow {
+  index: number;
+  turn: UsageTurn;
+  fill: number;
+}
+
 export function detectCompactionLoops(turns: UsageTurn[]): CompactionFinding[] {
   // Per TODO #102's spec: fill = `input_tokens / model_context_window`.
   // `input_tokens` from Claude Code's JSONL is the count of NEW uncached
@@ -143,7 +151,7 @@ export function detectCompactionLoops(turns: UsageTurn[]): CompactionFinding[] {
   // counters; that produced fills >300% on healthy heavily-cached
   // sessions because cached reads can cumulatively exceed the window
   // (rolling cache pattern). Reverted to the spec's semantic.
-  const assistantTurns: Array<{ index: number; turn: UsageTurn; fill: number }> = [];
+  const assistantTurns: AssistantFillRow[] = [];
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
     if (t.role !== "assistant") continue;
@@ -151,7 +159,13 @@ export function detectCompactionLoops(turns: UsageTurn[]): CompactionFinding[] {
     const window = getModelContextWindow(t.model);
     assistantTurns.push({ index: i, turn: t, fill: t.inputTokens / window });
   }
+  return scanCompactionPairs(assistantTurns);
+}
 
+/** Pair-window scan over the assistant-fill projection. Pulled out of
+ *  detectCompactionLoops so the bundled fused pass can reuse it without
+ *  rebuilding the projection. */
+function scanCompactionPairs(assistantTurns: AssistantFillRow[]): CompactionFinding[] {
   const findings: CompactionFinding[] = [];
   let runStart = -1;
   let runStartTurnIdx = -1;
@@ -256,14 +270,19 @@ export function detectToolFailureStreaks(turns: UsageTurn[]): StreakFinding[] {
       evaluable.push({ index: i, failed: true });
     }
   }
+  return scanFailureWindows(evaluable);
+}
 
+/** Greedy non-overlapping window scan over the evaluable projection.
+ *  Pulled out of detectToolFailureStreaks so the bundled fused pass can
+ *  reuse it without rebuilding the projection. */
+function scanFailureWindows(evaluable: EvaluableTurn[]): StreakFinding[] {
   if (evaluable.length < STREAK_WINDOW_MIN) return [];
 
-  // Greedy non-overlapping scan: extend a window as long as the failure
-  // rate stays above 50%. When it can no longer be extended, emit if it
-  // reached the minimum size, then jump past the window so the next run
-  // starts fresh. This avoids reporting overlapping windows for the same
-  // failure cluster.
+  // Extend a window as long as the failure rate stays above 50%. When it
+  // can no longer be extended, emit if it reached the minimum size, then
+  // jump past the window so the next run starts fresh. This avoids
+  // reporting overlapping windows for the same failure cluster.
   const findings: StreakFinding[] = [];
   let i = 0;
   while (i <= evaluable.length - STREAK_WINDOW_MIN) {
@@ -272,7 +291,6 @@ export function detectToolFailureStreaks(turns: UsageTurn[]): StreakFinding[] {
       if (evaluable[i + j].failed) failures++;
     }
     if (failures / STREAK_WINDOW_MIN > STREAK_FAILURE_THRESHOLD) {
-      // Extend forward as long as the running rate stays above threshold.
       let end = i + STREAK_WINDOW_MIN - 1;
       while (end + 1 < evaluable.length) {
         const nextFailures = failures + (evaluable[end + 1].failed ? 1 : 0);
@@ -315,20 +333,70 @@ export interface SessionQualitySummary {
  * Run all three detectors plus the cheap max-fill scan. Used by ingest to
  * persist boolean flags + cache_hit_ratio + max_context_fill, and by the
  * diagnosis route as the foundation for the full DiagnosisReport.
+ *
+ * Implementation: one pass over `turns[]` builds (a) cache totals,
+ * (b) per-assistant-turn fill projection, (c) tool-failure evaluable
+ * projection, (d) max-fill, all simultaneously. The two window-scan
+ * post-passes (compaction-pair scan, failure-rate scan) then run on the
+ * smaller projections — they are the work, not the redundancy.
+ *
+ * The per-detector exports (`computeCacheStats`, `detectCompactionLoops`,
+ * `detectToolFailureStreaks`) remain available for callers that only
+ * need one signal; they delegate to the same private window-scan helpers
+ * so behavior stays byte-equal to the bundled path. Pinned by the
+ * "all 4 detectors firing in one mixed session" golden vector test.
  */
 export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary {
   let maxContextFill = 0;
-  for (const t of turns) {
-    if (t.role !== "assistant" || t.inputTokens <= 0) continue;
-    const window = getModelContextWindow(t.model);
-    const fill = t.inputTokens / window;
-    if (fill > maxContextFill) maxContextFill = fill;
+  let cacheReadTokens = 0;
+  let cacheCreateTokens = 0;
+  let rebuildWasteUsd = 0;
+  const assistantProj: AssistantFillRow[] = [];
+  const evaluable: EvaluableTurn[] = [];
+
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+
+    if (t.role === "assistant") {
+      cacheReadTokens += t.cacheReadTokens;
+      cacheCreateTokens += t.cacheCreateTokens;
+      if (t.cacheCreateTokens > 0 || t.cacheReadTokens > 0) {
+        const pricing = getModelPricing(t.model);
+        rebuildWasteUsd +=
+          t.cacheCreateTokens * pricing.cacheWriteCostPerToken -
+          t.cacheReadTokens * pricing.cacheReadCostPerToken;
+      }
+      if (t.inputTokens > 0) {
+        const window = getModelContextWindow(t.model);
+        const fill = t.inputTokens / window;
+        if (fill > maxContextFill) maxContextFill = fill;
+        assistantProj.push({ index: i, turn: t, fill });
+      }
+    }
+
+    // Tool-failure projection: skip the grace period, then collect any
+    // turn that carries a tool-result signal.
+    if (i >= STREAK_GRACE_TURNS) {
+      if (t.role === "user" && t.toolResultText) {
+        evaluable.push({ index: i, failed: ERROR_MARKER_RE.test(t.toolResultText) });
+      } else if (t.role === "assistant" && t.isError) {
+        evaluable.push({ index: i, failed: true });
+      }
+    }
   }
 
+  const cacheTotal = cacheReadTokens + cacheCreateTokens;
+  const cache: CacheStats = {
+    cacheReadTokens,
+    cacheCreateTokens,
+    hitRatio: cacheTotal > 0 ? cacheReadTokens / cacheTotal : null,
+    rebuildWasteUsd,
+  };
+
   return {
-    cache: computeCacheStats(turns),
-    compactionLoops: detectCompactionLoops(turns),
-    toolFailureStreaks: detectToolFailureStreaks(turns),
+    cache,
+    compactionLoops: scanCompactionPairs(assistantProj),
+    toolFailureStreaks: scanFailureWindows(evaluable),
     maxContextFill,
   };
 }
