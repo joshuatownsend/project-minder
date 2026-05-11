@@ -1,7 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLogBatch, isOtelDbReady } from "@/lib/db/otelIngest";
-import { probeInitStatus } from "@/lib/data";
+import { ensureSchemaReady } from "@/lib/data";
 import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 
 // OTLP/HTTP JSON logs receiver.
@@ -20,18 +20,25 @@ import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 // A 200 with rejectedLogRecords>0 means partial success.
 // Non-200 means the entire batch was rejected (e.g. DB unavailable).
 //
-// DB readiness goes through `probeInitStatus()` (the data-layer state
+// DB readiness goes through `ensureSchemaReady()` (the data-layer state
 // machine) rather than `initDb()` directly. The state machine classifies
 // EBUSY/EPERM/SQLITE_BUSY as transient with `[100, 300, 900]ms` backoff
 // and caches `transient-failed` for 30s, so a momentary file lock
 // returns 503 instead of 500. Previously the route had its own
 // `initPromise` cache that bypassed the retry classifier and crashed
 // when quarantine raced with the indexer's open handle.
+//
+// `ensureSchemaReady()` rather than `probeInitStatus()` because the
+// latter intentionally short-circuits when `MINDER_USE_DB=0` (the
+// read-path file-parse fallback flag), and OTEL is write-side — it
+// needs the DB regardless of which read backend is selected. Using
+// `probeInitStatus()` here would 503 every OTEL POST under
+// `MINDER_USE_DB=0` (Copilot PR #117 P2 finding).
 
 async function ensureReady(): Promise<boolean> {
   if (!isOtelDbReady()) return false;
-  const status = await probeInitStatus();
-  return status.state === "success";
+  const result = await ensureSchemaReady();
+  return result.available;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
