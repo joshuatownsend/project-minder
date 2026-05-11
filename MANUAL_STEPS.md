@@ -140,3 +140,36 @@ then Install again to pick up the fix.
   3. Restart the Project Minder dev server so the server process inherits the env var.
 
 ---
+
+## 2026-05-10 14:00 | screenshot-to-code | Phase 6: build, key, register MCP server
+
+- [ ] Build the bundled MCP server
+  `npm run build:mcp-screenshot`
+  Produces `dist/mcp/screenshot-to-code/index.mjs` (~9 KB ESM, shebang-prefixed). The build
+  is `packages: "external"`, so Node resolves `@modelcontextprotocol/sdk`, `zod`, and
+  every other dep from the project's `node_modules/` at spawn time — keep that tree intact.
+- [ ] Export an API key for the provider you want to use
+  Default provider is **Gemini** (cheapest vision-capable model).
+  PowerShell:
+  `$env:GOOGLE_API_KEY = "AIza…"`     (or `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`)
+  bash/zsh:
+  `export GOOGLE_API_KEY=AIza…`
+  Set this in your shell profile if you want it across new terminals.
+  - Gemini keys: https://aistudio.google.com/app/apikey
+  - OpenAI keys: https://platform.openai.com/api-keys
+  - Anthropic keys: https://console.anthropic.com/settings/keys
+- [ ] Register the MCP server with Claude Code (so the `convert_screenshot_to_react` tool is callable)
+  `claude mcp add screenshot-to-code -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`
+  To pin a non-default provider/model at spawn time:
+  `claude mcp add screenshot-to-code --env SCREENSHOT_PROVIDER=anthropic --env SCREENSHOT_MODEL=claude-sonnet-4-5 -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`
+  Verify:
+  `claude mcp list`     should show `screenshot-to-code` as `connected`
+- [ ] Restart the Project Minder dev server so the Next.js process inherits the new env var
+  The `/config` → Playground tab uses the same env var the MCP server does. If the dashboard
+  shows `412 API_KEY_MISSING`, the dev server was started before the env var was exported —
+  stop it and re-run `npm run dev`.
+- [ ] Smoke-test the tool from Claude Code
+  In Claude Code: ask "Use the screenshot-to-code MCP tool on this image:" and attach a UI
+  screenshot. The tool should return TSX with no markdown fences.
+
+---

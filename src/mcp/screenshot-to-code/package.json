@@ -1,0 +1,10 @@
+{
+  "name": "@project-minder/screenshot-to-code-mcp",
+  "version": "0.1.0",
+  "description": "Bundled stdio MCP server that converts a UI screenshot into a self-contained React TypeScript component. Built artifact at dist/mcp/screenshot-to-code/index.mjs (relative to the project root). See ../../scripts/build-mcp-screenshot.mjs.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "screenshot-to-code-mcp": "../../dist/mcp/screenshot-to-code/index.mjs"
+  }
+}
