@@ -7,6 +7,11 @@ import React, { useMemo } from "react";
 // Body tab (Phase 4.1). Supports a subset of GFM: ATX headings,
 // fenced code blocks, bullet lists, pipe tables, inline bold/code/links.
 //
+// Non-obvious behavior: H2 (`## …`) renders as a section divider — an
+// uppercase muted label followed by a horizontal rule — not as a normal
+// heading element. The help docs depend on that shape for the
+// section-banner look, so don't "fix" it back to a plain `<h2>`.
+//
 // The link handler is opt-in: HelpPanel passes `onLinkClick` to wire
 // `*.md` links into its slug router; Body tab omits it so links are
 // inert. The rendered anchor always exposes `data-href` so callers can

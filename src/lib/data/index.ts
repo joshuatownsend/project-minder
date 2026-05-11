@@ -24,6 +24,7 @@ import type { SessionCostRow } from "./sessionsInWindow";
 import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
 import { getPeriodStart } from "@/lib/usage/periods";
 import type { Period } from "@/lib/usage/constants";
+import type { AggregatorPeriod } from "@/lib/usage/period";
 import type {
   SessionDetail,
   SessionSummary,
@@ -500,7 +501,7 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * migration.
  */
 async function runFileUsage(
-  period: "24h" | "today" | "7d" | "30d" | "all" | "week" | "month",
+  period: AggregatorPeriod,
   project: string | undefined,
   source: string | undefined
 ): Promise<UsageResult> {
@@ -520,7 +521,7 @@ async function runFileUsage(
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
-  period: "24h" | "today" | "7d" | "30d" | "all" | "week" | "month",
+  period: AggregatorPeriod,
   project?: string,
   source?: string
 ): Promise<UsageResult> {

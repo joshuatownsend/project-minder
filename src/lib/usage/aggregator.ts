@@ -28,13 +28,14 @@ import type {
   SourceBreakdown,
 } from "./types";
 
-// Local Period type kept loose so the aggregator accepts the full app
-// vocabulary (24h/today/7d/30d/all) plus legacy week/month strings — the
-// periods.ts switch normalizes all of them. validatePeriod() at the API
-// boundary maps week→7d, month→30d before this function ever sees the
-// value. "24h" was added in Phase 4.1 for the agent/skill detail page;
-// the aggregator handles it transparently via getPeriodStart.
-type Period = "24h" | "today" | "7d" | "30d" | "all" | "week" | "month";
+import type { AggregatorPeriod as Period } from "./period";
+
+// `Period` here is the alias `AggregatorPeriod` from `period.ts` —
+// canonical 5-option vocabulary plus the legacy `week`/`month` aliases
+// that `getPeriodStart` still normalizes. The aliasing makes
+// `generateUsageReport(period: Period, …)` read as before while
+// pointing at a single named type shared with `runFileUsage` and
+// `getUsage` in `data/index.ts`.
 
 export async function generateUsageReport(
   period: Period,

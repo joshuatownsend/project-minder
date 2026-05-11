@@ -12,6 +12,12 @@ import { getPeriodStart } from "./periods";
 
 export type UsagePeriod = Period;
 
+/** Same as `Period` but also includes legacy aliases. `getPeriodStart`
+ *  accepts these (week→7d, month→30d) so callers that historically
+ *  threaded them through (aggregator, file-parse usage path) keep the
+ *  alias surface without re-declaring the literal union. */
+export type AggregatorPeriod = Period | "week" | "month";
+
 /** The subset rendered on the agent/skill detail toggle. The app's full
  *  vocabulary in `VALID_PERIODS` also includes "today" (calendar) — the
  *  detail page intentionally shows rolling-24h instead because users land
@@ -32,16 +38,16 @@ export function parseUsagePeriod(value: string | null | undefined, fallback: Per
 
 /** Period → ISO8601 lower bound, or null for "all". Wrapper around
  *  `getPeriodStart` so the SQL-side caller and the file-parse-side caller
- *  agree on the same boundary for the same period+now. */
-export function periodSinceIso(period: Period, now: Date = new Date()): string | null {
+ *  agree on the same boundary for the same period+now. The parameter is
+ *  `string` (not `Period`) to mirror `getPeriodStart`, which itself
+ *  accepts legacy aliases (`week`/`month`). */
+export function periodSinceIso(period: string, now: Date = new Date()): string | null {
   return getPeriodStart(period, now)?.toISOString() ?? null;
 }
 
-/** Period → Unix-ms lower bound, or null for "all". The file-parse path
- *  compares `UsageTurn.timestamp` via `Date.parse` and wants ms, while
- *  the SQL path compares `tu.ts` TEXT and wants ISO — they're both
- *  derived from the same `getPeriodStart` result so they're guaranteed
- *  to agree for the same `now`. */
-export function periodSinceMs(period: Period, now: Date = new Date()): number | null {
+/** Period → Unix-ms lower bound, or null for "all". Same wider-`string`
+ *  signature as `periodSinceIso` for the same reason — both wrap the
+ *  same `getPeriodStart` and need to accept legacy aliases. */
+export function periodSinceMs(period: string, now: Date = new Date()): number | null {
   return getPeriodStart(period, now)?.getTime() ?? null;
 }
