@@ -84,3 +84,30 @@ To hide a project, use the three-dot menu on its card. To unhide, click **Unhide
 Edits to scan roots and scan behavior are not applied until you click **Save Changes**. Hidden project changes (unhide) take effect immediately.
 
 After saving, the next scan will pick up new roots. You can trigger an immediate rescan from the dashboard footer.
+
+## Screenshot → React Playground
+
+The **Playground** tab on `/config` (`/config?type=playground`) converts a UI screenshot into a single self-contained React TSX component using a vision model. Drop a PNG / JPEG / WebP screenshot, pick a provider + model, and click **Convert**.
+
+| Provider | Default model | Env var (resolved server-side) |
+|----------|---------------|-------------------------------|
+| Gemini   | `gemini-2.5-flash` | `GOOGLE_API_KEY` |
+| OpenAI   | `gpt-4o`           | `OPENAI_API_KEY` |
+| Anthropic | `claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
+
+API keys are **never** stored in `.minder.json` — only the env-var name is configurable. The server reads the secret from `process.env` per request. If the env var is missing the API returns a 412 with the variable name in the error message.
+
+### Code / Preview tabs
+
+After a successful conversion, the output appears with two view tabs:
+
+- **Code** — the raw TSX with a one-click copy button.
+- **Preview** — a live render of the generated component inside a sandboxed iframe.
+
+The preview iframe loads Babel (TSX compilation), Tailwind v4 (utility-class JIT), and React 18 UMD from CDN. The iframe uses `sandbox="allow-scripts"` without `allow-same-origin`, which gives it an opaque origin: it cannot read the host's cookies, localStorage, or DOM. Compile errors and runtime exceptions surface as a red banner under the preview frame; the same message is also rendered inside the iframe so you can see it without leaving the preview.
+
+Notes on the preview:
+
+- React 18 (not React 19) is loaded inside the iframe because React 19 dropped its UMD build. Visual rendering is unchanged for utility-class previews.
+- The renderer strips ES-module `import` lines before compiling — it exposes `React` and common hooks (`useState`, `useEffect`, `forwardRef`, `memo`, etc.) on the iframe's `window`. Imports of other packages in the generated code will throw at runtime.
+- The preview is a screenshot-driven approximation — the playground is intended for rapid prototyping, not production rendering. Copy the code into your real app for the final pass.

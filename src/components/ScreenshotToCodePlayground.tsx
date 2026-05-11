@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { Camera, AlertCircle } from "lucide-react";
 import { CodeBlock } from "./ui/code-block";
+import { ScreenshotToCodePreview } from "./ScreenshotToCodePreview";
 import {
   PROVIDERS,
   PROVIDER_DEFAULT_MODEL,
@@ -12,6 +13,8 @@ import {
   type Framework,
   type Variant,
 } from "@/mcp/screenshot-to-code/constants";
+
+type OutputView = "code" | "preview";
 
 const ACCEPTED_MIME = new Set<"image/png" | "image/jpeg" | "image/webp">([
   "image/png",
@@ -67,6 +70,7 @@ export function ScreenshotToCodePlayground() {
   const [pending, setPending] = useState(false);
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<OutputView>("code");
 
   const imageDataUrl = imageBase64 ? `data:${imageMediaType};base64,${imageBase64}` : null;
 
@@ -210,7 +214,90 @@ export function ScreenshotToCodePlayground() {
       </div>
 
       {error && <ErrorBanner message={error} />}
-      {code !== null && <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />}
+      {code !== null && (
+        <OutputPanel
+          code={code}
+          view={view}
+          onViewChange={setView}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Code/Preview toggle. Both panels stay mounted (CSS visibility toggle)
+ *  so switching tabs doesn't tear down the iframe and re-fetch its CDN
+ *  scripts. */
+function OutputPanel({
+  code,
+  view,
+  onViewChange,
+}: {
+  code: string;
+  view: OutputView;
+  onViewChange: (v: OutputView) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <ViewToggle view={view} onChange={onViewChange} />
+      <div style={{ display: view === "code" ? "block" : "none" }}>
+        <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />
+      </div>
+      <div style={{ display: view === "preview" ? "block" : "none" }}>
+        <ScreenshotToCodePreview code={code} />
+      </div>
+    </div>
+  );
+}
+
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: OutputView;
+  onChange: (v: OutputView) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Output view"
+      style={{
+        display: "inline-flex",
+        alignSelf: "flex-start",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        background: "var(--bg-surface)",
+        padding: "2px",
+        gap: "2px",
+      }}
+    >
+      {(["code", "preview"] as const).map((v) => {
+        const active = view === v;
+        return (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(v)}
+            style={{
+              padding: "4px 12px",
+              fontSize: "0.7rem",
+              fontFamily: "var(--font-mono)",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              background: active ? "var(--surface-2)" : "transparent",
+              color: active ? "var(--text-primary)" : "var(--text-muted)",
+              border: "1px solid",
+              borderColor: active ? "var(--border)" : "transparent",
+              borderRadius: "3px",
+              cursor: active ? "default" : "pointer",
+            }}
+          >
+            {v}
+          </button>
+        );
+      })}
     </div>
   );
 }
