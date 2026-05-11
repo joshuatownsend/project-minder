@@ -2,6 +2,7 @@
 
 import type { ClaudeMdAuditInfo, ClaudeMdAuditFinding, AuditFindingSeverity } from "@/lib/types";
 import { formatKB } from "@/lib/utils";
+import { severityTokens, type SeverityTone } from "./ui/design";
 
 interface Props {
   audit: ClaudeMdAuditInfo;
@@ -11,6 +12,16 @@ const SEVERITY_LABEL: Record<AuditFindingSeverity, string> = {
   P0: "Highest priority",
   P1: "High priority",
   P2: "Medium priority",
+};
+
+/** Map the audit's `P0/P1/P2` taxonomy onto the canonical severity tones.
+ *  Identical mapping to `DiagnosisPanel`'s — kept local rather than
+ *  exported because the two source types are decoupled aliases that
+ *  happen to share string members today. */
+const TONE_BY_SEVERITY: Record<AuditFindingSeverity, SeverityTone> = {
+  P0: "crit",
+  P1: "high",
+  P2: "med",
 };
 
 function scoreColors(score: number) {
@@ -155,7 +166,7 @@ export function ClaudeMdAuditPanel({ audit }: Props) {
             <div key={sev} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
               <div style={{
                 fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.1em",
-                textTransform: "uppercase", color: "var(--text-muted)",
+                textTransform: "uppercase", color: severityTokens[TONE_BY_SEVERITY[sev]].text,
                 fontFamily: "var(--font-body)",
               }}>
                 {sev} — {SEVERITY_LABEL[sev]}
