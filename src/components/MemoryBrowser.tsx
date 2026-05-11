@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import type { MemoryFileEntry, MemoryIndexSummary, MemoryScope } from "@/lib/types";
+import {
+  MEMORY_FILE_LARGE_BYTES,
+  MEMORY_INDEX_LINE_CAP,
+  MEMORY_TOTAL_BODY_BUDGET_BYTES,
+  budgetTone,
+  formatBytes,
+} from "@/lib/memory/budget";
 import { MemoryEditor } from "./MemoryEditor";
 
 const SCOPE_LABEL: Record<MemoryScope, string> = {
@@ -105,6 +112,23 @@ export function MemoryBrowser() {
     return { projects, entryCount, lineCount, orphans, dangling, maxLineCount };
   }, [indexSummaries]);
 
+  const budgetRollup = useMemo(() => {
+    // Total bytes-on-disk across every always-loaded memory surface --
+    // ~/.claude/CLAUDE.md, each scanned project's CLAUDE.md, and every
+    // auto-memory body. This is the aggregate the article frames as the
+    // soft Hermes-style budget (~32KB). Per-file Phase 1 D2 we also
+    // surface a chip on individual rows > 4KB. No tone on the aggregate
+    // -- it's informational; the alarm signal is the per-row chip.
+    if (!entries) return { totalBytes: 0, largeFileCount: 0 };
+    let totalBytes = 0;
+    let largeFileCount = 0;
+    for (const e of entries) {
+      totalBytes += e.sizeBytes;
+      if (e.sizeBytes > MEMORY_FILE_LARGE_BYTES) largeFileCount++;
+    }
+    return { totalBytes, largeFileCount };
+  }, [entries]);
+
   const selected = entries?.find((e) => e.id === selectedId) ?? null;
 
   if (error) {
@@ -116,7 +140,9 @@ export function MemoryBrowser() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      {indexRollup.projects > 0 && <IndexBanner rollup={indexRollup} />}
+      {(indexRollup.projects > 0 || budgetRollup.totalBytes > 0) && (
+        <IndexBanner rollup={indexRollup} budget={budgetRollup} />
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
         <input
           value={search}
@@ -211,11 +237,15 @@ export function MemoryBrowser() {
   );
 }
 
-// Article principle 3 + 4: surface the always-loaded index size and the cost
-// of bad bookkeeping (orphans / dangling links) in a single glance so the user
-// can see whether MEMORY.md is healthy without opening every file.
+// Article principle 3 + 4: surface the always-loaded index size, the cost of
+// bad bookkeeping (orphans / dangling links), and the budget envelope in a
+// single glance so the user can see whether MEMORY.md is healthy without
+// opening every file. The line-count chip turns amber at 80% of the 200-line
+// truncation cap and red at 95% (data-loss imminent). The total-bytes chip is
+// informational only -- alarm signal lives on the per-row chip for >4KB files.
 function IndexBanner({
   rollup,
+  budget,
 }: {
   rollup: {
     projects: number;
@@ -225,14 +255,14 @@ function IndexBanner({
     dangling: number;
     maxLineCount: number;
   };
+  budget: { totalBytes: number; largeFileCount: number };
 }) {
-  const cap = 200;
-  const capPct = rollup.maxLineCount / cap;
-  // 80% amber, 95% red per the locked Phase 1 budget thresholds.
-  const tone: "ok" | "warn" | "alarm" =
-    capPct >= 0.95 ? "alarm" : capPct >= 0.8 ? "warn" : "ok";
-  const toneColor =
-    tone === "alarm" ? "var(--accent)" : tone === "warn" ? "var(--accent)" : "var(--text-muted)";
+  const lineTone = budgetTone(rollup.maxLineCount, MEMORY_INDEX_LINE_CAP);
+  const lineToneColor =
+    lineTone === "alarm" || lineTone === "warn" ? "var(--accent)" : "var(--text-muted)";
+  const totalBudgetPct = Math.round(
+    (budget.totalBytes / MEMORY_TOTAL_BODY_BUDGET_BYTES) * 100,
+  );
   return (
     <div
       style={{
@@ -249,15 +279,30 @@ function IndexBanner({
       }}
     >
       <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-        MEMORY.md index
+        Memory budget
       </span>
-      <span>
-        {rollup.projects} {rollup.projects === 1 ? "project" : "projects"}
+      {rollup.projects > 0 && (
+        <>
+          <span>
+            {rollup.projects} {rollup.projects === 1 ? "project" : "projects"} indexed
+          </span>
+          <span>{rollup.entryCount} entries</span>
+          <span style={{ color: lineToneColor }}>
+            max {rollup.maxLineCount}/{MEMORY_INDEX_LINE_CAP} lines
+          </span>
+        </>
+      )}
+      <span
+        title={`Soft target ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)}; informational only`}
+      >
+        total {formatBytes(budget.totalBytes)}
+        {budget.totalBytes > 0 && ` (~${totalBudgetPct}% of ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)})`}
       </span>
-      <span>{rollup.entryCount} entries</span>
-      <span style={{ color: toneColor }}>
-        max {rollup.maxLineCount}/{cap} lines
-      </span>
+      {budget.largeFileCount > 0 && (
+        <span title={`Files larger than ${formatBytes(MEMORY_FILE_LARGE_BYTES)}`}>
+          {budget.largeFileCount} large file{budget.largeFileCount === 1 ? "" : "s"}
+        </span>
+      )}
       {rollup.orphans > 0 && (
         <span style={{ color: "var(--accent)" }}>{rollup.orphans} orphan{rollup.orphans === 1 ? "" : "s"}</span>
       )}
@@ -364,6 +409,9 @@ function MemoryRow({
         >
           {entry.displayName}
         </span>
+        {entry.sizeBytes > MEMORY_FILE_LARGE_BYTES && (
+          <SizeChip bytes={entry.sizeBytes} />
+        )}
         {stale && <StaleChip entry={entry} />}
       </div>
       {entry.projectName && (
@@ -402,7 +450,7 @@ function MemoryRow({
           fontFamily: "var(--font-mono)",
         }}
       >
-        {rel} · {(entry.sizeBytes / 1024).toFixed(1)} KB
+        {rel}
         {entry.usage && (
           <>
             {" · "}
@@ -414,6 +462,31 @@ function MemoryRow({
         )}
       </span>
     </button>
+  );
+}
+
+// Per-file size hint (Feature D2). Shown only when sizeBytes > 4KB so the
+// row gutter doesn't get noisy with size info on routine 200-byte memories.
+// Same tooltip pattern as StaleChip -- the chip itself is terse, hover gives
+// the soft-budget context.
+function SizeChip({ bytes }: { bytes: number }) {
+  return (
+    <span
+      title={`File size exceeds ${formatBytes(MEMORY_FILE_LARGE_BYTES)}; soft total-body target is ${formatBytes(MEMORY_TOTAL_BODY_BUDGET_BYTES)}`}
+      style={{
+        fontSize: "0.58rem",
+        fontFamily: "var(--font-mono)",
+        color: "var(--text-muted)",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "3px",
+        padding: "1px 5px",
+        letterSpacing: "0.04em",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {formatBytes(bytes)}
+    </span>
   );
 }
 
