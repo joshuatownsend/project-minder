@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
+import { ErrorBanner } from "./ui/design";
 import { buildPreviewSrcDoc } from "@/lib/previewIframe";
 
 interface Props {
@@ -105,7 +105,7 @@ export function ScreenshotToCodePreview({ code, height = 480 }: Props) {
         <PreviewWatermark />
       </div>
 
-      {previewError && <PreviewErrorBanner message={previewError} />}
+      {previewError && <ErrorBanner label="PREVIEW ERROR" message={previewError} />}
 
       <p
         style={{
@@ -146,28 +146,3 @@ function PreviewWatermark() {
   );
 }
 
-function PreviewErrorBanner({ message }: { message: string }) {
-  return (
-    <div
-      role="alert"
-      style={{
-        display: "flex",
-        gap: "8px",
-        alignItems: "flex-start",
-        padding: "8px 12px",
-        background: "var(--error-bg, #2a0000)",
-        borderRadius: "var(--radius)",
-        fontSize: "0.78rem",
-        color: "var(--error, #f87171)",
-      }}
-    >
-      <AlertCircle style={{ width: "14px", height: "14px", flex: "0 0 14px", marginTop: "2px" }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", letterSpacing: "0.04em" }}>
-          PREVIEW ERROR
-        </span>
-        <span style={{ fontFamily: "var(--font-mono)", wordBreak: "break-word" }}>{message}</span>
-      </div>
-    </div>
-  );
-}

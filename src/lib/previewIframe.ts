@@ -47,6 +47,14 @@ export function stripImports(code: string): string {
   return code.replace(IMPORT_RE, "").replace(/^\s*\n+/, "");
 }
 
+// Module-scope regex literals so each `rewriteDefaultExport` call doesn't
+// recompile them. The named-fn path runs the same pattern twice (match +
+// replace), so caching matters more than for the other two forms.
+const NAMED_DEFAULT_FN_RE = /^[ \t]*export\s+default\s+function\s+([A-Za-z_$][\w$]*)/m;
+const ANON_DEFAULT_FN_RE = /^[ \t]*export\s+default\s+function\s*\(/m;
+const ANON_DEFAULT_FN_REWRITE = /^[ \t]*export\s+default\s+function/m;
+const BARE_DEFAULT_RE = /^[ \t]*export\s+default\s+/m;
+
 /** Rewrite `export default <expr>` into `window.__Default = <expr>` so the
  *  preview harness can pick it up.
  *
@@ -61,22 +69,15 @@ export function stripImports(code: string): string {
  *  remains visible inside the component body (for self-recursion / display
  *  in React DevTools). */
 export function rewriteDefaultExport(code: string): string {
-  // Named function form. Capture the identifier so we can both keep the
-  // declaration and assign by name afterwards.
-  const namedFn = code.match(/^[ \t]*export\s+default\s+function\s+([A-Za-z_$][\w$]*)/m);
+  const namedFn = code.match(NAMED_DEFAULT_FN_RE);
   if (namedFn) {
     const name = namedFn[1];
-    return code.replace(
-      /^[ \t]*export\s+default\s+function\s+([A-Za-z_$][\w$]*)/m,
-      `function ${name}`,
-    ) + `\n;window.__Default = ${name};`;
+    return code.replace(NAMED_DEFAULT_FN_RE, `function ${name}`) + `\n;window.__Default = ${name};`;
   }
-  // Anonymous function form (function or arrow).
-  if (/^[ \t]*export\s+default\s+function\s*\(/m.test(code)) {
-    return code.replace(/^[ \t]*export\s+default\s+function/m, "window.__Default = function");
+  if (ANON_DEFAULT_FN_RE.test(code)) {
+    return code.replace(ANON_DEFAULT_FN_REWRITE, "window.__Default = function");
   }
-  // Bare expression (e.g. `export default Foo;` or `export default () => …`).
-  return code.replace(/^[ \t]*export\s+default\s+/m, "window.__Default = ");
+  return code.replace(BARE_DEFAULT_RE, "window.__Default = ");
 }
 
 /** Compose the iframe-ready preview source from raw LLM output.
@@ -123,28 +124,18 @@ export function buildPreviewSrcDoc(rawCode: string): string {
   html, body { margin: 0; padding: 0; }
   body { font-family: ui-sans-serif, system-ui, sans-serif; }
   #root { min-height: 100vh; }
-  #__preview_err {
-    display: none;
-    position: fixed; inset: 8px; padding: 12px 14px;
-    background: #2a0000; color: #f87171;
-    font: 12px/1.5 ui-monospace, monospace;
-    border: 1px solid #b91c1c; border-radius: 6px;
-    white-space: pre-wrap; overflow: auto;
-    z-index: 9999;
-  }
 </style>
 </head>
 <body>
 <div id="root"></div>
-<pre id="__preview_err"></pre>
 <script>
-  // Surface compile + runtime errors both in-frame (for the user) and
-  // out-of-frame (parent overlay). Parent listener matches by event.source,
-  // not origin (sandbox = opaque origin = origin "null"). See preparePreviewCode.
+  // Compile + runtime errors are surfaced exclusively by the parent (see
+  // ScreenshotToCodePreview's postMessage listener) so the preview canvas
+  // stays visible — an in-frame overlay would obscure whatever rendered
+  // before the error. Parent matches by event.source reference, not
+  // origin: sandbox = opaque origin = origin "null".
   function __reportPreviewError(msg, stack) {
     try {
-      var el = document.getElementById("__preview_err");
-      if (el) { el.style.display = "block"; el.textContent = msg + (stack ? "\\n\\n" + stack : ""); }
       parent.postMessage({ kind: "preview-error", message: String(msg), stack: stack ? String(stack) : undefined }, "*");
     } catch (_) { /* parent already gone */ }
   }

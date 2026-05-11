@@ -1,20 +1,23 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Camera, AlertCircle } from "lucide-react";
+import { Camera } from "lucide-react";
 import { CodeBlock } from "./ui/code-block";
+import { ErrorBanner, Seg } from "./ui/design";
 import { ScreenshotToCodePreview } from "./ScreenshotToCodePreview";
 import {
   PROVIDERS,
   PROVIDER_DEFAULT_MODEL,
-  FRAMEWORKS,
-  VARIANTS,
   type Provider,
   type Framework,
   type Variant,
 } from "@/mcp/screenshot-to-code/constants";
 
-type OutputView = "code" | "preview";
+/** Output panel toggle. Source of truth for the union — the array
+ *  literal both drives the segmented control's options and feeds the
+ *  string-union type, so adding a third view requires only one edit. */
+const OUTPUT_VIEWS = ["code", "preview"] as const;
+type OutputView = (typeof OUTPUT_VIEWS)[number];
 
 const ACCEPTED_MIME = new Set<"image/png" | "image/jpeg" | "image/webp">([
   "image/png",
@@ -238,66 +241,18 @@ function OutputPanel({
   onViewChange: (v: OutputView) => void;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-      <ViewToggle view={view} onChange={onViewChange} />
-      <div style={{ display: view === "code" ? "block" : "none" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start", width: "100%" }}>
+      <Seg<OutputView>
+        value={view}
+        options={OUTPUT_VIEWS.map((v) => ({ value: v, label: v }))}
+        onChange={onViewChange}
+      />
+      <div style={{ display: view === "code" ? "block" : "none", width: "100%" }}>
         <CodeBlock code={code} language="tsx" filename="GeneratedComponent.tsx" />
       </div>
-      <div style={{ display: view === "preview" ? "block" : "none" }}>
+      <div style={{ display: view === "preview" ? "block" : "none", width: "100%" }}>
         <ScreenshotToCodePreview code={code} />
       </div>
-    </div>
-  );
-}
-
-function ViewToggle({
-  view,
-  onChange,
-}: {
-  view: OutputView;
-  onChange: (v: OutputView) => void;
-}) {
-  return (
-    <div
-      role="tablist"
-      aria-label="Output view"
-      style={{
-        display: "inline-flex",
-        alignSelf: "flex-start",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        background: "var(--bg-surface)",
-        padding: "2px",
-        gap: "2px",
-      }}
-    >
-      {(["code", "preview"] as const).map((v) => {
-        const active = view === v;
-        return (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(v)}
-            style={{
-              padding: "4px 12px",
-              fontSize: "0.7rem",
-              fontFamily: "var(--font-mono)",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              background: active ? "var(--surface-2)" : "transparent",
-              color: active ? "var(--text-primary)" : "var(--text-muted)",
-              border: "1px solid",
-              borderColor: active ? "var(--border)" : "transparent",
-              borderRadius: "3px",
-              cursor: active ? "default" : "pointer",
-            }}
-          >
-            {v}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -454,26 +409,6 @@ function Dropzone(props: {
           />
         </label>
       )}
-    </div>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: "8px",
-        alignItems: "flex-start",
-        padding: "8px 12px",
-        background: "var(--error-bg, #2a0000)",
-        borderRadius: "var(--radius)",
-        fontSize: "0.78rem",
-        color: "var(--error, #f87171)",
-      }}
-    >
-      <AlertCircle style={{ width: "14px", height: "14px", flex: "0 0 14px", marginTop: "2px" }} />
-      <span style={{ fontFamily: "var(--font-mono)" }}>{message}</span>
     </div>
   );
 }
