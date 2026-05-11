@@ -1,5 +1,164 @@
 # Insights
 
+<!-- insight:465020079300 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T15:34:03.822Z -->
+## ★ Insight
+Phase 5's design hinged on Claude Code's runtime contract: MCP toggles work via the native `disabledMcpjsonServers` key, but hooks are **additive** (line 106 of `effectiveConfig.ts`). Without a runtime affordance, any "disable" mechanism Project Minder invents would either lie (hook still fires) or mutate the git-tracked file. This is why Phase 5 chose to refuse project-shared scope — the constraint isn't laziness, it's architectural.
+
+---
+
+<!-- insight:319626efe3e2 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T14:05:16.848Z -->
+## ★ Insight
+The biggest finding: `periodSinceIso` in `src/lib/usage/period.ts:36` is a verbatim duplicate of `periodStartIso` in `src/lib/data/usageFromDb.ts:51` — both compute `getPeriodStart(period, now)?.toISOString() ?? null`. Both fixers can call the same helper; `period.ts` is the right home because it's client-safe (HTTP route + component imports). And the 7-member period union `"24h" | "today" | "7d" | "30d" | "all" | "week" | "month"` is spelled out literally in three places.
+
+---
+
+<!-- insight:3d4df7dc347a | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T13:14:43.190Z -->
+## ★ Insight
+The DB schema stores `tu.ts` as ISO8601 text. ISO8601 sorts lexicographically, so a SQL `WHERE tu.ts >= ?` predicate with an ISO timestamp string is correct and uses the existing index. No conversion to Unix ms needed.
+
+---
+
+<!-- insight:a9ad6a1698ad | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T13:06:23.834Z -->
+## ★ Insight
+The `HelpPanel.tsx` `parseMarkdown` has a single coupling to the help system: `onNavigate` for `.md` link clicks routes to a specific help slug. To make it reusable in `BodyTab`, the navigation handler becomes optional — when omitted, links are inert (no nav, no preventDefault).
+
+---
+
+<!-- insight:f6005bf83898 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T12:57:00.068Z -->
+## ★ Insight
+Phase 4.1 has **two distinct sub-tasks**:
+1. **Period toggle (24h/7d/30d)** on `ItemUsageBreakdown` — needs API + DB changes (per-period stats joining on `sessions.end_ts`)
+2. **Markdown renderer** for the Body tab — needs new dep + render component
+The plan's Risks section flags both as needing decisions (e.g., which markdown renderer to pick).
+
+---
+
+<!-- insight:8eec68ea1a74 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-10T23:09:34.661Z -->
+## ★ Insight
+The advisor's key insight: split the deps. Install `@modelcontextprotocol/sdk` (non-negotiable for stdio MCP) but skip the three vendor SDKs — each provider call is one POST with a base64 image, so direct `fetch` saves hundreds of KB and three maintenance surfaces. Plan paths are wrong in two places: `MinderConfig` lives in `src/lib/types.ts:363`, and the codebase is flat (no `config-browser/` subdir). Build the MCP server like `scripts/build-worker.mjs` — Next.js can't produce a Node CLI binary, but esbuild can.
+
+---
+
+<!-- insight:177b2179ff99 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-10T21:42:14.008Z -->
+## ★ Insight
+- **Scope filter**: only `user` and `local` are toggleable. Plugin hooks live in plugin install dirs (toggle the plugin instead). Project-shared `.claude/settings.json` is git-tracked — toggling there commits a destructive change for teammates. Mirrors `mcpToggle.ts` precedent.
+- **Identity key**: reuse existing `makeHookKey(event, matcher, command)` (`unitKey` in the UI). The plan's literal "12-char sha256" loses the event prefix; aligning with the apply layer means the toggle button can use the existing `unitKey` field directly.
+- **Lock ordering**: always settings → sidecar to avoid cross-chain deadlock. Sidecar is a single global file at `~/.claude/.minder/disabled-hooks.json` keyed by `hookId` with the source `settingsPath` recorded inside.
+- **Byte-equal round-trip**: stash the raw command JSON object as found, not a reconstructed shape — guarantees re-enabled entry matches original bytes (plan's first test).
+
+---
+
+<!-- insight:14ce7bf846b8 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-10T20:53:35.400Z -->
+## ★ Insight
+Two plan-spec mismatches surfaced during exploration that I need to honor (and flag): (1) the plan's "existing markdown renderer in ClaudeMdAuditPanel" doesn't exist — the codebase convention is a `<pre style={{whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)"}}>` block, which `AgentsBrowser` already uses for the inline body preview. (2) The plan calls for a 24h/7d/30d period toggle on `usage.byProject`, but the actual API returns `AgentStats`/`SkillStats` with `projects: Record<string, number>` (all-time, no period dimension). Implementing the toggle requires API + DB query expansion outside the plan's stated file list. Skipping the toggle and appending a Risks note.
+
+---
+
+<!-- insight:af428477f808 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-10T20:34:28.627Z -->
+## ★ Insight
+- Adding a `memory_usage` table fits naturally into the existing migrations pattern at `src/lib/db/migrations.ts`. No new infra, just a new table + a couple of helper queries.
+- The `~/.claude/projects/<encoded>/memory/MEMORY.md` files are *already* parsed and skipped by `src/lib/scanner/memory.ts:61-63` (per the explore output) — so per-project MEMORY.md awareness is closer than user-scope and could be a stretch goal for Phase 1.
+
+---
+
+<!-- insight:41f5dc1b00ad | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-10T20:24:43.091Z -->
+## ★ Insight
+- Gray area A2 (which projects to grep for ref existence) has the biggest correctness impact — if we get it wrong, every cross-project memory shows up as broken-ref noise.
+- B2 (telemetry persistence) is a cheap-or-expensive choice: in-memory only is half a day, sidecar JSON is two days but survives dev restarts.
+- The other 6 implementation choices I'll lock with project-convention defaults and document in the CONTEXT doc — no need to ask if you don't want to discuss them.
+
+---
+
+<!-- insight:07c3a7365815 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-10T20:06:45.961Z -->
+## ★ Insight
+- The cheapest piece of Phase 1 is **C (MEMORY.md index parsing)** — it's pure parse + join, no JSONL replay, no project-tree grep. Good warm-up that builds the data model the rest of the phase consumes.
+- **A (semantic freshness audit)** has the most regex risk — false positives on file-ref extraction would flood `/memory` with noise. Worth tuning the regex against your real 64-file memory corpus before wiring the chip.
+- **B (memory read telemetry)** is the most architecturally interesting — it should piggyback on the existing JSONL pass in `src/lib/usage/parser.ts` via a callback rather than doing a second read. The article calls out Codex's `codex.memories.usage` counter; ours emits the same signal for Claude Code, retroactively.
+
+---
+
+<!-- insight:e0b76979cbb5 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-10T19:52:22.330Z -->
+## ★ Insight
+- Project Minder is unusually well-positioned for the article's ideas: 3 of 4 prerequisites already shipped (memory browser, stale chips, atomic writer, multi-adapter registry). The article's "open problem" — **Day 1 bootstrap from existing user data** — is *precisely* what a project scanner already produces.
+- The article's central principle ("memory is a hint surface, not an authority — verify on read") is partially implemented in `expandImports.ts`, but only for `@import` link integrity, not for body claims about file paths or function names. That's the cheapest, highest-leverage extension.
+- The adapter registry is read-only for sessions today — extending it with a symmetric `discoverMemory()` / `writeMemory()` per adapter is what would turn "memory observatory" into the cross-harness bridge the article wishes existed.
+
+---
+
+<!-- insight:6fe36f4fbed6 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-10T19:50:54.484Z -->
+## ★ Insight
+The Project Minder codebase already has a per-project `contextBudget.ts` (10,400-token CLI baseline, 400/server MCP heuristic, descriptor-only skill counts at 80 tokens each). Phase 3 deliberately uses a *different* model for the portfolio panel — lower baseline (3.2k) but more granular per-source (skills sized by full body bytes, MCP scaled per-tool) — so it can compare against *observed* startup tokens and surface the residual gap as "unknown / wasted." The aggregator is portfolio-scope (user + plugin + managed + desktop MCP, user + plugin hooks, user-scope CLAUDE.md), since per-project drill-down already exists in `ContextBudgetPanel`.
+
+---
+
+<!-- insight:96ec3453aefa | session:b909ace6-70c8-4bf8-bfcc-005a0326a573 | 2026-05-10T19:04:58.624Z -->
+## ★ Insight
+Two of the higher-leverage fixes had non-obvious second-order effects:
+
+---
+
+<!-- insight:f7575e0b9e07 | session:b909ace6-70c8-4bf8-bfcc-005a0326a573 | 2026-05-10T18:32:04.399Z -->
+## ★ Insight
+I'm naming the new types `MemoryFileEntry` / `MemoryScope` / `MemoryStaleness` to keep them distinct from the existing `MemoryFile` (which is a sub-shape inside `MemoryData` for the per-project auto-memory list). Two near-identical names is deliberate: one stays scoped to a single project's auto-memory dir, the other carries enough context (`scope`, `absPath`, `projectSlug?`) to live in a cross-tier list.
+
+---
+
+<!-- insight:28982931b408 | session:b909ace6-70c8-4bf8-bfcc-005a0326a573 | 2026-05-10T18:27:15.559Z -->
+## ★ Insight
+Two key discoveries from orientation:
+1. **Per-project auto-memory infra already exists** — `MemoryTab.tsx` + `/api/memory/[slug]` handle the auto-memory tier (`~/.claude/projects/<encoded>/memory/*.md`) inside the project detail page. Phase 2's job is the **cross-tier** browser at `/memory` that unifies user-CLAUDE.md, project-CLAUDE.md, and that auto-memory tier in one inventory.
+2. **Routing collision**: the plan calls for `/api/memory/[id]/route.ts`, but Next.js dynamic segments at the same directory level can have only one parameter name; `[slug]` is already taken. I'll route the new file ops under `/api/memory/by-id/[id]` to avoid renaming the existing route and breaking `MemoryTab`.
+
+---
+
+<!-- insight:28c46420a239 | session:61e3444a-a3af-419a-81c9-518d4c2e8367 | 2026-05-10T17:59:57.760Z -->
+## ★ Insight
+- **Why `import type` works across the `server-only` boundary**: TypeScript's `import type` is fully erased at compile time — no JS runtime code is emitted for it, so the `server-only` runtime check (which throws on client import) never fires. But the cleaner pattern (and what the project does for `ProjectData`, `MinderConfig`, etc.) is to put the shape in a non-server-only types module. That's why I moved `InitStatus` to `types.ts` rather than relying on `import type` from `data/index.ts`.
+- **Why `setDbStatus` short-circuit matters even when content is identical**: every fetch returns a fresh object, and React only bails on referential equality for primitives. Without `dbStatusEqual`, React reconciles `<DbStatusRow>` 4 times/min on an idle DB. With it, the prior reference is reused and React skips the rerender entirely.
+- **Symmetric quarantine increment**: hoisting `if (result?.quarantined) quarantineRuns += 1;` before the success/failure split is more than cosmetic — it means the success state's `quarantineRuns` field correctly tracks the cumulative count even when init recovered via internal quarantine. A future call retrieving `getInitStatus()` after a successful recovery can now see "we quarantined once and recovered" rather than "we quarantined zero times."
+
+---
+
+<!-- insight:89b739987d3f | session:61e3444a-a3af-419a-81c9-518d4c2e8367 | 2026-05-10T17:45:16.471Z -->
+## ★ Insight
+- **Substring classifier as a safety net**: my classifier checks `error.code` first, then falls back to substring matching against the message ("EBUSY", "EPERM", etc.). This is non-obvious but important — some call paths wrap errors and lose the `.code` attribute, and tests routinely throw `new Error("simulated EBUSY")` without setting a code. Without the fallback, those errors would misclassify as "unknown → fail fast" and break the existing test contract.
+- **Why `vi.useFakeTimers({ shouldAdvanceTime: false })`** in the permanent-fail test: I need `Date.now()` to be controllable (so I can advance past TTL deterministically), but I do NOT want auto-advance, because I'm testing cache stickiness — I want time to stand still until I explicitly bump it.
+- **Test override for delays**: production retry delays are 100/300/900 ms — tests inject `[0, 0, 0]` so the loop runs without hitting `setTimeout`. Avoids 1.3s of real wall-clock per retry round and keeps the test suite under its 5-second-per-test budget.
+
+---
+
+<!-- insight:586c8531be62 | session:61e3444a-a3af-419a-81c9-518d4c2e8367 | 2026-05-10T17:33:38.786Z -->
+## ★ Insight
+- **State-machine vs Promise cache**: the existing `cached: { promise, failedAt }` is essentially a 2-state machine (success | failed-with-TTL). Expanding to 5 states lets us classify *why* something failed (transient retry-able vs permanent corruption) and apply different recovery policies — important because hammering `initDb()` on a `SQLITE_CORRUPT` is wasteful, but a single Windows EBUSY should self-heal in ~100ms.
+- **Cross-call counters**: `initDb()` runs at most one quarantine per invocation. The "2nd quarantine → permanent" rule must track quarantine observations across the state-machine's lifetime, not within a single `initDb()` call. This is why the counter lives on `InitState`, not in `migrations.ts`.
+- **Test convention conflict**: CLAUDE.md mandates flat `tests/*.test.ts`, plan says `tests/db/initDb.test.ts`. I'll use `tests/initDb.test.ts` to match convention.
+
+---
+
+<!-- insight:649ffdab4e57 | session:357bab6a-c665-4f82-b968-b6c075d9e8c8 | 2026-05-10T17:25:58.783Z -->
+## ★ Insight
+- Round-trip from PR creation → review → fix → merge took 3 commits and stayed on a single branch, keeping the squash-merge clean (one consolidated commit on main, full history preserved in PR).
+- The `.gitattributes` fix prevents a class of future Windows-only test failures — every contributor cloning fresh on Windows now gets LF in working copy automatically. Worth more than the TODO.md sync alone.
+- Acting on Copilot's review comments was net-positive: the L98 internal-inconsistency catch was easy to miss in self-review, and the `*.lock binary` overreach would have silently degraded `package-lock.json` diff readability.
+
+---
+
+<!-- insight:e5e97c856f75 | session:357bab6a-c665-4f82-b968-b6c075d9e8c8 | 2026-05-10T16:58:57.183Z -->
+## ★ Insight
+- Recent feature commits (Wave 3.1 → Wave 12) had been merging via `--no-verify` or admin override — the .mjs CRLF issue would have failed every Windows pre-commit since Wave 12 introduced the test. Adding `.gitattributes` retroactively unblocks the gate that was theoretically protecting these merges.
+- Doing a TODO.md sync as a single chore commit (rather than mixing with feature work) makes the wave-by-wave shipping rhythm visible in `git log` and gives future audits a clean diffline to query.
+- The 16 remaining items aren't randomly scattered — they cluster into one infrastructure fix (#148), three feature surfaces (#193, #135, #238), two unblock decisions (#38, #40), and one hygiene PR. That structure is the plan; the audit just made it visible.
+
+---
+
+<!-- insight:40e5701957c3 | session:357bab6a-c665-4f82-b968-b6c075d9e8c8 | 2026-05-10T16:32:40.457Z -->
+## ★ Insight
+- The recent commit history (Wave 3.1 → Wave 12) shows ~85 backlog items shipped that were never marked `[x]` in TODO.md — a chronic "ship without checking off" pattern. The sync commit will surface this all at once.
+- The Plan agent caught that #40 (hook toggle) was blocked because `settings.json` is JSON (no comments), and #38 (per-item detail pages) is mostly done at the data layer — the missing piece is purely UI routing. Both items deserved reassessment now that downstream work has shipped.
+- Phase 1 (#148 ensureSchemaReady) is the only reliability fix in this batch — it's small but high-impact because a single Windows EBUSY currently silently degrades `/api/sessions`, `/api/usage`, `/api/agents`, `/api/skills` to file-parse for the rest of the process.
+
+---
+
 <!-- insight:c6186e5d512d | session:9e837609-6acc-4b8b-b1fb-68e5e930c94f | 2026-05-10T13:29:47.018Z -->
 ## ★ Insight
 - The trickiest fix was MEDIUM-6 (Kanban overflow). The container already had `overflow-x: auto` — but it's a flex *child* of the page-level flex column. CSS flexbox refuses to shrink a child below its intrinsic content width unless you explicitly set `min-width: 0` on it. That's why scrolling never engaged: flex was computing a width >= sum-of-columns, so there was nothing to scroll. This is one of the most common flex gotchas in production CSS and worth committing to memory.
