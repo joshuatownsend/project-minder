@@ -500,10 +500,19 @@ export async function scanSessionDetail(
   } else {
     // Fallback: shared session-id → jsonl resolver. Walks
     // ~/.claude/projects/<dir>/<sessionId>.jsonl until the first match.
-    const resolved = await resolveSessionJsonl(sessionId);
-    if (resolved) {
-      filePath = resolved.filePath;
-      projectDirName = resolved.projectDirName;
+    // The resolver throws on non-ENOENT fs errors (EACCES, EBUSY,
+    // etc.); the previous inline fallback swallowed all such errors and
+    // returned null. Preserve that detail-loader contract so a
+    // permissions glitch turns into a "session not available" 404
+    // rather than a 500 from the API route.
+    try {
+      const resolved = await resolveSessionJsonl(sessionId);
+      if (resolved) {
+        filePath = resolved.filePath;
+        projectDirName = resolved.projectDirName;
+      }
+    } catch {
+      return null;
     }
   }
 

@@ -30,12 +30,15 @@ export function makeTurn(
   return { ...DEFAULTS, ...overrides };
 }
 
-/** Convenience for assistant turns — the most common shape. */
-export function assistantTurn(overrides: Partial<UsageTurn> = {}): UsageTurn {
-  return makeTurn({ role: "assistant", ...overrides });
+/** Convenience for assistant turns — the most common shape. `role` is
+ *  excluded from the overrides type so callers can't accidentally
+ *  produce a user turn from this helper (the wrapper would otherwise
+ *  silently honor the override after the spread). */
+export function assistantTurn(overrides: Omit<Partial<UsageTurn>, "role"> = {}): UsageTurn {
+  return makeTurn({ ...overrides, role: "assistant" });
 }
 
-/** Convenience for user turns. */
-export function userTurn(overrides: Partial<UsageTurn> = {}): UsageTurn {
-  return makeTurn({ role: "user", ...overrides });
+/** Convenience for user turns. Same role-override guard as assistantTurn. */
+export function userTurn(overrides: Omit<Partial<UsageTurn>, "role"> = {}): UsageTurn {
+  return makeTurn({ ...overrides, role: "user" });
 }

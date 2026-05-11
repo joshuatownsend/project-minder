@@ -1,13 +1,13 @@
 // Wrapper around `tsgo --noEmit` that first removes the incremental
-// build cache (`tsconfig.tsbuildinfo`). Local `npm run typecheck` keeps
-// the cache between runs (fast iteration); CI / pre-commit runs through
-// this wrapper so a stale cache can never produce a false-clean
-// typecheck. The cache file is in .gitignore.
+// build cache (`tsconfig.tsbuildinfo`). Wired in as `npm run typecheck`
+// so EVERY check (local, pre-commit, CI) sees a clean baseline — a
+// stale `tsbuildinfo` from a different branch can mask real type
+// errors the fresh-from-disk run would catch. The cache file is in
+// .gitignore.
 //
-// Why bother: tsgo's incremental mode reuses on-disk type info from the
-// previous run. If the previous run was on a different branch (or used
-// a now-stale dependency tree), the cache can mask real type errors
-// the fresh-from-disk typecheck would catch.
+// For the fast cached path during tight iteration, hit `npx tsgo
+// --noEmit` directly — tsgo's incremental mode then reuses the on-disk
+// type info between runs.
 
 import { rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";

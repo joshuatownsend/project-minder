@@ -85,10 +85,11 @@ export function mostFrequent<K>(m: Map<K, number>): K | null {
   return best;
 }
 
-/** Validates a session ID string — UUID hex characters and hyphens only. */
-export function isValidSessionId(id: string): boolean {
-  return /^[a-f0-9-]+$/i.test(id);
-}
+// Re-exported from sessionPath.ts so the validation regex lives in
+// one place. External callers (the /api/sessions/[sessionId]/* routes)
+// import from `@/lib/usage/parser` historically; the re-export keeps
+// those imports working without touching every callsite.
+export { isValidSessionId } from "./sessionPath";
 
 // ── Single-file parser ────────────────────────────────────────────────────────
 

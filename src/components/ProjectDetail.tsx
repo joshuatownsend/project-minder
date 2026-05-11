@@ -480,7 +480,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── CONTEXT ───────────────────────────────────────────────── */}
           {activeTab === "context" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-              <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
+              {/* Optional chain guards against the HMR/cache-transition
+                  window where a pre-Phase-7 cached scan still in memory
+                  may not have populated this field. The TypeScript "required"
+                  contract holds for fresh scans; runtime defensive guard
+                  costs nothing and avoids a hard crash on hot-reload. */}
+              {project.claudeMdAudit && (
+                <ClaudeMdAuditPanel audit={project.claudeMdAudit} />
+              )}
               <ContextBudgetPanel slug={project.slug} />
               {project.claude?.claudeMdSummary ? (
                 <div>
@@ -488,7 +495,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   <MarkdownContent content={project.claude.claudeMdSummary} />
                 </div>
               ) : (
-                !project.claudeMdAudit.hasClaudeMd && (
+                !project.claudeMdAudit?.hasClaudeMd && (
                   <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", textAlign: "center", padding: "48px 0", margin: 0 }}>
                     No CLAUDE.md found for this project.
                   </p>

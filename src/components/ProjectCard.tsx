@@ -371,15 +371,17 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
 
         {/* ── Row 2 (conditional): attention signals ────────────────────── */}
         {(() => {
+          // Optional chain guards against the HMR/cache-transition window
+          // where a pre-Phase-7 cached scan still in memory may not have
+          // populated this field; TS narrows audit to ClaudeMdAuditPresent
+          // inside the truthy branch.
           const audit = project.claudeMdAudit;
-          // TS narrows audit to ClaudeMdAuditPresent inside the branch —
-          // no `!` needed to read .score.
-          const auditChip = audit.hasClaudeMd && audit.score < 80;
+          const auditChip = audit?.hasClaudeMd && audit.score < 80;
           const gradeStyle = efficiencyGrade ? GRADE_STYLE[efficiencyGrade] : null;
           if (!hasAttention && insightsTotal === 0 && !auditChip && !gradeStyle) return null;
           return (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            {auditChip && audit.hasClaudeMd && (
+            {auditChip && audit?.hasClaudeMd && (
               <ClaudeMdHealthBadge
                 score={audit.score}
                 hasClaudeMd={true}
