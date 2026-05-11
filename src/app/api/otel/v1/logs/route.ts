@@ -1,7 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLogBatch, isOtelDbReady } from "@/lib/db/otelIngest";
-import { initDb } from "@/lib/db/migrations";
+import { probeInitStatus } from "@/lib/data";
 import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 
 // OTLP/HTTP JSON logs receiver.
@@ -19,19 +19,19 @@ import type { OtlpLogRecord, OtlpResource } from "@/lib/db/otelIngest";
 // A 200 with rejectedLogRecords=0 means full success.
 // A 200 with rejectedLogRecords>0 means partial success.
 // Non-200 means the entire batch was rejected (e.g. DB unavailable).
-
-let initPromise: Promise<{ available: boolean }> | null = null;
+//
+// DB readiness goes through `probeInitStatus()` (the data-layer state
+// machine) rather than `initDb()` directly. The state machine classifies
+// EBUSY/EPERM/SQLITE_BUSY as transient with `[100, 300, 900]ms` backoff
+// and caches `transient-failed` for 30s, so a momentary file lock
+// returns 503 instead of 500. Previously the route had its own
+// `initPromise` cache that bypassed the retry classifier and crashed
+// when quarantine raced with the indexer's open handle.
 
 async function ensureReady(): Promise<boolean> {
   if (!isOtelDbReady()) return false;
-  if (!initPromise) initPromise = initDb();
-  try {
-    const { available } = await initPromise;
-    return available;
-  } catch {
-    initPromise = null;
-    return false;
-  }
+  const status = await probeInitStatus();
+  return status.state === "success";
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {

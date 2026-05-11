@@ -186,7 +186,6 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
   };
 
   const scopeLabel = scope === "all" ? "All projects" : scope;
-  const scopeInitial = scope === "all" ? "∞" : scope[0].toUpperCase();
 
   return (
     <aside className="sidebar" data-collapsed={collapsed}>
@@ -199,7 +198,11 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
         style={collapsed ? { padding: 6 } : undefined}
       >
         <div className="row">
-          <div className="glyph">{scopeInitial}</div>
+          {/* Fixed brand mark — was previously the first letter of the
+              selected scope ("∞" for all-projects). Pinning to "PM" treats
+              the glyph as a constant brand affordance; the active scope
+              still reads from `.scope-name` next to it. */}
+          <div className="glyph" aria-hidden="true">PM</div>
           {!collapsed && (
             <>
               <div className="meta">

@@ -298,9 +298,13 @@ body {
 .proj-switcher .row { display: flex; align-items: center; gap: 10px; }
 .proj-switcher .glyph {
   width: 28px; height: 28px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--info) 0%, var(--purple) 100%);
+  /* Amber brand glyph (PM = Project Minder). The earlier blue→purple
+     gradient pre-dated the amber-accent design system and read off-brand
+     against the rest of the sidebar. */
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 13px; color: var(--bg);
+  font-weight: 700; font-size: 11px; letter-spacing: 0.02em;
+  color: var(--bg);
   flex-shrink: 0;
 }
 .proj-switcher .meta { flex: 1; min-width: 0; }

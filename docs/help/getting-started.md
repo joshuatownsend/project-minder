@@ -51,3 +51,13 @@ Inside the panel you can:
 | `/` | Jump to the search box |
 | `?` | Toggle the help panel |
 | `Escape` | Close the help panel |
+
+## Troubleshooting: "Local index database is unavailable"
+
+If you see a red banner at the top of the Home page reading **"Local index database is unavailable"**, the local SQLite index at `~/.minder/index.db` has hit a terminal failure state after the recovery loop gave up.
+
+This only fires after the recovery state machine has run two cumulative quarantine attempts and the rebuilt database still couldn't open — it is **not** the same thing as a momentary file lock. Routine startup contention (EBUSY, SQLITE_BUSY) is retried automatically with backoff and never reaches this banner.
+
+**To recover:** stop the dev server (Ctrl-C in the terminal running `npm run dev`) and start it again. The index rebuilds from the JSONL session files on startup; the failure state only clears on process exit by design.
+
+The banner shows the last error code and a truncated message — useful when reporting the issue if a restart doesn't help.
