@@ -89,4 +89,40 @@ describe("writeMemoryFile", () => {
     expect(r.error?.code).toBe("WRITE_FAILED");
     expect((r.error as { code: "WRITE_FAILED"; message: string }).message).toContain("EACCES");
   });
+
+  it("rejects prefix/type mismatch in frontmatter (M.3 typed authoring)", async () => {
+    const content = "---\ntype: reference\n---\n\nbody";
+    const r = await writeMemoryFile("C:\\dev\\myproj", "feedback_x.md", content);
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("FRONTMATTER_INVALID");
+  });
+
+  it("rejects unknown prefix when frontmatter declares a type", async () => {
+    const content = "---\ntype: user\n---\n\nbody";
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", content);
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("FRONTMATTER_INVALID");
+  });
+
+  it("accepts a well-typed memory file with matching prefix + type", async () => {
+    const content = "---\ntype: user\nname: u\n---\n\nbody";
+    const r = await writeMemoryFile("C:\\dev\\myproj", "user_role.md", content);
+    expect(r.ok).toBe(true);
+  });
+
+  it("tolerates untyped scratch files with no frontmatter (back-compat)", async () => {
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "plain body");
+    expect(r.ok).toBe(true);
+  });
+
+  it("respects skipTypeValidation for callers that opt out", async () => {
+    const content = "---\ntype: reference\n---\n\nbody";
+    const r = await writeMemoryFile(
+      "C:\\dev\\myproj",
+      "feedback_x.md",
+      content,
+      { skipTypeValidation: true },
+    );
+    expect(r.ok).toBe(true);
+  });
 });

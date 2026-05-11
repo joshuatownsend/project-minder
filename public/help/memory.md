@@ -1,11 +1,38 @@
 # Memory Browser
 
-Project Minder ships two complementary memory views:
+Project Minder ships three complementary memory views:
 
 - **`/memory`** — cross-tier browser that lists every CLAUDE.md and auto-memory file across all scopes in one place. Edit any of them inline.
+- **`/memory/seed`** — Day 1 seed generator. Proposes a starter set of memory files synthesized from your existing scan data so a new Claude Code install walks in already knowing your role, stack, and active projects.
 - **Project detail → Memory tab** — per-project view scoped to one project's auto-memory directory.
 
-This page documents both.
+This page documents all three.
+
+## Day 1 seed page `/memory/seed`
+
+Generates five kinds of candidate memory files from data Project Minder already has:
+
+- **`user_role.md`** — distilled from your global `~/.claude/CLAUDE.md`
+- **`user_workstyle.md`** — your top session categories (Feature Dev, Refactoring, etc.) from JSONL replay
+- **`reference_repos.md`** — every active scanned repo with a one-line stack summary
+- **`reference_dev_environment.md`** — aggregate stack signals (frameworks, ORMs, styling) across your repos
+- **`project_<slug>.md`** — per top-10 active project (sorted by last activity)
+
+Each candidate carries `derived_from:` provenance in its frontmatter so a future audit can answer "where did this memory come from", and a `seeded: true` flag the main `/memory` browser surfaces.
+
+### Anchor project
+
+User-scope and reference candidates need a target dir. Pick an **anchor project** at the top of the page; user-scope seeds land in that project's `~/.claude/projects/<encoded>/memory/`. Per-project candidates auto-route to their own project's memory dir and don't need an anchor.
+
+### Conflict resolution
+
+If a candidate's filename already exists on disk, the row gets an `EXISTS` chip. Default action is **Skip**. To replace the existing file, click **Show 3-way diff** to compare existing vs proposed, then pick **Overwrite**. The diff renders line-by-line with `+` (proposed only), `−` (existing only), and unchanged lines.
+
+You can also click **Edit before promote** to tweak the candidate body before writing.
+
+### Typed authoring (the prefix↔type contract)
+
+The writer enforces Claude Code's memory taxonomy: the basename prefix (`user_`, `feedback_`, `project_`, `reference_`) must match the `type:` field in the frontmatter, and a file with a `type:` declared but no typed prefix is rejected. This applies to the seed generator AND to direct edits through the memory editor — bad-shape memories never reach disk.
 
 ## Cross-tier `/memory` page
 

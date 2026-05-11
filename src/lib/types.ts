@@ -129,6 +129,38 @@ export interface LiveSession {
 
 export type MemoryType = "user" | "feedback" | "project" | "reference";
 
+/**
+ * Seed-generator candidate. A proposed memory file that hasn't been written
+ * yet -- the user inspects + promotes (or skips) on /memory/seed.
+ *
+ * `targetProjectPath` is required at promote time so the writer knows which
+ * memoryDirFor(...) to use. Per-project candidates carry it from the
+ * generator; user-scope candidates have it as `null` until the user picks an
+ * anchor project on the seed page.
+ */
+export interface SeedCandidate {
+  /** Basename with required typed prefix, e.g. "user_role.md". */
+  fileName: string;
+  type: MemoryType;
+  /** "user" = needs an anchor project; "per-project" = auto-routed. */
+  scope: "user" | "per-project";
+  /** Pre-composed file content (frontmatter + body, ready to write). */
+  body: string;
+  /** First ~200 chars for inline preview, frontmatter stripped. */
+  preview: string;
+  /** Human-readable derivation trail, e.g. ["C:\\dev\\foo\\CLAUDE.md", "ProjectData(foo)"]. */
+  provenance: string[];
+  /** Per-project: set by generator. User-scope: null until anchor chosen. */
+  targetProjectPath: string | null;
+  /** Set when this candidate's filename already exists on disk. */
+  conflict?: {
+    existingPath: string;
+    existingBody: string;
+    /** True when the existing file carries the seed generator's marker. */
+    existingIsSeeded: boolean;
+  };
+}
+
 export interface MemoryFile {
   name: string;
   type?: MemoryType;
