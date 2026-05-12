@@ -67,3 +67,7 @@ Sessions that have been inactive longer than the **Abandon threshold** (default 
 **Catalog cross-reference in the Sub-agents tab.** Agent nodes in the tree that match an entry in your [Agents catalog](/agents) now render with the catalog entry's emoji and color, plus a link that pre-filters the catalog page to that agent. Click the ⓘ button next to any matched node to expand a one-line description inline without leaving the drawer.
 
 **Insights tab in the peek panel.** The peek drawer now has a third tab — **Insights** — showing all `★ Insight` blocks written during this session. Sourced directly from the session JSONL (not INSIGHTS.md) so freshly-written insights appear within seconds of being produced. A count badge on the tab header lights up as soon as the first insight lands.
+
+## Wave 5: What's new
+
+**Near-instant session discovery.** A new filesystem watcher on `~/.claude/projects/` fires the moment Claude Code creates a new JSONL file for a fresh session. Previously, a session started with plain `claude` (no `--bg`) could take up to 21 seconds to appear on the board (6-second cache TTL + 15-second heartbeat). The watcher reduces that to roughly 200 milliseconds. No configuration required; works automatically as long as the `/agent-view` page is open in a browser tab.

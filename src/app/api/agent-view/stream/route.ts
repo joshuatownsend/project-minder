@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { onAgentEvent } from "@/lib/agentView/eventBus";
 import { aggregateLiveSessions } from "@/lib/agentView/aggregate";
 import { startJobRosterWatcher, refreshRoster } from "@/lib/agentView/jobRoster";
+import { startJsonlWatcher } from "@/lib/agentView/jsonlWatcher";
 import { readConfig } from "@/lib/config";
 
 // SSE endpoint for the Agent View live Kanban.
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   // Ensure watcher is running (idempotent due to globalThis guard), then wait
   // for the initial roster load so the first snapshot includes daemon sessions.
   startJobRosterWatcher();
+  startJsonlWatcher();
   await refreshRoster();
 
   const stream = new ReadableStream({
