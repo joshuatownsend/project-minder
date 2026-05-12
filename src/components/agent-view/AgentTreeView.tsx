@@ -91,7 +91,7 @@ function TreeNode({
     : node.status === "ok" ? "var(--green-text,#4ade80)"
     : "var(--text-3,#888)";
 
-  const hasCatalog = !!node.catalogEmoji || !!node.catalogColor;
+  const hasCatalog = !!node.catalogEmoji || !!node.catalogColor || !!node.catalogDescription;
   const agentLabel = node.agentName ?? node.toolName;
 
   return (
@@ -128,6 +128,8 @@ function TreeNode({
           <button
             type="button"
             onClick={() => setDescOpen((v) => !v)}
+            aria-label={descOpen ? "Hide description" : "Show description"}
+            aria-expanded={descOpen}
             title={descOpen ? "Hide description" : "Show description"}
             style={{
               background: "none", border: "none",

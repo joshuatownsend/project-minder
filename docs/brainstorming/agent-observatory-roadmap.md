@@ -2,7 +2,7 @@
 
 Sketch-level wave proposals synthesized from cross-repo analysis of six reference observability projects (disler/claude-code-hooks-multi-agent-observability, Ngxba/claude-code-cli-ui, graykode/abtop, mukul975/claude-team-dashboard, Glsme/agent-monitor, Ericonaldo/AgentMonitor). Each wave is PR-shaped, ~1 day of work, and explicitly deferred from Wave 3.
 
-Full idea menu with source attribution lives in the plan doc at `C:\Users\joshu\.claude\plans\with-our-agent-observatory-jazzy-robin-agent-a6f5c5b87e81dfbd1.md`.
+Full idea menu with source attribution lives in the session plan doc (local to the dev who ran the planning session).
 
 ---
 

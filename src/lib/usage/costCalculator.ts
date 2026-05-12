@@ -205,6 +205,8 @@ const FALLBACK_MAX_CONTEXT: Record<string, number> = {
  */
 export function getModelMaxContextTokens(model: string): number {
   const lower = model.toLowerCase();
+  // LiteLLM appends [1m] or :1m for 1M-context variants (e.g. claude-opus-4-5[1m]).
+  if (lower.includes("[1m]") || lower.includes(":1m")) return 1_000_000;
   for (const [key, size] of Object.entries(FALLBACK_MAX_CONTEXT)) {
     if (lower.includes(key.replace("claude-", ""))) return size;
   }
