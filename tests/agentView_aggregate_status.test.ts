@@ -1,27 +1,7 @@
 import { describe, it, expect } from "vitest";
-
-// Test the pure status-mapping functions inline — same values as the module
-// exports but without pulling in the server-only aggregate module.
-
-type AgentSessionStatus = "waiting" | "working" | "idle" | "completed" | "failed" | "stopped";
-type LiveSessionStatus = "working" | "approval" | "waiting" | "other";
-
-function liveStatusToAgentStatus(s: LiveSessionStatus): AgentSessionStatus {
-  if (s === "working") return "working";
-  if (s === "approval" || s === "waiting") return "waiting";
-  return "idle";
-}
-
-function daemonStateToAgentStatus(state?: string): AgentSessionStatus {
-  if (!state) return "working";
-  const s = state.toLowerCase();
-  if (s === "completed") return "completed";
-  if (s === "failed" || s === "error") return "failed";
-  if (s === "stopped") return "stopped";
-  if (s === "waiting" || s === "awaiting_input") return "waiting";
-  if (s === "idle") return "idle";
-  return "working";
-}
+import { liveStatusToAgentStatus, daemonStateToAgentStatus } from "@/lib/agentView/aggregate";
+import { STATUS_ORDER } from "@/lib/agentView/types";
+import type { AgentSessionStatus } from "@/lib/agentView/types";
 
 describe("liveStatusToAgentStatus", () => {
   it("maps working → working", () => {
@@ -90,19 +70,22 @@ describe("daemonStateToAgentStatus", () => {
 });
 
 describe("status sort order", () => {
-  const statusOrder: Record<AgentSessionStatus, number> = {
-    waiting: 0, working: 1, idle: 2, completed: 3, failed: 4, stopped: 5,
-  };
-
   it("waiting sorts before working", () => {
-    expect(statusOrder["waiting"]).toBeLessThan(statusOrder["working"]);
+    expect(STATUS_ORDER["waiting"]).toBeLessThan(STATUS_ORDER["working"]);
   });
 
   it("working sorts before idle", () => {
-    expect(statusOrder["working"]).toBeLessThan(statusOrder["idle"]);
+    expect(STATUS_ORDER["working"]).toBeLessThan(STATUS_ORDER["idle"]);
   });
 
   it("completed sorts after idle", () => {
-    expect(statusOrder["completed"]).toBeGreaterThan(statusOrder["idle"]);
+    expect(STATUS_ORDER["completed"]).toBeGreaterThan(STATUS_ORDER["idle"]);
+  });
+
+  it("covers all statuses", () => {
+    const statuses: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
+    for (const s of statuses) {
+      expect(typeof STATUS_ORDER[s]).toBe("number");
+    }
   });
 });

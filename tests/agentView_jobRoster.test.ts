@@ -1,17 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-// slugFromPath is a pure function — import directly without the server-only
-// side of the module by testing the logic inline. This mirrors how the project
-// tests pure scanners (e.g. liveSessionStatus) without mocking globalThis.
-
-function slugFromPath(projectPath?: string): string {
-  if (!projectPath) return "__unknown__";
-  const basename = projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
-  return basename
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+import { slugFromPath } from "@/lib/agentView/jobRoster";
 
 describe("jobRoster — slugFromPath", () => {
   it("returns __unknown__ for undefined", () => {
