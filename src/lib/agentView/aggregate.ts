@@ -217,7 +217,7 @@ export async function aggregateLiveSessions(
       const metrics = await getLiveSessionMetrics(session.sessionId);
       if (!metrics) return;
       if (metrics.totalCostUsd > 0) session.costEstimate = metrics.totalCostUsd;
-      if (metrics.maxContextFill > 0) session.maxContextFill = metrics.maxContextFill;
+      if (metrics.contextFill > 0) session.maxContextFill = metrics.contextFill;
     }),
   );
 

@@ -91,7 +91,7 @@ describe("getLiveSessionMetrics", () => {
   it("returns zero cost and zero fill when there are no turns", async () => {
     mockParseTurns.mockResolvedValue([]);
     const result = await getLiveSessionMetrics("s1");
-    expect(result).toEqual({ totalCostUsd: 0, maxContextFill: 0 });
+    expect(result).toEqual({ totalCostUsd: 0, contextFill: 0 });
   });
 
   it("sums cost across all assistant turns", async () => {
@@ -125,7 +125,7 @@ describe("getLiveSessionMetrics", () => {
 
     const result = await getLiveSessionMetrics("s1");
     // Should show current state (60%), not the historical peak (90%)
-    expect(result?.maxContextFill).toBeCloseTo(0.6, 5);
+    expect(result?.contextFill).toBeCloseTo(0.6, 5);
   });
 
   it("returns cached result when mtime unchanged", async () => {

@@ -45,7 +45,11 @@ export interface LiveAgentSession {
   model?: string;
   /** Estimated USD cost so far (from session row in DB if available). */
   costEstimate?: number;
-  /** Peak context fill ratio [0,1] from maxContextFill. */
+  /**
+   * Context fill ratio [0,1]. For live (non-terminal) sessions this reflects
+   * the most recent assistant turn (post-compact accuracy). For historical
+   * sessions loaded from the DB this is the session's peak fill.
+   */
   maxContextFill?: number;
   /** Number of sub-agents currently spawned but not yet stopped (from hook buffer). */
   subagentsInFlight?: number;
