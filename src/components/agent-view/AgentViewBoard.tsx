@@ -5,9 +5,8 @@ import { useAgentViewStream } from "@/lib/agentView/useAgentViewStream";
 import { AgentCard } from "./AgentCard";
 import { AgentPeekPanel } from "./AgentPeekPanel";
 import { AgentViewToolbar, type AgentViewFilters } from "./AgentViewToolbar";
-import type { LiveAgentSession, AgentSessionStatus } from "@/lib/agentView/types";
-
-const ALL_STATUSES: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
+import type { LiveAgentSession, AgentSessionStatus, ConnectionState } from "@/lib/agentView/types";
+import { ALL_STATUSES, STATUS_ORDER } from "@/lib/agentView/types";
 
 const COLUMN_ORDER: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
 const COLUMN_LABELS: Record<AgentSessionStatus, string> = {
@@ -32,10 +31,8 @@ function sortSessions(sessions: LiveAgentSession[], key: AgentViewFilters["sort"
   if (key === "project") {
     copy.sort((a, b) => a.projectName.localeCompare(b.projectName));
   } else if (key === "status") {
-    const order: Record<AgentSessionStatus, number> = { waiting: 0, working: 1, idle: 2, completed: 3, failed: 4, stopped: 5 };
-    copy.sort((a, b) => order[a.status] - order[b.status] || a.secondsSinceChange - b.secondsSinceChange);
+    copy.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.secondsSinceChange - b.secondsSinceChange);
   } else {
-    // "recent"
     copy.sort((a, b) => a.secondsSinceChange - b.secondsSinceChange);
   }
   return copy;
@@ -159,28 +156,26 @@ export function AgentViewBoard() {
   );
 }
 
-function EmptyState({ connectionState }: { connectionState: string }) {
+function EmptyState({ connectionState }: { connectionState: ConnectionState }) {
+  const isConnecting = connectionState === "connecting" || connectionState === "reconnecting";
   return (
     <div style={{
       flex: 1, display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center", gap: 12, paddingBottom: 48,
     }}>
-      <div style={{ fontSize: "2rem", opacity: 0.25 }}>◎</div>
+      <div style={{ fontSize: "2rem", opacity: 0.25 }}>&#9678;</div>
       <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-2,#ccc)" }}>
         No active sessions
       </div>
       <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)", textAlign: "center", maxWidth: 380 }}>
-        {connectionState === "connecting" || connectionState === "reconnecting"
-          ? "Connecting to live session stream…"
-          : "Start a Claude Code session in any project to see it here. Background sessions launched with  "
-          }
-        {connectionState !== "connecting" && connectionState !== "reconnecting" && (
-          <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>
-            claude --bg
-          </code>
-        )}
-        {connectionState !== "connecting" && connectionState !== "reconnecting" && (
-          " appear here automatically."
+        {isConnecting ? "Connecting to live session stream…" : (
+          <>
+            Start a Claude Code session in any project to see it here. Background sessions launched with{" "}
+            <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>
+              claude --bg
+            </code>
+            {" "}appear here automatically.
+          </>
         )}
       </div>
     </div>

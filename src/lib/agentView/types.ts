@@ -65,6 +65,10 @@ export interface JobRosterEntry {
   activity?: string;
   /** True when the subprocess is still alive per the daemon. */
   processRunning?: boolean;
+  /** Propagated from state.json when the session is awaiting user input. */
+  awaitingInput?: boolean;
+  /** Model identifier propagated from state.json. */
+  model?: string;
   /** Arbitrary extra fields — kept for forward-compat. */
   [key: string]: unknown;
 }
@@ -95,3 +99,11 @@ export interface LiveAgentEvent {
 }
 
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "fallback";
+
+/** Canonical list of all statuses — single source of truth for filter chips and column order. */
+export const ALL_STATUSES: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
+
+/** Sort order for Kanban columns — lower number appears first. */
+export const STATUS_ORDER: Record<AgentSessionStatus, number> = {
+  waiting: 0, working: 1, idle: 2, completed: 3, failed: 4, stopped: 5,
+};

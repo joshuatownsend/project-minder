@@ -1,5 +1,6 @@
 "use client";
 
+import { formatCostCompact, formatDurationSeconds } from "@/lib/format";
 import type { LiveAgentSession, AgentSessionStatus } from "@/lib/agentView/types";
 
 const STATUS_COLORS: Record<AgentSessionStatus, { bg: string; text: string; border: string; label: string }> = {
@@ -11,17 +12,6 @@ const STATUS_COLORS: Record<AgentSessionStatus, { bg: string; text: string; bord
   stopped:   { bg: "var(--card-bg,#111)",        text: "var(--text-4,#555)",        border: "var(--line-soft,#222)",       label: "Stopped" },
 };
 
-function formatAge(seconds: number): string {
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  return `${Math.floor(seconds / 3600)}h ago`;
-}
-
-function formatCost(usd?: number): string | null {
-  if (usd == null || usd <= 0) return null;
-  if (usd < 0.01) return `<$0.01`;
-  return `$${usd.toFixed(2)}`;
-}
 
 interface AgentCardProps {
   session: LiveAgentSession;
@@ -30,7 +20,9 @@ interface AgentCardProps {
 
 export function AgentCard({ session, onPeek }: AgentCardProps) {
   const sc = STATUS_COLORS[session.status];
-  const cost = formatCost(session.costEstimate);
+  const cost = session.costEstimate != null && session.costEstimate > 0
+    ? formatCostCompact(session.costEstimate)
+    : null;
   const ctxPct = session.maxContextFill != null
     ? Math.round(session.maxContextFill * 100)
     : null;
@@ -123,7 +115,7 @@ export function AgentCard({ session, onPeek }: AgentCardProps) {
       {/* Footer: age + chips */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
         <span style={{ fontSize: "0.6rem", color: "var(--text-4,#555)" }}>
-          {formatAge(session.secondsSinceChange)}
+          {formatDurationSeconds(session.secondsSinceChange)} ago
         </span>
         <div style={{ flex: 1 }} />
         {ctxPct != null && ctxPct > 50 && (

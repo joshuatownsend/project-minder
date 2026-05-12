@@ -1,6 +1,7 @@
 "use client";
 
-import type { AgentSessionStatus } from "@/lib/agentView/types";
+import type { AgentSessionStatus, ConnectionState } from "@/lib/agentView/types";
+import { ALL_STATUSES } from "@/lib/agentView/types";
 
 export type SortKey = "recent" | "project" | "status";
 
@@ -10,7 +11,6 @@ export interface AgentViewFilters {
   sort: SortKey;
 }
 
-const ALL_STATUSES: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
 const STATUS_LABELS: Record<AgentSessionStatus, string> = {
   waiting: "Needs Input",
   working: "Working",
@@ -20,11 +20,25 @@ const STATUS_LABELS: Record<AgentSessionStatus, string> = {
   stopped: "Stopped",
 };
 
+const CONNECTION_COLOR: Record<ConnectionState, string> = {
+  connected:    "var(--green-text,#4ade80)",
+  fallback:     "var(--amber-text,#fbbf24)",
+  reconnecting: "var(--text-4,#555)",
+  connecting:   "var(--text-4,#555)",
+};
+
+const CONNECTION_LABEL: Record<ConnectionState, string> = {
+  connected:    "Live",
+  fallback:     "Polling",
+  reconnecting: "Reconnecting…",
+  connecting:   "Connecting…",
+};
+
 interface AgentViewToolbarProps {
   filters: AgentViewFilters;
   projectNames: string[];
   onFiltersChange: (f: AgentViewFilters) => void;
-  connectionState: string;
+  connectionState: ConnectionState;
   sessionCount: number;
 }
 
@@ -101,20 +115,9 @@ export function AgentViewToolbar({
       <div style={{ flex: 1 }} />
 
       {/* Connection state indicator */}
-      <span style={{
-        fontSize: "0.6rem",
-        color: connectionState === "connected" ? "var(--green-text,#4ade80)"
-          : connectionState === "fallback" ? "var(--amber-text,#fbbf24)"
-          : "var(--text-4,#555)",
-        display: "flex", alignItems: "center", gap: 4,
-      }}>
-        <span style={{
-          width: 6, height: 6, borderRadius: "50%",
-          background: connectionState === "connected" ? "var(--green-text,#4ade80)"
-            : connectionState === "fallback" ? "var(--amber-text,#fbbf24)"
-            : "var(--text-4,#555)",
-        }} />
-        {connectionState === "connected" ? "Live" : connectionState === "reconnecting" ? "Reconnecting…" : connectionState === "fallback" ? "Polling" : "Connecting…"}
+      <span style={{ fontSize: "0.6rem", color: CONNECTION_COLOR[connectionState], display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: CONNECTION_COLOR[connectionState] }} />
+        {CONNECTION_LABEL[connectionState]}
         {connectionState === "connected" && sessionCount > 0 && (
           <span style={{ marginLeft: 2, color: "var(--text-3,#888)" }}>· {sessionCount}</span>
         )}

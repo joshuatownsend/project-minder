@@ -82,15 +82,18 @@ async function buildRoster(): Promise<JobRosterEntry[]> {
     ? (rawRoster as Record<string, unknown[]>).sessions ?? []
     : [];
 
-  const entries: JobRosterEntry[] = [];
-  for (const raw of rawArray) {
-    if (raw === null || typeof raw !== "object") continue;
-    const r = raw as Record<string, unknown>;
-    const id = typeof r.id === "string" ? r.id : String(Date.now());
+  // Read all state.json files in parallel
+  const candidates = rawArray.filter(
+    (raw): raw is Record<string, unknown> => raw !== null && typeof raw === "object",
+  );
+  const withStates = await Promise.all(
+    candidates.map((r) => {
+      const id = typeof r.id === "string" ? r.id : String(Date.now());
+      return readJobState(id).then((state) => ({ r, id, state }));
+    }),
+  );
 
-    // Augment with per-job state.json
-    const jobState = await readJobState(id);
-
+  return withStates.map(({ r, id, state: jobState }) => {
     const entry: JobRosterEntry = {
       id,
       slug: typeof r.slug === "string" ? r.slug : undefined,
@@ -106,19 +109,11 @@ async function buildRoster(): Promise<JobRosterEntry[]> {
       processRunning: typeof r.processRunning === "boolean"
         ? r.processRunning
         : jobState?.processRunning ?? true,
+      awaitingInput: jobState?.awaitingInput ?? undefined,
+      model: jobState?.model ?? undefined,
     };
-
-    if (jobState?.awaitingInput) {
-      (entry as Record<string, unknown>).awaitingInput = true;
-    }
-    if (jobState?.model) {
-      (entry as Record<string, unknown>).model = jobState.model;
-    }
-
-    entries.push(entry);
-  }
-
-  return entries;
+    return entry;
+  });
 }
 
 async function refresh(): Promise<void> {

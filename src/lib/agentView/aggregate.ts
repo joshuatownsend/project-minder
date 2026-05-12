@@ -3,6 +3,7 @@ import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, getHookBuffer, STOP_EVENTS } from "@/lib/hooks/buffer";
 import { getRosterEntries } from "./jobRoster";
 import type { LiveAgentSession, AgentSessionStatus } from "./types";
+import { STATUS_ORDER } from "./types";
 import type { LiveSessionStatus } from "@/lib/types";
 
 // Merges three data sources into a single LiveAgentSession[]:
@@ -69,7 +70,7 @@ export async function aggregateLiveSessions(
     if (secondsSinceChange * 1000 > abandonThresholdMs) continue;
 
     const rosterStatus = daemonStateToAgentStatus(entry.state);
-    const isAwaiting = awaitingSlugSet.has(slug) || !!(entry as Record<string, unknown>).awaitingInput;
+    const isAwaiting = awaitingSlugSet.has(slug) || !!entry.awaitingInput;
     const status: AgentSessionStatus = isAwaiting ? "waiting" : rosterStatus;
 
     // Find a matching JSONL session for richer info (tool name, activity line)
@@ -92,9 +93,7 @@ export async function aggregateLiveSessions(
       awaitingInputSince: isAwaiting ? lastChangedAt : undefined,
       runningProcess: entry.processRunning !== false,
       livenessSource: "daemon",
-      model: typeof (entry as Record<string, unknown>).model === "string"
-        ? String((entry as Record<string, unknown>).model)
-        : undefined,
+      model: entry.model,
     };
     result.set(sessionId, session);
   }
@@ -176,13 +175,8 @@ export async function aggregateLiveSessions(
 
   const sessions = [...result.values()];
 
-  // Sort: waiting first, then working, then idle, completed, failed, stopped.
-  // Within each group, most-recently-changed first.
-  const statusOrder: Record<AgentSessionStatus, number> = {
-    waiting: 0, working: 1, idle: 2, completed: 3, failed: 4, stopped: 5,
-  };
   sessions.sort((a, b) => {
-    const diff = statusOrder[a.status] - statusOrder[b.status];
+    const diff = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
     if (diff !== 0) return diff;
     return a.secondsSinceChange - b.secondsSinceChange;
   });
