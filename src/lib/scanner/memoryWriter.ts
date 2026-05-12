@@ -25,6 +25,8 @@ export type MemoryWriteError =
   | { code: "TRAVERSAL" }
   | { code: "NOT_MARKDOWN" }
   | { code: "WRITE_FAILED"; message: string }
+  /** Client-fixable: malformed YAML, unknown type, or prefix↔type mismatch.
+   *  Callers mapping to HTTP should return 400 (not 500). */
   | { code: "FRONTMATTER_INVALID"; detail: FrontmatterError };
 
 export interface MemoryWriteResult {

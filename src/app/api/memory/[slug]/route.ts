@@ -93,12 +93,19 @@ export async function PATCH(
   const result = await writeMemoryFile(project.path, body.file, body.content);
   if (!result.ok) {
     const code = result.error?.code ?? "WRITE_FAILED";
-    const status =
-      code === "TRAVERSAL" || code === "NOT_MARKDOWN" || code === "INVALID_NAME"
-        ? 400
-        : 500;
+    // Client-fixable errors map to 400; only true server failures stay at 500.
+    const isClientError =
+      code === "TRAVERSAL" ||
+      code === "NOT_MARKDOWN" ||
+      code === "INVALID_NAME" ||
+      code === "FRONTMATTER_INVALID";
+    const status = isClientError ? 400 : 500;
     const message =
-      result.error && "message" in result.error ? result.error.message : undefined;
+      result.error && "message" in result.error
+        ? result.error.message
+        : result.error && "detail" in result.error
+          ? JSON.stringify(result.error.detail)
+          : undefined;
     return errorResponse(code, status, message);
   }
   invalidateMemoryCache(project.path);

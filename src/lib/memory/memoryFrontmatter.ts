@@ -66,20 +66,21 @@ export function validateTypedMemory(
 ): FrontmatterError | null {
   // MEMORY.md is the index file, not a typed body -- exempt.
   if (basename.toLowerCase() === "memory.md") return null;
-  const prefix = basenamePrefix(basename);
-  if (!prefix) {
-    // Untyped basenames are tolerated UNLESS the frontmatter declares a
-    // type -- then the prefix-as-cue contract is silently broken.
-    if (data.type && ALLOWED_TYPES.includes(data.type)) {
-      return { code: "UNKNOWN_PREFIX", basename };
-    }
-    return null;
-  }
-  const inferredType = TYPE_BY_PREFIX[prefix];
-  if (data.type === undefined) return null;
-  if (!ALLOWED_TYPES.includes(data.type)) {
+  // Any declared `type` must be one of the allowed values, regardless of
+  // basename. `notes.md` with `type: garbage` is still nonsense.
+  if (data.type !== undefined && !ALLOWED_TYPES.includes(data.type)) {
     return { code: "INVALID_TYPE", given: String(data.type) };
   }
+  const prefix = basenamePrefix(basename);
+  if (!prefix) {
+    // Untyped basename + declared (valid) type -- the prefix-as-cue contract
+    // is silently broken because the model only reads the basename for the
+    // sticky/binding signal.
+    if (data.type) return { code: "UNKNOWN_PREFIX", basename };
+    return null;
+  }
+  if (data.type === undefined) return null;
+  const inferredType = TYPE_BY_PREFIX[prefix];
   if (data.type !== inferredType) {
     return { code: "PREFIX_TYPE_MISMATCH", prefix, type: data.type };
   }

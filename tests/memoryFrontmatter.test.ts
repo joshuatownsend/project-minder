@@ -98,8 +98,16 @@ describe("validateTypedMemory", () => {
     }
   });
 
-  it("returns INVALID_TYPE for an unknown type value", () => {
+  it("returns INVALID_TYPE for an unknown type value (typed prefix)", () => {
     const err = validateTypedMemory("user_role.md", { type: "garbage" as never });
+    expect(err?.code).toBe("INVALID_TYPE");
+  });
+
+  it("returns INVALID_TYPE for an unknown type value even with untyped basename", () => {
+    // Regression: previously the validator only checked the type value when
+    // the basename had a recognized prefix, so `notes.md` with `type: garbage`
+    // slipped through.
+    const err = validateTypedMemory("notes.md", { type: "garbage" as never });
     expect(err?.code).toBe("INVALID_TYPE");
   });
 

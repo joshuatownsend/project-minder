@@ -108,6 +108,7 @@ export function MemorySeedTray() {
           fileName: c.fileName,
           targetProjectPath,
           body: row?.body ?? c.body,
+          action,
         };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
@@ -117,8 +118,12 @@ export function MemorySeedTray() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidates: payload }),
       });
-      const json = (await r.json()) as { results: PromoteResult[] };
-      setLastRun(json.results);
+      if (!r.ok) {
+        const errText = await r.text();
+        throw new Error(`HTTP ${r.status}: ${errText}`);
+      }
+      const json = (await r.json()) as { results?: PromoteResult[] };
+      setLastRun(json.results ?? []);
       // Refresh so promoted rows pick up their conflict state (now they exist).
       reload(anchorPath);
     } catch (e) {

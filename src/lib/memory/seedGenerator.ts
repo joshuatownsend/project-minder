@@ -168,6 +168,18 @@ ${lines.join("\n")}
   });
 }
 
+function describeHostPlatform(): string {
+  // Derive from the actual runtime so non-Windows users don't get a Windows
+  // seed. Best-effort labels -- if `process` isn't available (edge runtimes)
+  // we just say "unknown" instead of lying.
+  if (typeof process === "undefined") return "unknown";
+  const platform = process.platform;
+  if (platform === "win32") return "Windows / PowerShell";
+  if (platform === "darwin") return "macOS / zsh or bash";
+  if (platform === "linux") return "Linux / bash";
+  return platform;
+}
+
 function synthDevEnvironment(input: GeneratorInput): SeedCandidate | null {
   // Aggregate stack signals across active projects so the seed reflects what
   // the user actually works with, not an assumed default.
@@ -191,7 +203,7 @@ function synthDevEnvironment(input: GeneratorInput): SeedCandidate | null {
       .join(", ");
   const body = `Dev-environment signals aggregated across active scanned repos. Counts in parens.
 
-- **Platform**: Windows / PowerShell (per global CLAUDE.md)
+- **Platform**: ${describeHostPlatform()}
 - **Frameworks**: ${topOf(frameworks) || "—"}
 - **ORMs**: ${topOf(ormCounts) || "—"}
 - **Styling**: ${topOf(stylingCounts) || "—"}
