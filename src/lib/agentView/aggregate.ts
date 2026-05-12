@@ -59,6 +59,8 @@ export async function aggregateLiveSessions(
 
   const result = new Map<string, LiveAgentSession>();
 
+  const TERMINAL_STATUSES = new Set<AgentSessionStatus>(["completed", "failed", "stopped"]);
+
   // Roster sessions are authoritative — add them first.
   for (const entry of rosterEntries) {
     const sessionId = entry.sessionId ?? entry.id;
@@ -67,11 +69,14 @@ export async function aggregateLiveSessions(
     const lastMs = new Date(lastChangedAt).getTime();
     const secondsSinceChange = Math.floor((now - lastMs) / 1000);
 
-    if (secondsSinceChange * 1000 > abandonThresholdMs) continue;
-
     const rosterStatus = daemonStateToAgentStatus(entry.state);
+    const isAbandoned = secondsSinceChange * 1000 > abandonThresholdMs;
+
+    // Drop sessions that ended in a terminal state and are past the abandon window.
+    if (isAbandoned && TERMINAL_STATUSES.has(rosterStatus)) continue;
+
     const isAwaiting = awaitingSlugSet.has(slug) || !!entry.awaitingInput;
-    const status: AgentSessionStatus = isAwaiting ? "waiting" : rosterStatus;
+    const status: AgentSessionStatus = isAbandoned ? "stopped" : (isAwaiting ? "waiting" : rosterStatus);
 
     // Find a matching JSONL session for richer info (tool name, activity line)
     const jsonlMatch = jsonlSessions.find((s) => s.sessionId === sessionId || s.projectSlug === slug);
@@ -105,7 +110,8 @@ export async function aggregateLiveSessions(
     if (rosterBySessionId.has(sessionId)) continue;
 
     const hookBuffer = getHookBuffer(jsonlSession.projectSlug);
-    const lastHookEvent = [...hookBuffer].at(-1);
+    const sessionHookEvents = [...hookBuffer].filter((e) => e.sessionId === sessionId);
+    const lastHookEvent = sessionHookEvents.at(-1);
     const isLiveFromHook = liveSlugSet.has(jsonlSession.projectSlug);
 
     if (!isLiveFromHook && !lastHookEvent) continue;
@@ -116,18 +122,22 @@ export async function aggregateLiveSessions(
     const lastMs = new Date(lastChangedAt).getTime();
     const secondsSinceChange = Math.floor((now - lastMs) / 1000);
 
-    if (secondsSinceChange * 1000 > abandonThresholdMs) continue;
-
     const isAwaiting = awaitingSlugSet.has(jsonlSession.projectSlug);
     const isStoppedByHook = lastHookEvent && STOP_EVENTS.has(lastHookEvent.hookEventName);
-    let status: AgentSessionStatus;
+    const isAbandoned = secondsSinceChange * 1000 > abandonThresholdMs;
+
+    let hookDerivedStatus: AgentSessionStatus;
     if (isStoppedByHook) {
-      status = "completed";
+      hookDerivedStatus = "completed";
     } else if (isAwaiting) {
-      status = "waiting";
+      hookDerivedStatus = "waiting";
     } else {
-      status = liveStatusToAgentStatus(jsonlSession.status);
+      hookDerivedStatus = liveStatusToAgentStatus(jsonlSession.status);
     }
+
+    // Drop terminal hook sessions past the abandon window; mark others stopped.
+    if (isAbandoned && TERMINAL_STATUSES.has(hookDerivedStatus)) continue;
+    const status: AgentSessionStatus = isAbandoned ? "stopped" : hookDerivedStatus;
 
     result.set(sessionId, {
       sessionId,
@@ -153,17 +163,20 @@ export async function aggregateLiveSessions(
 
     const mtimeMs = new Date(jsonlSession.mtime).getTime();
     const secondsSinceChange = Math.floor((now - mtimeMs) / 1000);
-    if (secondsSinceChange * 1000 > abandonThresholdMs) continue;
 
     const jsonlStatus = liveStatusToAgentStatus(jsonlSession.status);
     if (jsonlStatus === "idle" && secondsSinceChange > 300) continue; // skip old idle sessions
+
+    const isAbandoned = secondsSinceChange * 1000 > abandonThresholdMs;
+    if (isAbandoned && TERMINAL_STATUSES.has(jsonlStatus)) continue;
+    const finalStatus: AgentSessionStatus = isAbandoned ? "stopped" : jsonlStatus;
 
     result.set(sessionId, {
       sessionId,
       projectSlug: jsonlSession.projectSlug,
       projectName: jsonlSession.projectName,
       worktreeLabel: jsonlSession.worktreeLabel,
-      status: jsonlStatus,
+      status: finalStatus,
       lastChangedAt: jsonlSession.mtime,
       secondsSinceChange,
       currentToolName: jsonlSession.lastToolName,
