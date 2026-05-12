@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import type { LiveAgentSession, ConnectionState } from "./types";
 
 // React hook that owns the EventSource connection to /api/agent-view/stream.
@@ -127,7 +127,10 @@ export function useAgentViewStream(): AgentViewStreamResult {
   }, [clearPoll, clearReconnect, startFallbackPolling]);
 
   // Keep connectRef in sync with the latest connect callback.
-  connectRef.current = connect;
+  // useLayoutEffect (not render body) to satisfy the react-compiler no-refs-during-render rule.
+  useLayoutEffect(() => {
+    connectRef.current = connect;
+  });
 
   useEffect(() => {
     connect();

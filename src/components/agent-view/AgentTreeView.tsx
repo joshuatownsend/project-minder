@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import type { OrchestrationGraph, OrchNode } from "@/lib/usage/orchestrationGraph";
 
 interface AgentTreeViewProps {
@@ -80,6 +81,7 @@ function TreeNode({
   nodeMap: Map<string, OrchNode>;
   indent?: number;
 }) {
+  const [descOpen, setDescOpen] = useState(false);
   const children = (childMap.get(node.id) ?? [])
     .map((id) => nodeMap.get(id))
     .filter((n): n is OrchNode => n !== undefined);
@@ -89,24 +91,70 @@ function TreeNode({
     : node.status === "ok" ? "var(--green-text,#4ade80)"
     : "var(--text-3,#888)";
 
+  const hasCatalog = !!node.catalogEmoji || !!node.catalogColor || !!node.catalogDescription;
+  const agentLabel = node.agentName ?? node.toolName;
+
   return (
     <div style={{ paddingLeft: indent * 16, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
         <span style={{ color: statusColor, flexShrink: 0 }}>
           {indent === 0 ? "◆" : "└─"}
         </span>
-        <span style={{ color: "var(--text-2,#ccc)" }}>
-          {node.agentName ?? node.toolName}
-        </span>
-        {node.agentName && (
+        {/* Agent label — linked when catalog matched, plain when unknown */}
+        {hasCatalog && node.agentName ? (
+          <Link
+            href={`/agents?q=${encodeURIComponent(node.agentName)}`}
+            style={{
+              color: node.catalogColor ?? "var(--blue-text,#60a5fa)",
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3,
+            }}
+          >
+            {node.catalogEmoji && <span>{node.catalogEmoji}</span>}
+            <span>{agentLabel}</span>
+          </Link>
+        ) : (
+          <span style={{ color: "var(--text-2,#ccc)" }}>{agentLabel}</span>
+        )}
+        {node.agentName && node.toolName !== node.agentName && (
           <span style={{ color: "var(--text-4,#555)" }}>
             ({node.toolName})
           </span>
+        )}
+        {/* Description peek toggle */}
+        {node.catalogDescription && (
+          <button
+            type="button"
+            onClick={() => setDescOpen((v) => !v)}
+            aria-label={descOpen ? "Hide description" : "Show description"}
+            aria-expanded={descOpen}
+            title={descOpen ? "Hide description" : "Show description"}
+            style={{
+              background: "none", border: "none",
+              color: "var(--text-4,#555)", cursor: "pointer",
+              fontSize: "0.6rem", padding: "0 2px",
+            }}
+          >
+            ⓘ
+          </button>
         )}
         <span style={{ color: "var(--text-4,#555)", marginLeft: "auto" }}>
           depth {node.depth}
         </span>
       </div>
+      {descOpen && node.catalogDescription && (
+        <div style={{
+          paddingLeft: (indent + 1) * 16,
+          paddingBottom: 4,
+          fontSize: "0.6rem",
+          color: "var(--text-3,#888)",
+          fontFamily: "inherit",
+        }}>
+          {node.catalogDescription}
+        </div>
+      )}
       {children.map((child) => (
         <TreeNode
           key={child.id}

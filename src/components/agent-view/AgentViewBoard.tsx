@@ -39,7 +39,7 @@ function sortSessions(sessions: LiveAgentSession[], key: AgentViewFilters["sort"
 }
 
 export function AgentViewBoard() {
-  const { sessions, connectionState } = useAgentViewStream();
+  const { sessions, connectionState, lastEventAt } = useAgentViewStream();
   const [peekedSession, setPeekedSession] = useState<LiveAgentSession | null>(null);
   const [filters, setFilters] = useState<AgentViewFilters>({
     statuses: ALL_STATUSES,
@@ -82,6 +82,7 @@ export function AgentViewBoard() {
         onFiltersChange={setFilters}
         connectionState={connectionState}
         sessionCount={filtered.length}
+        lastEventAt={lastEventAt}
       />
 
       {isEmpty ? (

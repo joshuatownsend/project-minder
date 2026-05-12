@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import type { AgentSessionStatus, ConnectionState } from "@/lib/agentView/types";
 import { ALL_STATUSES } from "@/lib/agentView/types";
 
@@ -34,12 +35,15 @@ const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting:   "Connecting…",
 };
 
+const FRESHNESS_AMBER_SECONDS = 30;
+
 interface AgentViewToolbarProps {
   filters: AgentViewFilters;
   projectNames: string[];
   onFiltersChange: (f: AgentViewFilters) => void;
   connectionState: ConnectionState;
   sessionCount: number;
+  lastEventAt?: number | null;
 }
 
 export function AgentViewToolbar({
@@ -48,7 +52,13 @@ export function AgentViewToolbar({
   onFiltersChange,
   connectionState,
   sessionCount,
+  lastEventAt,
 }: AgentViewToolbarProps) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
   function toggleStatus(s: AgentSessionStatus) {
     if (allSelected) {
       // When all are selected, clicking one focuses exclusively on that status.
@@ -113,6 +123,24 @@ export function AgentViewToolbar({
       </select>
 
       <div style={{ flex: 1 }} />
+
+      {/* Freshness clock — ticks every second so users see SSE latency between deltas */}
+      {lastEventAt != null && (() => {
+        const secondsAgo = Math.floor((now - lastEventAt) / 1000);
+        const isStale = secondsAgo > FRESHNESS_AMBER_SECONDS && connectionState === "connected";
+        const label = secondsAgo < 60
+          ? `${secondsAgo}s ago`
+          : `${Math.floor(secondsAgo / 60)}m ago`;
+        return (
+          <span style={{
+            fontSize: "0.6rem",
+            fontFamily: "var(--font-mono,monospace)",
+            color: isStale ? "var(--amber-text,#fbbf24)" : "var(--text-4,#555)",
+          }}>
+            Updated {label}
+          </span>
+        );
+      })()}
 
       {/* Connection state indicator */}
       <span style={{ fontSize: "0.6rem", color: CONNECTION_COLOR[connectionState], display: "flex", alignItems: "center", gap: 4 }}>
