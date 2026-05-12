@@ -1,5 +1,126 @@
 # Insights
 
+<!-- insight:e7a81ea9c0e9 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T17:52:08.094Z -->
+## ★ Insight
+The AbortController fix is the most impactful — without it, a slow `loadOrchestrationGraph` JSONL replay (~50–200ms) that arrives after a newer fetch would silently overwrite the correct state. This is a real race, not a theoretical one, because `loadOrchestrationGraph` does full file I/O on every call.
+
+---
+
+<!-- insight:76d2dfea503c | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T17:37:24.873Z -->
+## ★ Insight
+The tree data from `OrchestrationGraph` uses a flat `nodes + edges` list (not a nested tree). To render it hierarchically, we build a child-map from edges, then recursively render from root nodes (those with no incoming edges). This avoids mutating the data and handles the `rootCount` field naturally.
+
+---
+
+<!-- insight:7f6e2136bdc1 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T17:36:21.220Z -->
+## ★ Insight
+The aggregator has three loops, but only the first two have access to the hook buffer. The third (pure-JSONL) loop never sees hooks — those sessions have no hook instrumentation at all, so `subagentsInFlight` correctly stays `undefined` there. The badge count formula is: `spawns - stops`, clamped to 0. We filter hook events by `sessionId` because the buffer is keyed by slug (a project can have multiple concurrent sessions).
+
+---
+
+<!-- insight:d185b19fea10 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T16:33:11.335Z -->
+## ★ Insight
+The `useCallback` circular dependency issue here is a classic React pitfall: `connect` depends on `startFallbackPolling`, but if `startFallbackPolling` tried to call `connect` for retry, it would create a cycle that `useCallback` can't resolve. The solution is a `connectRef = useRef` — a ref always holds the latest function without being a dependency, breaking the cycle. The ref pattern is idiomatic React for "call a stable-by-ref version of a function that changes".
+
+---
+
+<!-- insight:e7df05f93bbc | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T16:32:40.015Z -->
+## ★ Insight
+The race is subtle: `startJobRosterWatcher()` kicks off an async `refresh()` internally but the caller can't await it since the function returns `void`. The fix imports and explicitly awaits `refreshRoster()` after starting the watcher. The watcher's own internal guard means the `refresh()` call won't double-fire since `startJobRosterWatcher` only calls `refresh()` once on first initialization.
+
+---
+
+<!-- insight:c3650d3d9ff0 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T16:31:46.859Z -->
+## ★ Insight
+The `window.innerWidth` in the drawer style is a classic SSR hydration hazard — React renders on the server where `window` doesn't exist, then re-renders on the client with the real value. The fix is to use a CSS `clamp`/`min()` expression instead, which moves the calculation to the browser's layout engine entirely.
+
+---
+
+<!-- insight:fffd9336a913 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T16:28:47.416Z -->
+## ★ Insight
+The 16 comments cluster into 5 real correctness bugs: (1) hook buffer events aren't filtered by `sessionId` so two sessions sharing a project slug contaminate each other; (2) the abandoned reaper drops sessions entirely instead of moving them to "Stopped"; (3) the peek API returns all project events regardless of which session you clicked; (4) removed roster entries don't emit an SSE push event; (5) the `useAgentViewStream` reconnect timer is never stored/cleared. Two route-init issues (await initial refresh) and defensive parsing round out the list.
+
+---
+
+<!-- insight:bd06fba0785f | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T15:21:34.971Z -->
+## ★ Insight
+The key fixes: (1) `ALL_STATUSES` and `STATUS_ORDER` defined 2× each — move to `types.ts` as value exports alongside the type; (2) `formatCost`/`formatAge` duplicates — use existing `format.ts` utilities; (3) sequential `readJobState` in a loop — `Promise.all` makes these parallel.
+
+---
+
+<!-- insight:133d81469692 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:52:52.927Z -->
+## ★ Insight
+The multi-select filter needs two distinct behaviors: (1) when all are selected, clicking one should "focus" exclusively on that status, and (2) when a subset is selected, clicking toggles individual membership. This is the "quick-filter" pattern used in GitHub's label filters and Notion's filter chips.
+
+---
+
+<!-- insight:e10113cd1ea4 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:49:31.545Z -->
+## ★ Insight
+The board captured the current Claude session as "Working" — the JSONL tail inference is functioning in real-time, reflecting the active `mcp__plugin_chrome-devtools` tool call as the activity line.
+
+---
+
+<!-- insight:38bc6523d526 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:48:40.973Z -->
+## ★ Insight
+The API is live and already showing real sessions — including the current Claude session working on this project (`22b0f49a`). This validates the JSONL tail inference path working correctly without any daemon setup needed.
+
+---
+
+<!-- insight:3bcbddb4bbe9 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:30:51.791Z -->
+## ★ Insight
+- The Kanban board renders 6 columns but most users will typically see only 1-2 non-empty columns (working + maybe waiting). Using CSS grid with `auto-fill` + `min-content` rather than fixed equal-width columns keeps the layout from being too sparse.
+- The "running process" dot needs two visual states: filled (roster/daemon) vs ring (JSONL-inferred). This maps directly to how Agent View uses shape to distinguish true process-running from inferred.
+- Peek panel uses the existing `getHookBuffer` ring — this is the first UI consumer of that dead-storage ring. We call a new API route to avoid importing server-only code on the client.
+
+---
+
+<!-- insight:570c3c70441a | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:26:16.621Z -->
+## ★ Insight
+- The existing `getLiveStatusPayload()` in `src/lib/liveStatus.ts` already reads JSONL tail, infers status, and returns `LiveSession[]`. Our aggregate will call it directly rather than duplicating the logic — the daemon roster adds a new *source of truth* on top of it.
+- The `AgentSessionStatus` type needs 6 values vs. the existing 4 in `LiveSessionStatus`. I'll introduce a new type rather than mutating the existing one, to avoid breaking the `/api/status` route and `PulseProvider`.
+- The SSE route uses `ReadableStream` + `request.signal.aborted` for cleanup — Next.js 16 App Router route handlers don't expose `res.write()`, so this is the correct pattern.
+
+---
+
+<!-- insight:9a800fd99918 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T14:08:26.243Z -->
+## ★ Insight
+- Project Minder already has `src/lib/db/ingestWatcher.ts` chokidar-watching every JSONL — but updates land in SQLite without ever being pushed to the client. The pulse endpoint (`src/app/api/pulse/route.ts`) polls every few seconds. That's why everything feels "near-live" instead of live.
+- Claude Agent View deliberately treats one background session as one row — it ignores sub-agent trees entirely. The official tree-visualization surface is OTel `claude_code.interaction → claude_code.tool` spans. Project Minder already ingests OTel (`src/lib/db/otelIngest.ts`) but doesn't render the tree.
+- The biggest leverage point is the **daemon/jobs roster** (`~/.claude/daemon/roster.json` + `~/.claude/jobs/<id>/state.json`). It's what Agent View itself reads. Reading it gives ground-truth liveness without requiring the user to install our curl-hook plumbing.
+
+---
+
+<!-- insight:20d56d5eb385 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T13:28:30.314Z -->
+## ★ Insight
+- This PR cycle paid down two-PRs-worth of pre-existing CI debt that had been silently red on `main` since Phase 1 (#118): the `Date.now()`-during-render lint blocker in `MemoryBrowser.tsx`, and the three Linux-incompatible `canonicalMemoryKey` tests in `memoryUsageTracker.test.ts`. Both bled through M.1's merge. Without branch protection requiring CI green, the only forcing function on this team is "the next PR author cares enough to fix it." Worth thinking about whether to flip on protection now that the queue is finally green — it'd cost ~zero going forward and prevent the next pre-existing failure from sliding through.
+- The "merge raced ahead of local checkout" failure mode is worth noting. `gh pr merge --squash --admin --delete-branch` is a remote-then-local operation: the server-side squash + branch deletion happens first, then the CLI tries to switch your local working copy to main. If your working tree has uncommitted changes, the local step fails while the remote step has already irrevocably succeeded — leaving you with (a) the merge done, (b) the remote branch deleted, (c) your local still on the now-orphaned feature branch with uncommitted changes that can't be carried anywhere. The defensive habit: commit-or-stash session-incidental files (INSIGHTS.md auto-captures, scratch notes) *before* invoking the merge tool, not after. Memory feels relevant here.
+- The Memory Observatory's "first three waves paid the infrastructure cost so M.4 was a thin recombination" thesis held up empirically: M.4 added one pure scoring module (175 lines), one writer extension (mover + sweep), one suppress store (47 lines), one API route, one page, one component — and *every* signal feeding the recommendation was already populated on `MemoryFileEntry` from Phase 1. No new scan paths, no new caches, no migration. M.2's cross-harness bridge will be the first wave that has to push past this surface area, and that's because it's the first wave with a genuinely new data source (Codex's memory dir layout). Marginal cost is a function of how much of the underlying graph you've already paid for.
+
+---
+
+<!-- insight:086f5a86710f | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T13:14:11.837Z -->
+## ★ Insight
+- This PR has now uncovered **two** pre-existing failures from Phase 1 (#118) that have been red on main since merge: the `react-hooks/purity` lint error in `MemoryBrowser.tsx` and the Linux-incompatible `canonicalMemoryKey` tests in `memoryUsageTracker.test.ts`. Both were silently tolerated because the M.1 PR also merged with red CI. Worth raising: a branch protection rule requiring `verify` to pass before merge would have caught both at their source. As-is, this PR is the only one in the wave actually gating on CI green — which means it's incidentally paying down two-PRs-worth of CI debt on its way through.
+- The `process.platform === "win32" ? it : it.skip` idiom is the right tool for a "local-only Windows dashboard" running its tests on Linux CI. The alternative — using `path.win32.resolve()` in the production code so behavior is platform-independent — would be the wrong direction here: the production code legitimately uses the host's path module (which on the target machine IS win32) and rewriting it to always run win32 semantics regardless of host would just hide a bug if anyone ever tried to deploy on Linux. Gating the tests is honest about what production does and where the contract holds.
+
+---
+
+<!-- insight:cb5cf5f727ed | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T12:30:04.463Z -->
+## ★ Insight
+- Three reviewers, three angles, one false positive between them — the parallel-review pattern continues to pay. Agent 1's reuse pass caught the basename validation duplication that wasn't on my radar; Agent 2's quality pass caught the pending-state shape and the action-body trio; Agent 3's efficiency pass caught the double-readdir from sweep+list. None of these were the same finding wearing different hats, which is what makes them worth running in parallel rather than asking one reviewer to do all three jobs.
+- The "Lift hold" bug is the kind of defect /simplify rarely surfaces on purpose. It came out because the action-body collapse forced me to re-read what `keepBody(entry, 0)` actually meant on the server, and the server's `Math.max(1, ...)` clamp meant the days-to-clear-hold trick was load-bearing on a value the server explicitly disallowed. The right cleanup forces you to look at adjacencies you skipped on the way in. Worth keeping in mind: refactors aren't just polish — they re-expose decision sites you originally rubber-stamped.
+- The `sweepAndListTrash` collapse is a tiny example of "the API shape determines whether duplication is possible." Once `sweepTrash` returns just `{removed}` and `listTrashed` is its own function, callers naturally pay for two readdirs because the language doesn't let them stitch one. Returning `{removed, survivors}` from the combined helper makes the one-pass form ergonomic; the back-compat wrapper costs three lines and the rare caller who wants the old shape still gets it.
+
+---
+
+<!-- insight:6b51aecc3048 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T12:14:30.603Z -->
+## ★ Insight
+- M.4 came together cleanly *because* Phase 1 and M.1 paid the infrastructure cost. The scorer is 175 lines of pure logic over `MemoryFileEntry`'s already-populated `usage`/`stale`/`indexed`/`mtimeMs`/`sizeBytes` fields. No new scan paths, no new JSONL parsing, no new caches — every signal was already on the entry object. This is exactly the leverage the original article framed: once the dashboard has "what" (Phase 1) and "where it came from" (M.1), "what to prune" (M.4) is a thin recombination. M.2's cross-harness bridge will be the first wave that has to push past this surface area.
+- The two-step Delete confirmation lives entirely in client state (`confirming === entry.absPath`), not in a modal or a separate route. Inline confirmation is faster, doesn't break tab focus, and re-uses the existing row layout — but it does mean the API has zero awareness of whether the user passed confirmation. That's intentional: the API contract is "delete soft-deletes for 30d," and the confirmation is purely UX scaffolding to prevent the user from clicking through a destructive action by accident. A scripted caller hitting POST `/api/memory/triage` directly is just acknowledging the soft-delete contract — that's a valid use, not an attack vector to guard.
+- Trash sweep at GET time (rather than via a cron or interval) keeps the system stateless: the dashboard's read path is the only thing that exists, so the read path is also the only thing that needs to enforce the 30-day window. No scheduler to fail, no race between sweeps and writes, no question of "what if the user hasn't visited /memory/triage in 45 days." First visit after the window naturally sweeps everything overdue. Simple and self-healing.
+
+---
+
 <!-- insight:fbab002ed3d7 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T11:44:14.514Z -->
 ## ★ Insight
 - Two PRs in one session built the Day 1 Memory Observatory layer from the article's "open problem" framing all the way to a working draft tray with 3-way diff, typed-authoring enforcement, and cross-platform seed accuracy. Each PR closed at production-ready quality (typecheck clean, 2190 tests, automated review feedback addressed) before merging. The pattern that's been working: **plan → execute → /simplify → /pr-resolve → merge** — each phase has tight feedback loops and clear exit gates.

@@ -7,6 +7,11 @@ export interface OrchNode {
   agentName?: string;
   depth: number;
   status?: "ok" | "error";
+  /** Catalog decoration — populated by the /api/agent-view/tree route when a
+   *  matching agent definition is found. Not present for unknown agents. */
+  catalogEmoji?: string;
+  catalogColor?: string;
+  catalogDescription?: string;
 }
 
 export interface OrchEdge {

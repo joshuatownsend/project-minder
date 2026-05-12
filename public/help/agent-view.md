@@ -57,3 +57,13 @@ Sessions launched with `claude` (foreground) appear when either the Live Activit
 ## Abandoned session reaper
 
 Sessions that have been inactive longer than the **Abandon threshold** (default 180 minutes) automatically drop to **Stopped** so they don't clutter the board. You can adjust the threshold in Settings → Feature Flags → Agent View.
+
+## Wave 3: What's new
+
+**Live cost + context fill.** The cost chip and context-fill bar on each card are now populated in real time from the session's JSONL turns (not just historical data). Cost accumulates as Claude responds; the context bar turns amber above 50% fill and red above 85%. Only active sessions (Working, Waiting, Idle) show live cost — terminal sessions (Completed, Failed, Stopped) show the final total recorded at session end.
+
+**Freshness clock.** The toolbar now displays "Updated Xs ago" next to the connection indicator, ticking every second between SSE events. It turns amber after 30 seconds of silence on a Live connection — a soft cue that the stream may be stalled rather than idle. The toolbar previously showed no indication of when the last event arrived.
+
+**Catalog cross-reference in the Sub-agents tab.** Agent nodes in the tree that match an entry in your [Agents catalog](/agents) now render with the catalog entry's emoji and color, plus a link that pre-filters the catalog page to that agent. Click the ⓘ button next to any matched node to expand a one-line description inline without leaving the drawer.
+
+**Insights tab in the peek panel.** The peek drawer now has a third tab — **Insights** — showing all `★ Insight` blocks written during this session. Sourced directly from the session JSONL (not INSIGHTS.md) so freshly-written insights appear within seconds of being produced. A count badge on the tab header lights up as soon as the first insight lands.

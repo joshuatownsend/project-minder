@@ -4,21 +4,30 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { LiveAgentSession } from "@/lib/agentView/types";
 import type { HookEvent } from "@/lib/hooks/buffer";
+import type { InsightEntry } from "@/lib/types";
 import { AgentTreeView } from "./AgentTreeView";
 
-type PeekTab = "hooks" | "tree";
+type PeekTab = "hooks" | "tree" | "notes";
 
 const TAB_LABELS: Record<PeekTab, string> = {
   hooks: "Hook events",
   tree: "Sub-agents",
+  notes: "Insights",
 };
+
+const ALL_TABS: PeekTab[] = ["hooks", "tree", "notes"];
 
 interface PeekData {
   hookEvents: HookEvent[];
+  insightsThisSession: InsightEntry[];
 }
 
 function formatEventTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatInsightDate(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 interface AgentPeekPanelProps {
@@ -41,6 +50,8 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
   }, [session?.sessionId, session?.projectSlug]);
 
   if (!session) return null;
+
+  const insightCount = data?.insightsThisSession.length ?? 0;
 
   return (
     <>
@@ -89,17 +100,16 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
         <div
           role="tablist"
           onKeyDown={(e) => {
-            const tabs: PeekTab[] = ["hooks", "tree"];
-            const idx = tabs.indexOf(activeTab);
-            if (e.key === "ArrowRight") { e.preventDefault(); setActiveTab(tabs[(idx + 1) % tabs.length]); }
-            if (e.key === "ArrowLeft") { e.preventDefault(); setActiveTab(tabs[(idx + tabs.length - 1) % tabs.length]); }
+            const idx = ALL_TABS.indexOf(activeTab);
+            if (e.key === "ArrowRight") { e.preventDefault(); setActiveTab(ALL_TABS[(idx + 1) % ALL_TABS.length]); }
+            if (e.key === "ArrowLeft") { e.preventDefault(); setActiveTab(ALL_TABS[(idx + ALL_TABS.length - 1) % ALL_TABS.length]); }
           }}
           style={{
             display: "flex", gap: 0,
             borderBottom: "1px solid var(--line-soft,#222)",
             padding: "0 16px",
           }}>
-          {(["hooks", "tree"] as PeekTab[]).map((tab) => (
+          {ALL_TABS.map((tab) => (
             <button
               key={tab}
               type="button"
@@ -131,6 +141,19 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
                   fontSize: "0.55rem",
                 }}>
                   {session.subagentsInFlight}
+                </span>
+              )}
+              {tab === "notes" && insightCount > 0 && (
+                <span style={{
+                  marginLeft: 5,
+                  background: "var(--green-bg,#052e16)",
+                  color: "var(--green-text,#4ade80)",
+                  border: "1px solid var(--green-border,#14532d)",
+                  borderRadius: 3,
+                  padding: "0 4px",
+                  fontSize: "0.55rem",
+                }}>
+                  {insightCount}
                 </span>
               )}
             </button>
@@ -190,6 +213,47 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
             <section>
               <SectionLabel>Sub-agent tree</SectionLabel>
               <AgentTreeView sessionId={session.sessionId} />
+            </section>
+          )}
+
+          {activeTab === "notes" && (
+            <section>
+              <SectionLabel>Insights this session</SectionLabel>
+              {!data ? (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>Loading…</div>
+              ) : data.insightsThisSession.length === 0 ? (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)", lineHeight: 1.5 }}>
+                  No insights captured yet. Use{" "}
+                  <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>
+                    ★ Insight
+                  </code>
+                  {" "}blocks in your responses to seed this view.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {data.insightsThisSession.map((insight) => (
+                    <div key={insight.id} style={{
+                      background: "var(--card-bg-2,#1a1a1a)",
+                      border: "1px solid var(--line-soft,#222)",
+                      borderRadius: 4,
+                      padding: "8px 10px",
+                    }}>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-4,#555)", marginBottom: 4 }}>
+                        {formatInsightDate(insight.date)}
+                      </div>
+                      <div style={{
+                        fontSize: "0.65rem",
+                        color: "var(--text-2,#ccc)",
+                        fontFamily: "var(--font-mono,monospace)",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}>
+                        {insight.content.trim()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           )}
         </div>

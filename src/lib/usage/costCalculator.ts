@@ -191,6 +191,26 @@ export function getModelPricing(model: string): ModelPricing {
   return base;
 }
 
+// Hardcoded context window sizes. All current Claude models are 200k.
+// Pattern matches the same keyword logic as getModelPricing for consistency.
+const FALLBACK_MAX_CONTEXT: Record<string, number> = {
+  "claude-opus-4": 200_000,
+  "claude-sonnet-4": 200_000,
+  "claude-haiku-3.5": 200_000,
+};
+
+/**
+ * Return the max input-token context window for a model.
+ * Uses keyword matching so it works for versioned IDs like `claude-opus-4-7`.
+ */
+export function getModelMaxContextTokens(model: string): number {
+  const lower = model.toLowerCase();
+  for (const [key, size] of Object.entries(FALLBACK_MAX_CONTEXT)) {
+    if (lower.includes(key.replace("claude-", ""))) return size;
+  }
+  return 200_000; // safe fallback for any unknown Claude model
+}
+
 export interface TokenCounts {
   inputTokens: number;
   outputTokens: number;

@@ -3,6 +3,7 @@ import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, getHookBuffer, STOP_EVENTS } from "@/lib/hooks/buffer";
 import type { HookEvent } from "@/lib/hooks/buffer";
 import { getRosterEntries } from "./jobRoster";
+import { getLiveSessionMetrics } from "./liveCostCache";
 import type { LiveAgentSession, AgentSessionStatus } from "./types";
 import { STATUS_ORDER } from "./types";
 import type { LiveSessionStatus } from "@/lib/types";
@@ -205,6 +206,20 @@ export async function aggregateLiveSessions(
   }
 
   const sessions = [...result.values()];
+
+  // Enrich active sessions with live cost + context-fill. Terminal sessions
+  // (completed/failed/stopped) are skipped — their data lives in the historical
+  // /sessions/[id] view which already computes these numbers.
+  const nonTerminalStatuses = new Set<AgentSessionStatus>(["waiting", "working", "idle"]);
+  await Promise.all(
+    sessions.map(async (session) => {
+      if (!nonTerminalStatuses.has(session.status)) return;
+      const metrics = await getLiveSessionMetrics(session.sessionId);
+      if (!metrics) return;
+      if (metrics.totalCostUsd > 0) session.costEstimate = metrics.totalCostUsd;
+      if (metrics.maxContextFill > 0) session.maxContextFill = metrics.maxContextFill;
+    }),
+  );
 
   sessions.sort((a, b) => {
     const diff = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
