@@ -23,6 +23,7 @@ Each card shows:
 - **Context chip** — appears when context fill exceeds 50%, turns red above 85%.
 - **Cost chip** — estimated USD cost so far.
 - **+N sub-agent chip** — appears when one or more sub-agents are currently in flight (spawned but not yet finished). Requires [Live Activity](/settings/live-activity) hooks to be enabled.
+- **⚠ tool err chip** — appears in amber when the most recent tool call failed (detected from the `PostToolUse` hook payload). Clears automatically once a subsequent successful tool runs. Requires Live Activity hooks.
 
 Click or press **Enter** on a card to open the **Peek panel**.
 
@@ -71,3 +72,9 @@ Sessions that have been inactive longer than the **Abandon threshold** (default 
 ## Wave 5: What's new
 
 **Near-instant session discovery.** A new filesystem watcher on `~/.claude/projects/` fires the moment Claude Code creates a new JSONL file for a fresh session. Previously, a session started with plain `claude` (no `--bg`) could take up to 21 seconds to appear on the board (6-second cache TTL + 15-second heartbeat). The watcher reduces that to roughly 200 milliseconds. No configuration required; works automatically as long as the `/agent-view` page is open in a browser tab.
+
+## Wave 4: What's new
+
+**Tool failure badge.** When a tool call fails — a Bash command exits non-zero, a file read hits an error, or any other tool returns `is_error: true` — the card shows an amber "⚠ tool err" chip. This is derived from the `PostToolUse` hook event payload, so it requires Live Activity hooks to be installed. The badge reflects the *most recent* tool result: a subsequent successful call clears it automatically, so you only see it when the last tool that ran actually failed.
+
+**Hook installer health indicator.** The Settings → Live Activity section now shows which events are registered as individual chips (`PreToolUse`, `PostToolUse`, etc.) and a "Last hook: Xs ago" line confirming hooks are actually firing. Previously the section only showed a count ("6 events") with no way to verify liveness without running a test session.
