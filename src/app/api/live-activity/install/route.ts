@@ -5,11 +5,16 @@ import {
   removeLiveActivityHooks,
   getLiveActivityHookStatus,
 } from "@/lib/hooks/applyLiveActivity";
+import { getLastHookReceivedAt } from "@/lib/hooks/buffer";
 
 /** GET /api/live-activity/install — return current install status including registered hookUrl. */
 export async function GET(): Promise<NextResponse> {
   const [status, config] = await Promise.all([getLiveActivityHookStatus(), readConfig()]);
-  return NextResponse.json({ ...status, hookUrl: config.liveActivity?.hookUrl ?? null });
+  return NextResponse.json({
+    ...status,
+    hookUrl: config.liveActivity?.hookUrl ?? null,
+    lastReceivedAt: getLastHookReceivedAt(),
+  });
 }
 
 /** POST /api/live-activity/install — install hooks into ~/.claude/settings.json. */
