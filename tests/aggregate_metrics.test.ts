@@ -57,7 +57,7 @@ function rosterEntry(sessionId: string, state = "working") {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.setSystemTime(NOW);
-  mockGetMetrics.mockResolvedValue({ totalCostUsd: 0.042, maxContextFill: 0.67 });
+  mockGetMetrics.mockResolvedValue({ totalCostUsd: 0.042, contextFill: 0.67 });
 });
 
 describe("aggregateLiveSessions — metrics wiring", () => {

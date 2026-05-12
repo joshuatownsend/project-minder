@@ -16,5 +16,8 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     testTimeout: 30000,
     execArgv: ["--max-old-space-size=4096"],
+    // Cap fork concurrency to avoid Windows VirtualAlloc failures when running
+    // 200+ test files in parallel child processes.
+    maxWorkers: 8,
   },
 });

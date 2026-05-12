@@ -11,7 +11,8 @@ import {
 
 export interface SessionMetrics {
   totalCostUsd: number;
-  maxContextFill: number;
+  /** Context fill ratio [0,1] for the most recent assistant turn (not historical peak). */
+  contextFill: number;
 }
 
 // Per-session mtime-keyed cache. Avoids re-reducing the same turns on every
@@ -58,18 +59,20 @@ export async function getLiveSessionMetrics(
   }
 
   let totalCostUsd = 0;
-  let maxContextFill = 0;
+  let contextFill = 0;
 
   for (const turn of turns) {
     if (turn.role !== "assistant") continue;
     const pricing = getModelPricing(turn.model);
     totalCostUsd += applyPricing(pricing, turn);
     const maxCtx = getModelMaxContextTokens(turn.model);
-    const fill = (turn.inputTokens + turn.cacheCreateTokens + turn.cacheReadTokens) / maxCtx;
-    if (fill > maxContextFill) maxContextFill = fill;
+    // Use the most recent turn's fill, not the historical peak. Turns are
+    // chronological so the last write wins — after a /compact the chip
+    // reflects the compacted context rather than the pre-compact high-water mark.
+    contextFill = (turn.inputTokens + turn.cacheCreateTokens + turn.cacheReadTokens) / maxCtx;
   }
 
-  const result: SessionMetrics = { totalCostUsd, maxContextFill };
+  const result: SessionMetrics = { totalCostUsd, contextFill };
   cache.set(sessionId, { mtime, result });
   return result;
 }
