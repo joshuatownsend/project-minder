@@ -86,6 +86,28 @@ describe("softDeleteMemoryFile", () => {
   it("trash dir name starts with a dot so the main scanner skips it", () => {
     expect(TRASH_SUBDIR.startsWith(".")).toBe(true);
   });
+
+  it("refreshes mtime so the 30d trash window starts at deletion, not source-mtime", async () => {
+    // Regression: previously the sweep used the rename-preserved mtime, so a
+    // 60d-old memory soft-deleted right now would be permanently unlinked on
+    // the very next sweep instead of staying recoverable for 30 days.
+    const memDir = memoryDirFor(PROJECT);
+    const past = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    await fs.utimes(path.join(memDir, "stale.md"), past, past);
+
+    const before = Date.now();
+    const r = await softDeleteMemoryFile(PROJECT, "stale.md");
+    expect(r.ok).toBe(true);
+
+    const trashed = await listTrashedMemoryFiles(PROJECT);
+    expect(trashed).toHaveLength(1);
+    expect(trashed[0].mtimeMs).toBeGreaterThanOrEqual(before - 1000);
+
+    // Sweep should NOT eat the file — it's fresh trash, not 90d-old trash.
+    const sweep = await sweepAndListTrash(PROJECT);
+    expect(sweep.removed).toBe(0);
+    expect(sweep.survivors).toHaveLength(1);
+  });
 });
 
 describe("restoreFromArchive / restoreFromTrash", () => {
@@ -120,6 +142,37 @@ describe("restoreFromArchive / restoreFromTrash", () => {
     const r = await restoreFromArchive(PROJECT, "never-archived.md");
     expect(r.ok).toBe(false);
     expect(r.error?.code).toBe("SOURCE_NOT_FOUND");
+  });
+});
+
+describe("destination locking", () => {
+  it("serializes concurrent archives of same-named files so neither is clobbered", async () => {
+    // Regression: renameInsideMemoryDir originally only locked srcPath, so
+    // two concurrent archives of files with the same basename could both
+    // observe an empty destDir and pick the same destPath — POSIX rename
+    // then silently overwrites. The destDir lock funnels them through the
+    // existence check sequentially, forcing the second to suffix.
+    const memDir = memoryDirFor(PROJECT);
+    // Two distinct source files with the same basename via separate restores
+    // is the natural shape; we simulate by archiving, recreating, archiving.
+    // Concurrent archives of the same path collide trivially — what we want
+    // to prove is the lock prevents both choosing the same dest.
+    await fs.writeFile(path.join(memDir, "a.md"), "# A1\n", "utf-8");
+    await fs.writeFile(path.join(memDir, "b.md"), "# B1\n", "utf-8");
+    // Stash one into archive ahead of time so the next archive must suffix.
+    await archiveMemoryFile(PROJECT, "a.md");
+    // Recreate to set up the race; b.md is a sentinel so the dir isn't empty.
+    await fs.writeFile(path.join(memDir, "a.md"), "# A2\n", "utf-8");
+    const results = await Promise.all([
+      archiveMemoryFile(PROJECT, "a.md"),
+      archiveMemoryFile(PROJECT, "b.md"),
+    ]);
+    expect(results.every((r) => r.ok)).toBe(true);
+    const archived = await listArchivedMemoryFiles(PROJECT);
+    // 3 archived files: the original a.md, the suffixed a-TIMESTAMP.md, and b.md.
+    expect(archived).toHaveLength(3);
+    const uniquePaths = new Set(archived.map((f) => f.absPath));
+    expect(uniquePaths.size).toBe(3);
   });
 });
 

@@ -168,15 +168,27 @@ async function pathExists(p: string): Promise<boolean> {
  * soft-delete) and move-OUT (restore-from-archive, restore-from-trash) paths.
  * Path-traversal safe (target stays inside the memory dir), retries Windows
  * EBUSY via renameWithRetry, and suffixes the destination with a compact ISO
- * timestamp when a same-named file already exists. Source presence is NOT
- * pre-checked — renameWithRetry surfaces ENOENT and we map it in the catch
- * so there's no TOCTOU window between stat and rename.
+ * timestamp when a same-named file already exists.
+ *
+ * Locks the destination dir for the existence-check + suffix + rename step
+ * so two concurrent moves into the same dir can't both decide on the same
+ * `destPath` between `pathExists` and `rename` (POSIX rename silently
+ * overwrites; without the lock the second mover clobbers the first).
+ *
+ * `refreshMtime: true` is used by soft-delete so the trash sweep's age
+ * window starts at deletion time rather than the source file's original
+ * mtime. Without it, a memory edited >30d ago and soft-deleted right now
+ * would be permanently unlinked on the very next sweep.
+ *
+ * Source presence is NOT pre-checked — renameWithRetry surfaces ENOENT and
+ * we map it in the catch so there's no TOCTOU window between stat and rename.
  */
 async function renameInsideMemoryDir(
   memoryDirAbs: string,
   srcDir: string,
   destDir: string,
   basename: string,
+  refreshMtime: boolean = false,
 ): Promise<MemoryMoveResult> {
   if (!isInside(srcDir, memoryDirAbs) || !isInside(destDir, memoryDirAbs)) {
     return { ok: false, error: { code: "TRAVERSAL" } };
@@ -187,13 +199,24 @@ async function renameInsideMemoryDir(
   }
 
   await fs.mkdir(destDir, { recursive: true });
-  let destPath = path.join(destDir, basename);
-  if (await pathExists(destPath)) {
-    destPath = path.join(destDir, timestampSuffix(basename));
-  }
 
   try {
-    await withFileLock(srcPath, () => renameWithRetry(srcPath, destPath));
+    const destPath = await withFileLock(destDir, async () => {
+      let chosen = path.join(destDir, basename);
+      if (await pathExists(chosen)) {
+        chosen = path.join(destDir, timestampSuffix(basename));
+      }
+      await withFileLock(srcPath, () => renameWithRetry(srcPath, chosen));
+      if (refreshMtime) {
+        const now = new Date();
+        try {
+          await fs.utimes(chosen, now, now);
+        } catch {
+          // best-effort: a failed utimes shouldn't fail the whole move
+        }
+      }
+      return chosen;
+    });
     return { ok: true, destPath };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -223,6 +246,7 @@ async function moveMemoryFileTo(
     memoryDirAbs,
     path.resolve(memoryDirAbs, subdir),
     v.stripped,
+    subdir === TRASH_SUBDIR,
   );
 }
 

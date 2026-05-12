@@ -134,8 +134,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (body.action === "keep") {
-    // Clamp days so a hand-crafted call can't set a multi-year hold.
-    const days = Math.min(365, Math.max(1, Math.floor(body.days ?? 30)));
+    // Clamp days so a hand-crafted call can't set a multi-year hold; reject
+    // non-finite values outright (e.g. body.days: "abc" -> NaN) so they don't
+    // flow through Math.floor into setSuppress and write "Invalid Date" into
+    // .minder.json.
+    const rawDays = body.days ?? 30;
+    if (typeof rawDays !== "number" || !Number.isFinite(rawDays)) {
+      return NextResponse.json({ error: "INVALID_DAYS" }, { status: 400 });
+    }
+    const days = Math.min(365, Math.max(1, Math.floor(rawDays)));
     const absPath = path.join(memoryDirFor(project.path), body.fileName);
     try {
       const until = await setSuppress(absPath, days);

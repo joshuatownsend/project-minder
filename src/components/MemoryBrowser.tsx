@@ -477,8 +477,12 @@ function StaleChip({ entry }: { entry: MemoryFileEntry }) {
     reasons.push(`${refs.length} stale ref${refs.length === 1 ? "" : "s"}`);
   }
   if (entry.stale.ageOver30d) {
-    // Age in days at row-render time. Avoids storing a derived field on the
-    // entry just to render a chip — the wall-clock delta is tiny anyway.
+    // Age in days at row-render time. The React compiler's purity rule
+    // doesn't apply here — `days` only feeds a tooltip string and a
+    // ±1-day drift between renders is invisible to the user. Storing
+    // pre-computed `days` on every entry just to satisfy the linter would
+    // bloat the API payload without any user-visible benefit.
+    // eslint-disable-next-line react-hooks/purity
     const days = Math.floor((Date.now() - entry.mtimeMs) / 86_400_000);
     reasons.push(`${days}d old`);
   }

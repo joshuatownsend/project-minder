@@ -1,6 +1,6 @@
 # Memory Browser
 
-Project Minder ships three complementary memory views:
+Project Minder ships four complementary memory views:
 
 - **`/memory`** — cross-tier browser that lists every CLAUDE.md and auto-memory file across all scopes in one place. Edit any of them inline.
 - **`/memory/seed`** — Day 1 seed generator. Proposes a starter set of memory files synthesized from your existing scan data so a new Claude Code install walks in already knowing your role, stack, and active projects.
@@ -47,7 +47,7 @@ The moderate-profile defaults:
 
 | Recommendation | When |
 |---|---|
-| **Archive candidate** | Never read **and** age > 60 days **or** last read more than 90 days ago |
+| **Archive candidate** | Never read **and** age 60+ days **or** last read 90+ days ago |
 | **Consider deletion** | Above **and** has broken refs, broken `@imports`, or is orphaned from `MEMORY.md` |
 | **Keep** | Everything else |
 

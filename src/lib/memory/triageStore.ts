@@ -27,7 +27,11 @@ export async function setSuppress(
   now: number = Date.now(),
 ): Promise<string> {
   if (!absPath) throw new Error("absPath is required");
-  const safeDays = Math.max(1, Math.floor(days));
+  // Defense-at-the-data-layer: a non-finite value from the route layer would
+  // otherwise produce an "Invalid Date" ISO that breaks every subsequent
+  // suppress-map read. Fall back to the default rather than throw.
+  const dayCount = Number.isFinite(days) ? Math.floor(days) : DEFAULT_KEEP_DAYS;
+  const safeDays = Math.max(1, dayCount);
   const until = new Date(now + safeDays * DAY_MS).toISOString();
   await mutateConfig((cfg) => {
     if (!cfg.memoryTriage) cfg.memoryTriage = { suppressUntil: {} };
