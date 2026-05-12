@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { aggregateLiveSessions } from "@/lib/agentView/aggregate";
-import { startJobRosterWatcher } from "@/lib/agentView/jobRoster";
+import { startJobRosterWatcher, refreshRoster } from "@/lib/agentView/jobRoster";
 import { readConfig } from "@/lib/config";
 
 // REST snapshot — same aggregate as the SSE route but for non-streaming
@@ -11,6 +11,7 @@ export async function GET(): Promise<NextResponse> {
   const abandonMin = config.agentView?.abandonThresholdMin;
 
   startJobRosterWatcher();
+  await refreshRoster();
 
   const sessions = await aggregateLiveSessions(abandonMin);
   return NextResponse.json({ sessions, generatedAt: new Date().toISOString() });
