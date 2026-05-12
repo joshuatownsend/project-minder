@@ -220,9 +220,9 @@ function synthProjectSeed(p: ProjectData): SeedCandidate {
   if (p.database?.type) partsList.push(`- **Database**: ${p.database.type}`);
   if (p.git?.branch) partsList.push(`- **Default branch**: ${p.git.branch}`);
   if (p.lastActivity) {
-    // ISO-stringify defensively -- cached scans may carry Date objects.
-    const iso = new Date(p.lastActivity as unknown as string | number | Date).toISOString();
-    partsList.push(`- **Last activity**: ${iso}`);
+    // ISO-stringify defensively -- cached scans may hold Date objects even
+    // though the type declares string. new Date() accepts both natively.
+    partsList.push(`- **Last activity**: ${new Date(p.lastActivity).toISOString()}`);
   }
   const body = `Project-scoped seed for ${p.name}. Verify with the project's CLAUDE.md before relying on conventions.
 

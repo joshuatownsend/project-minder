@@ -30,7 +30,10 @@ body text here
       expect(out.data.name).toBe("user role");
       expect(out.data.description).toBe("who the user is");
       expect(out.data.type).toBe("user");
-      expect(out.body).toBe("body text here\n");
+      // Indexer's parser trims body whitespace; we accept the leading/trailing
+      // strip since the writer atomic-writes the composed content (frontmatter
+      // + body recomposed before disk), not the parsed body slice directly.
+      expect(out.body).toBe("body text here");
     }
   });
 
@@ -125,7 +128,7 @@ describe("composeMemoryFile", () => {
     expect("error" in parsed).toBe(false);
     if (!("error" in parsed)) {
       expect(parsed.data.type).toBe("user");
-      expect(parsed.body).toBe("body\n");
+      expect(parsed.body).toBe("body");
     }
   });
 

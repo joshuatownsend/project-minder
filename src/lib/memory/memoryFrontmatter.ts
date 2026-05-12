@@ -1,15 +1,12 @@
 import yaml from "js-yaml";
+import { parseFrontmatter as parseFmIndexer } from "../indexer/parseFrontmatter";
 import type { MemoryType } from "../types";
 
-// Claude Code memory files use YAML frontmatter to declare type + description.
-// The prefix on the basename is load-bearing per Bustamante's article: the
-// model treats `feedback_*` as binding overrides, `reference_*` as sticky
-// facts, `project_*` as project-scoped, `user_*` as user description. The
-// prefix and the `type` field MUST agree -- a `feedback_x.md` with
-// `type: reference` would lie to the model. This module parses the
-// frontmatter, validates the prefix-type contract, and is used both by the
-// seed generator (output validation) and the memory writer (write-time
-// guard) so the bad path never reaches disk.
+// Owns the prefix↔type contract for typed memory files: `feedback_*` must
+// declare `type: feedback`, etc. YAML parsing itself delegates to the
+// shared indexer parser (used by agents/skills/commands catalog discovery)
+// -- we just promote its warnings to hard errors so the writer rejects
+// malformed YAML instead of silently dropping the frontmatter.
 
 export interface MemoryFrontmatter {
   name?: string;
@@ -29,37 +26,16 @@ export type FrontmatterError =
 export interface ParsedFrontmatter {
   data: MemoryFrontmatter;
   body: string;
-  raw: string;
 }
-
-// Closing `---` is followed by *at least one* newline plus any additional
-// blank lines, so the body slice doesn't include the gap most authors leave
-// between frontmatter and body. Without this, round-tripping through
-// composeMemoryFile would add a stray leading blank line on every write.
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n)+/;
 
 export function parseFrontmatter(
   content: string,
 ): ParsedFrontmatter | { error: FrontmatterError } {
-  const match = FRONTMATTER_RE.exec(content);
-  if (!match) return { data: {}, body: content, raw: "" };
-  const raw = match[1];
-  let parsed: unknown;
-  try {
-    parsed = yaml.load(raw);
-  } catch (err) {
-    return {
-      error: {
-        code: "INVALID_YAML",
-        message: err instanceof Error ? err.message : String(err),
-      },
-    };
+  const result = parseFmIndexer(content);
+  if (result.warnings.length > 0) {
+    return { error: { code: "INVALID_YAML", message: result.warnings[0] } };
   }
-  const data: MemoryFrontmatter =
-    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as MemoryFrontmatter)
-      : {};
-  return { data, body: content.slice(match[0].length), raw };
+  return { data: result.fm as MemoryFrontmatter, body: result.body };
 }
 
 const ALLOWED_TYPES: MemoryType[] = ["user", "feedback", "project", "reference"];

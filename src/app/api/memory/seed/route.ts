@@ -6,8 +6,8 @@ import { scanAllProjects } from "@/lib/scanner";
 import { generateSeedCandidates } from "@/lib/memory/seedGenerator";
 import { writeMemoryFile, memoryDirFor } from "@/lib/scanner/memoryWriter";
 import { userMemoryPath } from "@/lib/memory/safety";
-import { parseAllSessions } from "@/lib/usage/parser";
-import { classifyTurn } from "@/lib/usage/classifier";
+import { parseFrontmatter } from "@/lib/memory/memoryFrontmatter";
+import { getSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import type { SeedCandidate } from "@/lib/types";
 
 interface PromoteRequest {
@@ -34,17 +34,9 @@ export async function GET(request: NextRequest) {
     userClaudeMd = null;
   }
 
-  // Session category mix drives user_workstyle.md. Single-flight cached, so
-  // a /memory page load and a /memory/seed page load share the same pass.
-  const sessions = await parseAllSessions();
-  const sessionCategories = new Map<string, number>();
-  for (const turns of sessions.values()) {
-    for (const turn of turns) {
-      if (turn.role !== "assistant") continue;
-      const cat = classifyTurn(turn);
-      sessionCategories.set(cat, (sessionCategories.get(cat) ?? 0) + 1);
-    }
-  }
+  // Session category mix drives user_workstyle.md. Cached by JSONL max
+  // mtime so a /memory/seed reload following a prior call doesn't re-classify.
+  const sessionCategories = await getSessionCategoryCounts();
 
   const candidates = generateSeedCandidates({
     userClaudeMd,
@@ -87,13 +79,13 @@ async function attachConflict(
   const existingPath = path.join(memoryDirFor(targetPath), candidate.fileName);
   try {
     const existingBody = await fs.readFile(existingPath, "utf-8");
+    // Parse frontmatter so we don't false-match `seeded: true` text in the
+    // markdown body (e.g. a quoted example or fenced code).
+    const parsed = parseFrontmatter(existingBody);
+    const existingIsSeeded = !("error" in parsed) && parsed.data.seeded === true;
     return {
       ...candidate,
-      conflict: {
-        existingPath,
-        existingBody,
-        existingIsSeeded: existingBody.includes("seeded: true"),
-      },
+      conflict: { existingPath, existingBody, existingIsSeeded },
     };
   } catch {
     return candidate;

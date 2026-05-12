@@ -138,6 +138,9 @@ export type MemoryType = "user" | "feedback" | "project" | "reference";
  * generator; user-scope candidates have it as `null` until the user picks an
  * anchor project on the seed page.
  */
+/** Per-row choice on /memory/seed. Drives the POST payload filter. */
+export type SeedAction = "skip" | "create" | "overwrite";
+
 export interface SeedCandidate {
   /** Basename with required typed prefix, e.g. "user_role.md". */
   fileName: string;

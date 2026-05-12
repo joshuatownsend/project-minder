@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { SeedCandidate } from "@/lib/types";
+import type { SeedAction, SeedCandidate } from "@/lib/types";
 import { Chip } from "./ui/chip";
 import { MemorySeedDiff } from "./MemorySeedDiff";
 
@@ -22,7 +22,10 @@ interface PromoteResult {
   error?: unknown;
 }
 
-type Action = "skip" | "create" | "overwrite";
+interface RowState {
+  action: SeedAction;
+  body: string;
+}
 
 const TYPE_COLOR: Record<SeedCandidate["type"], string> = {
   user: "var(--accent)",
@@ -35,10 +38,13 @@ export function MemorySeedTray() {
   const [data, setData] = useState<SeedResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [anchorPath, setAnchorPath] = useState<string>("");
-  const [actions, setActions] = useState<Record<string, Action>>({});
-  const [bodies, setBodies] = useState<Record<string, string>>({});
+  const [rows, setRows] = useState<Record<string, RowState>>({});
   const [busy, setBusy] = useState(false);
   const [lastRun, setLastRun] = useState<PromoteResult[] | null>(null);
+
+  function patchRow(fileName: string, patch: Partial<RowState>) {
+    setRows((prev) => ({ ...prev, [fileName]: { ...prev[fileName], ...patch } }));
+  }
 
   async function reload(anchor: string, signal?: AbortSignal) {
     try {
@@ -47,16 +53,13 @@ export function MemorySeedTray() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const json = (await r.json()) as SeedResponse;
       setData(json);
-      // Seed default actions: skip if conflict (user must explicitly choose),
-      // create otherwise. The user toggles per row.
-      const nextActions: Record<string, Action> = {};
-      const nextBodies: Record<string, string> = {};
+      const next: Record<string, RowState> = {};
       for (const c of json.candidates) {
-        nextActions[c.fileName] = c.conflict ? "skip" : "create";
-        nextBodies[c.fileName] = c.body;
+        // EXISTS rows default to skip so the user must explicitly opt in to
+        // overwriting; non-conflicting rows default to create.
+        next[c.fileName] = { action: c.conflict ? "skip" : "create", body: c.body };
       }
-      setActions(nextActions);
-      setBodies(nextBodies);
+      setRows(next);
       setError(null);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
@@ -80,31 +83,31 @@ export function MemorySeedTray() {
     let skip = 0;
     let blocked = 0;
     for (const c of candidates) {
-      const a = actions[c.fileName] ?? "skip";
+      const action = rows[c.fileName]?.action ?? "skip";
       if (c.scope === "user" && !anchorPath) {
         blocked++;
         continue;
       }
-      if (a === "create") create++;
-      else if (a === "overwrite") overwrite++;
+      if (action === "create") create++;
+      else if (action === "overwrite") overwrite++;
       else skip++;
     }
     return { create, overwrite, skip, blocked };
-  }, [candidates, actions, anchorPath]);
+  }, [candidates, rows, anchorPath]);
 
   async function promote() {
     setBusy(true);
     const payload = candidates
       .map((c) => {
-        const action = actions[c.fileName] ?? "skip";
+        const row = rows[c.fileName];
+        const action = row?.action ?? "skip";
         if (action === "skip") return null;
-        // Skip user-scope rows with no anchor -- the server would reject them.
         if (c.scope === "user" && !anchorPath) return null;
         const targetProjectPath = c.scope === "per-project" ? c.targetProjectPath! : anchorPath;
         return {
           fileName: c.fileName,
           targetProjectPath,
-          body: bodies[c.fileName] ?? c.body,
+          body: row?.body ?? c.body,
         };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
@@ -221,11 +224,9 @@ export function MemorySeedTray() {
         <SeedRow
           key={c.fileName}
           candidate={c}
-          action={actions[c.fileName] ?? "skip"}
-          body={bodies[c.fileName] ?? c.body}
+          state={rows[c.fileName] ?? { action: "skip", body: c.body }}
           anchorPath={anchorPath}
-          onAction={(a) => setActions((prev) => ({ ...prev, [c.fileName]: a }))}
-          onBody={(b) => setBodies((prev) => ({ ...prev, [c.fileName]: b }))}
+          onChange={(patch) => patchRow(c.fileName, patch)}
         />
       ))}
     </div>
@@ -234,19 +235,16 @@ export function MemorySeedTray() {
 
 function SeedRow({
   candidate,
-  action,
-  body,
+  state,
   anchorPath,
-  onAction,
-  onBody,
+  onChange,
 }: {
   candidate: SeedCandidate;
-  action: Action;
-  body: string;
+  state: RowState;
   anchorPath: string;
-  onAction: (a: Action) => void;
-  onBody: (b: string) => void;
+  onChange: (patch: Partial<RowState>) => void;
 }) {
+  const { action, body } = state;
   const [showDiff, setShowDiff] = useState(false);
   const [editing, setEditing] = useState(false);
   const blocked = candidate.scope === "user" && !anchorPath;
@@ -290,19 +288,19 @@ function SeedRow({
       </div>
 
       <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
-        <ActionButton label="Skip" active={action === "skip"} onClick={() => onAction("skip")} />
+        <ActionButton label="Skip" active={action === "skip"} onClick={() => onChange({ action: "skip" })} />
         <ActionButton
           label={candidate.conflict ? "Create (rejected)" : "Create"}
           active={action === "create"}
           disabled={!!candidate.conflict || blocked}
-          onClick={() => onAction("create")}
+          onClick={() => onChange({ action: "create" })}
         />
         <ActionButton
           label="Overwrite"
           active={action === "overwrite"}
           disabled={!candidate.conflict || blocked}
           variant="warn"
-          onClick={() => onAction("overwrite")}
+          onClick={() => onChange({ action: "overwrite" })}
         />
         {candidate.conflict && (
           <button
@@ -345,7 +343,7 @@ function SeedRow({
       {editing && (
         <textarea
           value={body}
-          onChange={(e) => onBody(e.target.value)}
+          onChange={(e) => onChange({ body: e.target.value })}
           rows={Math.min(20, body.split("\n").length + 1)}
           style={{
             fontFamily: "var(--font-mono)",
