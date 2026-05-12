@@ -1,5 +1,178 @@
 # Insights
 
+<!-- insight:fbab002ed3d7 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T11:44:14.514Z -->
+## ★ Insight
+- Two PRs in one session built the Day 1 Memory Observatory layer from the article's "open problem" framing all the way to a working draft tray with 3-way diff, typed-authoring enforcement, and cross-platform seed accuracy. Each PR closed at production-ready quality (typecheck clean, 2190 tests, automated review feedback addressed) before merging. The pattern that's been working: **plan → execute → /simplify → /pr-resolve → merge** — each phase has tight feedback loops and clear exit gates.
+- The /pr-resolve pass here was load-bearing for correctness, not just polish. Three of the seven findings were real bugs that would have shipped (the create/overwrite race, the validator gap, the FRONTMATTER_INVALID → 500). Two automated reviewers running in parallel caught what /simplify didn't because they're triggered by the PR shape (HTTP-layer behavior, on-disk contracts, multi-writer races), not the in-code patterns /simplify focuses on. Keep both passes in the loop.
+- The Memory Observatory module structure is now stabilizing: pure-function libs in `src/lib/memory/` (memoryIndex, staleRefs, usageTracker, budget, seedGenerator, seedCategoryCounts, memoryFrontmatter), all backed by tight unit tests; thin glue in `src/app/api/memory/*` routes; one shared `MemoryBrowser` + dedicated `MemorySeedTray` UI surface. The next two waves (M.2 bridge, M.4 triage) can mostly compose against this surface area without modifying it — Phase 1 + M.1 paid the infrastructure cost, future waves get to consume.
+
+---
+
+<!-- insight:4cb0c7d1153e | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-12T00:12:14.855Z -->
+## ★ Insight
+- The `lineDiff` swap was the highest-leverage move in this pass. 87 lines of LCS deleted, a `maxLines` truncation guard gained, and the diff renderer now matches `MemoryEditor`'s visual contract for free. Whenever the codebase has *two* implementations of the same algorithm, the second one to land should almost always rebuild on the first — even when they're "close enough" to keep separate.
+- The frontmatter swap was a **soft-fail vs hard-fail** decision. The indexer parser is intentionally lenient (catalog discovery shouldn't blow up on a malformed agent definition; surface a warning, move on). The writer needs the opposite — malformed YAML must be rejected before bytes hit disk. Resolution: reuse the parsing **logic** but reshape the **return type** to fit the new caller's contract. The wrapper is 12 lines, the deleted regex/yaml-load logic was 30+. Pure win.
+- The state-consolidation in `MemorySeedTray` (`actions + bodies → rows`) is a small but real correctness improvement, not just style. Two `useState` slices keyed by the same string mean two setState windows where the row can be in an inconsistent state (one updated, the other not yet flushed). Bundling into one `RowState` makes that race structurally impossible.
+
+---
+
+<!-- insight:cccfc41c8d1c | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T23:55:46.180Z -->
+## ★ Insight
+- This is a **type-vs-runtime drift** bug. The TS interface declares `lastActivity: string`, but the runtime values aren't always strings because the scanner's `dates.sort(...).filter(Boolean) as string[]` cast washes through `Date` objects that originate from various sources. The compiler can't catch this — it trusts the interface — so the unit tests (which used ISO strings, matching the type) all passed. Production blew up the moment a real cached scan hit the route.
+- The right fix is to **mirror the existing defensive pattern** in `scanner/index.ts:273` rather than try to clean up the type. Cleaning up the type would mean either (a) widening to `string | Date` and updating every consumer, or (b) tightening the scanner to truly emit strings — both are out of scope for this PR. Following the established defensive pattern is the right move when the type drift is load-bearing somewhere upstream.
+- The unit-test gap here was real: my generator tests used clean ISO strings, so the code path that breaks in production was untested. The new regression test casts a `new Date(...)` through `as any` deliberately to exercise the exact runtime shape the production cache holds. This is the move whenever you find a "the type lied" bug — add a test that constructs the actual runtime shape, not the declared one.
+
+---
+
+<!-- insight:363f46ba7954 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T23:38:39.483Z -->
+## ★ Insight
+- The big architectural decision here was **bundling M.3 (typed authoring) into M.1's writer path** instead of treating it as a separate enforcement layer. By default the writer now validates frontmatter prefix↔type, with an opt-out flag for back-compat callers. This means the seed generator's output is automatically guarded — the seed generator can't accidentally ship a malformed candidate because the validator is the gate, not a separate check the generator has to remember to call.
+- The 3-way diff is **pure LCS, not Myers**. Memory files are routinely <200 lines (the budget chips alarm at 200), so the O(nm) memory cost is bounded at ~40K cells. Picking Myers would have been premature optimization given the data shape physics — a future PR for documentation diffs could swap in Myers if it ever lands.
+- The seed generator is a **pure function**: `(userClaudeMd, projects, sessionCategories) → SeedCandidate[]`. No fs, no clock, no network. That made the 10 generator tests trivial to write — they just construct synthetic `ProjectData[]` and assert on output. The fs side (`parseAllSessions`, `readFile(userMemoryPath)`) lives in the API route, where it can be smoke-tested manually but doesn't bloat the unit suite. Same pattern Phase 1 used for `staleRefs` and `memoryIndex` — that purity contract is the muscle the Memory Observatory has built up across all five waves now.
+- The **anchor project picker** is the load-bearing UX decision. Without it, user-scope candidates would either need a global "user memory" dir Claude Code doesn't actually read from, OR they'd silently land in some default project's memory dir without user awareness. Making the user pick once per session keeps the contract explicit: every byte written has an explicit owner, no magic routing.
+
+---
+
+<!-- insight:a4ce3d313b6a | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T21:05:16.374Z -->
+## ★ Insight
+- The decision to route the existing index-cap tone through `budgetTone(maxLineCount, 200)` instead of leaving it as inline math is the kind of refactor that's almost invisible at the diff level but matters compounding. Now the **same function** controls when the banner reaches into amber/red across every memory dimension, present and future. If we ever ship Wave M.4's auto-prune recommendations, they can call `budgetTone` directly and inherit the same thresholds the UI shows — no risk of a "the dashboard says warn but the recommender says critical" mismatch.
+- Locking the constants with **exact-value asserts** in the test file (`expect(MEMORY_INDEX_LINE_CAP).toBe(200)`) was deliberate. These numbers come from external article sources, not internal preferences. A future PR that bumps `MEMORY_INDEX_LINE_CAP` to 250 would fail the test loudly and force the reviewer to justify — "Anthropic shipped a bigger index cap and we have a link to confirm". That's better than silently drifting away from documented physics.
+- The total-body chip being **informational with no tone** while the per-row chip carries the alarm is a load-bearing design choice. Aggregates lie — a project with one 30 KB body and twenty 200-byte bodies has the same total as one with sixty 500-byte bodies, but the first is much more urgent to triage. Showing "60% of 32 KB" with no color and "5.2 KB" red-tinted on the specific offending row directs the user's attention at the file that's actually the problem.
+
+---
+
+<!-- insight:2f01b0e28a5f | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T21:00:09.451Z -->
+## ★ Insight
+- D is informational, not gating. The chips warn the user when the index or body bytes approach the article's documented limits, but nothing is blocked or auto-pruned. Decay/triage recommendations are deferred to Wave M.4 — D just provides the data those future recommendations will read.
+- Three thresholds, three meanings: 200 lines is the **truncation cap** (data loss risk); 4KB per-file is the **large-file marker** (just visibility); 32KB total body is the **soft budget target** (no hard cap, just amber when you're approaching what the article suggests). Color thresholds (80% amber, 95% red) come from CONTEXT decision D3 — the article reports both as practical limits.
+- The CONTEXT decision was to hardcode all thresholds and skip the `.minder.json` configurability the original plan mentioned. Rationale: budget targets are essentially physics-driven (200-line context cap is documented by the article), not user preference. If we later learn 32KB is wrong we change the constant in one place.
+
+---
+
+<!-- insight:89348ba774df | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T20:59:34.383Z -->
+## ★ Insight
+- The CONTEXT.md decision B3 ("parser callback API: `onMemoryEvent?`") turned out to be wrong. The right move was to piggyback on the cached `UsageTurn[]` from `parseAllSessions()` — same data, no parser surgery, zero risk to existing usage tests. The CONTEXT decision was framed by "avoid double-reading the files", but the existing `parseAllSessions` already caches with mtime-keyed LRU, so a callback wasn't actually solving anything. Worth noting as a process artifact: locked decisions during DISCUSS aren't immutable — when implementation reveals a simpler path, the right move is to take it and explain in the commit.
+- The `isMemoryPath` heuristic is doing real work. It has to recognize three different shapes (user, project, auto) emitted on two platforms (back-slash and forward-slash) with varying case sensitivity. The Windows realities are subtle: `C:\Users\joshu\.claude\` and `/home/josh/.claude/` both have to match the same pattern, and the project list lookup is case-insensitive because Windows filesystems are case-insensitive but emit case-preserving paths.
+- Write-through to SQLite with the read path entirely in-memory is a useful pattern when the persistent store is "future-proofing, not the hot path". It eliminates the DB from the latency budget while still capturing data for future queries that might want history (e.g., "show me the read trend for `feedback_design_system.md` over the past 6 months"). The migration adds the table but the dashboard never queries it — yet.
+
+---
+
+<!-- insight:07a3edd02eca | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T20:48:04.114Z -->
+## ★ Insight
+- Two-segment slash requirement in the regex (`[\w@./~\-]+\/[\w@./~\-]+\.ext`) is the single most important constraint. Without it, prose like "see version 1.2.3" or "the .ts compiler" would surface as broken refs. The slash anchor is what makes the audit useful instead of noisy.
+- Per-call memoization (`existsMemo: Map`) plus per-file persistent cache (mtime + projectsKey) work in layers: the memo amortizes the 60-memory-file × 10-candidate sweep within a single `/memory` load (cold path), and the persistent cache makes the next load free (warm path) until either the file changes OR the project set changes. The `projectsKey` invariant is what stops a deleted project from leaving stale "exists" verdicts in cache.
+- "Strip fences before scanning" is asymmetric on purpose. Code blocks in memory files are documentation/examples — they often deliberately mention files that don't exist (planned, hypothetical, illustrative). Prose mentions are assertions: "the route is at app/api/x/route.ts" claims it's there *now*. Same path, opposite intent. The fence boundary is the cheapest available proxy for that distinction.
+
+---
+
+<!-- insight:c49f0e11d1c7 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T20:40:06.219Z -->
+## ★ Insight
+- Feature A is the most error-prone of the four because regex-on-prose is a swamp. The CONTEXT lock (`A1: conservative regex covering ts/tsx/js/jsx/mjs/cjs/md/json/sql/yml/yaml/toml/sh/py/go/rs, path must contain '/', fence-aware`) is what keeps it from drowning in false positives. Every casual sentence like "see the new index.ts" must be ignored; only `src/foo/bar.ts` style refs count.
+- The two failure modes to avoid: (1) flagging code-fence content (markdown ` ```...``` ` blocks routinely show file paths in examples, mustn't trigger), and (2) flagging URL fragments like `github.com/foo/bar.ts`. Both are handled by simple state machines.
+- A2 locked the resolution policy: parent-encoded project first, fall back to any scanned project. That means for `~/.claude/projects/C--dev-project-minder/memory/foo.md`, we decode the encoded path back to `C:\dev\project-minder` and check there first. If the ref doesn't exist, we try the other 60 scanned projects in lexicographic order — first match wins.
+
+---
+
+<!-- insight:8a7250a57ef8 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T20:35:36.174Z -->
+## ★ Insight
+- The MEMORY.md "always-loaded index" pattern Bustamante describes is fundamentally about **lazy loading**: the index is small enough to keep in context every turn, and bodies load on-demand. Feature C surfaces that contract on the dashboard — if the index outgrows 200 lines it gets truncated, so a runaway entry list silently drops content. The amber/red threshold isn't cosmetic, it's an actual data-loss warning.
+- Orphan vs dangling is asymmetric. **Orphans** (files not linked) only waste disk and reduce discoverability — Claude Code will never load them automatically. **Dangling links** are worse: the model sees the link in its always-loaded index, decides to read the body, hits ENOENT, and may proceed on a memory that effectively doesn't exist. Surfacing both counts at once gives the user one place to spot index drift in either direction.
+- Decision to widen `listMemoryFiles`'s return type instead of adding a sibling function paid off — single cache, single source of truth, two consumers (API route + one test file) updated in two lines. The alternative (sibling `listIndexSummaries` reading from the same cache) would have required double-bookkeeping or a stale-cache race.
+
+---
+
+<!-- insight:4a64544ab545 | session:e7e544bf-e9e8-415d-8140-b1b946d13c84 | 2026-05-11T20:27:42.799Z -->
+## ★ Insight
+- Claude Code's MEMORY.md pattern is **per-encoded-cwd**, not global. Each project gets its own index + body files. The `auto` scope in this codebase already represents that exactly — `tryAuto()` reads from `memoryDirFor(p.path)`.
+- The original plan said "user-scope", but on disk that's just `~/.claude/CLAUDE.md` (single file). The MEMORY.md *index pattern* the article describes lives at auto-scope.
+- This is a one-word correction, not a scope change. I'll proceed with auto-scope index parsing and surface the new fields (`indexed`, `indexEntry`) only on auto-scope rows. Project/user rows always get `indexed: undefined`.
+
+---
+
+<!-- insight:a4695c00273b | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:49:26.840Z -->
+## ★ Insight
+The advisor flagged that the mixed-imports theory is plausible but unproven, and that the pattern existed before any of my recent changes — so if mixed imports were causal, the error would have been broken before too. The 30-second test: `[ScopeProvider] module eval` at module top-level. Two prints on one cold boot = duplication is real, refactor imports. One print = duplication theory is wrong, look elsewhere (likely something in my recent edits that changed render order before `useScope`).
+
+---
+
+<!-- insight:7a1c25a98d29 | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:48:43.809Z -->
+## ★ Insight
+**Found it.** `layout.tsx` and `page.tsx` import `ScopeProvider` via the `@/components/ScopeProvider` alias, while `AppShell.tsx`, `AppSidebar.tsx`, `AppTopbar.tsx`, and `ProjectScopeMenu.tsx` import it via the relative `./ScopeProvider`. These resolve to the same source file, but **Turbopack's chunking algorithm treats them as distinct module specifiers** and can produce two separate evaluations of the module — each with its own `createContext()` call producing a different `ScopeContext` object. The Provider in one chunk sets context_A; the consumer in another chunk reads context_B; the `null` check trips. This is why the error only fires on the first cold SSR pass (fresh chunking) and clears after HMR (modules converge through the dependency graph). The previous "clean restart fixed it" observation was misleading — HMR was masking the chunking duplication, not curing it.
+
+---
+
+<!-- insight:0e849eace69d | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:33:47.841Z -->
+## ★ Insight
+Real Claude Code user turns store `message.content` as a **string** (not an array of typed blocks like assistant turns do). `extractText()` in `src/lib/usage/contentBlocks.ts:18-28` early-returns `""` for non-arrays, so every human-typed prompt ingested into the DB ends up with empty `text_preview`, empty `initial_prompt`, and empty `last_prompt`. The file-parse path doesn't hit this — it has its own `extractHumanText` that handles strings (line 97-99). The DB path's `searchableText` reads non-empty because assistant turns DO use array content, so the search index fills with assistant prose while user prompts are silently dropped.
+
+---
+
+<!-- insight:aa022c01499d | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:32:06.115Z -->
+## ★ Insight
+The smoking gun is `extractHumanText` at `claudeConversations.ts:96-107`: it returns `""` for any content starting with `<`. That's intentional — to filter out hook-injected payloads like `<system-reminder>`, `<bash-input>`, `<bash-stdout>`. But if EVERY user turn in modern Claude Code sessions arrives wrapped (or the parser misses a path), `initialPrompt`/`lastPrompt` never get set. Yet `searchableText` does, because it also accumulates assistant `text` blocks (lines 228-234). That matches the symptom exactly: prompt fields empty, search text full of assistant prose.
+
+---
+
+<!-- insight:0e9bdc0c3e12 | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:26:16.532Z -->
+## ★ Insight
+`--accent` in this design system is the amber OKLCH token used as the brand attention color (per the design-system memory). The existing glyph uses a blue→purple gradient that doesn't match the rest of the brand palette. Switching to an amber gradient that mirrors the existing two-stop pattern (`--accent` → `--accent-strong`) preserves the established visual treatment while landing on-brand. Text stays `var(--bg)` (the dark page background color) — amber at `lightness 0.74` is light enough that dark text reads cleanly.
+
+---
+
+<!-- insight:342bc5304d2e | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:11:42.192Z -->
+## ★ Insight
+The state machine has two failed states. `transient-failed` is for locks/EBUSY that usually clear on their own — banners here would be alarmist and trip on a healthy DB that briefly contended a handle. `permanent-failed` only triggers after 2 cumulative quarantines, which by design means the rebuild itself isn't recovering — *that's* the state worth surfacing.
+
+---
+
+<!-- insight:583b595e8101 | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:08:53.485Z -->
+## ★ Insight
+The OTEL routes (`src/app/api/otel/v1/metrics/route.ts` and likely `logs/route.ts`) bypass the data-layer state machine: they call `initDb()` directly with their own `initPromise` cache. That machine in `src/lib/data/index.ts` already classifies EBUSY/EPERM as transient errors, retries with backoff `[100, 300, 900]ms`, caps quarantines at 2 (then escalates to `permanent-failed`), and exposes the state to `/api/health`. Going around it means EBUSY → unhandled throw → 500, and the failure never enters the state machine that Home could observe.
+
+---
+
+<!-- insight:93bcb7d3af86 | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:03:41.285Z -->
+## ★ Insight
+The codebase already has the canonical fix for this exact bug — see `AppSidebar.tsx:138-139` where a `hydrated` flag plus `useEffect` defers badge rendering until after the first client paint. The comment there even names this as "HIGH-4 in the 2026-05-10 review." `AppTopbar` was just missed when that fix was applied. So this is an inconsistency, not a new bug class.
+
+---
+
+<!-- insight:f6ac8506903e | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T19:01:28.671Z -->
+## ★ Insight
+The new error is a hydration mismatch — different category of bug. Server renders one HTML; client renders different HTML on first render; React aborts hydration and re-renders client-side. The diff shows the server thought there were 0 alerts and the client thought there were 242 — so the alert count comes from a source that's empty on the server and populated on the client (likely localStorage or a `usePulse` snapshot that initializes empty then fills).
+
+---
+
+<!-- insight:37a37ddce358 | session:5889b2bf-29dd-48df-b8ae-9432c93fe871 | 2026-05-11T18:39:12.657Z -->
+## ★ Insight
+A `template.tsx` at any level would re-mount the page tree on navigation **outside** the provider boundary defined in `layout.tsx` — that would cause exactly this symptom (context missing on a route the layout *appears* to wrap). None exist here, so this hypothesis is ruled out. The remaining likely cause is module-identity drift from Turbopack HMR: `createContext` returns a new object per module instance, so if Turbopack accidentally produces two copies of `ScopeProvider.tsx`, the Provider sets context on one object and the consumer reads from the other — and the consumer's `null` check trips.
+
+---
+
+<!-- insight:2aa478a7094b | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:33:50.112Z -->
+## ★ Insight
+- **Five phases shipped in one day** (4.1 → 5.1 → 6.1 → 7.1) following a consistent workflow: branch → implement → CHANGELOG → typecheck+test → simplify → commit+PR → pr-resolve → squash-merge. The pattern compounds: each phase reuses the previous phase's verification cadence, plan-rationale appending, and PR shape.
+- **The "byte-for-byte preservation as the discriminator" framing** is what made Phase 7.1 succeed where Phase 7's original attempt deferred. When the consolidation discipline is "look identical at every call site", the design choices follow: `children: ReactNode` for body content, `size` variants for genuine treatment divergence, `headerGap` prop to surface real preservation gaps. The framing acts as a forcing function for honest engineering.
+- **Phase 7.1d's `headerGap` fix** is a small but meaningful demonstration that pr-resolve isn't just about appeasing bots — Copilot's MEDIUM-severity catch on the 8/10 px header gap was a real byte-preservation gap I'd missed. The fix added 1 prop + 1 default + 1 call-site arg and made the byte-for-byte claim accurate.
+
+---
+
+<!-- insight:4c126c2e7c0a | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:26:45.455Z -->
+## ★ Insight
+- **F3 (the headerGap miss)** is the kind of byte-preservation gap that's easy to miss when you're focused on the bigger picture — I focused on the vertical row-spacing shift (and documented it explicitly) but didn't notice that the horizontal header gap also differed (8 vs 10). Always grep for `gap:` and `marginBottom:` on BOTH axes when claiming byte-for-byte.
+- **Three reviewer agents catching three different concerns** (Phase 6.1) found one P1 bug. Copilot alone on Phase 7.1 still caught one medium and two LOW nits. The marginal value of multi-agent review is the bug-catching at the long tail — single-agent review can still surface the obvious gaps.
+- **The `headerGap?: number` prop pattern** is the cleanest answer to "this consumer was 10, that one was 8". A single optional prop with a sensible default doesn't expand the surface much, doesn't force consumers to think about it, and lets the divergent consumer opt in. Better than a `variant` enum here.
+
+---
+
+<!-- insight:28867039c389 | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:17:10.117Z -->
+## ★ Insight
+- **Phase 7.1's discriminator was byte-for-byte preservation, not LOC savings**. The original Phase 7 attempt deferred because "the small consolidation win didn't pencil out vs the visible UI risk". By keeping each call site's body content as `children` and only consolidating the outer shell + header (FindingCard) or the entire shape with explicit variants (StatCell), the consolidation works without forcing visual drift.
+- **YAGNI on the tone palette** — the deferred plan called for crit/high/med/low/info (5 tones); only 3 are reachable from any current consumer. Adding 2 unused tones would have meant 2 unused CSS-var lookups in every consumer's `severityStyle` function. Smaller surface = easier to maintain.
+- **The "third StatCell" surprise** is a good argument for grepping ALL call sites before designing a prop surface. The plan named 2 sites; the codebase had 3, with the third (`UsageDashboard`) adding a `"good"` accent the plan didn't anticipate. If I'd designed for the plan's 2-site union instead of grepping first, the migration would have rejected UsageDashboard's accent at compile time.
+
+---
+
 <!-- insight:a44fa1b289fe | session:7dcc16cd-8653-49e8-9d2f-e7fe6e7ff12e | 2026-05-11T18:05:09.494Z -->
 ## ★ Insight
 - SessionDetailView and UsageDashboard have **identical** StatCell DOM/styling — only difference is UsageDashboard's `"good"` accent. The two collapse trivially. StatsDashboard is the genuinely different one (1.35rem vs 1.25rem font, 12×16 vs 14×20 padding, also adds an `icon` slot).
