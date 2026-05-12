@@ -139,6 +139,17 @@ describe("inferLiveSessionStatus", () => {
     ).toBe("working");
   });
 
+  it("returns other for stale end_turn sessions (> 10 min) — phantom-session fix", () => {
+    const entries = [assistantEntry({ stopReason: "end_turn" })];
+    // 11 minutes old — past STALE_MS, should not pin to "Needs Input"
+    expect(inferLiveSessionStatus(entries, makeMtime(11 * 60_000), undefined).status).toBe("other");
+  });
+
+  it("still returns waiting for end_turn sessions within the 10-min window", () => {
+    const entries = [assistantEntry({ stopReason: "end_turn" })];
+    expect(inferLiveSessionStatus(entries, makeMtime(5 * 60_000), undefined).status).toBe("waiting");
+  });
+
   it("ignores sidechain entries when finding last assistant turn", () => {
     const entries: ConversationEntry[] = [
       assistantEntry({ stopReason: "end_turn" }),
