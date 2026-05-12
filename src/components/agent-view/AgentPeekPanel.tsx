@@ -4,6 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { LiveAgentSession } from "@/lib/agentView/types";
 import type { HookEvent } from "@/lib/hooks/buffer";
+import { AgentTreeView } from "./AgentTreeView";
+
+type PeekTab = "hooks" | "tree";
+
+const TAB_LABELS: Record<PeekTab, string> = {
+  hooks: "Hook events",
+  tree: "Sub-agents",
+};
 
 interface PeekData {
   hookEvents: HookEvent[];
@@ -20,9 +28,10 @@ interface AgentPeekPanelProps {
 
 export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
   const [data, setData] = useState<PeekData | null>(null);
+  const [activeTab, setActiveTab] = useState<PeekTab>("hooks");
 
   useEffect(() => {
-    if (!session) { setData(null); return; }
+    if (!session) { setData(null); setActiveTab("hooks"); return; }
     let aborted = false;
     fetch(`/api/agent-view/peek?slug=${encodeURIComponent(session.projectSlug)}&sessionId=${encodeURIComponent(session.sessionId)}`)
       .then((r) => r.json())
@@ -76,6 +85,48 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
           </button>
         </div>
 
+        {/* Tabs */}
+        <div style={{
+          display: "flex", gap: 0,
+          borderBottom: "1px solid var(--line-soft,#222)",
+          padding: "0 16px",
+        }}>
+          {(["hooks", "tree"] as PeekTab[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              style={{
+                background: "none",
+                border: "none",
+                borderBottom: activeTab === tab ? "2px solid var(--blue-text,#60a5fa)" : "2px solid transparent",
+                color: activeTab === tab ? "var(--text-1,#fff)" : "var(--text-3,#888)",
+                cursor: "pointer",
+                fontSize: "0.7rem",
+                fontWeight: activeTab === tab ? 600 : 400,
+                padding: "8px 12px 6px",
+                marginBottom: -1,
+                textTransform: "capitalize",
+              }}
+            >
+              {TAB_LABELS[tab]}
+              {tab === "tree" && session.subagentsInFlight != null && session.subagentsInFlight > 0 && (
+                <span style={{
+                  marginLeft: 5,
+                  background: "var(--blue-bg,#0c1a2e)",
+                  color: "var(--blue-text,#60a5fa)",
+                  border: "1px solid var(--blue-border,#1e3a5f)",
+                  borderRadius: 3,
+                  padding: "0 4px",
+                  fontSize: "0.55rem",
+                }}>
+                  {session.subagentsInFlight}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
         {/* Body */}
         <div style={{ flex: 1, overflow: "auto", padding: "12px 16px" }}>
           {/* Session meta */}
@@ -86,43 +137,51 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
             <Chip label="Source" value={session.livenessSource} />
           </div>
 
-          {/* Hook events */}
-          <section>
-            <SectionLabel>
-              Hook events
-              <span style={{ color: "var(--text-4,#555)", fontWeight: 400, marginLeft: 6 }}>
-                (last 5 min)
-              </span>
-            </SectionLabel>
-            {!data ? (
-              <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>Loading…</div>
-            ) : data.hookEvents.length === 0 ? (
-              <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>
-                No hook events. Enable Live Activity in Settings to see them.
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {[...data.hookEvents].reverse().slice(0, 30).map((ev, i) => (
-                  <div key={i} style={{
-                    display: "flex", gap: 8, alignItems: "baseline",
-                    fontSize: "0.65rem", fontFamily: "var(--font-mono,monospace)",
-                  }}>
-                    <span style={{ color: "var(--text-4,#555)", flexShrink: 0 }}>
-                      {formatEventTime(ev.receivedAt)}
-                    </span>
-                    <span style={{ color: "var(--amber-text,#fbbf24)", flexShrink: 0 }}>
-                      {ev.hookEventName}
-                    </span>
-                    {ev.toolName && (
-                      <span style={{ color: "var(--text-2,#ccc)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {ev.toolName}
+          {activeTab === "hooks" && (
+            <section>
+              <SectionLabel>
+                Hook events
+                <span style={{ color: "var(--text-4,#555)", fontWeight: 400, marginLeft: 6 }}>
+                  (last 5 min)
+                </span>
+              </SectionLabel>
+              {!data ? (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>Loading…</div>
+              ) : data.hookEvents.length === 0 ? (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>
+                  No hook events. Enable Live Activity in Settings to see them.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {[...data.hookEvents].reverse().slice(0, 30).map((ev, i) => (
+                    <div key={i} style={{
+                      display: "flex", gap: 8, alignItems: "baseline",
+                      fontSize: "0.65rem", fontFamily: "var(--font-mono,monospace)",
+                    }}>
+                      <span style={{ color: "var(--text-4,#555)", flexShrink: 0 }}>
+                        {formatEventTime(ev.receivedAt)}
                       </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+                      <span style={{ color: "var(--amber-text,#fbbf24)", flexShrink: 0 }}>
+                        {ev.hookEventName}
+                      </span>
+                      {ev.toolName && (
+                        <span style={{ color: "var(--text-2,#ccc)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {ev.toolName}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeTab === "tree" && (
+            <section>
+              <SectionLabel>Sub-agent tree</SectionLabel>
+              <AgentTreeView sessionId={session.sessionId} />
+            </section>
+          )}
         </div>
       </div>
     </>

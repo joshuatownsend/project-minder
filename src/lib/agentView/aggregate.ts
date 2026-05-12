@@ -1,6 +1,7 @@
 import "server-only";
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, getHookBuffer, STOP_EVENTS } from "@/lib/hooks/buffer";
+import type { HookEvent } from "@/lib/hooks/buffer";
 import { getRosterEntries } from "./jobRoster";
 import type { LiveAgentSession, AgentSessionStatus } from "./types";
 import { STATUS_ORDER } from "./types";
@@ -35,6 +36,16 @@ export function daemonStateToAgentStatus(state?: string): AgentSessionStatus {
 function truncate(s: string | undefined, max = 80): string | undefined {
   if (!s) return undefined;
   return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+function countSubagentsInFlight(events: readonly HookEvent[]): number {
+  let spawns = 0;
+  let stops = 0;
+  for (const e of events) {
+    if (e.hookEventName === "PreToolUse" && e.toolName === "Agent") spawns++;
+    else if (e.hookEventName === "SubagentStop") stops++;
+  }
+  return Math.max(0, spawns - stops);
 }
 
 export async function aggregateLiveSessions(
@@ -81,6 +92,9 @@ export async function aggregateLiveSessions(
     // Find a matching JSONL session for richer info (tool name, activity line)
     const jsonlMatch = jsonlSessions.find((s) => s.sessionId === sessionId || s.projectSlug === slug);
 
+    const rosterEvents = [...getHookBuffer(slug)].filter((e) => e.sessionId === sessionId);
+    const rosterSubagentsInFlight = countSubagentsInFlight(rosterEvents);
+
     const session: LiveAgentSession = {
       sessionId,
       projectSlug: slug,
@@ -99,6 +113,7 @@ export async function aggregateLiveSessions(
       runningProcess: entry.processRunning !== false,
       livenessSource: "daemon",
       model: entry.model,
+      subagentsInFlight: rosterSubagentsInFlight > 0 ? rosterSubagentsInFlight : undefined,
     };
     result.set(sessionId, session);
   }
@@ -139,6 +154,8 @@ export async function aggregateLiveSessions(
     if (isAbandoned && TERMINAL_STATUSES.has(hookDerivedStatus)) continue;
     const status: AgentSessionStatus = isAbandoned ? "stopped" : hookDerivedStatus;
 
+    const hookSubagentsInFlight = countSubagentsInFlight(sessionHookEvents);
+
     result.set(sessionId, {
       sessionId,
       projectSlug: jsonlSession.projectSlug,
@@ -152,6 +169,7 @@ export async function aggregateLiveSessions(
       awaitingInputSince: isAwaiting ? lastChangedAt : undefined,
       runningProcess: false,
       livenessSource: "hook",
+      subagentsInFlight: hookSubagentsInFlight > 0 ? hookSubagentsInFlight : undefined,
     });
   }
 

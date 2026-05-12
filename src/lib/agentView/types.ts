@@ -47,6 +47,8 @@ export interface LiveAgentSession {
   costEstimate?: number;
   /** Peak context fill ratio [0,1] from maxContextFill. */
   maxContextFill?: number;
+  /** Number of sub-agents currently spawned but not yet stopped (from hook buffer). */
+  subagentsInFlight?: number;
 }
 
 /** A single entry from `~/.claude/daemon/roster.json`. All fields optional — schema is undocumented. */
