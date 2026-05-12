@@ -30,7 +30,7 @@ interface TriageResponse {
   trashed: TrashedRow[];
 }
 
-type ActionId = "archive" | "delete" | "keep" | "restore-archive" | "restore-trash";
+type ActionId = "archive" | "delete" | "keep" | "unsuppress" | "restore-archive" | "restore-trash";
 
 const KEEP_OPTIONS = [
   { days: 7, label: "Keep 7d" },
@@ -41,7 +41,7 @@ const KEEP_OPTIONS = [
 export function MemoryTriage() {
   const [data, setData] = useState<TriageResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const reload = useCallback(async (signal?: AbortSignal) => {
@@ -67,7 +67,11 @@ export function MemoryTriage() {
     rowKey: string,
     body: { action: ActionId; projectSlug: string; fileName: string; days?: number },
   ) {
-    setPending((p) => ({ ...p, [rowKey]: true }));
+    setPending((p) => {
+      const next = new Set(p);
+      next.add(rowKey);
+      return next;
+    });
     try {
       const r = await fetch("/api/memory/triage", {
         method: "POST",
@@ -76,20 +80,14 @@ export function MemoryTriage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        const code =
-          (typeof j?.error === "object" && j.error !== null && "code" in j.error)
-            ? String((j.error as { code: unknown }).code)
-            : typeof j?.error === "string"
-              ? j.error
-              : `HTTP ${r.status}`;
-        setError(`${body.action} failed: ${code}`);
+        setError(`${body.action} failed: ${extractErrorCode(j, r.status)}`);
         return;
       }
       await reload();
     } finally {
       setPending((p) => {
-        const next = { ...p };
-        delete next[rowKey];
+        const next = new Set(p);
+        next.delete(rowKey);
         return next;
       });
       setConfirming(null);
@@ -134,13 +132,13 @@ export function MemoryTriage() {
             <CandidateRow
               key={t.entry.absPath}
               triage={t}
-              pending={!!pending[t.entry.absPath]}
+              pending={pending.has(t.entry.absPath)}
               confirming={confirming === t.entry.absPath}
-              onArchive={() => act(t.entry.absPath, archiveBody(t.entry))}
+              onArchive={() => act(t.entry.absPath, actionBody("archive", t.entry))}
               onConfirmDelete={() => setConfirming(t.entry.absPath)}
-              onCommitDelete={() => act(t.entry.absPath, deleteBody(t.entry))}
+              onCommitDelete={() => act(t.entry.absPath, actionBody("delete", t.entry))}
               onCancelDelete={() => setConfirming(null)}
-              onKeep={(days) => act(t.entry.absPath, keepBody(t.entry, days))}
+              onKeep={(days) => act(t.entry.absPath, actionBody("keep", t.entry, days))}
             />
           ))}
         </Section>
@@ -156,13 +154,13 @@ export function MemoryTriage() {
             <CandidateRow
               key={t.entry.absPath}
               triage={t}
-              pending={!!pending[t.entry.absPath]}
+              pending={pending.has(t.entry.absPath)}
               confirming={confirming === t.entry.absPath}
-              onArchive={() => act(t.entry.absPath, archiveBody(t.entry))}
+              onArchive={() => act(t.entry.absPath, actionBody("archive", t.entry))}
               onConfirmDelete={() => setConfirming(t.entry.absPath)}
-              onCommitDelete={() => act(t.entry.absPath, deleteBody(t.entry))}
+              onCommitDelete={() => act(t.entry.absPath, actionBody("delete", t.entry))}
               onCancelDelete={() => setConfirming(null)}
-              onKeep={(days) => act(t.entry.absPath, keepBody(t.entry, days))}
+              onKeep={(days) => act(t.entry.absPath, actionBody("keep", t.entry, days))}
             />
           ))}
         </Section>
@@ -178,8 +176,8 @@ export function MemoryTriage() {
             <SuppressedRow
               key={t.entry.absPath}
               triage={t}
-              pending={!!pending[t.entry.absPath]}
-              onLift={() => act(t.entry.absPath, keepBody(t.entry, 0))}
+              pending={pending.has(t.entry.absPath)}
+              onLift={() => act(t.entry.absPath, actionBody("unsuppress", t.entry))}
             />
           ))}
         </Section>
@@ -195,7 +193,7 @@ export function MemoryTriage() {
             <ManagedRowView
               key={f.absPath}
               row={f}
-              pending={!!pending[f.absPath]}
+              pending={pending.has(f.absPath)}
               actionLabel="Restore"
               onAction={() =>
                 act(f.absPath, {
@@ -219,7 +217,7 @@ export function MemoryTriage() {
             <ManagedRowView
               key={f.absPath}
               row={f}
-              pending={!!pending[f.absPath]}
+              pending={pending.has(f.absPath)}
               actionLabel="Restore"
               autoDeleteAt={f.autoDeleteAt}
               onAction={() =>
@@ -243,27 +241,22 @@ export function MemoryTriage() {
   );
 }
 
-function archiveBody(entry: MemoryFileEntry) {
+function actionBody(action: ActionId, entry: MemoryFileEntry, days?: number) {
   return {
-    action: "archive" as const,
+    action,
     projectSlug: entry.projectSlug ?? "",
     fileName: entry.displayName,
+    ...(days !== undefined ? { days } : {}),
   };
 }
-function deleteBody(entry: MemoryFileEntry) {
-  return {
-    action: "delete" as const,
-    projectSlug: entry.projectSlug ?? "",
-    fileName: entry.displayName,
-  };
-}
-function keepBody(entry: MemoryFileEntry, days: number) {
-  return {
-    action: "keep" as const,
-    projectSlug: entry.projectSlug ?? "",
-    fileName: entry.displayName,
-    days,
-  };
+
+function extractErrorCode(json: unknown, status: number): string {
+  const err = (json as { error?: unknown } | null)?.error;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "code" in err) {
+    return String((err as { code: unknown }).code);
+  }
+  return `HTTP ${status}`;
 }
 
 function SummaryBanner({

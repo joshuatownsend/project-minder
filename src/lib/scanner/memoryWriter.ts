@@ -10,11 +10,10 @@ import {
   type FrontmatterError,
 } from "../memory/memoryFrontmatter";
 
-/** Sub-dir under the memory dir used by Wave M.4 triage actions. */
 export const ARCHIVE_SUBDIR = "archive";
+/** Dot-prefix keeps the main scanner's `!n.startsWith(".")` filter from
+ *  bleeding trashed files into the live /memory listing. */
 export const TRASH_SUBDIR = ".trash";
-
-/** Per the M.4 contract, trashed files are kept locally for 30 days then swept. */
 export const TRASH_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 
 export function memoryDirFor(projectPath: string): string {
@@ -68,22 +67,9 @@ export async function writeMemoryFile(
   content: string,
   options: WriteMemoryOptions = {},
 ): Promise<MemoryWriteResult> {
-  if (!fileName || typeof fileName !== "string") {
-    return { ok: false, error: { code: "INVALID_NAME" } };
-  }
-  // Reject anything with a separator before basename runs — basename would
-  // happily strip "/etc/passwd" into "passwd" and silently write a file the
-  // caller didn't intend.
-  if (fileName.includes("/") || fileName.includes("\\") || fileName.includes("\0")) {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-  const stripped = path.basename(fileName);
-  if (!stripped || stripped === "." || stripped === "..") {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-  if (!stripped.toLowerCase().endsWith(".md")) {
-    return { ok: false, error: { code: "NOT_MARKDOWN" } };
-  }
+  const v = validateMemoryBasename(fileName);
+  if (!v.ok) return { ok: false, error: v.error };
+  const stripped = v.stripped;
 
   if (!options.skipTypeValidation) {
     const parsed = parseFrontmatter(content);
@@ -96,14 +82,14 @@ export async function writeMemoryFile(
     }
   }
 
-  const memoryDir = memoryDirFor(projectPath);
-  const targetPath = path.resolve(memoryDir, stripped);
-  if (!isInside(targetPath, path.resolve(memoryDir))) {
+  const memoryDirAbs = path.resolve(memoryDirFor(projectPath));
+  const targetPath = path.resolve(memoryDirAbs, stripped);
+  if (!isInside(targetPath, memoryDirAbs)) {
     return { ok: false, error: { code: "TRAVERSAL" } };
   }
 
   try {
-    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.mkdir(memoryDirAbs, { recursive: true });
     await withFileLock(targetPath, () => writeFileAtomic(targetPath, content));
     return { ok: true, bytesWritten: Buffer.byteLength(content, "utf-8") };
   } catch (err) {
@@ -121,18 +107,27 @@ export async function writeMemoryFile(
 export interface MemoryMoveResult {
   ok: boolean;
   destPath?: string;
-  error?:
-    | { code: "INVALID_NAME" }
-    | { code: "TRAVERSAL" }
-    | { code: "NOT_MARKDOWN" }
-    | { code: "SOURCE_NOT_FOUND" }
-    | { code: "MOVE_FAILED"; message: string };
+  error?: BasenameError | { code: "SOURCE_NOT_FOUND" } | { code: "MOVE_FAILED"; message: string };
 }
 
-function validateMemoryBasename(fileName: string): { ok: true; stripped: string } | { ok: false; error: MemoryMoveResult["error"] } {
+type BasenameError =
+  | { code: "INVALID_NAME" }
+  | { code: "TRAVERSAL" }
+  | { code: "NOT_MARKDOWN" };
+
+/**
+ * Shared basename guard used by `writeMemoryFile` and every mover primitive.
+ * Centralizing prevents drift if the rules ever evolve (e.g. length caps,
+ * Windows-reserved names). The error variants are a subset of every caller's
+ * error union so the result is structurally assignable in both directions.
+ */
+function validateMemoryBasename(
+  fileName: string,
+): { ok: true; stripped: string } | { ok: false; error: BasenameError } {
   if (!fileName || typeof fileName !== "string") {
     return { ok: false, error: { code: "INVALID_NAME" } };
   }
+  // basename would happily strip "/etc/passwd" into "passwd" — reject pre-strip.
   if (fileName.includes("/") || fileName.includes("\\") || fileName.includes("\0")) {
     return { ok: false, error: { code: "TRAVERSAL" } };
   }
@@ -169,12 +164,52 @@ async function pathExists(p: string): Promise<boolean> {
 }
 
 /**
- * Move a memory file into a sibling subdir of the memory dir — used by the
- * /memory/triage Archive and Delete actions. The mover stays inside the
- * memory dir (path-traversal safe), retries Windows EBUSY via
- * renameWithRetry, and suffixes the destination with a compact ISO
- * timestamp when a same-named file already exists in the subdir.
+ * Atomic rename + collision-suffix engine shared by the move-IN (archive,
+ * soft-delete) and move-OUT (restore-from-archive, restore-from-trash) paths.
+ * Path-traversal safe (target stays inside the memory dir), retries Windows
+ * EBUSY via renameWithRetry, and suffixes the destination with a compact ISO
+ * timestamp when a same-named file already exists. Source presence is NOT
+ * pre-checked — renameWithRetry surfaces ENOENT and we map it in the catch
+ * so there's no TOCTOU window between stat and rename.
  */
+async function renameInsideMemoryDir(
+  memoryDirAbs: string,
+  srcDir: string,
+  destDir: string,
+  basename: string,
+): Promise<MemoryMoveResult> {
+  if (!isInside(srcDir, memoryDirAbs) || !isInside(destDir, memoryDirAbs)) {
+    return { ok: false, error: { code: "TRAVERSAL" } };
+  }
+  const srcPath = path.resolve(srcDir, basename);
+  if (!isInside(srcPath, srcDir)) {
+    return { ok: false, error: { code: "TRAVERSAL" } };
+  }
+
+  await fs.mkdir(destDir, { recursive: true });
+  let destPath = path.join(destDir, basename);
+  if (await pathExists(destPath)) {
+    destPath = path.join(destDir, timestampSuffix(basename));
+  }
+
+  try {
+    await withFileLock(srcPath, () => renameWithRetry(srcPath, destPath));
+    return { ok: true, destPath };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { ok: false, error: { code: "SOURCE_NOT_FOUND" } };
+    }
+    return {
+      ok: false,
+      error: {
+        code: "MOVE_FAILED",
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+}
+
 async function moveMemoryFileTo(
   projectPath: string,
   fileName: string,
@@ -182,97 +217,47 @@ async function moveMemoryFileTo(
 ): Promise<MemoryMoveResult> {
   const v = validateMemoryBasename(fileName);
   if (!v.ok) return { ok: false, error: v.error };
-
-  const memoryDir = memoryDirFor(projectPath);
-  const destDir = path.resolve(memoryDir, subdir);
-  if (!isInside(destDir, path.resolve(memoryDir))) {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-
-  const srcPath = path.resolve(memoryDir, v.stripped);
-  if (!isInside(srcPath, path.resolve(memoryDir))) {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-  if (!(await pathExists(srcPath))) {
-    return { ok: false, error: { code: "SOURCE_NOT_FOUND" } };
-  }
-
-  await fs.mkdir(destDir, { recursive: true });
-  let destPath = path.join(destDir, v.stripped);
-  if (await pathExists(destPath)) {
-    destPath = path.join(destDir, timestampSuffix(v.stripped));
-  }
-
-  try {
-    await withFileLock(srcPath, async () => {
-      await renameWithRetry(srcPath, destPath);
-    });
-    return { ok: true, destPath };
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        code: "MOVE_FAILED",
-        message: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
+  const memoryDirAbs = path.resolve(memoryDirFor(projectPath));
+  return renameInsideMemoryDir(
+    memoryDirAbs,
+    memoryDirAbs,
+    path.resolve(memoryDirAbs, subdir),
+    v.stripped,
+  );
 }
 
-/** Archive: visible non-dot subdir, recoverable via restoreFromSubdir. */
-export function archiveMemoryFile(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
-  return moveMemoryFileTo(projectPath, fileName, ARCHIVE_SUBDIR);
-}
-
-/** Soft-delete: dot-prefixed subdir, swept after 30 days by sweepTrash. */
-export function softDeleteMemoryFile(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
-  return moveMemoryFileTo(projectPath, fileName, TRASH_SUBDIR);
-}
-
-/**
- * Move a file out of archive/ or .trash/ back into the parent memory dir.
- * If a file with that name now occupies the parent, suffix the restored copy.
- */
-export async function restoreFromSubdir(
+async function restoreFromSubdir(
   projectPath: string,
   fileName: string,
   subdir: typeof ARCHIVE_SUBDIR | typeof TRASH_SUBDIR,
 ): Promise<MemoryMoveResult> {
   const v = validateMemoryBasename(fileName);
   if (!v.ok) return { ok: false, error: v.error };
+  const memoryDirAbs = path.resolve(memoryDirFor(projectPath));
+  return renameInsideMemoryDir(
+    memoryDirAbs,
+    path.resolve(memoryDirAbs, subdir),
+    memoryDirAbs,
+    v.stripped,
+  );
+}
 
-  const memoryDir = path.resolve(memoryDirFor(projectPath));
-  const srcDir = path.resolve(memoryDir, subdir);
-  if (!isInside(srcDir, memoryDir)) {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-  const srcPath = path.resolve(srcDir, v.stripped);
-  if (!isInside(srcPath, srcDir)) {
-    return { ok: false, error: { code: "TRAVERSAL" } };
-  }
-  if (!(await pathExists(srcPath))) {
-    return { ok: false, error: { code: "SOURCE_NOT_FOUND" } };
-  }
+/** Archive: visible non-dot subdir; reversible via restoreFromArchive. */
+export function archiveMemoryFile(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
+  return moveMemoryFileTo(projectPath, fileName, ARCHIVE_SUBDIR);
+}
 
-  let destPath = path.join(memoryDir, v.stripped);
-  if (await pathExists(destPath)) {
-    destPath = path.join(memoryDir, timestampSuffix(v.stripped));
-  }
+/** Soft-delete: dot-prefixed subdir, swept after 30 days. */
+export function softDeleteMemoryFile(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
+  return moveMemoryFileTo(projectPath, fileName, TRASH_SUBDIR);
+}
 
-  try {
-    await withFileLock(srcPath, async () => {
-      await renameWithRetry(srcPath, destPath);
-    });
-    return { ok: true, destPath };
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        code: "MOVE_FAILED",
-        message: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
+export function restoreFromArchive(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
+  return restoreFromSubdir(projectPath, fileName, ARCHIVE_SUBDIR);
+}
+
+export function restoreFromTrash(projectPath: string, fileName: string): Promise<MemoryMoveResult> {
+  return restoreFromSubdir(projectPath, fileName, TRASH_SUBDIR);
 }
 
 export interface ManagedMemoryFile {
@@ -318,25 +303,42 @@ export function listTrashedMemoryFiles(projectPath: string): Promise<ManagedMemo
 }
 
 /**
- * Permanently unlink trashed files older than `maxAgeMs` (default 30d).
- * Best-effort: a single per-file failure does not abort the sweep. Returns
- * the count of files removed.
+ * One-pass sweep + survivor list. Folds together the "permanently unlink
+ * files older than `maxAgeMs`" pass and the "give me the remaining trash for
+ * display" pass so the triage GET handler doesn't readdir `.trash/` twice
+ * per project on every page load. Best-effort: a single per-file unlink
+ * failure does not abort the sweep.
  */
+export async function sweepAndListTrash(
+  projectPath: string,
+  maxAgeMs: number = TRASH_MAX_AGE_MS,
+  now: number = Date.now(),
+): Promise<{ removed: number; survivors: ManagedMemoryFile[] }> {
+  const files = await listTrashedMemoryFiles(projectPath);
+  const survivors: ManagedMemoryFile[] = [];
+  let removed = 0;
+  for (const f of files) {
+    if (now - f.mtimeMs < maxAgeMs) {
+      survivors.push(f);
+      continue;
+    }
+    try {
+      await fs.unlink(f.absPath);
+      removed++;
+    } catch {
+      // file is locked or already gone — keep showing it; next sweep retries
+      survivors.push(f);
+    }
+  }
+  return { removed, survivors };
+}
+
+/** Back-compat wrapper for callers that only want the unlink pass. */
 export async function sweepTrash(
   projectPath: string,
   maxAgeMs: number = TRASH_MAX_AGE_MS,
   now: number = Date.now(),
 ): Promise<{ removed: number }> {
-  const files = await listTrashedMemoryFiles(projectPath);
-  let removed = 0;
-  for (const f of files) {
-    if (now - f.mtimeMs < maxAgeMs) continue;
-    try {
-      await fs.unlink(f.absPath);
-      removed++;
-    } catch {
-      // best-effort: a locked file or vanished entry isn't worth aborting for
-    }
-  }
+  const { removed } = await sweepAndListTrash(projectPath, maxAgeMs, now);
   return { removed };
 }

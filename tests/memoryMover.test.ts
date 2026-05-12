@@ -5,10 +5,12 @@ import path from "path";
 import {
   archiveMemoryFile,
   softDeleteMemoryFile,
-  restoreFromSubdir,
+  restoreFromArchive,
+  restoreFromTrash,
   listArchivedMemoryFiles,
   listTrashedMemoryFiles,
   sweepTrash,
+  sweepAndListTrash,
   memoryDirFor,
   ARCHIVE_SUBDIR,
   TRASH_SUBDIR,
@@ -86,10 +88,10 @@ describe("softDeleteMemoryFile", () => {
   });
 });
 
-describe("restoreFromSubdir", () => {
+describe("restoreFromArchive / restoreFromTrash", () => {
   it("restores an archived file back to the memory dir", async () => {
     await archiveMemoryFile(PROJECT, "stale.md");
-    const r = await restoreFromSubdir(PROJECT, "stale.md", ARCHIVE_SUBDIR);
+    const r = await restoreFromArchive(PROJECT, "stale.md");
     expect(r.ok).toBe(true);
     const memDir = memoryDirFor(PROJECT);
     await expect(fs.access(path.join(memDir, "stale.md"))).resolves.toBeUndefined();
@@ -99,7 +101,7 @@ describe("restoreFromSubdir", () => {
 
   it("restores a trashed file back to the memory dir", async () => {
     await softDeleteMemoryFile(PROJECT, "stale.md");
-    const r = await restoreFromSubdir(PROJECT, "stale.md", TRASH_SUBDIR);
+    const r = await restoreFromTrash(PROJECT, "stale.md");
     expect(r.ok).toBe(true);
     const trashed = await listTrashedMemoryFiles(PROJECT);
     expect(trashed).toHaveLength(0);
@@ -108,17 +110,36 @@ describe("restoreFromSubdir", () => {
   it("suffixes the restored copy when the parent now has the same name", async () => {
     await archiveMemoryFile(PROJECT, "stale.md");
     const memDir = memoryDirFor(PROJECT);
-    // Recreate a file with that name in the live dir.
     await fs.writeFile(path.join(memDir, "stale.md"), "# new\n", "utf-8");
-    const r = await restoreFromSubdir(PROJECT, "stale.md", ARCHIVE_SUBDIR);
+    const r = await restoreFromArchive(PROJECT, "stale.md");
     expect(r.ok).toBe(true);
     expect(r.destPath).toMatch(/stale-\d{14}\.md$/);
   });
 
   it("returns SOURCE_NOT_FOUND when restoring a file that isn't in the subdir", async () => {
-    const r = await restoreFromSubdir(PROJECT, "never-archived.md", ARCHIVE_SUBDIR);
+    const r = await restoreFromArchive(PROJECT, "never-archived.md");
     expect(r.ok).toBe(false);
     expect(r.error?.code).toBe("SOURCE_NOT_FOUND");
+  });
+});
+
+describe("sweepAndListTrash", () => {
+  it("returns survivors and removed-count in one pass", async () => {
+    await softDeleteMemoryFile(PROJECT, "stale.md");
+    const r = await sweepAndListTrash(PROJECT);
+    expect(r.removed).toBe(0);
+    expect(r.survivors).toHaveLength(1);
+    expect(r.survivors[0].name).toBe("stale.md");
+  });
+
+  it("unlinks expired entries and omits them from survivors", async () => {
+    await softDeleteMemoryFile(PROJECT, "stale.md");
+    const trashed = await listTrashedMemoryFiles(PROJECT);
+    const past = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    await fs.utimes(trashed[0].absPath, past, past);
+    const r = await sweepAndListTrash(PROJECT);
+    expect(r.removed).toBe(1);
+    expect(r.survivors).toHaveLength(0);
   });
 });
 

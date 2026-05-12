@@ -8,15 +8,14 @@ import { scoreTriage, type TriageReport } from "@/lib/memory/triageScorer";
 import {
   archiveMemoryFile,
   softDeleteMemoryFile,
-  restoreFromSubdir,
+  restoreFromArchive,
+  restoreFromTrash,
   listArchivedMemoryFiles,
-  listTrashedMemoryFiles,
-  sweepTrash,
+  sweepAndListTrash,
   memoryDirFor,
-  ARCHIVE_SUBDIR,
-  TRASH_SUBDIR,
   TRASH_MAX_AGE_MS,
   type ManagedMemoryFile,
+  type MemoryMoveResult,
 } from "@/lib/scanner/memoryWriter";
 import { getSuppressMap, setSuppress, clearSuppress } from "@/lib/memory/triageStore";
 
@@ -26,7 +25,7 @@ interface ManagedRow extends ManagedMemoryFile {
 }
 
 interface TrashedRow extends ManagedRow {
-  /** ISO timestamp at which sweepTrash will permanently unlink this file. */
+  /** ISO timestamp at which the next sweep will permanently unlink this file. */
   autoDeleteAt: string;
 }
 
@@ -55,23 +54,22 @@ export async function GET(): Promise<NextResponse<TriageGetResponse | { error: s
 
   const report = scoreTriage({ entries, suppressUntil });
 
-  // Best-effort 30-day sweep on every list call. Errors here are silently
-  // swallowed inside sweepTrash; we don't want a single project's failure to
-  // break the page.
-  await Promise.all(scan.projects.map((p) => sweepTrash(p.path)));
-
+  // sweepAndListTrash collapses the 30-day expire-pass and the per-row
+  // listing pass into one readdir per project — instead of three (one for
+  // sweepTrash + listTrashed + listArchived) we do two per project, fanned
+  // out in parallel.
   const archived: ManagedRow[] = [];
   const trashed: TrashedRow[] = [];
   await Promise.all(
     scan.projects.map(async (p) => {
       const [a, t] = await Promise.all([
         listArchivedMemoryFiles(p.path),
-        listTrashedMemoryFiles(p.path),
+        sweepAndListTrash(p.path),
       ]);
       for (const f of a) {
         archived.push({ ...f, projectSlug: p.slug, projectName: p.name });
       }
-      for (const f of t) {
+      for (const f of t.survivors) {
         trashed.push({
           ...f,
           projectSlug: p.slug,
@@ -87,8 +85,12 @@ export async function GET(): Promise<NextResponse<TriageGetResponse | { error: s
   return NextResponse.json({ report, archived, trashed });
 }
 
+const ACTIONS = ["archive", "delete", "keep", "unsuppress", "restore-archive", "restore-trash"] as const;
+type TriageAction = (typeof ACTIONS)[number];
+const VALID_ACTIONS = new Set<TriageAction>(ACTIONS);
+
 interface ActionRequest {
-  action: "archive" | "delete" | "keep" | "restore-archive" | "restore-trash";
+  action: TriageAction;
   /** Project slug — used to look up the project root for path scoping. */
   projectSlug: string;
   /** Basename inside the project's memory dir (e.g. "user_role.md"). */
@@ -97,13 +99,15 @@ interface ActionRequest {
   days?: number;
 }
 
-const VALID_ACTIONS = new Set([
-  "archive",
-  "delete",
-  "keep",
-  "restore-archive",
-  "restore-trash",
-]);
+const MOVERS: Record<
+  "archive" | "delete" | "restore-archive" | "restore-trash",
+  (projectPath: string, fileName: string) => Promise<MemoryMoveResult>
+> = {
+  archive: archiveMemoryFile,
+  delete: softDeleteMemoryFile,
+  "restore-archive": restoreFromArchive,
+  "restore-trash": restoreFromTrash,
+};
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   let body: ActionRequest;
@@ -129,55 +133,39 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "UNKNOWN_PROJECT" }, { status: 400 });
   }
 
-  switch (body.action) {
-    case "archive": {
-      const r = await archiveMemoryFile(project.path, body.fileName);
-      invalidateMemoryInventoryCache();
-      return r.ok
-        ? NextResponse.json({ ok: true, destPath: r.destPath })
-        : NextResponse.json({ error: r.error }, { status: 400 });
-    }
-    case "delete": {
-      const r = await softDeleteMemoryFile(project.path, body.fileName);
-      invalidateMemoryInventoryCache();
-      return r.ok
-        ? NextResponse.json({ ok: true, destPath: r.destPath })
-        : NextResponse.json({ error: r.error }, { status: 400 });
-    }
-    case "keep": {
-      // Clamp days to a sane range; the UI sends 7/30/90 by default but a
-      // hand-crafted call shouldn't be able to silently set a 100-year hold.
-      const days = Math.min(365, Math.max(1, Math.floor(body.days ?? 30)));
-      const absPath = path.join(memoryDirFor(project.path), body.fileName);
-      try {
-        const until = await setSuppress(absPath, days);
-        return NextResponse.json({ ok: true, until });
-      } catch (err) {
-        return NextResponse.json(
-          { error: { code: "SUPPRESS_FAILED", message: err instanceof Error ? err.message : String(err) } },
-          { status: 500 },
-        );
-      }
-    }
-    case "restore-archive": {
-      const r = await restoreFromSubdir(project.path, body.fileName, ARCHIVE_SUBDIR);
-      invalidateMemoryInventoryCache();
-      // Restoring should also lift any stale suppression so the file
-      // re-appears in the main /memory listing rather than getting hidden.
-      const absPath = path.join(memoryDirFor(project.path), body.fileName);
-      await clearSuppress(absPath).catch(() => {});
-      return r.ok
-        ? NextResponse.json({ ok: true, destPath: r.destPath })
-        : NextResponse.json({ error: r.error }, { status: 400 });
-    }
-    case "restore-trash": {
-      const r = await restoreFromSubdir(project.path, body.fileName, TRASH_SUBDIR);
-      invalidateMemoryInventoryCache();
-      const absPath = path.join(memoryDirFor(project.path), body.fileName);
-      await clearSuppress(absPath).catch(() => {});
-      return r.ok
-        ? NextResponse.json({ ok: true, destPath: r.destPath })
-        : NextResponse.json({ error: r.error }, { status: 400 });
+  if (body.action === "keep") {
+    // Clamp days so a hand-crafted call can't set a multi-year hold.
+    const days = Math.min(365, Math.max(1, Math.floor(body.days ?? 30)));
+    const absPath = path.join(memoryDirFor(project.path), body.fileName);
+    try {
+      const until = await setSuppress(absPath, days);
+      return NextResponse.json({ ok: true, until });
+    } catch (err) {
+      return NextResponse.json(
+        { error: { code: "SUPPRESS_FAILED", message: err instanceof Error ? err.message : String(err) } },
+        { status: 500 },
+      );
     }
   }
+  if (body.action === "unsuppress") {
+    const absPath = path.join(memoryDirFor(project.path), body.fileName);
+    await clearSuppress(absPath);
+    return NextResponse.json({ ok: true });
+  }
+
+  // The two non-mover branches above return early, leaving only the four
+  // keys MOVERS knows about. TS doesn't narrow across the early returns
+  // here, so re-type-assert at the dispatch site.
+  const moveAction = body.action as keyof typeof MOVERS;
+  const r = await MOVERS[moveAction](project.path, body.fileName);
+  invalidateMemoryInventoryCache();
+  // Restores should also lift any stale suppression so the file re-appears
+  // in /memory listings rather than staying hidden by an old "Keep" hold.
+  if (body.action === "restore-archive" || body.action === "restore-trash") {
+    const absPath = path.join(memoryDirFor(project.path), body.fileName);
+    await clearSuppress(absPath).catch(() => {});
+  }
+  return r.ok
+    ? NextResponse.json({ ok: true, destPath: r.destPath })
+    : NextResponse.json({ error: r.error }, { status: 400 });
 }
