@@ -6,7 +6,7 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   Home, LayoutGrid, Activity,
   CheckSquare, Columns3, FileText, ListChecks, Calendar, Lightbulb,
-  Layers, Brain, Clock, Sprout, Trash2,
+  Layers, Brain, Clock, Sprout, Trash2, MonitorPlay,
   Bot, Sparkles, Terminal, Plug, BookOpen, Network, Library,
   BarChart3, Wallet, HeartPulse, Webhook, Boxes, Database,
   Sliders, Settings as SettingsIcon,
@@ -66,7 +66,8 @@ const GROUPS: NavGroup[] = [
     label: "Sessions",
     hint: "What Claude Code is doing right now",
     children: [
-      { id: "sessions", label: "Sessions", href: "/sessions", icon: ico(Layers), badge: "live" },
+      { id: "agent-view", label: "Agent view", href: "/agent-view", icon: ico(MonitorPlay), badge: "live" },
+      { id: "sessions", label: "Sessions", href: "/sessions", icon: ico(Layers) },
       { id: "memory",   label: "Memory",   href: "/memory",   icon: ico(Brain) },
       { id: "memory-seed", label: "Memory seed", href: "/memory/seed", icon: ico(Sprout) },
       { id: "memory-triage", label: "Memory triage", href: "/memory/triage", icon: ico(Trash2) },

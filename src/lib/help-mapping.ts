@@ -3,6 +3,7 @@
  * Slugs correspond to files in /docs/help/{slug}.md (and /public/help/{slug}.md).
  */
 export const helpMapping: Record<string, string> = {
+  '/agent-view': 'agent-view',
   '/': 'getting-started',
   '/project/[slug]': 'project-details',
   '/manual-steps': 'manual-steps',

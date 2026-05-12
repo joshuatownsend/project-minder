@@ -19,6 +19,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "taskDispatcher",
   "mcpSecurityScan",
   "gsdPlanning",
+  "agentView",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -157,6 +158,14 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Scans per-project .planning/ directories (produced by the GSD skill) and surfaces a Planning tab on the project detail page.",
     group: "passive",
     appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "agentView",
+    label: "Agent View (live Kanban)",
+    description: "Reads the Claude daemon roster + JSONL appends to power the /agent-view live session Kanban. Defaults on.",
+    group: "active",
+    appliesAt: "watcher",
     wired: true,
   },
 ];

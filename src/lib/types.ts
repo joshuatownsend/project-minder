@@ -428,7 +428,8 @@ export type FeatureFlagKey =
   | "liveActivity"
   | "taskDispatcher"
   | "mcpSecurityScan"
-  | "gsdPlanning";
+  | "gsdPlanning"
+  | "agentView";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =
@@ -522,6 +523,11 @@ export interface MinderConfig {
   enabledAdapters?: string[];
   /** User-defined keyboard shortcut overrides. Keys are ShortcutActionId strings. Wave 12.2. */
   keyboardShortcuts?: Record<string, string>;
+  /** Agent View / Kanban live observability config. */
+  agentView?: {
+    /** Sessions inactive longer than this drop to "stopped". Defaults to 180. */
+    abandonThresholdMin?: number;
+  };
   /** Wave M.4 — per-absPath "Keep for N days" suppressions for /memory/triage.
    *  Values are ISO 8601 timestamps; entries with a past-dated value are
    *  ignored on read (treated as lapsed, not pruned eagerly). */
