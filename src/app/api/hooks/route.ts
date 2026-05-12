@@ -91,6 +91,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const eventName = hook_event_name as HookEventName;
   const slug = resolveSlug(cwd);
 
+  // Normalize failure signal from PostToolUse payloads.
+  // Canonical: is_error (Anthropic tool_result flag). Bash-specific: non-zero return_code.
+  let toolFailed: boolean | undefined;
+  if (eventName === "PostToolUse") {
+    const resp = body.tool_response as Record<string, unknown> | undefined;
+    const isError = resp?.is_error === true;
+    const badReturnCode =
+      typeof resp?.return_code === "number" && resp.return_code !== 0;
+    toolFailed = isError || badReturnCode || undefined;
+  }
+
   const event = {
     hookEventName: eventName,
     sessionId: session_id,
@@ -98,6 +109,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     receivedAt: Date.now(),
     toolName: typeof body.tool_name === "string" ? body.tool_name : undefined,
     message: typeof body.message === "string" ? body.message : undefined,
+    toolFailed,
   };
 
   pushHookEvent(slug, event);
