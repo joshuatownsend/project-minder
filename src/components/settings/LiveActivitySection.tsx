@@ -37,10 +37,16 @@ export function LiveActivitySection({
   const awaitingPrefs = config?.notificationPrefs?.events?.["awaiting-permission"] ?? {};
 
   useEffect(() => {
-    fetch("/api/live-activity/install")
-      .then((r) => r.json())
-      .then((d) => setStatus(d as InstallStatus))
-      .catch(() => {});
+    let cancelled = false;
+    function refresh() {
+      fetch("/api/live-activity/install")
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setStatus(d as InstallStatus); })
+        .catch(() => {});
+    }
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "";
