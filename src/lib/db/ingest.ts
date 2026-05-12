@@ -6,6 +6,7 @@ import { promises as fs, createReadStream } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
+import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
 import { computeSessionQuality, turnContextFill, type SessionQualitySummary } from "@/lib/usage/sessionQuality";
@@ -1827,6 +1828,10 @@ export async function reconcileSessionFile(
       affectedCategoryTuples = result.affectedCategoryTuples;
     });
     txn();
+    if (rows > 0) {
+      const slug = toSlug(canonicalizeDirName(projectDirName));
+      bridgeJsonlAppendToEventBus(sessionId, slug);
+    }
     return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
   }
 
@@ -1851,6 +1856,10 @@ export async function reconcileSessionFile(
   for (const tuple of oldTuples) affectedDays.add(tuple);
   const affectedCategoryTuples = new Set<string>(fullResult.parsed.affectedCategoryTuples);
   for (const tuple of oldCategoryTuples) affectedCategoryTuples.add(tuple);
+  if (rows > 0) {
+    const slug = toSlug(canonicalizeDirName(projectDirName));
+    bridgeJsonlAppendToEventBus(sessionId, slug);
+  }
   return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
 }
 
