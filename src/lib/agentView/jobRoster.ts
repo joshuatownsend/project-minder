@@ -76,19 +76,24 @@ async function buildRoster(): Promise<JobRosterEntry[]> {
     return [];
   }
 
+  const sessionsField =
+    rawRoster !== null && typeof rawRoster === "object" && "sessions" in rawRoster
+      ? (rawRoster as Record<string, unknown>).sessions
+      : undefined;
   const rawArray: unknown[] = Array.isArray(rawRoster)
     ? rawRoster
-    : rawRoster !== null && typeof rawRoster === "object" && "sessions" in rawRoster
-    ? (rawRoster as Record<string, unknown[]>).sessions ?? []
+    : Array.isArray(sessionsField)
+    ? sessionsField
     : [];
 
-  // Read all state.json files in parallel
+  // Read all state.json files in parallel; skip entries without a string id.
   const candidates = rawArray.filter(
-    (raw): raw is Record<string, unknown> => raw !== null && typeof raw === "object",
+    (raw): raw is Record<string, unknown> =>
+      raw !== null && typeof raw === "object" && typeof (raw as Record<string, unknown>).id === "string",
   );
   const withStates = await Promise.all(
     candidates.map((r) => {
-      const id = typeof r.id === "string" ? r.id : String(Date.now());
+      const id = r.id as string;
       return readJobState(id).then((state) => ({ r, id, state }));
     }),
   );
@@ -121,8 +126,9 @@ async function refresh(): Promise<void> {
   const prevEntries = g.__minderJobRosterState!.entries;
   const entries = await buildRoster();
 
-  // Emit daemon-change events for sessions that changed state.
+  // Emit daemon-change events for sessions that changed state or were removed.
   const prevById = new Map(prevEntries.map((e) => [e.id, e]));
+  const nextIds = new Set(entries.map((e) => e.id));
   for (const entry of entries) {
     const prev = prevById.get(entry.id);
     if (!prev || prev.state !== entry.state || prev.updatedAt !== entry.updatedAt) {
@@ -132,6 +138,12 @@ async function refresh(): Promise<void> {
           entry.projectSlug ?? "__unknown__",
         );
       }
+    }
+  }
+  // Entries that disappeared from the roster (session exited daemon).
+  for (const prev of prevEntries) {
+    if (!nextIds.has(prev.id) && prev.sessionId) {
+      bridgeDaemonChangeToEventBus(prev.sessionId, prev.projectSlug ?? "__unknown__");
     }
   }
 
