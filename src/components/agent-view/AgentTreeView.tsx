@@ -17,7 +17,10 @@ export function AgentTreeView({ sessionId }: AgentTreeViewProps) {
     setError(false);
     const controller = new AbortController();
     fetch(`/api/agent-view/tree?sessionId=${encodeURIComponent(sessionId)}`, { signal: controller.signal })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error("fetch-error");
+        return r.json();
+      })
       .then((data: { graph: OrchestrationGraph | null }) => {
         setGraph(data.graph);
         setLoading(false);

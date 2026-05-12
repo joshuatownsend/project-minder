@@ -86,15 +86,25 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
         </div>
 
         {/* Tabs */}
-        <div style={{
-          display: "flex", gap: 0,
-          borderBottom: "1px solid var(--line-soft,#222)",
-          padding: "0 16px",
-        }}>
+        <div
+          role="tablist"
+          onKeyDown={(e) => {
+            const tabs: PeekTab[] = ["hooks", "tree"];
+            const idx = tabs.indexOf(activeTab);
+            if (e.key === "ArrowRight") { e.preventDefault(); setActiveTab(tabs[(idx + 1) % tabs.length]); }
+            if (e.key === "ArrowLeft") { e.preventDefault(); setActiveTab(tabs[(idx + tabs.length - 1) % tabs.length]); }
+          }}
+          style={{
+            display: "flex", gap: 0,
+            borderBottom: "1px solid var(--line-soft,#222)",
+            padding: "0 16px",
+          }}>
           {(["hooks", "tree"] as PeekTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               style={{
                 background: "none",

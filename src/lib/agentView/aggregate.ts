@@ -38,7 +38,7 @@ function truncate(s: string | undefined, max = 80): string | undefined {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
-function countSubagentsInFlight(events: readonly HookEvent[]): number {
+export function countSubagentsInFlight(events: readonly HookEvent[]): number {
   let spawns = 0;
   let stops = 0;
   for (const e of events) {
