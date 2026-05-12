@@ -54,7 +54,13 @@ export function inferLiveSessionStatus(
   const ageMs = Date.now() - mtime.getTime();
 
   if (pendingIds.size === 0) {
-    if (stopReason === "end_turn") return { status: "waiting", lastToolName };
+    if (stopReason === "end_turn") {
+      // Session ended cleanly waiting for the user. After STALE_MS with no new
+      // user turn, treat as "other" so the aggregate drops it as a stale-idle
+      // entry instead of pinning it to "Needs Input" for 3 hours.
+      if (ageMs > STALE_MS) return { status: "other", lastToolName };
+      return { status: "waiting", lastToolName };
+    }
     // stop_reason was tool_use but results all returned — Claude is computing next response
     if (ageMs < WORKING_MS) return { status: "working", lastToolName };
     return { status: "other", lastToolName };
