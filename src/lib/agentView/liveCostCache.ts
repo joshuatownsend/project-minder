@@ -65,8 +65,10 @@ export async function getLiveSessionMetrics(
     const pricing = getModelPricing(turn.model);
     totalCostUsd += applyPricing(pricing, turn);
     const maxCtx = getModelMaxContextTokens(turn.model);
-    const fill = (turn.inputTokens + turn.cacheCreateTokens + turn.cacheReadTokens) / maxCtx;
-    if (fill > maxContextFill) maxContextFill = fill;
+    // Use the most recent turn's fill, not the historical peak. Turns are
+    // chronological so the last write wins — after a /compact the chip
+    // reflects the compacted context rather than the pre-compact high-water mark.
+    maxContextFill = (turn.inputTokens + turn.cacheCreateTokens + turn.cacheReadTokens) / maxCtx;
   }
 
   const result: SessionMetrics = { totalCostUsd, maxContextFill };

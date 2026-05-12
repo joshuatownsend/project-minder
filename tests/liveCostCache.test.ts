@@ -116,15 +116,16 @@ describe("getLiveSessionMetrics", () => {
     expect(result?.totalCostUsd).toBeCloseTo(0.0105, 6);
   });
 
-  it("maxContextFill is the peak ratio, not the last turn", async () => {
+  it("maxContextFill reflects the last turn, not the historical peak (post-compact accuracy)", async () => {
     mockParseTurns.mockResolvedValue([
       makeTurn({ inputTokens: 100_000 }),   // 50% fill
-      makeTurn({ inputTokens: 180_000 }),   // 90% fill (peak)
-      makeTurn({ inputTokens: 120_000 }),   // 60% fill
+      makeTurn({ inputTokens: 180_000 }),   // 90% fill (historical peak)
+      makeTurn({ inputTokens: 120_000 }),   // 60% fill — most recent after a /compact
     ] as ReturnType<typeof parseSessionTurns> extends Promise<infer T> ? T : never);
 
     const result = await getLiveSessionMetrics("s1");
-    expect(result?.maxContextFill).toBeCloseTo(0.9, 5);
+    // Should show current state (60%), not the historical peak (90%)
+    expect(result?.maxContextFill).toBeCloseTo(0.6, 5);
   });
 
   it("returns cached result when mtime unchanged", async () => {
