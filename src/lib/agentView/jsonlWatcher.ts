@@ -6,17 +6,10 @@ import { bridgeJsonlAppendToEventBus } from "./eventBus";
 import { decodeDirName, toSlug } from "@/lib/scanner/claudeConversations";
 import { WORKTREE_SEP } from "@/lib/scanner/worktrees";
 
-// Watches ~/.claude/projects/ recursively for new or appended JSONL files
-// and emits onto the agentView event bus so the SSE snapshot refreshes
-// within ~200ms of a new session starting — well ahead of liveStatus.ts's
-// 6s cache TTL + 15s heartbeat worst-case latency.
-//
-// Uses Node's built-in fs.promises.watch (no chokidar dep) with the same
-// globalThis singleton + debounce pattern as jobRoster.ts.
-//
-// Recursive watch works on Windows (ReadDirectoryChangesW) and macOS (FSEvents).
+// Watches ~/.claude/projects/ recursively so the SSE snapshot fires within
+// ~200ms of a new session starting — ahead of liveStatus.ts's 6s cache TTL.
 // On Linux, fs.promises.watch throws ERR_FS_WATCH_NOT_RECURSIVE — caught and
-// silently degraded (the existing 6s mtime path remains as fallback).
+// silently degraded; the existing mtime fallback remains active.
 
 const DEBOUNCE_MS = 200;
 
@@ -27,11 +20,6 @@ const g = globalThis as unknown as {
   __minderJsonlWatcherDebounce?: Map<string, NodeJS.Timeout>;
 };
 
-/**
- * Pure helper — exposed for unit tests. Given an absolute JSONL file path
- * under projectsDir, returns { projectSlug, sessionId } or null if the path
- * doesn't match the expected two-level structure.
- */
 export function parseJsonlPath(
   projectsDir: string,
   filePath: string,
@@ -43,9 +31,9 @@ export function parseJsonlPath(
 
   const [rawDir, fileName] = parts;
   const sessionId = path.basename(fileName, ".jsonl");
-  if (!sessionId || sessionId === fileName) return null; // no .jsonl suffix stripped
+  if (!sessionId || sessionId === fileName) return null;
 
-  // Strip worktree suffix if present (e.g. "C-dev-proj--worktrees-branchname")
+  // e.g. "C-dev-proj--claude-worktrees-branchname" → strip to parent dir name
   const markerIdx = rawDir.indexOf(WORKTREE_SEP);
   const dirName = markerIdx !== -1 ? rawDir.slice(0, markerIdx) : rawDir;
 
@@ -64,15 +52,13 @@ function scheduleEmit(filePath: string): void {
   debounce.set(filePath, setTimeout(() => {
     debounce.delete(filePath);
     const parsed = parseJsonlPath(PROJECTS_DIR, filePath);
-    if (parsed) {
-      bridgeJsonlAppendToEventBus(parsed.sessionId, parsed.projectSlug);
-    }
+    if (parsed) bridgeJsonlAppendToEventBus(parsed.sessionId, parsed.projectSlug);
   }, DEBOUNCE_MS));
 }
 
 export function startJsonlWatcher(): void {
   if (g.__minderJsonlWatcher) return;
-  g.__minderJsonlWatcher = true; // mark started so repeated calls are no-ops
+  g.__minderJsonlWatcher = true;
 
   fs.access(PROJECTS_DIR).then(async () => {
     try {
