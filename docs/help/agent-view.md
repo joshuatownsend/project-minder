@@ -22,8 +22,9 @@ Each card shows:
 - **Age** — how long ago the session last had activity.
 - **Context chip** — appears when context fill exceeds 50%, turns red above 85%.
 - **Cost chip** — estimated USD cost so far.
+- **+N sub-agent chip** — appears when one or more sub-agents are currently in flight (spawned but not yet finished). Requires [Live Activity](/settings/live-activity) hooks to be enabled.
 
-Click or press **Enter** on a card to open the **Peek panel**, which shows the last 30 hook events for that session. Hook events require [Live Activity](/settings/live-activity) to be enabled.
+Click or press **Enter** on a card to open the **Peek panel**.
 
 ## Data sources
 
@@ -39,6 +40,13 @@ Use the toolbar to:
 - **Filter by status** — click one or more status chips to focus on a subset.
 - **Filter by project** — narrow to one project.
 - **Sort** by most-recent change, project name, or status group.
+
+## Peek panel
+
+The Peek panel is a side drawer with two tabs:
+
+- **Hook events** — the last 30 hook events for this session (last 5 minutes). Requires [Live Activity](/settings/live-activity).
+- **Sub-agents** — a tree view of all sub-agent invocations recorded in the session's JSONL. Loaded lazily when you open the tab. Shows each sub-agent node with its depth, tool name, optional agent name, and completion status. Works for all sessions (no hooks required) but reflects the state as of the last JSONL index update.
 
 ## Running background sessions
 

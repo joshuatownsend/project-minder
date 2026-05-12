@@ -142,6 +142,21 @@ export function AgentCard({ session, onPeek }: AgentCardProps) {
             {cost}
           </span>
         )}
+        {session.subagentsInFlight != null && session.subagentsInFlight > 0 && (
+          <span
+            title={`${session.subagentsInFlight} sub-agent${session.subagentsInFlight === 1 ? "" : "s"} in flight`}
+            style={{
+              fontSize: "0.55rem",
+              padding: "1px 5px",
+              borderRadius: 3,
+              background: "var(--blue-bg,#0c1a2e)",
+              color: "var(--blue-text,#60a5fa)",
+              border: "1px solid var(--blue-border,#1e3a5f)",
+            }}
+          >
+            +{session.subagentsInFlight}
+          </span>
+        )}
       </div>
     </div>
   );
