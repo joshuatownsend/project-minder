@@ -24,7 +24,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
   useEffect(() => {
     if (!session) { setData(null); return; }
     let aborted = false;
-    fetch(`/api/agent-view/peek?slug=${encodeURIComponent(session.projectSlug)}`)
+    fetch(`/api/agent-view/peek?slug=${encodeURIComponent(session.projectSlug)}&sessionId=${encodeURIComponent(session.sessionId)}`)
       .then((r) => r.json())
       .then((d) => { if (!aborted) setData(d as PeekData); })
       .catch(() => { /* peek is best-effort */ });
@@ -46,7 +46,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
       {/* Drawer */}
       <div style={{
         position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 50,
-        width: Math.min(480, window.innerWidth - 32),
+        width: "min(480px, calc(100vw - 32px))",
         background: "var(--card-bg,#111)",
         borderLeft: "1px solid var(--line-soft,#222)",
         display: "flex", flexDirection: "column",

@@ -6,6 +6,9 @@ import { getHookBuffer } from "@/lib/hooks/buffer";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const slug = request.nextUrl.searchParams.get("slug") ?? "";
-  const hookEvents = [...getHookBuffer(slug)];
+  const sessionId = request.nextUrl.searchParams.get("sessionId") ?? "";
+  const hookEvents = [...getHookBuffer(slug)].filter(
+    (e) => !sessionId || e.sessionId === sessionId,
+  );
   return NextResponse.json({ hookEvents });
 }
