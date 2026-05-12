@@ -38,6 +38,7 @@ export const helpMapping: Record<string, string> = {
   '/insights-report': 'insights-report',
   '/memory': 'memory',
   '/memory/seed': 'memory',
+  '/memory/triage': 'memory',
 }
 
 /**

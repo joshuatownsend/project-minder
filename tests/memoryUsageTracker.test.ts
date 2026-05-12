@@ -100,30 +100,47 @@ describe("isMemoryPath", () => {
 });
 
 describe("canonicalMemoryKey", () => {
+  // path.resolve uses the host OS's path module — Linux can't normalize
+  // `C:\...` drive-letter paths into the slash-lowered form the assertions
+  // expect, so the Windows-specific cases are platform-gated. Production
+  // is win32-only (per CLAUDE.md); CI on Linux still type-checks the code,
+  // it just can't verify Windows path semantics.
+  const onlyOnWin = process.platform === "win32" ? it : it.skip;
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("expands ~/ to OS homedir so JSONL refs key under the real path", () => {
+  onlyOnWin("expands ~/ to OS homedir so JSONL refs key under the real path", () => {
     vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\joshu");
-    // Without expansion, path.resolve("~/...") would resolve relative to CWD
-    // and the lookup would silently miss for every real Read event.
     expect(canonicalMemoryKey("~/.claude/CLAUDE.md")).toBe(
       "c:/users/joshu/.claude/claude.md",
     );
   });
 
-  it("also expands ~\\ on Windows-style separators", () => {
+  onlyOnWin("also expands ~\\ on Windows-style separators", () => {
     vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\joshu");
     expect(canonicalMemoryKey("~\\.claude\\CLAUDE.md")).toBe(
       "c:/users/joshu/.claude/claude.md",
     );
   });
 
-  it("leaves absolute paths untouched (slash + lowercase)", () => {
+  onlyOnWin("leaves absolute paths untouched (slash + lowercase)", () => {
     expect(canonicalMemoryKey("C:\\Dev\\Foo\\CLAUDE.md")).toBe(
       "c:/dev/foo/claude.md",
     );
+  });
+
+  // Platform-portable check: the expansion + lowercase + slash-normalization
+  // contract holds on every host using a POSIX-shaped path the host can
+  // actually resolve.
+  it("lowercases and forward-slashes whatever the host can resolve", () => {
+    const homedir = process.platform === "win32" ? "C:\\Users\\joshu" : "/home/runner";
+    vi.spyOn(os, "homedir").mockReturnValue(homedir);
+    const out = canonicalMemoryKey("~/.claude/CLAUDE.md");
+    expect(out).toBe(out.toLowerCase());
+    expect(out).not.toMatch(/\\/);
+    expect(out.endsWith("/.claude/claude.md")).toBe(true);
   });
 });
 

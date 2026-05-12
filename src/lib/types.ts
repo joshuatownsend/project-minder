@@ -522,6 +522,12 @@ export interface MinderConfig {
   enabledAdapters?: string[];
   /** User-defined keyboard shortcut overrides. Keys are ShortcutActionId strings. Wave 12.2. */
   keyboardShortcuts?: Record<string, string>;
+  /** Wave M.4 — per-absPath "Keep for N days" suppressions for /memory/triage.
+   *  Values are ISO 8601 timestamps; entries with a past-dated value are
+   *  ignored on read (treated as lapsed, not pruned eagerly). */
+  memoryTriage?: {
+    suppressUntil?: Record<string, string>;
+  };
   /** Screenshot-to-React MCP server config. API keys are NEVER stored here —
    *  `apiKeyEnvVar` names the env var the MCP server reads at request time. */
   screenshotToCode?: {

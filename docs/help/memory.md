@@ -1,12 +1,13 @@
 # Memory Browser
 
-Project Minder ships three complementary memory views:
+Project Minder ships four complementary memory views:
 
 - **`/memory`** — cross-tier browser that lists every CLAUDE.md and auto-memory file across all scopes in one place. Edit any of them inline.
 - **`/memory/seed`** — Day 1 seed generator. Proposes a starter set of memory files synthesized from your existing scan data so a new Claude Code install walks in already knowing your role, stack, and active projects.
+- **`/memory/triage`** — auto-prune recommendations. Surfaces stale auto-memory files for review and offers Archive (reversible), Delete (30-day soft-delete), or Keep (suppress for N days). Never auto-deletes.
 - **Project detail → Memory tab** — per-project view scoped to one project's auto-memory directory.
 
-This page documents all three.
+This page documents all four.
 
 ## Day 1 seed page `/memory/seed`
 
@@ -33,6 +34,38 @@ You can also click **Edit before promote** to tweak the candidate body before wr
 ### Typed authoring (the prefix↔type contract)
 
 The writer enforces Claude Code's memory taxonomy: the basename prefix (`user_`, `feedback_`, `project_`, `reference_`) must match the `type:` field in the frontmatter, and a file with a `type:` declared but no typed prefix is rejected. This applies to the seed generator AND to direct edits through the memory editor — bad-shape memories never reach disk.
+
+## Memory triage page `/memory/triage`
+
+Combines the read-telemetry, age, broken-ref, and index-orphan signals into a single auto-prune view. The page never writes or deletes anything on its own — it **recommends** an action per row and waits for your click.
+
+### Scoring
+
+Triage operates strictly on auto-scope memory (files inside `~/.claude/projects/<encoded>/memory/`). User CLAUDE.md and per-project CLAUDE.md never appear here — they're authored by you, not the agent.
+
+The moderate-profile defaults:
+
+| Recommendation | When |
+|---|---|
+| **Archive candidate** | Never read **and** age 60+ days **or** last read 90+ days ago |
+| **Consider deletion** | Above **and** has broken refs, broken `@imports`, or is orphaned from `MEMORY.md` |
+| **Keep** | Everything else |
+
+Each row carries its reasons inline (`Never read`, `Last read 47d ago`, `1 broken ref`, `Not in MEMORY.md`).
+
+### Actions
+
+- **Archive** — move the file into `<memoryDir>/archive/<filename>`. Visible in the **Archived** section and restorable.
+- **Delete…** — soft-delete into `<memoryDir>/.trash/<filename>`. A confirmation step appears first. Trashed files are permanently removed 30 days after their move; until then, they live in the **Trash** section with their auto-delete date and a **Restore** button.
+- **Keep 7d / 30d / 90d** — suppress the row for the chosen window. The suppression map lives in `.minder.json` under `memoryTriage.suppressUntil`. Lift a hold from the **Suppressed** section.
+
+### Collision handling
+
+If you archive a file whose name already lives in `archive/`, the new copy gets a compact ISO timestamp suffix (e.g. `stale-20260512120241.md`) so the prior archive isn't clobbered. Same shape for trash and restore.
+
+### Configuring thresholds
+
+The moderate profile is the built-in default. Custom thresholds aren't user-tunable yet — file a TODO if you need a Strict (120d) or Aggressive (30d) variant.
 
 ## Cross-tier `/memory` page
 
