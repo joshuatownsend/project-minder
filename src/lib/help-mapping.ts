@@ -37,6 +37,7 @@ export const helpMapping: Record<string, string> = {
   '/new-project': 'new-project',
   '/insights-report': 'insights-report',
   '/memory': 'memory',
+  '/memory/seed': 'memory',
 }
 
 /**

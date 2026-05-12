@@ -4,6 +4,11 @@ import os from "os";
 import { encodePath } from "./claudeConversations";
 import { writeFileAtomic, withFileLock } from "../atomicWrite";
 import { isInside } from "../template/pathSafety";
+import {
+  parseFrontmatter,
+  validateTypedMemory,
+  type FrontmatterError,
+} from "../memory/memoryFrontmatter";
 
 export function memoryDirFor(projectPath: string): string {
   return path.join(
@@ -19,12 +24,24 @@ export type MemoryWriteError =
   | { code: "INVALID_NAME" }
   | { code: "TRAVERSAL" }
   | { code: "NOT_MARKDOWN" }
-  | { code: "WRITE_FAILED"; message: string };
+  | { code: "WRITE_FAILED"; message: string }
+  /** Client-fixable: malformed YAML, unknown type, or prefix↔type mismatch.
+   *  Callers mapping to HTTP should return 400 (not 500). */
+  | { code: "FRONTMATTER_INVALID"; detail: FrontmatterError };
 
 export interface MemoryWriteResult {
   ok: boolean;
   error?: MemoryWriteError;
   bytesWritten?: number;
+}
+
+export interface WriteMemoryOptions {
+  /**
+   * Skip the prefix↔type frontmatter contract check. Default false (validate).
+   * Set true ONLY for callers that intentionally write untyped scratch files
+   * -- the production write paths (editor save, seed promote) always validate.
+   */
+  skipTypeValidation?: boolean;
 }
 
 /**
@@ -41,7 +58,8 @@ export interface MemoryWriteResult {
 export async function writeMemoryFile(
   projectPath: string,
   fileName: string,
-  content: string
+  content: string,
+  options: WriteMemoryOptions = {},
 ): Promise<MemoryWriteResult> {
   if (!fileName || typeof fileName !== "string") {
     return { ok: false, error: { code: "INVALID_NAME" } };
@@ -58,6 +76,17 @@ export async function writeMemoryFile(
   }
   if (!stripped.toLowerCase().endsWith(".md")) {
     return { ok: false, error: { code: "NOT_MARKDOWN" } };
+  }
+
+  if (!options.skipTypeValidation) {
+    const parsed = parseFrontmatter(content);
+    if ("error" in parsed) {
+      return { ok: false, error: { code: "FRONTMATTER_INVALID", detail: parsed.error } };
+    }
+    const typeErr = validateTypedMemory(stripped, parsed.data);
+    if (typeErr) {
+      return { ok: false, error: { code: "FRONTMATTER_INVALID", detail: typeErr } };
+    }
   }
 
   const memoryDir = memoryDirFor(projectPath);
