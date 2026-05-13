@@ -132,6 +132,11 @@ async function buildStatusPayload(): Promise<StatusPayload> {
   return { generatedAt: new Date().toISOString(), sessions };
 }
 
+/** Force-evict the cache so the next getLiveStatusPayload() call does a fresh scan. */
+export function invalidateLiveStatusCache(): void {
+  delete g.__statusApiCache;
+}
+
 // Public API: returns the cached payload if fresh, otherwise dedupes
 // concurrent rebuilds via __statusApiFlight so two near-simultaneous callers
 // (e.g. /api/status and /api/pulse) don't each trigger a fresh FS sweep.

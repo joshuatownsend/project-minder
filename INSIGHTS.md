@@ -1,5 +1,81 @@
 # Insights
 
+<!-- insight:403bb68b79a7 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:40:20.595Z -->
+## ★ Insight
+Extracting `parseJsonlPath` as a pure function (no I/O, no globalThis) is the key move that makes testing trivial. The watcher's stateful behavior (debounce, fs.watch, globalThis singleton) is hard to unit-test — but the logic that matters (path → {projectSlug, sessionId}) is just string manipulation. Test the pure core, trust the integration via browser.
+
+---
+
+<!-- insight:a2600d2f0c82 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:39:00.758Z -->
+## ★ Insight
+The key insight: `liveStatus.ts` scans JSONL files with a 6s cache + needs an SSE event to trigger. With no active sessions (no hooks, no daemon), the heartbeat fires every 15s — so a brand new `claude` session can take up to 21s to appear. `fs.watch` with `recursive: true` fires within milliseconds of the JSONL file being created, immediately triggering an SSE push via the existing `bridgeJsonlAppendToEventBus`.
+
+---
+
+<!-- insight:61eb5db15020 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:34:51.756Z -->
+## ★ Insight
+The `Get-CimInstance` output confirms the advisor's warning: `node.exe` command lines show the **script path** (e.g., `C:\Users\joshu\AppData\Roaming\npm\...`) but nothing that maps to the project directory. `CurrentDirectory` (the CWD) is simply not exposed via WMI/CIM — it requires native Win32 P/Invoke (`NtQueryInformationProcess`). The roadmap's "tasklist + wmic" approach would tell us claude.exe is running somewhere, but not which project it's in.
+
+---
+
+<!-- insight:f4119ef37343 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:12:08.970Z -->
+## ★ Insight
+The `hasRecentToolFailure` scan walks backwards through the buffer — O(n) but bounded by the ring cap of 50. Walking backwards and returning on the first `PostToolUse` found means subsequent successful tool calls clear the badge automatically: no sticky state to reset.
+
+---
+
+<!-- insight:a8ef2ac8ea5e | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:08:51.707Z -->
+## ★ Insight
+The `is_error` flag in Anthropic's tool_result format is the canonical failure signal — it exists in both the hook `PostToolUse` payload (`tool_response.is_error`) and in the JSONL's user-turn tool_result content blocks. The `return_code` field is Bash-specific, so checking both gives coverage across all tool types. The parser confirms this pattern at `contentBlocks.ts:98`.
+
+---
+
+<!-- insight:0ad51501700f | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T20:51:56.249Z -->
+## ★ Insight
+The `max()` strategy makes sense for historical analytics ("did this session ever get close to the limit?") but breaks for a live kanban where the user wants "is this session in danger *right now*?". After a `/compact`, the terminal drops to ~10% but our chip is frozen at the historical peak. Using the **last** assistant turn's value (turns are chronological in the JSONL) gives current state.
+
+---
+
+<!-- insight:5c71ed8e68d8 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T20:38:52.865Z -->
+## ★ Insight
+The existing STALE_MS logic already handles "unresolved tool_use goes stale" → "other". The `end_turn` branch was intentionally left as permanent-"waiting" because it represents Claude awaiting user input — but that reasoning breaks when the user has walked away and closed the session. The fix reuses the same 10-min threshold so the behavior is symmetric: both kinds of stale sessions fade to "other" after the same window.
+
+---
+
+<!-- insight:01a517d5473a | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T19:23:24.233Z -->
+## ★ Insight
+Three distinct bug classes here: (1) **cache order inversion** — stat+readFile before cache lookup defeats mtime caching entirely; (2) **CodeQL path injection** — even though `resolveSessionJsonl` validates internally, CodeQL's data-flow analysis doesn't trace through the indirection, so an explicit guard at the entry point is needed; (3) **ref-during-render** — assigning to `ref.current` in the render body is valid React but triggers the React Compiler lint rule because it makes renders non-idempotent.
+
+---
+
+<!-- insight:662eb123277c | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T19:11:22.015Z -->
+## ★ Insight
+CSS `var()` only accepts `--`-prefixed custom property names as its first argument — e.g. `var(--blue-text, #60a5fa)`. Passing a plain color name like `var(purple, #60a5fa)` is silently invalid: browsers ignore the declaration entirely, leaving inherited or default color. Plain color values must be used directly in the `color:` property, not wrapped in `var()`.
+
+---
+
+<!-- insight:9871960b7bbc | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T18:57:15.801Z -->
+## ★ Insight
+- **Module-level cache on `globalThis`** is the established pattern in this codebase (see `parser.ts`, `catalog.ts`, `agentCost.ts`) to survive Next.js HMR hot-reloads. The new `liveCostCache` follows the same pattern rather than inventing a new cache lifecycle.
+- **`parseSessionTurns` takes `(filePath, projectDirName)` not a session ID**, so `resolveSessionJsonl` is necessary as the session-ID→file bridge. The re-export from `parser.ts:92` keeps imports consistent.
+
+---
+
+<!-- insight:5b8a283221d8 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T18:46:02.268Z -->
+## ★ Insight
+- **Plan-mode pivots avoided two real bugs**: the advisor flagged that INSIGHTS.md syncs lazily (so a freshly-written `★ Insight` would be invisible in a "live" tab for ~30s) and that `AgentsBrowser`'s `expandedIds` is local React state with no URL binding (so `#id` fragment navigation silently no-ops). Both are the kind of issue that only shows up under "I'm watching a live session right now" usage — exactly the path Wave 3 targets.
+- **`parseInsightsFromJsonl` exists as a pure function** in `src/lib/scanner/insightsMd.ts:44`, which is the lucky break: we can source insights from the raw JSONL without going through the writer/sync layer at all. It's a good reminder that scanner modules in this codebase tend to expose both the orchestrated read (`scanInsightsMd`) and a pure parser — useful when you need to read the same data from a different ingest point.
+
+---
+
+<!-- insight:8dc16910e56b | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T18:33:44.297Z -->
+## ★ Insight
+- `LiveAgentSession.costEstimate` and `maxContextFill` are already **declared** in `src/lib/agentView/types.ts:47-49` but **never populated** by the aggregator — these are the cheapest "internal linking" wins because the UI styling for ctx/cost chips is already in `AgentCard.tsx:121-159`, just unwired.
+- The codebase has **two parallel "live channel" architectures**: `PulseProvider` (poll-with-watermark for unified app-wide signals) and `/api/agent-view/stream` (true SSE, Observatory-only). Future waves should reuse — not bridge — these patterns to avoid a third paradigm.
+- The repo synthesis flagged that abtop discovers agents via **process tables**, not just JSONL — Project Minder today is blind to a `claude` process the user started until JSONL appears. This is the biggest observability gap.
+
+---
+
 <!-- insight:e7a81ea9c0e9 | session:22b0f49a-58d6-4a57-bcf2-d471b1cf40bb | 2026-05-12T17:52:08.094Z -->
 ## ★ Insight
 The AbortController fix is the most impactful — without it, a slow `loadOrchestrationGraph` JSONL replay (~50–200ms) that arrives after a newer fetch would silently overwrite the correct state. This is a real race, not a theoretical one, because `loadOrchestrationGraph` does full file I/O on every call.
