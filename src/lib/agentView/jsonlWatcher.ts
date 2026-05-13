@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { bridgeJsonlAppendToEventBus } from "./eventBus";
+import { invalidateLiveStatusCache } from "@/lib/liveStatus";
 import { decodeDirName, toSlug } from "@/lib/scanner/claudeConversations";
 import { WORKTREE_SEP } from "@/lib/scanner/worktrees";
 
@@ -52,7 +53,10 @@ function scheduleEmit(filePath: string): void {
   debounce.set(filePath, setTimeout(() => {
     debounce.delete(filePath);
     const parsed = parseJsonlPath(PROJECTS_DIR, filePath);
-    if (parsed) bridgeJsonlAppendToEventBus(parsed.sessionId, parsed.projectSlug);
+    if (parsed) {
+      invalidateLiveStatusCache();
+      bridgeJsonlAppendToEventBus(parsed.sessionId, parsed.projectSlug);
+    }
   }, DEBOUNCE_MS));
 }
 
@@ -70,8 +74,8 @@ export function startJsonlWatcher(): void {
         scheduleEmit(path.join(PROJECTS_DIR, filename));
       }
     } catch {
-      // Recursive watch not supported (Linux) or dir disappeared — degrade silently.
-      g.__minderJsonlWatcher = null;
+      // Recursive watch not supported (Linux) — permanent sentinel prevents retries.
+      g.__minderJsonlWatcher = "unsupported";
     }
   }).catch(() => {
     // ~/.claude/projects doesn't exist yet — normal for fresh installs.
