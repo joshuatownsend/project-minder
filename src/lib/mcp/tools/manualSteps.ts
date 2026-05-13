@@ -3,6 +3,7 @@ import path from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { toggleStepInFile } from "@/lib/manualStepsWriter";
+import { invalidateCache } from "@/lib/cache";
 import { SlugSchema } from "../schemas";
 import { jsonResult, errorResult } from "../result";
 import { getCachedOrFreshScan as getScan } from "../scanHelper";
@@ -100,6 +101,11 @@ export function registerManualStepsTools(server: McpServer): void {
       const filePath = path.join(project.path, "MANUAL_STEPS.md");
       try {
         const updated = await toggleStepInFile(filePath, lineNumber);
+        // Invalidate the scan cache so subsequent `list-manual-steps` /
+        // `get-project-manual-steps` reflect the toggle immediately rather
+        // than serving the pre-toggle parse for up to the 5-min cache TTL.
+        // Matches the REST POST /api/manual-steps/[slug] behavior.
+        invalidateCache();
         return jsonResult({ slug, lineNumber, manualSteps: updated });
       } catch (err) {
         return errorResult(`Failed to toggle step: ${(err as Error).message}`);

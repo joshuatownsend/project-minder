@@ -62,27 +62,16 @@ export function buildMcpServer(): McpServer {
   return server;
 }
 
-// Singleton McpServer on globalThis so the heavy registration cost (60+
-// `registerTool` / `registerResource` calls plus their Zod schema parsing) is
-// paid once per process and survives Next.js HMR module reloads. The
-// transport, on the other hand, MUST be created per request — the SDK's
-// stateless mode rejects reuse with: "Stateless transport cannot be reused
-// across requests. Create a new transport per request."
-const g = globalThis as unknown as { __minderMcpServer?: McpServer };
-
-function getServer(): McpServer {
-  if (!g.__minderMcpServer) {
-    g.__minderMcpServer = buildMcpServer();
-  }
-  return g.__minderMcpServer;
-}
-
-// Per-request transport handler. The route's GET/POST/DELETE all funnel here.
-// We build a fresh transport, connect the cached server to it, and let the
-// SDK take over. After `handleRequest` resolves, the transport is single-use
-// and can be discarded.
+// Per-request handler — fresh McpServer AND fresh transport per call.
+// We can't reuse a process-global McpServer because `server.connect(transport)`
+// replaces the active transport; if two `/api/mcp` requests overlap, the
+// second's `connect` rebinds the SDK's message router onto its own transport
+// and the first request's response can't route back. Per-request isolation
+// is the SDK's recommended pattern for stateless HTTP. Registration is cheap
+// metadata setup (no I/O, no expensive Zod parsing beyond what's cached at
+// module load).
 export async function handleMcpRequest(req: Request): Promise<Response> {
-  const server = getServer();
+  const server = buildMcpServer();
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Stateless mode — each request stands alone. The dashboard provides
     // live UI for anything that wants subscriptions; MCP clients can
@@ -102,10 +91,11 @@ export async function handleMcpRequest(req: Request): Promise<Response> {
   try {
     return await transport.handleRequest(req);
   } finally {
-    // Detach the transport from the server so the next request gets a
-    // fresh attachment. McpServer.connect() replaces the transport
-    // each call, so an explicit close keeps the bookkeeping clean.
+    // Close transport + server so per-request resources don't leak. The
+    // server is single-use under this design; the SDK's Server.close()
+    // is synchronous and cheap.
     await transport.close().catch(() => undefined);
+    await server.close().catch(() => undefined);
   }
 }
 
