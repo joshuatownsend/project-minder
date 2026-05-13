@@ -20,6 +20,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "mcpSecurityScan",
   "gsdPlanning",
   "agentView",
+  "claudeStatusAlerts",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -166,6 +167,14 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Reads the Claude daemon roster + JSONL appends to power the /agent-view live session Kanban. Defaults on.",
     group: "active",
     appliesAt: "watcher",
+    wired: true,
+  },
+  {
+    key: "claudeStatusAlerts",
+    label: "Claude status alerts",
+    description: "Polls status.claude.com for incidents and shows a banner + toast when Claude services are degraded. Defaults on.",
+    group: "active",
+    appliesAt: "ui",
     wired: true,
   },
 ];

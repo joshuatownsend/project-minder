@@ -6,6 +6,7 @@ import { HelpProvider } from "@/components/HelpProvider";
 import { HelpPanel } from "@/components/HelpPanel";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationListener } from "@/components/NotificationListener";
+import { ClaudeStatusListener } from "@/components/ClaudeStatusListener";
 import { PulseProvider } from "@/components/PulseProvider";
 import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
@@ -80,6 +81,7 @@ export default async function RootLayout({
 
                   <HelpPanel />
                   <NotificationListener />
+                  <ClaudeStatusListener />
                 </HelpProvider>
               </CommandPaletteProvider>
             </PulseProvider>

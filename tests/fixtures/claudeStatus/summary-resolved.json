@@ -1,0 +1,79 @@
+{
+  "page": {
+    "id": "tymt9n04zgry",
+    "name": "Claude",
+    "url": "https://status.claude.com",
+    "updated_at": "2026-05-13T14:10:00.000Z"
+  },
+  "components": [
+    {
+      "id": "rwppv331jlwc",
+      "name": "claude.ai",
+      "status": "operational",
+      "position": 1,
+      "updated_at": "2026-05-13T14:05:00.000Z"
+    },
+    {
+      "id": "cmpconsole01",
+      "name": "Claude Console",
+      "status": "operational",
+      "position": 2,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpapi00001",
+      "name": "Claude API",
+      "status": "operational",
+      "position": 3,
+      "updated_at": "2026-05-13T14:05:00.000Z"
+    },
+    {
+      "id": "cmpcode0001",
+      "name": "Claude Code",
+      "status": "operational",
+      "position": 4,
+      "updated_at": "2026-05-13T14:05:00.000Z"
+    },
+    {
+      "id": "cmpcowork01",
+      "name": "Cowork",
+      "status": "operational",
+      "position": 5,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpgov00001",
+      "name": "Government",
+      "status": "operational",
+      "position": 6,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    }
+  ],
+  "incidents": [
+    {
+      "id": "yn24rtdnf77b",
+      "name": "Claude.ai is experiencing elevated error rates",
+      "status": "resolved",
+      "impact": "major",
+      "shortlink": "https://status.claude.com/incidents/yn24rtdnf77b",
+      "started_at": "2026-05-13T12:21:57.626Z",
+      "created_at": "2026-05-13T12:21:57.633Z",
+      "updated_at": "2026-05-13T14:05:00.000Z",
+      "resolved_at": "2026-05-13T14:05:00.000Z",
+      "incident_updates": [
+        {
+          "id": "resolvedupd",
+          "status": "resolved",
+          "body": "This incident has been resolved. All systems are operating normally.",
+          "display_at": "2026-05-13T14:05:00.000Z",
+          "affected_components": [
+            { "code": "cmpapi00001", "name": "Claude API", "old_status": "major_outage", "new_status": "operational" },
+            { "code": "cmpcode0001", "name": "Claude Code", "old_status": "partial_outage", "new_status": "operational" }
+          ]
+        }
+      ]
+    }
+  ],
+  "scheduled_maintenances": [],
+  "status": { "indicator": "none", "description": "All Systems Operational" }
+}
