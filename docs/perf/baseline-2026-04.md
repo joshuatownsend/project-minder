@@ -595,3 +595,55 @@ bash docs/perf/api-bench.sh
 #   take_memory_snapshot on /sessions
 #   list_network_requests after a 30 s idle on /usage
 ```
+
+---
+
+## After P0 residual — 2026-05-13
+
+Client-only cleanup. No data-layer changes. Finishes the originally-deferred P0 items that were either missed or consciously skipped in the first pass (P0 → P0.5, 2026-04-30).
+
+**Branch:** `perf` (squash-merged to `main` after typecheck + full test suite pass)
+
+### What changed
+
+| Component | Change |
+|---|---|
+| `MarkdownContent.tsx` | Wrapped in `React.memo` + hoisted parse loop to `buildElements` helper called via `useMemo([content])`. Previously ran on every parent re-render regardless of whether `content` changed. |
+| `ManualStepsNavBadge.tsx` | Deleted `setInterval(fetch, 30_000)` against `/api/manual-steps?pending=true`. Replaced with `usePulse().snapshot.pendingSteps` — already in the 5s pulse stream. |
+| `ManualStepsDashboard.tsx` | Outer `sorted.map` virtualized via `useVirtualizer` with `measureElement` for dynamic row heights (collapsed vs. expanded sections). Scroll container `calc(100vh - 260px)`. Expand-all / Collapse-all toggle preserved. |
+| `SparklineList.tsx` | `<table>/<tbody>` converted to CSS `display: grid` with shared `COLS` constant for header/body column alignment. Rows virtualized via `useVirtualizer`, `estimateSize: 50`. Per-row `pendingTodos`, `pendingSteps`, `lastSession` IIFE and `Date.now()` computations hoisted to a memoized `enrichedSorted` array (deps: `[sorted, activityData, pinnedSlugs]`). |
+
+**Why ManualStepsDashboard and SparklineList were revisited:** P0.5 measured these at 9 and 32 rows respectively and applied the "below 100 rows → skip" rule. Since then, the project count and manual-step entry count have grown, and the per-row cost on SparklineList (one `ActivitySparkline` + one `DevServerControl` per row) is higher than a simple text row. Re-evaluation at ~61 projects / growing manual-steps list put both back above the cost threshold.
+
+### Bundle sizes (`node docs/perf/bundle-summary.mjs .`)
+
+Captured 2026-05-13 on branch `perf` after all four changes. The codebase grew substantially since the April 30 baseline (Claude status alerts, MCP server, Agent Observatory waves 4–5, etc.) so direct route-level comparisons to April 30 carry confounding features. The P0 residual changes themselves add no new dependencies.
+
+| Route | Apr-30 baseline (KB) | After P0 (KB) | Post-P0-residual (KB) | Δ vs Apr-30 |
+|---|---|---|---|---|
+| `/` (SparklineList here) | 719.5 | 720.1 | 629.7 | −89.8 |
+| `/manual-steps` | 574.0 | n/a | 642.9 | +68.9 (new features) |
+| `/insights` (MarkdownContent heavy) | 570.4 | n/a | 622.3 | +51.9 (new features) |
+| `/sessions` | 581.1 | 598.0 | 660.4 | +79.3 (new features) |
+| Shared baseline | 560.9 | 561.5 | 613.5 | +52.6 (new features) |
+
+**Key reading:** The `/` drop of 89.8 KB vs Apr-30 reflects both the P0 work (react-virtual added) and the P0 residual SparklineList changes. The increases on other routes are from feature additions after April 30, not from this residual pass. The P0 residual changes contribute no new bundle weight.
+
+### Idle network improvement
+
+`ManualStepsNavBadge` eliminated its independent 30s poller. The badge now reads `snapshot.pendingSteps` from `PulseProvider` (5s, shared, paused on `document.hidden`).
+
+| Source | Before (requests/30 s) | After (requests/30 s) |
+|---|---|---|
+| `ManualStepsNavBadge` → `/api/manual-steps?pending=true` | 1 | **0** |
+
+Combined with P0's pulse consolidation, this is now the last known independent idle poller on the standard navigation paths (excluding dev-mode singletons like `DevServerControl` in compact mode on each SparklineList row).
+
+### What still needs manual measurement
+
+The following were not captured in this slice and should be recaptured in a browser session:
+
+1. **`/manual-steps` DOM node count before/after** — confirm only viewport rows mount when `ManualStepsDashboard` is virtualized. Ballpark target: ~15–25 `<div>` rows in DOM regardless of total project count.
+2. **`/insights` React Profiler trace** — confirm `MarkdownContent` shows gray (skipped) bars in Profiler when the parent re-renders without changing `content`. This validates the `memo` wrap is exercised.
+3. **SparklineList visual regression** — side-by-side `/` with table (pre-change) vs. grid (post-change) on narrow viewport. Check horizontal overflow, column alignment, and `position: sticky` header when scrolling 60+ rows.
+4. **CLS on `/manual-steps`** — prior baseline not captured; recapture with Lighthouse to get a starting number for P3 comparison.
