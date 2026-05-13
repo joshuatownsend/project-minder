@@ -6,7 +6,8 @@
  *
  * Renders nothing when:
  *   - The feature flag is off (server replies `{disabled: true}`)
- *   - Overall status is `operational` with a fresh `live` source
+ *   - Overall status is `operational` (regardless of source — once we know
+ *     things are fine, the banner is hidden even if the snapshot is stale)
  *   - The first poll hasn't completed within the initial 600ms suppress window
  *
  * Polls `/api/claude-status` every 60s. State only updates on successful

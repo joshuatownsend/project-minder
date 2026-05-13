@@ -102,6 +102,40 @@ describe("parseSummary", () => {
     expect(snap.incidents[0].affectedComponentIds).toEqual([]);
   });
 
+  it("strips nested/malformed HTML from latestUpdateBody (defense against partial-sanitization escapes)", () => {
+    const payload = {
+      page: { url: "u", updated_at: "t" },
+      components: [],
+      incidents: [
+        {
+          id: "i1",
+          name: "n",
+          status: "investigating",
+          impact: "minor",
+          shortlink: "s",
+          started_at: "a",
+          updated_at: "b",
+          resolved_at: null,
+          incident_updates: [
+            {
+              id: "u1",
+              status: "investigating",
+              // Classic single-pass-strip bypass: removing `<script>` leaves
+              // the outer `<scr` + `ipt>` which look like a tag again.
+              body: "<scr<script>ipt>alert(1)</scr</script>ipt>fine",
+              display_at: "z",
+            },
+          ],
+        },
+      ],
+    };
+    const snap = parseSummary(payload);
+    const body = snap.incidents[0].latestUpdateBody ?? "";
+    expect(body).not.toContain("<");
+    expect(body).not.toContain(">");
+    expect(body).not.toContain("script");
+  });
+
   it("strips HTML from latestUpdateBody", () => {
     const payload = {
       page: { url: "u", updated_at: "t" },

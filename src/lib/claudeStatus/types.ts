@@ -4,12 +4,25 @@
  * UI/MCP surfaces actually render.
  */
 
+/**
+ * Component statuses Statuspage currently emits. The parser is intentionally
+ * lenient: it casts any string value from `summary.json` into this type so
+ * a Statuspage-side rename or new value doesn't crash the dashboard. Treat
+ * a `ComponentStatus` from the snapshot as an opaque string when branching —
+ * always provide a `default` arm. UI severity decisions go through
+ * `OverallStatus` (a derived 3-value enum), so this leniency is contained.
+ */
 export type ComponentStatus =
   | "operational"
   | "degraded_performance"
   | "partial_outage"
   | "major_outage";
 
+/**
+ * Incident statuses Statuspage currently emits. Same lenient-cast policy
+ * as {@link ComponentStatus} — values from the snapshot may be strings
+ * outside this union if Statuspage adds new states.
+ */
 export type IncidentStatus =
   | "investigating"
   | "identified"

@@ -36,8 +36,11 @@ function describeTransition(c: ClaudeStatusChange): { title: string; body: strin
 export function ClaudeStatusListener() {
   const { showToast } = useToast();
   const lastCheckedRef = useRef<string>(new Date().toISOString());
-  // Track (incidentId, status) we've already toasted so an overlapping
-  // poll/refresh can't fire a duplicate notification.
+  // Track (incidentId, status, impact, transition) we've already toasted so an
+  // overlapping poll/refresh can't fire a duplicate notification. Including
+  // impact catches severity escalations (e.g. minor→major while status stays
+  // `investigating`); including transition lets a resolve-then-reopen of the
+  // same incident still notify.
   const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -53,19 +56,22 @@ export function ClaudeStatusListener() {
         if (cancelled) return;
         if (!Array.isArray(data)) return;
 
+        let maxChangedAt = lastCheckedRef.current;
         for (const change of data) {
-          const key = `${change.incidentId}:${change.status}`;
-          if (seenRef.current.has(key)) continue;
-          seenRef.current.add(key);
-          const { title, body } = describeTransition(change);
-          showToast(title, body);
+          const key = `${change.incidentId}:${change.status}:${change.impact}:${change.transition}`;
+          if (!seenRef.current.has(key)) {
+            seenRef.current.add(key);
+            const { title, body } = describeTransition(change);
+            showToast(title, body);
+          }
+          if (change.changedAt > maxChangedAt) maxChangedAt = change.changedAt;
         }
-        // Advance the cursor to "just now" so the next poll only fetches
-        // events newer than this call. We deliberately don't use the
-        // server-supplied timestamp on each change because we want a
-        // single monotonic cursor; `getChanges(since)` is filter-only,
-        // so over-fetching is the worst that can happen on clock skew.
-        lastCheckedRef.current = new Date().toISOString();
+        // Advance the cursor to the latest server-stamped `changedAt` we
+        // observed. Falls back to the previous cursor if the response was
+        // empty (preserving since= so the same window is rechecked). This
+        // avoids the "client clock ahead of server" skip where setting
+        // `Date.now()` would jump past unconsumed transitions.
+        lastCheckedRef.current = maxChangedAt;
       } catch {
         // Transient errors are non-fatal — try again next tick.
       }

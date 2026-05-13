@@ -5,8 +5,11 @@
  *   - `src/lib/usage/costCalculator.ts`: file cache + promise singleton +
  *     fallback to a safe default when fetch fails.
  *   - `src/lib/manualStepsWatcher.ts`: `globalThis`-pinned instance so
- *     hot reload in dev doesn't spawn a second copy, plus a 5-minute
- *     ring buffer of change events exposed via `getChanges(since)`.
+ *     hot reload in dev doesn't spawn a second copy, plus a ring buffer
+ *     of change events exposed via `getChanges(since)`. We use a 30-min
+ *     window (see `CHANGE_RETENTION_MS`); manualStepsWatcher uses 5 min
+ *     because it polls every few seconds, while this module polls at
+ *     60 s so listeners need a wider catch-up window.
  *
  * Lifecycle: lazy. `getCurrentStatus()` triggers a fetch only when the
  * in-memory snapshot is older than `FRESH_TTL_MS`. There is no
@@ -121,11 +124,16 @@ async function refreshSnapshot(): Promise<ClaudeStatusSnapshot> {
   const now = Date.now();
 
   // If we're inside the backoff window, don't even try the network —
-  // just return whatever we have (or empty) marked as stale.
+  // just return whatever we have (or empty) marked as stale. Apply the
+  // same STALE_MAX_MS guard the catch branch uses so a string of failures
+  // can't keep serving 30min+ old data indefinitely.
   if (s.consecutiveFailures > 0 && now < s.nextRetryAt) {
-    if (s.snapshot) return { ...s.snapshot, source: "stale" };
-    const empty = emptySnapshot(`Backoff: skipping fetch until ${new Date(s.nextRetryAt).toISOString()}`);
-    return empty;
+    if (s.snapshot && now - s.snapshot.fetchedAt < STALE_MAX_MS) {
+      return { ...s.snapshot, source: "stale" };
+    }
+    return emptySnapshot(
+      `Backoff: skipping fetch until ${new Date(s.nextRetryAt).toISOString()}`,
+    );
   }
 
   try {
@@ -158,7 +166,11 @@ async function refreshSnapshot(): Promise<ClaudeStatusSnapshot> {
     s.nextRetryAt = now + backoffDelay(s.consecutiveFailures);
 
     if (s.snapshot && now - s.snapshot.fetchedAt < STALE_MAX_MS) {
-      return { ...s.snapshot, source: "stale", lastError: msg };
+      // Persist the failure context onto the cached snapshot so a memory
+      // hit during the backoff window still surfaces `lastError` to the
+      // UI/MCP. Cleared on the next successful refresh (above).
+      s.snapshot = { ...s.snapshot, lastError: msg };
+      return { ...s.snapshot, source: "stale" };
     }
 
     // Try disk cache once if we haven't already (cold boot path).
@@ -166,8 +178,8 @@ async function refreshSnapshot(): Promise<ClaudeStatusSnapshot> {
       s.diskHydrationAttempted = true;
       const disk = await readDiskCache();
       if (disk) {
-        s.snapshot = disk;
-        return { ...disk, source: "stale", lastError: msg };
+        s.snapshot = { ...disk, lastError: msg };
+        return { ...s.snapshot, source: "stale" };
       }
     }
 

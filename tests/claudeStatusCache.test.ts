@@ -8,9 +8,12 @@ vi.mock("fs", () => {
   const writeFile = vi.fn();
   const mkdir = vi.fn();
   return {
+    // Mock the promises surface used by cache.ts. `readFileSync` is also
+    // exported (as a stub) so any code path importing it from `fs` doesn't
+    // crash — but the stub does NOT proxy to the real implementation.
+    // The fixture loader below uses `require("node:fs").readFileSync`
+    // directly to bypass this mock when it needs real disk reads.
     promises: { stat, readFile, writeFile, mkdir },
-    // Some places (tests, vitest itself) import sync helpers from fs.
-    // Provide a no-op shim that delegates to real readFileSync via require.
     readFileSync: vi.fn(),
   };
 });
@@ -28,12 +31,11 @@ const mockReadFile = vi.mocked(fsP.readFile);
 const mockWriteFile = vi.mocked(fsP.writeFile);
 const mockMkdir = vi.mocked(fsP.mkdir);
 
-// We mocked the `fs` module so we can't use the real readFileSync to load
-// fixtures. Inline the payloads we need at module-load time, before mocks
-// were active, using a literal require. The fixtures are tiny.
+// Bypass the `vi.mock("fs", ...)` above by reaching for the unmocked
+// `node:fs` module via require(). Vitest only intercepts the bare "fs"
+// specifier, so "node:fs" gives us the real readFileSync we need to
+// hydrate the JSON fixtures off disk.
 function loadFixture(name: string): unknown {
-  // Use a path relative to the project root; readFileSync is mocked above,
-  // so we shell out to require() against a real path resolved by node.
   const real = require("node:fs").readFileSync as typeof readFileSync;
   const p = path.resolve(__dirname, "fixtures", "claudeStatus", `${name}.json`);
   return JSON.parse(real(p, "utf-8"));

@@ -47,10 +47,18 @@ function stripHtml(html: string): string {
   // the atom feed's `content`). We still strip defensively so any
   // sanitization on Statuspage's side that injects tags can't bleed
   // through to a toast.
-  return html
-    .replace(/<\/?[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  //
+  // Iterate until idempotent so nested/malformed payloads like
+  // `<scr<script>ipt>` collapse correctly (a single pass would leave a
+  // stray `ipt>` behind). Then drop any lingering angle brackets so a
+  // partial fragment can't be misread as a tag downstream.
+  let s = html;
+  for (let i = 0; i < 5; i++) {
+    const next = s.replace(/<\/?[^>]+>/g, "");
+    if (next === s) break;
+    s = next;
+  }
+  return s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function truncate(s: string, max: number): string {
