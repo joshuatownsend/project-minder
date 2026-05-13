@@ -1,18 +1,25 @@
-import type { ClaudeMdAuditInfo, LintReport } from "../types";
+import type { ClaudeMdAuditInfo, McpServer, LintReport } from "../types";
 import { runLintEngine } from "../lint/engine";
+
+/** Inputs narrowed to what each wave uses; widened wave-by-wave. */
+export interface ConfigLintInputs {
+  claudeMdAudit: ClaudeMdAuditInfo;
+  /** Wave B+: all MCP servers across sources for cross-scope rules. */
+  mcpServers?: McpServer[];
+}
 
 /**
  * Scan-time entry point for the workspace config linter.
- *
- * `projectPath` is unused in Wave A (adapter-only) but will be passed to
- * the `claude-code-lint` library pass in Wave B.
- *
- * Inputs are narrowed to exactly what each wave uses to avoid assembling
- * a half-built ProjectData inside the orchestrator.
+ * Passes `projectPath` separately so the library CLI can run from the
+ * project directory; structured inputs carry pre-loaded scanner data.
  */
 export async function runConfigLint(
-  _projectPath: string,
-  inputs: { claudeMdAudit: ClaudeMdAuditInfo },
+  projectPath: string,
+  inputs: ConfigLintInputs,
 ): Promise<LintReport> {
-  return runLintEngine({ claudeMdAudit: inputs.claudeMdAudit });
+  return runLintEngine({
+    claudeMdAudit: inputs.claudeMdAudit,
+    projectPath,
+    mcpServers: inputs.mcpServers,
+  });
 }

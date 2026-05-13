@@ -1,31 +1,34 @@
-import type { ClaudeMdAuditInfo, LintFinding, LintReport, LintTarget } from "../types";
+import type { ClaudeMdAuditInfo, McpServer, LintFinding, LintReport, LintTarget } from "../types";
 import { adaptClaudeMdFindings } from "./adapter/claudeMd";
 import { dedupeFindings } from "./dedupe";
+import { runLibraryCli } from "./library";
+import { runMcpRules } from "./rules/mcp";
 
 /** Inputs for the lint engine. Widened one wave at a time as new targets are added. */
 export interface LintInputs {
-  /** Wave A: CLAUDE.md adapter only. */
+  /** Populated by all waves — adapter re-emits findings into unified shape. */
   claudeMdAudit: ClaudeMdAuditInfo;
-  // Wave B+: skills, agents, commands (catalog entries)
-  // Wave C+: settings, hooks, mcpServers, plugins
+  /** Wave B+: project directory for library CLI pass. */
+  projectPath: string;
+  /** Wave B+: all MCP servers across sources for cross-scope vendored rules. */
+  mcpServers?: McpServer[];
+  // Wave C+: hooks, settings keys, plugin enables
   // Wave D+: outputStyles, lspConfig
 }
 
 /**
  * Run all lint passes and assemble a `LintReport`.
  *
- * Three passes run in parallel where independent, deduped by
+ * Three passes run in parallel where possible, then deduped by
  * (target, file, rule-family). Engine priority: library > vendored > adapter.
- *
- * Wave A ships the adapter pass only; library + vendored stubs return [].
  */
 export async function runLintEngine(inputs: LintInputs): Promise<LintReport> {
   const engineErrors: LintReport["engineErrors"] = [];
 
   const [adapterFindings, libraryFindings, vendoredFindings] = await Promise.all([
     Promise.resolve(adaptClaudeMdFindings(inputs.claudeMdAudit)),
-    runLibraryPass(engineErrors),
-    runVendoredPass(engineErrors),
+    runLibraryPass(inputs.projectPath, engineErrors),
+    Promise.resolve(runVendoredPass(inputs)),
   ]);
 
   const findings = dedupeFindings([adapterFindings, libraryFindings, vendoredFindings]);
@@ -33,23 +36,28 @@ export async function runLintEngine(inputs: LintInputs): Promise<LintReport> {
 }
 
 /**
- * Wave B: import `claude-code-lint`'s ClaudeLint class and run it against
- * the project path. Any thrown error is captured in `engineErrors` so the
- * panel degrades gracefully rather than crashing the scan.
+ * Spawn `claude-code-lint check-all --format json` in the project directory.
+ * Findings for the CLAUDE.md target are excluded — the adapter handles those.
+ * Any CLI error is captured in `engineErrors` so the panel degrades gracefully.
  */
 async function runLibraryPass(
-  _engineErrors: LintReport["engineErrors"],
+  projectPath: string,
+  engineErrors: LintReport["engineErrors"],
 ): Promise<LintFinding[]> {
-  // TODO Wave B: const { ClaudeLint } = await import("claude-code-lint");
-  return [];
+  const findings = await runLibraryCli(projectPath, engineErrors);
+  // Exclude claude-md target — the adapter already surfaces those via the
+  // existing audit, and running both would produce duplicate findings.
+  return findings.filter((f) => f.target !== "claude-md");
 }
 
-/** Wave B+: per-target vendored rule modules (skills, agents, commands, …). */
-async function runVendoredPass(
-  _engineErrors: LintReport["engineErrors"],
-): Promise<LintFinding[]> {
-  // TODO Wave B: wire rules/skills.ts, rules/agents.ts, rules/commands.ts
-  return [];
+/** Vendored rules that use cross-scope data the library CLI cannot access. */
+function runVendoredPass(inputs: LintInputs): LintFinding[] {
+  const findings: LintFinding[] = [];
+  if (inputs.mcpServers) {
+    findings.push(...runMcpRules(inputs.mcpServers));
+  }
+  // Wave C+: hooks, settings, plugins
+  return findings;
 }
 
 function buildReport(
