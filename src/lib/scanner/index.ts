@@ -201,7 +201,7 @@ async function scanProject(
     agentCount: catalogCounts.agentCount > 0 ? catalogCounts.agentCount : undefined,
     skillCount: catalogCounts.skillCount > 0 ? catalogCounts.skillCount : undefined,
     gsdPlanning,
-    configLint: configLint.findings.length > 0 ? configLint : undefined,
+    configLint: (configLint.findings.length > 0 || configLint.engineErrors.length > 0) ? configLint : undefined,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };

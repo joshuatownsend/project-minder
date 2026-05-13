@@ -25,7 +25,10 @@ export function dedupeFindings(buckets: LintFinding[][]): LintFinding[] {
   for (const findings of buckets) {
     for (const f of findings) {
       const ruleFamily = f.code.replace(/^[^/]+\//, "");
-      const key = `${f.target}::${f.file ?? ""}::${ruleFamily}`;
+      // When no file path, use the finding title to distinguish multiple
+      // findings from the same rule targeting different items (e.g. two
+      // unpinned plugins each produce a unique title).
+      const key = `${f.target}::${f.file ?? f.title}::${ruleFamily}`;
       const existing = best.get(key);
       if (!existing || ENGINE_PRIORITY[f.engine] > ENGINE_PRIORITY[existing.engine]) {
         best.set(key, f);

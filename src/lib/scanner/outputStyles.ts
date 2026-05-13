@@ -31,7 +31,9 @@ export async function scanOutputStyles(
 
     try {
       const files = await fs.readdir(styleDir);
-      const mdFile = files.find((f) => f.toLowerCase().endsWith(".md"));
+      const mdFile =
+        files.find((f) => f.toLowerCase() === "prompt.md") ??
+        files.find((f) => f.toLowerCase().endsWith(".md"));
       if (mdFile) {
         promptPath = path.join(styleDir, mdFile);
         const content = await fs.readFile(promptPath, "utf-8");

@@ -42,9 +42,10 @@ export async function runLibraryCli(
   engineErrors: LintReport["engineErrors"],
   timeoutMs = 20_000,
 ): Promise<LintFinding[]> {
-  // Resolve CLI binary relative to the package main (dist/index.js → dist/cli.js).
-  const pkgMain = require.resolve("claude-code-lint");
-  const cliBin = path.join(path.dirname(pkgMain), "cli.js");
+  // Resolve via package.json so we follow the declared bin entry, not a
+  // path assumption relative to main (main → dist/index.js, bin → bin/claudelint).
+  const pkgRoot = path.dirname(require.resolve("claude-code-lint/package.json"));
+  const cliBin = path.join(pkgRoot, "bin", "claudelint");
 
   let stdout: string;
   try {
