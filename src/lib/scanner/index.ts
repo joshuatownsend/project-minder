@@ -19,11 +19,18 @@ import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
 import { countProjectCatalog } from "./projectCatalogCounts";
 import { scanGsdPlanning } from "./gsdPlanning";
+import { runConfigLint } from "./configLint";
 
 // Neutral substitutes typed against the real scanner returns so downstream
 // code reads the same shape whether the scanner ran or was gated off.
 const EMPTY_CLAUDE_SESSIONS: Awaited<ReturnType<typeof scanClaudeSessions>> = {
   sessionCount: 0,
+};
+const EMPTY_LINT_REPORT: Awaited<ReturnType<typeof runConfigLint>> = {
+  findings: [],
+  countsByTarget: {},
+  totalCounts: { P0: 0, P1: 0, P2: 0 },
+  engineErrors: [],
 };
 const EMPTY_DOCKER: Awaited<ReturnType<typeof scanDockerCompose>> = {
   services: [],
@@ -66,6 +73,13 @@ async function scanProject(
   const claudeMdAuditPromise = claudeMdPromise.then((md) =>
     auditClaudeMd(projectPath, md ?? null)
   );
+  // Config lint chains off the audit result (Wave A: adapter-only).
+  // Defaults off until rule severities are tuned.
+  const configLintPromise = getFlag(flags, "configLint", false)
+    ? claudeMdAuditPromise.then((audit) =>
+        runConfigLint(projectPath, { claudeMdAudit: audit })
+      )
+    : Promise.resolve(EMPTY_LINT_REPORT);
 
   const [
     pkgResult,
@@ -83,6 +97,7 @@ async function scanProject(
     cicd,
     catalogCounts,
     gsdPlanning,
+    configLint,
   ] = await Promise.all([
     scanPackageJson(projectPath),
     scanEnvFiles(projectPath),
@@ -111,6 +126,7 @@ async function scanProject(
     getFlag(flags, "gsdPlanning")
       ? scanGsdPlanning(projectPath)
       : Promise.resolve(undefined),
+    configLintPromise,
   ]);
 
   // Determine DB port from env or docker
@@ -168,6 +184,7 @@ async function scanProject(
     agentCount: catalogCounts.agentCount > 0 ? catalogCounts.agentCount : undefined,
     skillCount: catalogCounts.skillCount > 0 ? catalogCounts.skillCount : undefined,
     gsdPlanning,
+    configLint: configLint.findings.length > 0 ? configLint : undefined,
     lastActivity,
     scannedAt: new Date().toISOString(),
   };
