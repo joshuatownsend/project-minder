@@ -429,7 +429,8 @@ export type FeatureFlagKey =
   | "taskDispatcher"
   | "mcpSecurityScan"
   | "gsdPlanning"
-  | "agentView";
+  | "agentView"
+  | "claudeStatusAlerts";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =

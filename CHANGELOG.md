@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Claude status alerts.** Project Minder now polls `status.claude.com/api/v2/summary.json` and surfaces active Claude incidents in a sticky banner below the topbar on every route, plus toast notifications when an incident appears, transitions status, or resolves. Gated behind a new `claudeStatusAlerts` feature flag (default-on). New library at `src/lib/claudeStatus/` (types, parser, diff, cache singleton) mirrors the file-cache + promise-singleton pattern from `costCalculator.ts` and the change-feed pattern from `manualStepsWatcher.ts`. New REST endpoints `GET /api/claude-status` and `GET /api/claude-status/changes?since=ISO8601`. New `<ClaudeStatusBanner />` in `AppShell.tsx` and `<ClaudeStatusListener />` in `layout.tsx`. New MCP tool `get-claude-status` (read-only, openWorld) so a connected Claude agent can self-diagnose whether an API error is upstream. Disk cache at `.cache/claude-status.json`; 30s memory TTL; backoff on consecutive failures up to 8 minutes. 33 new tests across `tests/claudeStatusParser.test.ts`, `tests/claudeStatusChanges.test.ts`, `tests/claudeStatusCache.test.ts` with four fixture payloads. Documented in `docs/help/claude-status.md`.
+
 ### Changed
 - **Settings page** — "W7" / "W8" / "W10" developer-only wave badges replaced with "Soon" labels; placeholder sections now say "Coming soon." instead of "Coming in wave N."
 - **Schedule page** — removed developer-only wave version reference from the coming-soon blurb.

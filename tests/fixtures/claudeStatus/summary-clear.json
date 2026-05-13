@@ -1,0 +1,55 @@
+{
+  "page": {
+    "id": "tymt9n04zgry",
+    "name": "Claude",
+    "url": "https://status.claude.com",
+    "updated_at": "2026-05-13T10:00:00.000Z"
+  },
+  "components": [
+    {
+      "id": "rwppv331jlwc",
+      "name": "claude.ai",
+      "status": "operational",
+      "position": 1,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpconsole01",
+      "name": "Claude Console",
+      "status": "operational",
+      "position": 2,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpapi00001",
+      "name": "Claude API",
+      "status": "operational",
+      "position": 3,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpcode0001",
+      "name": "Claude Code",
+      "status": "operational",
+      "position": 4,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpcowork01",
+      "name": "Cowork",
+      "status": "operational",
+      "position": 5,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpgov00001",
+      "name": "Government",
+      "status": "operational",
+      "position": 6,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    }
+  ],
+  "incidents": [],
+  "scheduled_maintenances": [],
+  "status": { "indicator": "none", "description": "All Systems Operational" }
+}

@@ -1,0 +1,88 @@
+{
+  "page": {
+    "id": "tymt9n04zgry",
+    "name": "Claude",
+    "url": "https://status.claude.com",
+    "updated_at": "2026-05-13T13:23:00.000Z"
+  },
+  "components": [
+    {
+      "id": "rwppv331jlwc",
+      "name": "claude.ai",
+      "status": "degraded_performance",
+      "position": 1,
+      "updated_at": "2026-05-13T12:59:41.000Z"
+    },
+    {
+      "id": "cmpconsole01",
+      "name": "Claude Console",
+      "status": "operational",
+      "position": 2,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpapi00001",
+      "name": "Claude API",
+      "status": "major_outage",
+      "position": 3,
+      "updated_at": "2026-05-13T12:59:41.000Z"
+    },
+    {
+      "id": "cmpcode0001",
+      "name": "Claude Code",
+      "status": "partial_outage",
+      "position": 4,
+      "updated_at": "2026-05-13T12:59:41.000Z"
+    },
+    {
+      "id": "cmpcowork01",
+      "name": "Cowork",
+      "status": "operational",
+      "position": 5,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    },
+    {
+      "id": "cmpgov00001",
+      "name": "Government",
+      "status": "operational",
+      "position": 6,
+      "updated_at": "2026-05-13T10:00:00.000Z"
+    }
+  ],
+  "incidents": [
+    {
+      "id": "yn24rtdnf77b",
+      "name": "Claude.ai is experiencing elevated error rates",
+      "status": "investigating",
+      "impact": "major",
+      "shortlink": "https://status.claude.com/incidents/yn24rtdnf77b",
+      "started_at": "2026-05-13T12:21:57.626Z",
+      "created_at": "2026-05-13T12:21:57.633Z",
+      "updated_at": "2026-05-13T12:59:41.257Z",
+      "resolved_at": null,
+      "incident_updates": [
+        {
+          "id": "77js7v1drnwf",
+          "status": "investigating",
+          "body": "We are continuing to investigate this issue. Engineers are looking into elevated error rates affecting the API and Claude Code.",
+          "display_at": "2026-05-13T12:59:41.254Z",
+          "affected_components": [
+            { "code": "cmpapi00001", "name": "Claude API", "old_status": "operational", "new_status": "major_outage" },
+            { "code": "cmpcode0001", "name": "Claude Code", "old_status": "operational", "new_status": "partial_outage" }
+          ]
+        },
+        {
+          "id": "earlierupd0",
+          "status": "investigating",
+          "body": "We are investigating reports of elevated error rates on the Claude API.",
+          "display_at": "2026-05-13T12:21:57.633Z",
+          "affected_components": [
+            { "code": "cmpapi00001", "name": "Claude API", "old_status": "operational", "new_status": "major_outage" }
+          ]
+        }
+      ]
+    }
+  ],
+  "scheduled_maintenances": [],
+  "status": { "indicator": "major", "description": "Major Service Outage" }
+}

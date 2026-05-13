@@ -12,6 +12,7 @@ import { registerGitTools } from "./tools/git";
 import { registerStatsTools } from "./tools/stats";
 import { registerOtelTools } from "./tools/otel";
 import { registerDevServerTools } from "./tools/devServers";
+import { registerClaudeStatusTools } from "./tools/claudeStatus";
 import { registerResources } from "./resources";
 
 // Bind the transport's DNS-rebinding protection to the dev-server's port.
@@ -57,6 +58,7 @@ export function buildMcpServer(): McpServer {
   registerStatsTools(server);
   registerOtelTools(server);
   registerDevServerTools(server);
+  registerClaudeStatusTools(server);
   registerResources(server);
 
   return server;
