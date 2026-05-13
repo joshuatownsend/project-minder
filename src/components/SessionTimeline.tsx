@@ -5,6 +5,7 @@ import { TimelineEvent } from "@/lib/types";
 import { User, Bot, Wrench, Brain, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { parseMarkdown, hasCodeFence } from "@/lib/markdown";
 import { formatToolArgs } from "@/lib/usage/toolArgFormatter";
+import type { RetrySpan } from "@/lib/usage/retryDetector";
 
 type EventType = TimelineEvent["type"];
 
@@ -190,10 +191,11 @@ function ThinkingContent({ sessionId, turnIndex, staticContent }: {
   );
 }
 
-function TimelineItem({ event, sessionStart, sessionId }: {
+function TimelineItem({ event, sessionStart, sessionId, isRetry }: {
   event: TimelineEvent;
   sessionStart?: string;
   sessionId?: string;
+  isRetry?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [toolExpanded, setToolExpanded] = useState(false);
@@ -215,6 +217,8 @@ function TimelineItem({ event, sessionStart, sessionId }: {
         borderRadius: "3px",
         background: cfg.bg,
         marginBottom: "2px",
+        borderLeft: isRetry ? "2px solid var(--amber-text,#fbbf24)" : undefined,
+        paddingLeft: isRetry ? "6px" : "8px",
       }}
     >
       <div style={{ color: cfg.color, flexShrink: 0, marginTop: "1px" }}>
@@ -301,18 +305,41 @@ export function SessionTimeline({
   timeline,
   sessionStart,
   sessionId,
+  cutoffIndex,
+  retrySpans,
 }: {
   timeline: TimelineEvent[];
   sessionStart?: string;
   sessionId?: string;
+  cutoffIndex?: number;
+  retrySpans?: RetrySpan[];
 }) {
-  if (timeline.length === 0) {
+  const visibleEvents =
+    cutoffIndex !== undefined ? timeline.slice(0, cutoffIndex + 1) : timeline;
+
+  // Build a Set of event indices that fall inside any retry cycle span.
+  const retryIndices = useMemo(() => {
+    if (!retrySpans?.length) return null;
+    const s = new Set<number>();
+    for (const { startIdx, endIdx } of retrySpans) {
+      for (let i = startIdx; i <= endIdx; i++) s.add(i);
+    }
+    return s;
+  }, [retrySpans]);
+
+  if (visibleEvents.length === 0) {
     return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "32px 0" }}>No timeline events.</p>;
   }
   return (
     <div>
-      {timeline.map((event, i) => (
-        <TimelineItem key={i} event={event} sessionStart={sessionStart} sessionId={sessionId} />
+      {visibleEvents.map((event, i) => (
+        <TimelineItem
+          key={i}
+          event={event}
+          sessionStart={sessionStart}
+          sessionId={sessionId}
+          isRetry={retryIndices?.has(i) ?? false}
+        />
       ))}
     </div>
   );

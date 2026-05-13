@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useSessionDetail } from "@/hooks/useSessions";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,6 +51,7 @@ import { downloadBlob } from "@/lib/downloadBlob";
 import { formatCost, formatDurationMs, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { SourceBadge } from "@/components/SourceBadge";
+import { detectRetrySpans } from "@/lib/usage/retryDetector";
 
 const checkboxRowStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "8px",
@@ -509,7 +510,13 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const [starredAt, setStarredAt] = useState<string | undefined>(undefined);
   const [distilledText, setDistilledText] = useState<string | undefined>(undefined);
   const [distilledAt, setDistilledAt] = useState<string | undefined>(undefined);
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
+
+  const retrySpans = useMemo(
+    () => (data ? detectRetrySpans(data.timeline) : []),
+    [data]
+  );
 
   useEffect(() => {
     setGeneratedTitle(data?.generatedTitle);
@@ -823,12 +830,75 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
         <div style={{ padding: "16px 20px" }}>
           {activeTab === "timeline" && (
-            <div style={{
-              maxHeight: "calc(100vh - 420px)",
-              minHeight: "300px",
-              overflowY: "auto",
-            }}>
-              <SessionTimeline timeline={data.timeline} sessionStart={data.startTime} sessionId={data.sessionId} />
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {/* Replay scrubber — shown only when there's more than one event */}
+              {data.timeline.length > 1 && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: "8px",
+                  padding: "6px 8px",
+                  background: "var(--bg-elevated)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  fontSize: "0.68rem", color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono)",
+                }}>
+                  <span style={{ flexShrink: 0 }}>Replay</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={data.timeline.length - 1}
+                    value={replayIndex ?? data.timeline.length - 1}
+                    onChange={(e) => setReplayIndex(parseInt(e.target.value, 10))}
+                    style={{ flex: 1, accentColor: "var(--accent)", cursor: "pointer" }}
+                  />
+                  <span style={{ flexShrink: 0, minWidth: "6ch", textAlign: "right" }}>
+                    {replayIndex !== null
+                      ? `${replayIndex + 1} / ${data.timeline.length}`
+                      : `${data.timeline.length}`}
+                  </span>
+                  {replayIndex !== null && (
+                    <button
+                      onClick={() => setReplayIndex(null)}
+                      style={{
+                        flexShrink: 0, padding: "2px 7px",
+                        fontSize: "0.65rem", fontFamily: "var(--font-body)",
+                        background: "var(--bg-surface)", border: "1px solid var(--border-default)",
+                        borderRadius: "3px", cursor: "pointer", color: "var(--text-muted)",
+                      }}
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {retrySpans.length > 0 && (
+                    <span
+                      style={{
+                        flexShrink: 0, padding: "1px 6px",
+                        fontSize: "0.62rem",
+                        background: "var(--amber-bg,#451a03)",
+                        color: "var(--amber-text,#fbbf24)",
+                        border: "1px solid var(--amber-border,#92400e)",
+                        borderRadius: "3px",
+                      }}
+                      title="Edit-test-reEdit retry cycles detected and highlighted with an amber border"
+                    >
+                      {retrySpans.length} retry {retrySpans.length === 1 ? "cycle" : "cycles"}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div style={{
+                maxHeight: "calc(100vh - 480px)",
+                minHeight: "300px",
+                overflowY: "auto",
+              }}>
+                <SessionTimeline
+                  timeline={data.timeline}
+                  sessionStart={data.startTime}
+                  sessionId={data.sessionId}
+                  cutoffIndex={replayIndex ?? undefined}
+                  retrySpans={retrySpans}
+                />
+              </div>
             </div>
           )}
 
