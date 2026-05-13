@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAllManualSteps } from "@/hooks/useManualSteps";
 import { ManualStepsInfo, ManualStepEntry, ManualStep } from "@/lib/types";
 import { useToggleStep } from "@/hooks/useManualSteps";
@@ -439,24 +440,28 @@ export function ManualStepsDashboard() {
     });
   };
 
-  // Filter projects
-  const filtered =
-    filter === "pending"
-      ? data.filter((p) => p.manualSteps.pendingSteps > 0)
-      : data;
+  const filtered = useMemo(
+    () =>
+      filter === "pending"
+        ? data.filter((p) => p.manualSteps.pendingSteps > 0)
+        : data,
+    [data, filter]
+  );
 
-  // Sort projects
-  const sorted = [...filtered].sort((a, b) => {
-    if (sort === "pending") {
-      return b.manualSteps.pendingSteps - a.manualSteps.pendingSteps;
-    }
-    // recent: latest entry date
-    const aDate =
-      a.manualSteps.entries[a.manualSteps.entries.length - 1]?.date ?? "";
-    const bDate =
-      b.manualSteps.entries[b.manualSteps.entries.length - 1]?.date ?? "";
-    return bDate.localeCompare(aDate);
-  });
+  const sorted = useMemo(
+    () =>
+      [...filtered].sort((a, b) => {
+        if (sort === "pending") {
+          return b.manualSteps.pendingSteps - a.manualSteps.pendingSteps;
+        }
+        const aDate =
+          a.manualSteps.entries[a.manualSteps.entries.length - 1]?.date ?? "";
+        const bDate =
+          b.manualSteps.entries[b.manualSteps.entries.length - 1]?.date ?? "";
+        return bDate.localeCompare(aDate);
+      }),
+    [filtered, sort]
+  );
 
   const totalPending = data.reduce(
     (sum, p) => sum + p.manualSteps.pendingSteps,
@@ -464,6 +469,15 @@ export function ManualStepsDashboard() {
   );
 
   const allCollapsed = sorted.length > 0 && sorted.every((p) => collapsedSlugs.has(p.slug));
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: sorted.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 80,
+    overscan: 4,
+    getItemKey: (index) => sorted[index].slug,
+  });
 
   const collapseAll = () =>
     setCollapsedSlugs(new Set(sorted.map((p) => p.slug)));
@@ -720,17 +734,38 @@ export function ManualStepsDashboard() {
           </p>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-          {sorted.map((project) => (
-            <ProjectSection
-              key={project.slug}
-              project={project}
-              showCompleted={showCompleted}
-              collapsed={collapsedSlugs.has(project.slug)}
-              onToggle={() => toggleCollapse(project.slug)}
-              onUpdate={handleUpdate}
-            />
-          ))}
+        <div
+          ref={scrollContainerRef}
+          style={{ height: "calc(100vh - 260px)", minHeight: "400px", overflowY: "auto" }}
+        >
+          <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+            {virtualizer.getVirtualItems().map((vItem) => {
+              const project = sorted[vItem.index];
+              return (
+                <div
+                  key={vItem.key}
+                  data-index={vItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vItem.start}px)`,
+                    paddingBottom: "24px",
+                  }}
+                >
+                  <ProjectSection
+                    project={project}
+                    showCompleted={showCompleted}
+                    collapsed={collapsedSlugs.has(project.slug)}
+                    onToggle={() => toggleCollapse(project.slug)}
+                    onUpdate={handleUpdate}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

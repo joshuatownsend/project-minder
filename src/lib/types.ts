@@ -58,6 +58,10 @@ export interface ProjectData {
   // `hasClaudeMd` to access the measurement fields without `?.`.
   claudeMdAudit: ClaudeMdAuditInfo;
 
+  // Workspace-wide config lint (skills, agents, hooks, MCPs, plugins, …).
+  // Populated when the `configLint` feature flag is on; absent otherwise.
+  configLint?: LintReport;
+
   // TODOs
   todos?: TodoInfo;
 
@@ -73,6 +77,8 @@ export interface ProjectData {
   // Claude config (project-local)
   hooks?: HooksInfo;
   mcpServers?: McpServersInfo;
+  outputStyles?: OutputStylesInfo;
+  lspConfig?: LspConfigInfo;
 
   // CI/CD
   cicd?: CiCdInfo;
@@ -326,6 +332,49 @@ export interface ClaudeMdAuditPresent {
  *  of these two variants (no `undefined` case). */
 export type ClaudeMdAuditInfo = ClaudeMdAuditAbsent | ClaudeMdAuditPresent;
 
+// ---------------------------------------------------------------------------
+// Config Lint — workspace-wide surface audit
+// ---------------------------------------------------------------------------
+
+/** Claude Code config surface being linted. */
+export type LintTarget =
+  | "claude-md"
+  | "skill"
+  | "agent"
+  | "command"
+  | "settings"
+  | "hook"
+  | "mcp"
+  | "plugin"
+  | "output-style"
+  | "lsp";
+
+/** Which engine produced a finding. */
+export type LintEngine = "adapter" | "library" | "vendored";
+
+/** A single config-lint finding. Compatible with `AuditFindingSeverity` so
+ *  existing severity-tone UI helpers work without changes. */
+export interface LintFinding {
+  target: LintTarget;
+  /** Namespaced rule code, e.g. "claude-md/long-index", "skill/missing-frontmatter". */
+  code: string;
+  severity: AuditFindingSeverity;
+  title: string;
+  fix: string;
+  /** Penalty weight preserved verbatim from the source finding (0 for informational). */
+  penalty: number;
+  engine: LintEngine;
+  file?: string;
+  docsUrl?: string;
+}
+
+export interface LintReport {
+  findings: LintFinding[];
+  countsByTarget: Partial<Record<LintTarget, { P0: number; P1: number; P2: number }>>;
+  totalCounts: { P0: number; P1: number; P2: number };
+  engineErrors: { engine: LintEngine; target?: LintTarget; message: string }[];
+}
+
 export interface ClaudeInfo {
   lastSessionDate?: string;
   lastPromptPreview?: string;
@@ -430,7 +479,8 @@ export type FeatureFlagKey =
   | "mcpSecurityScan"
   | "gsdPlanning"
   | "agentView"
-  | "claudeStatusAlerts";
+  | "claudeStatusAlerts"
+  | "configLint";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =
@@ -848,6 +898,25 @@ export interface PluginEntry {
 
 export interface PluginsInfo {
   plugins: PluginEntry[];
+}
+
+export interface OutputStyleEntry {
+  /** Directory name under `.claude/output-styles/`. */
+  name: string;
+  /** Absolute path to the style's prompt markdown file. */
+  promptPath: string;
+  frontmatter: Record<string, unknown>;
+}
+
+export interface OutputStylesInfo {
+  styles: OutputStyleEntry[];
+}
+
+export interface LspConfigInfo {
+  /** Absolute path to the lsp.json file. */
+  sourcePath: string;
+  /** Raw parsed config — keys are language IDs, values are server configs. */
+  config: Record<string, unknown>;
 }
 
 // ─── Plans ───────────────────────────────────────────────────────────────────

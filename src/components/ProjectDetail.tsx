@@ -19,6 +19,7 @@ import { ConfigHistoryTab } from "./ConfigHistoryTab";
 import { ProjectConfigTab } from "./ProjectConfigTab";
 import { GsdPlanningTab } from "./GsdPlanningTab";
 import { ClaudeMdAuditPanel } from "./ClaudeMdAuditPanel";
+import { ConfigLintPanel } from "./ConfigLintPanel";
 import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import { EfficiencyTab } from "./EfficiencyTab";
 import { HotFilesPanel } from "./HotFilesPanel";
@@ -48,7 +49,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -140,6 +141,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
   const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
+  const hasConfigLint = !!project.configLint;
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
@@ -158,6 +160,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     ...(hasSessions ? [{ key: "patterns"    as TabKey, label: "Patterns"     }] : []),
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
     ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
+    ...(hasConfigLint   ? [{ key: "config-lint"  as TabKey, label: "Config Lint"  }] : []),
   ];
 
   const actionBtn = (label: string, icon: React.ReactNode, onClick: () => void, href?: string) => {
@@ -601,6 +604,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── CONFIG HISTORY ───────────────────────────────────────── */}
           {activeTab === "config-history" && (
             <ConfigHistoryTab projectSlug={project.slug} projectPath={project.path} />
+          )}
+
+          {/* ── CONFIG LINT ──────────────────────────────────────────── */}
+          {activeTab === "config-lint" && project.configLint && (
+            <ConfigLintPanel report={project.configLint} />
           )}
         </div>
       </div>

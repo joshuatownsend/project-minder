@@ -1,32 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ClipboardList } from "lucide-react";
+import { usePulse } from "@/components/PulseProvider";
 
 export function ManualStepsNavBadge() {
-  const [pendingCount, setPendingCount] = useState(0);
-
-  useEffect(() => {
-    async function fetchCount() {
-      try {
-        const res = await fetch("/api/manual-steps?pending=true");
-        if (!res.ok) return;
-        const data = await res.json();
-        const total = data.reduce(
-          (sum: number, p: { manualSteps: { pendingSteps: number } }) =>
-            sum + p.manualSteps.pendingSteps,
-          0
-        );
-        setPendingCount(total);
-      } catch {
-        // ignore
-      }
-    }
-    fetchCount();
-    const interval = setInterval(fetchCount, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  const { snapshot } = usePulse();
+  const pendingCount = snapshot.pendingSteps;
 
   return (
     <Link

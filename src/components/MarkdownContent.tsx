@@ -1,5 +1,7 @@
 "use client";
 
+import { memo, useMemo } from "react";
+
 export function renderInline(text: string): React.ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((part, i) => {
@@ -25,7 +27,7 @@ export function renderInline(text: string): React.ReactNode[] {
   }).filter((p): p is NonNullable<typeof p> => p !== null);
 }
 
-export function MarkdownContent({ content }: { content: string }) {
+function buildElements(content: string): React.ReactNode[] {
   const lines = content.split("\n");
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -252,9 +254,14 @@ export function MarkdownContent({ content }: { content: string }) {
     i++;
   }
 
+  return elements;
+}
+
+export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
+  const elements = useMemo(() => buildElements(content), [content]);
   return (
     <div style={{ maxWidth: "720px" }}>
       {elements}
     </div>
   );
-}
+});
