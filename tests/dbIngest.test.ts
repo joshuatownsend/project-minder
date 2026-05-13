@@ -1128,6 +1128,135 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  // ── Quality signals (context_fill, compaction loop, tool-failure streak) ──
+
+  it("stamps context_fill on assistant turns and max_context_fill on session", async () => {
+    // claude-sonnet-4-5 → 200 K window
+    // turn 1: 200 input → fill = 200 / 200_000 = 0.001
+    // turn 2: 1000 input → fill = 1000 / 200_000 = 0.005  ← max
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-fill", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "r1", [], { input_tokens: 200, output_tokens: 50 }),
+      assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "r2", [], { input_tokens: 1000, output_tokens: 50 }),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const turnRows = db
+      .prepare("SELECT role, context_fill FROM turns WHERE session_id = 's1' ORDER BY turn_index")
+      .all() as Array<{ role: string; context_fill: number | null }>;
+    expect(turnRows[0].context_fill).toBeNull(); // user turn gets no fill
+    expect(turnRows[1].context_fill).toBeCloseTo(200 / 200_000, 10);
+    expect(turnRows[2].context_fill).toBeCloseTo(1000 / 200_000, 10);
+
+    const session = db
+      .prepare("SELECT max_context_fill, has_compaction_loop FROM sessions WHERE session_id = 's1'")
+      .get() as { max_context_fill: number | null; has_compaction_loop: number };
+    expect(session.max_context_fill).toBeCloseTo(1000 / 200_000, 10);
+    expect(session.has_compaction_loop).toBe(0); // fill too low to trigger
+
+    reloaded.conn.closeDb();
+  });
+
+  it("sets has_compaction_loop = 1 for consecutive near-identical high-fill turns", async () => {
+    // Three assistant turns all at ~77 % fill with < 10 % variance between
+    // consecutive pairs — exactly the compaction-loop heuristic spec.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-loop", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "long task"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "r1", [], { input_tokens: 155_000, output_tokens: 500 }),
+      assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "r2", [], { input_tokens: 154_000, output_tokens: 500 }),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "r3", [], { input_tokens: 156_000, output_tokens: 500 }),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const session = db
+      .prepare("SELECT has_compaction_loop, max_context_fill FROM sessions WHERE session_id = 's1'")
+      .get() as { has_compaction_loop: number; max_context_fill: number };
+    expect(session.has_compaction_loop).toBe(1);
+    expect(session.max_context_fill).toBeCloseTo(156_000 / 200_000, 5);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("sets has_tool_failure_streak = 1 after repeated errors past the grace period", async () => {
+    // The detector skips the first 6 turns (grace period). After that, 5
+    // consecutive evaluable user turns all carrying "Error:" content →
+    // 100% failure rate → streak fires.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-streak", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      // Grace period — turn indices 0-5
+      userTurn("2026-04-30T10:00:00Z", "start"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      userTurn("2026-04-30T10:00:02Z", "next"),
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "ok"),
+      userTurn("2026-04-30T10:00:04Z", "more"),
+      assistantTurn("2026-04-30T10:00:05Z", "claude-sonnet-4-5", "ok"),
+      // Post-grace evaluable turns — all carry error content
+      userToolResultTurn("2026-04-30T10:00:06Z", "tu1", "Error: something failed"),
+      assistantTurn("2026-04-30T10:00:07Z", "claude-sonnet-4-5", "retrying"),
+      userToolResultTurn("2026-04-30T10:00:08Z", "tu2", "Error: something failed"),
+      assistantTurn("2026-04-30T10:00:09Z", "claude-sonnet-4-5", "retrying"),
+      userToolResultTurn("2026-04-30T10:00:10Z", "tu3", "Error: something failed"),
+      assistantTurn("2026-04-30T10:00:11Z", "claude-sonnet-4-5", "retrying"),
+      userToolResultTurn("2026-04-30T10:00:12Z", "tu4", "Error: something failed"),
+      assistantTurn("2026-04-30T10:00:13Z", "claude-sonnet-4-5", "retrying"),
+      userToolResultTurn("2026-04-30T10:00:14Z", "tu5", "Error: something failed"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const session = db
+      .prepare("SELECT has_tool_failure_streak FROM sessions WHERE session_id = 's1'")
+      .get() as { has_tool_failure_streak: number };
+    expect(session.has_tool_failure_streak).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail-append re-runs quality detectors and updates max_context_fill", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tail-q", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "initial"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "r1", [], { input_tokens: 100 }),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const before = db
+      .prepare("SELECT max_context_fill FROM sessions WHERE session_id = 's1'")
+      .get() as { max_context_fill: number | null };
+    expect(before.max_context_fill).toBeCloseTo(100 / 200_000, 10);
+
+    // Tail-append a turn with much higher fill; quality should update.
+    await fs.appendFile(
+      sessionFile,
+      JSON.stringify(
+        assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "r2", [], { input_tokens: 50_000 })
+      ) + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const after = db
+      .prepare("SELECT max_context_fill FROM sessions WHERE session_id = 's1'")
+      .get() as { max_context_fill: number | null };
+    expect(after.max_context_fill).toBeCloseTo(50_000 / 200_000, 6);
+
+    reloaded.conn.closeDb();
+  });
+
   it("does NOT link sessions with different slugs even within the same project", async () => {
     const { reloaded, projectsDir } = await setup();
     const projectDir = path.join(projectsDir, "C--dev-cont2");
