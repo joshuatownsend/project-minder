@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   pushHookEvent,
   getLastHookReceivedAt,
@@ -32,6 +32,10 @@ beforeEach(() => {
   resetBuffers();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("getLastHookReceivedAt", () => {

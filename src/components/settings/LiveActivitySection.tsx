@@ -13,9 +13,10 @@ interface InstallStatus {
   lastReceivedAt: number | null;
 }
 
-function formatRelativeMs(ms: number | null): string {
-  if (ms === null) return "No hooks received this session";
+function formatRelativeMs(ms: number | null | undefined): string {
+  if (ms == null) return "No hooks received this session";
   const ago = Math.floor((Date.now() - ms) / 1000);
+  if (!isFinite(ago) || ago < 0) return "Just now";
   if (ago < 5) return "Just now";
   if (ago < 60) return `${ago}s ago`;
   if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;

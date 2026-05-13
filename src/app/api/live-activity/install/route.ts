@@ -53,7 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl };
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status, hookUrl });
+    return NextResponse.json({ ok: true, ...status, hookUrl, lastReceivedAt: getLastHookReceivedAt() });
   } catch (err) {
     console.error("[live-activity] install failed:", err);
     return NextResponse.json(
@@ -71,7 +71,7 @@ export async function DELETE(): Promise<NextResponse> {
       if (c.liveActivity) delete c.liveActivity.hookUrl;
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status, hookUrl: null });
+    return NextResponse.json({ ok: true, ...status, hookUrl: null, lastReceivedAt: getLastHookReceivedAt() });
   } catch (err) {
     console.error("[live-activity] remove failed:", err);
     return NextResponse.json(
