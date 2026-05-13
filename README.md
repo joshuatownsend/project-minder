@@ -85,6 +85,29 @@ Project Minder indexes sessions from multiple AI coding tools in a single unifie
 
 Adapters are enabled/disabled in **Settings → Adapters**. The `/usage` page's **By Source** breakdown shows cost attribution per tool. The sessions browser's source filter and source badges make multi-tool sessions easy to distinguish.
 
+### MCP Server — Ask Claude about Your Data
+Connect Claude Desktop or Claude Code to Project Minder over the **Model Context Protocol** and ask conversational questions like *"how much have I spent on Opus this week?"*, *"which agents were slowest in project X?"*, *"what manual steps are pending across my projects?"* — no copy-pasting through the UI.
+
+- **`GET/POST/DELETE /api/mcp`** — Streamable HTTP endpoint with **45 tools** across 10 domains plus **12 URI-addressable resources** (`minder://projects/{slug}`, `minder://agents/{id}`, `minder://usage/7d`, etc.). Tools call the same lib functions the dashboard uses — no HTTP loopback.
+- **Read tools** — projects, token usage (by period / project / model / category / day), sessions (list / get / search), agents and skills catalogs with invocation stats, manual steps, insights, git status, portfolio stats, efficiency grades, per-project analytics (hot files, error propagation, file coupling, git activity), OTEL telemetry (raw event/metric queries plus derived tool latency, cache efficiency, edit acceptance, hook activity, context pressure).
+- **Safe writes** — `scan-projects`, `update-project-config`, `toggle-manual-step`, `refresh-catalog`, `refresh-git-status`. Dev-server start/stop and `claude-config/apply` deliberately excluded for blast-radius reasons.
+- **DNS-rebinding protection** pinned to `localhost:4100`; per-request transport isolation so concurrent clients can't clobber each other's responses. No auth needed — localhost only.
+
+To connect, add the block below to `.mcp.json` (Claude Code, per-project) or `claude_desktop_config.json` (Claude Desktop). Project Minder must be running.
+
+```json
+{
+  "mcpServers": {
+    "project-minder": {
+      "type": "http",
+      "url": "http://localhost:4100/api/mcp"
+    }
+  }
+}
+```
+
+Full tool/resource reference: `docs/help/mcp-server.md`.
+
 ### Agents, Skills & Plugins
 - **Agents catalog** — `/agents` indexes every Claude Code agent persona from `~/.claude/agents/`, `~/.agents/agents/`, installed plugins, and per-project `.claude/agents/`; shows usage counts, last-invoked timestamps, and source provenance
 - **Skills catalog** — `/skills` indexes all slash-command skills from the same source tree; handles both bundled (`SKILL.md`-in-dir) and standalone (`.md`) layouts
