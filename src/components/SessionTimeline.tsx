@@ -306,7 +306,7 @@ export function SessionTimeline({
   sessionStart,
   sessionId,
   cutoffIndex,
-  retrySpans,
+  retrySpans = [],
 }: {
   timeline: TimelineEvent[];
   sessionStart?: string;
@@ -314,12 +314,13 @@ export function SessionTimeline({
   cutoffIndex?: number;
   retrySpans?: RetrySpan[];
 }) {
-  const visibleEvents =
-    cutoffIndex !== undefined ? timeline.slice(0, cutoffIndex + 1) : timeline;
+  const visibleEvents = useMemo(
+    () => (cutoffIndex !== undefined ? timeline.slice(0, cutoffIndex + 1) : timeline),
+    [timeline, cutoffIndex],
+  );
 
-  // Build a Set of event indices that fall inside any retry cycle span.
   const retryIndices = useMemo(() => {
-    if (!retrySpans?.length) return null;
+    if (!retrySpans.length) return null;
     const s = new Set<number>();
     for (const { startIdx, endIdx } of retrySpans) {
       for (let i = startIdx; i <= endIdx; i++) s.add(i);

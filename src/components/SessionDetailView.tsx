@@ -52,6 +52,7 @@ import { formatCost, formatDurationMs, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import { SourceBadge } from "@/components/SourceBadge";
 import { detectRetrySpans } from "@/lib/usage/retryDetector";
+import { pluralize } from "@/lib/utils";
 
 const checkboxRowStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "8px",
@@ -510,7 +511,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const [starredAt, setStarredAt] = useState<string | undefined>(undefined);
   const [distilledText, setDistilledText] = useState<string | undefined>(undefined);
   const [distilledAt, setDistilledAt] = useState<string | undefined>(undefined);
-  const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const [replayIndex, setReplayIndex] = useState<number | undefined>(undefined);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   const retrySpans = useMemo(
@@ -831,7 +832,6 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         <div style={{ padding: "16px 20px" }}>
           {activeTab === "timeline" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {/* Replay scrubber — shown only when there's more than one event */}
               {data.timeline.length > 1 && (
                 <div style={{
                   display: "flex", alignItems: "center", gap: "8px",
@@ -852,13 +852,13 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
                     style={{ flex: 1, accentColor: "var(--accent)", cursor: "pointer" }}
                   />
                   <span style={{ flexShrink: 0, minWidth: "6ch", textAlign: "right" }}>
-                    {replayIndex !== null
+                    {replayIndex !== undefined
                       ? `${replayIndex + 1} / ${data.timeline.length}`
                       : `${data.timeline.length}`}
                   </span>
-                  {replayIndex !== null && (
+                  {replayIndex !== undefined && (
                     <button
-                      onClick={() => setReplayIndex(null)}
+                      onClick={() => setReplayIndex(undefined)}
                       style={{
                         flexShrink: 0, padding: "2px 7px",
                         fontSize: "0.65rem", fontFamily: "var(--font-body)",
@@ -881,7 +881,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
                       }}
                       title="Edit-test-reEdit retry cycles detected and highlighted with an amber border"
                     >
-                      {retrySpans.length} retry {retrySpans.length === 1 ? "cycle" : "cycles"}
+                      {pluralize(retrySpans.length, "retry cycle")}
                     </span>
                   )}
                 </div>
@@ -895,7 +895,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
                   timeline={data.timeline}
                   sessionStart={data.startTime}
                   sessionId={data.sessionId}
-                  cutoffIndex={replayIndex ?? undefined}
+                  cutoffIndex={replayIndex}
                   retrySpans={retrySpans}
                 />
               </div>
