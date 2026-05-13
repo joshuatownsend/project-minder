@@ -73,17 +73,19 @@ async function scanProject(
   const claudeMdAuditPromise = claudeMdPromise.then((md) =>
     auditClaudeMd(projectPath, md ?? null)
   );
-  // Hoist mcpServers so both the main Promise.all and the config-lint
-  // chain share the same promise (no double-scan).
+  // Hoist mcpServers and hooks so both the main Promise.all and the
+  // config-lint chain share the same promises (no double-scan).
   const mcpServersPromise = scanMcpServers(projectPath);
-  // Config lint chains off audit + mcpServers (Wave B).
+  const hooksPromise = scanClaudeHooks(projectPath);
+  // Config lint chains off audit + mcpServers + hooks (Wave C).
   // Defaults off until rule severities are tuned.
   const configLintPromise = getFlag(flags, "configLint", false)
-    ? Promise.all([claudeMdAuditPromise, mcpServersPromise]).then(
-        ([audit, mcp]) =>
+    ? Promise.all([claudeMdAuditPromise, mcpServersPromise, hooksPromise]).then(
+        ([audit, mcp, hooksInfo]) =>
           runConfigLint(projectPath, {
             claudeMdAudit: audit,
             mcpServers: mcp?.servers,
+            hooks: hooksInfo?.entries,
           })
       )
     : Promise.resolve(EMPTY_LINT_REPORT);
@@ -126,7 +128,7 @@ async function scanProject(
     getFlag(flags, "scanInsights")
       ? scanInsightsMd(projectPath)
       : Promise.resolve(undefined),
-    scanClaudeHooks(projectPath),
+    hooksPromise,
     mcpServersPromise,
     scanCiCd(projectPath),
     countProjectCatalog(projectPath),

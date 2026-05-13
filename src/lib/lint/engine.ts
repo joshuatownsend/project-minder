@@ -1,18 +1,31 @@
-import type { ClaudeMdAuditInfo, McpServer, LintFinding, LintReport, LintTarget } from "../types";
+import type {
+  ClaudeMdAuditInfo,
+  HookEntry,
+  McpServer,
+  PluginEntry,
+  LintFinding,
+  LintReport,
+  LintTarget,
+} from "../types";
 import { adaptClaudeMdFindings } from "./adapter/claudeMd";
 import { dedupeFindings } from "./dedupe";
 import { runLibraryCli } from "./library";
 import { runMcpRules } from "./rules/mcp";
+import { runHookRules } from "./rules/hooks";
+import { runPluginRules } from "./rules/plugins";
 
 /** Inputs for the lint engine. Widened one wave at a time as new targets are added. */
 export interface LintInputs {
-  /** Populated by all waves — adapter re-emits findings into unified shape. */
+  /** All waves: CLAUDE.md adapter re-emits findings into unified shape. */
   claudeMdAudit: ClaudeMdAuditInfo;
   /** Wave B+: project directory for library CLI pass. */
   projectPath: string;
   /** Wave B+: all MCP servers across sources for cross-scope vendored rules. */
   mcpServers?: McpServer[];
-  // Wave C+: hooks, settings keys, plugin enables
+  /** Wave C+: hook entries from project + user + plugin scopes. */
+  hooks?: HookEntry[];
+  /** Wave C+: plugin entries from the merged registry. */
+  plugins?: PluginEntry[];
   // Wave D+: outputStyles, lspConfig
 }
 
@@ -53,10 +66,10 @@ async function runLibraryPass(
 /** Vendored rules that use cross-scope data the library CLI cannot access. */
 function runVendoredPass(inputs: LintInputs): LintFinding[] {
   const findings: LintFinding[] = [];
-  if (inputs.mcpServers) {
-    findings.push(...runMcpRules(inputs.mcpServers));
-  }
-  // Wave C+: hooks, settings, plugins
+  if (inputs.mcpServers) findings.push(...runMcpRules(inputs.mcpServers));
+  if (inputs.hooks)      findings.push(...runHookRules(inputs.hooks));
+  if (inputs.plugins)    findings.push(...runPluginRules(inputs.plugins));
+  // Wave D+: outputStyles, lspConfig
   return findings;
 }
 
