@@ -4,7 +4,16 @@ import path from "path";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { scanMemory, invalidateMemoryCache } from "@/lib/scanner/memory";
-import { memoryDirFor, writeMemoryFile } from "@/lib/scanner/memoryWriter";
+import { memoryDirFor, writeMemoryFile, type MemoryWriteError } from "@/lib/scanner/memoryWriter";
+
+const WRITE_ERROR_STATUS: Partial<Record<MemoryWriteError["code"], number>> = {
+  TRAVERSAL: 400,
+  NOT_MARKDOWN: 400,
+  INVALID_NAME: 400,
+  FRONTMATTER_INVALID: 400,
+  TOO_LARGE: 413,
+  MTIME_CONFLICT: 409,
+};
 
 /** Single shape for every error response in this route — matches the
  *  writer's `{code, message?}` envelope so MemoryTab's `error.code`
@@ -42,8 +51,11 @@ export async function GET(
     // path.basename guards against directory traversal
     const filePath = path.join(memoryDir, path.basename(file));
     try {
-      const content = await fs.readFile(filePath, "utf-8");
-      return NextResponse.json({ content });
+      const [content, stat] = await Promise.all([
+        fs.readFile(filePath, "utf-8"),
+        fs.stat(filePath),
+      ]);
+      return NextResponse.json({ content, mtimeMs: stat.mtimeMs, sizeBytes: stat.size });
     } catch {
       return errorResponse("FILE_NOT_FOUND", 404, `No memory file "${file}".`);
     }
@@ -75,7 +87,7 @@ export async function PATCH(
     return errorResponse("PROJECT_NOT_FOUND", 404, `No project "${slug}".`);
   }
 
-  let body: { file?: unknown; content?: unknown };
+  let body: { file?: unknown; content?: unknown; mtimeMs?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -90,16 +102,17 @@ export async function PATCH(
     );
   }
 
-  const result = await writeMemoryFile(project.path, body.file, body.content);
+  const rawMtime = body.mtimeMs;
+  const mtimeMs = typeof rawMtime === "number" && Number.isFinite(rawMtime) && rawMtime >= 0
+    ? rawMtime
+    : undefined;
+
+  const result = await writeMemoryFile(project.path, body.file, body.content, {
+    expectedMtimeMs: mtimeMs,
+  });
   if (!result.ok) {
     const code = result.error?.code ?? "WRITE_FAILED";
-    // Client-fixable errors map to 400; only true server failures stay at 500.
-    const isClientError =
-      code === "TRAVERSAL" ||
-      code === "NOT_MARKDOWN" ||
-      code === "INVALID_NAME" ||
-      code === "FRONTMATTER_INVALID";
-    const status = isClientError ? 400 : 500;
+    const status = WRITE_ERROR_STATUS[code as MemoryWriteError["code"]] ?? 500;
     const message =
       result.error && "message" in result.error
         ? result.error.message
@@ -109,5 +122,11 @@ export async function PATCH(
     return errorResponse(code, status, message);
   }
   invalidateMemoryCache(project.path);
-  return NextResponse.json({ ok: true, bytesWritten: result.bytesWritten });
+  return NextResponse.json({
+    ok: true,
+    bytesWritten: result.bytesWritten,
+    mtimeMs: result.mtimeMs,
+    sizeBytes: result.sizeBytes,
+    backupId: result.backupId,
+  });
 }

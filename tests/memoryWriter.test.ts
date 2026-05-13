@@ -6,7 +6,12 @@ vi.mock("fs", () => ({
     mkdir: vi.fn(),
     rename: vi.fn(),
     unlink: vi.fn(),
+    stat: vi.fn(),
   },
+}));
+
+vi.mock("@/lib/configHistory", () => ({
+  recordPreWrite: vi.fn().mockResolvedValue("backup-test-id"),
 }));
 
 vi.mock("os", () => ({
@@ -16,11 +21,16 @@ vi.mock("os", () => ({
 
 import { promises as fs } from "fs";
 import { writeMemoryFile } from "@/lib/scanner/memoryWriter";
+import { recordPreWrite } from "@/lib/configHistory";
 
 const mockWriteFile = vi.mocked(fs.writeFile);
 const mockMkdir = vi.mocked(fs.mkdir);
 const mockRename = vi.mocked(fs.rename);
 const mockUnlink = vi.mocked(fs.unlink);
+const mockStat = vi.mocked(fs.stat);
+const mockRecordPreWrite = vi.mocked(recordPreWrite);
+
+const DEFAULT_STAT = { mtimeMs: 5000, size: 100 } as Awaited<ReturnType<typeof fs.stat>>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -28,6 +38,9 @@ beforeEach(() => {
   mockMkdir.mockResolvedValue(undefined as never);
   mockRename.mockResolvedValue(undefined as never);
   mockUnlink.mockResolvedValue(undefined as never);
+  // Default: file exists with a stable mtime; used by the post-write stat.
+  mockStat.mockResolvedValue(DEFAULT_STAT);
+  mockRecordPreWrite.mockResolvedValue("backup-test-id" as never);
 });
 
 describe("writeMemoryFile", () => {
@@ -124,5 +137,80 @@ describe("writeMemoryFile", () => {
       { skipTypeValidation: true },
     );
     expect(r.ok).toBe(true);
+  });
+
+  it("rejects content exceeding MAX_BYTES with TOO_LARGE", async () => {
+    const huge = "x".repeat(2 * 1024 * 1024 + 1);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", huge);
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("TOO_LARGE");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("succeeds with expectedMtimeMs matching current stat", async () => {
+    mockStat.mockResolvedValue({ mtimeMs: 1234, size: 50 } as Awaited<ReturnType<typeof fs.stat>>);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body", {
+      expectedMtimeMs: 1234,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.mtimeMs).toBe(1234);
+    expect(r.sizeBytes).toBe(50);
+  });
+
+  it("returns MTIME_CONFLICT when expectedMtimeMs differs by more than 1ms", async () => {
+    mockStat.mockResolvedValue({ mtimeMs: 9999, size: 50 } as Awaited<ReturnType<typeof fs.stat>>);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body", {
+      expectedMtimeMs: 1234,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("MTIME_CONFLICT");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("succeeds with expectedMtimeMs: 0 when file does not exist (first write)", async () => {
+    // stat throws ENOENT before the write; succeeds after the write
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    mockStat
+      .mockRejectedValueOnce(enoent)
+      .mockResolvedValue({ mtimeMs: 2000, size: 20 } as Awaited<ReturnType<typeof fs.stat>>);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body", {
+      expectedMtimeMs: 0,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("returns MTIME_CONFLICT when expectedMtimeMs is non-zero but file is missing", async () => {
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    mockStat.mockRejectedValueOnce(enoent);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body", {
+      expectedMtimeMs: 5555,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("MTIME_CONFLICT");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("populates backupId from recordPreWrite on success", async () => {
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body");
+    expect(r.ok).toBe(true);
+    expect(r.backupId).toBe("backup-test-id");
+    expect(mockRecordPreWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it("proceeds with null backupId when recordPreWrite throws", async () => {
+    mockRecordPreWrite.mockRejectedValueOnce(new Error("disk full"));
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body");
+    expect(r.ok).toBe(true);
+    expect(r.backupId).toBeNull();
+    // Underlying write still happened
+    expect(mockRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns mtimeMs and sizeBytes from post-write stat", async () => {
+    mockStat.mockResolvedValue({ mtimeMs: 7777, size: 42 } as Awaited<ReturnType<typeof fs.stat>>);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body");
+    expect(r.ok).toBe(true);
+    expect(r.mtimeMs).toBe(7777);
+    expect(r.sizeBytes).toBe(42);
   });
 });
