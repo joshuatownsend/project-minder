@@ -158,7 +158,15 @@ Click any file in the list to load and render its full contents in the right pan
 
 ## Editing
 
-Each loaded file has an **Edit** button that switches the viewer into a textarea-based editor. Type your changes and click **Save** to write them back to disk. The dashboard validates the file name against path traversal and rejects anything other than `.md`. The PATCH endpoint backing the editor is `/api/memory/[slug]` with body `{ file, content }`.
+Each loaded file has an **Edit** button that switches the viewer into a textarea-based editor. Type your changes and click **Save** to write them back to disk. The dashboard validates the file name against path traversal and rejects anything other than `.md`.
+
+**Conflict detection.** When you open a file, the server records its current modification time (`mtimeMs`). If the file changes on disk (by a Claude Code session, another editor, or a concurrent save) between when you opened it and when you click **Save**, the save is rejected with 409 MTIME_CONFLICT. A toast appears with a **Reload** button that fetches the latest content so you can review it before re-applying your edits. Your draft is preserved in the editor until you decide to cancel or reload.
+
+**Size limit.** Files larger than 2 MB are rejected (413 TOO_LARGE) at save time.
+
+**Unsaved-draft guard.** If you navigate away from the page while the editor has unsaved changes, the browser prompts you to confirm leaving. This prevents accidental loss of edits during tab-switching or back-navigation.
+
+**Successful saves** are confirmed by a toast notification and update the file's last-modified timestamp in the list.
 
 ## Stale warnings
 

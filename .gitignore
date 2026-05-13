@@ -42,6 +42,22 @@ CLAUDE_MD_SNIPPET.md
 
 # scratch files
 manual-steps-tracker.html
+capture-new.mjs
+nul
+
+# local research / design references
+agentlytics-repo/
+.design-fetch/
+
+# codegraph knowledge graph (generated; rebuilt by `codegraph init`)
+.codegraph/
+
+# playwright debug logs
+.playwright-mcp/
+
+# screenshot captures + ui/ux review artifacts
+screenshots/
+uiux-review/
 
 # perf artifacts (large binary captures - kept locally, not committed)
 docs/perf/*.heapsnapshot

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useReducer } from "react";
 import { MarkdownContent } from "./MarkdownContent";
+import { useToast } from "@/components/ToastProvider";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 import type { MemoryData, MemoryFile, MemoryType } from "@/lib/types";
 
@@ -77,10 +78,12 @@ interface MemoryTabProps {
 }
 
 export function MemoryTab({ slug }: MemoryTabProps) {
+  const { showToast } = useToast();
   const [data, setData] = useState<MemoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const [fileMtimeMs, setFileMtimeMs] = useState<number | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [editor, dispatchEditor] = useReducer(editorReducer, { kind: "viewing" });
 
@@ -89,6 +92,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
     setData(null);
     setSelectedFile(null);
     setFileContent(null);
+    setFileMtimeMs(null);
     dispatchEditor({ type: "reset" });
 
     fetch(`/api/memory/${slug}`)
@@ -98,17 +102,35 @@ export function MemoryTab({ slug }: MemoryTabProps) {
       .finally(() => setLoading(false));
   }, [slug]);
 
-  async function openFile(name: string) {
-    if (selectedFile === name) return;
+  const isDirty =
+    (editor.kind === "editing" || editor.kind === "error") &&
+    fileContent !== null &&
+    "draft" in editor &&
+    editor.draft !== fileContent;
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
+  async function openFile(name: string, force = false) {
+    if (!force && selectedFile === name) return;
     setSelectedFile(name);
     setFileContent(null);
+    setFileMtimeMs(null);
     dispatchEditor({ type: "reset" });
     setFileLoading(true);
     try {
       const res = await fetch(`/api/memory/${slug}?file=${encodeURIComponent(name)}`);
       if (!res.ok) return;
-      const json = await res.json() as { content: string };
+      const json = await res.json() as { content: string; mtimeMs?: number };
       setFileContent(json.content);
+      setFileMtimeMs(json.mtimeMs ?? null);
     } catch {
       // ignore
     } finally {
@@ -123,23 +145,37 @@ export function MemoryTab({ slug }: MemoryTabProps) {
       const res = await fetch(`/api/memory/${slug}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file: selectedFile, content: draft }),
+        body: JSON.stringify({
+          file: selectedFile,
+          content: draft,
+          ...(fileMtimeMs !== null ? { mtimeMs: fileMtimeMs } : {}),
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const code = (body as { error?: { code?: string } }).error?.code ?? `HTTP ${res.status}`;
+        if (res.status === 409) {
+          dispatchEditor({ type: "fail", message: code });
+          showToast("File changed externally", "Reload to see latest content", {
+            label: "Reload",
+            onClick: () => openFile(selectedFile, true),
+          });
+          return;
+        }
         throw new Error(code);
       }
+      const saved = await res.json() as { mtimeMs?: number };
+      if (saved.mtimeMs !== undefined) setFileMtimeMs(saved.mtimeMs);
       setFileContent(draft);
       dispatchEditor({ type: "succeed" });
+      showToast("Saved", selectedFile);
       // Refresh the file list so mtime / size / stale badge update.
       const refreshed = await fetch(`/api/memory/${slug}`).then((r) => r.ok ? r.json() : null);
       if (refreshed) setData(refreshed as MemoryData);
     } catch (err) {
-      dispatchEditor({
-        type: "fail",
-        message: err instanceof Error ? err.message : "Save failed",
-      });
+      const message = err instanceof Error ? err.message : "Save failed";
+      dispatchEditor({ type: "fail", message });
+      showToast("Save failed", message);
     }
   }
 
