@@ -8,8 +8,9 @@ import type {
   DiagnosisSeverity,
   SessionOutcome,
 } from "@/lib/usage/sessionDiagnosis";
-import { formatDurationSeconds, formatPct } from "@/lib/format";
+import { formatCost, formatDurationSeconds, formatPct } from "@/lib/format";
 import { FindingCard } from "./ui/FindingCard";
+import { StatCell } from "./ui/StatCell";
 import type { SeverityTone } from "./ui/design";
 
 /** Mapping from this panel's `P0/P1/P2` taxonomy onto the canonical
@@ -33,12 +34,6 @@ function outcomeStyle(outcome: SessionOutcome): { label: string; color: string }
   }
 }
 
-function formatUsd(n: number): string {
-  if (Math.abs(n) < 0.01) return `$${n.toFixed(4)}`;
-  if (Math.abs(n) < 1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-}
-
 // ── Subcomponents ─────────────────────────────────────────────────────────────
 
 function DiagnosisFindingCard({ finding }: { finding: DiagnosisFinding }) {
@@ -59,7 +54,7 @@ function DiagnosisFindingCard({ finding }: { finding: DiagnosisFinding }) {
               color: "var(--text-secondary)",
             }}
           >
-            ~{formatUsd(finding.estimatedImpactUsd!)}
+            ~{formatCost(finding.estimatedImpactUsd!)}
           </span>
         ) : undefined
       }
@@ -88,64 +83,6 @@ function DiagnosisFindingCard({ finding }: { finding: DiagnosisFinding }) {
   );
 }
 
-function HeaderStat({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail?: string;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "2px",
-        padding: "10px 14px",
-        borderRight: "1px solid var(--border-subtle)",
-        flex: "1 1 100px",
-        minWidth: "100px",
-      }}
-    >
-      <span
-        style={{
-          fontSize: "0.6rem",
-          fontWeight: 600,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: "var(--text-muted)",
-          fontFamily: "var(--font-body)",
-        }}
-      >
-        {label}
-      </span>
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "1rem",
-          fontWeight: 600,
-          color: "var(--text-primary)",
-          lineHeight: 1.2,
-        }}
-      >
-        {value}
-      </span>
-      {detail && (
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.62rem",
-            color: "var(--text-muted)",
-          }}
-        >
-          {detail}
-        </span>
-      )}
-    </div>
-  );
-}
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
@@ -251,12 +188,11 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
           borderRadius: "var(--radius)",
         }}
       >
-        <HeaderStat
+        <StatCell
           label="Outcome"
-          value={outcome.label}
-          detail={undefined}
+          value={<span style={{ color: outcome.color }}>{outcome.label}</span>}
         />
-        <HeaderStat
+        <StatCell
           label="Cache hit"
           value={formatPct(report.cache.hitRatio)}
           detail={
@@ -265,22 +201,23 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
               : "no cache activity"
           }
         />
-        <HeaderStat
+        <StatCell
           label="Cache waste"
-          value={formatUsd(Math.max(report.cache.rebuildWasteUsd, 0))}
+          value={formatCost(Math.max(report.cache.rebuildWasteUsd, 0))}
           detail={
             report.cache.rebuildWasteUsd < 0
-              ? `saved ${formatUsd(-report.cache.rebuildWasteUsd)}`
+              ? `saved ${formatCost(-report.cache.rebuildWasteUsd)}`
               : undefined
           }
         />
-        <HeaderStat
+        <StatCell
           label="Peak fill"
           value={formatPct(report.maxContextFill)}
         />
-        <HeaderStat
+        <StatCell
           label="Idle"
           value={formatDurationSeconds(report.totalIdleSeconds)}
+          last
         />
       </div>
 

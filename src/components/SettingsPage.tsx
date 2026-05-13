@@ -64,24 +64,21 @@ type SectionKey =
 interface SectionDef {
   key: SectionKey;
   label: string;
-  /** Wave number where this section's controls actually ship. Wave 1
-   *  ships only "features" — the rest render a "Coming in wave N" hint
-   *  so the IA is final on day one. */
-  shipsInWave: number;
+  comingSoon: boolean;
   description: string;
 }
 
 const SECTIONS: SectionDef[] = [
-  { key: "features",      label: "Features",      shipsInWave: 1,  description: "Subsystem on/off toggles." },
-  { key: "appearance",    label: "Appearance",    shipsInWave: 1,  description: "View mode, theme, keyboard shortcuts." },
-  { key: "cost",          label: "Cost",          shipsInWave: 8,  description: "Currency, pricing rules, schedule mode for burndown." },
-  { key: "notifications", label: "Notifications", shipsInWave: 7,  description: "Push and Telegram event toggles." },
-  { key: "integrations",  label: "Integrations",  shipsInWave: 8,  description: "OTEL, Anthropic OAuth, currency API status." },
-  { key: "data",          label: "Data & Privacy", shipsInWave: 7, description: "History retention, distillation defaults, export shortcuts." },
-  { key: "terminal",       label: "Terminal",       shipsInWave: 7,  description: "Preferred terminal application for resume." },
-  { key: "auto-title",    label: "Auto-title",     shipsInWave: 7,  description: "LLM endpoint for session-title generation." },
-  { key: "live-activity", label: "Live Activity",  shipsInWave: 7,  description: "Hook server install/remove + awaiting-permission alerts." },
-  { key: "adapters",      label: "Adapters",       shipsInWave: 10, description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
+  { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
+  { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
+  { key: "cost",          label: "Cost",           comingSoon: true,  description: "Currency, pricing rules, schedule mode for burndown." },
+  { key: "notifications", label: "Notifications",  comingSoon: true,  description: "Push and Telegram event toggles." },
+  { key: "integrations",  label: "Integrations",   comingSoon: true,  description: "OTEL, Anthropic OAuth, currency API status." },
+  { key: "data",          label: "Data & Privacy", comingSoon: true,  description: "History retention, distillation defaults, export shortcuts." },
+  { key: "terminal",      label: "Terminal",        comingSoon: true,  description: "Preferred terminal application for resume." },
+  { key: "auto-title",    label: "Auto-title",      comingSoon: true,  description: "LLM endpoint for session-title generation." },
+  { key: "live-activity", label: "Live Activity",   comingSoon: true,  description: "Hook server install/remove + awaiting-permission alerts." },
+  { key: "adapters",      label: "Adapters",        comingSoon: true,  description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
 ];
 
 export function SettingsPage() {
@@ -248,16 +245,15 @@ export function SettingsPage() {
                 }}
               >
                 <span>{s.label}</span>
-                {s.shipsInWave > 1 && (
+                {s.comingSoon && (
                   <span
-                    title={`Ships in wave ${s.shipsInWave}`}
                     style={{
                       fontFamily: "var(--font-mono)",
                       fontSize: "0.6rem",
                       color: "var(--text-muted)",
                     }}
                   >
-                    W{s.shipsInWave}
+                    Soon
                   </span>
                 )}
               </button>
@@ -294,10 +290,9 @@ export function SettingsPage() {
         {active === "appearance" && (
           <AppearanceSection config={config} onConfigChange={patchConfig} />
         )}
-        {active !== "features" && active !== "notifications" && active !== "integrations" && active !== "terminal" && active !== "auto-title" && active !== "live-activity" && active !== "cost" && active !== "adapters" && active !== "appearance" && activeSection && (
+        {activeSection?.comingSoon && (
           <PlaceholderSection
             label={activeSection.label}
-            wave={activeSection.shipsInWave}
             description={activeSection.description}
           />
         )}
@@ -474,8 +469,8 @@ function FlagGroup(props: {
   );
 }
 
-function PlaceholderSection(props: { label: string; wave: number; description: string }) {
-  const { label, wave, description } = props;
+function PlaceholderSection(props: { label: string; description: string }) {
+  const { label, description } = props;
   return (
     <section>
       <h2
@@ -503,7 +498,7 @@ function PlaceholderSection(props: { label: string; wave: number; description: s
           fontFamily: "var(--font-body)",
         }}
       >
-        Coming in wave {wave}.
+        Coming soon.
       </div>
     </section>
   );

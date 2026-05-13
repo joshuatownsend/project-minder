@@ -88,7 +88,7 @@ function ResumeButton({ sessionId }: { sessionId: string }) {
   );
 }
 
-// ── Quality chips (Wave 3.1: cache hit %, compaction loop, tool-failure streak) ─
+// ── Quality chips (cache hit %, compaction loop, tool-failure streak) ───────────
 
 type QualityChipTone = "good" | "neutral" | "warn" | "error";
 

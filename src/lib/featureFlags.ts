@@ -104,7 +104,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "usageAnalytics",
     label: "Usage analytics",
-    description: "Cost calc and token aggregation on /usage. Wired in a later wave.",
+    description: "Cost calc and token aggregation on /usage.",
     group: "active",
     appliesAt: "ingest",
     wired: false,
@@ -112,7 +112,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "agentSkillIndexer",
     label: "Agent + skill indexer",
-    description: "Walks user/plugin/project trees to build the catalog. Wired in a later wave.",
+    description: "Walks user/plugin/project trees to build the agent and skill catalog.",
     group: "active",
     appliesAt: "ingest",
     wired: false,
@@ -120,7 +120,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "devServerControl",
     label: "Dev server control",
-    description: "Per-project start/stop/restart buttons. Wired in a later wave.",
+    description: "Per-project start/stop/restart buttons.",
     group: "active",
     appliesAt: "ui",
     wired: false,
@@ -128,7 +128,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "liveActivity",
     label: "Live activity (hook server)",
-    description: "POST /api/hooks accepts Claude Code lifecycle events. Wave 7.",
+    description: "POST /api/hooks accepts Claude Code lifecycle events.",
     group: "active",
     appliesAt: "ingest",
     wired: true,
@@ -136,7 +136,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
   {
     key: "taskDispatcher",
     label: "Task dispatcher",
-    description: "Dispatcher loop that spawns claude CLI child processes and tracks runs (classic mode). Stream mode ships in Wave 9.1c.",
+    description: "Dispatcher loop that spawns claude CLI child processes and tracks runs.",
     group: "active",
     appliesAt: "ingest",
     wired: true,
@@ -147,7 +147,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description:
       "Runs the deobfuscation + pattern engine across MCP servers. " +
       "Static-surface scan (command/args/url/env/name) runs unconditionally once wired. " +
-      "Live tool-list introspection (Wave 11.1b) is gated behind this flag.",
+      "Live tool-list introspection is gated behind this flag.",
     group: "active",
     appliesAt: "scan",
     wired: true,

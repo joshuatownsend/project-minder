@@ -9,34 +9,11 @@ import {
   _resetWarnedModelsForTesting,
 } from "@/lib/usage/sessionQuality";
 import type { UsageTurn } from "@/lib/usage/types";
+import { assistant, user } from "./_fixtures";
 
 beforeEach(() => {
   _resetWarnedModelsForTesting();
 });
-
-function asTurn(overrides: Partial<UsageTurn> & { role: "user" | "assistant" }): UsageTurn {
-  return {
-    timestamp: overrides.timestamp ?? "2026-01-01T00:00:00Z",
-    sessionId: "s1",
-    projectSlug: "p",
-    projectDirName: "p",
-    model: overrides.model ?? "claude-sonnet-4-6",
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheCreateTokens: 0,
-    cacheReadTokens: 0,
-    toolCalls: [],
-    ...overrides,
-  };
-}
-
-function assistant(args: Partial<UsageTurn>): UsageTurn {
-  return asTurn({ role: "assistant", ...args });
-}
-
-function user(args: Partial<UsageTurn>): UsageTurn {
-  return asTurn({ role: "user", ...args });
-}
 
 describe("getModelContextWindow", () => {
   it("returns 200K for standard claude-sonnet-4-6", () => {
