@@ -23,6 +23,7 @@ export function computeAlerts(
   sessionBudgetUsd: number,
   firedMap: Map<string, Set<number>>,
 ): BudgetAlert[] {
+  if (sessionBudgetUsd <= 0) return [];
   const toFire: BudgetAlert[] = [];
 
   for (const s of sessions) {

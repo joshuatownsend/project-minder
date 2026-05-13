@@ -19,6 +19,8 @@ interface SpendBannerProps {
 export function SpendBanner({ tier, budgets }: SpendBannerProps) {
   const [todayCost, setTodayCost] = useState<number | null>(null);
 
+  const cap = getEffectiveDailyCapUsd(tier, budgets?.dailyUsd);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -34,14 +36,13 @@ export function SpendBanner({ tier, budgets }: SpendBannerProps) {
     }
 
     refresh();
+    if (cap == null) return () => { cancelled = true; };
     const id = setInterval(refresh, 60_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
-
-  const cap = getEffectiveDailyCapUsd(tier, budgets?.dailyUsd);
+  }, [cap]);
 
   // Don't render until we have data
   if (todayCost == null) return null;

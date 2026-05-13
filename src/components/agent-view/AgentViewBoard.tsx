@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useAgentViewStream } from "@/lib/agentView/useAgentViewStream";
 import { AgentCard } from "./AgentCard";
 import { AgentPeekPanel } from "./AgentPeekPanel";
@@ -9,7 +9,7 @@ import { SpendBanner } from "./SpendBanner";
 import { useBudgetAlerts } from "@/hooks/useBudgetAlerts";
 import type { LiveAgentSession, AgentSessionStatus, ConnectionState } from "@/lib/agentView/types";
 import { ALL_STATUSES, STATUS_ORDER } from "@/lib/agentView/types";
-import type { MinderConfig } from "@/lib/types";
+import { useConfig } from "@/components/ConfigProvider";
 
 const COLUMN_ORDER: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
 const COLUMN_LABELS: Record<AgentSessionStatus, string> = {
@@ -50,19 +50,10 @@ export function AgentViewBoard() {
     sort: "recent",
   });
 
-  // Budget config — fetched once on mount; changes rarely
-  const [budgetConfig, setBudgetConfig] = useState<Pick<MinderConfig, "budgets" | "subscriptionTier">>({});
-  useEffect(() => {
-    fetch("/api/config")
-      .then((r) => r.ok ? r.json() : null)
-      .then((cfg: MinderConfig | null) => {
-        if (!cfg) return;
-        setBudgetConfig({ budgets: cfg.budgets, subscriptionTier: cfg.subscriptionTier });
-      })
-      .catch(() => {});
-  }, []);
+  // Budget config — sourced from ConfigProvider (already fetched at app level)
+  const config = useConfig();
 
-  useBudgetAlerts(sessions, budgetConfig.budgets?.sessionUsd);
+  useBudgetAlerts(sessions, config?.budgets?.sessionUsd);
 
   const projectNames = useMemo(
     () => [...new Set(sessions.map((s) => s.projectName))].sort(),
@@ -102,7 +93,7 @@ export function AgentViewBoard() {
         lastEventAt={lastEventAt}
       />
 
-      <SpendBanner tier={budgetConfig.subscriptionTier} budgets={budgetConfig.budgets} />
+      <SpendBanner tier={config?.subscriptionTier} budgets={config?.budgets} />
 
       {isEmpty ? (
         <EmptyState connectionState={connectionState} />
@@ -154,7 +145,7 @@ export function AgentViewBoard() {
                       key={s.sessionId}
                       session={s}
                       onPeek={setPeekedSession}
-                      sessionBudgetUsd={budgetConfig.budgets?.sessionUsd}
+                      sessionBudgetUsd={config?.budgets?.sessionUsd}
                     />
                   ))}
                   {cols.length === 0 && (

@@ -316,7 +316,7 @@ export async function PATCH(request: NextRequest) {
     if (body.subscriptionTier !== null && !VALID_TIERS.includes(body.subscriptionTier as SubscriptionTier)) {
       return NextResponse.json({ error: `subscriptionTier must be one of: ${VALID_TIERS.join(", ")} or null` }, { status: 400 });
     }
-    patches.push((c) => { c.subscriptionTier = body.subscriptionTier as SubscriptionTier | undefined ?? undefined; });
+    patches.push((c) => { c.subscriptionTier = body.subscriptionTier === null ? undefined : body.subscriptionTier as SubscriptionTier; });
   }
 
   if (body.budgets !== undefined) {

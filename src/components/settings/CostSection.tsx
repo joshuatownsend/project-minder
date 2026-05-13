@@ -139,17 +139,17 @@ export function CostSection({
     setBudgetSaving(true);
     setBudgetMsg(null);
     try {
-      const sessionVal = sessionUsd.trim() === "" ? undefined : parseFloat(sessionUsd);
-      const dailyVal = dailyUsd.trim() === "" ? undefined : parseFloat(dailyUsd);
+      const sessionVal = sessionUsd.trim() === "" ? undefined : parseFloat(sessionUsd) || undefined;
+      const dailyVal = dailyUsd.trim() === "" ? undefined : parseFloat(dailyUsd) || undefined;
 
       if ((sessionVal != null && (isNaN(sessionVal) || sessionVal < 0)) ||
           (dailyVal != null && (isNaN(dailyVal) || dailyVal < 0))) {
-        setBudgetMsg({ text: "Budget values must be positive numbers.", ok: false });
+        setBudgetMsg({ text: "Budget values must be numbers greater than zero.", ok: false });
         return;
       }
 
       await onConfigChange({
-        subscriptionTier: tier === "" ? undefined : tier,
+        subscriptionTier: (tier === "" ? null : tier) as SubscriptionTier | undefined,
         budgets: {
           ...(sessionVal != null ? { sessionUsd: sessionVal } : {}),
           ...(dailyVal != null ? { dailyUsd: dailyVal } : {}),
