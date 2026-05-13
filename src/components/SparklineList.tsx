@@ -198,26 +198,28 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
 
   return (
     <div style={{ width: "100%", overflowX: "auto" }}>
-      <div style={{ minWidth: "840px" }}>
+      <div role="grid" aria-label="Projects" style={{ minWidth: "840px" }}>
         {/* Sticky header row */}
-        <div
-          role="row"
-          style={{
-            display: "grid",
-            gridTemplateColumns: COLS,
-            position: "sticky",
-            top: 0,
-            zIndex: 1,
-          }}
-        >
-          <div role="columnheader" style={headerCell()} />
-          <ColHeader label="Project"         k="name"        sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-          <ColHeader label="14-day activity" k="activity"    sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-          <ColHeader label="Last session"    k="lastSession" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-          <ColHeader label="Branch"          k="branch"      sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-          <ColHeader label="Todos"           k="todos"       sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-          <div role="columnheader" style={headerCell()} />
-          <div role="columnheader" style={{ borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }} />
+        <div role="rowgroup">
+          <div
+            role="row"
+            style={{
+              display: "grid",
+              gridTemplateColumns: COLS,
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+            }}
+          >
+            <div role="columnheader" style={headerCell()}><span className="sr-only">Pin</span></div>
+            <ColHeader label="Project"         k="name"        sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="14-day activity" k="activity"    sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Last session"    k="lastSession" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Branch"          k="branch"      sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <ColHeader label="Todos"           k="todos"       sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <div role="columnheader" style={headerCell()}><span className="sr-only">Status</span></div>
+            <div role="columnheader" style={{ borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }}><span className="sr-only">Dev server</span></div>
+          </div>
         </div>
 
         {/* Virtual body */}
