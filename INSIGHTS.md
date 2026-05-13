@@ -1,5 +1,88 @@
 # Insights
 
+<!-- insight:37d70e4faf99 | session:5e9b1471-4a9f-46ac-aa8b-cecb1aab44a8 | 2026-05-13T11:57:32.860Z -->
+## ★ Insight
+**Stateless ≠ stateless transport.** The MCP spec's stateless mode means "no session bookkeeping across requests", but the SDK enforces that through a per-request transport constraint: each `WebStandardStreamableHTTPServerTransport` instance can only handle one HTTP request before it throws `"Stateless transport cannot be reused across requests"`. The fix is a hybrid pattern — cache the heavyweight `McpServer` (60+ tool/resource registrations + Zod schema parsing) on `globalThis`, but build a fresh transport per request and `connect()` the cached server to it. This caught me because the initial smoke test (one request) and the in-process tests (each test makes its own transport) both passed, but back-to-back HTTP requests failed.
+
+---
+
+<!-- insight:779c7a187bbc | session:5e9b1471-4a9f-46ac-aa8b-cecb1aab44a8 | 2026-05-13T11:25:42.432Z -->
+## ★ Insight
+**The `data/index.ts` façade is the right boundary**, not the raw `*FromDb.ts` / `parser.ts` modules. It picks DB vs file backend, applies v3-readiness gates, and falls back gracefully when the optional `better-sqlite3` driver isn't installed. MCP tools must call `getUsage`, `getSessionDetail`, `getSessionsList`, `getAgentUsage`, `getSkillUsage`, `searchSessions` (not the inner functions) — otherwise they'd break for users running without the DB driver.
+
+---
+
+<!-- insight:fa934eae2e10 | session:5e9b1471-4a9f-46ac-aa8b-cecb1aab44a8 | 2026-05-13T04:21:59.244Z -->
+## ★ Insight
+- **`WebStandardStreamableHTTPServerTransport` is the key**: the SDK 1.29 added a Web-standard transport that takes `Request` → `Response`. Without it, the only path would have been a Hono/Express adapter shim. This makes the Next.js Route Handler integration genuinely trivial: one transport instance, one handler that delegates GET/POST/DELETE to `transport.handleRequest(req)`.
+- **Stateless + JSON response mode is the right default for a local dashboard.** Stateful sessions only matter if you need per-client resource subscriptions or stream resumption — the dashboard UI already covers live updates, so paying that complexity tax for MCP would be redundant.
+- **Tools call lib, not routes** — the codebase already has a clean `src/lib` boundary (scanner, usage aggregator, otelQueries, manualStepsWriter, etc.). Mounting MCP at the lib layer instead of HTTP-proxying through `/api/*` avoids double-serialization, keeps in-process singletons (gitStatusCache, processManager, manualStepsWatcher) one hop away, and means tools are testable with Vitest the same way every other module is.
+
+---
+
+<!-- insight:f0dd67cd3604 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T03:54:37.604Z -->
+## ★ Insight
+README updates for a tool like this are tricky: the CHANGELOG entries are richly detailed (useful for devs/reviewers) but README prose needs to be 10× more concise and user-oriented. The pattern here is **bold lead → one terse sentence per capability**, never importing CHANGELOG paragraphs verbatim. Another tension: the Memory Observatory has 6 new capabilities that could each become a wall of text — using a nested sub-bullet list keeps the hierarchy scannable without needing headers.
+
+---
+
+<!-- insight:881579c73440 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T03:36:29.195Z -->
+## ★ Insight
+The `shipsInWave → comingSoon` migration shows a pattern worth watching: planning metadata (`shipsInWave: number`) that starts as a developer aid can inadvertently become user-visible ("W7" badges in Settings), leaking internal vocabulary into the product. Replacing it with a semantic boolean (`comingSoon`) removes the coupling while preserving all the gating behavior — the UI doesn't need to know *when* something ships, only *whether* it has.
+
+---
+
+<!-- insight:a8816148bae5 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T03:29:30.039Z -->
+## ★ Insight
+The four test files share the same `UsageTurn` defaults (`projectSlug: "p"`, `sessionId: "s1"`, `model: "claude-sonnet-4-6"`, zero tokens) but have slightly different required fields in their builders. The shared fixture exports `makeTurn` (base) + tool-call helpers; files with unique required fields or field mappings keep thin local wrappers that delegate to `makeTurn`.
+
+---
+
+<!-- insight:32fd08acb893 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T03:17:43.314Z -->
+## ★ Insight
+`shipsInWave: number` is a developer-internal planning field that leaked into the user-facing UI as "W7", "W8" badges and "Coming in wave N." placeholder text. The cleanest fix replaces it with `comingSoon: boolean`, which communicates the same thing to the UI without exposing development cycle nomenclature.
+
+---
+
+<!-- insight:3c7b2832ba08 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T03:15:59.553Z -->
+## ★ Insight
+The simplification pass targets three patterns: duplicated pure functions (format helpers), duplicated JSX shapes (StatCell/FindingCard), and duplicated test infrastructure. These are independent enough to parallelize across agents — the only real coupling is that DiagnosisPanel is touched by both the StatCell and FindingCard extractions, so those two should be sequenced.
+
+---
+
+<!-- insight:bdf5b13af57a | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T02:59:41.431Z -->
+## ★ Insight
+Two of the three Wave 8 items already exist: the command palette (⌘K) is fully implemented with project/session/agent search, and it's already wired into the topbar. Wave 8's real new work is the **agent dependency graph** at `/agents/graph`. Let me check keyboard shortcuts next.
+
+---
+
+<!-- insight:3320f11cdc2d | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T02:53:13.349Z -->
+## ★ Insight
+The three Copilot comments identify a real bug (replayIndex not reset when sessionId changes), a duplicate symptom (range value > max), and an accessibility gap (no aria-label). The first two collapse into one `useEffect` fix: reset on sessionId change. The third is a one-liner on the input.
+
+---
+
+<!-- insight:7952a5a6864f | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T02:36:08.205Z -->
+## ★ Insight
+The pre-commit hook ran typecheck + all 2333 tests automatically and passed before allowing the commit — the project's pre-commit gate enforced our verification gates without an extra manual step.
+
+---
+
+<!-- insight:055711badbcf | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T02:24:06.897Z -->
+## ★ Insight
+`SessionTimeline` renders events with an intersection-observer-based lazy-render (`useInView`) per item. The cutoff is just an array slice before the map — this won't break the observer since items are keyed by index and will simply unmount cleanly as the user drags the scrubber left.
+
+---
+
+<!-- insight:94eceac1b60c | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T02:22:47.344Z -->
+## ★ Insight
+Three key design insights for Wave 7:
+1. `ConcurrencyTimeline` already IS a flame chart — building a new `SubagentFlameChart` would be a near-duplicate. The roadmap was written before the Concurrency tab shipped.
+2. `TimelineEvent` has `toolName` and `toolInput` fields directly on it, so retry cycles (Edit→Bash(test)→re-Edit) can be detected from `TimelineEvent[]` without re-parsing JSONL — no server changes needed.
+3. The replay scrubber is a pure `cutoffIndex` slice on the existing array — zero API changes, zero new data.
+
+---
+
 <!-- insight:398c3a902cd5 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:52:13.362Z -->
 ## ★ Insight
 The PATCH handler uses a "validate-then-patch" pattern (lines 31-358) where validation failures short-circuit with a 400, but all patches are collected in an array and applied atomically in a single `mutateConfig` call. This means a multi-field PATCH either fully succeeds or fully rejects — no half-written config states. The `patches.length === 0` guard at line 352 is the reason new fields must be explicitly handled; unknown fields are silently ignored during collection but trip the empty-patches guard if they're the *only* thing sent.

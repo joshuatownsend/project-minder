@@ -110,6 +110,7 @@ export const helpSlugs = [
   'insights-report',
   'command-palette',
   'keyboard-shortcuts',
+  'mcp-server',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

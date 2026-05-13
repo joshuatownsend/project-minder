@@ -99,6 +99,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - `GET /api/agents/[id]` — single agent entry with full body text + usage stats
 - `GET /api/skills` — catalog of all skills with usage stats; same query params
 - `GET /api/skills/[id]` — single skill entry with full body text + usage stats
+- `GET/POST/DELETE /api/mcp` — Model Context Protocol server (Streamable HTTP transport, stateless). Lets Claude Desktop and Claude Code connect and query token usage, sessions, agents, skills, OTEL telemetry, manual steps, insights, git status, and portfolio stats. Server factory: `src/lib/mcp/server.ts`. Tools registered per-domain under `src/lib/mcp/tools/`; resources in `src/lib/mcp/resources.ts`. Tools call lib functions directly — no HTTP loopback. DNS-rebinding protection pinned to `localhost:4100` / `127.0.0.1:4100`. See `docs/help/mcp-server.md` for the full surface and client setup.
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid

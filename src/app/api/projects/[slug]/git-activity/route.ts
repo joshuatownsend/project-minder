@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db/connection";
-import { aggregateGitActivity, type GitActivitySummary } from "@/lib/usage/gitActivity";
-import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
-import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import type { GitActivitySummary } from "@/lib/usage/gitActivity";
+import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { getProjectGitActivity } from "@/lib/projectGitActivity";
 
 interface GitActivityResponse {
   slug: string;
@@ -54,52 +53,7 @@ export async function GET(
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    let activity: GitActivitySummary | null = null;
-
-    const db = await getDb();
-    if (db) {
-      try {
-        // DB path: single join gives commands + branch info
-        type ToolRow = { arguments_json: string | null };
-        type BranchRow = { git_branch: string | null; end_ts: string | null };
-        const toolRows = db.prepare(
-          `SELECT tu.arguments_json FROM tool_uses tu
-           JOIN sessions s ON tu.session_id = s.session_id
-           WHERE s.project_slug = ? AND tu.tool_name IN ('Bash', 'PowerShell')`
-        ).all(slug) as ToolRow[];
-        const branchRows = db.prepare(
-          `SELECT git_branch, end_ts FROM sessions WHERE project_slug = ?`
-        ).all(slug) as BranchRow[];
-
-        const toolCommands = toolRows.map((r) => {
-          try { return { command: (JSON.parse(r.arguments_json ?? "{}") as Record<string, unknown>)?.command as string ?? "" }; }
-          catch { return { command: "" }; }
-        });
-        const sessionBranches = branchRows.map((r) => ({
-          branch: r.git_branch,
-          lastActivity: r.end_ts ?? "",
-        }));
-        activity = aggregateGitActivity(toolCommands, sessionBranches);
-      } catch {
-        // DB schema not ready — fall through to file-parse
-      }
-    }
-
-    if (!activity) {
-      // File-parse fallback: commands only; branch list omitted (no gitBranch on UsageTurn)
-      const sessionMap = await parseAllSessions();
-      const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
-      const toolCommands = projectTurns.flatMap((t) =>
-        t.toolCalls
-          .filter((tc) => tc.name === "Bash" || tc.name === "PowerShell")
-          .map((tc) => ({
-            command: (tc.arguments?.command as string | undefined) ??
-                     (tc.arguments?.script as string | undefined) ?? "",
-          }))
-      );
-      activity = aggregateGitActivity(toolCommands, []);
-    }
-
+    const activity = await getProjectGitActivity(slug, project.path);
     const data: GitActivityResponse = { slug, activity, generatedAt: new Date().toISOString() };
     cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
     return NextResponse.json(data);
