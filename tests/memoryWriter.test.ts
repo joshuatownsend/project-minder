@@ -190,6 +190,17 @@ describe("writeMemoryFile", () => {
     expect(mockWriteFile).not.toHaveBeenCalled();
   });
 
+  it("surfaces WRITE_FAILED when stat throws a non-ENOENT error during mtime check", async () => {
+    const eperm = Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+    mockStat.mockRejectedValueOnce(eperm);
+    const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body", {
+      expectedMtimeMs: 5555,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe("WRITE_FAILED");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
   it("populates backupId from recordPreWrite on success", async () => {
     const r = await writeMemoryFile("C:\\dev\\myproj", "notes.md", "body");
     expect(r.ok).toBe(true);

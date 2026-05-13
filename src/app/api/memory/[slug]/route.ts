@@ -51,11 +51,13 @@ export async function GET(
     // path.basename guards against directory traversal
     const filePath = path.join(memoryDir, path.basename(file));
     try {
-      const [content, stat] = await Promise.all([
-        fs.readFile(filePath, "utf-8"),
-        fs.stat(filePath),
-      ]);
-      return NextResponse.json({ content, mtimeMs: stat.mtimeMs, sizeBytes: stat.size });
+      const fh = await fs.open(filePath, "r");
+      try {
+        const [content, stat] = await Promise.all([fh.readFile("utf-8"), fh.stat()]);
+        return NextResponse.json({ content, mtimeMs: stat.mtimeMs, sizeBytes: stat.size });
+      } finally {
+        await fh.close();
+      }
     } catch {
       return errorResponse("FILE_NOT_FOUND", 404, `No memory file "${file}".`);
     }

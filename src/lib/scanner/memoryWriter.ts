@@ -117,7 +117,8 @@ export async function writeMemoryFile(
         try {
           const s = await fs.stat(targetPath);
           currentMtime = s.mtimeMs;
-        } catch {
+        } catch (statErr) {
+          if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr;
           if (options.expectedMtimeMs !== 0) {
             return { ok: false, error: { code: "MTIME_CONFLICT" } };
           }
