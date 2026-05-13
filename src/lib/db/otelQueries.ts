@@ -60,7 +60,7 @@ import { getDb, prepCached } from "./connection";
 
 export type Period = "today" | "7d" | "30d" | "all";
 
-function periodToMs(period: Period): number {
+export function periodToMs(period: Period): number {
   const now = Date.now();
   if (period === "today") {
     const d = new Date(now);
@@ -495,4 +495,166 @@ export async function getPressureSnapshot(opts: {
     lastErrors,
     hasData,
   };
+}
+
+// ── Raw event/metric query (MCP surface) ──────────────────────────────────────
+// Lower-level peek at otel_events / otel_metrics for callers (the MCP server)
+// that want to slice raw rows in ways the derived helpers above don't cover.
+
+export interface RawOtelEvent {
+  id: number;
+  ts: string;
+  sessionId: string | null;
+  eventName: string;
+  payload: unknown;
+}
+
+export interface QueryEventsOpts {
+  since?: number;
+  until?: number;
+  eventName?: string;
+  sessionId?: string;
+  limit?: number;
+}
+
+export async function queryOtelEvents(opts: QueryEventsOpts = {}): Promise<RawOtelEvent[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (opts.since !== undefined) {
+    conditions.push(`ts >= ?`);
+    params.push(msToIso(opts.since));
+  }
+  if (opts.until !== undefined) {
+    conditions.push(`ts <= ?`);
+    params.push(msToIso(opts.until));
+  }
+  if (opts.eventName) {
+    conditions.push(`event_name = ?`);
+    params.push(opts.eventName);
+  }
+  if (opts.sessionId) {
+    conditions.push(`session_id = ?`);
+    params.push(opts.sessionId);
+  }
+
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const rows = prepCached(
+    db,
+    `SELECT id, ts, session_id, event_name, payload_json
+     FROM otel_events
+     ${where}
+     ORDER BY ts DESC
+     LIMIT ?`
+  ).all(...params, limit) as Array<{
+    id: number;
+    ts: string;
+    session_id: string | null;
+    event_name: string;
+    payload_json: string;
+  }>;
+
+  return rows.map((r) => {
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(r.payload_json);
+    } catch {
+      payload = r.payload_json;
+    }
+    return {
+      id: r.id,
+      ts: r.ts,
+      sessionId: r.session_id,
+      eventName: r.event_name,
+      payload,
+    };
+  });
+}
+
+export interface RawOtelMetric {
+  id: number;
+  ts: number;
+  sessionId: string | null;
+  metricName: string;
+  metricType: "counter" | "gauge";
+  value: number;
+  model: string | null;
+  attrs: unknown;
+}
+
+export interface QueryMetricsOpts {
+  since?: number;
+  until?: number;
+  metricName?: string;
+  sessionId?: string;
+  limit?: number;
+}
+
+export async function queryOtelMetrics(opts: QueryMetricsOpts = {}): Promise<RawOtelMetric[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  // otel_metrics.ts is INTEGER ms — direct comparison, no msToIso conversion.
+  if (opts.since !== undefined) {
+    conditions.push(`ts >= ?`);
+    params.push(opts.since);
+  }
+  if (opts.until !== undefined) {
+    conditions.push(`ts <= ?`);
+    params.push(opts.until);
+  }
+  if (opts.metricName) {
+    conditions.push(`metric_name = ?`);
+    params.push(opts.metricName);
+  }
+  if (opts.sessionId) {
+    conditions.push(`session_id = ?`);
+    params.push(opts.sessionId);
+  }
+
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const rows = prepCached(
+    db,
+    `SELECT id, ts, session_id, metric_name, metric_type, value, model, attrs_json
+     FROM otel_metrics
+     ${where}
+     ORDER BY ts DESC
+     LIMIT ?`
+  ).all(...params, limit) as Array<{
+    id: number;
+    ts: number;
+    session_id: string | null;
+    metric_name: string;
+    metric_type: "counter" | "gauge";
+    value: number;
+    model: string | null;
+    attrs_json: string | null;
+  }>;
+
+  return rows.map((r) => {
+    let attrs: unknown = null;
+    if (r.attrs_json) {
+      try {
+        attrs = JSON.parse(r.attrs_json);
+      } catch {
+        attrs = r.attrs_json;
+      }
+    }
+    return {
+      id: r.id,
+      ts: r.ts,
+      sessionId: r.session_id,
+      metricName: r.metric_name,
+      metricType: r.metric_type,
+      value: r.value,
+      model: r.model,
+      attrs,
+    };
+  });
 }

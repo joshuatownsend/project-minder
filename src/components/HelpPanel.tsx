@@ -48,6 +48,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "new-project": "New Project Wizard",
   "insights-report": "Insights Report",
   "command-palette": "Command Palette",
+  "mcp-server": "MCP Server",
   "keyboard-shortcuts": "Keyboard Shortcuts",
 };
 
