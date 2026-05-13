@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
   const notModified = ifNoneMatch(request, etag);
   if (notModified) return notModified;
 
-  const stats = computeStats(result.projects, result.hiddenCount, cache.usage);
+  const stats = computeStats(result.projects, result.hiddenCount, cache.usage, result.catalogLintFindings);
 
   // Attach scatter data for the SessionComplexityChart on /stats.
   // getSessionsList() has its own 2-min cache; no additional TTL needed here.

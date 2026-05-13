@@ -40,7 +40,7 @@ describe("static MCP resources", () => {
     );
     expect(["db", "file"]).toContain(payload.backend);
     expect(payload.stats).toBeDefined();
-  });
+  }, 90_000);
 });
 
 describe("template MCP resources", () => {

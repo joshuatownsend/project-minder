@@ -9,7 +9,10 @@ import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
 import { formatRelativeTime } from "@/lib/utils";
+import type { LintFinding } from "@/lib/types";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
 // See AgentsBrowser for the rationale behind virtualization + lifted state
@@ -30,6 +33,8 @@ function SkillRowItem({
   bodyFetched,
   onFetchBody,
   onToggleDisabled,
+  lintFindings,
+  lintProjectSlug,
 }: {
   row: SkillRow;
   updateStatus?: SkillUpdateStatus;
@@ -40,6 +45,8 @@ function SkillRowItem({
   bodyFetched: boolean;
   onFetchBody: () => Promise<void>;
   onToggleDisabled?: (enabled: boolean) => Promise<void>;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const [bodyLoading, setBodyLoading] = useState(false);
   const [togglePending, setTogglePending] = useState(false);
@@ -153,6 +160,9 @@ function SkillRowItem({
             )}
             {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={row.entry.parseWarnings} />
+            )}
+            {lintFindings && lintFindings.length > 0 && (
+              <LintCountChip findings={lintFindings} projectSlug={lintProjectSlug} />
             )}
             {isDisabled && (
               <span
@@ -400,6 +410,7 @@ export function SkillsBrowser() {
   }, [rawQuery]);
 
   const { data, loading, refresh } = useSkills();
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
   const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
@@ -713,6 +724,8 @@ export function SkillsBrowser() {
                           ? (enabled) => toggleDisabledFor(row.entry!.id, enabled)
                           : undefined
                       }
+                      lintFindings={row.entry ? (findingsByFile.get(row.entry.filePath) ?? []) : []}
+                      lintProjectSlug={row.entry ? projectSlugByFile.get(row.entry.filePath) : undefined}
                     />
                   </div>
                 );

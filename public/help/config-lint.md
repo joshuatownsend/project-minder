@@ -35,6 +35,29 @@ Config Lint uses a three-pass engine:
 
 The **Engine errors** section at the bottom of the panel appears when any pass fails to run. Engine errors do not suppress findings from the other passes — a broken library pass still shows vendored and adapter findings.
 
+## Browser badges
+
+Every entry in the `/agents`, `/skills`, `/commands`, and `/plugins` browsers shows a small count chip when it has lint findings. The chip is tinted by the highest-severity finding in that entry:
+
+- **Red** — at least one P0 finding
+- **Amber** — at least one P1 finding (no P0)
+- **Muted** — P2 findings only
+
+For project-scope entries, the chip is a link that navigates directly to the project's Config Lint tab. You can also deep-link there from a URL: `/project/<slug>?tab=config-lint`.
+
+## Portfolio stats
+
+The `/stats` page includes a **Config Lint** section when findings exist. It shows total P0/P1/P2 counts, the number of projects affected, and a bar chart of findings broken down by target surface. The section is hidden when there are no findings (clean workspace or flag off).
+
+## Global catalog pass
+
+In addition to per-project linting, a single **global catalog pass** runs once per scan and covers:
+
+- **Structural rules on user + plugin scope entries** — skills, agents, and commands that live outside any project are checked for missing/long descriptions. (Project-scope entries are handled by the per-project pass to avoid duplication.)
+- **Cross-scope duplicate detection** — any two entries (regardless of scope) with the same name emit a `skill/duplicate-name`, `agent/duplicate-name`, or `command/duplicate-slug` finding.
+
+Global-pass findings appear in the browser badges but do not have an associated project, so their chips render without a link.
+
 ## Feature flag
 
-Config Lint is gated behind the **`configLint` feature flag** (default off) in `/settings`. Enable it to start seeing findings on the next rescan. The tab only appears on projects that have at least one finding.
+Config Lint is gated behind the **`configLint` feature flag** (default off) in `/settings`. Enable it to start seeing findings on the next rescan. The Config Lint tab only appears on projects that have at least one finding.

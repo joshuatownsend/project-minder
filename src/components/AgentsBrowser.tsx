@@ -10,6 +10,9 @@ import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
+import type { LintFinding } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/utils";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
@@ -28,6 +31,8 @@ function AgentRowItem({
   bodyFull,
   bodyFetched,
   onFetchBody,
+  lintFindings,
+  lintProjectSlug,
 }: {
   row: AgentRow;
   updateStatus?: SkillUpdateStatus;
@@ -39,6 +44,8 @@ function AgentRowItem({
   // the "View full body" button and re-fetching on every click.
   bodyFetched: boolean;
   onFetchBody: () => Promise<void>;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const [bodyLoading, setBodyLoading] = useState(false);
 
@@ -146,6 +153,9 @@ function AgentRowItem({
               )}
             {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={row.entry.parseWarnings} />
+            )}
+            {lintFindings && lintFindings.length > 0 && (
+              <LintCountChip findings={lintFindings} projectSlug={lintProjectSlug} />
             )}
           </div>
           {truncDesc && (
@@ -383,6 +393,7 @@ export function AgentsBrowser() {
   }, [rawQuery]);
 
   const { data, loading } = useAgents();
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
   const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
@@ -687,6 +698,8 @@ export function AgentsBrowser() {
                       bodyFull={bodyFull}
                       bodyFetched={bodyFetched}
                       onFetchBody={() => (bodyId ? fetchBodyFor(bodyId) : Promise.resolve())}
+                      lintFindings={row.entry ? findingsByFile.get(row.entry.filePath) : undefined}
+                      lintProjectSlug={row.entry ? projectSlugByFile.get(row.entry.filePath) : undefined}
                     />
                   </div>
                 );

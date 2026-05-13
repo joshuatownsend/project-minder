@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Terminal, Search, ChevronDown, ChevronRight } from "lucide-react";
-import type { CommandEntry } from "@/lib/types";
+import type { CommandEntry, LintFinding } from "@/lib/types";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
 
 interface Row {
   entry: CommandEntry;
@@ -43,6 +45,7 @@ export function CommandsBrowser() {
   }, [sourceFilter, query]);
 
   const visible = useMemo(() => rows ?? [], [rows]);
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -147,6 +150,8 @@ export function CommandsBrowser() {
           row={r}
           expanded={expanded.has(r.entry.id)}
           onToggle={() => toggle(r.entry.id)}
+          lintFindings={findingsByFile.get(r.entry.filePath) ?? []}
+          lintProjectSlug={projectSlugByFile.get(r.entry.filePath)}
         />
       ))}
     </div>
@@ -157,10 +162,14 @@ function CommandRow({
   row,
   expanded,
   onToggle,
+  lintFindings = [],
+  lintProjectSlug,
 }: {
   row: Row;
   expanded: boolean;
   onToggle: () => void;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const e = row.entry;
   const truncDesc =
@@ -218,6 +227,7 @@ function CommandRow({
             {e.parseWarnings && e.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={e.parseWarnings} />
             )}
+            <LintCountChip findings={lintFindings} projectSlug={lintProjectSlug} />
             <CopyInvocationButton text={`/${e.slug}`} title={`Copy command invocation: /${e.slug}`} />
           </div>
           {truncDesc && (

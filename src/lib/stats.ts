@@ -1,4 +1,4 @@
-import { ProjectData, StatsData, ClaudeUsageStats } from "./types";
+import { ProjectData, StatsData, ClaudeUsageStats, LintFinding, LintTarget } from "./types";
 
 function countField(
   projects: ProjectData[],
@@ -35,7 +35,8 @@ function computeActivity(projects: ProjectData[]) {
 export function computeStats(
   projects: ProjectData[],
   hiddenCount: number,
-  claudeUsage?: ClaudeUsageStats
+  claudeUsage?: ClaudeUsageStats,
+  catalogLintFindings?: LintFinding[]
 ): StatsData {
   // Service counts — flatten across all projects
   const services: Record<string, number> = {};
@@ -83,6 +84,39 @@ export function computeStats(
     }
   }
 
+  // Config lint aggregate
+  let configLintStats: StatsData["configLint"] | undefined;
+  {
+    const acc = {
+      totalFindings: 0,
+      projectsWithFindings: 0,
+      bySeverity: { P0: 0, P1: 0, P2: 0 },
+      byTarget: {} as Partial<Record<LintTarget, number>>,
+    };
+    for (const p of projects) {
+      if (!p.configLint || p.configLint.findings.length === 0) continue;
+      acc.projectsWithFindings++;
+      acc.totalFindings += p.configLint.findings.length;
+      acc.bySeverity.P0 += p.configLint.totalCounts.P0;
+      acc.bySeverity.P1 += p.configLint.totalCounts.P1;
+      acc.bySeverity.P2 += p.configLint.totalCounts.P2;
+      for (const [tgt, c] of Object.entries(p.configLint.countsByTarget)) {
+        const total = c.P0 + c.P1 + c.P2;
+        const key = tgt as LintTarget;
+        acc.byTarget[key] = (acc.byTarget[key] ?? 0) + total;
+      }
+    }
+    // Fold in catalog-scope findings (user/plugin scope, no project association)
+    for (const f of catalogLintFindings ?? []) {
+      acc.totalFindings++;
+      acc.bySeverity[f.severity] = (acc.bySeverity[f.severity] ?? 0) + 1;
+      if (f.target) {
+        acc.byTarget[f.target] = (acc.byTarget[f.target] ?? 0) + 1;
+      }
+    }
+    if (acc.totalFindings > 0) configLintStats = acc;
+  }
+
   return {
     projectCount: projects.length,
     hiddenCount,
@@ -97,5 +131,6 @@ export function computeStats(
     manualStepsHealth: { total: msTotal, completed: msCompleted, pending: msPending },
     claudeSessions: { total: totalSessions, projectsWithSessions },
     claudeUsage,
+    configLint: configLintStats,
   };
 }

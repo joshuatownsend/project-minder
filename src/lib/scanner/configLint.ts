@@ -1,4 +1,5 @@
-import type { ClaudeMdAuditInfo, HookEntry, McpServer, LintReport } from "../types";
+import type { ClaudeMdAuditInfo, HookEntry, McpServer, LintReport, CommandEntry } from "../types";
+import type { AgentEntry, SkillEntry } from "../indexer/types";
 import { runLintEngine } from "../lint/engine";
 import { getUserConfig } from "../userConfigCache";
 
@@ -9,6 +10,10 @@ export interface ConfigLintInputs {
   mcpServers?: McpServer[];
   /** Wave C+: project-scope hook entries; user-scope fetched internally. */
   hooks?: HookEntry[];
+  /** Wave F+: project-scope catalog entries for structural rules. */
+  skills?: SkillEntry[];
+  agents?: AgentEntry[];
+  commands?: CommandEntry[];
 }
 
 /**
@@ -36,5 +41,8 @@ export async function runConfigLint(
     mcpServers: inputs.mcpServers,
     hooks: allHooks.length > 0 ? allHooks : undefined,
     plugins: userCfg?.plugins.plugins,
+    skills: inputs.skills,
+    agents: inputs.agents,
+    commands: inputs.commands,
   });
 }

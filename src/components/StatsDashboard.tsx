@@ -258,6 +258,29 @@ export function StatsDashboard() {
         </div>
       </section>
 
+      {/* Config Lint */}
+      {data.configLint && (
+        <section>
+          <SectionHeader label="Config Lint" />
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ display: "flex" }}>
+              <StatCell size="feature" label="Total Findings" value={String(data.configLint.totalFindings)} />
+              <StatCell size="feature" label="P0" value={String(data.configLint.bySeverity.P0)} accent="error" />
+              <StatCell size="feature" label="P1" value={String(data.configLint.bySeverity.P1)} accent="warn" />
+              <StatCell size="feature" label="P2" value={String(data.configLint.bySeverity.P2)} />
+              <StatCell size="feature" label="Projects Affected" value={String(data.configLint.projectsWithFindings)} last />
+            </div>
+            {Object.keys(data.configLint.byTarget).length > 0 && (
+              <ChartBlock title="Findings by Target">
+                <BarChart data={Object.fromEntries(
+                  Object.entries(data.configLint.byTarget).map(([k, v]) => [k, v ?? 0])
+                )} color="var(--accent)" />
+              </ChartBlock>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Session Complexity */}
       {data.sessions && data.sessions.length > 0 && (
         <section>

@@ -22,6 +22,12 @@ import { scanGsdPlanning } from "./gsdPlanning";
 import { scanOutputStyles } from "./outputStyles";
 import { scanLspConfig } from "./lspConfig";
 import { runConfigLint } from "./configLint";
+import { runCatalogLint } from "./catalogLint";
+import { walkProjectAgents } from "../indexer/walkAgents";
+import { walkProjectSkills } from "../indexer/walkSkills";
+import { walkProjectCommands } from "../indexer/walkCommands";
+import { loadProvenanceContext } from "../indexer/provenance";
+import type { ProvenanceContext } from "../indexer/types";
 
 // Neutral substitutes typed against the real scanner returns so downstream
 // code reads the same shape whether the scanner ran or was gated off.
@@ -60,6 +66,7 @@ async function scanProject(
   dirName: string,
   devRoot: string,
   flags: MinderConfig["featureFlags"],
+  ctx: ProvenanceContext,
 ): Promise<ProjectData | null> {
   const projectPath = path.join(devRoot, dirName);
 
@@ -79,16 +86,24 @@ async function scanProject(
   // config-lint chain share the same promises (no double-scan).
   const mcpServersPromise = scanMcpServers(projectPath);
   const hooksPromise = scanClaudeHooks(projectPath);
-  // Config lint chains off audit + mcpServers + hooks (Wave C).
-  // Defaults off until rule severities are tuned.
-  const configLintPromise = getFlag(flags, "configLint", false)
-    ? Promise.all([claudeMdAuditPromise, mcpServersPromise, hooksPromise]).then(
-        ([audit, mcp, hooksInfo]) =>
-          runConfigLint(projectPath, {
-            claudeMdAudit: audit,
-            mcpServers: mcp?.servers,
-            hooks: hooksInfo?.entries,
-          })
+  // Config lint chains off audit + mcpServers + hooks + project catalog.
+  const configLintPromise = getFlag(flags, "configLint")
+    ? Promise.all([
+        claudeMdAuditPromise,
+        mcpServersPromise,
+        hooksPromise,
+        walkProjectSkills(projectPath, slug, ctx),
+        walkProjectAgents(projectPath, slug, ctx),
+        walkProjectCommands(projectPath, slug, ctx),
+      ]).then(([audit, mcp, hooksInfo, skills, agents, commands]) =>
+        runConfigLint(projectPath, {
+          claudeMdAudit: audit,
+          mcpServers: mcp?.servers,
+          hooks: hooksInfo?.entries,
+          skills,
+          agents,
+          commands,
+        })
       )
     : Promise.resolve(EMPTY_LINT_REPORT);
 
@@ -242,6 +257,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
   const worktreesEnabled = getFlag(flags, "scanWorktrees");
 
+  // Load provenance context once — shared across all projects and catalog lint.
+  const ctx = await loadProvenanceContext();
+
   const allProjects: ProjectData[] = [];
   // Track slugs seen so far to handle collisions across roots (first root wins)
   const seenSlugs = new Set<string>();
@@ -276,7 +294,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
     const rootProjects: ProjectData[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags)));
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx)));
       for (const r of results) {
         if (r) {
           rootProjects.push(r);
@@ -310,11 +328,13 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
+  const catalogLintFindings = await runCatalogLint(allProjects, flags);
 
   return {
     projects: allProjects,
     portConflicts,
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),
+    catalogLintFindings,
   };
 }

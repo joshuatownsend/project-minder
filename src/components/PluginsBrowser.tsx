@@ -7,6 +7,9 @@ import Link from "next/link";
 import { usePlugins } from "@/hooks/usePlugins";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import type { PluginRollupRow } from "@/hooks/usePlugins";
+import type { LintFinding } from "@/lib/types";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name" },
@@ -31,6 +34,7 @@ export function PluginsBrowser() {
   }, [rawQuery]);
 
   const { data: plugins, loading, error } = usePlugins(query || undefined);
+  const { findingsByFile } = useLintFindings();
 
   const sorted = [...plugins].sort((a, b) => {
     if (sortBy === "invocations") return b.totalInvocations - a.totalInvocations;
@@ -182,6 +186,9 @@ export function PluginsBrowser() {
                     row={row}
                     expanded={expanded}
                     onToggle={() => toggleExpand(rowKey)}
+                    lintFindings={findingsByFile.get(
+                      row.plugin.installPath ?? `plugin:${row.plugin.name}@${row.plugin.marketplace}`
+                    ) ?? []}
                   />
                 </div>
               );
@@ -197,10 +204,12 @@ function PluginRow({
   row,
   expanded,
   onToggle,
+  lintFindings = [],
 }: {
   row: PluginRollupRow;
   expanded: boolean;
   onToggle: () => void;
+  lintFindings?: LintFinding[];
 }) {
   const { plugin, agentCount, skillCount, mcpServerCount, totalInvocations } = row;
   const status: "enabled" | "disabled" | "blocked" = plugin.blocked
@@ -300,6 +309,8 @@ function PluginRow({
         )}
 
         <StatusPill status={status} />
+
+        <LintCountChip findings={lintFindings} />
 
         {plugin.enabled && (
           <ApplyUnitButton
