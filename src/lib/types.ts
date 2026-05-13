@@ -77,6 +77,8 @@ export interface ProjectData {
   // Claude config (project-local)
   hooks?: HooksInfo;
   mcpServers?: McpServersInfo;
+  outputStyles?: OutputStylesInfo;
+  lspConfig?: LspConfigInfo;
 
   // CI/CD
   cicd?: CiCdInfo;
@@ -896,6 +898,25 @@ export interface PluginEntry {
 
 export interface PluginsInfo {
   plugins: PluginEntry[];
+}
+
+export interface OutputStyleEntry {
+  /** Directory name under `.claude/output-styles/`. */
+  name: string;
+  /** Absolute path to the style's prompt markdown file. */
+  promptPath: string;
+  frontmatter: Record<string, unknown>;
+}
+
+export interface OutputStylesInfo {
+  styles: OutputStyleEntry[];
+}
+
+export interface LspConfigInfo {
+  /** Absolute path to the lsp.json file. */
+  sourcePath: string;
+  /** Raw parsed config — keys are language IDs, values are server configs. */
+  config: Record<string, unknown>;
 }
 
 // ─── Plans ───────────────────────────────────────────────────────────────────

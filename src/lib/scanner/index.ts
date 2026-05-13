@@ -19,6 +19,8 @@ import { scanCiCd } from "./cicd";
 import { attachWorktreeOverlays } from "./worktrees";
 import { countProjectCatalog } from "./projectCatalogCounts";
 import { scanGsdPlanning } from "./gsdPlanning";
+import { scanOutputStyles } from "./outputStyles";
+import { scanLspConfig } from "./lspConfig";
 import { runConfigLint } from "./configLint";
 
 // Neutral substitutes typed against the real scanner returns so downstream
@@ -103,6 +105,8 @@ async function scanProject(
     insights,
     hooks,
     mcpServers,
+    outputStyles,
+    lspConfig,
     cicd,
     catalogCounts,
     gsdPlanning,
@@ -130,6 +134,8 @@ async function scanProject(
       : Promise.resolve(undefined),
     hooksPromise,
     mcpServersPromise,
+    scanOutputStyles(projectPath),
+    scanLspConfig(projectPath),
     scanCiCd(projectPath),
     countProjectCatalog(projectPath),
     getFlag(flags, "gsdPlanning")
@@ -189,6 +195,8 @@ async function scanProject(
     insights,
     hooks,
     mcpServers,
+    outputStyles,
+    lspConfig,
     cicd,
     agentCount: catalogCounts.agentCount > 0 ? catalogCounts.agentCount : undefined,
     skillCount: catalogCounts.skillCount > 0 ? catalogCounts.skillCount : undefined,
