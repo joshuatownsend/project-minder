@@ -1,5 +1,165 @@
 # Insights
 
+<!-- insight:c54f8b971492 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T23:35:09.994Z -->
+## ★ Insight
+Three patterns to fix here:
+1. **Module-scope constants** — `VALID_TABS` in a component body runs `new Set(...)` on every render; at module scope it's created once
+2. **Redundant guards before null-returning components** — `LintCountChip` already returns `null` for empty findings; the `lintFindings && lintFindings.length > 0 &&` guard duplicates that contract
+3. **Event bubbling bug** — nested `<Link>` inside a `<div onClick>` needs `stopPropagation`; without it, clicking the project badge also toggles the row
+
+---
+
+<!-- insight:e697bf35150c | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T23:17:51.402Z -->
+## ★ Insight
+Vitest `--pool=forks` gives each worker a separate Node process, so `globalThis` caches start cold per worker. A test that calls a full scan directly (vs. a mocked one) will be slow in CI/test environments — this is why MCP integration tests need generous timeouts and why unit tests should mock the scanner.
+
+---
+
+<!-- insight:5314f2c0b644 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T22:17:33.308Z -->
+## ★ Insight
+This is a classic flag inconsistency: the UI reads flags with `defaultOn=true` but the scanner was written with `defaultOn=false` for caution. Once the feature is ready, the scanner and UI should use the same default — otherwise flags appear enabled but nothing runs.
+
+---
+
+<!-- insight:59a25244c53d | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T21:58:57.207Z -->
+## ★ Insight
+The stats dashboard uses `data?.configLint` conditional rendering — the section only appears when at least one finding exists (we only set `configLintStats` when `totalFindings > 0` in stats.ts). This means the section naturally disappears in a "clean" workspace or when the flag is off, matching the zero-state behavior specified in the plan.
+
+---
+
+<!-- insight:392a26e8bc80 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T21:54:14.152Z -->
+## ★ Insight
+**CommandsBrowser** doesn't use a virtualizer (unlike Agents/Skills/Plugins) — rows are rendered via a plain `.map()`. This means I can pass props directly to `CommandRow` without the extra virtualizer render layer. **PluginsBrowser** does use the virtualizer pattern but `PluginRow` is a standalone function, so passing props there follows the same virtualizer-render-site pattern from AgentsBrowser.
+
+---
+
+<!-- insight:5ab72c80ac86 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T21:36:05.165Z -->
+## ★ Insight
+- `SkillEntry` extends `CatalogEntryBase` which has `description?: string`, `source: CatalogSource`, and `filePath: string` — exactly the fields the structural rules need. All three target types share this base.
+- `CatalogSource` is `"user" | "plugin" | "project"` — the global lint pass can filter to `source !== "project"` for structural rules to avoid duplication with per-project lint.
+
+---
+
+<!-- insight:eb4e8b577614 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:36:59.367Z -->
+## ★ Insight
+The engine-errors section in `ConfigLintPanel` is architecturally important beyond just UX: it enforces the invariant that "no findings displayed" only means "clean" — not "the linter crashed silently." This mirrors how good monitoring systems distinguish "no alerts" from "alerting system is down." The same pattern appears in `DiagnosisPanel` with its "No issues detected" empty state vs. error fallback.
+
+---
+
+<!-- insight:1076ed1b07f9 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:31:38.825Z -->
+## ★ Insight
+The existing `FindingCard` in `ui/FindingCard.tsx` was already extracted for reuse by `DiagnosisPanel` and `EfficiencyTab`. `ConfigLintPanel` can use it directly — no need to touch `ClaudeMdAuditPanel`. The comment on line 48 of `FindingCard.tsx` even explicitly says "ClaudeMdAuditPanel does NOT use this" — it has its own neutral-card pattern with severity in group headers instead.
+
+---
+
+<!-- insight:1a2550db5f38 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:29:25.965Z -->
+## ★ Insight
+The advisor confirms: ship panel + tab first (core value), badges and /stats as follow-ups. Key callout: the `engine errors` section isn't optional — an empty Config Lint panel could mean "all clean" when the CLI silently failed. Surface it to distinguish "clean" from "broken engine."
+
+---
+
+<!-- insight:f321b61a98e6 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:21:22.535Z -->
+## ★ Insight
+Wave D's key insight: the library CLI (`claude-code-lint`) already handles output-styles and LSP per-file validation. Our vendored rules only add value for cross-scope data the CLI can't see. Since neither surface has cross-scope data, Wave D is purely infrastructure — readers that pipe data through `ProjectData` so Wave E UI can display counts.
+
+---
+
+<!-- insight:e78c1abf82d8 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:20:33.317Z -->
+## ★ Insight
+Wave D's empirical check confirms the plan's fallback: neither `.claude/lsp.json` nor `.claude/output-styles/` exist in any real project today. The library CLI already handles those validators. Our job is to build the readers and wire the pipeline, not to ship rules that can't fire yet — this is a common pattern in feature-flag-gated systems: infrastructure first, semantics later.
+
+---
+
+<!-- insight:6604e73f4299 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:07:35.467Z -->
+## ★ Insight
+The `mcpServersPromise` hoisting pattern is worth noting: by starting the scan *before* `Promise.all` and reusing the same promise inside the main array, we get a single scan that feeds two consumers (the scan result and the lint chain) with zero extra I/O. This is the same technique as `claudeMdPromise` feeding both the `claude` field and `claudeMdAuditPromise` — a clean way to share work across scan-time and post-scan logic.
+
+---
+
+<!-- insight:cb54a3918e61 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T20:01:57.661Z -->
+## ★ Insight
+The library's CLI approach (subprocess + JSON parse) is actually *more reliable* than the programmatic API here because the `lintFiles()` ESLint-compatible API needs a config file to know which validator handles which glob — but `check-all` runs all validators directly against the workspace. Non-zero exit is normal when linting errors exist, so we resolve on `close` regardless of exit code and parse whatever stdout arrived.
+
+---
+
+<!-- insight:7e156733d7e3 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T19:51:48.328Z -->
+## ★ Insight
+Wave A uses a pure-adapter pattern: no file I/O means the tests are simpler than `claudeMdAudit.test.ts` (no `vi.mock("fs")` needed). This also proves the engine contract in isolation before Wave B adds the library pass and dedupe logic really matters.
+
+---
+
+<!-- insight:e1162b9d1f12 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T19:51:39.364Z -->
+## ★ Insight
+The `claudeMdAuditPromise` chain pattern in `scanner/index.ts` is elegant: it avoids a double-file-read by piggybacking the audit on the scan's already-read buffer. We'll extend this chain for `configLint` — the adapter only needs the audit result, so `configLintPromise = claudeMdAuditPromise.then(...)` is exactly the right slot.
+
+---
+
+<!-- insight:c8b8362546b5 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T19:48:48.343Z -->
+## ★ Insight
+The biggest design lever in this plan is the **adapter-only treatment of CLAUDE.md**: by re-emitting existing audit findings into the unified shape rather than re-implementing them, we avoid risking the post-Wave-2.2 corrections that already debunked the 200-line truncation myth. The hybrid engine then *only* runs both library + vendored rules on the nine surfaces where we don't already have a tuned audit — much smaller dedupe surface than running both engines on everything.
+
+---
+
+<!-- insight:af04f0608e94 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T19:35:21.615Z -->
+## ★ Insight
+The upstream is small (7 stars, 1 maintainer, last commit yesterday) but architecturally aligned with us: TypeScript, MIT, one-file-per-rule, severity model maps to P0/P1/P2, no 200-line truncation myth. That's the dream scenario for library import — but the maintainer risk is real, which is exactly the kind of trade-off worth pulling you into.
+
+---
+
+<!-- insight:4ea92c64bcab | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T19:22:56.480Z -->
+## ★ Insight
+The ARIA roles `row`, `rowgroup`, `columnheader`, `gridcell` are all *required context* roles — they only carry meaning when inside a container with `role="grid"` or `role="table"`. Without that root, screen readers discard the structure entirely. This is distinct from landmark roles (e.g. `region`, `navigation`) which work standalone.
+
+---
+
+<!-- insight:2f60722a53bf | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T19:06:15.102Z -->
+## ★ Insight
+The `useMemo` wrapping of `filtered`/`sorted` is important here because `ManualStepsDashboard` has frequent state updates — `collapsedSlugs` changes on every expand/collapse toggle. Without memoization, every toggle would re-sort the entire project list even though neither `data`, `filter`, nor `sort` changed. React's memo system only prevents re-renders when the component's own props/state haven't changed; `useMemo` guards derived values *within* a component against unrelated state changes.
+
+---
+
+<!-- insight:95b29887d0eb | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T19:04:39.918Z -->
+## ★ Insight
+Three efficiency patterns to fix here: (1) O(n²) `Array.includes()` inside a `.map()` — each call scans the whole array, so 61 projects × N pinned slugs = quadratic; a `Set` converts this to O(1) per lookup. (2) `Date.now()` inside a `.map()` is idiomatic but creates 61 slightly-different timestamps — hoisting to one value before the loop makes the memo's output deterministic. (3) `new Array(14).fill(0)` inside `.map()` allocates a fresh array per project per recompute — a module-level constant shares one reference.
+
+---
+
+<!-- insight:aa112c8c24fe | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T18:51:18.890Z -->
+## ★ Insight
+The core challenge of virtualizing a semantic HTML `<table>` is that `<tbody>` rows rely on the browser's table layout algorithm for column width sharing with `<thead>`. With absolute-positioned virtual rows, that algorithm no longer applies. The solution is a CSS `display: grid` with an explicit shared `grid-template-columns` constant — both the header row and every body row reference the same `COLS` string, so they align without the table engine.
+
+---
+
+<!-- insight:d783a8622c11 | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T18:50:46.887Z -->
+## ★ Insight
+The key detail with dynamic-height virtualization is `measureElement`: instead of guessing heights, react-virtual attaches a ResizeObserver to each mounted row div (via the `data-index` + `ref={virtualizer.measureElement}` pair). When a section collapses or expands, the ResizeObserver fires immediately and the virtualizer re-computes the total height and adjusts all subsequent row offsets — without any manual measurement code.
+
+---
+
+<!-- insight:a4b03a6a724c | session:30be00fa-9352-41cf-b279-a55b636b56bb | 2026-05-13T18:49:48.135Z -->
+## ★ Insight
+`MarkdownContent` runs a stateful while-loop (using a mutable `key` counter) on every render. The trick for `useMemo`-ifying this is to hoist the loop into a pure function — the counter stays local to the helper, so the function is referentially pure with respect to its string input. `React.memo` then prevents the component from even running `useMemo` when the parent re-renders with the same `content` prop.
+
+---
+
+<!-- insight:fa573c2eca61 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:24:18.351Z -->
+## ★ Insight
+The test for `has_tool_failure_streak` requires 6 "grace" turns to elapse before the window opens — a subtle spec detail. If you put all error turns in the first 6, the detector ignores them. The tests must deliberately build the correct turn-index geometry, not just count total turns.
+
+---
+
+<!-- insight:f3d95e360d14 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:14:30.945Z -->
+## ★ Insight
+The `fs.open()` → `FileHandle` pattern lets you call `.readFile()` and `.stat()` on the same underlying file descriptor. Since both operations share the same fd, the OS guarantees they see the same inode state — no window for a write to slip between them. This is the POSIX-correct way to get a consistent content+mtime snapshot.
+
+---
+
+<!-- insight:4acf9b687e52 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:08:07.532Z -->
+## ★ Insight
+The `statusMap` type improvement from `Record<string, number>` to `Partial<Record<MemoryWriteError["code"], number>>` creates a compile-time contract: TypeScript will error if you add a new `MemoryWriteError` code variant and forget to add it to the status map (once the map is exhaustive). The `Partial<>` wrapper acknowledges that `WRITE_FAILED` intentionally falls back to 500 rather than being mapped explicitly.
+
+---
+
 <!-- insight:15a5a036d4a5 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:06:18.251Z -->
 ## ★ Insight
 When validating numeric inputs from untrusted sources, `typeof x === "number"` passes for `NaN` and `Infinity` — both are valid JS numbers. `Number.isFinite` is the right predicate when you want "a real, finite number". This is especially important here where `NaN` passed as `expectedMtimeMs` would cause `Math.abs(currentMtime - NaN) > 1` to be `false`, silently disabling the conflict check.
