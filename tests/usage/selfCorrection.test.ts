@@ -5,7 +5,7 @@ import {
   type SelfCorrectionReport,
 } from "@/lib/usage/selfCorrection";
 import type { UsageTurn } from "@/lib/usage/types";
-import { makeTurn } from "./_fixtures";
+import { makeTurn } from "./fixtures/turn";
 
 function turn(args: {
   role: "user" | "assistant";

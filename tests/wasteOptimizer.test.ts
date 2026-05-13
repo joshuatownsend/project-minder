@@ -7,7 +7,7 @@ import {
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import type { McpServer } from "@/lib/types";
 import type { AgentEntry, SkillEntry } from "@/lib/indexer/types";
-import { makeTurn, readTurn, editTurn, mcpCallTurn } from "./usage/_fixtures";
+import { makeTurn, readTurn, editTurn, mcpCallTurn } from "./usage/fixtures/turn";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

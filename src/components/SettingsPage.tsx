@@ -71,14 +71,14 @@ interface SectionDef {
 const SECTIONS: SectionDef[] = [
   { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
   { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
-  { key: "cost",          label: "Cost",           comingSoon: true,  description: "Currency, pricing rules, schedule mode for burndown." },
-  { key: "notifications", label: "Notifications",  comingSoon: true,  description: "Push and Telegram event toggles." },
-  { key: "integrations",  label: "Integrations",   comingSoon: true,  description: "OTEL, Anthropic OAuth, currency API status." },
+  { key: "cost",          label: "Cost",           comingSoon: false, description: "Currency, pricing rules, schedule mode for burndown." },
+  { key: "notifications", label: "Notifications",  comingSoon: false, description: "Push and Telegram event toggles." },
+  { key: "integrations",  label: "Integrations",   comingSoon: false, description: "OTEL, Anthropic OAuth, currency API status." },
   { key: "data",          label: "Data & Privacy", comingSoon: true,  description: "History retention, distillation defaults, export shortcuts." },
-  { key: "terminal",      label: "Terminal",        comingSoon: true,  description: "Preferred terminal application for resume." },
-  { key: "auto-title",    label: "Auto-title",      comingSoon: true,  description: "LLM endpoint for session-title generation." },
-  { key: "live-activity", label: "Live Activity",   comingSoon: true,  description: "Hook server install/remove + awaiting-permission alerts." },
-  { key: "adapters",      label: "Adapters",        comingSoon: true,  description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
+  { key: "terminal",      label: "Terminal",        comingSoon: false, description: "Preferred terminal application for resume." },
+  { key: "auto-title",    label: "Auto-title",      comingSoon: false, description: "LLM endpoint for session-title generation." },
+  { key: "live-activity", label: "Live Activity",   comingSoon: false, description: "Hook server install/remove + awaiting-permission alerts." },
+  { key: "adapters",      label: "Adapters",        comingSoon: false, description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
 ];
 
 export function SettingsPage() {
@@ -437,7 +437,7 @@ function FlagGroup(props: {
                   </span>
                   {!f.wired && (
                     <span
-                      title="The toggle persists, but no consumer reads it yet. A future wave will wire it."
+                      title="The toggle persists, but no consumer reads it yet."
                       style={{
                         fontFamily: "var(--font-mono)",
                         fontSize: "0.6rem",

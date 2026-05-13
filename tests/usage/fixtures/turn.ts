@@ -42,3 +42,23 @@ export function assistantTurn(overrides: Omit<Partial<UsageTurn>, "role"> = {}):
 export function userTurn(overrides: Omit<Partial<UsageTurn>, "role"> = {}): UsageTurn {
   return makeTurn({ ...overrides, role: "user" });
 }
+
+export function readTurn(
+  path: string,
+  sessionId = "sess-1",
+  timestamp = "2026-01-01T00:00:00Z"
+): UsageTurn {
+  return assistantTurn({ sessionId, timestamp, toolCalls: [{ name: "Read", arguments: { file_path: path } }] });
+}
+
+export function editTurn(
+  path: string,
+  sessionId = "sess-1",
+  timestamp = "2026-01-01T00:00:00Z"
+): UsageTurn {
+  return assistantTurn({ sessionId, timestamp, toolCalls: [{ name: "Edit", arguments: { file_path: path } }] });
+}
+
+export function mcpCallTurn(server: string, tool = "do"): UsageTurn {
+  return assistantTurn({ toolCalls: [{ name: `mcp__${server}__${tool}` }] });
+}

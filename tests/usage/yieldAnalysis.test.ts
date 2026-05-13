@@ -7,7 +7,7 @@ import {
 } from "@/lib/usage/yieldAnalysis";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { CommitMeta } from "@/lib/scanner/git";
-import { makeTurn } from "./_fixtures";
+import { makeTurn } from "./fixtures/turn";
 
 function turn(args: Parameters<typeof makeTurn>[0] & {
   sessionId: string;

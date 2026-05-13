@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **Settings page** — "W7" / "W8" / "W10" developer-only wave badges replaced with "Soon" labels; placeholder sections now say "Coming soon." instead of "Coming in wave N."
 - **Schedule page** — removed developer-only wave version reference from the coming-soon blurb.
-- **Feature flag descriptions** — stripped internal wave references from the Settings UI labels for Live activity, Task dispatcher, and MCP security scan flags.
+- **Feature flag descriptions** — stripped internal wave references from the Settings UI labels for 6 flags: Usage analytics, Agent/skill indexer, Dev server control, Live activity, Task dispatcher, and MCP security scan.
 - **Test infrastructure** — shared `UsageTurn` fixture builder extracted to `tests/usage/_fixtures.ts` (`makeTurn`, `assistant`, `user`, `readTurn`, `editTurn`, `mcpCallTurn`); four test files updated to import from it.
 - **`DiagnosisPanel`** — removed stale local `formatUsd` and `HeaderStat` remnants; now fully uses `formatCost` from `@/lib/format` and `StatCell` from `ui/StatCell`.
 

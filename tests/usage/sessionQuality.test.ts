@@ -9,7 +9,7 @@ import {
   _resetWarnedModelsForTesting,
 } from "@/lib/usage/sessionQuality";
 import type { UsageTurn } from "@/lib/usage/types";
-import { assistant, user } from "./_fixtures";
+import { assistantTurn as assistant, userTurn as user } from "./fixtures/turn";
 
 beforeEach(() => {
   _resetWarnedModelsForTesting();
