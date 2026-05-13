@@ -1,5 +1,6 @@
 import type { LintFinding } from "../../types";
 import type { SkillEntry } from "../../indexer/types";
+import { groupByKey } from "./_shared";
 
 export function runSkillRules(entries: SkillEntry[]): LintFinding[] {
   const findings: LintFinding[] = [];
@@ -47,12 +48,7 @@ function longDescription(entries: SkillEntry[]): LintFinding[] {
 }
 
 function duplicateNames(entries: SkillEntry[]): LintFinding[] {
-  const byName = new Map<string, SkillEntry[]>();
-  for (const e of entries) {
-    const bucket = byName.get(e.name) ?? [];
-    bucket.push(e);
-    byName.set(e.name, bucket);
-  }
+  const byName = groupByKey(entries, (e) => e.name);
   const findings: LintFinding[] = [];
   for (const [name, dupes] of byName) {
     if (dupes.length < 2) continue;

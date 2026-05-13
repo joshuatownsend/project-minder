@@ -32,12 +32,12 @@ export async function runCatalogLint(
     ]);
 
     // Walk commands across all scopes (loadCatalog doesn't cover commands)
-    const [userCommands, pluginCommandSets, ...projectCommandSets] = await Promise.all([
+    const [userCommands, pluginCommands, ...projectCommandSets] = await Promise.all([
       walkUserCommands(ctx),
       walkPluginCommands(ctx.installedPlugins, ctx),
       ...projects.map((p) => walkProjectCommands(p.path, p.slug, ctx)),
     ]);
-    const allCommands = [userCommands, pluginCommandSets, ...projectCommandSets].flat();
+    const allCommands = [userCommands, pluginCommands, ...projectCommandSets].flat();
 
     return runGlobalLint({
       allSkills: catalog.skills,

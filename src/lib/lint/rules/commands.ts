@@ -1,4 +1,5 @@
 import type { LintFinding, CommandEntry } from "../../types";
+import { groupByKey } from "./_shared";
 
 export function runCommandRules(entries: CommandEntry[]): LintFinding[] {
   const findings: LintFinding[] = [];
@@ -30,12 +31,7 @@ function missingDescription(entries: CommandEntry[]): LintFinding[] {
 }
 
 function duplicateSlugs(entries: CommandEntry[]): LintFinding[] {
-  const bySlug = new Map<string, CommandEntry[]>();
-  for (const e of entries) {
-    const bucket = bySlug.get(e.slug) ?? [];
-    bucket.push(e);
-    bySlug.set(e.slug, bucket);
-  }
+  const bySlug = groupByKey(entries, (e) => e.slug);
   const findings: LintFinding[] = [];
   for (const [slug, dupes] of bySlug) {
     if (dupes.length < 2) continue;

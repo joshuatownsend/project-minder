@@ -97,6 +97,12 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
+const VALID_TABS = new Set<TabKey>([
+  "overview", "context", "todos", "sessions", "manual-steps", "insights",
+  "memory", "planning", "agents", "skills", "efficiency", "hot-files",
+  "errors", "patterns", "config", "config-history", "config-lint",
+]);
+
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -104,11 +110,6 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
   const [hasConfigHistory, setHasConfigHistory] = useState(false);
 
-  const VALID_TABS = new Set<TabKey>([
-    "overview", "context", "todos", "sessions", "manual-steps", "insights",
-    "memory", "planning", "agents", "skills", "efficiency", "hot-files",
-    "errors", "patterns", "config", "config-history", "config-lint",
-  ]);
   const initialTab = (searchParams.get("tab") ?? "overview") as TabKey;
   const [activeTab, setActiveTab] = useState<TabKey>(
     VALID_TABS.has(initialTab) ? initialTab : "overview"

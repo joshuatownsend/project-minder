@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Terminal, Search, ChevronDown, ChevronRight } from "lucide-react";
 import type { CommandEntry, LintFinding } from "@/lib/types";
@@ -9,6 +9,7 @@ import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
 import { LintCountChip } from "@/components/ui/LintCountChip";
 import { useLintFindings } from "@/hooks/useLintFindings";
+import { truncate } from "@/lib/utils";
 
 interface Row {
   entry: CommandEntry;
@@ -44,7 +45,7 @@ export function CommandsBrowser() {
     };
   }, [sourceFilter, query]);
 
-  const visible = useMemo(() => rows ?? [], [rows]);
+  const visible = rows ?? [];
   const { findingsByFile, projectSlugByFile } = useLintFindings();
 
   function toggle(id: string) {
@@ -172,8 +173,7 @@ function CommandRow({
   lintProjectSlug?: string;
 }) {
   const e = row.entry;
-  const truncDesc =
-    e.description && e.description.length > 160 ? e.description.slice(0, 160) + "…" : e.description;
+  const truncDesc = e.description ? truncate(e.description) : e.description;
 
   return (
     <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
@@ -293,7 +293,7 @@ function SourceBadge({ entry }: { entry: CommandEntry }) {
     return <Pill tone="info">plugin{entry.pluginName ? ` · ${entry.pluginName}` : ""}</Pill>;
   }
   return (
-    <Link href={`/project/${entry.projectSlug}`} style={{ textDecoration: "none" }}>
+    <Link href={`/project/${entry.projectSlug}`} style={{ textDecoration: "none" }} onClick={(e) => e.stopPropagation()}>
       <Pill tone="info">{entry.projectSlug}</Pill>
     </Link>
   );

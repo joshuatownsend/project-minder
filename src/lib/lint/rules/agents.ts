@@ -1,5 +1,6 @@
 import type { LintFinding } from "../../types";
 import type { AgentEntry } from "../../indexer/types";
+import { groupByKey } from "./_shared";
 
 export function runAgentRules(entries: AgentEntry[]): LintFinding[] {
   const findings: LintFinding[] = [];
@@ -47,12 +48,7 @@ function longDescription(entries: AgentEntry[]): LintFinding[] {
 }
 
 function duplicateNames(entries: AgentEntry[]): LintFinding[] {
-  const byName = new Map<string, AgentEntry[]>();
-  for (const e of entries) {
-    const bucket = byName.get(e.name) ?? [];
-    bucket.push(e);
-    byName.set(e.name, bucket);
-  }
+  const byName = groupByKey(entries, (e) => e.name);
   const findings: LintFinding[] = [];
   for (const [name, dupes] of byName) {
     if (dupes.length < 2) continue;

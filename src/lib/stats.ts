@@ -109,10 +109,8 @@ export function computeStats(
     // Fold in catalog-scope findings (user/plugin scope, no project association)
     for (const f of catalogLintFindings ?? []) {
       acc.totalFindings++;
-      acc.bySeverity[f.severity] = (acc.bySeverity[f.severity] ?? 0) + 1;
-      if (f.target) {
-        acc.byTarget[f.target] = (acc.byTarget[f.target] ?? 0) + 1;
-      }
+      acc.bySeverity[f.severity]++;
+      acc.byTarget[f.target] = (acc.byTarget[f.target] ?? 0) + 1;
     }
     if (acc.totalFindings > 0) configLintStats = acc;
   }

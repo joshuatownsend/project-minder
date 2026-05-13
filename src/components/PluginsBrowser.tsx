@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Search, Box, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import Link from "next/link";
@@ -36,10 +36,14 @@ export function PluginsBrowser() {
   const { data: plugins, loading, error } = usePlugins(query || undefined);
   const { findingsByFile } = useLintFindings();
 
-  const sorted = [...plugins].sort((a, b) => {
-    if (sortBy === "invocations") return b.totalInvocations - a.totalInvocations;
-    return a.plugin.name.localeCompare(b.plugin.name);
-  });
+  const sorted = useMemo(
+    () =>
+      [...plugins].sort((a, b) => {
+        if (sortBy === "invocations") return b.totalInvocations - a.totalInvocations;
+        return a.plugin.name.localeCompare(b.plugin.name);
+      }),
+    [plugins, sortBy],
+  );
 
   const virtualizer = useVirtualizer({
     count: sorted.length,
