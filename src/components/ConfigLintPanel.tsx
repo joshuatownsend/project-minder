@@ -1,8 +1,9 @@
 "use client";
 
 import type { LintReport, LintFinding, LintTarget, AuditFindingSeverity } from "@/lib/types";
+import { pluralize } from "@/lib/utils";
 import { FindingCard } from "./ui/FindingCard";
-import type { SeverityTone } from "./ui/design";
+import { severityTokens, type SeverityTone } from "./ui/design";
 
 interface Props {
   report: LintReport;
@@ -34,19 +35,14 @@ const TONE: Record<AuditFindingSeverity, SeverityTone> = {
   P2: "med",
 };
 
-const ENGINE_LABEL: Record<string, string> = {
-  adapter: "adapter",
-  library: "library",
-  vendored: "vendored",
+const SEVERITY_CHIP_COLORS: Record<AuditFindingSeverity, { bg: string; text: string }> = {
+  P0: { bg: "rgba(239,68,68,0.12)", text: severityTokens.crit.text },
+  P1: { bg: "rgba(245,158,11,0.12)", text: severityTokens.high.text },
+  P2: { bg: "rgba(99,102,241,0.10)", text: "var(--text-secondary)" },
 };
 
 function SeverityChip({ sev, count }: { sev: AuditFindingSeverity; count: number }) {
-  const colors: Record<AuditFindingSeverity, { bg: string; text: string }> = {
-    P0: { bg: "rgba(239,68,68,0.12)", text: "var(--status-blocked-text)" },
-    P1: { bg: "rgba(245,158,11,0.12)", text: "var(--status-paused-text)" },
-    P2: { bg: "rgba(99,102,241,0.10)", text: "var(--text-secondary)" },
-  };
-  const c = colors[sev];
+  const c = SEVERITY_CHIP_COLORS[sev];
   return (
     <span
       style={{
@@ -66,7 +62,7 @@ function SeverityChip({ sev, count }: { sev: AuditFindingSeverity; count: number
 }
 
 function TargetGroup({ target, findings }: { target: LintTarget; findings: LintFinding[] }) {
-  const countsByBySev = SEVERITY_ORDER.map((s) => ({
+  const countsBySev = SEVERITY_ORDER.map((s) => ({
     sev: s,
     count: findings.filter((f) => f.severity === s).length,
   })).filter((x) => x.count > 0);
@@ -90,7 +86,7 @@ function TargetGroup({ target, findings }: { target: LintTarget; findings: LintF
         >
           {TARGET_LABEL[target]}
         </span>
-        {countsByBySev.map(({ sev, count }) => (
+        {countsBySev.map(({ sev, count }) => (
           <SeverityChip key={sev} sev={sev} count={count} />
         ))}
       </div>
@@ -101,7 +97,7 @@ function TargetGroup({ target, findings }: { target: LintTarget; findings: LintF
             tone={TONE[f.severity]}
             toneLabel={f.severity}
             tag={f.code}
-            rightSlot={ENGINE_LABEL[f.engine]}
+            rightSlot={f.engine}
           >
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
               <span
@@ -125,34 +121,36 @@ function TargetGroup({ target, findings }: { target: LintTarget; findings: LintF
                   {f.fix}
                 </span>
               )}
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "2px" }}>
-                {f.file && (
-                  <span
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "0.65rem",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    {f.file}
-                  </span>
-                )}
-                {f.docsUrl && (
-                  <a
-                    href={f.docsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "0.65rem",
-                      color: "var(--text-accent)",
-                      textDecoration: "none",
-                    }}
-                  >
-                    docs ↗
-                  </a>
-                )}
-              </div>
+              {(f.file || f.docsUrl) && (
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  {f.file && (
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.65rem",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {f.file}
+                    </span>
+                  )}
+                  {f.docsUrl && (
+                    <a
+                      href={f.docsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.65rem",
+                        color: "var(--text-accent)",
+                        textDecoration: "none",
+                      }}
+                    >
+                      docs ↗
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
           </FindingCard>
         ))}
@@ -175,7 +173,6 @@ export function ConfigLintPanel({ report }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-      {/* Summary bar */}
       <div
         style={{
           display: "flex",
@@ -201,12 +198,11 @@ export function ConfigLintPanel({ report }: Props) {
             color: "var(--text-muted)",
           }}
         >
-          {findings.length} finding{findings.length !== 1 ? "s" : ""} across{" "}
-          {activeTargets.length} surface{activeTargets.length !== 1 ? "s" : ""}
+          {pluralize(findings.length, "finding")} across{" "}
+          {pluralize(activeTargets.length, "surface")}
         </span>
       </div>
 
-      {/* Per-target groups */}
       {activeTargets.length === 0 ? (
         <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: 0 }}>
           No findings — all config surfaces are clean.
@@ -217,7 +213,7 @@ export function ConfigLintPanel({ report }: Props) {
         ))
       )}
 
-      {/* Engine errors — always rendered when present so "no findings" ≠ "engine broken" */}
+      {/* always rendered when present so "no findings" ≠ "engine broken" */}
       {engineErrors.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           <span
@@ -245,7 +241,7 @@ export function ConfigLintPanel({ report }: Props) {
                 fontFamily: "var(--font-mono)",
               }}
             >
-              <span style={{ color: "var(--status-blocked-text)", fontWeight: 600 }}>
+              <span style={{ color: severityTokens.crit.text, fontWeight: 600 }}>
                 [{e.engine}{e.target ? `/${e.target}` : ""}]
               </span>{" "}
               {e.message}
