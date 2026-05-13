@@ -21,6 +21,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "gsdPlanning",
   "agentView",
   "claudeStatusAlerts",
+  "configLint",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -175,6 +176,14 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Polls status.claude.com for incidents and shows a banner + toast when Claude services are degraded. Defaults on.",
     group: "active",
     appliesAt: "ui",
+    wired: true,
+  },
+  {
+    key: "configLint",
+    label: "Config Lint",
+    description: "Workspace-wide config audit: CLAUDE.md, skills, agents, commands, hooks, MCPs, plugins, output styles, and LSPs.",
+    group: "passive",
+    appliesAt: "scan",
     wired: true,
   },
 ];

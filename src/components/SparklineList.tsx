@@ -241,9 +241,9 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                     key={vItem.key}
                     data-index={vItem.index}
                     ref={virtualizer.measureElement}
-                    role="row"
-                    onClick={() => router.push(`/project/${project.slug}`)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/project/${project.slug}`); } }}
+                    role="link"
+                    onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; router.push(`/project/${project.slug}`); }}
+                    onKeyDown={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/project/${project.slug}`); } }}
                     tabIndex={0}
                     aria-label={`Open ${project.name}`}
                     className="sparkline-row"
