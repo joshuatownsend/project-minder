@@ -10,6 +10,17 @@ interface InstallStatus {
   installed: boolean;
   hookUrl: string | null;
   eventsRegistered: string[];
+  lastReceivedAt: number | null;
+}
+
+function formatRelativeMs(ms: number | null | undefined): string {
+  if (ms == null) return "No hooks received this session";
+  const ago = Math.floor((Date.now() - ms) / 1000);
+  if (!isFinite(ago) || ago < 0) return "Just now";
+  if (ago < 5) return "Just now";
+  if (ago < 60) return `${ago}s ago`;
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  return `${Math.floor(ago / 3600)}h ago`;
 }
 
 export function LiveActivitySection({
@@ -27,10 +38,16 @@ export function LiveActivitySection({
   const awaitingPrefs = config?.notificationPrefs?.events?.["awaiting-permission"] ?? {};
 
   useEffect(() => {
-    fetch("/api/live-activity/install")
-      .then((r) => r.json())
-      .then((d) => setStatus(d as InstallStatus))
-      .catch(() => {});
+    let cancelled = false;
+    function refresh() {
+      fetch("/api/live-activity/install")
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setStatus(d as InstallStatus); })
+        .catch(() => {});
+    }
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const currentOrigin = typeof window !== "undefined" ? window.location.origin : "";
@@ -120,7 +137,7 @@ export function LiveActivitySection({
 
       {/* Install status + actions */}
       <div style={{ ...S.card, marginBottom: "16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
           <span style={{
             display: "inline-block", width: "8px", height: "8px", borderRadius: "50%",
             background: status?.installed ? "var(--status-active-text)" : "var(--border-default)",
@@ -130,10 +147,37 @@ export function LiveActivitySection({
             {status === null
               ? "Checking…"
               : status.installed
-              ? `Hooks installed (${status.eventsRegistered.length} events)`
+              ? "Hooks installed"
               : "Hooks not installed"}
           </span>
         </div>
+
+        {status?.installed && status.eventsRegistered.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "10px" }}>
+            {status.eventsRegistered.map((ev) => (
+              <span key={ev} style={{
+                fontSize: "0.65rem",
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: "var(--card-bg-2,#1a1a1a)",
+                color: "var(--text-3,#888)",
+                border: "1px solid var(--border-default,#333)",
+                fontFamily: "var(--font-mono)",
+              }}>
+                {ev}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {status?.installed && (
+          <div style={{ ...S.muted, marginBottom: "10px", fontSize: "0.72rem" }}>
+            Last hook:{" "}
+            <span style={{ color: status.lastReceivedAt !== null ? "var(--status-active-text)" : undefined }}>
+              {formatRelativeMs(status.lastReceivedAt)}
+            </span>
+          </div>
+        )}
 
         {status?.installed && status.hookUrl && (
           <div style={{ ...S.muted, marginBottom: "12px", fontFamily: "var(--font-mono)", fontSize: "0.72rem" }}>

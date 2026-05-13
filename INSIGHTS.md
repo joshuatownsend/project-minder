@@ -30,6 +30,7 @@ The `is_error` flag in Anthropic's tool_result format is the canonical failure s
 
 ---
 
+
 <!-- insight:0ad51501700f | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T20:51:56.249Z -->
 ## ★ Insight
 The `max()` strategy makes sense for historical analytics ("did this session ever get close to the limit?") but breaks for a live kanban where the user wants "is this session in danger *right now*?". After a `/compact`, the terminal drops to ~10% but our chip is frozen at the historical peak. Using the **last** assistant turn's value (turns are chronological in the JSONL) gives current state.

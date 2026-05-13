@@ -5,11 +5,16 @@ import {
   removeLiveActivityHooks,
   getLiveActivityHookStatus,
 } from "@/lib/hooks/applyLiveActivity";
+import { getLastHookReceivedAt } from "@/lib/hooks/buffer";
 
 /** GET /api/live-activity/install — return current install status including registered hookUrl. */
 export async function GET(): Promise<NextResponse> {
   const [status, config] = await Promise.all([getLiveActivityHookStatus(), readConfig()]);
-  return NextResponse.json({ ...status, hookUrl: config.liveActivity?.hookUrl ?? null });
+  return NextResponse.json({
+    ...status,
+    hookUrl: config.liveActivity?.hookUrl ?? null,
+    lastReceivedAt: getLastHookReceivedAt(),
+  });
 }
 
 /** POST /api/live-activity/install — install hooks into ~/.claude/settings.json. */
@@ -48,7 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl };
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status, hookUrl });
+    return NextResponse.json({ ok: true, ...status, hookUrl, lastReceivedAt: getLastHookReceivedAt() });
   } catch (err) {
     console.error("[live-activity] install failed:", err);
     return NextResponse.json(
@@ -66,7 +71,7 @@ export async function DELETE(): Promise<NextResponse> {
       if (c.liveActivity) delete c.liveActivity.hookUrl;
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status, hookUrl: null });
+    return NextResponse.json({ ok: true, ...status, hookUrl: null, lastReceivedAt: getLastHookReceivedAt() });
   } catch (err) {
     console.error("[live-activity] remove failed:", err);
     return NextResponse.json(

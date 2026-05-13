@@ -53,6 +53,12 @@ export interface LiveAgentSession {
   maxContextFill?: number;
   /** Number of sub-agents currently spawned but not yet stopped (from hook buffer). */
   subagentsInFlight?: number;
+  /**
+   * True when the most recent PostToolUse hook event for this session carried a
+   * failure signal (is_error or non-zero return_code) within the last 2 minutes.
+   * Clears automatically once a subsequent successful tool event arrives.
+   */
+  lastToolFailed?: boolean;
 }
 
 /** A single entry from `~/.claude/daemon/roster.json`. All fields optional — schema is undocumented. */

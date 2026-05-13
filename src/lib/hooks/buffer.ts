@@ -7,6 +7,8 @@ export interface HookEvent {
   receivedAt: number; // epoch ms
   toolName?: string;
   message?: string;
+  /** True when a PostToolUse event carried a failure signal (is_error or non-zero return_code). */
+  toolFailed?: boolean;
 }
 
 export interface LiveSession {
@@ -26,6 +28,7 @@ const g = globalThis as unknown as {
   __minderLiveSessions?: Map<string, LiveSession>;
   __minderAwaiting?: Set<string>;
   __minderAwaitingReported?: Set<string>;
+  __minderLastHookReceivedAt?: number;
 };
 
 function ensureGlobals(): void {
@@ -41,6 +44,12 @@ export function pushHookEvent(slug: string, event: HookEvent): void {
   arr.push(event);
   if (arr.length > RING_CAP) arr.splice(0, arr.length - RING_CAP);
   g.__minderHookBuffers!.set(slug, arr);
+  g.__minderLastHookReceivedAt = event.receivedAt;
+}
+
+/** Returns epoch ms of the most recently received hook event, or null if none yet. */
+export function getLastHookReceivedAt(): number | null {
+  return g.__minderLastHookReceivedAt ?? null;
 }
 
 export function updateLiveSession(

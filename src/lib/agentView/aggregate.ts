@@ -49,6 +49,19 @@ export function countSubagentsInFlight(events: readonly HookEvent[]): number {
   return Math.max(0, spawns - stops);
 }
 
+const TOOL_FAILURE_WINDOW_MS = 120_000;
+
+/** Returns true if the most recent PostToolUse in the buffer failed within the last 2 minutes. */
+export function hasRecentToolFailure(events: readonly HookEvent[], now: number): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.hookEventName !== "PostToolUse") continue;
+    if (now - e.receivedAt > TOOL_FAILURE_WINDOW_MS) return false;
+    return e.toolFailed === true;
+  }
+  return false;
+}
+
 export async function aggregateLiveSessions(
   abandonThresholdMin = DEFAULT_ABANDON_MIN,
 ): Promise<LiveAgentSession[]> {
@@ -95,6 +108,7 @@ export async function aggregateLiveSessions(
 
     const rosterEvents = [...getHookBuffer(slug)].filter((e) => e.sessionId === sessionId);
     const rosterSubagentsInFlight = countSubagentsInFlight(rosterEvents);
+    const rosterToolFailed = hasRecentToolFailure(rosterEvents, now) || undefined;
 
     const session: LiveAgentSession = {
       sessionId,
@@ -115,6 +129,7 @@ export async function aggregateLiveSessions(
       livenessSource: "daemon",
       model: entry.model,
       subagentsInFlight: rosterSubagentsInFlight > 0 ? rosterSubagentsInFlight : undefined,
+      lastToolFailed: rosterToolFailed,
     };
     result.set(sessionId, session);
   }
@@ -156,6 +171,7 @@ export async function aggregateLiveSessions(
     const status: AgentSessionStatus = isAbandoned ? "stopped" : hookDerivedStatus;
 
     const hookSubagentsInFlight = countSubagentsInFlight(sessionHookEvents);
+    const hookToolFailed = hasRecentToolFailure(sessionHookEvents, now) || undefined;
 
     result.set(sessionId, {
       sessionId,
@@ -171,6 +187,7 @@ export async function aggregateLiveSessions(
       runningProcess: false,
       livenessSource: "hook",
       subagentsInFlight: hookSubagentsInFlight > 0 ? hookSubagentsInFlight : undefined,
+      lastToolFailed: hookToolFailed,
     });
   }
 

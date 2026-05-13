@@ -157,6 +157,21 @@ export function AgentCard({ session, onPeek }: AgentCardProps) {
             +{session.subagentsInFlight}
           </span>
         )}
+        {session.lastToolFailed && (
+          <span
+            title="Most recent tool call failed"
+            style={{
+              fontSize: "0.55rem",
+              padding: "1px 5px",
+              borderRadius: 3,
+              background: "var(--amber-bg,#451a03)",
+              color: "var(--amber-text,#fbbf24)",
+              border: "1px solid var(--amber-border,#92400e)",
+            }}
+          >
+            ⚠ tool err
+          </span>
+        )}
       </div>
     </div>
   );
