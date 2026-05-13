@@ -4,11 +4,14 @@ import os from "os";
 import { encodePath } from "./claudeConversations";
 import { writeFileAtomic, withFileLock, renameWithRetry } from "../atomicWrite";
 import { isInside } from "../template/pathSafety";
+import { recordPreWrite } from "../configHistory";
 import {
   parseFrontmatter,
   validateTypedMemory,
   type FrontmatterError,
 } from "../memory/memoryFrontmatter";
+
+export const MAX_BYTES = 2 * 1024 * 1024;
 
 export const ARCHIVE_SUBDIR = "archive";
 /** Dot-prefix keeps the main scanner's `!n.startsWith(".")` filter from
@@ -33,12 +36,17 @@ export type MemoryWriteError =
   | { code: "WRITE_FAILED"; message: string }
   /** Client-fixable: malformed YAML, unknown type, or prefix↔type mismatch.
    *  Callers mapping to HTTP should return 400 (not 500). */
-  | { code: "FRONTMATTER_INVALID"; detail: FrontmatterError };
+  | { code: "FRONTMATTER_INVALID"; detail: FrontmatterError }
+  | { code: "TOO_LARGE" }
+  | { code: "MTIME_CONFLICT" };
 
 export interface MemoryWriteResult {
   ok: boolean;
   error?: MemoryWriteError;
   bytesWritten?: number;
+  mtimeMs?: number;
+  sizeBytes?: number;
+  backupId?: string | null;
 }
 
 export interface WriteMemoryOptions {
@@ -48,6 +56,14 @@ export interface WriteMemoryOptions {
    * -- the production write paths (editor save, seed promote) always validate.
    */
   skipTypeValidation?: boolean;
+  /**
+   * When set, the write fails with MTIME_CONFLICT if the file's current mtime
+   * differs by more than 1ms from this value. Pass 0 to assert the file does
+   * not exist yet. Omit to skip the check (last-write-wins).
+   */
+  expectedMtimeMs?: number;
+  /** Label used when recording the pre-write backup. Defaults to "memoryEditor". */
+  backupLabel?: string;
 }
 
 /**
@@ -82,6 +98,11 @@ export async function writeMemoryFile(
     }
   }
 
+  const contentBytes = Buffer.byteLength(content, "utf-8");
+  if (contentBytes > MAX_BYTES) {
+    return { ok: false, error: { code: "TOO_LARGE" } };
+  }
+
   const memoryDirAbs = path.resolve(memoryDirFor(projectPath));
   const targetPath = path.resolve(memoryDirAbs, stripped);
   if (!isInside(targetPath, memoryDirAbs)) {
@@ -90,8 +111,43 @@ export async function writeMemoryFile(
 
   try {
     await fs.mkdir(memoryDirAbs, { recursive: true });
-    await withFileLock(targetPath, () => writeFileAtomic(targetPath, content));
-    return { ok: true, bytesWritten: Buffer.byteLength(content, "utf-8") };
+    return await withFileLock(targetPath, async (): Promise<MemoryWriteResult> => {
+      if (options.expectedMtimeMs !== undefined) {
+        let currentMtime: number | null = null;
+        try {
+          const s = await fs.stat(targetPath);
+          currentMtime = s.mtimeMs;
+        } catch (statErr) {
+          if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr;
+          if (options.expectedMtimeMs !== 0) {
+            return { ok: false, error: { code: "MTIME_CONFLICT" } };
+          }
+        }
+        if (currentMtime !== null && Math.abs(currentMtime - options.expectedMtimeMs) > 1) {
+          return { ok: false, error: { code: "MTIME_CONFLICT" } };
+        }
+      }
+
+      let backupId: string | null = null;
+      try {
+        backupId = await recordPreWrite(targetPath, {
+          label: options.backupLabel ?? "memoryEditor",
+        });
+      } catch {
+        // backup is best-effort; do not block the save
+      }
+
+      await writeFileAtomic(targetPath, content);
+
+      const newStat = await fs.stat(targetPath);
+      return {
+        ok: true,
+        bytesWritten: contentBytes,
+        mtimeMs: newStat.mtimeMs,
+        sizeBytes: newStat.size,
+        backupId,
+      };
+    });
   } catch (err) {
     return {
       ok: false,

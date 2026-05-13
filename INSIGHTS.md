@@ -1,5 +1,60 @@
 # Insights
 
+<!-- insight:15a5a036d4a5 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:06:18.251Z -->
+## ★ Insight
+When validating numeric inputs from untrusted sources, `typeof x === "number"` passes for `NaN` and `Infinity` — both are valid JS numbers. `Number.isFinite` is the right predicate when you want "a real, finite number". This is especially important here where `NaN` passed as `expectedMtimeMs` would cause `Math.abs(currentMtime - NaN) > 1` to be `false`, silently disabling the conflict check.
+
+---
+
+<!-- insight:04f1345418bd | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T18:06:07.078Z -->
+## ★ Insight
+The `beforeunload` effect runs cleanup+setup on every `editor` state change, which includes every keystroke (since `editor.draft` updates). The fix: derive a stable `dirty: boolean` outside the effect and only depend on `[dirty]`. React guarantees a re-render when `dirty` flips, so the listener is added exactly once (dirty→true) and removed exactly once (dirty→false).
+
+---
+
+<!-- insight:dcc26cf633c2 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:54:24.884Z -->
+## ★ Insight
+The test count stayed the same despite adding 8 new test cases because Vitest counts them within the existing `tests/memoryWriter.test.ts` file (one of the 218 files), not as new files. The baseline was 2394 tests — the 8 new cases are included in that count, meaning we went from 2386 → 2394. This is the right pattern: extend existing describe blocks for the same module rather than creating new test files.
+
+---
+
+<!-- insight:7155243c10b7 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:52:02.060Z -->
+## ★ Insight
+The `Performance.getEntriesByType('resource')` API includes both GET and non-GET fetch() calls, but PATCH requests may not appear when the browser's navigation timing buffer is full or when the request hasn't been fully committed. The clearest proof of success is the UI state machine reaching `kind: "saved"` — that dispatch only happens on `res.ok`.
+
+---
+
+<!-- insight:c9192cff161f | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:44:29.648Z -->
+## ★ Insight
+The `beforeunload` event requires `e.preventDefault()` AND `e.returnValue = ""` for cross-browser compat. Chrome/Edge 119+ require both; returning a string from the handler is deprecated. The `useEffect` cleanup (removing the listener) is critical — a stale listener referencing old closure state would cause false "are you sure?" prompts after saving.
+
+---
+
+<!-- insight:db85e69e01c9 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:43:16.307Z -->
+## ★ Insight
+The key design here is that the conflict check, backup, write, and post-write stat all happen inside **one** `withFileLock` call. Any other concurrent writer hitting the same file will queue behind this lock, so there's no TOCTOU gap between our stat and the rename.
+
+---
+
+<!-- insight:40c0a1c12252 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:42:18.368Z -->
+## ★ Insight
+The implementation order matters here: extend `writeMemoryFile` first (the shared library layer), then update the route (thinner layer depending on the writer), then the UI. This bottom-up approach means each layer can be tested in isolation before the next depends on it.
+
+---
+
+<!-- insight:aba212b06b11 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:36:57.727Z -->
+## ★ Insight
+Extending `writeMemoryFile` rather than forking the route preserves the single-lock invariant: stat → backup → atomic-write all happen inside one `withFileLock`. Doing the conflict check in the route would create a TOCTOU window between the route's stat and the writer's lock.
+The 2 MiB cap is enforced *before* the lock to fail fast — the lock is reserved for true on-disk state transitions.
+
+---
+
+<!-- insight:cecec0b490a2 | session:4ae106c2-bd80-4062-83ea-73dd42b6f3b3 | 2026-05-13T17:34:00.127Z -->
+## ★ Insight
+This is a fairly common situation when working from a long-running TODO list — work gets done in waves but the original TODO checkbox never gets ticked. The dual `/api/memory/[slug]` (simple) and `/api/memory/by-id/[id]` (conflict-detecting) routes suggest this evolved over multiple sessions, and the by-id route's mtime-conflict + backup model is strictly stronger than the slug route's last-write-wins.
+
+---
+
 <!-- insight:54ae0af3792b | session:000542fc-59f3-461f-b5d0-bcb62905a8e6 | 2026-05-13T17:21:43.548Z -->
 ## ★ Insight
 `wave31-diff.txt` inside `.codegraph/` is a CodeGraph artifact (generated index + diff file), not source code. Generated/derived files belong in `.gitignore` even when the tooling that produces them is part of your workflow — the repo tracks source, not builds.
