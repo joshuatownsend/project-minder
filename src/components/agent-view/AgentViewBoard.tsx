@@ -5,8 +5,11 @@ import { useAgentViewStream } from "@/lib/agentView/useAgentViewStream";
 import { AgentCard } from "./AgentCard";
 import { AgentPeekPanel } from "./AgentPeekPanel";
 import { AgentViewToolbar, type AgentViewFilters } from "./AgentViewToolbar";
+import { SpendBanner } from "./SpendBanner";
+import { useBudgetAlerts } from "@/hooks/useBudgetAlerts";
 import type { LiveAgentSession, AgentSessionStatus, ConnectionState } from "@/lib/agentView/types";
 import { ALL_STATUSES, STATUS_ORDER } from "@/lib/agentView/types";
+import { useConfig } from "@/components/ConfigProvider";
 
 const COLUMN_ORDER: AgentSessionStatus[] = ["waiting", "working", "idle", "completed", "failed", "stopped"];
 const COLUMN_LABELS: Record<AgentSessionStatus, string> = {
@@ -47,6 +50,11 @@ export function AgentViewBoard() {
     sort: "recent",
   });
 
+  // Budget config — sourced from ConfigProvider (already fetched at app level)
+  const config = useConfig();
+
+  useBudgetAlerts(sessions, config?.budgets?.sessionUsd);
+
   const projectNames = useMemo(
     () => [...new Set(sessions.map((s) => s.projectName))].sort(),
     [sessions],
@@ -84,6 +92,8 @@ export function AgentViewBoard() {
         sessionCount={filtered.length}
         lastEventAt={lastEventAt}
       />
+
+      <SpendBanner tier={config?.subscriptionTier} budgets={config?.budgets} />
 
       {isEmpty ? (
         <EmptyState connectionState={connectionState} />
@@ -131,7 +141,12 @@ export function AgentViewBoard() {
                 {/* Cards */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {cols.map((s) => (
-                    <AgentCard key={s.sessionId} session={s} onPeek={setPeekedSession} />
+                    <AgentCard
+                      key={s.sessionId}
+                      session={s}
+                      onPeek={setPeekedSession}
+                      sessionBudgetUsd={config?.budgets?.sessionUsd}
+                    />
                   ))}
                   {cols.length === 0 && (
                     <div style={{

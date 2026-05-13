@@ -16,9 +16,10 @@ const STATUS_COLORS: Record<AgentSessionStatus, { bg: string; text: string; bord
 interface AgentCardProps {
   session: LiveAgentSession;
   onPeek: (session: LiveAgentSession) => void;
+  sessionBudgetUsd?: number;
 }
 
-export function AgentCard({ session, onPeek }: AgentCardProps) {
+export function AgentCard({ session, onPeek, sessionBudgetUsd }: AgentCardProps) {
   const sc = STATUS_COLORS[session.status];
   const cost = session.costEstimate != null && session.costEstimate > 0
     ? formatCostCompact(session.costEstimate)
@@ -26,6 +27,16 @@ export function AgentCard({ session, onPeek }: AgentCardProps) {
   const ctxPct = session.maxContextFill != null
     ? Math.round(session.maxContextFill * 100)
     : null;
+
+  const budgetRatio =
+    sessionBudgetUsd != null && sessionBudgetUsd > 0 && session.costEstimate != null
+      ? session.costEstimate / sessionBudgetUsd
+      : null;
+  const budgetShadow =
+    budgetRatio == null ? undefined
+    : budgetRatio >= 1.0 ? "0 0 0 1.5px var(--red-border,#7f1d1d)"
+    : budgetRatio >= 0.8 ? "0 0 0 1.5px var(--amber-border,#92400e)"
+    : undefined;
 
   return (
     <div
@@ -43,7 +54,8 @@ export function AgentCard({ session, onPeek }: AgentCardProps) {
         flexDirection: "column",
         gap: 6,
         outline: "none",
-        transition: "filter 0.1s",
+        transition: "filter 0.1s, box-shadow 0.3s",
+        boxShadow: budgetShadow,
       }}
       onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.15)")}
       onMouseLeave={(e) => (e.currentTarget.style.filter = "")}

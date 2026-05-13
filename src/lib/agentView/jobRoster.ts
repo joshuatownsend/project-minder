@@ -45,7 +45,8 @@ function ensureGlobals(): void {
 
 export function slugFromPath(projectPath?: string): string {
   if (!projectPath) return "__unknown__";
-  return toSlug(path.basename(projectPath));
+  const normalized = projectPath.replace(/\\/g, "/");
+  return toSlug(path.basename(normalized));
 }
 
 async function readJobState(jobId: string): Promise<JobStateEntry | null> {

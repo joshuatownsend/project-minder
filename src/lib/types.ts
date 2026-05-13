@@ -454,6 +454,17 @@ export const SCHEDULE_MODES: { value: ScheduleMode; label: string }[] = [
 
 /** Pricing override rule. Placeholder shape; Wave 8 (Cluster S) tightens
  *  the contract and adds the Settings editor. */
+/** Claude.ai subscription tier for budget cap reference. */
+export type SubscriptionTier = "pro" | "max5x" | "max20x" | "api";
+
+/** Per-session / per-day / per-hour spending limits for Agent View alerts. */
+export interface AgentBudgets {
+  /** Maximum USD per session — card tints amber at 80%, red at 100%. Triggers OS notification on crossing. */
+  sessionUsd?: number;
+  /** Maximum USD per day — drives the SpendBanner progress bar on /agent-view. */
+  dailyUsd?: number;
+}
+
 export interface PricingRule {
   /** Wildcard pattern matched against the model id (e.g. "claude-opus-*"). */
   pattern: string;
@@ -523,6 +534,10 @@ export interface MinderConfig {
   enabledAdapters?: string[];
   /** User-defined keyboard shortcut overrides. Keys are ShortcutActionId strings. Wave 12.2. */
   keyboardShortcuts?: Record<string, string>;
+  /** Claude.ai subscription tier — used to compute the daily spend cap reference in Agent View. */
+  subscriptionTier?: SubscriptionTier;
+  /** Per-session and per-day spend limits that drive Agent View budget alerts. */
+  budgets?: AgentBudgets;
   /** Agent View / Kanban live observability config. */
   agentView?: {
     /** Sessions inactive longer than this drop to "stopped". Defaults to 180. */

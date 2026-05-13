@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
-import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES } from "@/lib/types";
+import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES, SubscriptionTier } from "@/lib/types";
 import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
@@ -308,6 +308,33 @@ export async function PATCH(request: NextRequest) {
       }, { status: 400 });
     }
     patches.push((c) => { c.enabledAdapters = ids; });
+  }
+
+  const VALID_TIERS: SubscriptionTier[] = ["pro", "max5x", "max20x", "api"];
+
+  if (body.subscriptionTier !== undefined) {
+    if (body.subscriptionTier !== null && !VALID_TIERS.includes(body.subscriptionTier as SubscriptionTier)) {
+      return NextResponse.json({ error: `subscriptionTier must be one of: ${VALID_TIERS.join(", ")} or null` }, { status: 400 });
+    }
+    patches.push((c) => { c.subscriptionTier = body.subscriptionTier === null ? undefined : body.subscriptionTier as SubscriptionTier; });
+  }
+
+  if (body.budgets !== undefined) {
+    if (typeof body.budgets !== "object" || body.budgets === null || Array.isArray(body.budgets)) {
+      return NextResponse.json({ error: "budgets must be an object" }, { status: 400 });
+    }
+    const { sessionUsd, dailyUsd } = body.budgets as Record<string, unknown>;
+    for (const [key, val] of [["sessionUsd", sessionUsd], ["dailyUsd", dailyUsd]] as const) {
+      if (val !== undefined && val !== null && (typeof val !== "number" || !isFinite(val) || val < 0 || val > 100000)) {
+        return NextResponse.json({ error: `budgets.${key} must be a finite number in 0–100000 or null` }, { status: 400 });
+      }
+    }
+    patches.push((c) => {
+      c.budgets = {
+        ...(sessionUsd != null ? { sessionUsd: sessionUsd as number } : {}),
+        ...(dailyUsd != null ? { dailyUsd: dailyUsd as number } : {}),
+      };
+    });
   }
 
   if (body.keyboardShortcuts !== undefined) {
