@@ -1,5 +1,35 @@
 # Insights
 
+<!-- insight:398c3a902cd5 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:52:13.362Z -->
+## ★ Insight
+The PATCH handler uses a "validate-then-patch" pattern (lines 31-358) where validation failures short-circuit with a 400, but all patches are collected in an array and applied atomically in a single `mutateConfig` call. This means a multi-field PATCH either fully succeeds or fully rejects — no half-written config states. The `patches.length === 0` guard at line 352 is the reason new fields must be explicitly handled; unknown fields are silently ignored during collection but trip the empty-patches guard if they're the *only* thing sent.
+
+---
+
+<!-- insight:13c11ae35782 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:36:27.349Z -->
+## ★ Insight
+Separating the **pure `computeAlerts` function** from the `useBudgetAlerts` hook makes the edge-detection logic independently testable without React — a key pattern for hooks that contain business logic. The hook calls the pure function and fires side effects; the test validates only the pure function.
+
+---
+
+<!-- insight:8822bd64f718 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:32:58.963Z -->
+## ★ Insight
+The Wave 6 alert system uses a **threshold edge-detection** pattern: the `useRef<Map<sessionId, Set<threshold>>>` persists which thresholds already fired for each session. Without this, every SSE delta that keeps cost above 80% would re-fire the notification — the ref-backed set ensures each threshold triggers exactly once per session.
+
+---
+
+<!-- insight:c9e1faba8c40 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:27:07.139Z -->
+## ★ Insight
+The `budgetMonitor.ts` server-side event-bus subscriber from the roadmap is now redundant — Wave 3 already wired `costEstimate` onto `LiveAgentSession`. Budget alerting can be entirely client-side: compare `costEstimate / sessionBudget` in the card, fire a browser `Notification` on threshold edge. No new server infrastructure needed.
+
+---
+
+<!-- insight:1aa6ddabeb84 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-13T01:06:27.920Z -->
+## ★ Insight
+All three issues stem from the same root cause: **the POST/DELETE routes were written before `lastReceivedAt` was added to the `InstallStatus` interface**, so they never got the field. The client side blindly trusts the shape, and TypeScript didn't catch it because the return type was `unknown` at the call site. This is a classic "interface evolved after implementation" gap — the fix is: make the interface the single source of truth first, then wire all callers.
+
+---
+
 <!-- insight:403bb68b79a7 | session:a5c28f7a-43cb-44d7-83b6-9b1cb835fac6 | 2026-05-12T23:40:20.595Z -->
 ## ★ Insight
 Extracting `parseJsonlPath` as a pure function (no I/O, no globalThis) is the key move that makes testing trivial. The watcher's stateful behavior (debounce, fs.watch, globalThis singleton) is hard to unit-test — but the logic that matters (path → {projectSlug, sessionId}) is just string manipulation. Test the pure core, trust the integration via browser.

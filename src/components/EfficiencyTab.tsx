@@ -11,7 +11,7 @@ import type {
 } from "@/lib/scanner/wasteOptimizer";
 import type { YieldResult, YieldOutcome } from "@/lib/usage/yieldAnalysis";
 import { WORK_MODE_DISPLAY, workModeToSegments, type WorkMode, type WorkModeBreakdown } from "@/lib/usage/workMode";
-import { formatPct, formatTokensOrDash } from "@/lib/format";
+import { formatCost, formatPct, formatTokensOrDash } from "@/lib/format";
 import { FindingCard } from "./ui/FindingCard";
 import type { SeverityTone } from "./ui/design";
 
@@ -59,12 +59,6 @@ function outcomeColor(o: YieldOutcome): string {
     case "reverted": return "var(--status-error-text)";
     case "abandoned": return "var(--text-muted)";
   }
-}
-
-function formatUsd(n: number): string {
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
 }
 
 // ── Subcomponents ────────────────────────────────────────────────────────────
@@ -266,7 +260,7 @@ export function EfficiencyTab({ slug }: EfficiencyTabProps) {
                 label="$/Shipped Commit"
                 value={
                   yieldReport.report.dollarsPerShippedCommit !== null
-                    ? formatUsd(yieldReport.report.dollarsPerShippedCommit)
+                    ? formatCost(yieldReport.report.dollarsPerShippedCommit)
                     : "—"
                 }
                 color="var(--text-primary)"

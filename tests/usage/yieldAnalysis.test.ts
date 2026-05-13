@@ -7,23 +7,13 @@ import {
 } from "@/lib/usage/yieldAnalysis";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { CommitMeta } from "@/lib/scanner/git";
+import { makeTurn } from "./fixtures/turn";
 
-function turn(args: Partial<UsageTurn> & {
-  role: "user" | "assistant";
+function turn(args: Parameters<typeof makeTurn>[0] & {
   sessionId: string;
   timestamp: string;
-}): UsageTurn {
-  return {
-    projectSlug: "p",
-    projectDirName: "p",
-    model: "claude-sonnet-4-6",
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheCreateTokens: 0,
-    cacheReadTokens: 0,
-    toolCalls: [],
-    ...args,
-  };
+}) {
+  return makeTurn(args);
 }
 
 function commit(sha: string, dateIso: string, subject: string): CommitMeta {

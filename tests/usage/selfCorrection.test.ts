@@ -5,28 +5,21 @@ import {
   type SelfCorrectionReport,
 } from "@/lib/usage/selfCorrection";
 import type { UsageTurn } from "@/lib/usage/types";
+import { makeTurn } from "./fixtures/turn";
 
-function turn(args: Partial<UsageTurn> & {
+function turn(args: {
   role: "user" | "assistant";
   sessionId: string;
   model?: string;
   text?: string;
-}): UsageTurn {
-  return {
-    timestamp: "2026-01-01T00:00:00Z",
-    projectSlug: "p",
-    projectDirName: "p",
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheCreateTokens: 0,
-    cacheReadTokens: 0,
-    toolCalls: [],
-    model: args.model ?? "claude-sonnet-4-6",
-    assistantText: args.role === "assistant" ? args.text : undefined,
-    userMessageText: args.role === "user" ? args.text : undefined,
+}) {
+  return makeTurn({
     role: args.role,
     sessionId: args.sessionId,
-  };
+    ...(args.model !== undefined ? { model: args.model } : {}),
+    assistantText: args.role === "assistant" ? args.text : undefined,
+    userMessageText: args.role === "user" ? args.text : undefined,
+  });
 }
 
 // ── textHasSelfCorrection ───────────────────────────────────────────────────
