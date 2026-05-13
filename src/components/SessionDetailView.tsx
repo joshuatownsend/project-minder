@@ -512,6 +512,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const [distilledText, setDistilledText] = useState<string | undefined>(undefined);
   const [distilledAt, setDistilledAt] = useState<string | undefined>(undefined);
   const [replayIndex, setReplayIndex] = useState<number | undefined>(undefined);
+  useEffect(() => { setReplayIndex(undefined); }, [sessionId]);
   useDocumentTitle(data ? (data.projectPath?.split(/[\\/]/).pop() ?? "Session") : "Session");
 
   const retrySpans = useMemo(
@@ -849,6 +850,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
                     max={data.timeline.length - 1}
                     value={replayIndex ?? data.timeline.length - 1}
                     onChange={(e) => setReplayIndex(parseInt(e.target.value, 10))}
+                    aria-label="Replay scrubber"
                     style={{ flex: 1, accentColor: "var(--accent)", cursor: "pointer" }}
                   />
                   <span style={{ flexShrink: 0, minWidth: "6ch", textAlign: "right" }}>
