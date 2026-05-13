@@ -1,8 +1,13 @@
 import type { UsageTurn, OneShotStats } from "@/lib/usage/types";
 
-const EDIT_WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
+export const EDIT_WRITE_TOOLS = new Set([
+  "Edit",
+  "Write",
+  "MultiEdit",
+  "NotebookEdit",
+]);
 
-const VERIFICATION_PATTERN =
+export const VERIFICATION_PATTERN =
   /\b(test|vitest|jest|pytest|npm test|npm run test|build|lint|tsc|eslint|check)\b/i;
 
 const ERROR_PATTERNS = [

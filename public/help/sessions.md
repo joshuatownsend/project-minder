@@ -83,6 +83,10 @@ Chronological list of all events: user prompts, assistant responses, tool calls,
 
 **Thinking blocks** are collapsible. Click to expand an extended-thinking event and read the full reasoning trace (up to ~3000 characters). When the SQLite index is active (the default), thinking content is not stored in the database — it is fetched on demand from the original JSONL at the recorded byte offset. If the file has been moved or deleted, the block shows "Thinking content unavailable for this turn." rather than silently hiding the section.
 
+**Replay scrubber** — a slider above the event list lets you scrub through the session as if rewinding a recording. Drag left to hide later events and see what the conversation looked like at any earlier point. The counter shows the current position (e.g. `47 / 184`). Click **Reset** to return to the full view. Pure client-side; no refetch required.
+
+**Retry cycle highlights** — when the session contains Edit/Write → Bash(test) → re-Edit patterns (the structural signature of Claude trying, verifying, and retrying), each event within those cycles is highlighted with an amber left border. The scrubber bar also shows a count badge (e.g. `2 retry cycles`) when any are detected. This makes it easy to identify where Claude had to course-correct.
+
 ### Tools
 Bar chart showing which tools were used and how many times.
 
