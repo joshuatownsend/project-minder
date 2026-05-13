@@ -69,6 +69,12 @@ Sessions that have been inactive longer than the **Abandon threshold** (default 
 
 **Insights tab in the peek panel.** The peek drawer now has a third tab — **Insights** — showing all `★ Insight` blocks written during this session. Sourced directly from the session JSONL (not INSIGHTS.md) so freshly-written insights appear within seconds of being produced. A count badge on the tab header lights up as soon as the first insight lands.
 
+## Wave 6: What's new
+
+**Spending limits and budget alerts.** Configure a per-session budget in Settings → Cost → "Spending Limits". When a session's estimated cost approaches the limit, its Kanban card gains an amber ring at 80% and a red ring at 100%. An OS browser notification fires on each threshold crossing (at most once per session per page load). The notification prompt appears lazily on the first alert, not when you open the page.
+
+**Daily spend banner.** A new progress bar above the Kanban board shows today's total spend from all sessions, a burn-rate projection (extrapolated to a 24-hour day), and a progress bar toward your daily cap. Set your cap by choosing a subscription tier (Pro/Max 5×/Max 20×) in Settings → Cost, or enter a custom daily budget in USD. The banner turns amber at 70% of the cap and red at 90%. It stays hidden when no cap is configured and today's cost is zero.
+
 ## Wave 5: What's new
 
 **Near-instant session discovery.** A new filesystem watcher on `~/.claude/projects/` fires the moment Claude Code creates a new JSONL file for a fresh session. Previously, a session started with plain `claude` (no `--bg`) could take up to 21 seconds to appear on the board (6-second cache TTL + 15-second heartbeat). The watcher reduces that to roughly 200 milliseconds. No configuration required; works automatically as long as the `/agent-view` page is open in a browser tab.

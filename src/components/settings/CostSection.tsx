@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { MinderConfig, PricingRule, ScheduleMode } from "@/lib/types";
+import type { MinderConfig, PricingRule, ScheduleMode, SubscriptionTier } from "@/lib/types";
 import { SCHEDULE_MODES } from "@/lib/types";
+import { TIER_LABELS, getEffectiveDailyCapUsd } from "@/lib/agentView/tierCaps";
 import { S } from "./styles";
 import { SUPPORTED_CURRENCIES, CURRENCY_NAMES } from "@/lib/currencies";
 import { invalidateCurrencyCache } from "@/hooks/useCurrency";
@@ -48,6 +49,13 @@ export function CostSection({
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(config?.scheduleMode ?? "weekdays");
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
+  // Budget / subscription tier state
+  const [tier, setTier] = useState<SubscriptionTier | "">(config?.subscriptionTier ?? "");
+  const [sessionUsd, setSessionUsd] = useState<string>(String(config?.budgets?.sessionUsd ?? ""));
+  const [dailyUsd, setDailyUsd] = useState<string>(String(config?.budgets?.dailyUsd ?? ""));
+  const [budgetSaving, setBudgetSaving] = useState(false);
+  const [budgetMsg, setBudgetMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
   const quota = useQuota();
 
   useEffect(() => {
@@ -68,6 +76,18 @@ export function CostSection({
   useEffect(() => {
     setScheduleMode(config?.scheduleMode ?? "weekdays");
   }, [config?.scheduleMode]);
+
+  useEffect(() => {
+    setTier(config?.subscriptionTier ?? "");
+  }, [config?.subscriptionTier]);
+
+  useEffect(() => {
+    setSessionUsd(config?.budgets?.sessionUsd != null ? String(config.budgets.sessionUsd) : "");
+  }, [config?.budgets?.sessionUsd]);
+
+  useEffect(() => {
+    setDailyUsd(config?.budgets?.dailyUsd != null ? String(config.budgets.dailyUsd) : "");
+  }, [config?.budgets?.dailyUsd]);
 
   async function handleCurrencyChange(next: string) {
     setCurrency(next);
@@ -112,6 +132,34 @@ export function CostSection({
       setRulesMsg({ text: (err as Error).message, ok: false });
     } finally {
       setRulesSaving(false);
+    }
+  }
+
+  async function handleSaveBudgets() {
+    setBudgetSaving(true);
+    setBudgetMsg(null);
+    try {
+      const sessionVal = sessionUsd.trim() === "" ? undefined : parseFloat(sessionUsd);
+      const dailyVal = dailyUsd.trim() === "" ? undefined : parseFloat(dailyUsd);
+
+      if ((sessionVal != null && (isNaN(sessionVal) || sessionVal < 0)) ||
+          (dailyVal != null && (isNaN(dailyVal) || dailyVal < 0))) {
+        setBudgetMsg({ text: "Budget values must be positive numbers.", ok: false });
+        return;
+      }
+
+      await onConfigChange({
+        subscriptionTier: tier === "" ? undefined : tier,
+        budgets: {
+          ...(sessionVal != null ? { sessionUsd: sessionVal } : {}),
+          ...(dailyVal != null ? { dailyUsd: dailyVal } : {}),
+        },
+      });
+      setBudgetMsg({ text: "Budget settings saved.", ok: true });
+    } catch (err) {
+      setBudgetMsg({ text: (err as Error).message, ok: false });
+    } finally {
+      setBudgetSaving(false);
     }
   }
 
@@ -353,6 +401,94 @@ export function CostSection({
           Pricing rule changes apply to new session ingest immediately.
           Previously indexed session costs are not retroactively recalculated.
         </div>
+      </div>
+
+      {/* ── Spending Limits ──────────────────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "4px" }}>
+          Spending Limits
+        </div>
+        <div style={{ ...S.muted, marginBottom: "16px" }}>
+          Set a per-session budget to get an amber/red card glow and an OS notification when Claude Code
+          approaches or exceeds the limit. Choose your subscription tier (or enter a custom daily budget)
+          to see a daily spend progress bar on the Agent View board.
+        </div>
+
+        {/* Subscription tier */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
+          <label htmlFor="tier-select" style={{ ...S.label, flexShrink: 0, width: "120px" }}>Subscription</label>
+          <select
+            id="tier-select"
+            style={{ ...S.select, width: "260px" }}
+            value={tier}
+            onChange={(e) => setTier(e.target.value as SubscriptionTier | "")}
+          >
+            <option value="">— None / not set —</option>
+            {(Object.keys(TIER_LABELS) as SubscriptionTier[]).map((t) => (
+              <option key={t} value={t}>{TIER_LABELS[t]}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Per-session budget */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
+          <label htmlFor="session-budget-input" style={{ ...S.label, flexShrink: 0, width: "120px" }}>Session budget</label>
+          <input
+            id="session-budget-input"
+            type="number"
+            style={{ ...S.input, width: "120px", fontFamily: "var(--font-mono)", textAlign: "right" }}
+            value={sessionUsd}
+            placeholder="e.g. 0.50"
+            min={0}
+            step="any"
+            onChange={(e) => setSessionUsd(e.target.value)}
+          />
+          <span style={S.muted}>USD / session</span>
+        </div>
+
+        {/* Custom daily budget */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+          <label htmlFor="daily-budget-input" style={{ ...S.label, flexShrink: 0, width: "120px" }}>Daily budget</label>
+          <input
+            id="daily-budget-input"
+            type="number"
+            style={{ ...S.input, width: "120px", fontFamily: "var(--font-mono)", textAlign: "right" }}
+            value={dailyUsd}
+            placeholder="e.g. 2.00"
+            min={0}
+            step="any"
+            onChange={(e) => setDailyUsd(e.target.value)}
+          />
+          <span style={S.muted}>
+            USD / day
+            {tier && tier !== "api" && dailyUsd.trim() === "" && (
+              <> (using tier default: <strong>{getEffectiveDailyCapUsd(tier, undefined)?.toFixed(2)}</strong>)</>
+            )}
+          </span>
+        </div>
+
+        <button
+          style={{
+            ...S.btn,
+            background: "var(--info)",
+            color: "#fff",
+            borderColor: "var(--info)",
+            opacity: budgetSaving ? 0.4 : 1,
+          }}
+          disabled={budgetSaving}
+          onClick={handleSaveBudgets}
+        >
+          {budgetSaving ? "Saving…" : "Save limits"}
+        </button>
+
+        {budgetMsg && (
+          <div style={{
+            marginTop: "10px", fontSize: "0.74rem",
+            color: budgetMsg.ok ? "var(--status-active-text)" : "var(--status-error-text)",
+          }}>
+            {budgetMsg.text}
+          </div>
+        )}
       </div>
 
       {/* ── Quota Burndown ───────────────────────────────────────────────── */}
