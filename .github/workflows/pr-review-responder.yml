@@ -79,14 +79,14 @@ jobs:
           echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.pr_ref.outputs.head_ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20.19.0'   # pin to match CI
           cache: 'npm'
