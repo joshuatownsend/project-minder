@@ -5,9 +5,10 @@ vi.mock("@/lib/lint/library", () => ({
   runLibraryCli: vi.fn().mockResolvedValue([]),
 }));
 
-import { runLintEngine } from "@/lib/lint/engine";
+import { runLintEngine, runGlobalLint } from "@/lib/lint/engine";
 import { dedupeFindings } from "@/lib/lint/dedupe";
 import type { ClaudeMdAuditAbsent, ClaudeMdAuditPresent, LintFinding } from "@/lib/types";
+import type { AgentEntry, SkillEntry } from "@/lib/indexer/types";
 
 const ABSENT: ClaudeMdAuditAbsent = {
   hasClaudeMd: false,
@@ -64,6 +65,148 @@ describe("runLintEngine (Wave A — adapter only)", () => {
     expect(report.findings).toHaveLength(0);
     expect(report.totalCounts).toEqual({ P0: 0, P1: 0, P2: 0 });
     expect(report.countsByTarget).toEqual({});
+  });
+
+  it("surfaces skill findings when skills input is provided", async () => {
+    const skill: SkillEntry = {
+      kind: "skill",
+      id: "skill:project:my-proj:my-skill",
+      slug: "my-skill",
+      name: "my-skill",
+      source: "project",
+      filePath: "/dev/proj/.claude/skills/my-skill/SKILL.md",
+      bodyExcerpt: "",
+      frontmatter: {},
+      mtime: new Date().toISOString(),
+      ctime: new Date().toISOString(),
+      layout: "bundled",
+      provenance: { kind: "project-local", projectSlug: "my-proj" },
+    };
+    const report = await runLintEngine({
+      projectPath: "",
+      claudeMdAudit: { ...PRESENT, findings: [] },
+      skills: [skill],
+    });
+    const skillFindings = report.findings.filter((f) => f.target === "skill");
+    expect(skillFindings.length).toBeGreaterThan(0);
+    expect(skillFindings[0].code).toBe("skill/missing-description");
+  });
+});
+
+describe("runGlobalLint", () => {
+  it("returns empty when all inputs are empty", () => {
+    const findings = runGlobalLint({
+      allSkills: [],
+      allAgents: [],
+      allCommands: [],
+      allPlugins: [],
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("lints user-scope skills (structural rules)", () => {
+    const skill: SkillEntry = {
+      kind: "skill",
+      id: "skill:user:user:no-desc",
+      slug: "no-desc",
+      name: "no-desc",
+      source: "user",
+      filePath: "/home/.claude/skills/no-desc/SKILL.md",
+      bodyExcerpt: "",
+      frontmatter: {},
+      mtime: new Date().toISOString(),
+      ctime: new Date().toISOString(),
+      layout: "bundled",
+      provenance: { kind: "user-local" },
+    };
+    const findings = runGlobalLint({
+      allSkills: [skill],
+      allAgents: [],
+      allCommands: [],
+      allPlugins: [],
+    });
+    expect(findings.some((f) => f.code === "skill/missing-description")).toBe(true);
+  });
+
+  it("does not lint project-scope entries with structural rules (they are per-project)", () => {
+    const skill: SkillEntry = {
+      kind: "skill",
+      id: "skill:project:proj:some-skill",
+      slug: "some-skill",
+      name: "some-skill",
+      source: "project",
+      filePath: "/dev/proj/.claude/skills/SKILL.md",
+      bodyExcerpt: "",
+      frontmatter: {},
+      mtime: new Date().toISOString(),
+      ctime: new Date().toISOString(),
+      layout: "bundled",
+      provenance: { kind: "project-local", projectSlug: "proj" },
+    };
+    const findings = runGlobalLint({
+      allSkills: [skill],
+      allAgents: [],
+      allCommands: [],
+      allPlugins: [],
+    });
+    // Structural finding for this project entry should NOT appear (handled by per-project lint).
+    // Cross-scope duplicate check only fires if same name in multiple scopes — no duplicate here.
+    expect(findings.filter((f) => f.code === "skill/missing-description")).toHaveLength(0);
+  });
+
+  it("emits duplicate-name across user + project scopes", () => {
+    const base: SkillEntry = {
+      kind: "skill",
+      id: "skill:user:user:foo",
+      slug: "foo",
+      name: "foo",
+      description: "a description",
+      source: "user",
+      filePath: "/home/.claude/skills/foo/SKILL.md",
+      bodyExcerpt: "",
+      frontmatter: {},
+      mtime: new Date().toISOString(),
+      ctime: new Date().toISOString(),
+      layout: "bundled",
+      provenance: { kind: "user-local" },
+    };
+    const projectEntry: SkillEntry = {
+      ...base,
+      id: "skill:project:proj:foo",
+      source: "project",
+      filePath: "/dev/proj/.claude/skills/foo/SKILL.md",
+      provenance: { kind: "project-local", projectSlug: "proj" },
+    };
+    const findings = runGlobalLint({
+      allSkills: [base, projectEntry],
+      allAgents: [],
+      allCommands: [],
+      allPlugins: [],
+    });
+    expect(findings.some((f) => f.code === "skill/duplicate-name")).toBe(true);
+  });
+
+  it("lints user-scope agents with missing description", () => {
+    const agent: AgentEntry = {
+      kind: "agent",
+      id: "agent:user:user:no-desc",
+      slug: "no-desc",
+      name: "no-desc",
+      source: "user",
+      filePath: "/home/.claude/agents/no-desc.md",
+      bodyExcerpt: "",
+      frontmatter: {},
+      mtime: new Date().toISOString(),
+      ctime: new Date().toISOString(),
+      provenance: { kind: "user-local" },
+    };
+    const findings = runGlobalLint({
+      allSkills: [],
+      allAgents: [agent],
+      allCommands: [],
+      allPlugins: [],
+    });
+    expect(findings.some((f) => f.code === "agent/missing-description")).toBe(true);
   });
 });
 

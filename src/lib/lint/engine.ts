@@ -6,13 +6,18 @@ import type {
   LintFinding,
   LintReport,
   LintTarget,
+  CommandEntry,
 } from "../types";
+import type { AgentEntry, SkillEntry } from "../indexer/types";
 import { adaptClaudeMdFindings } from "./adapter/claudeMd";
 import { dedupeFindings } from "./dedupe";
 import { runLibraryCli } from "./library";
 import { runMcpRules } from "./rules/mcp";
 import { runHookRules } from "./rules/hooks";
 import { runPluginRules } from "./rules/plugins";
+import { runSkillRules, runSkillDuplicateNames } from "./rules/skills";
+import { runAgentRules, runAgentDuplicateNames } from "./rules/agents";
+import { runCommandRules, runCommandDuplicateSlugs } from "./rules/commands";
 
 /** Inputs for the lint engine. Widened one wave at a time as new targets are added. */
 export interface LintInputs {
@@ -27,6 +32,18 @@ export interface LintInputs {
   /** Wave C+: plugin entries from the merged registry. */
   plugins?: PluginEntry[];
   // Wave D+: outputStyles, lspConfig
+  /** Wave F+: project-scope catalog entries for structural rules. */
+  skills?: SkillEntry[];
+  agents?: AgentEntry[];
+  commands?: CommandEntry[];
+}
+
+/** Inputs for the one-shot global catalog lint that runs once per scan. */
+export interface GlobalLintInputs {
+  allSkills: SkillEntry[];
+  allAgents: AgentEntry[];
+  allCommands: CommandEntry[];
+  allPlugins: PluginEntry[];
 }
 
 /**
@@ -70,7 +87,35 @@ function runVendoredPass(inputs: LintInputs): LintFinding[] {
   if (inputs.hooks)      findings.push(...runHookRules(inputs.hooks));
   if (inputs.plugins)    findings.push(...runPluginRules(inputs.plugins));
   // Wave D+: outputStyles, lspConfig
+  // Wave F+: project-scope structural rules for catalog targets.
+  if (inputs.skills)   findings.push(...runSkillRules(inputs.skills));
+  if (inputs.agents)   findings.push(...runAgentRules(inputs.agents));
+  if (inputs.commands) findings.push(...runCommandRules(inputs.commands));
   return findings;
+}
+
+/**
+ * One-shot global lint that runs once per scan.
+ * Lints user + plugin scope entries with structural rules; runs cross-scope
+ * duplicate-name/slug checks over the full catalog (all scopes).
+ */
+export function runGlobalLint(inputs: GlobalLintInputs): LintFinding[] {
+  const findings: LintFinding[] = [];
+
+  const nonProjectSkills   = inputs.allSkills.filter((e) => e.source !== "project");
+  const nonProjectAgents   = inputs.allAgents.filter((e) => e.source !== "project");
+  const nonProjectCommands = inputs.allCommands.filter((e) => e.source !== "project");
+
+  findings.push(...runSkillRules(nonProjectSkills));
+  findings.push(...runAgentRules(nonProjectAgents));
+  findings.push(...runCommandRules(nonProjectCommands));
+
+  // Cross-scope duplicate detection — runs over full catalog.
+  findings.push(...runSkillDuplicateNames(inputs.allSkills));
+  findings.push(...runAgentDuplicateNames(inputs.allAgents));
+  findings.push(...runCommandDuplicateSlugs(inputs.allCommands));
+
+  return dedupeFindings([findings]);
 }
 
 function buildReport(

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
 import { StatusSelector } from "./StatusBadge";
 import { TodoList, AddTodoForm } from "./TodoList";
@@ -96,11 +97,28 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 // ── Main Component ─────────────────────────────────────────────────────────
 
+const VALID_TABS = new Set<TabKey>([
+  "overview", "context", "todos", "sessions", "manual-steps", "insights",
+  "memory", "planning", "agents", "skills", "efficiency", "hot-files",
+  "errors", "patterns", "config", "config-history", "config-lint",
+]);
+
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [devPort, setDevPort] = useState(project.devPort);
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [hasConfigHistory, setHasConfigHistory] = useState(false);
+
+  const initialTab = (searchParams.get("tab") ?? "overview") as TabKey;
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    VALID_TABS.has(initialTab) ? initialTab : "overview"
+  );
+
+  const handleTabChange = useCallback((tab: TabKey) => {
+    setActiveTab(tab);
+    router.replace(`/project/${project.slug}?tab=${tab}`, { scroll: false });
+  }, [router, project.slug]);
 
   useEffect(() => {
     setTodos(project.todos);
@@ -308,7 +326,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {tabs.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => handleTabChange(tab.key)}
               style={{
                 padding: "10px 14px",
                 fontSize: "0.72rem", fontFamily: "var(--font-body)",
