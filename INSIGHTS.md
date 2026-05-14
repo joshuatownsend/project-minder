@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:0effba216b47 | session:000542fc-59f3-461f-b5d0-bcb62905a8e6 | 2026-05-14T01:00:57.694Z -->
+## ★ Insight
+The `incremental: true` flag in tsconfig.json creates `.tsbuildinfo` cache files that track which files need re-checking. The bug: when a type union widens (e.g., `HelpSlug` gains a new key), files that *consume* that union but have unchanged bytes don't get invalidated by the incremental cache — so TypeScript silently misses the cross-file error locally. Since `npm run typecheck` uses `tsgo` (the Go port) rather than `tsc`, and Next.js Turbopack does its own incremental building independently, this `incremental` setting only affects `tsc` — which we don't use. Dropping it is a pure win.
+
+---
+
+<!-- insight:2c26ee274b75 | session:e2ec1dcf-afd9-4459-a7c8-5eded7047b10 | 2026-05-14T00:21:31.104Z -->
+## ★ Insight
+Dependabot rebases are fast — it updated all three branches in ~15 minutes, and CI ran in parallel on each. The check timestamps (00:13–00:15) confirm these are fresh runs against the updated main, not stale results from before the rebase.
+
+---
+
+<!-- insight:93c96751736c | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T23:58:38.531Z -->
+## ★ Insight
+Comment 3 surfaces a subtle **temporal coupling** issue: `loadCatalog({ includeProjects: true })` reads from `getCachedScan()` — the previous scan — because the current scan hasn't been committed to the cache yet. This pattern (a function reading a shared cache that the caller is in the middle of populating) is a classic "phantom read" in cooperative-multitasking systems.
+
+---
+
+<!-- insight:2b3f7d25e4ad | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T23:46:05.732Z -->
+## ★ Insight
+The fixes here illustrate how code quality issues cluster: the `VALID_TABS` render-scope bug, the redundant guards, and the missing `stopPropagation` are all the same class of error — contract boundaries being re-implemented at the call site instead of trusted. The `groupByKey` extraction saves ~15 lines but more importantly makes the three rule files self-evidently consistent: if one is wrong, they're all wrong in the same way, making future bugs visible.
+
+---
+
 <!-- insight:c54f8b971492 | session:45fa20a8-e0e7-41b7-9d6f-9bc644a3b3e4 | 2026-05-13T23:35:09.994Z -->
 ## ★ Insight
 Three patterns to fix here:
