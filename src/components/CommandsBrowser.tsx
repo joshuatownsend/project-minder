@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Terminal, Search, ChevronDown, ChevronRight } from "lucide-react";
-import type { CommandEntry } from "@/lib/types";
+import type { CommandEntry, LintFinding } from "@/lib/types";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
+import { truncate } from "@/lib/utils";
 
 interface Row {
   entry: CommandEntry;
@@ -42,7 +45,8 @@ export function CommandsBrowser() {
     };
   }, [sourceFilter, query]);
 
-  const visible = useMemo(() => rows ?? [], [rows]);
+  const visible = rows ?? [];
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -147,6 +151,8 @@ export function CommandsBrowser() {
           row={r}
           expanded={expanded.has(r.entry.id)}
           onToggle={() => toggle(r.entry.id)}
+          lintFindings={findingsByFile.get(r.entry.filePath) ?? []}
+          lintProjectSlug={projectSlugByFile.get(r.entry.filePath)}
         />
       ))}
     </div>
@@ -157,14 +163,17 @@ function CommandRow({
   row,
   expanded,
   onToggle,
+  lintFindings = [],
+  lintProjectSlug,
 }: {
   row: Row;
   expanded: boolean;
   onToggle: () => void;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const e = row.entry;
-  const truncDesc =
-    e.description && e.description.length > 160 ? e.description.slice(0, 160) + "…" : e.description;
+  const truncDesc = e.description ? truncate(e.description) : e.description;
 
   return (
     <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
@@ -218,6 +227,7 @@ function CommandRow({
             {e.parseWarnings && e.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={e.parseWarnings} />
             )}
+            <LintCountChip findings={lintFindings} projectSlug={lintProjectSlug} />
             <CopyInvocationButton text={`/${e.slug}`} title={`Copy command invocation: /${e.slug}`} />
           </div>
           {truncDesc && (
@@ -283,7 +293,7 @@ function SourceBadge({ entry }: { entry: CommandEntry }) {
     return <Pill tone="info">plugin{entry.pluginName ? ` · ${entry.pluginName}` : ""}</Pill>;
   }
   return (
-    <Link href={`/project/${entry.projectSlug}`} style={{ textDecoration: "none" }}>
+    <Link href={`/project/${entry.projectSlug}`} style={{ textDecoration: "none" }} onClick={(e) => e.stopPropagation()}>
       <Pill tone="info">{entry.projectSlug}</Pill>
     </Link>
   );

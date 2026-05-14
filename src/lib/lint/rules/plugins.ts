@@ -27,6 +27,7 @@ function blockedButEnabled(plugins: PluginEntry[]): LintFinding[] {
       fix: `Remove "${p.name}" from the enabled list, or remove it from the blocklist if you want it to run.`,
       penalty: 5,
       engine: "vendored" as const,
+      file: p.installPath ?? `plugin:${p.name}@${p.marketplace}`,
     }));
 }
 
@@ -45,5 +46,6 @@ function enabledWithoutVersion(plugins: PluginEntry[]): LintFinding[] {
       fix: `Pin the plugin to a specific version or commit SHA to prevent silent breaking updates. Use \`claudelint install-plugin ${p.name}@<version>\` to re-install pinned.`,
       penalty: 2,
       engine: "vendored" as const,
+      file: p.installPath ?? `plugin:${p.name}@${p.marketplace}`,
     }));
 }

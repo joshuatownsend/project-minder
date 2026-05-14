@@ -10,7 +10,10 @@ import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
-import { formatRelativeTime } from "@/lib/utils";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
+import type { LintFinding } from "@/lib/types";
+import { formatRelativeTime, truncate } from "@/lib/utils";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
 // Stable identity for a row across virtualizer remounts. Falls back through
@@ -28,6 +31,8 @@ function AgentRowItem({
   bodyFull,
   bodyFetched,
   onFetchBody,
+  lintFindings,
+  lintProjectSlug,
 }: {
   row: AgentRow;
   updateStatus?: SkillUpdateStatus;
@@ -39,6 +44,8 @@ function AgentRowItem({
   // the "View full body" button and re-fetching on every click.
   bodyFetched: boolean;
   onFetchBody: () => Promise<void>;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const [bodyLoading, setBodyLoading] = useState(false);
 
@@ -57,8 +64,7 @@ function AgentRowItem({
 
   const name = row.entry?.name ?? row.usage?.name ?? "Unknown";
   const description = row.entry?.description ?? "";
-  const truncDesc =
-    description.length > 160 ? description.slice(0, 160) + "…" : description;
+  const truncDesc = truncate(description);
 
   return (
     <div style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
@@ -147,6 +153,7 @@ function AgentRowItem({
             {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={row.entry.parseWarnings} />
             )}
+            <LintCountChip findings={lintFindings ?? []} projectSlug={lintProjectSlug} />
           </div>
           {truncDesc && (
             <p
@@ -383,6 +390,7 @@ export function AgentsBrowser() {
   }, [rawQuery]);
 
   const { data, loading } = useAgents();
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
   const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
@@ -434,7 +442,7 @@ export function AgentsBrowser() {
   }, [data, sourceFilter, query, sortBy, hasUpdateOnly, statuses]);
 
   const total = data.length;
-  const invoked = data.filter((r) => (r.usage?.invocations ?? 0) > 0).length;
+  const invoked = useMemo(() => data.filter((r) => (r.usage?.invocations ?? 0) > 0).length, [data]);
 
   const toggleExpanded = useCallback((key: string) => {
     setExpandedIds((prev) => {
@@ -687,6 +695,8 @@ export function AgentsBrowser() {
                       bodyFull={bodyFull}
                       bodyFetched={bodyFetched}
                       onFetchBody={() => (bodyId ? fetchBodyFor(bodyId) : Promise.resolve())}
+                      lintFindings={row.entry ? findingsByFile.get(row.entry.filePath) : undefined}
+                      lintProjectSlug={row.entry ? projectSlugByFile.get(row.entry.filePath) : undefined}
                     />
                   </div>
                 );

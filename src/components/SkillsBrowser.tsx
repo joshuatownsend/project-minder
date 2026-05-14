@@ -9,7 +9,10 @@ import Link from "next/link";
 import { ProvenanceBadge, ProvenanceDetails } from "@/components/ProvenanceBadge";
 import { CatalogActionStrip } from "@/components/CatalogActionStrip";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
-import { formatRelativeTime } from "@/lib/utils";
+import { LintCountChip } from "@/components/ui/LintCountChip";
+import { useLintFindings } from "@/hooks/useLintFindings";
+import { formatRelativeTime, truncate } from "@/lib/utils";
+import type { LintFinding } from "@/lib/types";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
 // See AgentsBrowser for the rationale behind virtualization + lifted state
@@ -30,6 +33,8 @@ function SkillRowItem({
   bodyFetched,
   onFetchBody,
   onToggleDisabled,
+  lintFindings,
+  lintProjectSlug,
 }: {
   row: SkillRow;
   updateStatus?: SkillUpdateStatus;
@@ -40,6 +45,8 @@ function SkillRowItem({
   bodyFetched: boolean;
   onFetchBody: () => Promise<void>;
   onToggleDisabled?: (enabled: boolean) => Promise<void>;
+  lintFindings?: LintFinding[];
+  lintProjectSlug?: string;
 }) {
   const [bodyLoading, setBodyLoading] = useState(false);
   const [togglePending, setTogglePending] = useState(false);
@@ -67,8 +74,7 @@ function SkillRowItem({
 
   const name = row.entry?.name ?? row.usage?.name ?? "Unknown";
   const description = row.entry?.description ?? "";
-  const truncDesc =
-    description.length > 160 ? description.slice(0, 160) + "…" : description;
+  const truncDesc = truncate(description);
 
   const isDisabled = row.entry?.disabled === true;
 
@@ -154,6 +160,7 @@ function SkillRowItem({
             {row.entry?.parseWarnings && row.entry.parseWarnings.length > 0 && (
               <CatalogLintChip warnings={row.entry.parseWarnings} />
             )}
+            <LintCountChip findings={lintFindings ?? []} projectSlug={lintProjectSlug} />
             {isDisabled && (
               <span
                 style={{
@@ -400,6 +407,7 @@ export function SkillsBrowser() {
   }, [rawQuery]);
 
   const { data, loading, refresh } = useSkills();
+  const { findingsByFile, projectSlugByFile } = useLintFindings();
   const { statuses, pending } = useUpdateStatuses();
 
   const filtered = useMemo(() => {
@@ -450,7 +458,7 @@ export function SkillsBrowser() {
   }, [data, sourceFilter, query, sortBy, hasUpdateOnly, statuses]);
 
   const total = data.length;
-  const invoked = data.filter((r) => (r.usage?.invocations ?? 0) > 0).length;
+  const invoked = useMemo(() => data.filter((r) => (r.usage?.invocations ?? 0) > 0).length, [data]);
 
   const toggleExpanded = useCallback((key: string) => {
     setExpandedIds((prev) => {
@@ -713,6 +721,8 @@ export function SkillsBrowser() {
                           ? (enabled) => toggleDisabledFor(row.entry!.id, enabled)
                           : undefined
                       }
+                      lintFindings={row.entry ? (findingsByFile.get(row.entry.filePath) ?? []) : []}
+                      lintProjectSlug={row.entry ? projectSlugByFile.get(row.entry.filePath) : undefined}
                     />
                   </div>
                 );

@@ -641,6 +641,12 @@ export interface StatsData {
   claudeSessions: { total: number; projectsWithSessions: number };
   claudeUsage?: ClaudeUsageStats;
   sessions?: import("@/lib/usage/sessionScatter").SessionScatterPoint[];
+  configLint?: {
+    totalFindings: number;
+    projectsWithFindings: number;
+    bySeverity: { P0: number; P1: number; P2: number };
+    byTarget: Partial<Record<LintTarget, number>>;
+  };
 }
 
 export interface SessionRecap {
@@ -1021,6 +1027,8 @@ export interface ScanResult {
   portConflicts: PortConflict[];
   hiddenCount: number;
   scannedAt: string;
+  /** Findings from the one-shot global catalog lint (user + plugin-scope entries). */
+  catalogLintFindings: LintFinding[];
 }
 
 // ─── Template Mode ──────────────────────────────────────────────────────────

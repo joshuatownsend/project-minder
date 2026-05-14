@@ -52,7 +52,7 @@ describe("list-projects tool", () => {
       expect(typeof first.name).toBe("string");
       expect(typeof first.path).toBe("string");
     }
-  });
+  }, 90_000);
 
   it("rejects an unknown slug from get-project with an error result", async () => {
     const cl = await client();

@@ -36,6 +36,7 @@ function duplicateServerNames(servers: McpServer[]): LintFinding[] {
       fix: `Remove duplicate entries. Last-scope wins, but duplicates cause confusion and may load unintended versions.`,
       penalty: 5,
       engine: "vendored",
+      file: `mcp:${name}`,
     });
   }
   return findings;

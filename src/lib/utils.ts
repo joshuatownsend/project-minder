@@ -13,6 +13,10 @@ export function formatKB(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+export function truncate(str: string, max = 160): string {
+  return str.length > max ? str.slice(0, max) + "…" : str;
+}
+
 export function formatRelativeTime(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);

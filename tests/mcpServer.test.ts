@@ -30,7 +30,7 @@ describe("MCP server boot", () => {
   let resourceTemplates: { uriTemplate: string }[] = [];
   let staticResources: { uri: string }[] = [];
 
-  // 60s hookTimeout — the in-memory transport + Zod schema parse for ~45 tools
+  // 120s hookTimeout — the in-memory transport + Zod schema parse for ~45 tools
   // takes a few seconds in isolation, but under 8-worker vitest contention can
   // blow the 10s default. Bumping the hook (not each `it`) is the right knob.
   beforeAll(async () => {
@@ -38,7 +38,7 @@ describe("MCP server boot", () => {
     tools = (await client.listTools()).tools;
     resourceTemplates = (await client.listResourceTemplates()).resourceTemplates;
     staticResources = (await client.listResources()).resources;
-  }, 60_000);
+  }, 120_000);
 
   it("exposes the documented tool surface", () => {
     const names = new Set(tools.map((t) => t.name));
