@@ -112,7 +112,7 @@ export function computeStats(
       acc.bySeverity[f.severity]++;
       acc.byTarget[f.target] = (acc.byTarget[f.target] ?? 0) + 1;
     }
-    if (acc.totalFindings > 0) configLintStats = acc;
+    configLintStats = acc;
   }
 
   return {

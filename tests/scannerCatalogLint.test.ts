@@ -5,8 +5,11 @@ import type { ProjectData } from "@/lib/types";
 vi.mock("@/lib/indexer/catalog", () => ({
   loadCatalog: vi.fn(),
 }));
-vi.mock("@/lib/indexer/provenance", () => ({
-  loadProvenanceContext: vi.fn(),
+vi.mock("@/lib/indexer/walkAgents", () => ({
+  walkProjectAgents: vi.fn(),
+}));
+vi.mock("@/lib/indexer/walkSkills", () => ({
+  walkProjectSkills: vi.fn(),
 }));
 vi.mock("@/lib/indexer/walkCommands", () => ({
   walkUserCommands: vi.fn(),
@@ -19,7 +22,8 @@ vi.mock("@/lib/userConfigCache", () => ({
 
 import { runCatalogLint } from "@/lib/scanner/catalogLint";
 import { loadCatalog } from "@/lib/indexer/catalog";
-import { loadProvenanceContext } from "@/lib/indexer/provenance";
+import { walkProjectAgents } from "@/lib/indexer/walkAgents";
+import { walkProjectSkills } from "@/lib/indexer/walkSkills";
 import { walkUserCommands, walkPluginCommands, walkProjectCommands } from "@/lib/indexer/walkCommands";
 import { getUserConfig } from "@/lib/userConfigCache";
 
@@ -68,7 +72,8 @@ const EMPTY_USER_CFG = { plugins: { plugins: [] } };
 
 function stubMocks(catalog: { skills: SkillEntry[]; agents: AgentEntry[] } = { skills: [], agents: [] }) {
   vi.mocked(loadCatalog).mockResolvedValue(catalog as Awaited<ReturnType<typeof loadCatalog>>);
-  vi.mocked(loadProvenanceContext).mockResolvedValue(EMPTY_CTX);
+  vi.mocked(walkProjectAgents).mockResolvedValue([]);
+  vi.mocked(walkProjectSkills).mockResolvedValue([]);
   vi.mocked(walkUserCommands).mockResolvedValue([]);
   vi.mocked(walkPluginCommands).mockResolvedValue([]);
   vi.mocked(walkProjectCommands).mockResolvedValue([]);
@@ -84,25 +89,26 @@ describe("runCatalogLint", () => {
 
   it("returns empty array when configLint flag is off", async () => {
     stubMocks();
-    const findings = await runCatalogLint(PROJECTS, FLAGS_OFF);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_OFF, EMPTY_CTX);
     expect(findings).toEqual([]);
     expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("returns empty array (graceful) when loadCatalog throws", async () => {
     vi.mocked(loadCatalog).mockRejectedValue(new Error("disk error"));
-    vi.mocked(loadProvenanceContext).mockResolvedValue(EMPTY_CTX);
+    vi.mocked(walkProjectAgents).mockResolvedValue([]);
+    vi.mocked(walkProjectSkills).mockResolvedValue([]);
     vi.mocked(walkUserCommands).mockResolvedValue([]);
     vi.mocked(walkPluginCommands).mockResolvedValue([]);
     vi.mocked(getUserConfig).mockResolvedValue(EMPTY_USER_CFG as unknown as Awaited<ReturnType<typeof getUserConfig>>);
 
-    const findings = await runCatalogLint(PROJECTS, FLAGS_ON);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings).toEqual([]);
   });
 
   it("returns findings for user-scope skill with no description", async () => {
     stubMocks({ skills: [makeSkill({ description: undefined })], agents: [] });
-    const findings = await runCatalogLint(PROJECTS, FLAGS_ON);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings.length).toBeGreaterThan(0);
     expect(findings[0].code).toBe("skill/missing-description");
   });
@@ -110,7 +116,7 @@ describe("runCatalogLint", () => {
   it("does not emit structural findings for project-scope entries", async () => {
     const projectSkill = makeSkill({ source: "project", description: undefined });
     stubMocks({ skills: [projectSkill], agents: [] });
-    const findings = await runCatalogLint(PROJECTS, FLAGS_ON);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings.filter((f) => f.code === "skill/missing-description")).toHaveLength(0);
   });
 
@@ -118,13 +124,13 @@ describe("runCatalogLint", () => {
     const user = makeSkill({ name: "shared", source: "user" });
     const project = makeSkill({ name: "shared", source: "project", description: "ok" });
     stubMocks({ skills: [user, project], agents: [] });
-    const findings = await runCatalogLint(PROJECTS, FLAGS_ON);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings.some((f) => f.code === "skill/duplicate-name")).toBe(true);
   });
 
   it("returns findings for user-scope agent with no description", async () => {
     stubMocks({ skills: [], agents: [makeAgent({ description: undefined })] });
-    const findings = await runCatalogLint(PROJECTS, FLAGS_ON);
+    const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings.some((f) => f.code === "agent/missing-description")).toBe(true);
   });
 });

@@ -257,8 +257,11 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const hiddenSet = new Set(config.hidden.map((h) => h.toLowerCase()));
   const worktreesEnabled = getFlag(flags, "scanWorktrees");
 
-  // Load provenance context once — shared across all projects and catalog lint.
-  const ctx = await loadProvenanceContext();
+  // Load provenance context once when configLint is enabled — only the lint
+  // pipeline uses it. Use an empty stub when off so callers don't change shape.
+  const ctx = getFlag(flags, "configLint")
+    ? await loadProvenanceContext()
+    : ({} as Awaited<ReturnType<typeof loadProvenanceContext>>);
 
   const allProjects: ProjectData[] = [];
   // Track slugs seen so far to handle collisions across roots (first root wins)
@@ -328,7 +331,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
-  const catalogLintFindings = await runCatalogLint(allProjects, flags);
+  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx);
 
   return {
     projects: allProjects,

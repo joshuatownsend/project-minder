@@ -60,4 +60,4 @@ Global-pass findings appear in the browser badges but do not have an associated 
 
 ## Feature flag
 
-Config Lint is gated behind the **`configLint` feature flag** (default off) in `/settings`. Enable it to start seeing findings on the next rescan. The Config Lint tab only appears on projects that have at least one finding.
+Config Lint is gated behind the **`configLint` feature flag** (default **on**, opt-out) in `/settings`. Toggle it off to suppress all findings and hide the Config Lint tab. Changes take effect on the next rescan. The Config Lint tab only appears on projects that have at least one finding.
