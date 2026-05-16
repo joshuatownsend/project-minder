@@ -57,6 +57,11 @@ agentlytics-repo/
 
 # screenshot captures + ui/ux review artifacts
 screenshots/
+# …except the published gh-pages site screenshots, which are committed.
+!site/screenshots/
+!site/screenshots/**
+# local preview artifacts from scripts/preview-landing.mjs — not committed
+scripts/preview/
 uiux-review/
 
 # perf artifacts (large binary captures - kept locally, not committed)

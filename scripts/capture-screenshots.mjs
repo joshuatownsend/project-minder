@@ -20,9 +20,53 @@ async function shoot(page, name, { selector } = {}) {
   console.log(`  ✓  ${name}.png`);
 }
 
-async function go(page, route, settle = 600) {
-  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' });
+// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
+// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
+// We run the check via waitForFunction (page-context JS, Playwright-enforced
+// timeout) instead of locator polling — keeps the whole wait bounded and
+// avoids the locator.count() hang we hit on stubborn pages.
+async function waitForStableUI(page, { timeout = 25000 } = {}) {
+  try {
+    await page.waitForFunction(
+      () => {
+        const w = /** @type {any} */ (window);
+        const now = Date.now();
+        const hasCompile = /Compiling/i.test(document.body.innerText || '');
+        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
+        if (hasCompile || hasSkeleton) {
+          w.__minderQuietSince = null;
+          return false;
+        }
+        if (!w.__minderQuietSince) {
+          w.__minderQuietSince = now;
+          return false;
+        }
+        return now - w.__minderQuietSince >= 1500;
+      },
+      null,
+      { timeout, polling: 250 },
+    );
+  } catch {
+    // Stability not achieved within timeout — accept whatever's on screen.
+  }
+}
+
+async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000 } = {}) {
+  // domcontentloaded + settle is more reliable than networkidle for this app:
+  // background polling (git status, sessions, OTEL) keeps the network busy
+  // and would otherwise time out the 30s networkidle wait.
+  // 90s nav timeout absorbs Next.js dev's first-compile cost; 60s stability
+  // timeout absorbs the data-fetch cost on heavy routes.
+  //
+  // postSettle (default 4s) is the safety net for pages that DON'T use the
+  // Skeleton component (e.g. /usage renders empty stat cards until data
+  // arrives via /api/usage which takes ~5s in dev). waitForStableUI returns
+  // instantly when no skeleton is ever shown, so we always wait a final
+  // window for data fetches to complete.
+  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(settle);
+  await waitForStableUI(page, { timeout: stableTimeout });
+  await page.waitForTimeout(postSettle);
 }
 
 (async () => {
@@ -97,7 +141,15 @@ async function go(page, route, settle = 600) {
   await go(page, '/config');
   await shoot(page, 'config');
 
-  // 12. Card detail — element screenshot of the project-minder card link
+  // 12. System Status page — live cross-project session bucket view
+  await go(page, '/status', 1200);
+  await shoot(page, 'status');
+
+  // 13. Memory tab on project detail — MEMORY.md overview
+  await go(page, '/project/project-minder?tab=memory', 1200);
+  await shoot(page, 'memory');
+
+  // 14. Card detail — element screenshot of the project-minder card link
   await go(page, '/');
   await shoot(page, 'card-detail', { selector: 'a[href="/project/project-minder"]' });
 

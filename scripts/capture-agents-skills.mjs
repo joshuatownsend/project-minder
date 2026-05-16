@@ -4,7 +4,11 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = 'http://localhost:4100';
-const OUT = join(__dirname, 'screenshots');
+// Write into site/screenshots/ so all gh-pages assets live in one directory.
+// (Previously this script wrote to scripts/screenshots/ — a path mismatch with
+// the other two capture scripts that prevented gh-pages from picking up agents
+// /skills/provenance refreshes.)
+const OUT = join(__dirname, '..', 'site', 'screenshots');
 
 async function shoot(page, name) {
   const dest = join(OUT, `${name}.png`);
@@ -12,9 +16,53 @@ async function shoot(page, name) {
   console.log(`  ✓  ${name}.png`);
 }
 
-async function go(page, route, settle = 800) {
-  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' });
+// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
+// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
+// We run the check via waitForFunction (page-context JS, Playwright-enforced
+// timeout) instead of locator polling — keeps the whole wait bounded and
+// avoids the locator.count() hang we hit on stubborn pages.
+async function waitForStableUI(page, { timeout = 25000 } = {}) {
+  try {
+    await page.waitForFunction(
+      () => {
+        const w = /** @type {any} */ (window);
+        const now = Date.now();
+        const hasCompile = /Compiling/i.test(document.body.innerText || '');
+        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
+        if (hasCompile || hasSkeleton) {
+          w.__minderQuietSince = null;
+          return false;
+        }
+        if (!w.__minderQuietSince) {
+          w.__minderQuietSince = now;
+          return false;
+        }
+        return now - w.__minderQuietSince >= 1500;
+      },
+      null,
+      { timeout, polling: 250 },
+    );
+  } catch {
+    // Stability not achieved within timeout — accept whatever's on screen.
+  }
+}
+
+async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000 } = {}) {
+  // domcontentloaded + settle is more reliable than networkidle for this app:
+  // background polling (git status, sessions, OTEL) keeps the network busy
+  // and would otherwise time out the 30s networkidle wait.
+  // 90s nav timeout absorbs Next.js dev's first-compile cost; 60s stability
+  // timeout absorbs the data-fetch cost on heavy routes.
+  //
+  // postSettle (default 4s) is the safety net for pages that DON'T use the
+  // Skeleton component (e.g. /usage renders empty stat cards until data
+  // arrives via /api/usage which takes ~5s in dev). waitForStableUI returns
+  // instantly when no skeleton is ever shown, so we always wait a final
+  // window for data fetches to complete.
+  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(settle);
+  await waitForStableUI(page, { timeout: stableTimeout });
+  await page.waitForTimeout(postSettle);
 }
 
 (async () => {
