@@ -31,6 +31,7 @@
 - [x] **Create CHANGELOG.md** — Set up with Keep a Changelog format.
 - [x] **Use dropdown menu dep** — `@radix-ui/react-dropdown-menu` now used for project card action menu.
 - [x] **Remove `@radix-ui/react-separator`** — Uninstalled.
+- [ ] **Automate `site/` → `gh-pages` publish** — Today the gh-pages refresh is a manual worktree push. Drift accumulates fast: during the 2026-05-16 docs refresh the local `site/index.html` on `main` was 31 lines behind `gh-pages` because commits like `bb3293a` (remove Windows-only language) and `33b9ef0` (Agents/Skills section) went straight to the published branch and never came back. Add a GitHub Actions workflow that, on every push to `main` touching `site/**`, regenerates the gh-pages branch from `site/*`. Bonus: include a job that warns the PR if `site/screenshots/*.png` was touched without a regenerated `index.html`. Existing flow lives in `scripts/capture-screenshots*.mjs`. Also rename mislabeled `worktrees.png` (actually a TODOs-tab shot) to `todos-tab.png` and capture a real worktree overlay shot as `worktrees.png` in the same change.
 
 ### Simplification follow-ups
 

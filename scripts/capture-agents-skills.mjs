@@ -4,7 +4,11 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = 'http://localhost:4100';
-const OUT = join(__dirname, 'screenshots');
+// Write into site/screenshots/ so all gh-pages assets live in one directory.
+// (Previously this script wrote to scripts/screenshots/ — a path mismatch with
+// the other two capture scripts that prevented gh-pages from picking up agents
+// /skills/provenance refreshes.)
+const OUT = join(__dirname, '..', 'site', 'screenshots');
 
 async function shoot(page, name) {
   const dest = join(OUT, `${name}.png`);
@@ -12,9 +16,46 @@ async function shoot(page, name) {
   console.log(`  ✓  ${name}.png`);
 }
 
-async function go(page, route, settle = 800) {
-  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' });
+// Next.js dev mode renders a "Compiling..." pill in the bottom-right
+// while a route compiles. Screenshotting before it disappears yields
+// a skeleton-only frame. Wait for it to be hidden before continuing.
+async function waitForCompile(page) {
+  try {
+    const indicator = page.locator('text=/Compiling/i').first();
+    if (await indicator.isVisible({ timeout: 500 }).catch(() => false)) {
+      await indicator.waitFor({ state: 'hidden', timeout: 90000 });
+    }
+  } catch {
+    // Indicator absent or already gone — no-op
+  }
+}
+
+// Project Minder's UI uses .animate-pulse skeleton placeholders while data
+// loads. Capturing before they clear yields a content-less frame. Wait for
+// all skeletons to disappear (with a 20s budget — if data is genuinely
+// missing we accept the skeleton frame as the honest empty state).
+async function waitForSkeletons(page) {
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('.animate-pulse').length === 0,
+      null,
+      { timeout: 20000 }
+    );
+  } catch {
+    // Skeletons may persist if data is genuinely loading slowly — proceed.
+  }
+}
+
+async function go(page, route, settle = 1500) {
+  // domcontentloaded + settle is more reliable than networkidle for this app:
+  // background polling (git status, sessions, OTEL) keeps the network busy
+  // and would otherwise time out the 30s networkidle wait.
+  // 90s timeout absorbs Next.js dev's first-compile cost for heavy routes.
+  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(settle);
+  await waitForCompile(page);
+  await waitForSkeletons(page);
+  await page.waitForTimeout(400); // brief final settle after data arrives
 }
 
 (async () => {

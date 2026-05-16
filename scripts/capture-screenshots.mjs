@@ -20,9 +20,46 @@ async function shoot(page, name, { selector } = {}) {
   console.log(`  ✓  ${name}.png`);
 }
 
-async function go(page, route, settle = 600) {
-  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' });
+// Next.js dev mode renders a "Compiling..." pill in the bottom-right
+// while a route compiles. Screenshotting before it disappears yields
+// a skeleton-only frame. Wait for it to be hidden before continuing.
+async function waitForCompile(page) {
+  try {
+    const indicator = page.locator('text=/Compiling/i').first();
+    if (await indicator.isVisible({ timeout: 500 }).catch(() => false)) {
+      await indicator.waitFor({ state: 'hidden', timeout: 90000 });
+    }
+  } catch {
+    // Indicator absent or already gone — no-op
+  }
+}
+
+// Project Minder's UI uses .animate-pulse skeleton placeholders while data
+// loads. Capturing before they clear yields a content-less frame. Wait for
+// all skeletons to disappear (with a 20s budget — if data is genuinely
+// missing we accept the skeleton frame as the honest empty state).
+async function waitForSkeletons(page) {
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('.animate-pulse').length === 0,
+      null,
+      { timeout: 20000 }
+    );
+  } catch {
+    // Skeletons may persist if data is genuinely loading slowly — proceed.
+  }
+}
+
+async function go(page, route, settle = 1500) {
+  // domcontentloaded + settle is more reliable than networkidle for this app:
+  // background polling (git status, sessions, OTEL) keeps the network busy
+  // and would otherwise time out the 30s networkidle wait.
+  // 90s timeout absorbs Next.js dev's first-compile cost for heavy routes.
+  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(settle);
+  await waitForCompile(page);
+  await waitForSkeletons(page);
+  await page.waitForTimeout(400); // brief final settle after data arrives
 }
 
 (async () => {
@@ -97,7 +134,15 @@ async function go(page, route, settle = 600) {
   await go(page, '/config');
   await shoot(page, 'config');
 
-  // 12. Card detail — element screenshot of the project-minder card link
+  // 12. System Status page — live cross-project session bucket view
+  await go(page, '/status', 1200);
+  await shoot(page, 'status');
+
+  // 13. Memory tab on project detail — MEMORY.md overview
+  await go(page, '/project/project-minder?tab=memory', 1200);
+  await shoot(page, 'memory');
+
+  // 14. Card detail — element screenshot of the project-minder card link
   await go(page, '/');
   await shoot(page, 'card-detail', { selector: 'a[href="/project/project-minder"]' });
 
