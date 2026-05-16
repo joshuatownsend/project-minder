@@ -8,7 +8,7 @@
 // skeleton frame in /usage as a result; this script eliminates that whole
 // category of flake.
 
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { setTimeout as delay } from 'timers/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -69,9 +69,18 @@ async function killServer() {
   } else {
     try {
       server.kill('SIGTERM');
-      // Give it 2s to shut down gracefully, then SIGKILL
-      await delay(2_000);
-      if (!server.killed) server.kill('SIGKILL');
+      // ChildProcess.killed flips true the moment a signal is *sent*, not
+      // when the process exits — so we can't use it to detect a stuck child.
+      // Wait up to 2s for an actual 'exit' event; escalate to SIGKILL if the
+      // server is still alive (exitCode null) after that.
+      const exited = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), 2_000);
+        server.once('exit', () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      if (!exited && server.exitCode === null) server.kill('SIGKILL');
     } catch (err) {
       console.warn('  ⚠  kill failed:', err.message);
     }
@@ -104,6 +113,15 @@ function installSignalHandlers() {
 (async () => {
   installSignalHandlers();
 
+  // Capture whether tsconfig.json was dirty BEFORE the build. If so, leave
+  // it alone after build — auto-reverting would clobber the developer's
+  // uncommitted edits. `git diff --quiet` exits 0 if clean, 1 if dirty.
+  const tsconfigWasClean = spawnSync(
+    'git',
+    ['diff', '--quiet', '--', 'tsconfig.json'],
+    { cwd: REPO_ROOT, stdio: 'ignore', shell: IS_WIN },
+  ).status === 0;
+
   console.log(`\n→ Building Next.js (production)...\n`);
   await run('npm', ['run', 'build']);
 
@@ -111,11 +129,22 @@ function installSignalHandlers() {
   // which this project deliberately dropped (see commit 0000f2f — stale
   // tsbuildinfo missed cross-file errors after a widened union). Revert it
   // so the orchestrator's working tree stays clean and a subsequent
-  // `git commit` doesn't pick up Next.js's unwanted edit.
-  try {
-    await run('git', ['checkout', 'HEAD', '--', 'tsconfig.json']);
-  } catch (err) {
-    console.warn('  ⚠  Could not revert tsconfig.json:', err.message);
+  // `git commit` doesn't pick up Next.js's unwanted edit — but only when
+  // tsconfig.json was clean before the build. If a developer had pending
+  // edits, we don't touch the file (risk of clobbering their work) and
+  // instead warn so they can manually strip the injection.
+  if (tsconfigWasClean) {
+    try {
+      await run('git', ['checkout', 'HEAD', '--', 'tsconfig.json']);
+    } catch (err) {
+      console.warn('  ⚠  Could not revert tsconfig.json:', err.message);
+    }
+  } else {
+    console.warn(
+      '  ⚠  tsconfig.json had uncommitted edits before build — leaving as-is.\n' +
+      '     Next.js may have appended `incremental: true` on top of your edits;\n' +
+      '     review the diff and strip that line manually if present.',
+    );
   }
 
   console.log(`\n→ Starting prod server on ${BASE}...\n`);

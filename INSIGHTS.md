@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:acfca474a94c | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T23:37:13.377Z -->
+## ★ Insight
+- **`server.killed` is a "signal sent" flag, not a "process exited" flag** — Node's docs are subtle here. After `child.kill('SIGTERM')` returns, `killed` is `true` even if the child is still running (e.g. ignoring SIGTERM). The reliable liveness check is `exitCode === null` (still running) vs a number (exited). Pairing that with an `exit`-event-based wait is the canonical Node pattern for "graceful then forceful" shutdown.
+- **`spawnSync` for one-shot checks** — synchronous spawn is the right tool for the `git diff --quiet` pre-check: there's nothing else to do in parallel, and we want the answer before `npm run build` starts. Using async `spawn` here would add a needless layer of promise plumbing. The trade-off is that `spawnSync` blocks the event loop, which is fine for sub-second commands but a footgun for anything longer.
+- **Dirty-check pattern vs surgical edit** — we could have parsed `tsconfig.json` and only stripped the specific `incremental: true` line Next.js injects. That's more code, more brittleness (Next.js could change the injection shape), and silently changing user files is exactly what got us flagged. The dirty-check is a one-way valve: clean → safe to auto-fix, dirty → hands off and tell the human.
+
+---
+
 <!-- insight:93d050d1159e | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T21:56:18.222Z -->
 ## ★ Insight
 - **`fetch-depth: 0` vs the default shallow clone**: gh-pages publishing reads main's full history-relative paths via `rsync`, but more importantly `git fetch origin gh-pages:gh-pages` requires a non-shallow clone or it errors with "fetch on remote-tracking branch is not allowed in a shallow clone." Cheap insurance for an orphan-branch workflow.
