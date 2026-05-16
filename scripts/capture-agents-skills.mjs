@@ -16,46 +16,53 @@ async function shoot(page, name) {
   console.log(`  ✓  ${name}.png`);
 }
 
-// Next.js dev mode renders a "Compiling..." pill in the bottom-right
-// while a route compiles. Screenshotting before it disappears yields
-// a skeleton-only frame. Wait for it to be hidden before continuing.
-async function waitForCompile(page) {
-  try {
-    const indicator = page.locator('text=/Compiling/i').first();
-    if (await indicator.isVisible({ timeout: 500 }).catch(() => false)) {
-      await indicator.waitFor({ state: 'hidden', timeout: 90000 });
-    }
-  } catch {
-    // Indicator absent or already gone — no-op
-  }
-}
-
-// Project Minder's UI uses .animate-pulse skeleton placeholders while data
-// loads. Capturing before they clear yields a content-less frame. Wait for
-// all skeletons to disappear (with a 20s budget — if data is genuinely
-// missing we accept the skeleton frame as the honest empty state).
-async function waitForSkeletons(page) {
+// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
+// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
+// We run the check via waitForFunction (page-context JS, Playwright-enforced
+// timeout) instead of locator polling — keeps the whole wait bounded and
+// avoids the locator.count() hang we hit on stubborn pages.
+async function waitForStableUI(page, { timeout = 25000 } = {}) {
   try {
     await page.waitForFunction(
-      () => document.querySelectorAll('.animate-pulse').length === 0,
+      () => {
+        const w = /** @type {any} */ (window);
+        const now = Date.now();
+        const hasCompile = /Compiling/i.test(document.body.innerText || '');
+        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
+        if (hasCompile || hasSkeleton) {
+          w.__minderQuietSince = null;
+          return false;
+        }
+        if (!w.__minderQuietSince) {
+          w.__minderQuietSince = now;
+          return false;
+        }
+        return now - w.__minderQuietSince >= 1500;
+      },
       null,
-      { timeout: 20000 }
+      { timeout, polling: 250 },
     );
   } catch {
-    // Skeletons may persist if data is genuinely loading slowly — proceed.
+    // Stability not achieved within timeout — accept whatever's on screen.
   }
 }
 
-async function go(page, route, settle = 1500) {
+async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000 } = {}) {
   // domcontentloaded + settle is more reliable than networkidle for this app:
   // background polling (git status, sessions, OTEL) keeps the network busy
   // and would otherwise time out the 30s networkidle wait.
-  // 90s timeout absorbs Next.js dev's first-compile cost for heavy routes.
+  // 90s nav timeout absorbs Next.js dev's first-compile cost; 60s stability
+  // timeout absorbs the data-fetch cost on heavy routes.
+  //
+  // postSettle (default 4s) is the safety net for pages that DON'T use the
+  // Skeleton component (e.g. /usage renders empty stat cards until data
+  // arrives via /api/usage which takes ~5s in dev). waitForStableUI returns
+  // instantly when no skeleton is ever shown, so we always wait a final
+  // window for data fetches to complete.
   await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForTimeout(settle);
-  await waitForCompile(page);
-  await waitForSkeletons(page);
-  await page.waitForTimeout(400); // brief final settle after data arrives
+  await waitForStableUI(page, { timeout: stableTimeout });
+  await page.waitForTimeout(postSettle);
 }
 
 (async () => {
