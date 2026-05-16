@@ -1,5 +1,21 @@
 # Insights
 
+<!-- insight:001c92395dfc | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T03:26:02.992Z -->
+## ★ Insight
+The verification phase paid off. By reading the actual components I found two things that changed the script meaningfully:
+1. **`/config?type=mcp` and `/project/<slug>?tab=config-lint`** — both pages already accept tab state via URL params (from a deep-link feature added in Wave F). That replaces ~12 lines of `try { click('MCP tab') }` with a single `goto()` call and makes captures deterministic regardless of remembered UI state.
+2. **`ConfigLintPanel` lives on project detail, not the global `/config` page.** The plan had me capturing `/config` for the linter shot — that would have shown the catalog/settings tab instead of the actual lint findings. Caught before running the script, not after.
+
+---
+
+<!-- insight:883f96ea15df | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T03:19:19.084Z -->
+## ★ Insight
+Two structural decisions baked into the plan worth noting as you watch this unfold:
+1. **`site/` lives on both branches** — once as tracked content on `main` (the source of truth we edit) and once as the published artifact on the orphan `gh-pages` branch. The capture script writes to `main`'s `site/screenshots/`; the gh-pages worktree just mirrors that directory at publish time. This avoids dual-source drift.
+2. **Empty states are fine for docs.** Several new routes (`/swarms`, `/agent-view`, `/insights-report`) won't have populated content on a fresh machine, but the empty-state UI itself communicates the feature's purpose. Pre-populating just to look busier is a documentation anti-pattern — readers learn more from "here's what this looks like when waiting for work" than from a screenshot crafted to fill every pixel.
+
+---
+
 <!-- insight:0effba216b47 | session:000542fc-59f3-461f-b5d0-bcb62905a8e6 | 2026-05-14T01:00:57.694Z -->
 ## ★ Insight
 The `incremental: true` flag in tsconfig.json creates `.tsbuildinfo` cache files that track which files need re-checking. The bug: when a type union widens (e.g., `HelpSlug` gains a new key), files that *consume* that union but have unchanged bytes don't get invalidated by the incremental cache — so TypeScript silently misses the cross-file error locally. Since `npm run typecheck` uses `tsgo` (the Go port) rather than `tsc`, and Next.js Turbopack does its own incremental building independently, this `incremental` setting only affects `tsc` — which we don't use. Dropping it is a pure win.
