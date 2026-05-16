@@ -2,7 +2,9 @@
 // Pairs with capture-screenshots.mjs (which handles the original landing-page set)
 // and capture-agents-skills.mjs (which handles agents/skills/provenance).
 //
-// Run with the dev server already running on http://localhost:4100.
+// Run with the dev server already running on http://localhost:4100 — or set
+// MINDER_CAPTURE_BASE to point at a prod-built server on a different port
+// (used by scripts/capture-screenshots-prod.mjs).
 // All output lands in site/screenshots/.
 
 import { chromium } from 'playwright';
@@ -11,7 +13,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BASE = 'http://localhost:4100';
+const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
 const OUT  = join(__dirname, '..', 'site', 'screenshots');
 
 mkdirSync(OUT, { recursive: true });

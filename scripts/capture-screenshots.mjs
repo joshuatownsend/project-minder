@@ -4,7 +4,11 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BASE = 'http://localhost:4100';
+// Default targets the dev server (port 4100). The prod-capture orchestrator
+// (scripts/capture-screenshots-prod.mjs) sets MINDER_CAPTURE_BASE to point at
+// a prod-built `next start` on a different port — avoids dev-mode "Compiling…"
+// pills and skeleton placeholders.
+const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
 const OUT  = join(__dirname, '..', 'site', 'screenshots');
 
 mkdirSync(OUT, { recursive: true });
@@ -125,13 +129,14 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   await go(page, '/manual-steps');
   await shoot(page, 'manual-steps');
 
-  // 9. Worktrees — project detail, TODOs tab
+  // 9. TODOs tab — project detail, TODOs tab. (Previously misnamed "worktrees" —
+  // a separate real-worktree-overlay shot remains a follow-up; see TODO.md.)
   await go(page, '/project/project-minder', 900);
   try {
     await page.getByRole('tab', { name: 'TODOs' }).click();
     await page.waitForTimeout(400);
   } catch { /* tab absent or already active — screenshot whatever is visible */ }
-  await shoot(page, 'worktrees');
+  await shoot(page, 'todos-tab');
 
   // 10. Setup page
   await go(page, '/setup');

@@ -1,0 +1,73 @@
+name: Publish gh-pages
+
+# Mirrors `site/*` on main into the orphan `gh-pages` branch root after every
+# push that touches site/**. Replaces the prior manual `git worktree add`
+# publish flow, which is the documented source of drift between branches
+# (see TODO.md entry "Automate site/ → gh-pages publish").
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/gh-pages-publish.yml'
+  # Manual run for ad-hoc resyncs (e.g. recovering from a missed event).
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# Don't cancel an in-flight publish — that risks pushing a half-synced state.
+# Queue subsequent pushes serially behind the running publisher.
+concurrency:
+  group: gh-pages-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch gh-pages branch
+        run: git fetch origin gh-pages:gh-pages
+
+      - name: Sanity-check site/ has content
+        # Refuse to publish if site/ is empty or missing index.html. Without
+        # this guard, an accidental `rm` or rebase that nukes site/ would
+        # propagate `rsync --delete` straight to gh-pages and break the
+        # public site silently.
+        run: |
+          if [ ! -f site/index.html ]; then
+            echo '::error::site/index.html is missing — refusing to publish'
+            exit 1
+          fi
+
+      - name: Add gh-pages worktree
+        run: git worktree add ../gh-pages-worktree gh-pages
+
+      - name: Mirror site/ → gh-pages worktree
+        # --delete prunes files that no longer exist in site/; --exclude .git
+        # protects the worktree's own git metadata. Trailing slash on src tells
+        # rsync to copy contents (not the parent dir).
+        run: rsync -av --delete --exclude='.git' site/ ../gh-pages-worktree/
+
+      - name: Commit and push if changed
+        working-directory: ../gh-pages-worktree
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config user.name 'github-actions[bot]'
+          git add -A
+          if git diff --staged --quiet; then
+            echo 'No changes to publish.'
+            exit 0
+          fi
+          git commit -m "docs(gh-pages): sync from main @ ${SOURCE_SHA:0:7}"
+          git push origin gh-pages

@@ -3,7 +3,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BASE = 'http://localhost:4100';
+// Default targets the dev server (port 4100). The prod-capture orchestrator
+// overrides this with MINDER_CAPTURE_BASE to hit a prod-built server.
+const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
 // Write into site/screenshots/ so all gh-pages assets live in one directory.
 // (Previously this script wrote to scripts/screenshots/ — a path mismatch with
 // the other two capture scripts that prevented gh-pages from picking up agents
