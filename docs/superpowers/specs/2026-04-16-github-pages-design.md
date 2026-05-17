@@ -1,7 +1,7 @@
 # GitHub Pages Landing Site — Design Spec
 
 **Date:** 2026-04-16  
-**Status:** Approved  
+**Status:** Approved (shipped); `worktrees.png` renamed to `todos-tab.png` in PR #144 (2026-05-16) — see follow-up in `TODO.md` for the real worktree-overlay capture.  
 **Hosting:** `gh-pages` branch → `joshuatownsend.github.io/project-minder`
 
 ---

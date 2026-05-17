@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:acfca474a94c | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T23:37:13.377Z -->
+## ★ Insight
+- **`server.killed` is a "signal sent" flag, not a "process exited" flag** — Node's docs are subtle here. After `child.kill('SIGTERM')` returns, `killed` is `true` even if the child is still running (e.g. ignoring SIGTERM). The reliable liveness check is `exitCode === null` (still running) vs a number (exited). Pairing that with an `exit`-event-based wait is the canonical Node pattern for "graceful then forceful" shutdown.
+- **`spawnSync` for one-shot checks** — synchronous spawn is the right tool for the `git diff --quiet` pre-check: there's nothing else to do in parallel, and we want the answer before `npm run build` starts. Using async `spawn` here would add a needless layer of promise plumbing. The trade-off is that `spawnSync` blocks the event loop, which is fine for sub-second commands but a footgun for anything longer.
+- **Dirty-check pattern vs surgical edit** — we could have parsed `tsconfig.json` and only stripped the specific `incremental: true` line Next.js injects. That's more code, more brittleness (Next.js could change the injection shape), and silently changing user files is exactly what got us flagged. The dirty-check is a one-way valve: clean → safe to auto-fix, dirty → hands off and tell the human.
+
+---
+
+<!-- insight:93d050d1159e | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T21:56:18.222Z -->
+## ★ Insight
+- **`fetch-depth: 0` vs the default shallow clone**: gh-pages publishing reads main's full history-relative paths via `rsync`, but more importantly `git fetch origin gh-pages:gh-pages` requires a non-shallow clone or it errors with "fetch on remote-tracking branch is not allowed in a shallow clone." Cheap insurance for an orphan-branch workflow.
+- **`concurrency.cancel-in-progress: false`** vs the project's existing `ci.yml` which uses `true`: CI is idempotent and the latest commit's checks supersede earlier ones, so cancelling mid-run is fine. A gh-pages publish is *non-idempotent at intermediate steps* — interrupting between "rsync delete" and "commit + push" leaves a half-synced worktree. Serial queueing is the safer default for any workflow that mutates a non-source-of-truth branch.
+- **`--exclude='.git'`** on rsync: the worktree has a `.git` *file* (not directory) pointing at the parent repo's git store. `rsync --delete` would happily blow it away on an empty `site/.git` slot. Without the exclude, the second push fails with "fatal: not a git repository".
+
+---
+
+<!-- insight:2bda3b19da97 | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T21:54:52.346Z -->
+## ★ Insight
+- **Why a separate orchestrator vs an npm-script chain**: `next start` is a long-running server, not a `build && start && capture && kill` chainable command. A Node orchestrator can `spawn` the server, wait on readiness with structured polling, run children with controlled env, and guarantee teardown via signal handlers — none of which is expressible in npm-script land.
+- **`taskkill /F /T` is non-negotiable on Windows**: `next start` spawns worker subprocesses (router compiler, SWC native, file watchers). `server.kill()` on Windows only terminates the parent `next.cmd` shim, leaving zombies on port 4101 that block re-runs. The `/T` (tree) flag is the fix — same pattern the in-app `processManager` uses for dev-server stop.
+- **`MINDER_CAPTURE_BASE` as the override knob**: rather than fork the capture scripts, we keep their default behavior identical (`localhost:4100`) and only divert via env. This means a developer running just `npm run capture:docs` still gets the legacy dev-server flow; the prod path layers on top.
+
+---
+
 <!-- insight:001c92395dfc | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T03:26:02.992Z -->
 ## ★ Insight
 The verification phase paid off. By reading the actual components I found two things that changed the script meaningfully:

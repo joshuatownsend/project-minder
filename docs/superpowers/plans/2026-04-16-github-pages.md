@@ -1,5 +1,7 @@
 # GitHub Pages Landing Site — Implementation Plan
 
+> **Status (updated 2026-05-16):** This plan shipped. The `worktrees.png` reference below was renamed to `todos-tab.png` in PR #144 because the actual capture is of the TODOs tab, not a worktree overlay. A real worktree-overlay shot is tracked as a follow-up in `TODO.md`. The dated plan body below is preserved as a historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a public-facing GitHub Pages site at `joshuatownsend.github.io/project-minder` — plain HTML/CSS with 12 Playwright-captured screenshots — that showcases Project Minder's features and converts visitors into users.
