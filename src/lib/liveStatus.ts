@@ -4,6 +4,7 @@ import os from "os";
 import { inferLiveSessionStatus } from "@/lib/scanner/liveSessionStatus";
 import { decodeDirName, toSlug } from "@/lib/scanner/claudeConversations";
 import { WORKTREE_SEP } from "@/lib/scanner/worktrees";
+import { getLiveProcesses } from "@/lib/claudeAgentsCli";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 
@@ -21,7 +22,15 @@ const SESSION_MAX_AGE_MS = 4 * 60 * 60_000;
 const MTIME_EVICT_MS = 15 * 60_000;
 
 interface MtimeCacheEntry { lastMtime: number; lastSeenAt: number }
-export interface StatusPayload { generatedAt: string; sessions: LiveSession[] }
+export interface StatusPayload {
+  generatedAt: string;
+  sessions: LiveSession[];
+  // `true` when `claude agents --json` ran successfully (whether or not it
+  // returned any sessions). `false` when the CLI was missing/timed out/old —
+  // consumers in that case must NOT treat `isLive: undefined` as evidence
+  // of staleness and should fall back to the existing hook-server signals.
+  cliAvailable: boolean;
+}
 
 const g = globalThis as unknown as {
   __statusApiCache?: { data: StatusPayload; cachedAt: number };
@@ -75,12 +84,28 @@ async function buildStatusPayload(): Promise<StatusPayload> {
     if (now - entry.lastSeenAt > MTIME_EVICT_MS) mtimeCache.delete(key);
   }
 
+  // Kick off the CLI call concurrently with the FS walk so its session-id set
+  // can gate the SESSION_MAX_AGE_MS skip below: a long-idle but still-running
+  // Claude Code session has a >4 h JSONL mtime, yet the CLI confirms its PID
+  // is alive. Without this gate, that session would never enter `sessions[]`
+  // and never get `isLive=true` tagged — defeating the verified-live merge.
+  const liveProcessesPromise = getLiveProcesses();
+
   let dirents: import("fs").Dirent<string>[];
   try {
     dirents = await fs.readdir(projectsDir, { withFileTypes: true, encoding: "utf-8" });
   } catch {
-    return { generatedAt: new Date().toISOString(), sessions: [] };
+    const liveProcesses = await liveProcessesPromise;
+    return {
+      generatedAt: new Date().toISOString(),
+      sessions: [],
+      cliAvailable: liveProcesses !== null,
+    };
   }
+
+  const liveProcesses = await liveProcessesPromise;
+  const liveSessionIds = liveProcesses ? new Set(liveProcesses.map((p) => p.sessionId)) : null;
+  const cliAvailable = liveProcesses !== null;
 
   for (const dirent of dirents) {
     if (!dirent.isDirectory()) continue;
@@ -95,9 +120,10 @@ async function buildStatusPayload(): Promise<StatusPayload> {
         const filePath = path.join(dirPath, file);
         try {
           const fstat = await fs.stat(filePath);
-          if (now - fstat.mtime.getTime() > SESSION_MAX_AGE_MS) continue;
-
           const sessionId = path.basename(file, ".jsonl");
+          const isCliAlive = liveSessionIds?.has(sessionId) ?? false;
+          if (now - fstat.mtime.getTime() > SESSION_MAX_AGE_MS && !isCliAlive) continue;
+
           const cacheKey = `${dir}/${sessionId}`;
           const previousMtimeMs = mtimeCache.get(cacheKey)?.lastMtime;
 
@@ -120,6 +146,32 @@ async function buildStatusPayload(): Promise<StatusPayload> {
     } catch { /* skip inaccessible dir */ }
   }
 
+  // Merge `claude agents --json` liveness ground-truth. The CLI knows which
+  // PIDs are actually running; the JSONL-mtime path only knows which files
+  // were touched recently. When CLI is available, every session in our list
+  // is tagged isLive=true|false; when unavailable, isLive stays undefined and
+  // consumers fall back to the existing mtime-based heuristics.
+  if (liveProcesses !== null) {
+    const liveBySessionId = new Map(liveProcesses.map((p) => [p.sessionId, p]));
+    for (const s of sessions) {
+      const proc = liveBySessionId.get(s.sessionId);
+      if (proc) {
+        s.pid = proc.pid;
+        s.isLive = true;
+        // Date construction can throw RangeError on out-of-range timestamps
+        // (>±8.64e15 ms). The typeguard already rejects NaN/Infinity, but a
+        // finite-but-too-large value still falls through — guard here so a
+        // single bad entry can't abort the whole merge loop.
+        try {
+          s.processStartedAt = new Date(proc.startedAt).toISOString();
+        } catch { /* leave processStartedAt unset */ }
+        if (proc.name) s.processName = proc.name;
+      } else {
+        s.isLive = false;
+      }
+    }
+  }
+
   const priority: Record<LiveSessionStatus, number> = {
     approval: 0, working: 1, waiting: 2, other: 3,
   };
@@ -129,7 +181,7 @@ async function buildStatusPayload(): Promise<StatusPayload> {
     return new Date(b.mtime).getTime() - new Date(a.mtime).getTime();
   });
 
-  return { generatedAt: new Date().toISOString(), sessions };
+  return { generatedAt: new Date().toISOString(), sessions, cliAvailable };
 }
 
 /** Force-evict the cache so the next getLiveStatusPayload() call does a fresh scan. */

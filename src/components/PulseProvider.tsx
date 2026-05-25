@@ -20,6 +20,11 @@ export interface PulseChange {
   kind?: string;
 }
 
+export interface LiveProcessInfo {
+  pid: number;
+  name?: string;
+}
+
 export interface PulseSnapshot {
   pendingSteps: number;
   approvalCount: number;
@@ -28,6 +33,13 @@ export interface PulseSnapshot {
   dispatcherPaused: boolean;
   liveSlugs: string[];
   awaitingSlugs: string[];
+  // Slugs whose live status is confirmed by `claude agents --json`.
+  // When `cliAvailable === false`, this falls back to `liveSlugs`, so
+  // consumers can treat `liveSlugs ∖ verifiedLiveSlugs` (set difference)
+  // as "hook server says live but CLI says dead" — i.e., stale ring entry.
+  verifiedLiveSlugs: string[];
+  liveProcessInfo: Record<string, LiveProcessInfo>;
+  cliAvailable: boolean;
   generatedAt: string | null;
 }
 
@@ -56,6 +68,9 @@ export function PulseProvider({ children }: { children: ReactNode }) {
     dispatcherPaused: false,
     liveSlugs: [],
     awaitingSlugs: [],
+    verifiedLiveSlugs: [],
+    liveProcessInfo: {},
+    cliAvailable: false,
     generatedAt: null,
   });
   const lastCheckedRef = useRef<string>(new Date().toISOString());
@@ -94,6 +109,9 @@ export function PulseProvider({ children }: { children: ReactNode }) {
           changes: PulseChange[];
           liveSlugs?: string[];
           awaitingSlugs?: string[];
+          verifiedLiveSlugs?: string[];
+          liveProcessInfo?: Record<string, LiveProcessInfo>;
+          cliAvailable?: boolean;
           generatedAt: string;
         };
 
@@ -101,22 +119,45 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
         const liveSlugs = data.liveSlugs ?? [];
         const awaitingSlugs = data.awaitingSlugs ?? [];
+        const verifiedLiveSlugs = data.verifiedLiveSlugs ?? liveSlugs;
+        const liveProcessInfo = data.liveProcessInfo ?? {};
+        const cliAvailable = data.cliAvailable ?? false;
         const decisionCount = data.decisionCount ?? 0;
         const inboxCount = data.inboxCount ?? 0;
         const dispatcherPaused = data.dispatcherPaused ?? false;
         setSnapshot((prev) => {
+          // Compare process-info shape by stringifying — the object is small
+          // (≤1 entry per live project) and equality dodges a deep-compare.
+          const prevInfoKey = Object.keys(prev.liveProcessInfo).sort().map((k) => `${k}:${prev.liveProcessInfo[k].pid}:${prev.liveProcessInfo[k].name ?? ""}`).join("|");
+          const nextInfoKey = Object.keys(liveProcessInfo).sort().map((k) => `${k}:${liveProcessInfo[k].pid}:${liveProcessInfo[k].name ?? ""}`).join("|");
           if (
             prev.pendingSteps === data.pendingSteps &&
             prev.approvalCount === data.approvalCount &&
             prev.decisionCount === decisionCount &&
             prev.inboxCount === inboxCount &&
             prev.dispatcherPaused === dispatcherPaused &&
+            prev.cliAvailable === cliAvailable &&
             prev.liveSlugs.length === liveSlugs.length &&
             prev.awaitingSlugs.length === awaitingSlugs.length &&
+            prev.verifiedLiveSlugs.length === verifiedLiveSlugs.length &&
             prev.liveSlugs.every((s, i) => s === liveSlugs[i]) &&
-            prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i])
+            prev.awaitingSlugs.every((s, i) => s === awaitingSlugs[i]) &&
+            prev.verifiedLiveSlugs.every((s, i) => s === verifiedLiveSlugs[i]) &&
+            prevInfoKey === nextInfoKey
           ) return prev;
-          return { pendingSteps: data.pendingSteps, approvalCount: data.approvalCount, decisionCount, inboxCount, dispatcherPaused, liveSlugs, awaitingSlugs, generatedAt: data.generatedAt };
+          return {
+            pendingSteps: data.pendingSteps,
+            approvalCount: data.approvalCount,
+            decisionCount,
+            inboxCount,
+            dispatcherPaused,
+            liveSlugs,
+            awaitingSlugs,
+            verifiedLiveSlugs,
+            liveProcessInfo,
+            cliAvailable,
+            generatedAt: data.generatedAt,
+          };
         });
 
         if (data.changes && data.changes.length > 0) {

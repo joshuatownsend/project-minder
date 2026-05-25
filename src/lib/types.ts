@@ -131,6 +131,14 @@ export interface LiveSession {
   status: LiveSessionStatus;
   mtime: string;
   lastToolName?: string;
+  // Liveness ground-truth from `claude agents --json` (v2.1.145+).
+  // `isLive === true`  — CLI confirms the process is alive.
+  // `isLive === false` — CLI ran and did NOT see this session (process exited).
+  // `isLive === undefined` — CLI unavailable; treat liveness as unknown.
+  pid?: number;
+  isLive?: boolean;
+  processStartedAt?: string;
+  processName?: string;
 }
 
 export type MemoryType = "user" | "feedback" | "project" | "reference";

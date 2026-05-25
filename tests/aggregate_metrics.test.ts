@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // test the aggregator's wiring without touching fs, network, or caches.
 
 vi.mock("@/lib/liveStatus", () => ({
-  getLiveStatusPayload: vi.fn().mockResolvedValue({ sessions: [] }),
+  getLiveStatusPayload: vi.fn().mockResolvedValue({ generatedAt: new Date().toISOString(), sessions: [], cliAvailable: false }),
 }));
 
 vi.mock("@/lib/hooks/buffer", () => ({
@@ -63,7 +63,7 @@ beforeEach(() => {
 describe("aggregateLiveSessions — metrics wiring", () => {
   describe("JSONL-only path", () => {
     it("populates costEstimate and maxContextFill for working sessions", async () => {
-      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [jsonlSession("s1", "working")] });
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [jsonlSession("s1", "working")], cliAvailable: false });
       mockGetRoster.mockReturnValue([]);
 
       const result = await aggregateLiveSessions();
@@ -78,7 +78,7 @@ describe("aggregateLiveSessions — metrics wiring", () => {
         ...jsonlSession("s2", "other"),
         mtime: new Date(NOW - 600_000).toISOString(), // 10 min ago
       };
-      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [oldIdleSession] });
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [oldIdleSession], cliAvailable: false });
       mockGetRoster.mockReturnValue([]);
 
       await aggregateLiveSessions();
@@ -89,7 +89,7 @@ describe("aggregateLiveSessions — metrics wiring", () => {
 
   describe("daemon roster path", () => {
     it("populates cost for working roster sessions", async () => {
-      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [] });
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [], cliAvailable: false });
       mockGetRoster.mockReturnValue([rosterEntry("s3", "working")]);
 
       const result = await aggregateLiveSessions();
@@ -99,7 +99,7 @@ describe("aggregateLiveSessions — metrics wiring", () => {
     });
 
     it("skips cost enrichment for terminal roster sessions", async () => {
-      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [] });
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [], cliAvailable: false });
       mockGetRoster.mockReturnValue([rosterEntry("s4", "completed")]);
 
       await aggregateLiveSessions();
@@ -110,7 +110,7 @@ describe("aggregateLiveSessions — metrics wiring", () => {
   describe("when getLiveSessionMetrics returns null", () => {
     it("leaves costEstimate and maxContextFill undefined", async () => {
       mockGetMetrics.mockResolvedValue(null);
-      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [jsonlSession("s5", "working")] });
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [jsonlSession("s5", "working")], cliAvailable: false });
       mockGetRoster.mockReturnValue([]);
 
       const result = await aggregateLiveSessions();

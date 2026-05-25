@@ -48,10 +48,35 @@ export async function GET(request: NextRequest) {
   // Live status and config are independent — fetch concurrently.
   // getLiveStatusPayload() is single-flighted so concurrent callers share the same sweep.
   const [status, cfg] = await Promise.all([getLiveStatusPayload(), readConfig()]);
-  const approvalCount = status.sessions.filter((s) => s.status === "approval").length;
+  // Exclude sessions the CLI just confirmed are dead (isLive===false). When
+  // the CLI is unavailable or the field is missing (older Claude Code), isLive
+  // is undefined and we count the session like before — no regression.
+  const approvalCount = status.sessions.filter(
+    (s) => s.status === "approval" && s.isLive !== false,
+  ).length;
 
   // Hook-server live activity — stale-sweep is cheap (bounded by session count)
   const { liveSlugs, awaitingSlugs } = sweepAndGetState();
+
+  // CLI-verified liveness from `claude agents --json` (v2.1.145+). When the
+  // CLI is unavailable, fall back to the hook-server slugs so consumers that
+  // treat "in liveSlugs but NOT in verifiedLiveSlugs" as "stale ring entry"
+  // don't false-positive on every card. liveProcessInfo carries PID + name
+  // for tooltips on verified-live cards; one entry per slug (first wins,
+  // matching the priority sort in getLiveStatusPayload — approval > working).
+  const verifiedLiveSet = new Set<string>();
+  const liveProcessInfo: Record<string, { pid: number; name?: string }> = {};
+  for (const s of status.sessions) {
+    if (s.isLive === true && s.pid !== undefined) {
+      if (!verifiedLiveSet.has(s.projectSlug)) {
+        liveProcessInfo[s.projectSlug] = s.processName
+          ? { pid: s.pid, name: s.processName }
+          : { pid: s.pid };
+      }
+      verifiedLiveSet.add(s.projectSlug);
+    }
+  }
+  const verifiedLiveSlugs = status.cliAvailable ? Array.from(verifiedLiveSet) : liveSlugs;
 
   // Synthesize awaiting-permission change events for edge-triggered toast/sound.
   // drainNewAwaitingTransitions() returns only slugs that entered awaiting since
@@ -107,6 +132,9 @@ export async function GET(request: NextRequest) {
     changes: [...changes, ...awaitingChanges, ...decisionChanges],
     liveSlugs,
     awaitingSlugs,
+    verifiedLiveSlugs,
+    liveProcessInfo,
+    cliAvailable: status.cliAvailable,
     generatedAt,
   });
 }
@@ -120,5 +148,8 @@ export type PulsePayload = {
   changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
   liveSlugs: string[];
   awaitingSlugs: string[];
+  verifiedLiveSlugs: string[];
+  liveProcessInfo: Record<string, { pid: number; name?: string }>;
+  cliAvailable: boolean;
   generatedAt: string;
 };
