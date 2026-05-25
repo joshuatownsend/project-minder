@@ -70,9 +70,9 @@ function insertSubagentCompleted(
   args: { ts: string; sessionId: string; promptId: string; agentType: string; durationMs: number; model: string; totalTokens: number; totalToolUses: number },
 ): void {
   db.prepare(`
-    INSERT INTO otel_events (event_name, ts, payload_json)
-    VALUES ('subagent_completed', ?, ?)
-  `).run(args.ts, JSON.stringify({
+    INSERT INTO otel_events (event_name, ts, session_id, payload_json)
+    VALUES ('subagent_completed', ?, ?, ?)
+  `).run(args.ts, args.sessionId, JSON.stringify({
     attrs: {
       "session.id": args.sessionId,
       "prompt.id": args.promptId,
@@ -90,9 +90,9 @@ function insertApiRequest(
   args: { ts: string; sessionId: string; promptId: string; costUsd: number; input: number; output: number; cacheRead: number; cacheCreate: number },
 ): void {
   db.prepare(`
-    INSERT INTO otel_events (event_name, ts, payload_json)
-    VALUES ('api_request', ?, ?)
-  `).run(args.ts, JSON.stringify({
+    INSERT INTO otel_events (event_name, ts, session_id, payload_json)
+    VALUES ('api_request', ?, ?, ?)
+  `).run(args.ts, args.sessionId, JSON.stringify({
     attrs: {
       "session.id": args.sessionId,
       "prompt.id": args.promptId,
@@ -215,9 +215,12 @@ describe.skipIf(!driverAvailable)("enrichSubagentsFromOtel", () => {
 
     expect(subagents[0].model).toBe("m1");
     expect(subagents[0].durationMs).toBe(5000);
-    expect(subagents[0].inputTokens).toBe(9999);
+    // Fallback writes to `totalTokens`, NOT `inputTokens`, so consumers
+    // can distinguish a precise input-token count from a combined rollup.
+    expect(subagents[0].totalTokens).toBe(9999);
+    expect(subagents[0].inputTokens).toBeUndefined();
+    expect(subagents[0].outputTokens).toBeUndefined();
     // Cost stays undefined — we can't reliably split I/O for pricing.
     expect(subagents[0].costUsd).toBeUndefined();
-    expect(subagents[0].outputTokens).toBeUndefined();
   });
 });

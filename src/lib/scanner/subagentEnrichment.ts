@@ -112,11 +112,12 @@ export async function enrichSubagentsFromOtel(
       agent.outputTokens = rollup.outputTokens;
       agent.cacheReadTokens = rollup.cacheReadTokens;
       agent.cacheCreateTokens = rollup.cacheCreateTokens;
-    } else {
-      // No api_request rollup available — fall back to subagent_completed's
-      // total_tokens. Cost stays undefined since we can't reliably split
-      // input/output for pricing.
-      agent.inputTokens = completion.totalTokens;
+    } else if (completion.totalTokens > 0) {
+      // No api_request rollup available — surface the rollup-only token
+      // total under a dedicated field so consumers don't mistake it for an
+      // input/output value. Cost stays undefined since we can't reliably
+      // split input/output for pricing.
+      agent.totalTokens = completion.totalTokens;
     }
   }
 }
@@ -125,8 +126,12 @@ function querySubagentCompletions(
   db: import("better-sqlite3").Database,
   sessionId: string,
 ): SubagentCompletion[] {
-  // OTEL attrs in `otel_events.payload_json` follow the shape `{ attrs: {...} }`.
-  // Numeric attrs arrive as strings via the OTEL JS SDK (stringValue); cast.
+  // Filter on the indexed `otel_events.session_id` column — same convention
+  // as `src/lib/db/otelQueries.ts`. The column is populated at ingest time
+  // (otelIngest.ts:112) from per-record OR resource attrs, so it's the
+  // canonical source. Using `json_extract(payload_json, ...)` here would
+  // both miss rows where the attr lives only on the resource AND defeat
+  // the `otel_events_by_session(session_id, ts)` index.
   const rows = db.prepare(`
     SELECT
       json_extract(payload_json, '$.attrs."prompt.id"')          AS promptId,
@@ -137,8 +142,8 @@ function querySubagentCompletions(
       CAST(json_extract(payload_json, '$.attrs.total_tokens')    AS INTEGER) AS totalTokens,
       ts                                                          AS eventTimestamp
     FROM otel_events
-    WHERE event_name = 'subagent_completed'
-      AND json_extract(payload_json, '$.attrs."session.id"') = ?
+    WHERE session_id = ?
+      AND event_name = 'subagent_completed'
     ORDER BY ts ASC
   `).all(sessionId) as Array<{
     promptId: string | null;
@@ -169,6 +174,8 @@ function queryApiRequestsBySession(
   // Pre-aggregate by prompt.id in SQL to keep the JS layer small.
   // cost_usd in api_request is a real number (not stringified) per the
   // OTEL metrics SDK; input/output/cache token attrs may be strings.
+  // Filter on the indexed `session_id` column (see comment in
+  // `querySubagentCompletions` above for rationale).
   const rows = db.prepare(`
     SELECT
       json_extract(payload_json, '$.attrs."prompt.id"')                   AS promptId,
@@ -178,8 +185,8 @@ function queryApiRequestsBySession(
       SUM(CAST(json_extract(payload_json, '$.attrs.cache_read_tokens') AS INTEGER))     AS cacheReadTokens,
       SUM(CAST(json_extract(payload_json, '$.attrs.cache_creation_tokens') AS INTEGER)) AS cacheCreateTokens
     FROM otel_events
-    WHERE event_name = 'api_request'
-      AND json_extract(payload_json, '$.attrs."session.id"') = ?
+    WHERE session_id = ?
+      AND event_name = 'api_request'
     GROUP BY json_extract(payload_json, '$.attrs."prompt.id"')
   `).all(sessionId) as Array<{
     promptId: string | null;

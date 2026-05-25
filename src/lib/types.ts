@@ -792,13 +792,23 @@ export interface SubagentInfo {
   category?: SubagentCategory;
   metaTurnCount?: number;
   metaSourced?: boolean;
-  // Per-invocation runtime metrics, computed from the sidechain assistant
-  // turns belonging to this agent (matched via `parentToolUseID`). Only
-  // populated by the file-parse path; the DB-ingest path currently leaves
-  // these undefined (parity divergence #3 in tests/dataSessionDetail.test.ts).
+  // Per-invocation runtime metrics, populated by `enrichSubagentsFromOtel`
+  // from OTEL `subagent_completed` (model, duration, total_tokens) joined
+  // with `api_request` events by `prompt.id` for exact cost + I/O split.
+  // Both file-parse (`scanSessionDetail`) and DB-backed
+  // (`loadSessionDetailFromDb`) paths run the enrichment. Fields stay
+  // undefined when the session has no OTEL coverage (older Claude Code,
+  // no telemetry exporter) or the SQLite driver isn't loaded.
+  //
+  // `costUsd`, `inputTokens`, `outputTokens`, `cacheReadTokens`, and
+  // `cacheCreateTokens` are populated only when `api_request` rows exist
+  // for the matching `prompt.id`. When only the rollup `subagent_completed`
+  // event is available (no api_request join), `totalTokens` carries
+  // input+output combined (no I/O split, no cost — can't be priced).
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
   model?: string;
