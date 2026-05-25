@@ -27,7 +27,7 @@ Plugin agents also show a **version chip** (e.g. `v1.2.3`) next to the badge. If
 ## Row Indicators
 
 - **`!` chip (amber)** — the agent's frontmatter has a parse warning (e.g. invalid YAML). Hover the chip to see the error message. The row still renders with the name and description that could be recovered.
-- **`$N.NN` chip** — estimated cost of all sidechain (subagent) turns spawned by this agent across your session history. Computed on demand from JSONL files; appears when the agent has attributable cost.
+- **`$N.NN` chip** — estimated cost of all subagent invocations of this agent across your session history. Computed from OTEL `subagent_completed` + `api_request` events. **Coverage:** pre-OTEL sessions (before you set `OTEL_EXPORTER_OTLP_ENDPOINT`) have no recoverable per-agent cost, so the chip surfaces $0 for them; recent OTEL-equipped sessions show real numbers. When multiple agents dispatch from the same user turn, cost is split proportionally by each invocation's `total_tokens`.
 - **Copy button** — click the copy icon next to `@<name>` to copy the invocation string to the clipboard. Use this string as the `subagent_type` argument when invoking the agent programmatically.
 
 ## Update Detection

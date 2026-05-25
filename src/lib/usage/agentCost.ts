@@ -1,7 +1,25 @@
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import { getModelPricing, applyPricing } from "./costCalculator";
+import "server-only";
+import {
+  computeAgentCostInvocationsFromOtel,
+  aggregateAgentCostByType,
+} from "./agentCostFromOtel";
+
+// Portfolio-level per-agent cost.
+//
+// Pre-PR-#163 this module walked `~/.claude/projects/**/*.jsonl` and
+// accumulated cost from sidechain assistant entries linked via
+// `parentToolUseID`. Claude Code dropped sidechain entries from the
+// parent session JSONL (probed 2026-05-25: 0/214 sessions retained
+// any sidechain assistants), making that path return $0 for every
+// agent (issue #161). The replacement reads OTEL `subagent_completed`
+// + `api_request` events — see `agentCostFromOtel.ts` for the
+// matched-set proportional-distribution rule that handles
+// parallel-dispatch turns correctly.
+//
+// **Coverage caveat.** OTEL emission is only present in sessions
+// run with `OTEL_EXPORTER_OTLP_ENDPOINT` configured. Pre-OTEL
+// sessions (most of any user's history) have no cost data to
+// recover. The `/agents` UI surface notes this.
 
 export interface AgentCostEntry {
   costUsd: number;
@@ -13,139 +31,45 @@ const globalForAgentCost = globalThis as unknown as {
   __agentCostCache?: { map: Map<string, AgentCostEntry>; expiresAt: number };
 };
 
-interface RawEntry {
-  type?: string;
-  isSidechain?: boolean;
-  isMeta?: boolean;
-  parentToolUseID?: string;
-  message?: {
-    model?: string;
-    content?: Array<{
-      type?: string;
-      name?: string;
-      id?: string;
-      input?: { subagent_type?: string; agent?: string; [key: string]: unknown };
-    }>;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    };
-  };
-}
-
 /**
- * Walk all JSONL files in ~/.claude/projects/ and compute per-agent
- * cost from sidechain turns in a single pass.
+ * Compute per-agent cost across all OTEL-equipped sessions. Returns a
+ * Map keyed by `agent_type` (the same string Claude Code emits as
+ * `subagent_completed.agent_type`, which matches `AgentEntry.name`
+ * once aliased via `buildAgentAliasMap`).
  *
- * Strategy per file:
- *   Pass 1: collect Task tool_use blocks from main-conversation turns
- *           to build tool_use_id → subagent_type.
- *   Pass 2: accumulate cost from sidechain assistant turns by matching
- *           parentToolUseID → agent name.
- *
- * Called on-demand from /api/agents. Returns a Map from agent_name → costs.
+ * Cached in `globalThis` for 2 minutes — keeps per-request load on
+ * `/api/agents` cheap. The cache invalidates implicitly by TTL; an
+ * explicit invalidation hook isn't needed because new OTEL events
+ * are appended out-of-band by the ingest worker and a 2-min
+ * staleness on a portfolio analytics column is fine.
  */
 export async function computeAgentCostFromFiles(): Promise<Map<string, AgentCostEntry>> {
+  // Function name retained for back-compat with `data/index.ts`
+  // imports; the implementation no longer touches the filesystem.
   const now = Date.now();
   const cached = globalForAgentCost.__agentCostCache;
   if (cached && now < cached.expiresAt) return cached.map;
 
-  const projectsRoot = path.join(os.homedir(), ".claude", "projects");
+  const invocations = await computeAgentCostInvocationsFromOtel();
+  const rollup = aggregateAgentCostByType(invocations);
 
-  let projectDirs: string[];
-  try {
-    projectDirs = await fs.readdir(projectsRoot);
-  } catch {
-    return new Map();
-  }
-
+  // Project the richer rollup down to the (costUsd, inputTokens,
+  // outputTokens) triple the existing call site
+  // (`mergeAgentCost` in data/index.ts) expects. Invocation counts
+  // surface separately through the indexed `tool_uses`-based
+  // `AgentStats.invocations` field — re-emitting them here would
+  // duplicate that signal.
   const result = new Map<string, AgentCostEntry>();
-
-  await Promise.all(
-    projectDirs.map(async (dirName) => {
-      const dirPath = path.join(projectsRoot, dirName);
-      let files: string[];
-      try {
-        files = await fs.readdir(dirPath);
-      } catch {
-        return;
-      }
-
-      await Promise.all(
-        files
-          .filter((f) => f.endsWith(".jsonl"))
-          .map(async (f) => {
-            let raw: string;
-            try {
-              raw = await fs.readFile(path.join(dirPath, f), "utf-8");
-            } catch {
-              return;
-            }
-
-            const lines = raw.split("\n");
-            const entries: RawEntry[] = [];
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              try {
-                entries.push(JSON.parse(trimmed) as RawEntry);
-              } catch {
-                // skip malformed lines
-              }
-            }
-
-            // Build tool_use_id → agent_name from main-conversation Task calls
-            const taskMap = new Map<string, string>();
-            for (const entry of entries) {
-              if (entry.isSidechain || entry.isMeta) continue;
-              if (entry.type !== "assistant" || !entry.message) continue;
-              for (const block of entry.message.content ?? []) {
-                if (block.type === "tool_use" && block.name === "Agent" && block.id) {
-                  const agentName = block.input?.subagent_type ?? block.input?.agent;
-                  if (typeof agentName === "string") taskMap.set(block.id, agentName);
-                }
-              }
-            }
-
-            // Accumulate cost from sidechain assistant turns
-            for (const entry of entries) {
-              if (!entry.isSidechain || entry.type !== "assistant" || !entry.message) continue;
-              const model = entry.message.model;
-              if (!model || model === "<synthetic>") continue;
-
-              const usage = entry.message.usage ?? {};
-              const inputTokens = usage.input_tokens ?? 0;
-              const outputTokens = usage.output_tokens ?? 0;
-              const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
-              const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
-
-              const agentName =
-                (entry.parentToolUseID && taskMap.get(entry.parentToolUseID)) || "unknown";
-
-              const pricing = getModelPricing(model);
-              const cost = applyPricing(pricing, {
-                inputTokens,
-                outputTokens,
-                cacheCreateTokens,
-                cacheReadTokens,
-              });
-
-              const existing = result.get(agentName) ?? {
-                costUsd: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-              };
-              existing.costUsd += cost;
-              existing.inputTokens += inputTokens;
-              existing.outputTokens += outputTokens;
-              result.set(agentName, existing);
-            }
-          })
-      );
-    })
-  );
+  for (const [agentType, entry] of rollup) {
+    if (entry.costUsd === 0 && entry.inputTokens === 0 && entry.outputTokens === 0) {
+      continue;
+    }
+    result.set(agentType, {
+      costUsd: entry.costUsd,
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+    });
+  }
 
   globalForAgentCost.__agentCostCache = { map: result, expiresAt: now + 120_000 };
   return result;
