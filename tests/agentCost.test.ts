@@ -437,11 +437,79 @@ describe.skipIf(!driverAvailable)("computeAgentCostInvocationsFromOtel", () => {
     const sessionA = await fromOtel.computeAgentCostInvocationsFromOtel({
       sessionId: "session-a",
     });
-    expect(sessionA).toHaveLength(1);
-    expect(sessionA[0].sessionId).toBe("session-a");
-    expect(sessionA[0].costUsd).toBeCloseTo(0.1, 4);
+    expect(sessionA).not.toBeNull();
+    expect(sessionA!).toHaveLength(1);
+    expect(sessionA![0].sessionId).toBe("session-a");
+    expect(sessionA![0].costUsd).toBeCloseTo(0.1, 4);
 
     const all = await fromOtel.computeAgentCostInvocationsFromOtel();
-    expect(all).toHaveLength(2);
+    expect(all).not.toBeNull();
+    expect(all!).toHaveLength(2);
+  });
+
+  it("keys cost attribution by (session_id, prompt_id) — no cross-session collision", async () => {
+    // Defensive: two sessions reuse the same prompt.id by accident
+    // (UUID collisions are astronomically unlikely but the schema
+    // doesn't enforce uniqueness, so the join key must be the
+    // compound). See issue #161 follow-up.
+    const { fromOtel, mig, conn } = await reloadModules();
+    await mig.initDb();
+    const db = (await conn.getDb())!;
+
+    const sharedPromptId = "p-collision";
+    // Session A: invocation with $0.10 of agent:custom cost.
+    insertSubagentCompleted(db, {
+      ts: "2026-05-25T10:00:30Z",
+      sessionId: "session-a",
+      promptId: sharedPromptId,
+      agentType: "agent-a",
+      totalTokens: 1000,
+    });
+    insertApiRequest(db, {
+      ts: "2026-05-25T10:00:10Z",
+      sessionId: "session-a",
+      promptId: sharedPromptId,
+      querySource: "agent:custom",
+      costUsd: 0.10,
+      input: 10,
+      output: 20,
+    });
+    // Session B: invocation with $5.00 — must NOT bleed onto agent-a.
+    insertSubagentCompleted(db, {
+      ts: "2026-05-25T10:01:30Z",
+      sessionId: "session-b",
+      promptId: sharedPromptId,
+      agentType: "agent-b",
+      totalTokens: 99999,
+    });
+    insertApiRequest(db, {
+      ts: "2026-05-25T10:01:10Z",
+      sessionId: "session-b",
+      promptId: sharedPromptId,
+      querySource: "agent:custom",
+      costUsd: 5.00,
+      input: 1000,
+      output: 2000,
+    });
+
+    const invocations = await fromOtel.computeAgentCostInvocationsFromOtel();
+    expect(invocations).not.toBeNull();
+    const a = invocations!.find((i) => i.sessionId === "session-a")!;
+    const b = invocations!.find((i) => i.sessionId === "session-b")!;
+    // Each session keeps its own cost, untouched by the other.
+    expect(a.costUsd).toBeCloseTo(0.10, 4);
+    expect(b.costUsd).toBeCloseTo(5.00, 4);
+    expect(a.agentType).toBe("agent-a");
+    expect(b.agentType).toBe("agent-b");
+  });
+
+  it("returns null on OTEL read failure (so caller can skip caching)", async () => {
+    const { fromOtel } = await reloadModules();
+    // No initDb() — getDb() will throw on querying missing tables.
+    const result = await fromOtel.computeAgentCostInvocationsFromOtel();
+    // null distinguishes failure from `[]` (success-no-data). Callers
+    // (e.g. agentCost.ts) skip the 2-min cache write on null so the
+    // dashboard recovers as soon as the DB does.
+    expect(result).toBeNull();
   });
 });

@@ -62,6 +62,7 @@ interface OtelInvocationRow {
 }
 
 interface OtelCostRow {
+  sessionId: string;
   promptId: string;
   querySource: string;
   costUsd: number;
@@ -99,26 +100,33 @@ export interface AgentCostFromOtelOpts {
 }
 
 /**
- * Compute per-invocation agent cost from OTEL events. Best-effort —
- * returns `[]` when the SQLite driver isn't loaded, the connection
- * can't open, or the events tables are missing/empty.
+ * Compute per-invocation agent cost from OTEL events.
  *
- * Each returned row corresponds to exactly one `subagent_completed`
+ * Returns `null` when the OTEL read itself failed (SQLite driver
+ * unloaded, connection refused, query threw on a partially-migrated
+ * schema). Callers should treat `null` as "data unavailable" and
+ * avoid caching the result.
+ *
+ * Returns `[]` when the read succeeded but no `subagent_completed`
+ * events match the filter (cold install, brand-new session, OTEL
+ * disabled). Callers can cache `[]` safely.
+ *
+ * Each invocation row corresponds to exactly one `subagent_completed`
  * event; sibling invocations sharing a prompt.id appear as separate
  * rows with the cost split proportionally per the rules in the file
  * header.
  */
 export async function computeAgentCostInvocationsFromOtel(
   opts: AgentCostFromOtelOpts = {},
-): Promise<AgentCostInvocation[]> {
+): Promise<AgentCostInvocation[] | null> {
   let db: import("better-sqlite3").Database | null = null;
   try {
     const { getDb } = await import("@/lib/db/connection");
     db = await getDb();
   } catch {
-    return [];
+    return null;
   }
-  if (!db) return [];
+  if (!db) return null;
 
   let invocations: OtelInvocationRow[];
   let costs: OtelCostRow[];
@@ -126,25 +134,30 @@ export async function computeAgentCostInvocationsFromOtel(
     invocations = querySubagentInvocations(db, opts.sessionId);
     costs = queryAgentCosts(db, opts.sessionId);
   } catch {
-    return [];
+    return null;
   }
   if (invocations.length === 0) return [];
 
-  // Group invocations by prompt.id, preserving chronological order
-  // (the SQL ORDER BY ts handles this).
+  // Group invocations by (sessionId, promptId), preserving chronological
+  // order (the SQL ORDER BY ts handles this). prompt.id alone is not
+  // safe in portfolio mode — see queryAgentCosts comment.
+  const promptKey = (sessionId: string, promptId: string) =>
+    `${sessionId}\x00${promptId}`;
   const byPrompt = new Map<string, OtelInvocationRow[]>();
   for (const inv of invocations) {
-    const list = byPrompt.get(inv.promptId) ?? [];
+    const key = promptKey(inv.sessionId, inv.promptId);
+    const list = byPrompt.get(key) ?? [];
     list.push(inv);
-    byPrompt.set(inv.promptId, list);
+    byPrompt.set(key, list);
   }
 
-  // Group cost rows by prompt.id.
+  // Group cost rows by (sessionId, promptId) for the same reason.
   const costsByPrompt = new Map<string, OtelCostRow[]>();
   for (const c of costs) {
-    const list = costsByPrompt.get(c.promptId) ?? [];
+    const key = promptKey(c.sessionId, c.promptId);
+    const list = costsByPrompt.get(key) ?? [];
     list.push(c);
-    costsByPrompt.set(c.promptId, list);
+    costsByPrompt.set(key, list);
   }
 
   // Seed result rows in the same chronological order as `invocations`.
@@ -173,10 +186,10 @@ export async function computeAgentCostInvocationsFromOtel(
     results.push(row);
   }
 
-  // Walk each prompt and distribute its agent:* cost rows across the
-  // appropriate matched set of invocations.
-  for (const [promptId, promptInvocations] of byPrompt) {
-    const promptCosts = costsByPrompt.get(promptId) ?? [];
+  // Walk each (session, prompt) and distribute its agent:* cost rows
+  // across the appropriate matched set of invocations.
+  for (const [key, promptInvocations] of byPrompt) {
+    const promptCosts = costsByPrompt.get(key) ?? [];
     if (promptCosts.length === 0) continue;
 
     // Derive the set of *builtin* agent types referenced in this
@@ -315,13 +328,19 @@ function queryAgentCosts(
   db: import("better-sqlite3").Database,
   sessionId?: string,
 ): OtelCostRow[] {
-  // Pre-aggregate by (prompt.id, query_source) in SQL — keeps the JS
-  // distribution loop small and avoids carrying thousands of individual
-  // api_request rows into memory.
+  // Pre-aggregate by (session_id, prompt.id, query_source) in SQL —
+  // keeps the JS distribution loop small and avoids carrying thousands
+  // of individual api_request rows into memory.
   //
   // Filter to `agent:%` query_sources only — `repl_main_thread` and
   // ancillary sources (`compact`, `away_summary`, etc.) are not
   // subagent cost.
+  //
+  // Grouping must include `session_id` for portfolio-wide rollups
+  // (`sessionId` undefined): `prompt.id` is a UUID but the schema
+  // doesn't enforce cross-session uniqueness, and lumping costs from
+  // two sessions that happened to share a prompt.id would misattribute
+  // them onto each other's invocations. See PR #163 review.
   const whereParts: string[] = [
     `event_name = 'api_request'`,
     `json_extract(payload_json, '$.attrs.query_source') LIKE 'agent:%'`,
@@ -333,6 +352,7 @@ function queryAgentCosts(
   }
   const rows = db.prepare(`
     SELECT
+      session_id                                                                 AS sessionId,
       json_extract(payload_json, '$.attrs."prompt.id"')                          AS promptId,
       json_extract(payload_json, '$.attrs.query_source')                         AS querySource,
       SUM(CAST(json_extract(payload_json, '$.attrs.cost_usd')             AS REAL))    AS costUsd,
@@ -342,8 +362,9 @@ function queryAgentCosts(
       SUM(CAST(json_extract(payload_json, '$.attrs.cache_creation_tokens') AS INTEGER)) AS cacheCreateTokens
     FROM otel_events
     WHERE ${whereParts.join(" AND ")}
-    GROUP BY promptId, querySource
+    GROUP BY sessionId, promptId, querySource
   `).all(...params) as Array<{
+    sessionId: string | null;
     promptId: string | null;
     querySource: string | null;
     costUsd: number | null;
@@ -353,8 +374,9 @@ function queryAgentCosts(
     cacheCreateTokens: number | null;
   }>;
   return rows
-    .filter((r) => r.promptId !== null && r.querySource !== null)
+    .filter((r) => r.sessionId !== null && r.promptId !== null && r.querySource !== null)
     .map((r) => ({
+      sessionId: r.sessionId!,
       promptId: r.promptId!,
       querySource: r.querySource!,
       costUsd: r.costUsd ?? 0,

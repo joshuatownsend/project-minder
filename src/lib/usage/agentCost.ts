@@ -51,6 +51,14 @@ export async function computeAgentCostFromFiles(): Promise<Map<string, AgentCost
   if (cached && now < cached.expiresAt) return cached.map;
 
   const invocations = await computeAgentCostInvocationsFromOtel();
+
+  // `null` signals an OTEL read failure (driver missing, query threw).
+  // Returning an empty Map is the right user-facing answer (chip absent),
+  // but writing it into the 2-minute cache would lock the dashboard
+  // into the failure state long after the DB recovers. Return without
+  // caching so the next call retries.
+  if (invocations === null) return new Map();
+
   const rollup = aggregateAgentCostByType(invocations);
 
   // Project the richer rollup down to the (costUsd, inputTokens,

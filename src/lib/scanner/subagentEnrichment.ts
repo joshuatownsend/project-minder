@@ -41,8 +41,11 @@ export async function enrichSubagentsFromOtel(
 ): Promise<void> {
   if (subagents.length === 0) return;
 
+  // `null` signals OTEL read failure (driver missing, query threw on a
+  // partially-migrated schema). No-op rather than mutating the SubagentInfo
+  // array — the JSONL-derived skeleton still renders without runtime chips.
   const invocations = await computeAgentCostInvocationsFromOtel({ sessionId });
-  if (invocations.length === 0) return;
+  if (invocations === null || invocations.length === 0) return;
 
   // Group invocations by agent_type, preserving chronological order
   // (the underlying SQL returned them sorted by ts ASC).
@@ -75,7 +78,15 @@ export async function enrichSubagentsFromOtel(
     // raw prompt.id total — writing it raw here is correct. Token
     // shares are fractional in `inv` (the util defers rounding to
     // consumption sites); display layers want integers, so round here.
-    if (inv.costUsd > 0 || inv.inputTokens > 0 || inv.outputTokens > 0) {
+    // The condition includes cache tokens (Copilot review: a cache-
+    // heavy turn with zero input/output should still surface).
+    const hasAnyCostOrTokens =
+      inv.costUsd          > 0 ||
+      inv.inputTokens      > 0 ||
+      inv.outputTokens     > 0 ||
+      inv.cacheReadTokens  > 0 ||
+      inv.cacheCreateTokens > 0;
+    if (hasAnyCostOrTokens) {
       agent.costUsd           = inv.costUsd;
       agent.inputTokens       = Math.round(inv.inputTokens);
       agent.outputTokens      = Math.round(inv.outputTokens);
