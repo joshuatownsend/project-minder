@@ -28,14 +28,22 @@ function LiveStatusBadge({
   isLive,
   isAwaiting,
   isVerifiedLive,
+  cliAvailable,
   processInfo,
 }: {
   isLive: boolean;
   isAwaiting: boolean;
   isVerifiedLive: boolean;
+  cliAvailable: boolean;
   processInfo?: { pid: number; name?: string };
 }) {
-  if (isAwaiting) return (
+  // Awaiting beats verified-live only when CLI hasn't independently said the
+  // process is gone. With `cliAvailable && !isVerifiedLive`, we know the
+  // session crashed mid-Notification — fall through to the dim "live?" branch
+  // (or no badge) so the user sees a stale-state indicator instead of an
+  // amber input badge that has no live process to respond to it.
+  const awaitingValid = isAwaiting && (isVerifiedLive || !cliAvailable);
+  if (awaitingValid) return (
     <span title="Claude Code is awaiting permission" style={{
       display: "inline-flex", alignItems: "center", gap: "4px",
       fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
@@ -188,7 +196,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
-            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} processInfo={processInfo} />
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} cliAvailable={snapshot.cliAvailable} processInfo={processInfo} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
@@ -313,7 +321,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
-            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} processInfo={processInfo} />
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} cliAvailable={snapshot.cliAvailable} processInfo={processInfo} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}

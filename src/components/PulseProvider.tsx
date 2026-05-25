@@ -117,11 +117,21 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
         lastCheckedRef.current = data.generatedAt;
 
-        const liveSlugs = data.liveSlugs ?? [];
-        const awaitingSlugs = data.awaitingSlugs ?? [];
-        const verifiedLiveSlugs = data.verifiedLiveSlugs ?? liveSlugs;
-        const liveProcessInfo = data.liveProcessInfo ?? {};
+        // Sort the slug arrays so the index-pairwise equality check below
+        // doesn't trigger an unnecessary re-render when the server's
+        // Set-derived iteration order shifts without a content change.
+        const liveSlugs = (data.liveSlugs ?? []).slice().sort();
+        const awaitingSlugs = (data.awaitingSlugs ?? []).slice().sort();
         const cliAvailable = data.cliAvailable ?? false;
+        // Only fall back to `liveSlugs` when the CLI is unavailable. With
+        // `cliAvailable: true && verifiedLiveSlugs: undefined` (schema drift,
+        // hot-reload mismatch), substituting `liveSlugs` would silently
+        // re-enable the false-positive "verified live" badge the field exists
+        // to prevent — return [] instead.
+        const verifiedLiveSlugs = (
+          data.verifiedLiveSlugs ?? (cliAvailable ? [] : data.liveSlugs ?? [])
+        ).slice().sort();
+        const liveProcessInfo = data.liveProcessInfo ?? {};
         const decisionCount = data.decisionCount ?? 0;
         const inboxCount = data.inboxCount ?? 0;
         const dispatcherPaused = data.dispatcherPaused ?? false;

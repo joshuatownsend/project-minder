@@ -150,6 +150,50 @@ describe("getLiveProcesses", () => {
     expect(result![0].sessionId).toBe("good");
   });
 
+  it("rejects entries with non-string `name` (number, object)", async () => {
+    // Typeguard must validate optional `name` — otherwise a non-string value
+    // flows into `processName: string` and renders as `[object Object]` /
+    // `42` in tooltips.
+    stubExecFile({
+      stdout: JSON.stringify([
+        { pid: 1, cwd: "C:\\dev\\a", kind: "interactive", startedAt: 1, sessionId: "good-undef", status: "busy" },
+        { pid: 2, cwd: "C:\\dev\\b", kind: "interactive", startedAt: 2, sessionId: "bad-num", status: "busy", name: 42 },
+        { pid: 3, cwd: "C:\\dev\\c", kind: "interactive", startedAt: 3, sessionId: "bad-obj", status: "busy", name: { foo: 1 } },
+        { pid: 4, cwd: "C:\\dev\\d", kind: "interactive", startedAt: 4, sessionId: "good-str", status: "busy", name: "my-session" },
+      ]),
+    });
+    const result = await getLiveProcesses();
+    expect(result).toHaveLength(2);
+    expect(result!.map((p) => p.sessionId).sort()).toEqual(["good-str", "good-undef"]);
+  });
+
+  it("invalidate during in-flight fetch prevents stale cache write", async () => {
+    // The .then writes cache only when __claudeAgentsFlight still points to
+    // the same flight Promise. After invalidate clears it, the resolving
+    // flight must not repopulate the cache. The next call must spawn fresh.
+    let resolveCli: ((stdout: string) => void) | null = null;
+    execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+      const cb = callback as (err: Error | null, stdout: string, stderr: string) => void;
+      resolveCli = (stdout: string) => cb(null, stdout, "");
+      return {} as ReturnType<typeof execFile>;
+    });
+
+    // Start a flight; do NOT await it yet.
+    const flight1 = getLiveProcesses();
+    invalidateClaudeAgentsCache();
+    // Now resolve the in-flight CLI with stale data — its .then should detect
+    // the flight slot is cleared and skip the cache write.
+    resolveCli!(JSON.stringify([{ pid: 99, cwd: "x", kind: "interactive", startedAt: 1, sessionId: "stale", status: "busy" }]));
+    await flight1;
+
+    // Stub a fresh CLI response and call again — should spawn a NEW exec,
+    // not return the in-flight's stale result from cache.
+    stubExecFile({ stdout: "[]" });
+    const result2 = await getLiveProcesses();
+    expect(result2).toEqual([]);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("caches null results for a shorter TTL than success results", async () => {
     // Negative-result TTL is 1 s; success TTL is 10 s. A single failed call
     // must NOT lock the dashboard into CLI-unavailable mode for the full 10 s.

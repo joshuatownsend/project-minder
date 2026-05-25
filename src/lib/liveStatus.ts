@@ -18,6 +18,10 @@ import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 // pulse arriving slightly before its peer interval still hits the cache.
 
 const API_CACHE_TTL = 6_000;
+// Shorter TTL when the embedded CLI probe came back unavailable — matches the
+// 1 s negative-result TTL in claudeAgentsCli so a transient CLI blip doesn't
+// pin `cliAvailable=false` for the full 6 s API window.
+const API_CACHE_TTL_CLI_UNAVAILABLE = 1_000;
 const SESSION_MAX_AGE_MS = 4 * 60 * 60_000;
 const MTIME_EVICT_MS = 15 * 60_000;
 
@@ -175,9 +179,19 @@ async function buildStatusPayload(): Promise<StatusPayload> {
   const priority: Record<LiveSessionStatus, number> = {
     approval: 0, working: 1, waiting: 2, other: 3,
   };
+  // Prefer CLI-confirmed-live sessions when statuses tie. `isLive === false`
+  // is "definitely dead" and demoted; `isLive === undefined` (CLI unavailable)
+  // is neutral so older Claude Code versions see the unchanged mtime ordering.
+  const liveRank = (s: LiveSession): number => {
+    if (s.isLive === true) return 0;
+    if (s.isLive === false) return 1;
+    return 0;
+  };
   sessions.sort((a, b) => {
-    const diff = priority[a.status] - priority[b.status];
-    if (diff !== 0) return diff;
+    const statusDiff = priority[a.status] - priority[b.status];
+    if (statusDiff !== 0) return statusDiff;
+    const liveDiff = liveRank(a) - liveRank(b);
+    if (liveDiff !== 0) return liveDiff;
     return new Date(b.mtime).getTime() - new Date(a.mtime).getTime();
   });
 
@@ -194,8 +208,11 @@ export function invalidateLiveStatusCache(): void {
 // (e.g. /api/status and /api/pulse) don't each trigger a fresh FS sweep.
 export async function getLiveStatusPayload(): Promise<StatusPayload> {
   const cache = g.__statusApiCache;
-  if (cache && Date.now() - cache.cachedAt <= API_CACHE_TTL) {
-    return cache.data;
+  if (cache) {
+    const ttl = cache.data.cliAvailable ? API_CACHE_TTL : API_CACHE_TTL_CLI_UNAVAILABLE;
+    if (Date.now() - cache.cachedAt <= ttl) {
+      return cache.data;
+    }
   }
   if (!g.__statusApiFlight) {
     g.__statusApiFlight = buildStatusPayload()

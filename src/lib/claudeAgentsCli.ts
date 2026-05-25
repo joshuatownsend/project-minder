@@ -45,7 +45,11 @@ function isLiveProcess(v: unknown): v is LiveProcess {
     // `new Date(startedAt).toISOString()` which throws RangeError on non-finite.
     Number.isFinite(o.startedAt) &&
     typeof o.sessionId === "string" &&
-    typeof o.status === "string"
+    typeof o.status === "string" &&
+    // `name` is optional but must be a string when present — otherwise a
+    // non-string `name` (e.g. number from a buggy CLI build) would flow into
+    // `processName: string` and render as `[object Object]` in tooltips.
+    (o.name === undefined || typeof o.name === "string")
   );
 }
 
@@ -91,14 +95,24 @@ export async function getLiveProcesses(): Promise<LiveProcess[] | null> {
   }
 
   if (!g.__claudeAgentsFlight) {
-    g.__claudeAgentsFlight = fetchLiveProcesses()
+    // Capture the flight Promise locally so the .then/.finally can compare
+    // identity against the current `__claudeAgentsFlight` slot. If
+    // invalidateClaudeAgentsCache() runs while this flight is still active,
+    // the slot is cleared (or replaced) — we skip the cache write so the
+    // flight can't repopulate stale data over the invalidation.
+    const flight: Promise<LiveProcess[] | null> = fetchLiveProcesses()
       .then((data) => {
-        g.__claudeAgentsCache = { data, cachedAt: Date.now() };
+        if (g.__claudeAgentsFlight === flight) {
+          g.__claudeAgentsCache = { data, cachedAt: Date.now() };
+        }
         return data;
       })
       .finally(() => {
-        g.__claudeAgentsFlight = undefined;
+        if (g.__claudeAgentsFlight === flight) {
+          g.__claudeAgentsFlight = undefined;
+        }
       });
+    g.__claudeAgentsFlight = flight;
   }
   return g.__claudeAgentsFlight;
 }
@@ -106,4 +120,9 @@ export async function getLiveProcesses(): Promise<LiveProcess[] | null> {
 /** Force-evict the cache. Used by tests and the manual rescan path. */
 export function invalidateClaudeAgentsCache(): void {
   delete g.__claudeAgentsCache;
+  // Also clear the in-flight Promise so a concurrent fetch resolving AFTER
+  // invalidation can't stamp its (pre-invalidation) data back into the cache.
+  // Callers already awaiting the prior flight still receive its result via
+  // the local Promise reference; they just won't see it leak into the cache.
+  delete g.__claudeAgentsFlight;
 }
