@@ -792,6 +792,19 @@ export interface SubagentInfo {
   category?: SubagentCategory;
   metaTurnCount?: number;
   metaSourced?: boolean;
+  // Per-invocation runtime metrics, computed from the sidechain assistant
+  // turns belonging to this agent (matched via `parentToolUseID`). Only
+  // populated by the file-parse path; the DB-ingest path currently leaves
+  // these undefined (parity divergence #3 in tests/dataSessionDetail.test.ts).
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+  model?: string;
+  durationMs?: number;
+  firstTimestamp?: string;
+  lastTimestamp?: string;
 }
 
 export interface SessionDetail extends SessionSummary {

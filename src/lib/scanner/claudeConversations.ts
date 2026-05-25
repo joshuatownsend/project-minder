@@ -16,6 +16,7 @@ import { computeSessionQuality } from "../usage/sessionQuality";
 import { classifyTurn } from "../usage/classifier";
 import { aggregateWorkMode } from "../usage/workMode";
 import { readSubagentMeta } from "./subagentMeta";
+import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
@@ -575,7 +576,15 @@ export async function scanSessionDetail(
           }
         }
 
-        // Process sidechain assistant entries for subagent stats
+        // Process sidechain assistant entries for subagent stats.
+        // Historical: this path used `parentToolUseID` to link tool calls to
+        // their parent Agent dispatch. As of Claude Code ~v2.1.150 the JSONL
+        // schema no longer carries sidechain assistant entries in the parent
+        // session's file (probed 2026-05-25: 0/214 sessions had isSidechain
+        // assistants). Per-subagent runtime metrics now come from the OTEL
+        // `subagent_completed` + `api_request` events via the enrichment
+        // step in `enrichSubagentsFromOtel`. Kept here for any session JSONL
+        // that still includes the old schema — does no harm when empty.
         if (entry.type === "assistant" && entry.message && entry.isSidechain) {
           const msg = entry.message;
           const parentId = (entry as any).parentToolUseID;
@@ -698,11 +707,19 @@ export async function scanSessionDetail(
 
   const cliVersion = mostFrequent(versionCounts) ?? undefined;
 
+  // Enrich subagent entries with runtime metrics from OTEL events
+  // (subagent_completed + api_request rollup by prompt.id). Best-effort:
+  // when OTEL data is unavailable or the SQLite driver isn't loaded, the
+  // subagent entries keep their JSONL-derived skeleton (type, description)
+  // without the runtime chips.
+  const subagentsArray = Array.from(subagentMap.values());
+  await enrichSubagentsFromOtel(summary.sessionId, subagentsArray);
+
   return {
     ...summary,
     timeline,
     fileOperations,
-    subagents: Array.from(subagentMap.values()),
+    subagents: subagentsArray,
     hasThinking: hasThinking || undefined,
     cliVersion,
   };
