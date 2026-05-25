@@ -6,6 +6,7 @@ import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { prepCached } from "@/lib/db/connection";
 import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
+import { enrichSubagentsFromOtel } from "@/lib/scanner/subagentEnrichment";
 import type { SubagentMeta } from "@/lib/scanner/subagentMeta";
 import type {
   SessionDetail,
@@ -158,10 +159,10 @@ const FILE_OP_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
  * no row — the caller's façade falls back to file-parse in that case
  * (handles the "session exists on disk but isn't indexed yet" edge).
  */
-export function loadSessionDetailFromDb(
+export async function loadSessionDetailFromDb(
   db: DatabaseT.Database,
   sessionId: string
-): SessionDetail | null {
+): Promise<SessionDetail | null> {
   // SessionId-shape gate: same regex as `scanSessionDetail` — UUIDs and
   // hex-only — so a path-traversal attempt can't even hit the DB.
   if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
@@ -210,6 +211,9 @@ export function loadSessionDetailFromDb(
   );
   const subagentMetaMap = readSubagentMetaSync(jsonlPath);
   const aggregates = aggregateTools(tools, subagentMetaMap);
+  // OTEL-derived runtime metrics (cost, tokens, model, duration) on each
+  // subagent invocation — same enrichment as the file-parse path.
+  await enrichSubagentsFromOtel(sessionId, aggregates.subagents);
   const timeline = buildTimeline(turns, aggregates.toolsByTurn);
   const modelsUsed = collectModelsUsed(turns);
 
