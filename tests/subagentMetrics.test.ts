@@ -6,12 +6,18 @@ import type { SubagentInfo } from "@/lib/types";
 
 // Tests for `enrichSubagentsFromOtel` — populates per-subagent runtime
 // metrics (cost, tokens, model, duration) on JSONL-derived SubagentInfo
-// entries by querying the OTEL events table for `subagent_completed` +
-// `api_request` rows linked by `prompt.id`.
+// entries by consuming `computeAgentCostInvocationsFromOtel` output.
 //
 // JSONL sidechain data went away in Claude Code ~v2.1.150 (probed
-// 2026-05-25: 0/214 sessions had isSidechain assistants). This enrichment
-// is the working replacement.
+// 2026-05-25: 0/214 sessions had isSidechain assistants). This
+// enrichment is the working replacement.
+//
+// Issue #161 follow-up: the original enrichment looked up cost by
+// `subagent_completed.prompt.id` and assigned the full prompt-turn
+// cost to EACH invocation in a parallel-dispatch batch. The util now
+// distributes by `query_source` + token share, so the test fixtures
+// here pin both the simple (one-invocation-per-prompt) and parallel
+// (multiple-invocations-per-prompt) cases.
 
 let driverAvailable: boolean;
 try {
@@ -26,13 +32,23 @@ let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
+// Holds a reference to the most recently loaded connection module so
+// afterEach can close the SQLite handle deterministically — needed to
+// release Windows file locks before tmpHome cleanup.
+let currentConn: typeof import("@/lib/db/connection") | null = null;
+
 async function reloadModules() {
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+  }
   vi.resetModules();
   delete (globalThis as { __minderDb?: unknown }).__minderDb;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  const conn = await import("@/lib/db/connection");
+  currentConn = conn;
   return {
     enrichment: await import("@/lib/scanner/subagentEnrichment"),
-    conn: await import("@/lib/db/connection"),
+    conn,
     mig: await import("@/lib/db/migrations"),
   };
 }
@@ -48,6 +64,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+    currentConn = null;
+  }
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -67,7 +87,16 @@ function makeSubagent(agentId: string, type: string): SubagentInfo {
 
 function insertSubagentCompleted(
   db: import("better-sqlite3").Database,
-  args: { ts: string; sessionId: string; promptId: string; agentType: string; durationMs: number; model: string; totalTokens: number; totalToolUses: number },
+  args: {
+    ts: string;
+    sessionId: string;
+    promptId: string;
+    agentType: string;
+    durationMs: number;
+    model: string;
+    totalTokens: number;
+    totalToolUses?: number;
+  },
 ): void {
   db.prepare(`
     INSERT INTO otel_events (event_name, ts, session_id, payload_json)
@@ -80,14 +109,24 @@ function insertSubagentCompleted(
       "duration_ms": String(args.durationMs),
       "model": args.model,
       "total_tokens": String(args.totalTokens),
-      "total_tool_uses": String(args.totalToolUses),
+      "total_tool_uses": String(args.totalToolUses ?? 0),
     },
   }));
 }
 
 function insertApiRequest(
   db: import("better-sqlite3").Database,
-  args: { ts: string; sessionId: string; promptId: string; costUsd: number; input: number; output: number; cacheRead: number; cacheCreate: number },
+  args: {
+    ts: string;
+    sessionId: string;
+    promptId: string;
+    querySource: string;
+    costUsd: number;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheCreate: number;
+  },
 ): void {
   db.prepare(`
     INSERT INTO otel_events (event_name, ts, session_id, payload_json)
@@ -96,6 +135,7 @@ function insertApiRequest(
     attrs: {
       "session.id": args.sessionId,
       "prompt.id": args.promptId,
+      "query_source": args.querySource,
       "cost_usd": args.costUsd,
       "input_tokens": String(args.input),
       "output_tokens": String(args.output),
@@ -116,23 +156,22 @@ describe.skipIf(!driverAvailable)("enrichSubagentsFromOtel", () => {
       ts: "2026-05-25T10:00:30Z",
       sessionId,
       promptId: "prompt-1",
-      agentType: "Explore",
+      agentType: "code-architect",
       durationMs: 30_000,
       model: "claude-haiku-4-5",
       totalTokens: 12_345,
-      totalToolUses: 7,
     });
-    insertApiRequest(db, { ts: "2026-05-25T10:00:05Z", sessionId, promptId: "prompt-1", costUsd: 0.12, input: 500, output: 50, cacheRead: 1000, cacheCreate: 200 });
-    insertApiRequest(db, { ts: "2026-05-25T10:00:25Z", sessionId, promptId: "prompt-1", costUsd: 0.08, input: 300, output: 30, cacheRead: 800, cacheCreate: 0 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:05Z", sessionId, promptId: "prompt-1", querySource: "agent:custom", costUsd: 0.12, input: 500, output: 50, cacheRead: 1000, cacheCreate: 200 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:25Z", sessionId, promptId: "prompt-1", querySource: "agent:custom", costUsd: 0.08, input: 300, output: 30, cacheRead: 800, cacheCreate: 0 });
 
-    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "Explore")];
+    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "code-architect")];
     await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
 
     const agent = subagents[0];
     expect(agent.model).toBe("claude-haiku-4-5");
     expect(agent.durationMs).toBe(30_000);
     expect(agent.lastTimestamp).toBe("2026-05-25T10:00:30Z");
-    // Cost + tokens summed across the two api_request rows.
+    // Solo invocation in the matched set → share = 1.0 → full cost.
     expect(agent.costUsd).toBeCloseTo(0.20, 4);
     expect(agent.inputTokens).toBe(800);
     expect(agent.outputTokens).toBe(80);
@@ -140,45 +179,87 @@ describe.skipIf(!driverAvailable)("enrichSubagentsFromOtel", () => {
     expect(agent.cacheCreateTokens).toBe(200);
   });
 
-  it("matches n-th JSONL dispatch of a type to n-th OTEL completion of same type", async () => {
+  it("matches n-th JSONL dispatch of a type to n-th OTEL invocation of same type", async () => {
     const { enrichment, conn, mig } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;
 
     const sessionId = "abc12345-0000-0000-0000-000000000002";
-    // Three Explore invocations in chronological order
-    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", agentType: "Explore", durationMs: 1000, model: "m1", totalTokens: 100, totalToolUses: 1 });
-    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:02Z", sessionId, promptId: "p2", agentType: "Explore", durationMs: 2000, model: "m2", totalTokens: 200, totalToolUses: 2 });
-    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:03Z", sessionId, promptId: "p3", agentType: "Explore", durationMs: 3000, model: "m3", totalTokens: 300, totalToolUses: 3 });
+    // Three sequential code-architect invocations, each in its own prompt.id.
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", agentType: "code-architect", durationMs: 1000, model: "m1", totalTokens: 100 });
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:02Z", sessionId, promptId: "p2", agentType: "code-architect", durationMs: 2000, model: "m2", totalTokens: 200 });
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:03Z", sessionId, promptId: "p3", agentType: "code-architect", durationMs: 3000, model: "m3", totalTokens: 300 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", querySource: "agent:custom", costUsd: 1.0, input: 10, output: 10, cacheRead: 0, cacheCreate: 0 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:02Z", sessionId, promptId: "p2", querySource: "agent:custom", costUsd: 2.0, input: 20, output: 20, cacheRead: 0, cacheCreate: 0 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:03Z", sessionId, promptId: "p3", querySource: "agent:custom", costUsd: 3.0, input: 30, output: 30, cacheRead: 0, cacheCreate: 0 });
 
     const subagents: SubagentInfo[] = [
-      makeSubagent("tu_a1", "Explore"),
-      makeSubagent("tu_a2", "Explore"),
-      makeSubagent("tu_a3", "Explore"),
+      makeSubagent("tu_a1", "code-architect"),
+      makeSubagent("tu_a2", "code-architect"),
+      makeSubagent("tu_a3", "code-architect"),
     ];
     await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
 
     expect(subagents[0].model).toBe("m1");
     expect(subagents[1].model).toBe("m2");
     expect(subagents[2].model).toBe("m3");
-    expect(subagents[0].durationMs).toBe(1000);
-    expect(subagents[1].durationMs).toBe(2000);
-    expect(subagents[2].durationMs).toBe(3000);
+    expect(subagents[0].costUsd).toBeCloseTo(1.0, 4);
+    expect(subagents[1].costUsd).toBeCloseTo(2.0, 4);
+    expect(subagents[2].costUsd).toBeCloseTo(3.0, 4);
   });
 
-  it("leaves excess JSONL dispatches with undefined fields when OTEL has fewer completions", async () => {
+  it("splits parallel-dispatch cost proportionally by total_tokens", async () => {
+    // Original symptom: two agents sharing a prompt.id each got the
+    // FULL prompt cost, not their share. This test pins the fix.
     const { enrichment, conn, mig } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;
 
     const sessionId = "abc12345-0000-0000-0000-000000000003";
-    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", agentType: "Explore", durationMs: 1000, model: "m1", totalTokens: 100, totalToolUses: 1 });
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p-shared", agentType: "gsd-executor", durationMs: 1000, model: "claude-opus-4-7", totalTokens: 1000 });
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:02Z", sessionId, promptId: "p-shared", agentType: "gsd-verifier", durationMs: 2000, model: "claude-opus-4-7", totalTokens: 3000 });
+    insertApiRequest(db, {
+      ts: "2026-05-25T10:00:00Z",
+      sessionId,
+      promptId: "p-shared",
+      querySource: "agent:custom",
+      costUsd: 4.0,
+      input: 100,
+      output: 100,
+      cacheRead: 0,
+      cacheCreate: 0,
+    });
 
-    // 3 JSONL dispatches but only 1 OTEL completion — extras stay unenriched.
     const subagents: SubagentInfo[] = [
-      makeSubagent("tu_a1", "Explore"),
-      makeSubagent("tu_a2", "Explore"),
-      makeSubagent("tu_a3", "Explore"),
+      makeSubagent("tu_a1", "gsd-executor"),
+      makeSubagent("tu_a2", "gsd-verifier"),
+    ];
+    await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
+
+    // gsd-executor: 1000/4000 = 25% → $1.00
+    expect(subagents[0].costUsd).toBeCloseTo(1.0, 4);
+    // gsd-verifier: 3000/4000 = 75% → $3.00
+    expect(subagents[1].costUsd).toBeCloseTo(3.0, 4);
+    // Token totals also split proportionally and round to integers.
+    expect(subagents[0].inputTokens).toBe(25);
+    expect(subagents[1].inputTokens).toBe(75);
+    // Conservation: full prompt cost lands across the two invocations.
+    expect(subagents[0].costUsd! + subagents[1].costUsd!).toBeCloseTo(4.0, 4);
+  });
+
+  it("leaves excess JSONL dispatches with undefined fields when OTEL has fewer invocations", async () => {
+    const { enrichment, conn, mig } = await reloadModules();
+    await mig.initDb();
+    const db = (await conn.getDb())!;
+
+    const sessionId = "abc12345-0000-0000-0000-000000000004";
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", agentType: "code-architect", durationMs: 1000, model: "m1", totalTokens: 100 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "p1", querySource: "agent:custom", costUsd: 1.0, input: 10, output: 10, cacheRead: 0, cacheCreate: 0 });
+
+    const subagents: SubagentInfo[] = [
+      makeSubagent("tu_a1", "code-architect"),
+      makeSubagent("tu_a2", "code-architect"),
+      makeSubagent("tu_a3", "code-architect"),
     ];
     await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
 
@@ -194,33 +275,49 @@ describe.skipIf(!driverAvailable)("enrichSubagentsFromOtel", () => {
     await mig.initDb();
     await conn.getDb();
 
-    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "Explore")];
+    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "code-architect")];
     await enrichment.enrichSubagentsFromOtel("session-with-no-data", subagents);
-    // Skeleton SubagentInfo unchanged.
     expect(subagents[0].model).toBeUndefined();
     expect(subagents[0].costUsd).toBeUndefined();
   });
 
-  it("falls back to total_tokens when no api_request rollup is available", async () => {
+  it("falls back to total_tokens when the prompt has no agent:* api_request rows", async () => {
     const { enrichment, conn, mig } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;
 
-    const sessionId = "abc12345-0000-0000-0000-000000000004";
-    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "lonely", agentType: "Explore", durationMs: 5000, model: "m1", totalTokens: 9999, totalToolUses: 3 });
-    // No api_request rows for prompt "lonely".
+    const sessionId = "abc12345-0000-0000-0000-000000000005";
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:01Z", sessionId, promptId: "lonely", agentType: "code-architect", durationMs: 5000, model: "m1", totalTokens: 9999 });
+    // No api_request rows at all for this prompt — common when the
+    // session's OTEL stream is partial.
 
-    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "Explore")];
+    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "code-architect")];
     await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
 
     expect(subagents[0].model).toBe("m1");
     expect(subagents[0].durationMs).toBe(5000);
-    // Fallback writes to `totalTokens`, NOT `inputTokens`, so consumers
-    // can distinguish a precise input-token count from a combined rollup.
     expect(subagents[0].totalTokens).toBe(9999);
     expect(subagents[0].inputTokens).toBeUndefined();
     expect(subagents[0].outputTokens).toBeUndefined();
-    // Cost stays undefined — we can't reliably split I/O for pricing.
     expect(subagents[0].costUsd).toBeUndefined();
+  });
+
+  it("excludes repl_main_thread cost from the matched set", async () => {
+    const { enrichment, conn, mig } = await reloadModules();
+    await mig.initDb();
+    const db = (await conn.getDb())!;
+
+    const sessionId = "abc12345-0000-0000-0000-000000000006";
+    insertSubagentCompleted(db, { ts: "2026-05-25T10:00:30Z", sessionId, promptId: "p-with-main", agentType: "code-architect", durationMs: 1000, model: "m1", totalTokens: 1000 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:00Z", sessionId, promptId: "p-with-main", querySource: "repl_main_thread", costUsd: 99.0, input: 99999, output: 99999, cacheRead: 0, cacheCreate: 0 });
+    insertApiRequest(db, { ts: "2026-05-25T10:00:10Z", sessionId, promptId: "p-with-main", querySource: "agent:custom", costUsd: 0.5, input: 100, output: 100, cacheRead: 0, cacheCreate: 0 });
+
+    const subagents: SubagentInfo[] = [makeSubagent("tu_a1", "code-architect")];
+    await enrichment.enrichSubagentsFromOtel(sessionId, subagents);
+
+    // Only the $0.50 agent:custom cost is attributable; the $99 main-
+    // thread cost is dropped from the subagent's share.
+    expect(subagents[0].costUsd).toBeCloseTo(0.5, 4);
+    expect(subagents[0].inputTokens).toBe(100);
   });
 });
