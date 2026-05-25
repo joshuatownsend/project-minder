@@ -34,7 +34,7 @@ const mockGetFlag = vi.mocked(getFlag);
 
 const NOW = "2026-05-08T12:00:00.000Z";
 
-const emptyPayload = { generatedAt: NOW, sessions: [] };
+const emptyPayload = { generatedAt: NOW, sessions: [], cliAvailable: false };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -125,6 +125,7 @@ describe("GET /api/kanban", () => {
           mtime: NOW,
         },
       ],
+      cliAvailable: false,
     });
     const res = await getRoute(mkGet());
     const body = await res.json();
@@ -143,6 +144,7 @@ describe("GET /api/kanban", () => {
     mockGetLiveStatusPayload.mockResolvedValue({
       generatedAt: NOW,
       sessions: [liveSession],
+      cliAvailable: false,
     });
     const res = await getRoute(mkGet());
     const body = await res.json();

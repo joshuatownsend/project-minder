@@ -24,8 +24,26 @@ import { usePulse } from "./PulseProvider";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
-function LiveStatusBadge({ isLive, isAwaiting }: { isLive: boolean; isAwaiting: boolean }) {
-  if (isAwaiting) return (
+function LiveStatusBadge({
+  isLive,
+  isAwaiting,
+  isVerifiedLive,
+  cliAvailable,
+  processInfo,
+}: {
+  isLive: boolean;
+  isAwaiting: boolean;
+  isVerifiedLive: boolean;
+  cliAvailable: boolean;
+  processInfo?: { pid: number; name?: string };
+}) {
+  // Awaiting beats verified-live only when CLI hasn't independently said the
+  // process is gone. With `cliAvailable && !isVerifiedLive`, we know the
+  // session crashed mid-Notification — fall through to the dim "live?" branch
+  // (or no badge) so the user sees a stale-state indicator instead of an
+  // amber input badge that has no live process to respond to it.
+  const awaitingValid = isAwaiting && (isVerifiedLive || !cliAvailable);
+  if (awaitingValid) return (
     <span title="Claude Code is awaiting permission" style={{
       display: "inline-flex", alignItems: "center", gap: "4px",
       fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
@@ -35,14 +53,37 @@ function LiveStatusBadge({ isLive, isAwaiting }: { isLive: boolean; isAwaiting: 
       <StatusDot status="awaiting" size={6} />input
     </span>
   );
+  if (isVerifiedLive) {
+    const tooltip = processInfo
+      ? `Claude Code is active in this project (PID ${processInfo.pid}${processInfo.name ? ` · ${processInfo.name}` : ""})`
+      : "Claude Code is active in this project";
+    return (
+      <span title={tooltip} style={{
+        display: "inline-flex", alignItems: "center", gap: "4px",
+        fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+        color: "var(--status-active-text)", background: "var(--status-active-bg)",
+        border: "1px solid var(--status-active-border)", borderRadius: "3px", padding: "2px 6px",
+      }}>
+        <StatusDot status="live" size={6} />live
+      </span>
+    );
+  }
+  // Hook server reported a live session but `claude agents --json` returned no
+  // matching PID — the ring-buffer entry is stale (process exited mid-session).
+  // Surface this as an outlined "live?" so the user can spot the discrepancy.
   if (isLive) return (
-    <span title="Claude Code is active in this project" style={{
+    <span title="Hook events suggest this project was live, but no live Claude Code process was found. The session may have exited." style={{
       display: "inline-flex", alignItems: "center", gap: "4px",
       fontSize: "0.62rem", fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-      color: "var(--status-active-text)", background: "var(--status-active-bg)",
-      border: "1px solid var(--status-active-border)", borderRadius: "3px", padding: "2px 6px",
+      color: "var(--text-muted)", background: "transparent",
+      border: "1px solid var(--border-subtle)", borderRadius: "3px", padding: "2px 6px",
     }}>
-      <StatusDot status="live" size={6} />live
+      <span style={{
+        width: "6px", height: "6px", borderRadius: "50%",
+        border: "1px solid var(--text-muted)", background: "transparent",
+        flexShrink: 0,
+      }} />
+      live?
     </span>
   );
   return null;
@@ -73,6 +114,8 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
   const { snapshot } = usePulse();
   const isLive = snapshot.liveSlugs.includes(project.slug);
   const isAwaiting = snapshot.awaitingSlugs.includes(project.slug);
+  const isVerifiedLive = snapshot.verifiedLiveSlugs.includes(project.slug);
+  const processInfo = snapshot.liveProcessInfo[project.slug];
 
   // ── Aggregate worktree counts ──────────────────────────────────────────
   const pendingTodos = (() => {
@@ -153,7 +196,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }} onClick={(e) => e.preventDefault()}>
-            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} />
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} cliAvailable={snapshot.cliAvailable} processInfo={processInfo} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
@@ -278,7 +321,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}
             onClick={(e) => e.preventDefault()}
           >
-            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} />
+            <LiveStatusBadge isLive={isLive} isAwaiting={isAwaiting} isVerifiedLive={isVerifiedLive} cliAvailable={snapshot.cliAvailable} processInfo={processInfo} />
             {sessionBadge && (
               <button
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(sessionId ? `/sessions/${sessionId}` : "/sessions"); }}
