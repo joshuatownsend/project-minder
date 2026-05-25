@@ -12,12 +12,12 @@ import type { SubagentInfo } from "@/lib/types";
 // 2026-05-25: 0/214 sessions had isSidechain assistants). This
 // enrichment is the working replacement.
 //
-// PR #163 fixed a critical overcounting bug: pre-PR the enrichment
-// looked up cost by `subagent_completed.prompt.id` and assigned the
-// full prompt-turn cost to EACH invocation in a parallel-dispatch
-// batch. The new util distributes by `query_source` + token share,
-// so the test fixtures here pin both the simple (one-invocation-per-
-// prompt) and parallel (multiple-invocations-per-prompt) cases.
+// Issue #161 follow-up: the original enrichment looked up cost by
+// `subagent_completed.prompt.id` and assigned the full prompt-turn
+// cost to EACH invocation in a parallel-dispatch batch. The util now
+// distributes by `query_source` + token share, so the test fixtures
+// here pin both the simple (one-invocation-per-prompt) and parallel
+// (multiple-invocations-per-prompt) cases.
 
 let driverAvailable: boolean;
 try {
@@ -32,13 +32,23 @@ let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
+// Holds a reference to the most recently loaded connection module so
+// afterEach can close the SQLite handle deterministically — needed to
+// release Windows file locks before tmpHome cleanup.
+let currentConn: typeof import("@/lib/db/connection") | null = null;
+
 async function reloadModules() {
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+  }
   vi.resetModules();
   delete (globalThis as { __minderDb?: unknown }).__minderDb;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  const conn = await import("@/lib/db/connection");
+  currentConn = conn;
   return {
     enrichment: await import("@/lib/scanner/subagentEnrichment"),
-    conn: await import("@/lib/db/connection"),
+    conn,
     mig: await import("@/lib/db/migrations"),
   };
 }
@@ -54,6 +64,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+    currentConn = null;
+  }
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -194,10 +208,9 @@ describe.skipIf(!driverAvailable)("enrichSubagentsFromOtel", () => {
     expect(subagents[2].costUsd).toBeCloseTo(3.0, 4);
   });
 
-  it("splits parallel-dispatch cost proportionally by total_tokens (PR #163 fix)", async () => {
-    // The bug we shipped in T1.2 (PR #162): two agents sharing a
-    // prompt.id each got the FULL prompt cost, not their share.
-    // This test would have failed against pre-#163 code.
+  it("splits parallel-dispatch cost proportionally by total_tokens", async () => {
+    // Original symptom: two agents sharing a prompt.id each got the
+    // FULL prompt cost, not their share. This test pins the fix.
     const { enrichment, conn, mig } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;

@@ -26,15 +26,28 @@ let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
+// Holds a reference to the most recently loaded connection module so
+// afterEach can close the SQLite handle deterministically — `vi.
+// resetModules()` only drops the module-cache entry; the singleton
+// `state.db` inside the prior module instance still holds the file
+// descriptor until close(). Skipping the close makes `fs.rm(tmpHome,
+// { recursive: true })` flaky on Windows.
+let currentConn: typeof import("@/lib/db/connection") | null = null;
+
 async function reloadModules() {
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+  }
   vi.resetModules();
   delete (globalThis as { __minderDb?: unknown }).__minderDb;
   delete (globalThis as { __agentCostCache?: unknown }).__agentCostCache;
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  const conn = await import("@/lib/db/connection");
+  currentConn = conn;
   return {
     agentCost: await import("@/lib/usage/agentCost"),
     fromOtel: await import("@/lib/usage/agentCostFromOtel"),
-    conn: await import("@/lib/db/connection"),
+    conn,
     mig: await import("@/lib/db/migrations"),
   };
 }
@@ -49,6 +62,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Close the SQLite handle before removing tmpHome — `state.db.close()`
+  // releases the WAL/SHM file locks that Windows holds onto until then.
+  if (currentConn) {
+    try { currentConn.closeDb(); } catch { /* ignore */ }
+    currentConn = null;
+  }
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -162,10 +181,10 @@ describe.skipIf(!driverAvailable)("computeAgentCostFromFiles (OTEL-backed)", () 
   });
 
   it("splits 6× same-type parallel agents proportionally by total_tokens", async () => {
-    // Empirical fixture from PR #163 probe: 6× general-purpose in one
+    // Empirical fixture for issue #161: 6× general-purpose in one
     // prompt.id share $7.35 of agent:builtin:general-purpose cost.
     // The matched-set rule should give each its share, NOT the full
-    // $7.35 (which was the T1.2 bug).
+    // $7.35 (the original symptom on the Subagents tab).
     const { agentCost, mig, conn } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;
