@@ -1,4 +1,5 @@
 import type { HookEventName } from "@/lib/types";
+import type { HookPayload } from "./payload";
 
 export interface HookEvent {
   hookEventName: HookEventName;
@@ -9,6 +10,15 @@ export interface HookEvent {
   message?: string;
   /** True when a PostToolUse event carried a failure signal (is_error or non-zero return_code). */
   toolFailed?: boolean;
+  /**
+   * T2.3a: typed discriminated-union view of the JSON body Claude Code
+   * POSTed for this event. `null` when the body shape didn't satisfy the
+   * variant's required fields. Additive — existing consumers
+   * (live-activity, awaiting state, toolFailed) still read the envelope
+   * fields above; the payload is for downstream surfaces like the
+   * background-tasks / session-crons portfolio view.
+   */
+  payload?: HookPayload | null;
 }
 
 export interface LiveSession {
@@ -141,4 +151,66 @@ export function sweepAndGetState(): { liveSlugs: string[]; awaitingSlugs: string
 export function getHookBuffer(slug: string): readonly HookEvent[] {
   ensureGlobals();
   return g.__minderHookBuffers!.get(slug) ?? [];
+}
+
+/**
+ * T2.3b: aggregate the most recent `background_tasks` + `session_crons`
+ * arrays seen across Stop / SubagentStop events for a project. Returns
+ * the values from the **latest** Stop/SubagentStop event in the ring
+ * buffer for that slug — subsequent stops naturally supersede earlier
+ * ones (Claude Code re-emits the current state on each stop).
+ *
+ * Freshness: only Stop / SubagentStop events received within
+ * `STALE_EVICT_MS` (5 min) are considered. Older events are ignored even
+ * if they're the only data we have — this matches the API/UI/docs claim
+ * that the surface reflects the "last ~5 min". Events are pushed in
+ * chronological order, so walking newest→oldest, the first too-old event
+ * means all older ones are too-old too; we can `break` rather than
+ * `continue`.
+ *
+ * Empty-arrays semantics: Claude Code's Stop hook is a *snapshot* of the
+ * current state. An explicit `background_tasks: []` is authoritative
+ * ("no tasks running right now") and should clear any prior non-empty
+ * report. We only skip a Stop when **both** fields are `undefined` —
+ * which happens on pre-v2.1.145 Stops that don't carry the keys at all.
+ * Distinguishing `undefined` (no info) from `[]` (explicit empty) lets a
+ * task finishing actually clear the surface instead of resurrecting
+ * older state.
+ *
+ * Caveat: the ring buffer is count-capped (50) but not time-evicted at
+ * write time. Long-running tasks whose session hasn't fired a Stop in
+ * the last 5 min won't appear here, even though the OS process is still
+ * running. SQLite-backed retention is the right T2.4 follow-up.
+ */
+export function getProjectBackgroundActivity(slug: string): {
+  backgroundTasks: unknown[];
+  sessionCrons: unknown[];
+  lastObservedAt: number | null;
+} {
+  ensureGlobals();
+  const events = g.__minderHookBuffers!.get(slug) ?? [];
+  const now = Date.now();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (now - ev.receivedAt > STALE_EVICT_MS) break;
+    const p = ev.payload;
+    if (!p) continue;
+    if (p.kind !== "Stop" && p.kind !== "SubagentStop") continue;
+    const bg = p.backgroundTasks;
+    const crons = p.sessionCrons;
+    // Pre-v2.1.145 Stop bodies omit both keys entirely — no info, keep walking.
+    if (bg === undefined && crons === undefined) continue;
+    return {
+      backgroundTasks: bg ?? [],
+      sessionCrons: crons ?? [],
+      lastObservedAt: ev.receivedAt,
+    };
+  }
+  return { backgroundTasks: [], sessionCrons: [], lastObservedAt: null };
+}
+
+/** Returns the set of slugs that currently have any buffered hook events. */
+export function getAllSlugsWithBufferedEvents(): string[] {
+  ensureGlobals();
+  return Array.from(g.__minderHookBuffers!.keys());
 }

@@ -12,6 +12,7 @@ import {
   clearAwaiting,
   STOP_EVENTS,
 } from "@/lib/hooks/buffer";
+import { parseHookPayload } from "@/lib/hooks/payload";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
 import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import { bridgeHookToEventBus } from "@/lib/agentView/eventBus";
@@ -102,6 +103,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     toolFailed = isError || badReturnCode || undefined;
   }
 
+  // T2.3a: typed payload parse alongside the existing envelope capture.
+  // `parseHookPayload` returns `null` on shape mismatch — the envelope
+  // event still goes into the ring buffer either way.
+  const payload = parseHookPayload(body, eventName);
+
   const event = {
     hookEventName: eventName,
     sessionId: session_id,
@@ -110,6 +116,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     toolName: typeof body.tool_name === "string" ? body.tool_name : undefined,
     message: typeof body.message === "string" ? body.message : undefined,
     toolFailed,
+    payload,
   };
 
   pushHookEvent(slug, event);

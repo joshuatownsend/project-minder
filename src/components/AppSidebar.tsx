@@ -68,6 +68,7 @@ const GROUPS: NavGroup[] = [
     children: [
       { id: "agent-view", label: "Agent view", href: "/agent-view", icon: ico(MonitorPlay), badge: "live" },
       { id: "sessions", label: "Sessions", href: "/sessions", icon: ico(Layers) },
+      { id: "background", label: "Background", href: "/background", icon: ico(Activity) },
       { id: "memory",   label: "Memory",   href: "/memory",   icon: ico(Brain) },
       { id: "memory-seed", label: "Memory seed", href: "/memory/seed", icon: ico(Sprout) },
       { id: "memory-triage", label: "Memory triage", href: "/memory/triage", icon: ico(Trash2) },
