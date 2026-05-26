@@ -208,14 +208,16 @@ export async function loadSessionDetailFromDb(
     .all(sessionId) as ToolRow[];
 
   // PRs harvested at ingest time from `gh pr create` tool_results (T2.2).
-  // Ordered by pr_number ASC to match the list-loader path
-  // (sessionsListFromDb.ts ORDER BY session_id, pr_number) so chip order
-  // is stable across both surfaces.
+  // Ordered by (pr_number, repo, pr_url) ASC — pr_number is the primary
+  // user-visible sort, but two repos can each have a PR #1, so we add
+  // `repo, pr_url` as tiebreakers to guarantee a stable order on those
+  // collisions. Matches the list-loader's identical sort in
+  // sessionsListFromDb.ts so chip order is the same across both surfaces.
   const prRows = prepCached(db,
       `SELECT pr_url, pr_number, repo
        FROM session_prs
        WHERE session_id = ?
-       ORDER BY pr_number`
+       ORDER BY pr_number, repo, pr_url`
     )
     .all(sessionId) as { pr_url: string; pr_number: number; repo: string }[];
   const prs: PrLink[] = prRows.map((r) => ({
