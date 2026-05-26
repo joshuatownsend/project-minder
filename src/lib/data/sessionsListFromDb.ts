@@ -266,7 +266,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       db,
       `SELECT session_id, pr_url, pr_number, repo
        FROM session_prs
-       ORDER BY session_id, pr_number`
+       ORDER BY session_id, pr_number, repo, pr_url`
     ).all() as PrRow[]
   );
 

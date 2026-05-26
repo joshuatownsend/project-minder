@@ -50,6 +50,18 @@ export interface OtlpMetric {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
+// Normalizes an OTLP attribute list into a Map. The same logical attribute can
+// arrive in different wire forms across Claude Code versions — e.g. duration_ms
+// as `{stringValue: "42"}` on older builds vs `{intValue: "42"}` on newer ones
+// (both shapes coexist in tests/fixtures/otlp-logs.json). This function picks a
+// JS representation per wire form but does NOT unify them downstream: a string
+// wire form serializes back into payload_json as a quoted JSON string, while
+// intValue/doubleValue serialize as unquoted JSON numbers. Consumers querying
+// numeric attrs MUST coerce — either via SQL `CAST(... AS REAL/INTEGER)` (the
+// dominant pattern in otelQueries.ts and agentCostFromOtel.ts) or via JS-side
+// `Number(...)` on the returned scalar (see the lastErrors map at the bottom
+// of pressure queries). V.1 audit (2026-05-26) confirms every numeric consumer
+// in the tree does one or the other.
 function attrMap(attrs: OtlpAttribute[] | undefined): Map<string, unknown> {
   const m = new Map<string, unknown>();
   if (!attrs) return m;
