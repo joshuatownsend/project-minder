@@ -14,6 +14,7 @@ import type {
   FileOperation,
   SubagentInfo,
   SessionStatus,
+  PrLink,
 } from "@/lib/types";
 
 // SQL-backed session detail loader. Mirrors `scanSessionDetail`'s output
@@ -206,6 +207,23 @@ export async function loadSessionDetailFromDb(
     )
     .all(sessionId) as ToolRow[];
 
+  // PRs harvested at ingest time from `gh pr create` tool_results (T2.2).
+  // Ordered by pr_number ASC to match the list-loader path
+  // (sessionsListFromDb.ts ORDER BY session_id, pr_number) so chip order
+  // is stable across both surfaces.
+  const prRows = prepCached(db,
+      `SELECT pr_url, pr_number, repo
+       FROM session_prs
+       WHERE session_id = ?
+       ORDER BY pr_number`
+    )
+    .all(sessionId) as { pr_url: string; pr_number: number; repo: string }[];
+  const prs: PrLink[] = prRows.map((r) => ({
+    url: r.pr_url,
+    number: r.pr_number,
+    repo: r.repo,
+  }));
+
   const jsonlPath = path.join(
     os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
   );
@@ -277,6 +295,7 @@ export async function loadSessionDetailFromDb(
     timeline,
     fileOperations: aggregates.fileOperations,
     subagents: aggregates.subagents,
+    prs: prs.length > 0 ? prs : undefined,
   };
 }
 

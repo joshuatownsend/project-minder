@@ -1,4 +1,4 @@
--- Project Minder local index — SQLite schema, version 12.
+-- Project Minder local index — SQLite schema, version 14.
 --
 -- Design tenets:
 --

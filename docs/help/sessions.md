@@ -55,7 +55,7 @@ Click into a session to see the full breakdown on the **Diagnosis** tab.
 
 ### PR chips
 
-When a session ran `gh pr create` and the resulting PR URL appeared in the tool result, the session row on a project's **Sessions** tab shows a `PR #N` chip per PR (multiple if the session opened several). Chips appear in encounter order; the repo is derived from the URL itself (so PRs against a fork or sibling repo are attributed correctly, not against the session's git remote).
+When a session ran `gh pr create` and the resulting PR URL appeared in the tool result, the session row on a project's **Sessions** tab shows a `PR #N` chip per PR (multiple if the session opened several). Chips are ordered by PR number ascending; the repo is derived from the URL itself (so PRs against a fork or sibling repo are attributed correctly, not against the session's git remote).
 
 Clicking a `PR #N` chip filters the in-page session list to just sessions that created that PR — useful for "what other work touched this PR's slug-chain?" A filter banner appears above the list with an "open on GitHub" link and a clear-filter button. The filter is in-page only and does not change the URL.
 
