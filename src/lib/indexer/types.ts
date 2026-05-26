@@ -72,6 +72,22 @@ interface CatalogEntryBase {
   isSymlink?: boolean;
   realPath?: string;
   parseWarnings?: string[];
+  /** UTF-8 byte count of the source markdown (SKILL.md, agent .md, etc.).
+   *  Captured at walk time when the body is already in memory so both the
+   *  portfolio-wide token estimator (`src/lib/contextOverhead.ts`) and the
+   *  per-row catalog chip (`src/lib/usage/tokenEstimate.ts`, T2.1) can
+   *  derive a token estimate without a second fs pass. */
+  fileBytes?: number;
+  /** Projected per-invocation context cost (T2.1). Populated at the
+   *  catalog API/MCP layer (`withProjectedContextCost` in
+   *  `src/lib/usage/tokenEstimate.ts`), not by the indexer — so the
+   *  context-window denominator can come from the active model rather
+   *  than being fixed at walk time. Absent when `fileBytes` is missing
+   *  or rounds to zero tokens. */
+  projectedContextCost?: {
+    tokenEstimate: number;
+    contextWindowPercent: number;
+  };
 }
 
 export interface AgentEntry extends CatalogEntryBase {
@@ -91,10 +107,6 @@ export interface SkillEntry extends CatalogEntryBase {
   description?: string;
   /** True when the skill lives in ~/.claude/skills-disabled/ and is excluded from Claude Code. */
   disabled?: boolean;
-  /** UTF-8 byte count of the source SKILL.md (or standalone .md). Captured at walk
-   *  time when the body is already in memory so portfolio-wide token estimators
-   *  (see `src/lib/contextOverhead.ts`) don't need a separate fs.stat pass. */
-  fileBytes?: number;
 }
 
 export type CatalogEntry = AgentEntry | SkillEntry;

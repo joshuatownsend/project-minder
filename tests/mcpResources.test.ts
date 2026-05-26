@@ -34,13 +34,20 @@ describe("static MCP resources", () => {
 
   it("minder://stats returns a stats payload with backend label", async () => {
     const cl = await client();
-    const result = await cl.readResource({ uri: "minder://stats" });
+    // Per-call SDK timeout overrides the 60s default — the stats aggregator
+    // walks every session JSONL when the SQLite index isn't enabled; under
+    // vitest worker contention this blows the SDK window even though the
+    // test-level budget is 120s (#158).
+    const result = await cl.readResource(
+      { uri: "minder://stats" },
+      { timeout: 120_000 },
+    );
     const payload = parseJsonContent<{ backend: string; stats: unknown }>(
       result as Parameters<typeof parseJsonContent>[0]
     );
     expect(["db", "file"]).toContain(payload.backend);
     expect(payload.stats).toBeDefined();
-  }, 90_000);
+  }, 120_000);
 });
 
 describe("template MCP resources", () => {
@@ -64,14 +71,20 @@ describe("template MCP resources", () => {
     "minder://usage/7d returns a usage report wrapped with backend label",
     async () => {
       const cl = await client();
-      const result = await cl.readResource({ uri: "minder://usage/7d" });
+      // Per-call SDK timeout — same rationale as the `minder://stats` test
+      // above (#158). The usage aggregator scans every session JSONL on
+      // cold cache; under contention this can exceed the 60s SDK default.
+      const result = await cl.readResource(
+        { uri: "minder://usage/7d" },
+        { timeout: 120_000 },
+      );
       const payload = parseJsonContent<{ backend: string; report: { period: string } }>(
         result as Parameters<typeof parseJsonContent>[0]
       );
       expect(["db", "file"]).toContain(payload.backend);
       expect(payload.report).toHaveProperty("period");
     },
-    90_000
+    120_000
   );
 
   it("unknown session id returns an error-shaped JSON payload (not a transport error)", async () => {

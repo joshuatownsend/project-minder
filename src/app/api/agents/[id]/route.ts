@@ -4,6 +4,7 @@ import { loadCatalog } from "@/lib/indexer/catalog";
 import { getAgentUsage } from "@/lib/data";
 import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
 import { parseUsagePeriod } from "@/lib/usage/period";
+import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 
 export async function GET(
   request: NextRequest,
@@ -29,7 +30,12 @@ export async function GET(
     (s) => aliasMap.get(s.name.toLowerCase()) === entry
   );
 
-  const response = NextResponse.json({ entry, bodyFull: bodyText, usage, period });
+  const response = NextResponse.json({
+    entry: withProjectedContextCost(entry),
+    bodyFull: bodyText,
+    usage,
+    period,
+  });
   response.headers.set("X-Minder-Backend", agentUsage.meta.backend);
   return response;
 }

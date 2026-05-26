@@ -14,6 +14,7 @@ import {
   OverviewTab,
   VersionsTab,
 } from "./CatalogItemDetail";
+import { formatProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { AgentEntry } from "@/lib/indexer/types";
 import type { ItemUsageStats } from "./ItemUsageBreakdown";
 import type { UsagePeriod } from "@/lib/usage/period";
@@ -111,6 +112,17 @@ export function AgentDetailView({ id }: Props) {
               <MetaPill label="tools" value={`${entry.tools.length}`} title={entry.tools.join(", ")} />
             )}
             {entry.category && <MetaPill label="category" value={entry.category} />}
+            {(() => {
+              const chip = formatProjectedContextCost(entry.projectedContextCost);
+              if (!chip) return null;
+              return (
+                <MetaPill
+                  label="context"
+                  value={chip.chipLabel}
+                  title={chip.chipTitle}
+                />
+              );
+            })()}
           </>
         }
       />

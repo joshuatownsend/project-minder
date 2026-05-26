@@ -27,6 +27,8 @@ export interface SkillRow {
     realPath?: string;
     parseWarnings?: string[];
     disabled?: boolean;
+    fileBytes?: number;
+    projectedContextCost?: { tokenEstimate: number; contextWindowPercent: number };
   };
   usage?: {
     name: string;

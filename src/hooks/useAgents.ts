@@ -26,6 +26,8 @@ export interface AgentRow {
     isSymlink?: boolean;
     realPath?: string;
     parseWarnings?: string[];
+    fileBytes?: number;
+    projectedContextCost?: { tokenEstimate: number; contextWindowPercent: number };
   };
   usage?: {
     name: string;

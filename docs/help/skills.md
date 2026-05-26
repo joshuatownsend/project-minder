@@ -44,7 +44,8 @@ An **amber dot** on the provenance badge indicates an update is available. The e
 - **Source filter** — narrow to user / plugin / project skills
 - **Updates filter** — show only skills with detected updates; `…` appears while the background check is still running
 - **Sort** — by most invoked, recently used, or name A–Z
-- **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator, amber `!` lint chip (on parse warnings — hover to see the error)
+- **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator, amber `!` lint chip (on parse warnings — hover to see the error), and the projected-context-cost chip (e.g. `~1.2k · 0.6%`)
+- **Projected-context-cost chip (`~Nk · X%`)** — token estimate of injecting this skill's body into the Claude Code context window. Uses a `bytes / 4` heuristic against the `SKILL.md` (or standalone `.md`) file size; percent is against a fixed 200,000-token window. **Treats the body as a ceiling** — Claude Code only injects skill frontmatter into the system prompt at startup, with the full body loaded on invocation. So the chip reads "worst case when invoked," matching the model used by the `/stats` portfolio overhead estimator. Hover for the precise breakdown.
 - **Copy button** — copies the invocation string to clipboard: `/<name>` for user-invocable skills, `Skill: <name>` for programmatic-only skills
 - **Expand row** — shows provenance details, action buttons, body excerpt, and recent sessions
 

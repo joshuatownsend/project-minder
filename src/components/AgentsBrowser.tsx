@@ -14,6 +14,7 @@ import { LintCountChip } from "@/components/ui/LintCountChip";
 import { useLintFindings } from "@/hooks/useLintFindings";
 import type { LintFinding } from "@/lib/types";
 import { formatRelativeTime, truncate } from "@/lib/utils";
+import { formatProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
 // Stable identity for a row across virtualizer remounts. Falls back through
@@ -220,6 +221,22 @@ function AgentRowItem({
               {row.usage.invocations}×
             </span>
           )}
+          {(() => {
+            const chip = formatProjectedContextCost(row.entry?.projectedContextCost);
+            if (!chip) return null;
+            return (
+              <span
+                title={chip.chipTitle}
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {chip.chipLabel}
+              </span>
+            );
+          })()}
           {row.usage?.lastUsed && (
             <span
               style={{
