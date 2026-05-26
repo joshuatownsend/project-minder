@@ -6,6 +6,7 @@ import {
   contextWindowPercent,
   estimateTokensFromBytes,
   formatContextWindowPercent,
+  formatProjectedContextCost,
   formatTokenCount,
   withProjectedContextCost,
 } from "@/lib/usage/tokenEstimate";
@@ -38,6 +39,16 @@ describe("contextWindowPercent", () => {
     expect(contextWindowPercent(0)).toBe(0);
     expect(contextWindowPercent(-50)).toBe(0);
     expect(contextWindowPercent(1_000, 0)).toBe(0);
+  });
+
+  it("returns 0 for non-finite tokens or window (NaN/Infinity)", () => {
+    // PR #166 Copilot C1: shared util shouldn't leak NaN/Infinity through
+    // the formatter as `NaN%` / `Infinity%`.
+    expect(contextWindowPercent(NaN)).toBe(0);
+    expect(contextWindowPercent(Infinity)).toBe(0);
+    expect(contextWindowPercent(-Infinity)).toBe(0);
+    expect(contextWindowPercent(1_000, NaN)).toBe(0);
+    expect(contextWindowPercent(1_000, Infinity)).toBe(0);
   });
 
   it("uses 200k as the default context window", () => {
@@ -182,5 +193,40 @@ describe("withProjectedContextCost", () => {
     const enriched = withProjectedContextCost(entry, 100_000);
     expect(enriched.projectedContextCost?.tokenEstimate).toBe(1_000);
     expect(enriched.projectedContextCost?.contextWindowPercent).toBeCloseTo(1, 6);
+  });
+});
+
+describe("formatProjectedContextCost", () => {
+  it("returns null when the field is undefined or zero-token", () => {
+    expect(formatProjectedContextCost(undefined)).toBeNull();
+    expect(formatProjectedContextCost({ tokenEstimate: 0, contextWindowPercent: 0 })).toBeNull();
+    expect(formatProjectedContextCost({ tokenEstimate: -10, contextWindowPercent: 0 })).toBeNull();
+  });
+
+  it("formats label + tooltip from the server-provided field", () => {
+    const chip = formatProjectedContextCost({ tokenEstimate: 1_200, contextWindowPercent: 0.6 });
+    expect(chip).not.toBeNull();
+    expect(chip!.chipLabel).toBe("~1.2k · 0.6%");
+    expect(chip!.chipTitle).toBe(
+      "~1,200 tokens · 0.60% of 200,000-token context window",
+    );
+  });
+
+  it("recomputes percent against a caller-supplied context window so label and tooltip stay consistent", () => {
+    // PR #166 Copilot C2: caller passing a non-default window must not get
+    // a tooltip claiming "...of 100,000-token context window" while the
+    // percent in the label was computed against 200k.
+    const chip = formatProjectedContextCost(
+      // Field arrived from the server computed against 200k → 0.6%.
+      { tokenEstimate: 1_200, contextWindowPercent: 0.6 },
+      // Caller is rendering for a 100k window.
+      100_000,
+    );
+    expect(chip).not.toBeNull();
+    // 1200 / 100k = 1.2% — both label and tooltip should reflect this.
+    expect(chip!.chipLabel).toBe("~1.2k · 1.2%");
+    expect(chip!.chipTitle).toBe(
+      "~1,200 tokens · 1.20% of 100,000-token context window",
+    );
   });
 });

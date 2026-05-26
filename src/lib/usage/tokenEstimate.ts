@@ -25,6 +25,10 @@ export function contextWindowPercent(
   tokens: number,
   contextWindow: number = DEFAULT_CONTEXT_WINDOW_TOKENS,
 ): number {
+  // Mirror `bytesToTokens`'s defensive checks — NaN/Infinity inputs would
+  // otherwise propagate through the formatter as `NaN%` / `Infinity%`
+  // (PR #166 Copilot review C1).
+  if (!Number.isFinite(tokens) || !Number.isFinite(contextWindow)) return 0;
   if (tokens <= 0 || contextWindow <= 0) return 0;
   return (tokens / contextWindow) * 100;
 }
@@ -87,9 +91,16 @@ export function formatProjectedContextCost(
   contextWindow: number = DEFAULT_CONTEXT_WINDOW_TOKENS,
 ): { chipLabel: string; chipTitle: string } | null {
   if (!pcc || pcc.tokenEstimate <= 0) return null;
+  // Recompute the percent against the caller-supplied `contextWindow` so
+  // the chip label and tooltip stay internally consistent — without this,
+  // a caller passing a non-default window would render
+  // "...of 100,000-token context window" with a percent computed against
+  // 200k (PR #166 Copilot review C2). When the caller uses the default,
+  // this recomputes to the same value the server already sent.
+  const pct = contextWindowPercent(pcc.tokenEstimate, contextWindow);
   return {
-    chipLabel: `${formatTokenCount(pcc.tokenEstimate)} · ${formatContextWindowPercent(pcc.contextWindowPercent)}`,
-    chipTitle: `~${pcc.tokenEstimate.toLocaleString()} tokens · ${pcc.contextWindowPercent.toFixed(2)}% of ${contextWindow.toLocaleString()}-token context window`,
+    chipLabel: `${formatTokenCount(pcc.tokenEstimate)} · ${formatContextWindowPercent(pct)}`,
+    chipTitle: `~${pcc.tokenEstimate.toLocaleString()} tokens · ${pct.toFixed(2)}% of ${contextWindow.toLocaleString()}-token context window`,
   };
 }
 
