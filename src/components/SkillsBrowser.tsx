@@ -12,6 +12,7 @@ import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { LintCountChip } from "@/components/ui/LintCountChip";
 import { useLintFindings } from "@/hooks/useLintFindings";
 import { formatRelativeTime, truncate } from "@/lib/utils";
+import { formatProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { LintFinding } from "@/lib/types";
 import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 
@@ -242,6 +243,22 @@ function SkillRowItem({
               {row.slashCount ?? 0} slash · {row.autoCount ?? 0} auto
             </span>
           )}
+          {(() => {
+            const chip = formatProjectedContextCost(row.entry?.projectedContextCost);
+            if (!chip) return null;
+            return (
+              <span
+                title={`${chip.chipTitle} (full body weight)`}
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {chip.chipLabel}
+              </span>
+            );
+          })()}
           {row.usage?.lastUsed && (
             <span
               style={{

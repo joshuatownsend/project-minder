@@ -75,6 +75,7 @@ function makeAgentEntry(
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
+    fileBytes: Buffer.byteLength(text, "utf-8"),
   };
 }
 

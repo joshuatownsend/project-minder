@@ -1,4 +1,8 @@
 import { pluralize } from "@/lib/utils";
+import {
+  BYTES_PER_TOKEN as SHARED_BYTES_PER_TOKEN,
+  bytesToTokens as sharedBytesToTokens,
+} from "@/lib/usage/tokenEstimate";
 import type { HookEntry } from "@/lib/types";
 import type { SkillEntry } from "@/lib/indexer/types";
 
@@ -40,7 +44,9 @@ export const SYSTEM_PROMPT_BASELINE_TOKENS = 3_200;
 export const MCP_TOOLS_PER_SERVER = 5;
 export const MCP_TOKENS_PER_TOOL = 250;
 export const MCP_TOKENS_PER_SERVER = MCP_TOOLS_PER_SERVER * MCP_TOKENS_PER_TOOL;
-export const BYTES_PER_TOKEN = 4;
+// Re-export from the shared util so portfolio overhead and the per-row
+// catalog chip (T2.1, `src/lib/usage/tokenEstimate.ts`) can never drift.
+export const BYTES_PER_TOKEN = SHARED_BYTES_PER_TOKEN;
 
 export type ContextSource =
   | "baseline"
@@ -224,9 +230,7 @@ export function median(samples: number[]): number {
   return sorted[mid];
 }
 
-function bytesToTokens(bytes: number): number {
-  return Math.round(bytes / BYTES_PER_TOKEN);
-}
+const bytesToTokens = sharedBytesToTokens;
 
 function formatBytes(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}MB`;

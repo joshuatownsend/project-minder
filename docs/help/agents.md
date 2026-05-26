@@ -28,6 +28,7 @@ Plugin agents also show a **version chip** (e.g. `v1.2.3`) next to the badge. If
 
 - **`!` chip (amber)** — the agent's frontmatter has a parse warning (e.g. invalid YAML). Hover the chip to see the error message. The row still renders with the name and description that could be recovered.
 - **`$N.NN` chip** — estimated cost of all subagent invocations of this agent across your session history. Computed from OTEL `subagent_completed` + `api_request` events; only appears when the agent has attributable cost. **Coverage:** sessions run before you set `OTEL_EXPORTER_OTLP_ENDPOINT` have no recoverable per-agent cost data, so the chip is absent for agents whose history is entirely pre-OTEL. When multiple agents dispatch from the same user turn, cost is split proportionally by each invocation's `total_tokens`.
+- **`~Nk · X%` chip** — projected context cost of invoking this agent. The token count comes from a `bytes / 4` heuristic applied to the agent's `.md` file size; the percent is against a fixed 200,000-token context window (the Claude Sonnet 4.6 / Opus 4.7 default). Hover for the precise breakdown. Useful for spotting unusually heavy agents before they're dispatched — a row showing `~12k · 6%` is consuming six percent of the working context just to load. The chip is absent for orphan-usage rows that have no catalog file backing them.
 - **Copy button** — click the copy icon next to `@<name>` to copy the invocation string to the clipboard. Use this string as the `subagent_type` argument when invoking the agent programmatically.
 
 ## Update Detection

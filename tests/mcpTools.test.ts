@@ -40,7 +40,15 @@ describe("get-project-config tool", () => {
 describe("list-projects tool", () => {
   it("returns an array of projects with at minimum slug/name/path", async () => {
     const cl = await client();
-    const result = await cl.callTool({ name: "list-projects", arguments: {} });
+    // Per-call SDK timeout overrides the 60s default — `list-projects` cold-
+    // scans `C:\dev\*` which can run 30–90s on a machine with many projects;
+    // the test-level 120s budget covers it, but the SDK's request layer
+    // bails earlier without an explicit override (#158).
+    const result = await cl.callTool(
+      { name: "list-projects", arguments: {} },
+      undefined,
+      { timeout: 120_000 },
+    );
     const payload = parseText<{ projects: unknown[]; total: number }>(
       result as Parameters<typeof parseText>[0]
     );
@@ -52,7 +60,7 @@ describe("list-projects tool", () => {
       expect(typeof first.name).toBe("string");
       expect(typeof first.path).toBe("string");
     }
-  }, 90_000);
+  }, 120_000);
 
   it("rejects an unknown slug from get-project with an error result", async () => {
     const cl = await client();
@@ -93,25 +101,27 @@ describe("get-git-status tool", () => {
 });
 
 describe("get-usage-by-day tool", () => {
-  // 90s per-test timeout — `get-usage` parses every JSONL session in
-  // ~/.claude/projects/ when the SQLite index isn't enabled. Under 8-worker
-  // vitest contention this can blow the default 30s budget on a developer
-  // machine with hundreds of sessions; in isolation it's well under 5s.
+  // 120s per-test + per-call SDK timeouts — `get-usage` parses every JSONL
+  // session in ~/.claude/projects/ when the SQLite index isn't enabled.
+  // Under 8-worker vitest contention this can blow the default 30s budget
+  // on a developer machine with hundreds of sessions AND the SDK's 60s
+  // request timeout (#158). In isolation it's well under 5s.
   it(
     "returns a daily breakdown for period=7d (possibly empty)",
     async () => {
       const cl = await client();
-      const result = await cl.callTool({
-        name: "get-usage-by-day",
-        arguments: { period: "7d" },
-      });
+      const result = await cl.callTool(
+        { name: "get-usage-by-day", arguments: { period: "7d" } },
+        undefined,
+        { timeout: 120_000 },
+      );
       const payload = parseText<{ period: string; daily: unknown[] }>(
         result as Parameters<typeof parseText>[0]
       );
       expect(payload.period).toBe("7d");
       expect(Array.isArray(payload.daily)).toBe(true);
     },
-    90_000
+    120_000
   );
 });
 

@@ -7,6 +7,7 @@ import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache } from "@/lib/skillUpdateCache";
 import { jsonWithCacheControl } from "@/lib/httpCache";
 import { getDb } from "@/lib/db/connection";
+import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { QueueItem } from "@/lib/skillUpdateCache";
 import type { SkillStats } from "@/lib/usage/types";
 import type { SkillEntry } from "@/lib/indexer/types";
@@ -94,7 +95,7 @@ export async function GET(request: NextRequest) {
       (s) => aliasMap.get(s.name.toLowerCase()) === entry
     );
     if (usage) matchedNames.add(usage.name);
-    rows.push({ entry, usage });
+    rows.push({ entry: withProjectedContextCost(entry), usage });
   }
 
   for (const stat of statsArr) {

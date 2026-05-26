@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { loadCatalog, invalidateCatalogCache } from "@/lib/indexer/catalog";
 import { getAgentUsage, getSkillUsage } from "@/lib/data";
+import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { AgentEntry, SkillEntry } from "@/lib/indexer/types";
 import {
   SlugSchema,
@@ -57,7 +58,9 @@ export function registerCatalogTools(server: McpServer): void {
     },
     async ({ source, project, q, includeProjects }) => {
       const { agents } = await loadCatalog({ includeProjects });
-      const filtered = filterCatalog(agents, { source, project, q });
+      const filtered = filterCatalog(agents, { source, project, q }).map((a) =>
+        withProjectedContextCost(a),
+      );
       return jsonResult({ total: filtered.length, agents: filtered });
     }
   );
@@ -84,7 +87,7 @@ export function registerCatalogTools(server: McpServer): void {
         (s) => s.name.toLowerCase() === agent.name.toLowerCase() || s.name === agent.slug
       );
 
-      return jsonResult({ agent, usage: usage ?? null });
+      return jsonResult({ agent: withProjectedContextCost(agent), usage: usage ?? null });
     }
   );
 
@@ -105,7 +108,9 @@ export function registerCatalogTools(server: McpServer): void {
     },
     async ({ source, project, q, includeProjects }) => {
       const { skills } = await loadCatalog({ includeProjects });
-      const filtered = filterCatalog(skills, { source, project, q });
+      const filtered = filterCatalog(skills, { source, project, q }).map((s) =>
+        withProjectedContextCost(s),
+      );
       return jsonResult({ total: filtered.length, skills: filtered });
     }
   );
@@ -132,7 +137,7 @@ export function registerCatalogTools(server: McpServer): void {
         (s) => s.name.toLowerCase() === skill.name.toLowerCase() || s.name === skill.slug
       );
 
-      return jsonResult({ skill, usage: usage ?? null });
+      return jsonResult({ skill: withProjectedContextCost(skill), usage: usage ?? null });
     }
   );
 

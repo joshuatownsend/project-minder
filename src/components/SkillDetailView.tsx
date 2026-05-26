@@ -14,6 +14,7 @@ import {
   OverviewTab,
   VersionsTab,
 } from "./CatalogItemDetail";
+import { formatProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { SkillEntry } from "@/lib/indexer/types";
 import type { ItemUsageStats } from "./ItemUsageBreakdown";
 import type { UsagePeriod } from "@/lib/usage/period";
@@ -106,6 +107,17 @@ export function SkillDetailView({ id }: Props) {
             {entry.disabled && <MetaPill label="status" value="disabled" />}
             {entry.argumentHint && <MetaPill label="args" value={entry.argumentHint} />}
             {entry.version && <MetaPill label="version" value={entry.version} />}
+            {(() => {
+              const chip = formatProjectedContextCost(entry.projectedContextCost);
+              if (!chip) return null;
+              return (
+                <MetaPill
+                  label="context"
+                  value={chip.chipLabel}
+                  title={`${chip.chipTitle} (full body weight)`}
+                />
+              );
+            })()}
           </>
         }
       />
