@@ -586,6 +586,27 @@ BEGIN
   DELETE FROM catalog_fts WHERE kind = 'command' AND id = OLD.id;
 END;
 
+-- ─── session_prs ─────────────────────────────────────────────────────────
+-- T2.2: GitHub PRs created during a session, harvested from `gh pr create`
+-- Bash tool_result text and matched to their assistant call by
+-- `tool_use_id`. One row per (session, pr_url) — `INSERT OR IGNORE` on
+-- the PK keeps tail-appends and full reconciles idempotent. `repo` is
+-- derived from the URL (`owner/repo`), NOT from the session's git
+-- remote: Claude can open a PR against a fork or sibling repo.
+
+CREATE TABLE session_prs (
+  session_id   TEXT NOT NULL,
+  pr_url       TEXT NOT NULL,
+  pr_number    INTEGER NOT NULL,
+  repo         TEXT NOT NULL,
+  PRIMARY KEY (session_id, pr_url),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- Powers `/api/sessions?pr=<url>` lookup. Tiny table (most sessions
+-- have zero PRs), but the index keeps the equality probe O(log n).
+CREATE INDEX session_prs_by_url ON session_prs(pr_url);
+
 -- ─── mcp_scan_runs ───────────────────────────────────────────────────────
 -- One row per security scan invocation. Findings reference this for provenance.
 

@@ -16,6 +16,8 @@ import {
   AlertCircle,
   DollarSign,
   Layers,
+  GitPullRequest,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { formatCost, formatDurationMsCompact as formatDuration, formatTokens } from "@/lib/format";
@@ -74,6 +76,9 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
 export function ProjectSessions({ projectPath }: { projectPath: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  // T2.2: in-page filter set by clicking a PR chip on a session row.
+  // Null = no filter, otherwise the full PR URL we filter against.
+  const [prFilter, setPrFilter] = useState<string | null>(null);
   const { currency, fxRate } = useCurrency();
   // Respect user's motion preference for the active ping animation
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -188,8 +193,63 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
       {/* Session list */}
       <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         <h3 style={{ fontSize: "0.875rem", fontWeight: 500, margin: 0 }}>All Sessions</h3>
+
+        {/* T2.2: active PR filter banner. Shown only while filtering. */}
+        {prFilter && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid var(--accent-border)",
+              background: "var(--accent-bg)",
+              fontSize: "0.8rem",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--accent)" }}>
+              <GitPullRequest aria-hidden="true" style={{ width: "14px", height: "14px" }} />
+              Filtering to sessions that created{" "}
+              <a
+                href={prFilter}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ textDecoration: "underline", color: "inherit" }}
+              >
+                {prFilter.replace(/^https?:\/\/github\.com\//, "")}
+              </a>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPrFilter(null)}
+              aria-label="Clear PR filter"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                border: "1px solid var(--accent-border)",
+                background: "transparent",
+                color: "var(--accent)",
+                fontSize: "0.75rem",
+                cursor: "pointer",
+              }}
+            >
+              <X aria-hidden="true" style={{ width: "12px", height: "12px" }} />
+              Clear
+            </button>
+          </div>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {sessions.map((session) => {
+          {(prFilter
+            ? sessions.filter((s) => s.prs?.some((p) => p.url === prFilter))
+            : sessions
+          ).map((session) => {
             const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
             const label = sessionLabel(session);
             return (
@@ -288,6 +348,53 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
                             {session.gitBranch}
                           </span>
                         )}
+                        {/* T2.2: PR chips. Rendered as <span role="button">
+                            (NOT <button>) because the row is wrapped in
+                            <Link>, which renders <a> — nesting <button>
+                            inside <a> is invalid HTML and Enter on the
+                            chip can still activate the ancestor anchor in
+                            some browsers despite preventDefault. Click +
+                            keyboard activation both stop propagation so
+                            the parent row navigation doesn't fire. Read
+                            review #5. */}
+                        {session.prs?.map((pr) => {
+                          const activate = (e: React.SyntheticEvent) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPrFilter(pr.url);
+                          };
+                          return (
+                            <span
+                              key={pr.url}
+                              role="button"
+                              tabIndex={0}
+                              onClick={activate}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  activate(e);
+                                }
+                              }}
+                              title={`Filter to sessions that created ${pr.repo}#${pr.number}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                fontSize: "0.75rem",
+                                padding: "1px 6px",
+                                borderRadius: "3px",
+                                border: "1px solid var(--accent-border)",
+                                background: "var(--accent-bg)",
+                                color: "var(--accent)",
+                                fontWeight: 500,
+                                cursor: "pointer",
+                                userSelect: "none",
+                              }}
+                            >
+                              <GitPullRequest aria-hidden="true" style={{ width: "12px", height: "12px" }} />
+                              PR #{pr.number}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                     <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", flexShrink: 0 }}>

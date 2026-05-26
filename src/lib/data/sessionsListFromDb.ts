@@ -3,7 +3,7 @@ import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
-import type { SessionSummary, SessionStatus } from "@/lib/types";
+import type { SessionSummary, SessionStatus, PrLink } from "@/lib/types";
 import { isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
@@ -258,6 +258,18 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as TextPreviewRow[]
   );
 
+  // T2.2: PRs harvested from `gh pr create` tool_result text at ingest.
+  // Empty for sessions that never created a PR — single SELECT bulk-fetch
+  // keeps this O(table-scan) once instead of N per-session queries.
+  const prsBySession = groupPrs(
+    prepCached(
+      db,
+      `SELECT session_id, pr_url, pr_number, repo
+       FROM session_prs
+       ORDER BY session_id, pr_number`
+    ).all() as PrRow[]
+  );
+
   const now = Date.now();
   const result: SessionSummary[] = [];
   for (const h of headers) {
@@ -350,10 +362,29 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
         : undefined,
       isWorktree: isWorktreeEncodedDir(h.project_dir_name),
       source: h.source ?? "claude",
+      prs: prsBySession.get(h.session_id),
     });
   }
 
   return result;
+}
+
+interface PrRow {
+  session_id: string;
+  pr_url: string;
+  pr_number: number;
+  repo: string;
+}
+
+function groupPrs(rows: PrRow[]): Map<string, PrLink[]> {
+  const map = new Map<string, PrLink[]>();
+  for (const r of rows) {
+    const list = map.get(r.session_id);
+    const link: PrLink = { url: r.pr_url, number: r.pr_number, repo: r.repo };
+    if (list) list.push(link);
+    else map.set(r.session_id, [link]);
+  }
+  return map;
 }
 
 /**

@@ -37,6 +37,11 @@ function deriveMaxSessionMs(sessions: SessionSummary[]): number {
 export async function GET(request: NextRequest) {
   const project = request.nextUrl.searchParams.get("project");
   const source = request.nextUrl.searchParams.get("source");
+  // T2.2: optional PR-URL filter. Accept either a full URL
+  // (`https://github.com/foo/bar/pull/42`) or just `<owner>/<repo>#<N>` /
+  // `#<N>` shorthand — the equality check below covers the full-URL case;
+  // shorthand callers should query the full URL we surface in `prs[].url`.
+  const prFilter = request.nextUrl.searchParams.get("pr");
 
   // Refresh the in-route cache when stale. The façade itself layers DB and
   // file-parse caches under it, so a refresh that finds no JSONL changes is
@@ -72,7 +77,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: "sessions-v1",
     maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
-    parts: [project ?? "", source ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
+    parts: [project ?? "", source ?? "", prFilter ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
   });
 
   const notModified = ifNoneMatch(request, etag);
@@ -85,6 +90,11 @@ export async function GET(request: NextRequest) {
   }
   if (source) {
     results = results.filter((s) => (s.source ?? "claude") === source);
+  }
+  if (prFilter) {
+    // Exact URL match. The chip's onClick stitches the full PR URL into
+    // this query, so callers never need to second-guess normalization.
+    results = results.filter((s) => s.prs?.some((p) => p.url === prFilter));
   }
 
   // jsonWithETag returns a NextResponse; layer the backend header on top so

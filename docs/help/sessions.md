@@ -39,11 +39,11 @@ Each session row shows a narrow colour-coded strip on the right summarising how 
 | Red | Testing | Testing |
 | Grey | Other | Git Ops, Build/Deploy, Debugging, Delegation, Conversation, General |
 
-The strip is proportional to the percentage of assistant turns in each mode. Hover the strip for a tooltip with exact percentages. Sessions indexed before schema v10 (DERIVED_VERSION 7) will not show the strip.
+The strip is proportional to the percentage of assistant turns in each mode. Hover the strip for a tooltip with exact percentages. Sessions indexed before schema v10 (DERIVED_VERSION ≥ 7) will not show the strip.
 
 ### Quality chips
 
-When a session has been re-indexed under DERIVED_VERSION 7 (or scanned by the file-parse path), the row may surface up to five quality chips:
+When a session has been re-indexed under the current `DERIVED_VERSION` (or scanned by the file-parse path), the row may surface up to five quality chips:
 
 - **`NN% cache`** — cache hit ratio (`cache_read / (cache_read + cache_create)`). Green at ≥70% (cache paying back the build cost), amber under 50% (rebuilds dominating). Sessions with no cache activity at all simply don't show the chip.
 - **`compaction loop`** (red) — at least one run of consecutive turn pairs where input variance was <10% and context fill was >75%. Signals Claude was burning tokens cycling on the same context without progress.
@@ -52,6 +52,14 @@ When a session has been re-indexed under DERIVED_VERSION 7 (or scanned by the fi
 - **`thinking`** (muted) — the session contains at least one extended thinking block from a Sonnet or Opus model.
 
 Click into a session to see the full breakdown on the **Diagnosis** tab.
+
+### PR chips
+
+When a session ran `gh pr create` and the resulting PR URL appeared in the tool result, the session row on a project's **Sessions** tab shows a `PR #N` chip per PR (multiple if the session opened several). Chips appear in encounter order; the repo is derived from the URL itself (so PRs against a fork or sibling repo are attributed correctly, not against the session's git remote).
+
+Clicking a `PR #N` chip filters the in-page session list to just sessions that created that PR — useful for "what other work touched this PR's slug-chain?" A filter banner appears above the list with an "open on GitHub" link and a clear-filter button. The filter is in-page only and does not change the URL.
+
+Extraction happens at session-ingest time and matches the `gh pr create` Bash call to its `tool_result` by `tool_use_id` (not positional ordering), so parallel Bash dispatches can't cross-link results to the wrong call. Sessions written before this feature shipped backfill on the next reconcile via a DERIVED_VERSION bump.
 
 ## Search & Sort
 
