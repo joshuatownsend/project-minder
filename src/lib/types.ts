@@ -750,6 +750,25 @@ export interface SessionSummary {
   isWorktree?: boolean;
   /** Adapter source id (e.g. "claude", "codex"). Defaults to "claude" for legacy sessions. */
   source?: string;
+  /**
+   * PRs created during this session, harvested from `gh pr create`
+   * tool_result text and matched by `tool_use_id` (T2.2). Empty/absent
+   * for sessions that never invoked `gh pr create`. Multiple entries
+   * possible when a single session opens several PRs; deduped by URL.
+   */
+  prs?: PrLink[];
+}
+
+/**
+ * GitHub PR opened during a Claude Code session, harvested from the
+ * `gh pr create` tool_result text. `repo` is derived from the URL, not
+ * from the session's git remote — a session may open PRs against a fork
+ * or a sibling repo.
+ */
+export interface PrLink {
+  url: string;
+  number: number;
+  repo: string;
 }
 
 export interface TimelineEvent {

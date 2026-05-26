@@ -199,7 +199,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(7);
+    expect(session.derived_version).toBe(8);
     expect(session.source).toBe("claude");
 
     const turnRows = db
@@ -1336,7 +1336,191 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
       .get() as { slug: string | null; derived_version: number };
     expect(row.slug).toBe("graceful-pivoting-ferret");
-    expect(row.derived_version).toBe(7);
+    expect(row.derived_version).toBe(8);
+    reloaded.conn.closeDb();
+  });
+
+  // T2.2 — session_prs write-path integration tests. These prove the
+  // extractor → ParsedSession.prs → writeSession/appendSessionTail →
+  // session_prs DB rows pipeline end-to-end, catching the regression risk
+  // code review #15 flagged: refactors that silently drop the field would
+  // pass every unit test today.
+
+  it("persists session_prs rows from `gh pr create` Bash tool_result", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-prapp", "pr1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "open a PR"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "Opening it now",
+        [{ id: "tu_pr", name: "Bash", input: { command: "gh pr create --fill" } }],
+      ),
+      userToolResultTurn("2026-04-30T10:00:02Z", "tu_pr", "https://github.com/foo/bar/pull/42"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const prs = db
+      .prepare(
+        "SELECT pr_url, pr_number, repo FROM session_prs WHERE session_id = 'pr1' ORDER BY pr_number",
+      )
+      .all() as Array<{ pr_url: string; pr_number: number; repo: string }>;
+    expect(prs).toEqual([
+      {
+        pr_url: "https://github.com/foo/bar/pull/42",
+        pr_number: 42,
+        repo: "foo/bar",
+      },
+    ]);
+    reloaded.conn.closeDb();
+  });
+
+  it("persists multiple session_prs rows, sorted by pr_number on read", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-multipr", "multi.jsonl");
+    // Encounter order is 200, 5 (a later --continue session opens an older
+    // PR). DB read must order by pr_number ascending — review #7 made the
+    // file-parse extractor sort the same way so both backends agree.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "first PR"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "creating",
+        [{ id: "tu_a", name: "Bash", input: { command: "gh pr create --title a" } }],
+      ),
+      userToolResultTurn("2026-04-30T10:00:02Z", "tu_a", "https://github.com/foo/bar/pull/200"),
+      userTurn("2026-04-30T10:00:03Z", "second PR"),
+      assistantTurn(
+        "2026-04-30T10:00:04Z",
+        "claude-sonnet-4-5",
+        "creating",
+        [{ id: "tu_b", name: "Bash", input: { command: "gh pr create --title b" } }],
+      ),
+      userToolResultTurn("2026-04-30T10:00:05Z", "tu_b", "https://github.com/foo/bar/pull/5"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const numbers = (
+      db
+        .prepare(
+          "SELECT pr_number FROM session_prs WHERE session_id = 'multi' ORDER BY pr_number",
+        )
+        .all() as Array<{ pr_number: number }>
+    ).map((r) => r.pr_number);
+    expect(numbers).toEqual([5, 200]);
+    reloaded.conn.closeDb();
+  });
+
+  it("preserves existing session_prs rows when a re-parse extractor returns []", async () => {
+    // Code review #2: `safeExtractPrs` swallows extractor errors and
+    // returns []. writeSession's DELETE-then-reinsert pattern would
+    // otherwise cascade through the FK and wipe every prior PR. The fix
+    // saves rows before DELETE and merges them back; verify the prior PR
+    // survives an empty re-extract.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-preserve", "p1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "open it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "ok",
+        [{ id: "tu_x", name: "Bash", input: { command: "gh pr create --fill" } }],
+      ),
+      userToolResultTurn("2026-04-30T10:00:02Z", "tu_x", "https://github.com/foo/bar/pull/77"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Manually wipe the bash call from the file (simulating an extractor
+    // that returns [] after a content-shape change) and bump mtime to
+    // force a re-parse. The session row will go through DELETE→cascade →
+    // re-insert; without the preservation fix the PR would vanish.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "open it"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "ok",
+        // No `gh pr create` here — fresh extract returns [].
+      ),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const prs = db
+      .prepare("SELECT pr_url FROM session_prs WHERE session_id = 'p1'")
+      .all() as Array<{ pr_url: string }>;
+    expect(prs).toEqual([{ pr_url: "https://github.com/foo/bar/pull/77" }]);
+    reloaded.conn.closeDb();
+  });
+
+  it("recovers a straddled PR via tail-pass full re-extraction", async () => {
+    // Code review #1: when the `gh pr create` Bash call lands in already-
+    // persisted bytes and the tool_result arrives in a later tail-append,
+    // the tail extractor sees only an orphan `tool_result` with no
+    // matching `tool_use_id`. The recovery path in `reconcileSessionFile`
+    // does a full-file PR re-extract to catch it.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-straddle", "s1.jsonl");
+
+    // First write: just the user prompt + the assistant Bash call. No
+    // tool_result yet — simulates the writer flushing mid-conversation.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "ship the PR"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "creating",
+        [{ id: "tu_straddle", name: "Bash", input: { command: "gh pr create --fill" } }],
+      ),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    // No PR yet — the result hasn't been written.
+    expect(
+      (
+        db.prepare("SELECT COUNT(*) AS n FROM session_prs WHERE session_id = 's1'").get() as { n: number }
+      ).n,
+    ).toBe(0);
+
+    // Append the tool_result in a SEPARATE write. The cursor is parked
+    // past the assistant turn, so the next reconcile's tail-parse sees
+    // ONLY the new user turn — orphan tool_use_id, no matching call.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "ship the PR"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        "creating",
+        [{ id: "tu_straddle", name: "Bash", input: { command: "gh pr create --fill" } }],
+      ),
+      userToolResultTurn(
+        "2026-04-30T10:00:02Z",
+        "tu_straddle",
+        "https://github.com/foo/bar/pull/88",
+      ),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Recovery should have caught the PR via the full-file re-extract.
+    const prs = db
+      .prepare("SELECT pr_url, pr_number FROM session_prs WHERE session_id = 's1'")
+      .all() as Array<{ pr_url: string; pr_number: number }>;
+    expect(prs).toEqual([
+      { pr_url: "https://github.com/foo/bar/pull/88", pr_number: 88 },
+    ]);
     reloaded.conn.closeDb();
   });
 });

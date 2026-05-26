@@ -402,6 +402,30 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 14,
+    name: "T2.2: session_prs table for gh pr create → session reverse-index",
+    up: (db) => {
+      // Created idempotently with IF NOT EXISTS — same posture as the
+      // other Wave-N migrations so a partially-applied schema doesn't
+      // brick the indexer. INSERT OR IGNORE on the PK keeps repeated
+      // tail-appends and reconciles idempotent (the extractor re-runs
+      // on every parse; existing rows survive a NOOP).
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS session_prs (
+          session_id   TEXT NOT NULL,
+          pr_url       TEXT NOT NULL,
+          pr_number    INTEGER NOT NULL,
+          repo         TEXT NOT NULL,
+          PRIMARY KEY (session_id, pr_url),
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        ) WITHOUT ROWID
+      `).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS session_prs_by_url ON session_prs(pr_url)"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

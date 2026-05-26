@@ -1,4 +1,4 @@
-// Last verified: schema version 10 (src/lib/db/schema.sql + migrations v1-v10)
+// Last verified: schema version 14 (src/lib/db/schema.sql + migrations v1-v14)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 
 export interface TableSchema {
@@ -111,6 +111,10 @@ export const SQL_SCHEMA: TableSchema[] = [
       "id", "started_at_ms", "finished_at_ms", "kind", "files_seen",
       "files_changed", "rows_written", "error",
     ],
+  },
+  {
+    table: "session_prs",
+    columns: ["session_id", "pr_url", "pr_number", "repo"],
   },
   {
     table: "prompts_fts",

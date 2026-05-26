@@ -21,6 +21,8 @@ import {
 } from "@/lib/usage/contentBlocks";
 import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
+import { extractPrsFromEntries } from "@/lib/usage/prExtractor";
+import type { PrLink } from "@/lib/types";
 import {
   FILE_OP_BY_TOOL,
   AGENT_DISPATCH_TOOL,
@@ -270,6 +272,13 @@ interface ParsedSession {
   workModeOtherPct: number | null;
   /** Adapter source id (e.g. "claude"). */
   source: string;
+  /**
+   * PRs harvested from `gh pr create` tool_result text (T2.2). Matched
+   * by `tool_use_id` (not positional) so parallel Bash dispatches can't
+   * cross-link. INSERT OR IGNORE on `session_prs` means a tail-append
+   * pass producing the same URLs the first parse already saw is a NOOP.
+   */
+  prs: PrLink[];
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -374,6 +383,16 @@ interface ReadOptions {
 interface ReadResult {
   parsed: ParsedSession | null;
   safeOffset: number;
+  /**
+   * T2.2 straddle-recovery signal — true when this parse window contains
+   * one or more `tool_result` blocks whose `tool_use_id` isn't matched by
+   * a `tool_use` block in the same window. On a tail parse this is the
+   * fingerprint of a `gh pr create` Bash call written in the prefix whose
+   * result lands in the tail; the caller does a full-file PR re-extract
+   * to catch it. Always `false` on full parses (`fromOffset = 0`) since
+   * any unmatched result would also be unrecoverable. Read review #1.
+   */
+  hasOrphanToolResults: boolean;
 }
 
 async function readJsonlSession(
@@ -469,6 +488,43 @@ async function readJsonlSession(
     }
     const names = extractCommandNames(src);
     if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
+  }
+
+  // T2.2 orphan-result detector — flags tail parses where at least one
+  // `tool_result` block references a `tool_use_id` that isn't in the same
+  // parse window. This is the fingerprint of a `gh pr create` whose
+  // assistant Bash call lives in the already-persisted prefix but whose
+  // result landed in the tail. Caller (`reconcileSessionFile`) does a
+  // full-file PR re-extract when this fires so the PR isn't silently lost
+  // (review #1). Only meaningful for tails — on a `fromOffset === 0`
+  // full parse the recovery is moot because the full file is already in
+  // scope.
+  let hasOrphanToolResults = false;
+  if (fromOffset > 0) {
+    const toolUseIds = new Set<string>();
+    for (const { entry: e } of parsedLines) {
+      if (!e || e.type !== "assistant" || !Array.isArray(e.message?.content)) continue;
+      for (const block of e.message.content as Array<Record<string, unknown>>) {
+        if (block.type === "tool_use" && typeof block.id === "string") {
+          toolUseIds.add(block.id);
+        }
+      }
+    }
+    outer: for (const { entry: e } of parsedLines) {
+      if (!e || e.type !== "user") continue;
+      const ec = (e.message?.content as unknown) ?? (e as { content?: unknown }).content;
+      if (!Array.isArray(ec)) continue;
+      for (const block of ec as Array<Record<string, unknown>>) {
+        if (
+          block.type === "tool_result" &&
+          typeof block.tool_use_id === "string" &&
+          !toolUseIds.has(block.tool_use_id)
+        ) {
+          hasOrphanToolResults = true;
+          break outer;
+        }
+      }
+    }
   }
 
   // Tracks the timestamp of the most-recent user turn so the following
@@ -753,7 +809,7 @@ async function readJsonlSession(
   }
 
   if (PROFILE) tick("parseTurns", performance.now() - tParse);
-  if (turns.length === 0) return { parsed: null, safeOffset };
+  if (turns.length === 0) return { parsed: null, safeOffset, hasOrphanToolResults };
 
   const primaryModel = mostFrequent(modelCounts);
   const cliVersion = mostFrequent(versionCounts);
@@ -901,12 +957,99 @@ async function readJsonlSession(
       workModeTestingPct: workMode.testing,
       workModeOtherPct: workMode.other,
       source: "claude",
+      // Run the PR extractor on the already-parsed entries. The walk is
+      // cheap (no JSON.parse hit; reuses `parsedLines.entry`) and skips
+      // sessions that never invoked `gh pr create`. A throw here would
+      // poison the whole session insert, so wrap defensively — the
+      // session still indexes, the PR chip just doesn't render.
+      prs: safeExtractPrs(parsedLines, sessionId),
       turns,
       affectedDays,
       affectedCategoryTuples,
     },
     safeOffset,
+    hasOrphanToolResults,
   };
+}
+
+function safeExtractPrs(
+  parsedLines: Array<{ line: string; entry: ConversationEntry | null }>,
+  sessionId: string,
+): PrLink[] {
+  try {
+    const entries: ConversationEntry[] = [];
+    for (const { entry } of parsedLines) if (entry) entries.push(entry);
+    return extractPrsFromEntries(entries);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[ingest] PR extraction failed for ${sessionId}:`, err);
+    return [];
+  }
+}
+
+/**
+ * Union two PR-link lists, deduping by URL. `current` (fresh extraction)
+ * wins on overlap so a re-extract that corrects metadata (e.g., the
+ * canonical URL form) supersedes the preserved row. Order matches
+ * `extractPrsFromEntries`'s post-sort (pr_number ascending), so the
+ * merged output and the SQL `ORDER BY session_id, pr_number` read
+ * stay aligned across backends. Read review #2 and #7.
+ */
+function mergePrLinks(current: PrLink[], preserved: PrLink[]): PrLink[] {
+  const byUrl = new Map<string, PrLink>();
+  for (const pr of preserved) byUrl.set(pr.url, pr);
+  for (const pr of current) byUrl.set(pr.url, pr); // current overrides
+  return Array.from(byUrl.values()).sort((a, b) => a.number - b.number);
+}
+
+/**
+ * T2.2 straddle-recovery (review #1). Reads the full JSONL file from
+ * byte 0, runs the PR extractor against every parsed entry, and
+ * `INSERT OR IGNORE`s each PR. Used by `reconcileSessionFile` ONLY when
+ * the tail parse flagged `hasOrphanToolResults` — i.e., a `tool_result`
+ * referenced a `tool_use_id` we don't have in tail scope. Cheap on small
+ * files (~10 ms for 5 MB), bounded by `MAX_SESSION_FILE_SIZE` (50 MB) at
+ * the worst case. Soft-fails on any error so a recovery glitch never
+ * blocks the tail-append's primary correctness.
+ */
+async function recoverStraddledPrs(
+  db: DatabaseT.Database,
+  filePath: string,
+  sessionId: string,
+): Promise<number> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const lines = raw.split("\n");
+    const entries: ConversationEntry[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        entries.push(JSON.parse(trimmed) as ConversationEntry);
+      } catch {
+        /* skip malformed line */
+      }
+    }
+    const allPrs = extractPrsFromEntries(entries);
+    if (allPrs.length === 0) return 0;
+    const insertSessionPr = db.prepare(
+      `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
+       VALUES (?, ?, ?, ?)`,
+    );
+    let recovered = 0;
+    const txn = db.transaction(() => {
+      for (const pr of allPrs) {
+        const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+        recovered += Number(result.changes ?? 0);
+      }
+    });
+    txn();
+    return recovered;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[ingest] PR straddle-recovery failed for ${sessionId}:`, err);
+    return 0;
+  }
 }
 
 // ── Quality detector wrapper ───────────────────────────────────────────────
@@ -979,7 +1122,25 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   const existingSession = db
     .prepare("SELECT 1 FROM sessions WHERE session_id = ?")
     .get(s.sessionId);
+  // T2.2: save existing session_prs BEFORE the cascade DELETE wipes them.
+  // If `safeExtractPrs` returned `[]` due to a throw on this re-parse (a
+  // single content-shape change can take out the whole session's PRs),
+  // we restore the prior rows after re-insert — `INSERT OR IGNORE` plus
+  // the new-extraction-wins merge means a healthy re-extract still
+  // supersedes them. Read review #2.
+  let preservedPrs: PrLink[] = [];
   if (existingSession) {
+    preservedPrs = (
+      db
+        .prepare(
+          "SELECT pr_url, pr_number, repo FROM session_prs WHERE session_id = ?",
+        )
+        .all(s.sessionId) as Array<{
+        pr_url: string;
+        pr_number: number;
+        repo: string;
+      }>
+    ).map((r) => ({ url: r.pr_url, number: r.pr_number, repo: r.repo }));
     db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(s.sessionId);
     db.prepare("DELETE FROM sessions WHERE session_id = ?").run(s.sessionId);
   }
@@ -1106,6 +1267,23 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT OR IGNORE INTO file_edits (session_id, turn_index, file_path, op, ts)
      VALUES (?, ?, ?, ?, ?)`
   );
+  const insertSessionPr = db.prepare(
+    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
+     VALUES (?, ?, ?, ?)`
+  );
+
+  // Persist PRs found by the extractor. The prior `DELETE FROM sessions`
+  // (above, when an existing row was found) cascaded through the FK to
+  // wipe stale entries — but `preservedPrs` captured the prior set first
+  // so a thrown extractor (returning `[]` via `safeExtractPrs`) doesn't
+  // destroy data. Fresh extraction takes precedence on URL dedup; the
+  // preserved set fills the gap when extraction returned empty. Counter
+  // uses `result.changes` so INSERT OR IGNORE NOOPs don't inflate the
+  // soak-monitoring `rowsWritten` metric. Read review #2 and #6.
+  for (const pr of mergePrLinks(s.prs, preservedPrs)) {
+    const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo);
+    rows += Number(result.changes ?? 0);
+  }
 
   const tInsertChildren = PROFILE ? performance.now() : 0;
   for (const t of s.turns) {
@@ -1452,6 +1630,21 @@ function appendSessionTail(
     `INSERT OR IGNORE INTO file_edits (session_id, turn_index, file_path, op, ts)
      VALUES (?, ?, ?, ?, ?)`
   );
+  const insertSessionPr = db.prepare(
+    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
+     VALUES (?, ?, ?, ?)`
+  );
+
+  // T2.2: tail-parse only sees entries past the byte cursor. The straddle
+  // case (call before cursor, result after) is recovered by a second
+  // full-file pass below — see `recoverStraddledPrs`. Counter uses
+  // `result.changes` so INSERT OR IGNORE NOOPs (PRs already persisted by
+  // the prior writeSession) don't inflate the soak-monitoring metric.
+  // Read review #1 and #6.
+  for (const pr of parsed.prs) {
+    const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+    rows += Number(result.changes ?? 0);
+  }
 
   for (const t of parsed.turns) {
     insertTurn.run({
@@ -1828,6 +2021,23 @@ export async function reconcileSessionFile(
       affectedCategoryTuples = result.affectedCategoryTuples;
     });
     txn();
+
+    // T2.2 straddle-recovery (review #1). When the tail contains a
+    // `tool_result` whose `tool_use_id` lives in the already-persisted
+    // prefix, the tail extractor can't match the pair on its own —
+    // bashPrCalls in `safeExtractPrs` only ever sees the tail window. Do
+    // a fallback full-file PR pass and INSERT OR IGNORE so the chip
+    // appears without waiting on the next DERIVED_VERSION bump. The
+    // orphan-result flag was computed cheaply during the tail parse so we
+    // skip this whole branch on the common case (no orphan = nothing to
+    // recover). Logs and returns soft on any error — never blocks the
+    // tail-append's primary correctness.
+    let recovered = 0;
+    if (tailResult.hasOrphanToolResults) {
+      recovered = await recoverStraddledPrs(db, filePath, sessionId);
+      if (recovered > 0) rows += recovered;
+    }
+
     if (rows > 0) {
       const slug = toSlug(canonicalizeDirName(projectDirName));
       bridgeJsonlAppendToEventBus(sessionId, slug);

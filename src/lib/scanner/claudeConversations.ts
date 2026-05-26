@@ -15,6 +15,7 @@ import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
 import { classifyTurn } from "../usage/classifier";
 import { aggregateWorkMode } from "../usage/workMode";
+import { extractPrsFromEntries } from "../usage/prExtractor";
 import { readSubagentMeta } from "./subagentMeta";
 import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
@@ -336,6 +337,16 @@ async function scanSessionFile(
       sessionWorkMode = aggregateWorkMode(categories);
     } catch { /* non-critical */ }
 
+    // PR extraction (T2.2). Walks the already-parsed entries once more
+    // looking for `gh pr create` Bash invocations matched to their
+    // tool_result by `tool_use_id`. Defensive try/catch so a parse hiccup
+    // never poisons the rest of the SessionSummary.
+    let prs: SessionSummary["prs"] | undefined;
+    try {
+      const found = extractPrsFromEntries(allEntries);
+      if (found.length > 0) prs = found;
+    } catch { /* non-critical */ }
+
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
     await loadPricing();
     let costEstimate = 0;
@@ -403,6 +414,7 @@ async function scanSessionFile(
       workMode: sessionWorkMode,
       isWorktree: isWorktreeEncodedDir(projectDirName),
       source: "claude",
+      prs,
     };
   } catch {
     return null;

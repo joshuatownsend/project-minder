@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 7;
+export const DERIVED_VERSION = 8;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -62,3 +62,21 @@ export const DERIVED_VERSION = 7;
 //     populated across the existing corpus. No read-side gate — NULL
 //     work_mode columns degrade to "no work-mode strip", NULL error
 //     columns to "no error category breakdown", both non-silent.
+// 8 — T2.2 added the `session_prs` table populated by extracting
+//     `gh pr create` results from JSONL `tool_result` blocks. Without
+//     this bump, existing sessions (no mtime/size change) would skip
+//     re-parse and remain PR-less indefinitely; only newly-modified
+//     sessions would populate the new table. Bumping drives a one-time
+//     re-parse so every session that ever ran `gh pr create` gets its
+//     PRs backfilled into the table.
+//
+//     **Tail-straddle recovery (review #1).** A PR whose `gh pr create`
+//     Bash call lands in already-persisted bytes but whose `tool_result`
+//     arrives in a later tail-append is recovered by a fallback
+//     full-file PR extraction (`recoverStraddledPrs` in ingest.ts),
+//     gated on a cheap `hasOrphanToolResults` flag computed during the
+//     tail parse. This catches the call/result-cross-cursor case without
+//     needing another DERIVED_VERSION bump.
+//
+//     No read-side gate — missing rows just mean no chip renders for
+//     that session, never a wrong chip.
