@@ -51,6 +51,10 @@ The **/background** page aggregates `background_tasks` and `session_crons` array
 
 **Data source.** When Claude Code finishes a turn (Stop) or a subagent completes (SubagentStop), the hook payload includes the current set of background tasks and session crons. Project Minder's hook receiver parses these arrays into the in-memory ring buffer keyed by project slug; the `/background` page reads from there.
 
-**Eviction caveat.** The ring buffer holds the last 50 events per project and evicts entries after 5 minutes of inactivity. **Long-running background tasks whose session hasn't fired a Stop event in the last 5 minutes won't appear here**, even if the underlying OS process is still running. The page can lie by omission. SQLite-backed retention is a planned follow-up.
+**Freshness rule.** The aggregator only considers Stop / SubagentStop events received in the last 5 minutes. Older events are ignored on read even if they're the only data we have, so the page never claims something is "current" when its last signal was hours ago. The underlying ring buffer is count-capped at 50 events per project and is not time-evicted at write time, but for the purposes of this surface the older entries effectively don't exist.
+
+**Snapshot semantics.** Each Stop hook carries a *snapshot* of background tasks and crons at that moment. An explicit `background_tasks: []` on the latest Stop is treated as authoritative — a task finishing clears the surface, it doesn't fall back to an older non-empty payload. Pre-v2.1.145 Stops that omit both keys entirely are treated as "no info" and skipped, so they don't shadow a prior payload that did carry data.
+
+**Lies-by-omission caveat.** A long-running background task whose session hasn't fired a Stop event in the last 5 minutes won't appear here, even if the underlying OS process is still running. SQLite-backed retention is a planned follow-up.
 
 **Field shape.** The inner shape of each `background_tasks` / `session_crons` entry isn't published in the public Claude Code docs as of v2.1.150, so the page renders whatever fields the payload carries via defensive runtime narrowing — every own-key + stringified value. If Claude Code adds, renames, or drops fields, the page keeps working (no schema break).

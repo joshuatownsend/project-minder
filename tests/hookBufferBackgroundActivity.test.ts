@@ -112,9 +112,11 @@ describe("getProjectBackgroundActivity", () => {
     expect(r.backgroundTasks).toEqual([{ task_id: "from-sub" }]);
   });
 
-  it("skips Stop events whose arrays are both empty", () => {
-    // A Stop without bg_tasks/crons (pre-v2.1.145, or a session that
-    // never started any) shouldn't shadow a prior Stop that did have data.
+  it("skips Stop events that omit both keys entirely (pre-v2.1.145 shape)", () => {
+    // Pre-v2.1.145 Stop bodies don't carry bg_tasks/crons at all → both
+    // fields land as `undefined` in the parsed payload. That's "no info",
+    // not "explicit empty", so the aggregator should keep walking and
+    // surface the prior non-empty Stop.
     pushHookEvent(
       "myapp",
       makeEvent(
@@ -126,6 +128,75 @@ describe("getProjectBackgroundActivity", () => {
     pushHookEvent("myapp", makeEvent("myapp", { kind: "Stop" }));
     const r = getProjectBackgroundActivity("myapp");
     expect(r.backgroundTasks).toEqual([{ task_id: "real" }]);
+  });
+
+  it("treats latest Stop with explicit empty arrays as authoritative clear", () => {
+    // Claude Code's Stop hook is a snapshot — `background_tasks: []` means
+    // "no tasks running right now". A task finishing should clear the
+    // surface, not resurrect an older non-empty payload. Distinguishes
+    // explicit `[]` from undefined-key absence handled above.
+    pushHookEvent(
+      "myapp",
+      makeEvent(
+        "myapp",
+        { kind: "Stop", backgroundTasks: [{ task_id: "done" }], sessionCrons: [] },
+        -10_000,
+      ),
+    );
+    pushHookEvent(
+      "myapp",
+      makeEvent("myapp", { kind: "Stop", backgroundTasks: [], sessionCrons: [] }),
+    );
+    const r = getProjectBackgroundActivity("myapp");
+    expect(r.backgroundTasks).toEqual([]);
+    expect(r.sessionCrons).toEqual([]);
+    // We did observe a Stop — `lastObservedAt` is the cleared event's time,
+    // not null. The route layer drops projects whose arrays are both empty.
+    expect(r.lastObservedAt).toBeGreaterThan(0);
+  });
+
+  it("ignores Stop events older than STALE_EVICT_MS (5 min)", () => {
+    // A stale Stop carrying real data should not surface — the API, UI,
+    // and docs all claim this is a "last ~5 min" view.
+    pushHookEvent(
+      "myapp",
+      makeEvent(
+        "myapp",
+        {
+          kind: "Stop",
+          backgroundTasks: [{ task_id: "old-but-real" }],
+          sessionCrons: [{ schedule: "*/5 * * * *" }],
+        },
+        -6 * 60_000, // 6 min ago, beyond the 5-min freshness window
+      ),
+    );
+    const r = getProjectBackgroundActivity("myapp");
+    expect(r.backgroundTasks).toEqual([]);
+    expect(r.sessionCrons).toEqual([]);
+    expect(r.lastObservedAt).toBeNull();
+  });
+
+  it("returns a fresh Stop even when an older stale Stop sits behind it", () => {
+    // Walk-and-break: newest→oldest scan must surface the fresh entry
+    // before the stale-age check causes a break.
+    pushHookEvent(
+      "myapp",
+      makeEvent(
+        "myapp",
+        { kind: "Stop", backgroundTasks: [{ task_id: "stale" }], sessionCrons: [] },
+        -10 * 60_000, // 10 min ago — beyond TTL
+      ),
+    );
+    pushHookEvent(
+      "myapp",
+      makeEvent("myapp", {
+        kind: "Stop",
+        backgroundTasks: [{ task_id: "fresh" }],
+        sessionCrons: [],
+      }),
+    );
+    const r = getProjectBackgroundActivity("myapp");
+    expect(r.backgroundTasks).toEqual([{ task_id: "fresh" }]);
   });
 
   it("ignores non-Stop hook events", () => {

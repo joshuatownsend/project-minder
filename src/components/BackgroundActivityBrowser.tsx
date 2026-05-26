@@ -122,9 +122,9 @@ export function BackgroundActivityBrowser() {
         <p style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
           Claude Code v2.1.145+ emits <code>background_tasks</code> and{" "}
           <code>session_crons</code> arrays on Stop / SubagentStop hook events.
-          Data is held in an in-memory ring buffer and evicts after 5 minutes
-          of inactivity — so a long-running task whose session hasn't recently
-          fired a Stop event won&apos;t appear here.
+          Only events received in the last 5 minutes are surfaced here — a
+          long-running task whose session hasn&apos;t recently fired a Stop
+          event won&apos;t appear, even if the OS process is still running.
         </p>
       </div>
     );
