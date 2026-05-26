@@ -44,3 +44,13 @@ The `/config?type=hooks` tab on the Config page mirrors the toggle behavior abov
 | Search | Matches event, matcher, command text, project name (debounced 300ms) |
 | Source dropdown | Filter to `project`, `local`, or `user` scope |
 | Sort | By event name (A–Z) or by project name |
+
+## Background activity (T2.3)
+
+The **/background** page aggregates `background_tasks` and `session_crons` arrays emitted by Stop / SubagentStop hook events as of Claude Code v2.1.145. Use it to see what long-running shell commands or scheduled tasks are pending across your portfolio.
+
+**Data source.** When Claude Code finishes a turn (Stop) or a subagent completes (SubagentStop), the hook payload includes the current set of background tasks and session crons. Project Minder's hook receiver parses these arrays into the in-memory ring buffer keyed by project slug; the `/background` page reads from there.
+
+**Eviction caveat.** The ring buffer holds the last 50 events per project and evicts entries after 5 minutes of inactivity. **Long-running background tasks whose session hasn't fired a Stop event in the last 5 minutes won't appear here**, even if the underlying OS process is still running. The page can lie by omission. SQLite-backed retention is a planned follow-up.
+
+**Field shape.** The inner shape of each `background_tasks` / `session_crons` entry isn't published in the public Claude Code docs as of v2.1.150, so the page renders whatever fields the payload carries via defensive runtime narrowing — every own-key + stringified value. If Claude Code adds, renames, or drops fields, the page keeps working (no schema break).

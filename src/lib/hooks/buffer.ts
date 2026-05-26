@@ -1,4 +1,5 @@
 import type { HookEventName } from "@/lib/types";
+import type { HookPayload } from "./payload";
 
 export interface HookEvent {
   hookEventName: HookEventName;
@@ -9,6 +10,15 @@ export interface HookEvent {
   message?: string;
   /** True when a PostToolUse event carried a failure signal (is_error or non-zero return_code). */
   toolFailed?: boolean;
+  /**
+   * T2.3a: typed discriminated-union view of the JSON body Claude Code
+   * POSTed for this event. `null` when the body shape didn't satisfy the
+   * variant's required fields. Additive — existing consumers
+   * (live-activity, awaiting state, toolFailed) still read the envelope
+   * fields above; the payload is for downstream surfaces like the
+   * background-tasks / session-crons portfolio view.
+   */
+  payload?: HookPayload | null;
 }
 
 export interface LiveSession {
@@ -141,4 +151,45 @@ export function sweepAndGetState(): { liveSlugs: string[]; awaitingSlugs: string
 export function getHookBuffer(slug: string): readonly HookEvent[] {
   ensureGlobals();
   return g.__minderHookBuffers!.get(slug) ?? [];
+}
+
+/**
+ * T2.3b: aggregate the most recent `background_tasks` + `session_crons`
+ * arrays seen across Stop / SubagentStop events for a project. Returns
+ * the values from the **latest** Stop/SubagentStop event in the ring
+ * buffer for that slug — subsequent stops naturally supersede earlier
+ * ones (Claude Code re-emits the current state on each stop).
+ *
+ * Caveat: the ring buffer evicts entries after `STALE_EVICT_MS` (5 min).
+ * If a session's bg-tasks are long-running but no Stop has fired in
+ * the last 5 min, the aggregator returns empty — the badge can lie by
+ * omission. Documented as a known v1 limitation; SQLite-backed retention
+ * is the right T2.4 follow-up.
+ */
+export function getProjectBackgroundActivity(slug: string): {
+  backgroundTasks: unknown[];
+  sessionCrons: unknown[];
+  lastObservedAt: number | null;
+} {
+  ensureGlobals();
+  const events = g.__minderHookBuffers!.get(slug) ?? [];
+  // Walk newest → oldest, take the first Stop / SubagentStop payload
+  // with the arrays present.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    const p = ev.payload;
+    if (!p) continue;
+    if (p.kind !== "Stop" && p.kind !== "SubagentStop") continue;
+    const bg = p.backgroundTasks ?? [];
+    const crons = p.sessionCrons ?? [];
+    if (bg.length === 0 && crons.length === 0) continue;
+    return { backgroundTasks: bg, sessionCrons: crons, lastObservedAt: ev.receivedAt };
+  }
+  return { backgroundTasks: [], sessionCrons: [], lastObservedAt: null };
+}
+
+/** Returns the set of slugs that currently have any buffered hook events. */
+export function getAllSlugsWithBufferedEvents(): string[] {
+  ensureGlobals();
+  return Array.from(g.__minderHookBuffers!.keys());
 }
