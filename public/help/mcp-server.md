@@ -129,7 +129,7 @@ No authentication, no API keys: the endpoint exposes read access to your local C
 
 ## Troubleshooting
 
-**Tool list is empty in Claude Code** — confirm `npm run dev` is running and `curl http://localhost:4100/api/mcp -X POST -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'` returns a 200 with a JSON-RPC body.
+**Tool list is empty in Claude Code** — confirm `pnpm dev` is running and `curl http://localhost:4100/api/mcp -X POST -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'` returns a 200 with a JSON-RPC body.
 
 **DB-backed tools return empty** — Project Minder's SQLite index (`~/.minder/index.db`) is optional. Without it, the tools fall back to file-parse paths; OTEL tools return empty results until you ingest at least one event via the `/api/otel` endpoints.
 

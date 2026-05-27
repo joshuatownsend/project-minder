@@ -85,15 +85,20 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '20.19.0'   # pin to match CI
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install project dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
+      # Global CLI tool — install via npm (always bundled with Node); this
+      # is a global binary, not a project dependency, so it stays off pnpm.
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 

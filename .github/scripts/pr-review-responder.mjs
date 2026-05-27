@@ -24,7 +24,7 @@ const [OWNER, REPO] = GITHUB_REPOSITORY.split('/');
 const PROTECTED = ['.github/workflows/', '.github/actions/', '.github/scripts/'];
 
 // CI check order matches .github/workflows/ci.yml exactly
-const CI_CHECKS = ['npm run lint', 'npm run typecheck', 'npm test', 'npm run build'];
+const CI_CHECKS = ['pnpm lint', 'pnpm typecheck', 'pnpm test', 'pnpm build'];
 
 // ── Low-level helpers ─────────────────────────────────────────────────────────
 

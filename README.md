@@ -168,16 +168,16 @@ Full tool/resource reference: `docs/help/mcp-server.md`.
 
 ## Quick Start
 
-**Prerequisites:** Node.js ≥ 20.19 — runs on macOS, Linux, and Windows
+**Prerequisites:** Node.js ≥ 20.19 and [pnpm](https://pnpm.io) (run `corepack enable` to use the version pinned in `package.json`) — runs on macOS, Linux, and Windows
 
 ```bash
 git clone https://github.com/joshuatownsend/project-minder.git
 cd project-minder
-npm install
-npm run setup-hooks   # installs the pre-commit hook (typecheck + test)
+pnpm install
+pnpm setup-hooks   # installs the pre-commit hook (typecheck + test)
 ```
 
-Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `npm run dev` (create it if it doesn't exist):
+Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `pnpm dev` (create it if it doesn't exist):
 
 ```json
 {
@@ -190,7 +190,7 @@ On Windows use `C:\\dev` (or whatever your dev root is).
 Then start the dev server:
 
 ```bash
-npm run dev
+pnpm dev
 # Open http://localhost:4100
 ```
 

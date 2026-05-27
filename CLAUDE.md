@@ -11,12 +11,14 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 ## Commands
 
-- `npm run dev` — starts on port 4100 (Turbopack is default in Next.js 16)
-- `npm run build` — production build
-- `npm run start` — production server on port 4100
-- `npm run typecheck` — fast standalone type-check via tsgo (TypeScript 7 Go port, ~10× faster than tsc)
-- `npm test` — run all tests (vitest)
-- `npm run test:watch` — run tests in watch mode
+This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm install --frozen-lockfile`). `pnpm-lock.yaml` is the source of truth — there is no `package-lock.json`.
+
+- `pnpm dev` — starts on port 4100 (Turbopack is default in Next.js 16)
+- `pnpm build` — production build
+- `pnpm start` — production server on port 4100
+- `pnpm typecheck` — fast standalone type-check via tsgo (TypeScript 7 Go port, ~10× faster than tsc)
+- `pnpm test` — run all tests (vitest)
+- `pnpm test:watch` — run tests in watch mode
 
 ## Testing
 
@@ -24,9 +26,9 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - **Test location:** `tests/*.test.ts` — flat directory, one file per module
 - **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
 - **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`), `insightsWriter`, and usage modules (`classifier`, `shellParser`, `mcpParser`, `oneShotDetector`, `costCalculator`)
-- **Pre-commit hook:** Local setup only (not version-controlled) — `.git/hooks/pre-commit` runs `npm run typecheck && npm test` before each commit. New clones must set this up manually.
-- **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `npm run build` + manual browser testing.
-- **When to run tests:** Always run `npm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
+- **Pre-commit hook:** Local setup only (not version-controlled) — `.git/hooks/pre-commit` runs `pnpm typecheck && pnpm test -- --pool=forks` before each commit. New clones must set this up manually (`pnpm setup-hooks`).
+- **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `pnpm build` + manual browser testing.
+- **When to run tests:** Always run `pnpm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
 
 ## Architecture
 
@@ -136,7 +138,7 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 - Create a github issue for discovered pre-existing issues, bugs, test failures, and defects that are out of scope for current work. Include details, file names and line numbers
 
 ## Verification Gates
-Before committing or opening a PR, ALWAYS run: (1) `npm run typecheck`, (2) full test suite. Report exact pass counts (e.g., '934 tests passing'). Do not mark a task complete until both pass.
+Before committing or opening a PR, ALWAYS run: (1) `pnpm typecheck`, (2) full test suite. Report exact pass counts (e.g., '934 tests passing'). Do not mark a task complete until both pass.
 
 ## Context Management
 - For long sessions, prefer `Grep` and targeted `Read` with offset/limit over re-reading whole large files.

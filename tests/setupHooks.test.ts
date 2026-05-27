@@ -10,7 +10,7 @@ vi.mock("fs", () => ({
 import * as fs from "fs";
 import { setupHooks } from "../scripts/setup-hooks.mjs";
 
-const HOOK = `#!/bin/sh\n# Run type-check and tests before committing\nnpm run typecheck && npm test -- --pool=forks\n`;
+const HOOK = `#!/bin/sh\n# Run type-check and tests before committing\npnpm typecheck && pnpm test -- --pool=forks\n`;
 const TARGET = "/fake/.git/hooks/pre-commit";
 
 describe("setupHooks", () => {

@@ -1,5 +1,5 @@
 // Wrapper around `tsgo --noEmit` that first removes the incremental
-// build cache (`tsconfig.tsbuildinfo`). Wired in as `npm run typecheck`
+// build cache (`tsconfig.tsbuildinfo`). Wired in as `pnpm typecheck`
 // so EVERY check (local, pre-commit, CI) sees a clean baseline — a
 // stale `tsbuildinfo` from a different branch can mask real type
 // errors the fresh-from-disk run would catch. The cache file is in

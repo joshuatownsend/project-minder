@@ -4,17 +4,19 @@ Project Minder welcomes bug reports and pull requests. Here's what you need to k
 
 ## Setup
 
+This project uses [pnpm](https://pnpm.io). The version is pinned in `package.json`'s `packageManager` field — run `corepack enable` once and the right pnpm is used automatically.
+
 ```sh
 git clone https://github.com/joshuatownsend/project-minder.git
 cd project-minder
-npm install
-npm run setup-hooks   # installs the pre-commit hook
-npm run dev           # dashboard runs on http://localhost:4100
+pnpm install
+pnpm setup-hooks   # installs the pre-commit hook
+pnpm dev           # dashboard runs on http://localhost:4100
 ```
 
 ## Pre-commit hook
 
-`npm run setup-hooks` writes a pre-commit hook that runs `npm run typecheck && npm test` before every commit. Set it up once after cloning. CI enforces the same checks, but catching failures locally is faster.
+`pnpm setup-hooks` writes a pre-commit hook that runs `pnpm typecheck && pnpm test -- --pool=forks` before every commit. Set it up once after cloning. CI enforces the same checks, but catching failures locally is faster.
 
 ## Branching and merging
 
@@ -28,7 +30,7 @@ Add entries to `CHANGELOG.md` under `## [Unreleased]` for any user-visible chang
 
 ## Tests
 
-Every new module in `src/lib/**` needs a test file in `tests/`. Visual components are verified manually and through `npm run build`.
+Every new module in `src/lib/**` needs a test file in `tests/`. Visual components are verified manually and through `pnpm build`.
 
 ## Community files
 

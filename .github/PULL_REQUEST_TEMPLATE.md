@@ -8,9 +8,9 @@
 
 ## Test plan
 
-- [ ] `npm run typecheck` passes
-- [ ] `npm test` passes — N tests passing
-- [ ] `npm run build` succeeds
+- [ ] `pnpm typecheck` passes
+- [ ] `pnpm test` passes — N tests passing
+- [ ] `pnpm build` succeeds
 - [ ] New behaviour manually verified in the browser at `localhost:4100`
 - [ ] `docs/help/` updated for any new routes or UI changes
 - [ ] `CHANGELOG.md` entry added under `[Unreleased]`
