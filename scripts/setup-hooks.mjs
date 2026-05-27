@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Writes the canonical pre-commit hook to .git/hooks/pre-commit.
- * Run with: npm run setup-hooks
+ * Run with: pnpm setup-hooks
  * Idempotent: no-op when the hook already matches.
  */
 
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 
 const HOOK_CONTENT = `#!/bin/sh
 # Run type-check and tests before committing
-npm run typecheck && npm test -- --pool=forks
+pnpm typecheck && pnpm test --pool=forks
 `;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

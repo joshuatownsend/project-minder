@@ -10,7 +10,7 @@
 // hint, never a 200 with garbage. Provider/model defaults are baked in
 // at spawn time via env overrides (see `resolveConfig` below).
 //
-// Build: `npm run build:mcp-screenshot` produces
+// Build: `pnpm build:mcp-screenshot` produces
 // `dist/mcp/screenshot-to-code/index.mjs`. Wire into Claude Code with
 // `claude mcp add screenshot-to-code -- node /abs/path/to/index.mjs`.
 

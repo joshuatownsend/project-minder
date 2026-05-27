@@ -36,7 +36,7 @@ try {
   db = new Database(DB_PATH, { readonly: true });
 } catch (err) {
   console.error(`Could not open DB at ${DB_PATH}: ${err.message}`);
-  console.error("Make sure Project Minder has run at least once (npm run dev) to create the DB.");
+  console.error("Make sure Project Minder has run at least once (pnpm dev) to create the DB.");
   process.exit(1);
 }
 

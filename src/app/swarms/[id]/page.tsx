@@ -16,8 +16,14 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
 
   useDocumentTitle(swarm ? `Swarm: ${swarm.name}` : "Swarm");
 
+  // Latest-ref pattern: keep `swarmRef` in sync with `swarm` from an
+  // effect (not during render — see react-hooks/refs) so the stable
+  // 5s poll interval below can read the freshest status without
+  // restarting on every status change.
   const swarmRef = useRef<Swarm | null>(null);
-  swarmRef.current = swarm;
+  useEffect(() => {
+    swarmRef.current = swarm;
+  }, [swarm]);
 
   const load = useCallback(async () => {
     try {

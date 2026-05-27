@@ -21,8 +21,8 @@ body:
     attributes:
       label: Running mode
       options:
-        - Dev (`npm run dev`)
-        - Production (`npm run build && npm run start`)
+        - Dev (`pnpm dev`)
+        - Production (`pnpm build && pnpm start`)
     validations:
       required: true
 

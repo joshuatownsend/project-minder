@@ -9,19 +9,20 @@ Thank you for your interest in Project Minder! This is primarily a personal tool
    ```sh
    git clone https://github.com/joshuatownsend/project-minder.git
    cd project-minder
-   npm install
-   npm run setup-hooks   # installs the pre-commit hook
-   npm run dev           # starts on http://localhost:4100
+   corepack enable        # use the pnpm version pinned in package.json
+   pnpm install
+   pnpm setup-hooks   # installs the pre-commit hook
+   pnpm dev           # starts on http://localhost:4100
    ```
 
 2. The dashboard auto-scans `C:\dev\*` (or the `devRoot` in `.minder.json`). Point it at a directory with a few projects to get real data.
 
 ## Pre-commit requirements
 
-The pre-commit hook runs `npm run typecheck && npm test` before every commit. Both must pass. Set it up once with:
+The pre-commit hook runs `pnpm typecheck && pnpm test --pool=forks` before every commit. Both must pass. Set it up once with:
 
 ```sh
-npm run setup-hooks
+pnpm setup-hooks
 ```
 
 If you skip this, CI will still catch failures — but local failures are faster to iterate on.
@@ -42,8 +43,8 @@ Pure refactors and test-only changes do not need a CHANGELOG entry.
 
 - Every new module in `src/lib/**` must have a `tests/<module>.test.ts`.
 - API routes need tests when validation is non-trivial.
-- Visual components are verified manually and through `npm run build`.
-- Run `npm test` before opening a PR. The pre-commit hook enforces this but running it manually surfaces failures faster.
+- Visual components are verified manually and through `pnpm build`.
+- Run `pnpm test` before opening a PR. The pre-commit hook enforces this but running it manually surfaces failures faster.
 
 ## Signed commits
 
