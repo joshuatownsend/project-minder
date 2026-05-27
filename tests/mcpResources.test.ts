@@ -1,7 +1,61 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import path from "path";
+import os from "os";
+import { promises as fs } from "fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServerForTests } from "@/lib/mcp/server";
+import { setCachedScan, invalidateCache } from "@/lib/cache";
+
+// Isolation hooks (#173). Three independent leak sources combined into one
+// setup block — without them the MCP tests walk the developer's real
+// filesystem and routinely exceed the SDK request timeout:
+//
+// 1. `~/.claude/projects/` — `minder://usage/7d`, `get-usage-by-day`,
+//    `minder://stats` (indirectly). Mitigated by HOME/USERPROFILE
+//    override + `os.homedir` spy + empty tmp `.claude/projects/`.
+// 2. `devRoot` (default `C:\dev` on Windows) — `list-projects`,
+//    `minder://stats`, every resource template that builds project URIs.
+//    Mitigated by pre-populating the scan cache with an empty
+//    `ScanResult` so `getCachedOrFreshScan` returns immediately without
+//    invoking `scanAllProjects()`. The cache lives on globalThis with a
+//    5-min TTL.
+// 3. Cache bleed between test runs — `afterEach` invalidates so other
+//    files' tests don't see our empty-projects snapshot.
+let tmpHome: string;
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
+
+beforeEach(async () => {
+  originalHome = process.env.HOME;
+  originalUserProfile = process.env.USERPROFILE;
+  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-mcp-resources-"));
+  await fs.mkdir(path.join(tmpHome, ".claude", "projects"), { recursive: true });
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  setCachedScan({
+    projects: [],
+    portConflicts: [],
+    hiddenCount: 0,
+    scannedAt: new Date().toISOString(),
+    catalogLintFindings: [],
+  });
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  invalidateCache();
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
+  try {
+    await fs.rm(tmpHome, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+});
 
 async function client() {
   const server = await buildMcpServerForTests();

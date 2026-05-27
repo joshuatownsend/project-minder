@@ -1,7 +1,51 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import path from "path";
+import os from "os";
+import { promises as fs } from "fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServerForTests } from "@/lib/mcp/server";
+import { setCachedScan, invalidateCache } from "@/lib/cache";
+
+// Isolation hooks (#173). See mcpResources.test.ts for the full rationale:
+// HOME/USERPROFILE override + `os.homedir` spy isolates the JSONL walk;
+// pre-populating the scan cache short-circuits the `getCachedOrFreshScan`
+// → `scanAllProjects` walk of the configured devRoot (`C:\dev` on
+// Windows by default).
+let tmpHome: string;
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
+
+beforeEach(async () => {
+  originalHome = process.env.HOME;
+  originalUserProfile = process.env.USERPROFILE;
+  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-mcp-tools-"));
+  await fs.mkdir(path.join(tmpHome, ".claude", "projects"), { recursive: true });
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  setCachedScan({
+    projects: [],
+    portConflicts: [],
+    hiddenCount: 0,
+    scannedAt: new Date().toISOString(),
+    catalogLintFindings: [],
+  });
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  invalidateCache();
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
+  try {
+    await fs.rm(tmpHome, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+});
 
 // End-to-end tool execution tests. Each call() goes through the real MCP
 // JSON-RPC pipe (in-memory transport) → server's registered handler → lib
