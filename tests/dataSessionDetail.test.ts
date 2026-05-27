@@ -277,6 +277,60 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     // Documented divergences — assert the DB path's intentional differences.
     expect(d.recaps).toBeUndefined();
     expect(d.searchableText).toBeUndefined();
+
+    // Issue #172 — parity with the list loader on three previously-missing
+    // SessionSummary fields. The fixture's project dir is non-worktree,
+    // adapter source defaults to "claude" at reconcile time, and the
+    // workmode aggregator either fills all four columns or none — so
+    // both backends should agree on each field even for the default
+    // fixture shape.
+    expect(d.isWorktree).toBe(f.isWorktree);
+    expect(d.source).toBe(f.source);
+    expect(d.workMode).toEqual(f.workMode);
+  });
+
+  it("DB loader populates isWorktree / source / workMode (issue #172 parity)", async () => {
+    // Drives values that the default reconcile path wouldn't produce:
+    //   - project dir name carrying the worktree separator
+    //   - non-"claude" adapter `source` column
+    //   - all four work_mode_*_pct columns set
+    // Then asserts the detail loader propagates each to SessionDetail.
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const worktreeDir = "C--dev-app-x--claude-worktrees-feature";
+    await writeJsonl(path.join(projectsDir, worktreeDir, `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      assistantTurn("2026-04-15T10:00:01Z", "claude-sonnet-4-5", "hello", []),
+    ]);
+
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Stamp non-default values that reconcile doesn't naturally produce.
+    db.prepare(
+      `UPDATE sessions
+         SET source = ?,
+             work_mode_exploration_pct = ?,
+             work_mode_building_pct = ?,
+             work_mode_testing_pct = ?,
+             work_mode_other_pct = ?
+       WHERE session_id = ?`
+    ).run("codex", 40, 30, 20, 10, SESSION_ID);
+
+    const result = await facade.getSessionDetail(SESSION_ID);
+    expect(result.meta.backend).toBe("db");
+    expect(result.detail).not.toBeNull();
+    const d = result.detail!;
+    expect(d.isWorktree).toBe(true);
+    expect(d.source).toBe("codex");
+    expect(d.workMode).toEqual({
+      exploration: 40,
+      building: 30,
+      testing: 20,
+      other: 10,
+    });
   });
 
   it("rejects path-traversal-shaped sessionIds", async () => {
