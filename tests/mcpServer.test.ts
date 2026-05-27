@@ -1,55 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import path from "path";
-import os from "os";
-import { promises as fs } from "fs";
+import { describe, it, expect, beforeAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildMcpServerForTests } from "@/lib/mcp/server";
-import { setCachedScan, invalidateCache } from "@/lib/cache";
+import { installMcpIsolation } from "./_helpers/mcpIsolation";
 
-// Isolation hooks (#173). The boot test's `listResources()` call invokes
-// every resource template's `list` callback — including session/usage
-// templates that walk `~/.claude/projects/`, and project templates that
-// walk the configured devRoot. Both leak sources are mitigated here:
-// HOME/USERPROFILE + `os.homedir` spy for the JSONL walk; pre-populated
-// scan cache short-circuits `scanAllProjects()`. File-scoped (beforeAll/
-// afterAll) because mcpServer.test.ts uses a single-connection beforeAll;
-// our setup needs to run BEFORE that connection's beforeAll triggers the
-// `listResources()` call.
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-
-beforeAll(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-mcp-server-"));
-  await fs.mkdir(path.join(tmpHome, ".claude", "projects"), { recursive: true });
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
-  setCachedScan({
-    projects: [],
-    portConflicts: [],
-    hiddenCount: 0,
-    scannedAt: new Date().toISOString(),
-    catalogLintFindings: [],
-  });
-});
-
-afterAll(async () => {
-  vi.restoreAllMocks();
-  invalidateCache();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
-});
+// File-scoped isolation (#173). See `tests/_helpers/mcpIsolation.ts`.
+// The "perFile" lifetime registers a single beforeAll/afterAll pair so
+// our setup runs BEFORE the inner `describe`'s connection beforeAll
+// (which triggers the slow `listResources()` template enumeration).
+installMcpIsolation("perFile");
 
 /**
  * Smoke tests for the MCP server. Each test wires up a fresh
@@ -64,6 +22,11 @@ afterAll(async () => {
  */
 
 async function makeConnectedClient() {
+  // Dynamic import AFTER the isolation hook's `vi.resetModules()` runs
+  // so `@/lib/db/connection`'s `DB_PATH` module-scope capture honors
+  // the spied homedir (the boot test's `listResources()` indirectly
+  // touches DB-backed loaders).
+  const { buildMcpServerForTests } = await import("@/lib/mcp/server");
   const server = await buildMcpServerForTests();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
