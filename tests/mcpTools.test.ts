@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildMcpServerForTests } from "@/lib/mcp/server";
+import { installMcpIsolation } from "./_helpers/mcpIsolation";
+
+// Isolation hooks (#173). See `tests/_helpers/mcpIsolation.ts`.
+installMcpIsolation("perTest");
 
 // End-to-end tool execution tests. Each call() goes through the real MCP
 // JSON-RPC pipe (in-memory transport) → server's registered handler → lib
@@ -10,6 +13,10 @@ import { buildMcpServerForTests } from "@/lib/mcp/server";
 // (no projects, no sessions) still pass.
 
 async function client() {
+  // Dynamic import AFTER `vi.resetModules()` (inside the isolation
+  // hook) so the DB layer's module-scope `DB_PATH` capture uses the
+  // spied homedir, not the developer's real `~/.minder/index.db`.
+  const { buildMcpServerForTests } = await import("@/lib/mcp/server");
   const server = await buildMcpServerForTests();
   const [c, s] = InMemoryTransport.createLinkedPair();
   await server.connect(s);

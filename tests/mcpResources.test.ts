@@ -1,9 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildMcpServerForTests } from "@/lib/mcp/server";
+import { installMcpIsolation } from "./_helpers/mcpIsolation";
+
+// Isolation hooks (#173). See `tests/_helpers/mcpIsolation.ts` for the
+// full rationale — closes the JSONL walk leak (`~/.claude/projects/`),
+// the devRoot walk leak (`scanAllProjects()`), and the module-load DB
+// path capture (`~/.minder/index.db`).
+installMcpIsolation("perTest");
 
 async function client() {
+  // Dynamic import AFTER the isolation hook's `vi.resetModules()` runs
+  // so `@/lib/db/connection`'s module-scope `DB_DIR`/`DB_PATH` captures
+  // the spied homedir, not the developer's real home (Codex P2 finding
+  // on PR #176).
+  const { buildMcpServerForTests } = await import("@/lib/mcp/server");
   const server = await buildMcpServerForTests();
   const [c, s] = InMemoryTransport.createLinkedPair();
   await server.connect(s);

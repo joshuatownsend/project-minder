@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { buildMcpServerForTests } from "@/lib/mcp/server";
+import { installMcpIsolation } from "./_helpers/mcpIsolation";
+
+// File-scoped isolation (#173). See `tests/_helpers/mcpIsolation.ts`.
+// The "perFile" lifetime registers a single beforeAll/afterAll pair so
+// our setup runs BEFORE the inner `describe`'s connection beforeAll
+// (which triggers the slow `listResources()` template enumeration).
+installMcpIsolation("perFile");
 
 /**
  * Smoke tests for the MCP server. Each test wires up a fresh
@@ -16,6 +22,11 @@ import { buildMcpServerForTests } from "@/lib/mcp/server";
  */
 
 async function makeConnectedClient() {
+  // Dynamic import AFTER the isolation hook's `vi.resetModules()` runs
+  // so `@/lib/db/connection`'s `DB_PATH` module-scope capture honors
+  // the spied homedir (the boot test's `listResources()` indirectly
+  // touches DB-backed loaders).
+  const { buildMcpServerForTests } = await import("@/lib/mcp/server");
   const server = await buildMcpServerForTests();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
