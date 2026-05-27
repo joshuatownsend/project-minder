@@ -5,6 +5,7 @@ import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { prepCached } from "@/lib/db/connection";
+import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
 import { enrichSubagentsFromOtel } from "@/lib/scanner/subagentEnrichment";
 import type { SubagentMeta } from "@/lib/scanner/subagentMeta";
@@ -83,11 +84,33 @@ import type {
 // timeline content matches for sessions with single-text-block
 // assistant turns and no `thinking` blocks (the common case in the
 // test fixture).
+//
+// **Parity gaps closed with the DB list loader** (issue #172): the
+// three optional `SessionSummary` fields below were silently
+// `undefined` on this loader for a while because `SessionDetail
+// extends SessionSummary` with each marked `?:` — TS never caught the
+// omission. They're all set the same way as `sessionsListFromDb.ts`:
+//
+//   - `isWorktree`: derived from `file_path` (NOT `project_dir_name`)
+//     via `isWorktreeFilePath`. `project_dir_name` gets canonicalized
+//     at ingest (`canonicalizeDirName` strips `--claude-worktrees-*`
+//     to group worktree sessions under the parent project's slug), so
+//     the worktree marker is only recoverable from the raw file path.
+//     Fixing this here required adding the same `file_path` select +
+//     derivation to `sessionsListFromDb.ts` so the two loaders agree.
+//   - `source`: read straight from `sessions.source` with a `"claude"`
+//     fallback for legacy rows (Wave 10.2a adapter id; file-parse
+//     hardcodes `"claude"` since adapter detection lives at a
+//     different layer).
+//   - `workMode`: composed from the four `work_mode_*_pct` columns,
+//     `undefined` when any of them is NULL (the workmode aggregator
+//     never writes a partial row, so this is an all-or-nothing gate).
 
 interface SessionRow {
   session_id: string;
   project_slug: string | null;
   project_dir_name: string;
+  file_path: string;
   file_mtime_ms: number;
   start_ts: string | null;
   end_ts: string | null;
@@ -114,6 +137,11 @@ interface SessionRow {
   starred_at: string | null;
   distilled_at: string | null;
   distilled_text: string | null;
+  source: string | null;
+  work_mode_exploration_pct: number | null;
+  work_mode_building_pct: number | null;
+  work_mode_testing_pct: number | null;
+  work_mode_other_pct: number | null;
 }
 
 interface TurnRow {
@@ -169,7 +197,7 @@ export async function loadSessionDetailFromDb(
   if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
 
   const session = prepCached(db,
-      `SELECT session_id, project_slug, project_dir_name, file_mtime_ms,
+      `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
               start_ts, end_ts, primary_model,
               turn_count, user_turn_count, assistant_turn_count,
               tool_call_count, error_count,
@@ -177,7 +205,10 @@ export async function loadSessionDetailFromDb(
               cost_usd, has_one_shot, verified_task_count, one_shot_task_count,
               git_branch, initial_prompt, last_prompt,
               has_thinking, cli_version, generated_title,
-              starred_at, distilled_at, distilled_text
+              starred_at, distilled_at, distilled_text,
+              source,
+              work_mode_exploration_pct, work_mode_building_pct,
+              work_mode_testing_pct, work_mode_other_pct
        FROM sessions
        WHERE session_id = ?`
     )
@@ -298,6 +329,20 @@ export async function loadSessionDetailFromDb(
     fileOperations: aggregates.fileOperations,
     subagents: aggregates.subagents,
     prs: prs.length > 0 ? prs : undefined,
+    isWorktree: isWorktreeFilePath(session.file_path),
+    source: session.source ?? "claude",
+    workMode:
+      session.work_mode_exploration_pct !== null &&
+      session.work_mode_building_pct !== null &&
+      session.work_mode_testing_pct !== null &&
+      session.work_mode_other_pct !== null
+        ? {
+            exploration: session.work_mode_exploration_pct,
+            building: session.work_mode_building_pct,
+            testing: session.work_mode_testing_pct,
+            other: session.work_mode_other_pct,
+          }
+        : undefined,
   };
 }
 

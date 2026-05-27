@@ -280,4 +280,38 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
     expect(result.sessions).toEqual([]);
     expect(result.meta.backend).toBe("file");
   });
+
+  it("DB loader detects worktree sessions via file_path (issue #172)", async () => {
+    // Regression cover: `canonicalizeDirName` strips the
+    // `--claude-worktrees-*` suffix from `project_dir_name` at ingest
+    // (to group worktree sessions under the parent project's slug), so
+    // both DB loaders must derive `isWorktree` from the raw `file_path`
+    // column. Before the fix, this returned `false` for worktree
+    // sessions in DB mode while file-parse returned `true`.
+    const SESSION_WT = "cccccccc-1111-2222-3333-444455556666";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const worktreeDir = "C--dev-app-x--claude-worktrees-feature";
+    await writeJsonl(path.join(projectsDir, worktreeDir, `${SESSION_WT}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      assistantTurn("2026-04-15T10:00:01Z", "claude-sonnet-4-5", "hello", []),
+    ]);
+
+    // File backend agreement check.
+    process.env.MINDER_USE_DB = "0";
+    const { facade: fileFacade } = await reloadModules();
+    const fileResult = await fileFacade.getSessionsList();
+    const fileWt = fileResult.sessions.find((s) => s.sessionId === SESSION_WT)!;
+    expect(fileWt.isWorktree).toBe(true);
+
+    // DB backend must agree after reconcile.
+    process.env.MINDER_USE_DB = "1";
+    const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    const dbResult = await dbFacade.getSessionsList();
+    expect(dbResult.meta.backend).toBe("db");
+    const dbWt = dbResult.sessions.find((s) => s.sessionId === SESSION_WT)!;
+    expect(dbWt).toBeDefined();
+    expect(dbWt.isWorktree).toBe(true);
+  });
 });

@@ -4,7 +4,7 @@ import { decodeDirName } from "@/lib/platform";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink } from "@/lib/types";
-import { isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
+import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -92,6 +92,7 @@ interface SessionRow {
   session_id: string;
   project_slug: string | null;
   project_dir_name: string;
+  file_path: string;
   file_mtime_ms: number;
   start_ts: string | null;
   end_ts: string | null;
@@ -180,7 +181,7 @@ const ASSISTANT_TEXT_SLICE = 500;
 export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[] {
   const headers = prepCached(
     db,
-    `SELECT session_id, project_slug, project_dir_name, file_mtime_ms,
+    `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
             start_ts, end_ts, status,
             turn_count, user_turn_count, assistant_turn_count,
             error_count,
@@ -360,7 +361,13 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             other: h.work_mode_other_pct,
           }
         : undefined,
-      isWorktree: isWorktreeEncodedDir(h.project_dir_name),
+      // Derived from `file_path` (raw filesystem path), NOT
+      // `project_dir_name` — `canonicalizeDirName` strips
+      // `--claude-worktrees-*` at ingest to group worktree sessions
+      // under the parent project's slug, so `project_dir_name` has
+      // lost the worktree marker by the time we read it. The raw path
+      // is preserved on the `file_path` column.
+      isWorktree: isWorktreeFilePath(h.file_path),
       source: h.source ?? "claude",
       prs: prsBySession.get(h.session_id),
     });
