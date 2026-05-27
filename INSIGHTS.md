@@ -1,5 +1,140 @@
 # Insights
 
+<!-- insight:641860e99ce7 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T01:44:00.848Z -->
+## ★ Insight
+- The fix uses `file_path` because it's the only column on `sessions` that preserves the raw worktree dir name — ingest threads it through unchanged from `walkProjects`, while `project_dir_name` gets canonicalized two lines earlier (`canonicalDir = canonicalizeDirName(projectDirName)`).
+- The canonicalization is *intentional* — it groups worktree sessions under the parent project's slug. So switching `project_dir_name` to store the raw form would break that grouping. A new column or a derive-at-read approach is the only path forward.
+- `WORKTREE_SEP = "--claude-worktrees-"` is distinctive enough that a substring match on the full file path is safe; no real Windows or POSIX path component contains those two consecutive `--` triplets by accident.
+
+---
+
+<!-- insight:6a7103c1be64 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T21:47:22.834Z -->
+## ★ Insight
+**What I found empirically**:
+1. `src/lib/db/ingest.ts:920` stores the **canonicalized** `project_dir_name` (worktree suffix stripped by `canonicalizeDirName`). So both the list loader AND the detail loader's `isWorktreeEncodedDir(project_dir_name)` calls always return `false` for worktree sessions.
+2. Confirmed against your real DB at `~/.minder/index.db`: 0 sessions in either column contain `--claude-worktrees-`, yet 8 worktree dirs exist on disk. (Those 8 are empty — no JSONL files — so no user-visible damage has shipped yet, but the moment you spawn a Claude session inside a worktree, that session lands in the DB with `isWorktree: false`.)
+3. **`source` and `workMode` are genuinely fixable in this PR with the changes I made.** Only `isWorktree` is collateral damage from a deeper canonicalization design choice.
+
+---
+
+<!-- insight:481a9f32c838 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T21:37:02.394Z -->
+## ★ Insight
+- The file-parse path gets parity "for free" because `scanSessionDetail` does `return {...summary, ...detailFields}` — every `SessionSummary` field flows through automatically. The DB loader assembles its return shape field-by-field, so any new summary field must be explicitly mirrored.
+- TS won't catch this: `isWorktree?`/`source?`/`workMode?` are all optional in `SessionSummary`, so omitting them isn't a type error. This is the classic structural-typing failure mode where "extends a type" doesn't enforce coverage of optional fields.
+- `source` in the file-parse path is hardcoded to `"claude"` — only the DB column carries non-default adapter ids (Wave 10.2a). So the detail loader pulling `source` from the DB is actually *more* correct than file-parse, not just at parity.
+
+---
+
+<!-- insight:f3a84b4abeff | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T16:46:39.674Z -->
+## ★ Insight
+The empirical proof: a `fresh`-base worktree (branched from `origin/main`) produces a `.git` pointer of exact form `gitdir: <path>` and a worktree-internal HEAD of exact form `ref: refs/heads/<branch>`. Both regexes in `readWorktreeBranch` match perfectly. Git's worktree infrastructure is base-ref-agnostic at the file-format layer — the start-point only affects commit ancestry in the object database, never the branch name or pointer file shape. This is why one test in `tests/worktrees.test.ts:128` covers both Claude Code worktree-base modes without parameterisation.
+
+---
+
+<!-- insight:643e3988d454 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T16:38:09.715Z -->
+## ★ Insight
+The fixture is itself the proof: the same logical attr `duration_ms` appears as `{stringValue: "42"}` at line 24 AND `{intValue: "1200"}` at line 53 of the same OTLP log fixture. That's the v2.1.122 wire-shape ambiguity in plain view — `attrMap()` collapses them into a JS string vs JS number respectively, which `JSON.stringify` then serialises as a quoted-string vs unquoted-number in `payload_json`. Downstream `CAST(... AS REAL)` and JS-side `Number(...)` calls neutralise this at consume-time.
+
+---
+
+<!-- insight:b6d158a7e90f | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T16:32:10.146Z -->
+## ★ Insight
+Post-merge state is healthy. The LSP-level diagnostics that flashed during the checkout were stale — the IDE language server hadn't reindexed yet, but the canonical `tsgo` typecheck via `scripts/typecheck.mjs` is clean. This is a common Windows + Next.js + Tailwind v4 situation where the editor's TypeScript service lags filesystem changes by a few seconds. The CLAUDE.md verification gate (`npm run typecheck && npm test`) is the source of truth, and both pass.
+
+---
+
+<!-- insight:672b69d234a9 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T16:11:04.828Z -->
+## ★ Insight
+**2613 passing, 1 skipped, 0 failures.** Typecheck clean. Net +3 from the new tests covering explicit `[]` clear semantics, stale-event TTL drop, and the walk-and-break interaction. The fact that all preexisting tests passed unchanged is reassuring — the `undefined`-omission case (which is the only thing the old code distinguished) was preserved by the renamed test, and the new `[]`-clear semantics changes behavior only for a case that didn't have coverage before.
+
+---
+
+<!-- insight:b796dc275449 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T16:04:57.233Z -->
+## ★ Insight
+Five of the eight comments are the same defect viewed from different surfaces — when docs claim "X happens" and code doesn't do X, every code-review tool will flag every doc/UI mention of X. The cheapest fix here is almost always "make the code match the docs" rather than rewriting four doc surfaces, *unless* the docs were aspirational. Here they were aspirational — I documented intended behavior but only implemented the count cap.
+
+---
+
+<!-- insight:4df9de5dfa03 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-26T03:02:26.725Z -->
+## ★ Insight
+The two pre-existing bugs we caught and fixed during T2.1 verification are textbook examples of why CLAUDE.md mandates "use the feature in a browser before reporting the task as complete." Both bugs (#165 and #158) had been quietly broken for sessions — typecheck + tests both passed, the production code was probably fine, but specific paths were unreachable or flaky. Visual verification surfaced them in minutes. The lesson generalizes: tests prove your code compiles and unit-tests pass; only running the actual feature proves it works.
+
+---
+
+<!-- insight:cd7fc31ad88b | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T21:46:56.445Z -->
+## ★ Insight
+The existing heuristic uses `Math.round(bytes / 4)`; the plan literally says `Math.ceil(bytes / 4)`. At small file sizes the difference is ±1 token — irrelevant for display. The bigger choice is whether to surface a "% of context window" alongside the raw token count, which actually shapes how a user *reads* the chip: "890 tokens" is meaningless without knowing 200k is the denominator. The trade-off is signal density vs. row noise.
+
+---
+
+<!-- insight:15c0e30e373f | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T21:42:56.088Z -->
+## ★ Insight
+What just shipped, in two layers:
+
+---
+
+<!-- insight:03c0abb8aa54 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T21:25:13.780Z -->
+## ★ Insight
+The C1 fix (null vs `[]` return) is the kind of subtlety that's easy to miss in review: the code looked like it returned `[]` for both "no data" and "failure," which silently degraded the dashboard. Distinguishing them at the API boundary lets callers make different decisions — `agentCost.ts` skips the cache, `subagentEnrichment.ts` keeps the JSONL skeleton.
+
+---
+
+<!-- insight:fa8b6b02579b | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T21:00:17.532Z -->
+## ★ Insight
+Two bugs fixed with one util. The investigation revealed that `prompt.id` in Claude Code's OTEL stream is per-user-turn, not per-subagent — so the obvious "look up cost by prompt.id" approach silently overcounts in parallel-dispatch turns. The breakthrough was discovering `api_request.query_source` (`agent:builtin:<name>`, `agent:custom`, `repl_main_thread`), which gives per-call attribution missing from `prompt.id` alone. The matched-set proportional rule degenerates to share=1.0 in the simple case, so it's a strict generalization with no special-casing.
+
+---
+
+<!-- insight:cfae97384851 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T20:41:00.374Z -->
+## ★ Insight
+The advisor caught a subtle bug: my original "100% if type matches" rule would have over-counted when multiple invocations of the same builtin type share a prompt.id. The corrected matched-set proportional rule degenerates to the simple case (share=1.0) when only one invocation matches, so it's a strict generalization — no special-casing needed.
+
+---
+
+<!-- insight:0d8715e32a7a | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T16:56:02.740Z -->
+## ★ Insight
+- The strongest cluster of findings (1, 2, 3, 6, 11) share a theme: T1.1 introduced authoritative liveness data but only one consumer (ProjectCard) was updated to use it. The aggregator, the approval counter, the awaiting-badge check, the session sort, and the readdir-error path all still operate as if `isLive` doesn't exist. This is a classic "data added, but writes-only" pattern — a follow-up T1.1b that wires the new field into every downstream gate would clean it up without new schema work.
+- Findings 4 and 7 are the same defect from two angles: the cache state machine has no negative-result handling (10s null poison) and no in-flight cancellation. Both are fixable in ~5 lines: a shorter TTL for null results (e.g., 1s) and clearing `__claudeAgentsFlight` in `invalidateClaudeAgentsCache`. Worth combining.
+- Finding 1 (`new Date(NaN).toISOString()` throw) is theoretically catastrophic — a single bad CLI entry can 500 the entire pulse endpoint. Wrapping the single line in `try { ... } catch {}` or pre-validating with `Number.isFinite(proc.startedAt)` in the typeguard closes it.
+
+---
+
+<!-- insight:9526a04d5cad | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T16:17:27.744Z -->
+## ★ Insight
+- Useful side effect of the verified-live tier: before this change, a project would only show a "live" badge if its hook events were recent (because `liveSlugs` came purely from the hook buffer). Hook events fire on tool-use, so a session that was idly waiting for input would *not* show as live. Now the CLI tier catches those — the dashboard correctly reflects "Claude is sitting in this project" regardless of recent activity.
+- The fallback `verifiedLiveSlugs = liveSlugs` when `cliAvailable === false` is a "do no harm" default — older Claude Code versions get the exact existing UI behavior; the three-tier logic only kicks in on v2.1.145+. This is the same defensive shape T1.1's data layer used (`null` vs `[]`).
+
+---
+
+<!-- insight:14bf70eb9a2d | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T16:01:05.309Z -->
+## ★ Insight
+- Two independent "live" signals now exist: (1) **hook-server buffer** — slugs that have emitted hook events recently (could be a session that crashed mid-tool-call); (2) **CLI `--json`** — PIDs that are confirmed alive right now. These can disagree, and that disagreement is information: hook-says-live + CLI-says-dead = stale ring-buffer entry from a crashed session.
+- The cleanest way to wire CLI liveness into the existing UI is to enrich `PulseSnapshot` with a new `verifiedLiveSlugs` field computed in `/api/pulse` from `getLiveStatusPayload()`. Every existing consumer (`ProjectCard`, `AppSidebar`, etc.) reads `snapshot.X` so they all become opt-in.
+
+---
+
+<!-- insight:ac4df322e0ad | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T15:52:14.626Z -->
+## ★ Insight
+- `util.promisify` has two paths: if the callee declares `util.promisify.custom`, it uses that custom promiseifier (Node's `execFile` defines one returning `{stdout, stderr}`). Otherwise it falls back to "callback's second arg is the value." Mocked `vi.fn()` has no custom symbol, so the test sees the fallback path while production gets the structured object — a silent behavioral divergence.
+- The project has both patterns in use (`git.ts` uses promisify, `worktreeChecker.ts` uses manual Promise). Manual-Promise is more test-friendly and avoids the symbol-dependency footgun. Standardizing on it for new code seems prudent.
+
+---
+
+<!-- insight:a3b022a98658 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-25T15:47:48.620Z -->
+## ★ Insight
+- `null` vs `[]` is a load-bearing distinction in the CLI wrapper return: `null` means "CLI is broken/missing, don't apply liveness merging" (preserves current behavior); `[]` means "CLI is healthy, zero sessions are alive" (every JSONL session correctly gets `isLive: false`). Conflating them would either over-trust a broken CLI or never get the false-positive elimination.
+- The cache-flight pattern in `liveStatus.ts` (lines 148-156) deduplicates concurrent FS sweeps from `/api/status` + `/api/pulse`. I'll mirror it in the new CLI wrapper so the same dual-poll won't double-spawn `claude agents --json`.
+
+---
+
+<!-- insight:34260276b5be | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-24T21:20:59.304Z -->
+## ★ Insight
+- The CLI's actual value isn't "richer state classification" — it's **ground-truth process identity** (PID + alive/not-alive). That kills a real class of false positives: JSONL files written recently by a process that has since crashed.
+- The plan's "awaiting-input" badge was the headline UX win. Without an explicit `awaiting-input` status value in the CLI output, we can't ship that the way the plan described — we'd have to keep relying on the existing JSONL `approval`/`waiting` classification.
+- Both sessions on this machine right now show `"busy"` — including this very one, which is "thinking about a user message," not running a tool. So `"busy"` may be a catch-all and the granular states (idle/awaiting/etc.) may simply not be exposed at this version.
+
+---
+
 <!-- insight:acfca474a94c | session:39229a86-04f3-4b09-9f5d-363914297caf | 2026-05-16T23:37:13.377Z -->
 ## ★ Insight
 - **`server.killed` is a "signal sent" flag, not a "process exited" flag** — Node's docs are subtle here. After `child.kill('SIGTERM')` returns, `killed` is `true` even if the child is still running (e.g. ignoring SIGTERM). The reliable liveness check is `exitCode === null` (still running) vs a number (exited). Pairing that with an `exit`-event-based wait is the canonical Node pattern for "graceful then forceful" shutdown.
