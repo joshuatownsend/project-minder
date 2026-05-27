@@ -16,7 +16,7 @@ pnpm dev           # dashboard runs on http://localhost:4100
 
 ## Pre-commit hook
 
-`pnpm setup-hooks` writes a pre-commit hook that runs `pnpm typecheck && pnpm test -- --pool=forks` before every commit. Set it up once after cloning. CI enforces the same checks, but catching failures locally is faster.
+`pnpm setup-hooks` writes a pre-commit hook that runs `pnpm typecheck && pnpm test --pool=forks` before every commit. Set it up once after cloning. CI enforces the same checks, but catching failures locally is faster.
 
 ## Branching and merging
 

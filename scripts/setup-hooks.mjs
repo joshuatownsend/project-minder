@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 
 const HOOK_CONTENT = `#!/bin/sh
 # Run type-check and tests before committing
-pnpm typecheck && pnpm test -- --pool=forks
+pnpm typecheck && pnpm test --pool=forks
 `;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

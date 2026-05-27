@@ -26,7 +26,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - **Test location:** `tests/*.test.ts` — flat directory, one file per module
 - **Pattern:** Mock `fs` at module level with `vi.mock("fs")`, test pure parsing/transformation logic
 - **Coverage:** Scanner modules (`todoMd`, `manualStepsMd`, `insightsMd`, `worktrees`), `insightsWriter`, and usage modules (`classifier`, `shellParser`, `mcpParser`, `oneShotDetector`, `costCalculator`)
-- **Pre-commit hook:** Local setup only (not version-controlled) — `.git/hooks/pre-commit` runs `pnpm typecheck && pnpm test -- --pool=forks` before each commit. New clones must set this up manually (`pnpm setup-hooks`).
+- **Pre-commit hook:** Local setup only (not version-controlled) — `.git/hooks/pre-commit` runs `pnpm typecheck && pnpm test --pool=forks` before each commit. New clones must set this up manually (`pnpm setup-hooks`).
 - **When to write tests:** When adding or modifying scanner modules, parsers, or any pure logic function in `src/lib/`. UI components and API routes are validated through `pnpm build` + manual browser testing.
 - **When to run tests:** Always run `pnpm test` before committing. The pre-commit hook enforces this, but run manually first to catch failures early.
 
