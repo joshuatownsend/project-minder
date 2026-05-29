@@ -95,6 +95,13 @@ export async function getLiveProcesses(): Promise<LiveProcess[] | null> {
   }
 
   if (!g.__claudeAgentsFlight) {
+    // Sample the clock BEFORE the CLI call starts, not after it resolves. The
+    // TTL measures staleness of the underlying data, and the data is sampled
+    // when the CLI reads the process table at invocation time. Stamping
+    // `cachedAt` in the .then below (after a possibly multi-second fetch) would
+    // make a slow call report itself as fresh for TTL + fetch_latency, silently
+    // widening the staleness window past the documented 10 s.
+    const sampledAt = Date.now();
     // Capture the flight Promise locally so the .then/.finally can compare
     // identity against the current `__claudeAgentsFlight` slot. If
     // invalidateClaudeAgentsCache() runs while this flight is still active,
@@ -103,7 +110,7 @@ export async function getLiveProcesses(): Promise<LiveProcess[] | null> {
     const flight: Promise<LiveProcess[] | null> = fetchLiveProcesses()
       .then((data) => {
         if (g.__claudeAgentsFlight === flight) {
-          g.__claudeAgentsCache = { data, cachedAt: Date.now() };
+          g.__claudeAgentsCache = { data, cachedAt: sampledAt };
         }
         return data;
       })
