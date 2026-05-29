@@ -19,6 +19,10 @@ Aggregated from conversation logs in `~/.claude/projects/`:
 - **Models** — which Claude models have been used
 - **Errors** — API error count across all conversations
 
+### Cross-check vs Claude's stats-cache
+
+When Claude Code's own `~/.claude/stats-cache.json` is present, a small **Cross-check** card compares the totals we computed independently against Claude's own counter. Each row shows our number, Claude's number, and the **drift** (green under 5%, amber under 20%, red beyond). A large drift means our parser and Claude's bookkeeping disagree — a useful self-diagnostic. The **Sessions** row is an exact apples-to-apples count; the **Messages** row is approximate (it compares our turn count to Claude's message tally). The card is hidden when the file is absent.
+
 ## Tech Stack Distribution
 
 Bar charts showing how many projects use each:

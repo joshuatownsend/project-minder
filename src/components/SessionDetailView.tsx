@@ -28,6 +28,7 @@ import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
 import { DiagnosisPanel } from "./DiagnosisPanel";
+import { SessionMetaPanel } from "./SessionMetaPanel";
 import { HandoffPanel } from "./HandoffPanel";
 import { HandoffDocModal } from "./HandoffDocModal";
 import { FeedbackPanel } from "./FeedbackPanel";
@@ -787,6 +788,9 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           />
         ))}
       </div>
+
+      {/* ── Session metadata panel (Claude Code's own per-session record) ───── */}
+      {data.sessionMeta && <SessionMetaPanel meta={data.sessionMeta} />}
 
       {/* ── Distillation panel ──────────────────────────────────────────────── */}
       {distilledText && (

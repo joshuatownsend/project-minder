@@ -3,6 +3,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
 import { getClaudeUsage, getSessionsList } from "@/lib/data";
+import { getStatsCache, crossCheckStats } from "@/lib/scanner/claudeStats";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import { ClaudeUsageStats } from "@/lib/types";
 import { projectScatter } from "@/lib/usage/sessionScatter";
@@ -78,7 +79,16 @@ export async function GET(request: NextRequest) {
     // non-fatal — scatter chart just shows empty state
   }
 
-  const response = jsonWithETag({ ...stats, sessions }, etag);
+  // Cross-check our computed totals against Claude Code's own stats-cache.json
+  // (diagnostic; degrades to available:false when the file is absent). Sessions
+  // is a clean apples-to-apples count; messages compares Claude's message tally
+  // to our turn count, so treat its drift as approximate.
+  const crossCheck = crossCheckStats(await getStatsCache(), {
+    sessions: stats.claudeSessions.total,
+    messages: stats.claudeUsage?.totalTurns ?? 0,
+  });
+
+  const response = jsonWithETag({ ...stats, sessions, crossCheck }, etag);
   response.headers.set("X-Minder-Backend", cache.backend);
   return response;
 }

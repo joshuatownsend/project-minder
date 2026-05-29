@@ -655,6 +655,12 @@ export interface StatsData {
     bySeverity: { P0: number; P1: number; P2: number };
     byTarget: Partial<Record<LintTarget, number>>;
   };
+  /**
+   * Cross-check of our computed totals against Claude Code's own
+   * `stats-cache.json`. Diagnostic only — a large drift means our parser
+   * disagrees with Claude's bookkeeping. See `src/lib/scanner/claudeStats.ts`.
+   */
+  crossCheck?: import("./scanner/claudeStats").StatsCrossCheck;
 }
 
 export interface SessionRecap {
@@ -840,6 +846,13 @@ export interface SessionDetail extends SessionSummary {
   timeline: TimelineEvent[];
   fileOperations: FileOperation[];
   subagents: SubagentInfo[];
+  /**
+   * Rich per-session metadata from Claude Code's own
+   * `~/.claude/usage-data/session-meta/<id>.json` (git activity, lines
+   * changed, tool-error categories, …). Absent when no record exists.
+   * Read-only enrichment — see `src/lib/scanner/claudeStats.ts`.
+   */
+  sessionMeta?: import("./scanner/claudeStats").SessionMeta;
 }
 
 // ─── Claude config: hooks, MCP servers, plugins ──────────────────────────────

@@ -23,6 +23,7 @@ import { ContextOverheadPanel } from "./ContextOverheadPanel";
 
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
+import type { StatsCrossCheck } from "@/lib/scanner/claudeStats";
 
 function SectionHeader({ label }: { label: string }) {
   return (
@@ -39,6 +40,64 @@ function SectionHeader({ label }: { label: string }) {
         {label}
       </span>
       <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+    </div>
+  );
+}
+
+// ── Cross-check card: our totals vs Claude Code's own stats-cache.json ─────────
+function driftTone(ratio: number | null): string {
+  if (ratio === null) return "var(--text-muted)";
+  const a = Math.abs(ratio);
+  if (a < 0.05) return "var(--status-active-text)"; // agree (<5%)
+  if (a < 0.2) return "var(--accent)"; // mild drift
+  return "var(--status-error-text)"; // large drift
+}
+function fmtDrift(ratio: number | null): string {
+  if (ratio === null) return "—";
+  const pct = ratio * 100;
+  return `${pct > 0 ? "+" : ""}${pct.toFixed(Math.abs(pct) < 10 && pct % 1 !== 0 ? 1 : 0)}%`;
+}
+
+function CrossCheckRow({
+  label, ours, claude, ratio, approx,
+}: {
+  label: string; ours: number; claude: number | null; ratio: number | null; approx?: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: "10px", fontFamily: "var(--font-mono)", fontSize: "0.72rem" }}>
+      <span style={{ color: "var(--text-muted)", minWidth: "8ch" }}>{label}{approx ? " ≈" : ""}</span>
+      <span style={{ color: "var(--text-primary)" }}>{ours.toLocaleString()}</span>
+      <span style={{ color: "var(--text-muted)" }}>ours</span>
+      <span style={{ color: "var(--border-default)" }}>·</span>
+      <span style={{ color: "var(--text-primary)" }}>{claude === null ? "—" : claude.toLocaleString()}</span>
+      <span style={{ color: "var(--text-muted)" }}>Claude</span>
+      <span style={{ marginLeft: "auto", fontWeight: 600, color: driftTone(ratio) }}>{fmtDrift(ratio)}</span>
+    </div>
+  );
+}
+
+function CrossCheckCard({ cc }: { cc: StatsCrossCheck }) {
+  return (
+    <div style={{
+      background: "var(--bg-surface)", border: "1px solid var(--border-subtle)",
+      borderRadius: "var(--radius)", padding: "12px 16px",
+      display: "flex", flexDirection: "column", gap: "8px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span style={{ fontSize: "0.66rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Cross-check vs Claude&apos;s stats-cache
+        </span>
+        {cc.lastComputedDate && (
+          <span style={{ marginLeft: "auto", fontSize: "0.64rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            computed {cc.lastComputedDate}
+          </span>
+        )}
+      </div>
+      <CrossCheckRow label="Sessions" ours={cc.observedSessions} claude={cc.claudeSessions} ratio={cc.sessionDriftRatio} />
+      <CrossCheckRow label="Messages" ours={cc.observedMessages} claude={cc.claudeMessages} ratio={cc.messageDriftRatio} approx />
+      <p style={{ fontSize: "0.64rem", color: "var(--text-muted)", margin: 0, lineHeight: 1.4 }}>
+        Drift compares our independently-parsed totals to Claude Code&apos;s own counter. Messages is approximate (our turn count vs Claude&apos;s message tally).
+      </p>
     </div>
   );
 }
@@ -155,6 +214,9 @@ export function StatsDashboard() {
                 last
               />
             </div>
+
+            {/* Cross-check vs Claude Code's own stats-cache.json (item 2) */}
+            {data.crossCheck?.available && <CrossCheckCard cc={data.crossCheck} />}
 
             {/* Tools + Models */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
