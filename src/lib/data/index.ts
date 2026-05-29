@@ -2,6 +2,7 @@ import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
+import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
 import {
@@ -575,6 +576,18 @@ export interface SessionDetailResult {
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailResult> {
+  const result = await resolveSessionDetail(idOrSlug);
+  // Enrich with Claude Code's own per-session metadata here in the façade —
+  // above both the DB and file-parse paths AND shared by every consumer (the
+  // HTTP route and the `get-session` MCP tool both call this). Best-effort:
+  // a missing/malformed record is null.
+  if (result.detail) {
+    result.detail.sessionMeta = (await getSessionMeta(result.detail.sessionId)) ?? undefined;
+  }
+  return result;
+}
+
+async function resolveSessionDetail(idOrSlug: string): Promise<SessionDetailResult> {
   if (!dbModeRequested()) {
     const detail = await scanSessionDetail(idOrSlug);
     return { detail, meta: { backend: "file" } };

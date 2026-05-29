@@ -82,6 +82,10 @@ Note: a session created seconds before you visit `/sessions/<slug>` may 404 unti
 
 Click a session to see the full detail view with tabs:
 
+### Session metadata panel
+
+When Claude Code has recorded a per-session metadata file (`~/.claude/usage-data/session-meta/<id>.json`), a **Session metadata** panel appears below the stats strip. It surfaces Claude's own bookkeeping for the session that we don't otherwise compute: **git activity** (commits, pushes, lines added/removed, files modified), **interruptions**, the **capabilities** the session used (Task agent, MCP, web search, web fetch), and a breakdown of **tool errors by category**. Read-only; the panel is hidden when no record exists.
+
 ### Timeline
 Chronological list of all events: user prompts, assistant responses, tool calls, thinking blocks, and errors. Each event shows a time offset from the session start. Assistant and user messages render **markdown formatting** — fenced code blocks appear in a monospace code box, and inline `code` spans are styled distinctly.
 

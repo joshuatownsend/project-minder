@@ -6,6 +6,8 @@ export async function GET(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const { sessionId } = await params;
+  // `getSessionDetail` enriches `detail.sessionMeta` in the façade, so both
+  // this route and the `get-session` MCP tool get it.
   const { detail, meta } = await getSessionDetail(sessionId);
 
   if (!detail) {

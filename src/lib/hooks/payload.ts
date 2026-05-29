@@ -20,6 +20,7 @@
  */
 
 import type { HookEventName } from "../types";
+import { str, bool, num, arr } from "../coerce";
 
 export interface BasePayload {
   /** Path to the JSONL transcript on disk — common to every event. */
@@ -116,26 +117,10 @@ export type HookPayload =
   | SessionStartPayload
   | SessionEndPayload;
 
-// ── Field-extraction helpers ──────────────────────────────────────────────
-// All return `undefined` (not throw) on type mismatch so a single bad field
-// doesn't poison the whole parse. The parser then drops the field but keeps
-// the envelope, matching the route's "best-effort capture" posture.
-
-function str(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined;
-}
-
-function bool(v: unknown): boolean | undefined {
-  return typeof v === "boolean" ? v : undefined;
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-function arr(v: unknown): unknown[] | undefined {
-  return Array.isArray(v) ? v : undefined;
-}
+// Field-extraction helpers (`str`/`bool`/`num`/`arr`) live in `@/lib/coerce` —
+// they return `undefined` (not throw) on type mismatch so a single bad field
+// doesn't poison the whole parse, matching the route's "best-effort capture"
+// posture.
 
 function commonBase(body: Record<string, unknown>): BasePayload {
   return {
