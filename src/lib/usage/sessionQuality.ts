@@ -367,31 +367,76 @@ function toolLabel(calls: ToolCall[]): string {
  *  so `scanStuckLoops` only builds it for rows whose cheap label+result already
  *  match a neighbour. */
 function toolSig(calls: ToolCall[]): string {
-  const sig = calls.map((c) => `${c.name}(${stableStringify(c.arguments ?? {})})`).join("");
-  return sig;
+  // Each element is `name(args)` — the parens delimit calls, so a plain
+  // concatenation is unambiguous and needs no separator. (Previously joined on
+  // a literal SOH control char, invisible in source — see PR #183.)
+  return calls.map((c) => `${c.name}(${stableStringify(c.arguments ?? {})})`).join("");
 }
 
 /** One assistant tool-issuing turn plus the result text that followed it. */
+// Mirrors the tool-result preview cap in parser.ts (`extractToolResults`
+// slices to 2000 chars). A result at this length is likely truncated, so two
+// different long outputs can share a prefix — we don't let those anchor a loop.
+const TOOL_RESULT_PREVIEW_CHARS = 2000;
+
 interface ToolActionRow {
   index: number;
   label: string;
   calls: ToolCall[];
-  result: string;
+  /** Trimmed tool-result preview; `undefined` when no tool_result was observed
+   *  for this call — so "no result" never matches "no result". */
+  result?: string;
+  /** Result hit the preview cap (likely truncated) — can't confidently anchor
+   *  a loop since different long outputs may share the captured prefix. */
+  resultTruncated?: boolean;
+  /** A genuine human prompt preceded this row — barriers the run (the model is
+   *  not looping on its own if the user asked for the rerun). */
+  barrier?: boolean;
+}
+
+interface ProjBuildState {
+  pending: number; // index of the row awaiting its tool result, or -1
+  pendingBarrier: boolean; // a human prompt is queued to barrier the next row
+}
+
+/** Fold one turn into the tool-action projection. Shared by `detectStuckLoops`
+ *  and the fused `computeSessionQuality` pass (called once per turn — no extra
+ *  pass) so the barrier/truncation-aware logic can't diverge between them. */
+function projectToolAction(
+  proj: ToolActionRow[],
+  state: ProjBuildState,
+  t: UsageTurn,
+  i: number
+): void {
+  if (t.role === "assistant" && t.toolCalls.length > 0) {
+    proj.push({
+      index: i,
+      label: toolLabel(t.toolCalls),
+      calls: t.toolCalls,
+      barrier: state.pendingBarrier,
+    });
+    state.pending = proj.length - 1;
+    state.pendingBarrier = false;
+  } else if (t.role === "user") {
+    if (t.toolResultText !== undefined) {
+      // A tool result (even whitespace-only, which trims to "") — attach it.
+      if (state.pending !== -1) {
+        proj[state.pending].result = t.toolResultText.trim();
+        proj[state.pending].resultTruncated = t.toolResultText.length >= TOOL_RESULT_PREVIEW_CHARS;
+        state.pending = -1;
+      }
+    } else if (t.userMessageText) {
+      // A real human prompt (no tool_result): the next tool run starts fresh —
+      // user-requested reruns are not the model spinning on its own.
+      state.pendingBarrier = true;
+    }
+  }
 }
 
 export function detectStuckLoops(turns: UsageTurn[]): StuckLoopFinding[] {
   const proj: ToolActionRow[] = [];
-  let pending = -1; // index in proj of the last row awaiting its result
-  for (let i = 0; i < turns.length; i++) {
-    const t = turns[i];
-    if (t.role === "assistant" && t.toolCalls.length > 0) {
-      proj.push({ index: i, label: toolLabel(t.toolCalls), calls: t.toolCalls, result: "" });
-      pending = proj.length - 1;
-    } else if (t.role === "user" && t.toolResultText && pending !== -1) {
-      proj[pending].result = t.toolResultText.trim();
-      pending = -1;
-    }
-  }
+  const state: ProjBuildState = { pending: -1, pendingBarrier: false };
+  for (let i = 0; i < turns.length; i++) projectToolAction(proj, state, turns[i], i);
   return scanStuckLoops(proj);
 }
 
@@ -407,12 +452,19 @@ function scanStuckLoops(proj: ToolActionRow[]): StuckLoopFinding[] {
   const findings: StuckLoopFinding[] = [];
   const sigMemo: (string | undefined)[] = new Array(proj.length);
   const sigOf = (i: number): string => (sigMemo[i] ??= toolSig(proj[i].calls));
+  // A result can only confirm "identical output" when it was actually observed
+  // and wasn't truncated at the preview cap.
+  const comparable = (r: ToolActionRow): boolean =>
+    r.result !== undefined && !r.resultTruncated;
 
   let runStart = 0;
   for (let i = 1; i <= proj.length; i++) {
     const sameAsPrev =
       i < proj.length &&
+      !proj[i].barrier &&
       proj[i].label === proj[i - 1].label &&
+      comparable(proj[i]) &&
+      comparable(proj[i - 1]) &&
       proj[i].result === proj[i - 1].result &&
       sigOf(i) === sigOf(i - 1);
     if (sameAsPrev) continue;
@@ -467,7 +519,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
   const assistantProj: AssistantFillRow[] = [];
   const evaluable: EvaluableTurn[] = [];
   const toolActionProj: ToolActionRow[] = [];
-  let pendingResultRow = -1; // index in toolActionProj awaiting its result
+  const stuckState: ProjBuildState = { pending: -1, pendingBarrier: false };
 
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
@@ -487,11 +539,6 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
         if (fill > maxContextFill) maxContextFill = fill;
         assistantProj.push({ index: i, turn: t, fill });
       }
-      // Stuck-loop projection: one row per assistant turn that issues tools.
-      if (t.toolCalls.length > 0) {
-        toolActionProj.push({ index: i, label: toolLabel(t.toolCalls), calls: t.toolCalls, result: "" });
-        pendingResultRow = toolActionProj.length - 1;
-      }
     }
 
     // Tool-failure projection: skip the grace period, then collect any
@@ -504,11 +551,8 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
       }
     }
 
-    // Attach the result text to the most recent tool-action row awaiting one.
-    if (t.role === "user" && t.toolResultText && pendingResultRow !== -1) {
-      toolActionProj[pendingResultRow].result = t.toolResultText.trim();
-      pendingResultRow = -1;
-    }
+    // Stuck-loop projection — same per-turn fold the standalone path uses.
+    projectToolAction(toolActionProj, stuckState, t, i);
   }
 
   const cacheTotal = cacheReadTokens + cacheCreateTokens;

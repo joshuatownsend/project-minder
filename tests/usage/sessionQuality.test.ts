@@ -465,4 +465,50 @@ describe("detectStuckLoops", () => {
     ];
     expect(computeSessionQuality(turns).stuckLoops).toEqual(detectStuckLoops(turns));
   });
+
+  // ── PR #183 review fixes ─────────────────────────────────────────────────
+  const humanPrompt = (text: string) => user({ userMessageText: text });
+
+  it("does NOT fire when a human prompt separates the reruns (user-driven, not a loop)", () => {
+    // The user explicitly asks for each rerun — the model isn't spinning on its
+    // own, so a human prompt barriers the run.
+    const turns = [
+      bash("npm test"), result("FAIL"),
+      humanPrompt("run it again"),
+      bash("npm test"), result("FAIL"),
+      humanPrompt("again please"),
+      bash("npm test"), result("FAIL"),
+    ];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("does NOT fire when no tool results were observed (missing ≠ identical)", () => {
+    // Three identical calls with no captured tool_result — we can't confirm
+    // identical OUTPUT, so it must not be treated as a loop.
+    const turns = [bash("npm test"), bash("npm test"), bash("npm test")];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("does NOT fire on truncated results that merely share a prefix", () => {
+    // Results at the 2KB preview cap are likely truncated; different long
+    // outputs can share the captured prefix, so they can't anchor a loop.
+    const capped = "X".repeat(2000);
+    const turns = [
+      bash("npm test"), result(capped),
+      bash("npm test"), result(capped),
+      bash("npm test"), result(capped),
+    ];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("still fires on identical whitespace-only results (observed, not missing)", () => {
+    // A whitespace result trims to "" but was genuinely observed — distinct
+    // from a missing result, so an identical-call run still counts.
+    const turns = [
+      bash("ls"), result("   "),
+      bash("ls"), result("  "),
+      bash("ls"), result(" "),
+    ];
+    expect(detectStuckLoops(turns).length).toBe(1);
+  });
 });
