@@ -2,6 +2,7 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { FileCache } from "@/lib/usage/cache";
+import { num, str, bool } from "@/lib/coerce";
 
 // ── Claude Code's own data files (cc-lens-inspired, TODO item 2) ─────────────
 //
@@ -26,16 +27,8 @@ const STATS_CACHE_PATH = path.join(CLAUDE_DIR, "stats-cache.json");
 const SESSION_META_DIR = path.join(CLAUDE_DIR, "usage-data", "session-meta");
 
 // ── small defensive coercers ─────────────────────────────────────────────────
+// Scalar coercers (num/str/bool) are shared from `@/lib/coerce`.
 
-function num(v: unknown): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-function str(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined;
-}
-function bool(v: unknown): boolean | undefined {
-  return typeof v === "boolean" ? v : undefined;
-}
 /** Coerce a value to a Record<string, number>, dropping non-numeric members. */
 function numRecord(v: unknown): Record<string, number> | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
@@ -100,18 +93,31 @@ function statsCacheStore(): FileCache<StatsCache | null> {
 }
 
 /**
- * Read `~/.claude/stats-cache.json` — Claude Code's own aggregate stats.
- * Returns null when absent or malformed (degrade, never throw).
+ * Read + parse a JSON file through a FileCache, degrading to null on a missing
+ * file (FileCache yields `undefined`) OR malformed JSON (the factory catches).
+ * Shared by both readers — neither must ever throw.
  */
-export async function getStatsCache(): Promise<StatsCache | null> {
-  const result = await statsCacheStore().getOrCompute(STATS_CACHE_PATH, async (fp) => {
+async function readJsonCached<T>(
+  store: FileCache<T | null>,
+  filePath: string,
+  parse: (json: unknown) => T | null
+): Promise<T | null> {
+  const result = await store.getOrCompute(filePath, async (fp) => {
     try {
-      return parseStatsCache(JSON.parse(await fs.readFile(fp, "utf8")));
+      return parse(JSON.parse(await fs.readFile(fp, "utf8")));
     } catch {
-      return null; // malformed JSON → no data, not a thrown error
+      return null;
     }
   });
   return result ?? null;
+}
+
+/**
+ * Read `~/.claude/stats-cache.json` — Claude Code's own aggregate stats.
+ * Returns null when absent or malformed (degrade, never throw).
+ */
+export function getStatsCache(): Promise<StatsCache | null> {
+  return readJsonCached(statsCacheStore(), STATS_CACHE_PATH, parseStatsCache);
 }
 
 // ── session-meta/<sessionId>.json ──────────────────────────────────────────────
@@ -184,16 +190,11 @@ function sessionMetaStore(): FileCache<SessionMeta | null> {
  * Read the session-meta record for one session. Returns null when absent
  * (no metadata recorded) or malformed (degrade, never throw).
  */
-export async function getSessionMeta(sessionId: string): Promise<SessionMeta | null> {
+export function getSessionMeta(sessionId: string): Promise<SessionMeta | null> {
   const filePath = path.join(SESSION_META_DIR, `${sessionId}.json`);
-  const result = await sessionMetaStore().getOrCompute(filePath, async (fp) => {
-    try {
-      return parseSessionMeta(JSON.parse(await fs.readFile(fp, "utf8")), sessionId);
-    } catch {
-      return null;
-    }
-  });
-  return result ?? null;
+  return readJsonCached(sessionMetaStore(), filePath, (json) =>
+    parseSessionMeta(json, sessionId)
+  );
 }
 
 // ── cross-check: Claude's totals vs ours ──────────────────────────────────────

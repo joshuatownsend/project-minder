@@ -69,23 +69,26 @@ export async function GET(request: NextRequest) {
 
   const stats = computeStats(result.projects, result.hiddenCount, cache.usage, result.catalogLintFindings);
 
-  // Attach scatter data for the SessionComplexityChart on /stats.
-  // getSessionsList() has its own 2-min cache; no additional TTL needed here.
-  let sessions: ReturnType<typeof projectScatter>[] = [];
-  try {
-    const sessionsList = await getSessionsList();
-    sessions = sessionsList.sessions.map(projectScatter);
-  } catch {
-    // non-fatal — scatter chart just shows empty state
-  }
+  // Sessions list (for the scatter chart + the message-count cross-check) and
+  // Claude's own stats-cache are independent — fetch concurrently. Both are
+  // cached (sessions: 2-min; stats-cache: by mtime), so this is cheap.
+  const [sessionsList, statsCache] = await Promise.all([
+    getSessionsList().catch(() => null), // non-fatal — scatter just shows empty
+    getStatsCache(),
+  ]);
+
+  const sessions: ReturnType<typeof projectScatter>[] =
+    sessionsList?.sessions.map(projectScatter) ?? [];
 
   // Cross-check our computed totals against Claude Code's own stats-cache.json
-  // (diagnostic; degrades to available:false when the file is absent). Sessions
-  // is a clean apples-to-apples count; messages compares Claude's message tally
-  // to our turn count, so treat its drift as approximate.
-  const crossCheck = crossCheckStats(await getStatsCache(), {
+  // (diagnostic; degrades to available:false when the file is absent). Both
+  // rows compare like-for-like counts: sessions vs sessions, and our summed
+  // per-session message count vs Claude's message tally.
+  const observedMessages =
+    sessionsList?.sessions.reduce((sum, s) => sum + (s.messageCount ?? 0), 0) ?? 0;
+  const crossCheck = crossCheckStats(statsCache, {
     sessions: stats.claudeSessions.total,
-    messages: stats.claudeUsage?.totalTurns ?? 0,
+    messages: observedMessages,
   });
 
   const response = jsonWithETag({ ...stats, sessions, crossCheck }, etag);

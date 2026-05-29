@@ -16,7 +16,7 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: "0.06em",
 };
 
-function Chip({
+function MetaChip({
   icon,
   label,
   value,
@@ -60,12 +60,12 @@ const ic = { width: "11px", height: "11px" } as const;
 
 export function SessionMetaPanel({ meta }: { meta: SessionMeta }) {
   const git: React.ReactNode[] = [];
-  if (meta.gitCommits) git.push(<Chip key="c" icon={<GitCommit style={ic} />} label="commits" value={meta.gitCommits} />);
-  if (meta.gitPushes) git.push(<Chip key="p" icon={<Upload style={ic} />} label="pushes" value={meta.gitPushes} />);
-  if (meta.linesAdded) git.push(<Chip key="la" icon={<Plus style={ic} />} label="added" value={meta.linesAdded} tone="pos" />);
-  if (meta.linesRemoved) git.push(<Chip key="lr" icon={<Minus style={ic} />} label="removed" value={meta.linesRemoved} tone="neg" />);
-  if (meta.filesModified) git.push(<Chip key="fm" icon={<FilePen style={ic} />} label="files" value={meta.filesModified} />);
-  if (meta.userInterruptions) git.push(<Chip key="ui" label="interruptions" value={meta.userInterruptions} />);
+  if (meta.gitCommits) git.push(<MetaChip key="c" icon={<GitCommit style={ic} />} label="commits" value={meta.gitCommits} />);
+  if (meta.gitPushes) git.push(<MetaChip key="p" icon={<Upload style={ic} />} label="pushes" value={meta.gitPushes} />);
+  if (meta.linesAdded) git.push(<MetaChip key="la" icon={<Plus style={ic} />} label="added" value={meta.linesAdded} tone="pos" />);
+  if (meta.linesRemoved) git.push(<MetaChip key="lr" icon={<Minus style={ic} />} label="removed" value={meta.linesRemoved} tone="neg" />);
+  if (meta.filesModified) git.push(<MetaChip key="fm" icon={<FilePen style={ic} />} label="files" value={meta.filesModified} />);
+  if (meta.userInterruptions) git.push(<MetaChip key="ui" label="interruptions" value={meta.userInterruptions} />);
 
   const flags = (
     [

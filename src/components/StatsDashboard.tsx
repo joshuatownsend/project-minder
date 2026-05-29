@@ -59,13 +59,13 @@ function fmtDrift(ratio: number | null): string {
 }
 
 function CrossCheckRow({
-  label, ours, claude, ratio, approx,
+  label, ours, claude, ratio,
 }: {
-  label: string; ours: number; claude: number | null; ratio: number | null; approx?: boolean;
+  label: string; ours: number; claude: number | null; ratio: number | null;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: "10px", fontFamily: "var(--font-mono)", fontSize: "0.72rem" }}>
-      <span style={{ color: "var(--text-muted)", minWidth: "8ch" }}>{label}{approx ? " ≈" : ""}</span>
+      <span style={{ color: "var(--text-muted)", minWidth: "8ch" }}>{label}</span>
       <span style={{ color: "var(--text-primary)" }}>{ours.toLocaleString()}</span>
       <span style={{ color: "var(--text-muted)" }}>ours</span>
       <span style={{ color: "var(--border-default)" }}>·</span>
@@ -94,9 +94,9 @@ function CrossCheckCard({ cc }: { cc: StatsCrossCheck }) {
         )}
       </div>
       <CrossCheckRow label="Sessions" ours={cc.observedSessions} claude={cc.claudeSessions} ratio={cc.sessionDriftRatio} />
-      <CrossCheckRow label="Messages" ours={cc.observedMessages} claude={cc.claudeMessages} ratio={cc.messageDriftRatio} approx />
+      <CrossCheckRow label="Messages" ours={cc.observedMessages} claude={cc.claudeMessages} ratio={cc.messageDriftRatio} />
       <p style={{ fontSize: "0.64rem", color: "var(--text-muted)", margin: 0, lineHeight: 1.4 }}>
-        Drift compares our independently-parsed totals to Claude Code&apos;s own counter. Messages is approximate (our turn count vs Claude&apos;s message tally).
+        Drift compares our independently-parsed totals to Claude Code&apos;s own counter — a large gap means the two disagree.
       </p>
     </div>
   );
