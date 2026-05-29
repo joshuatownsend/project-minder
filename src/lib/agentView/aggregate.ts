@@ -4,7 +4,7 @@ import { sweepAndGetState, getHookBuffer, STOP_EVENTS } from "@/lib/hooks/buffer
 import type { HookEvent } from "@/lib/hooks/buffer";
 import { getRosterEntries } from "./jobRoster";
 import { getLiveSessionMetrics } from "./liveCostCache";
-import type { LiveAgentSession, AgentSessionStatus } from "./types";
+import type { LiveAgentSession, AgentSessionStatus, LivenessSource } from "./types";
 import { STATUS_ORDER } from "./types";
 import type { LiveSessionStatus } from "@/lib/types";
 
@@ -21,6 +21,22 @@ export function liveStatusToAgentStatus(s: LiveSessionStatus): AgentSessionStatu
   if (s === "working") return "working";
   if (s === "approval" || s === "waiting") return "waiting";
   return "idle";
+}
+
+/**
+ * Resolves the `runningProcess` / `livenessSource` pair from the CLI liveness
+ * signal (`claude agents --json`). `isLive === true` is the only case where we
+ * have PID ground-truth, so it wins. Any other value (`false` = confirmed dead,
+ * or `undefined` = CLI unavailable) falls back to the caller's source — keeping
+ * pre-CLI behavior intact for older Claude Code installs.
+ */
+export function resolveCliLiveness(
+  isLive: boolean | undefined,
+  fallbackSource: LivenessSource,
+): { runningProcess: boolean; livenessSource: LivenessSource } {
+  return isLive === true
+    ? { runningProcess: true, livenessSource: "cli" }
+    : { runningProcess: false, livenessSource: fallbackSource };
 }
 
 export function daemonStateToAgentStatus(state?: string): AgentSessionStatus {
@@ -184,8 +200,9 @@ export async function aggregateLiveSessions(
       currentToolName: lastHookEvent?.toolName ?? jsonlSession.lastToolName,
       currentActivityLine: truncate(lastHookEvent?.toolName ?? jsonlSession.lastToolName),
       awaitingInputSince: isAwaiting ? lastChangedAt : undefined,
-      runningProcess: false,
-      livenessSource: "hook",
+      // Prefer CLI ground-truth (PID liveness) over the hook signal when present.
+      ...resolveCliLiveness(jsonlSession.isLive, "hook"),
+      pid: jsonlSession.pid,
       subagentsInFlight: hookSubagentsInFlight > 0 ? hookSubagentsInFlight : undefined,
       lastToolFailed: hookToolFailed,
     });
@@ -217,8 +234,10 @@ export async function aggregateLiveSessions(
       secondsSinceChange,
       currentToolName: jsonlSession.lastToolName,
       currentActivityLine: truncate(jsonlSession.lastToolName),
-      runningProcess: false,
-      livenessSource: "jsonl",
+      // Same CLI-ground-truth precedence as the hook-only branch: a session
+      // with no hook/daemon coverage can still be confirmed live by the CLI.
+      ...resolveCliLiveness(jsonlSession.isLive, "jsonl"),
+      pid: jsonlSession.pid,
     });
   }
 

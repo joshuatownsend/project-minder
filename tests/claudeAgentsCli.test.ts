@@ -194,6 +194,41 @@ describe("getLiveProcesses", () => {
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
+  it("measures TTL from sample time (fetch start), not cache-write time (#153)", async () => {
+    // A slow CLI call must not grant itself extra freshness. cachedAt is
+    // stamped at the moment the fetch STARTS (when the process table was
+    // sampled), so a 4s fetch + 7s wait = 11s of staleness > 10s TTL and
+    // triggers a re-fetch — even though the cache was only *written* 7s ago.
+    vi.useFakeTimers();
+    try {
+      // Deferred callback: capture it now, invoke it after advancing the clock
+      // to simulate a fetch that takes 4s of wall time to resolve.
+      let resolveCli: ((stdout: string) => void) | null = null;
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cb = callback as (err: Error | null, stdout: string, stderr: string) => void;
+        resolveCli = (stdout: string) => cb(null, stdout, "");
+        return {} as ReturnType<typeof execFile>;
+      });
+
+      const flight = getLiveProcesses(); // sampledAt = t0
+      vi.advanceTimersByTime(4_000); // fetch takes 4s
+      resolveCli!("[]");
+      const first = await flight;
+      expect(first).toEqual([]);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+
+      // 7s later: total staleness from sample = 4 + 7 = 11s > 10s TTL.
+      // If cachedAt had been stamped at resolve time (t=4s), this would read as
+      // only 7s old and wrongly serve from cache.
+      vi.advanceTimersByTime(7_000);
+      stubExecFile({ stdout: "[]" });
+      await getLiveProcesses();
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caches null results for a shorter TTL than success results", async () => {
     // Negative-result TTL is 1 s; success TTL is 10 s. A single failed call
     // must NOT lock the dashboard into CLI-unavailable mode for the full 10 s.

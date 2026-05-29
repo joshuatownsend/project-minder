@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { StatusCard } from "./StatusCard";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
-
-interface StatusPayload {
-  generatedAt: string;
-  sessions: LiveSession[];
-}
+// Use the canonical payload type rather than a local copy. The local interface
+// previously omitted `cliAvailable`, so the `as StatusPayload` cast at the
+// fetch site silently dropped the field. Importing the source of truth keeps
+// this component in sync as the payload evolves.
+import type { StatusPayload } from "@/lib/liveStatus";
 
 const BUCKET_CONFIG: { status: LiveSessionStatus; label: string; color: string }[] = [
   { status: "approval", label: "Needs Approval",      color: "var(--accent)" },

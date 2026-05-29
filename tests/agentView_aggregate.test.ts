@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { resolveCliLiveness } from "@/lib/agentView/aggregate";
 
 // Tests for aggregate logic: abandoned reaper threshold and session merge ordering.
 // Pure logic — mirrors the behavior of aggregateLiveSessions without server deps.
 
 type AgentSessionStatus = "waiting" | "working" | "idle" | "completed" | "failed" | "stopped";
-type LivenessSource = "daemon" | "hook" | "jsonl";
+type LivenessSource = "daemon" | "hook" | "jsonl" | "cli";
 
 interface MockSession {
   sessionId: string;
@@ -86,6 +87,25 @@ describe("session sort order", () => {
     const sorted = sortSessions(sessions);
     expect(sorted[0].sessionId).toBe("newer");
     expect(sorted[1].sessionId).toBe("older");
+  });
+});
+
+describe("resolveCliLiveness (#152)", () => {
+  it("isLive === true wins: runningProcess true, source 'cli' (overrides fallback)", () => {
+    expect(resolveCliLiveness(true, "hook")).toEqual({ runningProcess: true, livenessSource: "cli" });
+    expect(resolveCliLiveness(true, "jsonl")).toEqual({ runningProcess: true, livenessSource: "cli" });
+  });
+
+  it("isLive === false (CLI says dead): runningProcess false, keeps fallback source", () => {
+    expect(resolveCliLiveness(false, "hook")).toEqual({ runningProcess: false, livenessSource: "hook" });
+    expect(resolveCliLiveness(false, "jsonl")).toEqual({ runningProcess: false, livenessSource: "jsonl" });
+  });
+
+  it("isLive === undefined (CLI unavailable): preserves pre-CLI behavior via fallback", () => {
+    // The load-bearing case: older Claude Code installs report no isLive, and
+    // the result must be identical to the old hardcoded `false` / fallback.
+    expect(resolveCliLiveness(undefined, "hook")).toEqual({ runningProcess: false, livenessSource: "hook" });
+    expect(resolveCliLiveness(undefined, "jsonl")).toEqual({ runningProcess: false, livenessSource: "jsonl" });
   });
 });
 
