@@ -3,3 +3,14 @@ onlyBuiltDependencies:
   - esbuild
   - sharp
   - unrs-resolver
+
+# Dependency overrides live here (not the `pnpm` field of package.json) because
+# pnpm 11+ no longer reads settings from package.json — keeping them here means
+# the floors stay enforced across the supported config location for both the
+# pinned pnpm 10 and future pnpm 11 toolchains.
+#   - postcss: floor the line at 8.5.10, capped below 9 so a future breaking
+#     postcss@9 can't satisfy the range (Next bundles 8.4.31 otherwise). See #179.
+#   - zod: pin to 3.25.76 (carried over from the npm→pnpm migration, #164).
+overrides:
+  postcss: ">=8.5.10 <9"
+  zod: "3.25.76"
