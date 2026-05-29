@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { resolveCliLiveness } from "@/lib/agentView/aggregate";
 
 // Tests for aggregate logic: abandoned reaper threshold and session merge ordering.
-// Pure logic — mirrors the behavior of aggregateLiveSessions without server deps.
+// Most cases mirror the behavior of aggregateLiveSessions inline. The
+// resolveCliLiveness suite imports the real helper from @/lib/agentView/aggregate,
+// which is `server-only` — that import resolves under vitest because the config
+// aliases `server-only` to a no-op stub (see vitest.config.ts).
 
 type AgentSessionStatus = "waiting" | "working" | "idle" | "completed" | "failed" | "stopped";
 type LivenessSource = "daemon" | "hook" | "jsonl" | "cli";

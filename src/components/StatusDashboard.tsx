@@ -5,8 +5,8 @@ import { StatusCard } from "./StatusCard";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 // Use the canonical payload type rather than a local copy. The local interface
 // previously omitted `cliAvailable`, so the `as StatusPayload` cast at the
-// fetch site silently dropped the field. Importing the source of truth keeps
-// this component in sync as the payload evolves.
+// fetch site hid the field from TypeScript (the runtime JSON still carries it).
+// Importing the source of truth keeps this component in sync as the payload evolves.
 import type { StatusPayload } from "@/lib/liveStatus";
 
 const BUCKET_CONFIG: { status: LiveSessionStatus; label: string; color: string }[] = [
