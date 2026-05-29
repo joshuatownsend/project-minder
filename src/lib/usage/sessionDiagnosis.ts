@@ -89,6 +89,12 @@ const CONTEXT_DOMINATED_FRACTION = 0.30;      // ≥30% of assistant turns must 
 // to overrule the simpler trailing-turn read").
 const STUCK_OUTCOME_LOOP_PAIRS = 3;
 const STUCK_OUTCOME_STREAK_WINDOW = 8;
+// Repeat count at which a stuck loop forces the terminal `stuck` outcome.
+// Defaults to the detection floor (3) — identical input AND identical output
+// repeated 3× is already a strong "no progress" signal. Named (rather than
+// inlined as `length > 0`) to match the tunable seam its siblings use; raise
+// toward the P0-severity line (5) if 3-repeat loops prove too aggressive.
+const STUCK_OUTCOME_REPEAT_COUNT = 3;
 // Severity rank used by topAdvice prioritization. P0 dominates impact;
 // P1 dominates impact-less P2; impact USD adds within a tier.
 const SEVERITY_RANK: Record<DiagnosisSeverity, number> = {
@@ -440,7 +446,7 @@ function inferOutcome(
   // finished/abandoned read.
   // A stuck loop (identical call+result repeated 3+×) is the strongest such
   // signal — surface it regardless of how the session happened to trail off.
-  if (stuckLoops.length > 0) return "stuck";
+  if (stuckLoops.some((l) => l.repeatCount >= STUCK_OUTCOME_REPEAT_COUNT)) return "stuck";
   if (compactionLoops.length > 0 && compactionLoops.some((l) => l.pairCount >= STUCK_OUTCOME_LOOP_PAIRS)) {
     return "stuck";
   }

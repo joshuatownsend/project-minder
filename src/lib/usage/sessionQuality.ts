@@ -357,18 +357,25 @@ function stableStringify(value: unknown): string {
   return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
 }
 
-/** Signature + human label for an assistant turn's tool calls. */
-function toolSignature(calls: ToolCall[]): { sig: string; label: string } {
+/** Cheap human label (distinct tool names) for an assistant turn's tool calls. */
+function toolLabel(calls: ToolCall[]): string {
+  return Array.from(new Set(calls.map((c) => c.name))).join(", ");
+}
+
+/** Full identity signature (name + order-independent args). Expensive — it
+ *  serializes arguments, which can be large (e.g. a Write call's file body) —
+ *  so `scanStuckLoops` only builds it for rows whose cheap label+result already
+ *  match a neighbour. */
+function toolSig(calls: ToolCall[]): string {
   const sig = calls.map((c) => `${c.name}(${stableStringify(c.arguments ?? {})})`).join("");
-  const label = Array.from(new Set(calls.map((c) => c.name))).join(", ");
-  return { sig, label };
+  return sig;
 }
 
 /** One assistant tool-issuing turn plus the result text that followed it. */
 interface ToolActionRow {
   index: number;
-  sig: string;
   label: string;
+  calls: ToolCall[];
   result: string;
 }
 
@@ -378,8 +385,7 @@ export function detectStuckLoops(turns: UsageTurn[]): StuckLoopFinding[] {
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
     if (t.role === "assistant" && t.toolCalls.length > 0) {
-      const { sig, label } = toolSignature(t.toolCalls);
-      proj.push({ index: i, sig, label, result: "" });
+      proj.push({ index: i, label: toolLabel(t.toolCalls), calls: t.toolCalls, result: "" });
       pending = proj.length - 1;
     } else if (t.role === "user" && t.toolResultText && pending !== -1) {
       proj[pending].result = t.toolResultText.trim();
@@ -390,15 +396,25 @@ export function detectStuckLoops(turns: UsageTurn[]): StuckLoopFinding[] {
 }
 
 /** Run-length scan over the tool-action projection. Pulled out so the bundled
- *  fused pass can reuse it without rebuilding the projection. */
+ *  fused pass can reuse it without rebuilding the projection.
+ *
+ *  Signatures are computed lazily and memoized: the expensive `toolSig` (which
+ *  serializes tool arguments) only runs when two adjacent rows already agree on
+ *  the cheap `label` and `result`. Label equality is a necessary precondition
+ *  for signature equality, so this never misses a real loop — it just avoids
+ *  serializing arguments for the turns that never participate in one. */
 function scanStuckLoops(proj: ToolActionRow[]): StuckLoopFinding[] {
   const findings: StuckLoopFinding[] = [];
+  const sigMemo: (string | undefined)[] = new Array(proj.length);
+  const sigOf = (i: number): string => (sigMemo[i] ??= toolSig(proj[i].calls));
+
   let runStart = 0;
   for (let i = 1; i <= proj.length; i++) {
     const sameAsPrev =
       i < proj.length &&
-      proj[i].sig === proj[i - 1].sig &&
-      proj[i].result === proj[i - 1].result;
+      proj[i].label === proj[i - 1].label &&
+      proj[i].result === proj[i - 1].result &&
+      sigOf(i) === sigOf(i - 1);
     if (sameAsPrev) continue;
     const runLen = i - runStart;
     if (runLen >= STUCK_LOOP_MIN_REPEATS) {
@@ -473,8 +489,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
       }
       // Stuck-loop projection: one row per assistant turn that issues tools.
       if (t.toolCalls.length > 0) {
-        const { sig, label } = toolSignature(t.toolCalls);
-        toolActionProj.push({ index: i, sig, label, result: "" });
+        toolActionProj.push({ index: i, label: toolLabel(t.toolCalls), calls: t.toolCalls, result: "" });
         pendingResultRow = toolActionProj.length - 1;
       }
     }
