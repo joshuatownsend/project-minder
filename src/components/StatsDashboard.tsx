@@ -94,7 +94,9 @@ function CrossCheckCard({ cc }: { cc: StatsCrossCheck }) {
         )}
       </div>
       <CrossCheckRow label="Sessions" ours={cc.observedSessions} claude={cc.claudeSessions} ratio={cc.sessionDriftRatio} />
-      <CrossCheckRow label="Messages" ours={cc.observedMessages} claude={cc.claudeMessages} ratio={cc.messageDriftRatio} />
+      {cc.observedMessages !== null && (
+        <CrossCheckRow label="Messages" ours={cc.observedMessages} claude={cc.claudeMessages} ratio={cc.messageDriftRatio} />
+      )}
       <p style={{ fontSize: "0.64rem", color: "var(--text-muted)", margin: 0, lineHeight: 1.4 }}>
         Drift compares our independently-parsed totals to Claude Code&apos;s own counter — a large gap means the two disagree.
       </p>

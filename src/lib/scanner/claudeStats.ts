@@ -120,6 +120,19 @@ export function getStatsCache(): Promise<StatsCache | null> {
   return readJsonCached(statsCacheStore(), STATS_CACHE_PATH, parseStatsCache);
 }
 
+/**
+ * mtime (ms) of stats-cache.json, or 0 when absent. Exposed so `/api/stats`
+ * can fold it into its ETag — a change to this file alone alters the
+ * cross-check block, so without it a 304 could serve a stale cross-check.
+ */
+export async function getStatsCacheMtimeMs(): Promise<number> {
+  try {
+    return (await fs.stat(STATS_CACHE_PATH)).mtimeMs;
+  } catch {
+    return 0; // absent → no contribution to the ETag
+  }
+}
+
 // ── session-meta/<sessionId>.json ──────────────────────────────────────────────
 
 export interface SessionMeta {
@@ -209,7 +222,8 @@ export interface StatsCrossCheck {
   /** (observed − claude) / claude. null when Claude's number is unknown. */
   sessionDriftRatio: number | null;
   claudeMessages: number | null;
-  observedMessages: number;
+  /** null when the sessions list (our message source) was unavailable. */
+  observedMessages: number | null;
   messageDriftRatio: number | null;
 }
 
@@ -226,7 +240,7 @@ function driftRatio(claude: number | undefined, observed: number): number | null
  */
 export function crossCheckStats(
   stats: StatsCache | null,
-  observed: { sessions: number; messages: number }
+  observed: { sessions: number; messages: number | null }
 ): StatsCrossCheck {
   return {
     available: stats !== null,
@@ -236,6 +250,8 @@ export function crossCheckStats(
     sessionDriftRatio: driftRatio(stats?.totalSessions, observed.sessions),
     claudeMessages: stats?.totalMessages ?? null,
     observedMessages: observed.messages,
-    messageDriftRatio: driftRatio(stats?.totalMessages, observed.messages),
+    // Unknown observed total → drift is unavailable, not a misleading number.
+    messageDriftRatio:
+      observed.messages === null ? null : driftRatio(stats?.totalMessages, observed.messages),
   };
 }

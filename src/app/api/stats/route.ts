@@ -3,7 +3,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
 import { getClaudeUsage, getSessionsList } from "@/lib/data";
-import { getStatsCache, crossCheckStats } from "@/lib/scanner/claudeStats";
+import { getStatsCache, getStatsCacheMtimeMs, crossCheckStats } from "@/lib/scanner/claudeStats";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import { ClaudeUsageStats } from "@/lib/types";
 import { projectScatter } from "@/lib/usage/sessionScatter";
@@ -59,9 +59,13 @@ export async function GET(request: NextRequest) {
   //     means scan freshness alone drives the ETag; that's adequate
   //     because the route's 10-min cache rotates `cachedAt` and the
   //     scan rotates on its own cycle.
+  // Fold Claude's stats-cache.json mtime into the ETag: a change to it alone
+  // alters the cross-check block, and the ETag is checked before the cache is
+  // read below — without this a client could be 304'd onto a stale cross-check.
+  const statsCacheMtime = await getStatsCacheMtimeMs();
   const etag = computeETag({
     salt: `stats-v2-${cache.backend}`,
-    maxMtimeMs: Math.max(cache.maxMtime, new Date(result.scannedAt).getTime()),
+    maxMtimeMs: Math.max(cache.maxMtime, new Date(result.scannedAt).getTime(), statsCacheMtime),
   });
 
   const notModified = ifNoneMatch(request, etag);
@@ -81,11 +85,13 @@ export async function GET(request: NextRequest) {
     sessionsList?.sessions.map(projectScatter) ?? [];
 
   // Cross-check our computed totals against Claude Code's own stats-cache.json
-  // (diagnostic; degrades to available:false when the file is absent). Both
-  // rows compare like-for-like counts: sessions vs sessions, and our summed
-  // per-session message count vs Claude's message tally.
-  const observedMessages =
-    sessionsList?.sessions.reduce((sum, s) => sum + (s.messageCount ?? 0), 0) ?? 0;
+  // (diagnostic; degrades to available:false when the file is absent). Sessions
+  // comes from the scan (always known); messages is summed from the sessions
+  // list, so when that fetch failed we report messages as unavailable (null)
+  // rather than a misleading 0 that would show a huge negative drift.
+  const observedMessages = sessionsList
+    ? sessionsList.sessions.reduce((sum, s) => sum + (s.messageCount ?? 0), 0)
+    : null;
   const crossCheck = crossCheckStats(statsCache, {
     sessions: stats.claudeSessions.total,
     messages: observedMessages,

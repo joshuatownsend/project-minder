@@ -175,4 +175,16 @@ describe("crossCheckStats", () => {
     expect(crossCheckStats(stats, { sessions: 0, messages: 0 }).sessionDriftRatio).toBe(0);
     expect(crossCheckStats(stats, { sessions: 5, messages: 0 }).sessionDriftRatio).toBe(1);
   });
+
+  it("reports messages unavailable (no false 0 drift) when the count is null", async () => {
+    // PR #184 review: when the sessions list fetch fails the route passes
+    // messages: null — the session comparison stays valid, but messages must
+    // not show a bogus large negative drift.
+    const { crossCheckStats } = await import("@/lib/scanner/claudeStats");
+    const stats = { totalSessions: 100, totalMessages: 5000, dailyActivity: [] };
+    const cc = crossCheckStats(stats, { sessions: 100, messages: null });
+    expect(cc.observedMessages).toBeNull();
+    expect(cc.messageDriftRatio).toBeNull();
+    expect(cc.sessionDriftRatio).toBe(0); // sessions still compared
+  });
 });
