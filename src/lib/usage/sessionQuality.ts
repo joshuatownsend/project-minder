@@ -1,4 +1,4 @@
-import type { UsageTurn } from "./types";
+import type { ToolCall, UsageTurn } from "./types";
 import { getModelPricing } from "./costCalculator";
 
 // ── Model context windows ─────────────────────────────────────────────────────
@@ -319,12 +319,109 @@ function scanFailureWindows(evaluable: EvaluableTurn[]): StreakFinding[] {
   return findings;
 }
 
+// ── Stuck-loop detection (#178: cc-blackbox-inspired) ────────────────────────
+
+/**
+ * Detect "stuck loops" — runs of 3+ consecutive tool actions that repeat the
+ * SAME tool call (identical name + identical arguments) AND produce the SAME
+ * result text. A model re-issuing the exact same command and getting the exact
+ * same output is the strongest signal it is stuck, distinct from the
+ * `oneShotDetector` (edit→test→re-edit retry cycles, where inputs change) and
+ * from `detectToolFailureStreaks` (errors vary across turns). Per the
+ * cc-blackbox reference, identical-input-and-output repetition is the marker.
+ *
+ * "Consecutive" is measured over the tool-action projection (assistant turns
+ * that issue ≥1 tool call), so interleaved commentary turns without tool calls
+ * do not break a run. Requiring the result to match keeps false positives low.
+ */
+export interface StuckLoopFinding {
+  /** Distinct tool name(s) involved in the repeated action, comma-joined. */
+  tool: string;
+  /** Assistant turn index (in `turns[]`) where the loop run begins. */
+  startIndex: number;
+  /** Assistant turn index where the loop run ends. */
+  endIndex: number;
+  /** Number of consecutive identical (call, result) repeats — always ≥3. */
+  repeatCount: number;
+}
+
+const STUCK_LOOP_MIN_REPEATS = 3;
+
+/** Deterministic stringify with sorted object keys, so argument equality is
+ *  order-independent. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
+
+/** Signature + human label for an assistant turn's tool calls. */
+function toolSignature(calls: ToolCall[]): { sig: string; label: string } {
+  const sig = calls.map((c) => `${c.name}(${stableStringify(c.arguments ?? {})})`).join("");
+  const label = Array.from(new Set(calls.map((c) => c.name))).join(", ");
+  return { sig, label };
+}
+
+/** One assistant tool-issuing turn plus the result text that followed it. */
+interface ToolActionRow {
+  index: number;
+  sig: string;
+  label: string;
+  result: string;
+}
+
+export function detectStuckLoops(turns: UsageTurn[]): StuckLoopFinding[] {
+  const proj: ToolActionRow[] = [];
+  let pending = -1; // index in proj of the last row awaiting its result
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    if (t.role === "assistant" && t.toolCalls.length > 0) {
+      const { sig, label } = toolSignature(t.toolCalls);
+      proj.push({ index: i, sig, label, result: "" });
+      pending = proj.length - 1;
+    } else if (t.role === "user" && t.toolResultText && pending !== -1) {
+      proj[pending].result = t.toolResultText.trim();
+      pending = -1;
+    }
+  }
+  return scanStuckLoops(proj);
+}
+
+/** Run-length scan over the tool-action projection. Pulled out so the bundled
+ *  fused pass can reuse it without rebuilding the projection. */
+function scanStuckLoops(proj: ToolActionRow[]): StuckLoopFinding[] {
+  const findings: StuckLoopFinding[] = [];
+  let runStart = 0;
+  for (let i = 1; i <= proj.length; i++) {
+    const sameAsPrev =
+      i < proj.length &&
+      proj[i].sig === proj[i - 1].sig &&
+      proj[i].result === proj[i - 1].result;
+    if (sameAsPrev) continue;
+    const runLen = i - runStart;
+    if (runLen >= STUCK_LOOP_MIN_REPEATS) {
+      findings.push({
+        tool: proj[runStart].label,
+        startIndex: proj[runStart].index,
+        endIndex: proj[i - 1].index,
+        repeatCount: runLen,
+      });
+    }
+    runStart = i;
+  }
+  return findings;
+}
+
 // ── Bundled compute (used by ingest + diagnosis) ─────────────────────────────
 
 export interface SessionQualitySummary {
   cache: CacheStats;
   compactionLoops: CompactionFinding[];
   toolFailureStreaks: StreakFinding[];
+  /** Runs of 3+ identical repeated tool calls (same input AND output). */
+  stuckLoops: StuckLoopFinding[];
   /** Peak input_tokens / context_window across all assistant turns, in [0, 1]. */
   maxContextFill: number;
 }
@@ -353,6 +450,8 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
   let rebuildWasteUsd = 0;
   const assistantProj: AssistantFillRow[] = [];
   const evaluable: EvaluableTurn[] = [];
+  const toolActionProj: ToolActionRow[] = [];
+  let pendingResultRow = -1; // index in toolActionProj awaiting its result
 
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
@@ -372,6 +471,12 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
         if (fill > maxContextFill) maxContextFill = fill;
         assistantProj.push({ index: i, turn: t, fill });
       }
+      // Stuck-loop projection: one row per assistant turn that issues tools.
+      if (t.toolCalls.length > 0) {
+        const { sig, label } = toolSignature(t.toolCalls);
+        toolActionProj.push({ index: i, sig, label, result: "" });
+        pendingResultRow = toolActionProj.length - 1;
+      }
     }
 
     // Tool-failure projection: skip the grace period, then collect any
@@ -382,6 +487,12 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
       } else if (t.role === "assistant" && t.isError) {
         evaluable.push({ index: i, failed: true });
       }
+    }
+
+    // Attach the result text to the most recent tool-action row awaiting one.
+    if (t.role === "user" && t.toolResultText && pendingResultRow !== -1) {
+      toolActionProj[pendingResultRow].result = t.toolResultText.trim();
+      pendingResultRow = -1;
     }
   }
 
@@ -397,6 +508,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
     cache,
     compactionLoops: scanCompactionPairs(assistantProj),
     toolFailureStreaks: scanFailureWindows(evaluable),
+    stuckLoops: scanStuckLoops(toolActionProj),
     maxContextFill,
   };
 }

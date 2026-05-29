@@ -6,6 +6,7 @@ import {
   type CacheStats,
   type CompactionFinding,
   type StreakFinding,
+  type StuckLoopFinding,
 } from "./sessionQuality";
 import { detectResumeAnomaly } from "./resumeAnomaly";
 import { isBuggyVersion } from "./versionDetector";
@@ -24,6 +25,7 @@ export type DiagnosisCategory =
   | "near-compaction"
   | "compaction-loop"
   | "tool-failure-streak"
+  | "stuck-loop"
   | "high-idle"
   | "context-dominated"
   | "resume-anomaly"
@@ -192,6 +194,22 @@ export function diagnoseSession(
     });
   }
 
+  // (6b) Stuck loop — the same tool call repeated 3+ times with identical
+  // input AND identical output. Distinct from the tool-failure streak (errors
+  // vary) and the one-shot retry cycle (inputs change). cc-blackbox-inspired.
+  if (quality.stuckLoops.length > 0) {
+    const worst = quality.stuckLoops.reduce((a, b) =>
+      b.repeatCount > a.repeatCount ? b : a
+    );
+    findings.push({
+      category: "stuck-loop",
+      severity: worst.repeatCount >= 5 ? "P0" : "P1",
+      finding: `Stuck loop: \`${worst.tool}\` ran ${worst.repeatCount}× in a row with identical input and output`,
+      advice:
+        "The model is repeating the exact same tool call and getting the exact same result — it is not making progress. Intervene: change the approach, fix the underlying blocker, or start a fresh session.",
+    });
+  }
+
   // (7) High idle — total dead air across the session.
   const idleSummary = computeIdleSummary(turns);
   if (idleSummary.totalSeconds > HIGH_IDLE_THRESHOLD_SECONDS) {
@@ -251,7 +269,12 @@ export function diagnoseSession(
   }
 
   // ── Outcome inference ──────────────────────────────────────────────────────
-  const outcome = inferOutcome(turns, quality.toolFailureStreaks, quality.compactionLoops);
+  const outcome = inferOutcome(
+    turns,
+    quality.toolFailureStreaks,
+    quality.compactionLoops,
+    quality.stuckLoops
+  );
 
   // ── Top 3 advice — prioritize by estimated impact desc, falling back to severity. ─
   const topAdvice = pickTopAdvice(findings, 3);
@@ -408,12 +431,16 @@ function estimateCompactionLoopImpact(
 function inferOutcome(
   turns: UsageTurn[],
   failureStreaks: StreakFinding[],
-  compactionLoops: CompactionFinding[]
+  compactionLoops: CompactionFinding[],
+  stuckLoops: StuckLoopFinding[]
 ): SessionOutcome {
   if (turns.length === 0) return "abandoned";
   // "Stuck" wins when there's persistent failure or active loop signal —
   // the trailing-turn shape can't see those, but they trump the simpler
   // finished/abandoned read.
+  // A stuck loop (identical call+result repeated 3+×) is the strongest such
+  // signal — surface it regardless of how the session happened to trail off.
+  if (stuckLoops.length > 0) return "stuck";
   if (compactionLoops.length > 0 && compactionLoops.some((l) => l.pairCount >= STUCK_OUTCOME_LOOP_PAIRS)) {
     return "stuck";
   }

@@ -3,6 +3,7 @@ import {
   computeCacheStats,
   detectCompactionLoops,
   detectToolFailureStreaks,
+  detectStuckLoops,
   computeSessionQuality,
   getModelContextWindow,
   turnContextFill,
@@ -378,5 +379,90 @@ describe("computeSessionQuality + turnContextFill", () => {
 
     // max fill: peak input is 160_800 / 200_000 = 0.804
     expect(summary.maxContextFill).toBeCloseTo(160_800 / 200_000, 4);
+
+    // stuck loops: no repeated tool calls in this fixture → none
+    expect(summary.stuckLoops).toEqual([]);
+  });
+});
+
+describe("detectStuckLoops", () => {
+  // A "tool action" row = one assistant turn issuing ≥1 tool call, paired with
+  // the result text of the following user turn. The detector fires on a run of
+  // 3+ rows with identical (tool signature, result).
+  const bash = (cmd: string) =>
+    assistant({ toolCalls: [{ name: "Bash", arguments: { command: cmd } }] });
+  const result = (text: string) => user({ toolResultText: text });
+
+  it("fires on 3 identical call+result repeats", () => {
+    const turns = [
+      bash("npm test"), result("FAIL: 1 test"),
+      bash("npm test"), result("FAIL: 1 test"),
+      bash("npm test"), result("FAIL: 1 test"),
+    ];
+    const findings = detectStuckLoops(turns);
+    expect(findings.length).toBe(1);
+    expect(findings[0]).toMatchObject({ tool: "Bash", repeatCount: 3, startIndex: 0, endIndex: 4 });
+  });
+
+  it("does NOT fire when results differ across repeats", () => {
+    const turns = [
+      bash("npm test"), result("FAIL: test A"),
+      bash("npm test"), result("FAIL: test B"),
+      bash("npm test"), result("FAIL: test C"),
+    ];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("does NOT fire when arguments differ across repeats", () => {
+    const turns = [
+      bash("ls a"), result("same"),
+      bash("ls b"), result("same"),
+      bash("ls c"), result("same"),
+    ];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("does NOT fire below the 3-repeat threshold", () => {
+    const turns = [
+      bash("npm test"), result("FAIL"),
+      bash("npm test"), result("FAIL"),
+    ];
+    expect(detectStuckLoops(turns)).toEqual([]);
+  });
+
+  it("treats interleaved tool-less assistant turns as non-breaking", () => {
+    // A commentary turn (no tool calls) between identical calls does not
+    // reset the run — the projection only contains tool-issuing turns.
+    const turns = [
+      bash("npm test"), result("FAIL"),
+      assistant({ assistantText: "let me try again" }),
+      bash("npm test"), result("FAIL"),
+      bash("npm test"), result("FAIL"),
+    ];
+    const findings = detectStuckLoops(turns);
+    expect(findings.length).toBe(1);
+    expect(findings[0].repeatCount).toBe(3);
+    expect(findings[0].startIndex).toBe(0);
+    // endIndex is the last tool-issuing assistant turn (index 5), not the
+    // trailing result turn (index 6).
+    expect(findings[0].endIndex).toBe(5);
+  });
+
+  it("argument key order does not affect equality", () => {
+    const turns = [
+      assistant({ toolCalls: [{ name: "Grep", arguments: { a: 1, b: 2 } }] }), result("none"),
+      assistant({ toolCalls: [{ name: "Grep", arguments: { b: 2, a: 1 } }] }), result("none"),
+      assistant({ toolCalls: [{ name: "Grep", arguments: { a: 1, b: 2 } }] }), result("none"),
+    ];
+    expect(detectStuckLoops(turns).length).toBe(1);
+  });
+
+  it("computeSessionQuality reports the same stuck loops as the standalone detector", () => {
+    const turns = [
+      bash("npm test"), result("FAIL"),
+      bash("npm test"), result("FAIL"),
+      bash("npm test"), result("FAIL"),
+    ];
+    expect(computeSessionQuality(turns).stuckLoops).toEqual(detectStuckLoops(turns));
   });
 });
