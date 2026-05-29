@@ -76,7 +76,12 @@ function dirToProjectInfo(dirName: string): {
   return { parentProjectName: baseName, parentSlug: toSlug(baseName) };
 }
 
-async function buildStatusPayload(): Promise<StatusPayload> {
+// Returns the payload plus a `transient` flag. `transient: true` marks a payload
+// produced by an error path (e.g. a momentary readdir failure) that must NOT be
+// cached for the full API window — otherwise one blip pins the dashboard to an
+// empty state for the whole TTL. Callers skip the cache write when transient, so
+// the next poll (≤5 s later) rebuilds from scratch.
+async function buildStatusPayload(): Promise<{ data: StatusPayload; transient: boolean }> {
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
   const sessions: LiveSession[] = [];
   const now = Date.now();
@@ -101,9 +106,12 @@ async function buildStatusPayload(): Promise<StatusPayload> {
   } catch {
     const liveProcesses = await liveProcessesPromise;
     return {
-      generatedAt: new Date().toISOString(),
-      sessions: [],
-      cliAvailable: liveProcesses !== null,
+      data: {
+        generatedAt: new Date().toISOString(),
+        sessions: [],
+        cliAvailable: liveProcesses !== null,
+      },
+      transient: true,
     };
   }
 
@@ -195,7 +203,7 @@ async function buildStatusPayload(): Promise<StatusPayload> {
     return new Date(b.mtime).getTime() - new Date(a.mtime).getTime();
   });
 
-  return { generatedAt: new Date().toISOString(), sessions, cliAvailable };
+  return { data: { generatedAt: new Date().toISOString(), sessions, cliAvailable }, transient: false };
 }
 
 /** Force-evict the cache so the next getLiveStatusPayload() call does a fresh scan. */
@@ -216,8 +224,13 @@ export async function getLiveStatusPayload(): Promise<StatusPayload> {
   }
   if (!g.__statusApiFlight) {
     g.__statusApiFlight = buildStatusPayload()
-      .then((data) => {
-        g.__statusApiCache = { data, cachedAt: Date.now() };
+      .then(({ data, transient }) => {
+        // Don't cache transient error payloads — leaving the cache empty lets
+        // the next poll (≤5 s) rebuild instead of pinning the failed state for
+        // the full 6 s API window.
+        if (!transient) {
+          g.__statusApiCache = { data, cachedAt: Date.now() };
+        }
         return data;
       })
       .finally(() => { g.__statusApiFlight = undefined; });
