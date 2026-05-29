@@ -192,6 +192,26 @@ describe("extractTicketsFromEntries", () => {
     expect(out[0].key).toBe("foo/bar#99");
   });
 
+  it("falls back to top-level content when message.content is an empty array", () => {
+    // Copilot/Codex review: Claude sometimes writes `message.content` as
+    // an empty array with the real blocks (incl. tool_results) on the
+    // top-level `content` field. A nullish-only fallback would skip them
+    // and silently drop the ticket URL; the length-based fallback must
+    // scan top-level content. Mirrors parser.ts:236-241.
+    const entry = {
+      type: "user",
+      timestamp: "2026-05-29T12:00:03Z",
+      message: { role: "user", content: [] },
+      content: [
+        { type: "tool_result", tool_use_id: "t9", content: "https://github.com/foo/bar/issues/321" },
+      ],
+    } as unknown as ConversationEntry;
+    const out = extractTicketsFromEntries([entry]);
+    expect(out).toEqual([
+      { provider: "github", key: "foo/bar#321", url: "https://github.com/foo/bar/issues/321" },
+    ]);
+  });
+
   it("dedupes the same URL seen across a prompt and a tool result", () => {
     const out = extractTicketsFromEntries([
       userText("work on https://linear.app/acme/issue/ENG-5"),

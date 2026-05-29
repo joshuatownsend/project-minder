@@ -83,17 +83,27 @@ function collectText(entries: ConversationEntry[]): string {
       continue;
     }
     if (entry.type === "user") {
-      // User content is a bare string on plain prompts and an array on
-      // tool-result / multi-part turns (mixed shape — see project memory).
-      const content =
-        (entry.message?.content as unknown) ??
-        (entry as { content?: unknown }).content ??
-        [];
-      if (typeof content === "string") {
-        parts.push(content);
+      // Plain prompts put a bare string on `message.content`; tool-result /
+      // multi-part turns use an array of blocks that may live on
+      // `message.content` OR — when that array is EMPTY — on top-level
+      // `content`. Mirror `parser.ts`'s length-based fallback (not a
+      // nullish one): an empty `message.content` must not hide a top-level
+      // tool_result, or its ticket URL is silently dropped. (See project
+      // memory on the mixed string-vs-array user-content shape.)
+      const msg = (entry.message?.content as unknown) ?? [];
+      if (typeof msg === "string") {
+        parts.push(msg);
         continue;
       }
-      parts.push(extractText(content), extractToolResults(content));
+      const source =
+        Array.isArray(msg) && msg.length === 0
+          ? ((entry as { content?: unknown }).content ?? msg)
+          : msg;
+      if (typeof source === "string") {
+        parts.push(source);
+      } else {
+        parts.push(extractText(source), extractToolResults(source));
+      }
     }
   }
   return parts.filter(Boolean).join("\n");
