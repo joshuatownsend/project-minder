@@ -192,4 +192,22 @@ describe("diagnoseSession", () => {
     const report = diagnoseSession("s", turns);
     expect(report.outcome).toBe("completed");
   });
+
+  it("flags a stuck loop and forces the outcome to stuck", () => {
+    // 3× identical Bash call + identical result. Inputs are small (<50K) and
+    // gaps short, so no other finding fires — isolating the stuck-loop signal.
+    const turns: UsageTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push({
+        ...assistantTurn({ inputTokens: 1_000, outputTokens: 500, offsetSec: i * 20 }),
+        toolCalls: [{ name: "Bash", arguments: { command: "npm test" } }],
+      });
+      turns.push(userTurn({ toolResultText: "FAIL: 1 test", offsetSec: i * 20 + 5 }));
+    }
+    const report = diagnoseSession("s", turns);
+    const loop = report.findings.find((f) => f.category === "stuck-loop");
+    expect(loop).toBeDefined();
+    expect(loop!.severity).toBe("P1"); // repeatCount 3 (<5 → P1)
+    expect(report.outcome).toBe("stuck");
+  });
 });

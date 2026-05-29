@@ -121,7 +121,7 @@ Two-column Bezier flow diagram: primary models (left column) → subagent models
 D3 force-directed graph of agent communication within the session. Each node represents a unique agent (collapsed across multiple invocations); node radius scales with message volume. Directed arrows show delegation edges. Hover a node for agent name and message count. A virtual `main` node anchors root-level delegations. Only visible when the session has subagents.
 
 ### Diagnosis
-Post-hoc 8-category quality analysis of the session, computed on demand from the JSONL:
+Post-hoc 9-category quality analysis of the session, computed on demand from the JSONL:
 
 - **Cache TTL expiry** — inter-turn gaps that exceeded the 5-minute prompt cache lifetime. Long pauses invalidate the cache; the rebuild on the next turn is paid in full.
 - **Cache thrash** — three or more cache_creation spikes (≥5K tokens) within a 5-minute window. Usually means the system message or memory is mutating per turn (timestamps, listings) and forcing repeated rebuilds.
@@ -129,6 +129,7 @@ Post-hoc 8-category quality analysis of the session, computed on demand from the
 - **Near-compaction** — at least one turn at >83% fill, within striking distance of Claude Code's auto-compaction threshold.
 - **Compaction loop** — same detector that drives the SessionsBrowser chip.
 - **Tool failure streak** — same detector that drives the SessionsBrowser chip.
+- **Stuck loop** (P1, P0 at ≥5 repeats) — the same tool was called 3+ times in a row with identical input *and* identical output. The strongest "not making progress" signal: distinct from the tool-failure streak (where errors vary) and the one-shot retry cycle (where inputs change). Forces the session outcome to **stuck**.
 - **High idle** — total inter-turn idle time exceeds 30 minutes. Capped per gap at 12 hours so an overnight pause doesn't drown out genuine in-session idle.
 - **Context-dominated** — ≥30% of assistant turns spent ≥10× more on input than on output. Pay-input-rates-for-repeat-context pattern.
 

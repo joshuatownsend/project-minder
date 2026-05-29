@@ -1,4 +1,4 @@
-import type { UsageTurn } from "./types";
+import type { ToolCall, UsageTurn } from "./types";
 import { getModelPricing } from "./costCalculator";
 
 // ── Model context windows ─────────────────────────────────────────────────────
@@ -319,12 +319,177 @@ function scanFailureWindows(evaluable: EvaluableTurn[]): StreakFinding[] {
   return findings;
 }
 
+// ── Stuck-loop detection (#178: cc-blackbox-inspired) ────────────────────────
+
+/**
+ * Detect "stuck loops" — runs of 3+ consecutive tool actions that repeat the
+ * SAME tool call (identical name + identical arguments) AND produce the SAME
+ * result text. A model re-issuing the exact same command and getting the exact
+ * same output is the strongest signal it is stuck, distinct from the
+ * `oneShotDetector` (edit→test→re-edit retry cycles, where inputs change) and
+ * from `detectToolFailureStreaks` (errors vary across turns). Per the
+ * cc-blackbox reference, identical-input-and-output repetition is the marker.
+ *
+ * "Consecutive" is measured over the tool-action projection (assistant turns
+ * that issue ≥1 tool call), so interleaved commentary turns without tool calls
+ * do not break a run. Requiring the result to match keeps false positives low.
+ */
+export interface StuckLoopFinding {
+  /** Distinct tool name(s) involved in the repeated action, comma-joined. */
+  tool: string;
+  /** Assistant turn index (in `turns[]`) where the loop run begins. */
+  startIndex: number;
+  /** Assistant turn index where the loop run ends. */
+  endIndex: number;
+  /** Number of consecutive identical (call, result) repeats — always ≥3. */
+  repeatCount: number;
+}
+
+const STUCK_LOOP_MIN_REPEATS = 3;
+
+/** Deterministic stringify with sorted object keys, so argument equality is
+ *  order-independent. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
+
+/** Cheap human label (distinct tool names) for an assistant turn's tool calls. */
+function toolLabel(calls: ToolCall[]): string {
+  return Array.from(new Set(calls.map((c) => c.name))).join(", ");
+}
+
+/** Full identity signature (name + order-independent args). Expensive — it
+ *  serializes arguments, which can be large (e.g. a Write call's file body) —
+ *  so `scanStuckLoops` only builds it for rows whose cheap label+result already
+ *  match a neighbour. */
+function toolSig(calls: ToolCall[]): string {
+  // Each element is `name(args)` — the parens delimit calls, so a plain
+  // concatenation is unambiguous and needs no separator. (Previously joined on
+  // a literal SOH control char, invisible in source — see PR #183.)
+  return calls.map((c) => `${c.name}(${stableStringify(c.arguments ?? {})})`).join("");
+}
+
+/** One assistant tool-issuing turn plus the result text that followed it. */
+// Mirrors the tool-result preview cap in parser.ts (`extractToolResults`
+// slices to 2000 chars). A result at this length is likely truncated, so two
+// different long outputs can share a prefix — we don't let those anchor a loop.
+const TOOL_RESULT_PREVIEW_CHARS = 2000;
+
+interface ToolActionRow {
+  index: number;
+  label: string;
+  calls: ToolCall[];
+  /** Trimmed tool-result preview; `undefined` when no tool_result was observed
+   *  for this call — so "no result" never matches "no result". */
+  result?: string;
+  /** Result hit the preview cap (likely truncated) — can't confidently anchor
+   *  a loop since different long outputs may share the captured prefix. */
+  resultTruncated?: boolean;
+  /** A genuine human prompt preceded this row — barriers the run (the model is
+   *  not looping on its own if the user asked for the rerun). */
+  barrier?: boolean;
+}
+
+interface ProjBuildState {
+  pending: number; // index of the row awaiting its tool result, or -1
+  pendingBarrier: boolean; // a human prompt is queued to barrier the next row
+}
+
+/** Fold one turn into the tool-action projection. Shared by `detectStuckLoops`
+ *  and the fused `computeSessionQuality` pass (called once per turn — no extra
+ *  pass) so the barrier/truncation-aware logic can't diverge between them. */
+function projectToolAction(
+  proj: ToolActionRow[],
+  state: ProjBuildState,
+  t: UsageTurn,
+  i: number
+): void {
+  if (t.role === "assistant" && t.toolCalls.length > 0) {
+    proj.push({
+      index: i,
+      label: toolLabel(t.toolCalls),
+      calls: t.toolCalls,
+      barrier: state.pendingBarrier,
+    });
+    state.pending = proj.length - 1;
+    state.pendingBarrier = false;
+  } else if (t.role === "user") {
+    if (t.toolResultText !== undefined) {
+      // A tool result (even whitespace-only, which trims to "") — attach it.
+      if (state.pending !== -1) {
+        proj[state.pending].result = t.toolResultText.trim();
+        proj[state.pending].resultTruncated = t.toolResultText.length >= TOOL_RESULT_PREVIEW_CHARS;
+        state.pending = -1;
+      }
+    } else if (t.userMessageText) {
+      // A real human prompt (no tool_result): the next tool run starts fresh —
+      // user-requested reruns are not the model spinning on its own.
+      state.pendingBarrier = true;
+    }
+  }
+}
+
+export function detectStuckLoops(turns: UsageTurn[]): StuckLoopFinding[] {
+  const proj: ToolActionRow[] = [];
+  const state: ProjBuildState = { pending: -1, pendingBarrier: false };
+  for (let i = 0; i < turns.length; i++) projectToolAction(proj, state, turns[i], i);
+  return scanStuckLoops(proj);
+}
+
+/** Run-length scan over the tool-action projection. Pulled out so the bundled
+ *  fused pass can reuse it without rebuilding the projection.
+ *
+ *  Signatures are computed lazily and memoized: the expensive `toolSig` (which
+ *  serializes tool arguments) only runs when two adjacent rows already agree on
+ *  the cheap `label` and `result`. Label equality is a necessary precondition
+ *  for signature equality, so this never misses a real loop — it just avoids
+ *  serializing arguments for the turns that never participate in one. */
+function scanStuckLoops(proj: ToolActionRow[]): StuckLoopFinding[] {
+  const findings: StuckLoopFinding[] = [];
+  const sigMemo: (string | undefined)[] = new Array(proj.length);
+  const sigOf = (i: number): string => (sigMemo[i] ??= toolSig(proj[i].calls));
+  // A result can only confirm "identical output" when it was actually observed
+  // and wasn't truncated at the preview cap.
+  const comparable = (r: ToolActionRow): boolean =>
+    r.result !== undefined && !r.resultTruncated;
+
+  let runStart = 0;
+  for (let i = 1; i <= proj.length; i++) {
+    const sameAsPrev =
+      i < proj.length &&
+      !proj[i].barrier &&
+      proj[i].label === proj[i - 1].label &&
+      comparable(proj[i]) &&
+      comparable(proj[i - 1]) &&
+      proj[i].result === proj[i - 1].result &&
+      sigOf(i) === sigOf(i - 1);
+    if (sameAsPrev) continue;
+    const runLen = i - runStart;
+    if (runLen >= STUCK_LOOP_MIN_REPEATS) {
+      findings.push({
+        tool: proj[runStart].label,
+        startIndex: proj[runStart].index,
+        endIndex: proj[i - 1].index,
+        repeatCount: runLen,
+      });
+    }
+    runStart = i;
+  }
+  return findings;
+}
+
 // ── Bundled compute (used by ingest + diagnosis) ─────────────────────────────
 
 export interface SessionQualitySummary {
   cache: CacheStats;
   compactionLoops: CompactionFinding[];
   toolFailureStreaks: StreakFinding[];
+  /** Runs of 3+ identical repeated tool calls (same input AND output). */
+  stuckLoops: StuckLoopFinding[];
   /** Peak input_tokens / context_window across all assistant turns, in [0, 1]. */
   maxContextFill: number;
 }
@@ -353,6 +518,8 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
   let rebuildWasteUsd = 0;
   const assistantProj: AssistantFillRow[] = [];
   const evaluable: EvaluableTurn[] = [];
+  const toolActionProj: ToolActionRow[] = [];
+  const stuckState: ProjBuildState = { pending: -1, pendingBarrier: false };
 
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
@@ -383,6 +550,9 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
         evaluable.push({ index: i, failed: true });
       }
     }
+
+    // Stuck-loop projection — same per-turn fold the standalone path uses.
+    projectToolAction(toolActionProj, stuckState, t, i);
   }
 
   const cacheTotal = cacheReadTokens + cacheCreateTokens;
@@ -397,6 +567,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
     cache,
     compactionLoops: scanCompactionPairs(assistantProj),
     toolFailureStreaks: scanFailureWindows(evaluable),
+    stuckLoops: scanStuckLoops(toolActionProj),
     maxContextFill,
   };
 }
