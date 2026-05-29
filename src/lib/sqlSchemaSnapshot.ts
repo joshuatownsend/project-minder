@@ -117,6 +117,10 @@ export const SQL_SCHEMA: TableSchema[] = [
     columns: ["session_id", "pr_url", "pr_number", "repo"],
   },
   {
+    table: "session_tickets",
+    columns: ["session_id", "url", "provider", "ticket_key"],
+  },
+  {
     table: "prompts_fts",
     columns: ["session_id", "turn_index", "role", "ts", "text"],
     virtual: true,

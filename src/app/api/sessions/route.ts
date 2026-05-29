@@ -42,6 +42,9 @@ export async function GET(request: NextRequest) {
   // `#<N>` shorthand — the equality check below covers the full-URL case;
   // shorthand callers should query the full URL we surface in `prs[].url`.
   const prFilter = request.nextUrl.searchParams.get("pr");
+  // item3: optional ticket-URL filter, same exact-URL contract as `pr`.
+  // The chip stitches the full canonical URL we surface in `tickets[].url`.
+  const ticketFilter = request.nextUrl.searchParams.get("ticket");
 
   // Refresh the in-route cache when stale. The façade itself layers DB and
   // file-parse caches under it, so a refresh that finds no JSONL changes is
@@ -77,7 +80,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: "sessions-v1",
     maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
-    parts: [project ?? "", source ?? "", prFilter ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
+    parts: [project ?? "", source ?? "", prFilter ?? "", ticketFilter ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
   });
 
   const notModified = ifNoneMatch(request, etag);
@@ -95,6 +98,10 @@ export async function GET(request: NextRequest) {
     // Exact URL match. The chip's onClick stitches the full PR URL into
     // this query, so callers never need to second-guess normalization.
     results = results.filter((s) => s.prs?.some((p) => p.url === prFilter));
+  }
+  if (ticketFilter) {
+    // Exact URL match, same contract as the PR filter above.
+    results = results.filter((s) => s.tickets?.some((t) => t.url === ticketFilter));
   }
 
   // jsonWithETag returns a NextResponse; layer the backend header on top so

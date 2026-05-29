@@ -16,6 +16,7 @@ import { computeSessionQuality } from "../usage/sessionQuality";
 import { classifyTurn } from "../usage/classifier";
 import { aggregateWorkMode } from "../usage/workMode";
 import { extractPrsFromEntries } from "../usage/prExtractor";
+import { extractTicketsFromEntries } from "../usage/ticketExtractor";
 import { readSubagentMeta } from "./subagentMeta";
 import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
@@ -347,6 +348,15 @@ async function scanSessionFile(
       if (found.length > 0) prs = found;
     } catch { /* non-critical */ }
 
+    // Ticket extraction (item 3). Scans all text blocks for full
+    // Linear/Jira/GitHub-issue URLs — no tool_use_id pairing. Same
+    // defensive posture: a hiccup must not poison the SessionSummary.
+    let tickets: SessionSummary["tickets"] | undefined;
+    try {
+      const found = extractTicketsFromEntries(allEntries);
+      if (found.length > 0) tickets = found;
+    } catch { /* non-critical */ }
+
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
     await loadPricing();
     let costEstimate = 0;
@@ -415,6 +425,7 @@ async function scanSessionFile(
       isWorktree: isWorktreeEncodedDir(projectDirName),
       source: "claude",
       prs,
+      tickets,
     };
   } catch {
     return null;

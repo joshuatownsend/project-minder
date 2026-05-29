@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 8;
+export const DERIVED_VERSION = 9;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -80,3 +80,17 @@ export const DERIVED_VERSION = 8;
 //
 //     No read-side gate — missing rows just mean no chip renders for
 //     that session, never a wrong chip.
+// 9 — item3 added the `session_tickets` table, populated by scanning all
+//     session text (prompts, assistant text, tool_result output) for full
+//     Linear/Jira/GitHub-issue URLs. Same rationale as v8: without this
+//     bump, existing sessions (no mtime/size change) skip re-parse and
+//     stay ticket-less indefinitely; only newly-modified sessions would
+//     populate the new table. Bumping drives a one-time re-parse so every
+//     session that ever referenced a tracker URL gets backfilled.
+//
+//     No tail-straddle recovery is needed (unlike v8's PRs): tickets are
+//     harvested by a plain text scan, not a call→result pairing, so there
+//     is no cross-cursor case to recover — tickets in already-persisted
+//     bytes are carried forward by `preservedTickets` on every rewrite.
+//
+//     No read-side gate — missing rows just mean no chip renders.

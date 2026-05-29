@@ -607,6 +607,28 @@ CREATE TABLE session_prs (
 -- have zero PRs), but the index keeps the equality probe O(log n).
 CREATE INDEX session_prs_by_url ON session_prs(pr_url);
 
+-- ─── session_tickets ─────────────────────────────────────────────────────
+-- Issue/ticket trackers REFERENCED during a session (Linear/Jira/GitHub
+-- issues), harvested by scanning every text block — prompts, assistant
+-- text, and tool_result output — for a full tracker URL and deduping by
+-- URL. Unlike session_prs there is no `gh … create` command pairing: a
+-- ticket reference is meaningful wherever it appears. `provider` and
+-- `ticket_key` both derive from the URL itself. One row per
+-- (session, url) — `INSERT OR IGNORE` on the PK keeps tail-appends and
+-- full reconciles idempotent.
+
+CREATE TABLE session_tickets (
+  session_id   TEXT NOT NULL,
+  url          TEXT NOT NULL,
+  provider     TEXT NOT NULL,
+  ticket_key   TEXT NOT NULL,
+  PRIMARY KEY (session_id, url),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- Powers `/api/sessions?ticket=<url>` lookup, same shape as session_prs.
+CREATE INDEX session_tickets_by_url ON session_tickets(url);
+
 -- ─── mcp_scan_runs ───────────────────────────────────────────────────────
 -- One row per security scan invocation. Findings reference this for provenance.
 

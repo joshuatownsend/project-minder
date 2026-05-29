@@ -199,7 +199,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(8);
+    expect(session.derived_version).toBe(9);
     expect(session.source).toBe("claude");
 
     const turnRows = db
@@ -1336,7 +1336,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
       .get() as { slug: string | null; derived_version: number };
     expect(row.slug).toBe("graceful-pivoting-ferret");
-    expect(row.derived_version).toBe(8);
+    expect(row.derived_version).toBe(9);
     reloaded.conn.closeDb();
   });
 
@@ -1460,6 +1460,67 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT pr_url FROM session_prs WHERE session_id = 'p1'")
       .all() as Array<{ pr_url: string }>;
     expect(prs).toEqual([{ pr_url: "https://github.com/foo/bar/pull/77" }]);
+    reloaded.conn.closeDb();
+  });
+
+  // item3 — session_tickets write-path integration. Tickets come from a
+  // plain all-text scan (no `gh … create` pairing), so a URL in a prompt
+  // is enough; the riskiest new code is the preserve-then-merge on rewrite.
+
+  it("persists session_tickets rows from a referenced ticket URL", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tkt", "tk1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn(
+        "2026-04-30T10:00:00Z",
+        "work on https://linear.app/acme/issue/ENG-7 and https://github.com/foo/bar/issues/9",
+      ),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "on it"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const rows = db
+      .prepare(
+        "SELECT url, provider, ticket_key FROM session_tickets WHERE session_id = 'tk1' ORDER BY provider, ticket_key",
+      )
+      .all() as Array<{ url: string; provider: string; ticket_key: string }>;
+    expect(rows).toEqual([
+      { url: "https://github.com/foo/bar/issues/9", provider: "github", ticket_key: "foo/bar#9" },
+      { url: "https://linear.app/acme/issue/ENG-7", provider: "linear", ticket_key: "ENG-7" },
+    ]);
+    reloaded.conn.closeDb();
+  });
+
+  it("preserves existing session_tickets rows when a re-parse finds none", async () => {
+    // Ticket analogue of the session_prs preservation test: writeSession's
+    // DELETE→cascade→re-insert would wipe prior tickets if the fresh extract
+    // returns nothing. `preservedTickets` + `mergeTicketLinks` must keep them.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tktpreserve", "tp1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "fixes https://github.com/foo/bar/issues/55"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Rewrite without the URL and bump mtime to force a full re-parse whose
+    // fresh extract yields []. Without preservation the ticket would vanish.
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "no ticket here anymore"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const rows = db
+      .prepare("SELECT url FROM session_tickets WHERE session_id = 'tp1'")
+      .all() as Array<{ url: string }>;
+    expect(rows).toEqual([{ url: "https://github.com/foo/bar/issues/55" }]);
     reloaded.conn.closeDb();
   });
 
