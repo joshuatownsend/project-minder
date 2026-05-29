@@ -85,7 +85,12 @@ export async function writeFileAtomic(
     } else {
       await fs.writeFile(tmp, content, encoding);
     }
-    await fs.rename(tmp, filePath);
+    // Use renameWithRetry rather than a raw fs.rename: this is the hot path
+    // for every config / TODO.md / settings.json write, and on Windows a
+    // rename landing within ms of a prior reader/writer's handle release can
+    // transiently fail with EPERM/EBUSY (the flake behind issue #105). The
+    // retry/backoff is a no-op on the fast, uncontended path.
+    await renameWithRetry(tmp, filePath);
   } catch (err) {
     // If rename failed, the tmp file may still be there — best-effort cleanup.
     try { await fs.unlink(tmp); } catch { /* ignore */ }
