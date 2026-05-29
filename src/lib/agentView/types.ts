@@ -15,8 +15,12 @@ export type AgentSessionStatus =
   | "failed"
   | "stopped";
 
-/** Source that last determined liveness — used to show the "running process" indicator. */
-export type LivenessSource = "daemon" | "hook" | "jsonl";
+/**
+ * Source that last determined liveness — used to show the "running process" indicator.
+ * "cli" = ground-truth PID liveness from `claude agents --json` (most authoritative);
+ * "daemon" = job roster; "hook" = live hook events; "jsonl" = mtime-inferred (weakest).
+ */
+export type LivenessSource = "daemon" | "hook" | "jsonl" | "cli";
 
 /** One live session as shown on the Kanban board. */
 export interface LiveAgentSession {
@@ -41,6 +45,8 @@ export interface LiveAgentSession {
    */
   runningProcess: boolean;
   livenessSource: LivenessSource;
+  /** OS process id when liveness was confirmed by the CLI (`isLive === true`). */
+  pid?: number;
   /** Model identifier from the session. */
   model?: string;
   /** Estimated USD cost so far (from session row in DB if available). */
