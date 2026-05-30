@@ -8,7 +8,7 @@ import {
   CheckSquare, Columns3, FileText, ListChecks, Calendar, Lightbulb,
   Layers, Brain, Clock, Sprout, Trash2, MonitorPlay,
   Bot, Sparkles, Terminal, Plug, BookOpen, Network, Library,
-  BarChart3, Wallet, HeartPulse, Webhook, Boxes, Database,
+  BarChart3, Wallet, HeartPulse, Webhook, Boxes, Database, Cpu,
   Sliders, Settings as SettingsIcon,
   ChevronRight, ChevronDown,
 } from "lucide-react";
@@ -101,6 +101,7 @@ const GROUPS: NavGroup[] = [
       { id: "hooks",           label: "Hooks",           href: "/hooks",           icon: ico(Webhook) },
       { id: "mcps",            label: "MCP",             href: "/config?type=mcp", matchType: "mcp", icon: ico(Boxes) },
       { id: "sql",             label: "SQL",             href: "/sql",             icon: ico(Database) },
+      { id: "adapters",        label: "Harnesses",       href: "/adapters",        icon: ico(Cpu) },
       { id: "insights-report", label: "Insights report", href: "/insights-report", icon: ico(Lightbulb) },
     ],
   },

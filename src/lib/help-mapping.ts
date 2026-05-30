@@ -27,6 +27,7 @@ export const helpMapping: Record<string, string> = {
   '/settings/auto-title': 'auto-title',
   '/settings/live-activity': 'live-activity',
   '/settings/adapters': 'adapters',
+  '/adapters': 'adapters',
   '/kanban': 'kanban',
   '/tasks': 'tasks',
   '/schedule': 'tasks',
