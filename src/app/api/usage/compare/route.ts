@@ -12,9 +12,15 @@ import type { UsageComparison } from "@/lib/usage/types";
 // comparison reflects the window as of `cachedAt` (up to the TTL stale) —
 // the same staleness profile the usage report cache already accepts.
 //
-// Client-side 304s ride an mtime-salted ETag: identical underlying data (same
-// `MAX(file_mtime_ms)`) yields the same ETag even as the window edges drift by
-// seconds, because no new turns fall into the shifted edges.
+// Client-side 304s ride an ETag salted by mtime AND the cache-slot timestamp.
+// The slot timestamp is essential here, not redundant: a rolling window's
+// payload changes as `now` advances even when no file changes — turns age out
+// of the trailing edge, and `today` flips at midnight. An mtime-only ETag
+// would let a client revalidate with a stale `If-None-Match` and get a 304
+// against a freshly-recomputed comparison, pinning the UI to the old windows
+// until some unrelated file changed. Keying on `cachedAt` rotates the ETag
+// exactly when the server recomputes the slot, bounding client staleness to
+// the same TTL the server already accepts.
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -53,7 +59,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: `usage-compare-v1-${slot.backend}`,
     maxMtimeMs: slot.maxMtime,
-    parts: [safePeriod, project ?? "", source ?? ""],
+    parts: [safePeriod, project ?? "", source ?? "", String(slot.cachedAt)],
   });
 
   const notModified = ifNoneMatch(request, etag);
