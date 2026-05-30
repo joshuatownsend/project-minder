@@ -1,5 +1,117 @@
 # Insights
 
+<!-- insight:af1dceb33eac | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T03:28:08.128Z -->
+## ★ Insight
+The bug is a classic "absence vs zero" conflation: `queryPeriodSummary` returns `oneShotRate: 0` / `cacheHitRate: 0` for an *empty* window (the `verified > 0 ? ... : 0` fallback), which is indistinguishable from a genuine 0% measurement. The volume metrics are immune (0 cost *is* a real measurement), but rate metrics need a **basis guard**: only show a percentage-point delta when both windows actually measured something (`verifiedTasks > 0` for one-shot; a nonzero token denominator for cache-hit).
+
+---
+
+<!-- insight:7bbde2ca36ac | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T03:15:41.795Z -->
+## ★ Insight
+The advisor's **elapsed-duration generalization** is the key design move: instead of special-casing each period, I compute `elapsed = now − periodStart` once and derive both windows as `[now−elapsed, now)` and `[now−2·elapsed, now−elapsed)`. For rolling windows (`7d`/`30d`/`24h`) this is identical to the naive version, but for `today` it compares an equal-length prior block rather than a full 24h day against a partial morning — turning a guaranteed "−80% every morning" artifact into an honest comparison. One formula, zero special cases.
+
+---
+
+<!-- insight:4c7e966ab707 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T02:25:31.758Z -->
+## ★ Insight
+- **Fix #1 is the clean reward of incremental extraction.** The original diff pulled out `resolveClaudelintBin` but copy-pasted the *spawn loop* one level up — extracting the cheap half while duplicating the error-prone half. Finishing the seam (one `spawnClaudelint` both wrappers call) is strictly better than the half-measure, and the existing `runLibraryCli` tests proved the unification preserved behavior.
+- **Good skips are a feature of /simplify, not a failure.** Three of the seven findings were genuine but reached into files outside the reviewed change. Pulling them in would balloon a focused feature PR into a cross-cutting refactor — the discipline is to *log* them (the `findProjectPath` 4-way duplication is a real future cleanup) rather than scope-creep the current work.
+
+---
+
+<!-- insight:f353508b0840 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T02:14:33.342Z -->
+## ★ Insight
+- **Materializing a derivable flag earns its keep when it's a *contract*.** `hasBlocking` is computable from `totalCounts`, but defining "fails strict lint" in one place (`buildReport`) beats re-deriving the P0/P1 rule in the chip, the API, and MCP — the rule can never drift across consumers.
+- **The lazy-emit test fix is a real async-ordering lesson.** `mockReturnValueOnce` constructs the fake `--fix` process *during setup*, long before `applyFormatting`'s second spawn consumes it — so eager `Promise.resolve().then(emit)` fired `close` before any listener existed. Emitting on the `newListener('close')` event ties emission to consumption, which is correct regardless of when the object was created.
+
+---
+
+<!-- insight:7e3ed3f29146 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T02:02:10.311Z -->
+## ★ Insight
+- **The plan's premise for (a) was empirically wrong.** Reading the seven `claudeMdAudit` codes showed every one needs human judgment about *what to extract* — there's no safe mechanical rewrite. Building a per-finding `autofix()` framework would have shipped a capability with zero safe callers. The fix: the *formatter* is the real mechanical writer, and "Fix" just runs it.
+- **Wrapping beats hand-rolling — and sidesteps the JSONC trap.** `claudelint format` uses prettier under the hood, which preserves JSON comments/trailing commas. Hand-rolling a `JSON.parse→stringify` formatter would silently destroy those. Delegating to the library means it owns the lossless-format contract.
+- **Reversibility is layered, not trusted.** Rather than trust the formatter, the apply path snapshots every target via `recordPreWrite` *before* the mutating `--fix` runs — the same backup infra that powers config restore.
+
+---
+
+<!-- insight:f677e168e131 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-29T21:16:25.504Z -->
+## ★ Insight
+- **Mirroring isn't copying.** The PR feature's reliability comes from `tool_use_id` call→result pairing because a PR URL is only meaningful as a command's *output*. Recognizing that a ticket reference is meaningful *anywhere* let me drop two whole subsystems (tool-matching + tail-straddle recovery) while gaining recall — the simpler design was the *more* correct one.
+- **`{...summary}` spread is a parity safety net.** Because `scanSessionDetail` returns `{ ...summary, timeline, ... }`, adding `tickets` to the summary builder propagated it to the detail object for free — the spread is what saved this from the silent file-parse parity gap that bit the PR feature (#172).
+- **A passing suite ≠ tested logic.** The 20 extractor unit tests were green, but the riskiest *new* code — preserve-then-merge on rewrite — had zero coverage until the 2 integration tests; that's the silent-data-loss path the whole `preservedTickets` dance exists to prevent.
+
+---
+
+<!-- insight:e8ae3970bf84 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-29T20:48:32.675Z -->
+## ★ Insight
+- **PRs vs tickets are structurally different signals.** A PR-create URL is only meaningful *as the output of the create command*, so `tool_use_id` call→result matching is load-bearing. A ticket reference is meaningful *wherever it appears* — so the right model is a plain all-text-block scan deduped by URL, which is **simpler** (no tool-matching, no straddle recovery) and **higher-recall** (catches `gh issue create` output for free, since that URL lands in a tool-result text block).
+- **Scope to self-validating full URLs first** (Linear `…/issue/KEY`, Jira `…/browse/KEY`, GitHub `…/issues/N`) — provider+key+url all derive from the URL, zero config, ~0 false positives. Bare keys (`ABC-123`, `#N`) from branches/commits are the FP source and need `ticketProviders` config → defer to a follow-up PR.
+- **Two read paths feed the UI.** Chips render off `SessionSummary.prs` populated by `sessionsListFromDb.ts`, *not* the detail loader — both must be wired or chips never appear.
+
+---
+
+<!-- insight:f17c8fa3d963 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-29T16:16:55.463Z -->
+## ★ Insight
+The advisor's catch was the whole game here: the `## Inspired by` sections in `TODO.md` aren't just attributions — each has a status-tagged bullet list that's the *previously-mined* feature set. Diffing READMEs against **memory** would have re-recommended ~8 already-shipped features (DAG/Sankey viz, facet data, command palette, kanban). Diffing against the **authoritative `[x]` list** collapsed 13 repos down to ~3 real gaps. The lesson: when a repo already tracks "what we took from source X," that file is ground truth, not your recollection of it.
+
+---
+
+<!-- insight:418036436f3a | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-29T16:05:39.055Z -->
+## ★ Insight
+- **Signal vs. noise in repo mining:** A naive `github.com/...` grep returns ~130 hits, but most live in `tests/prExtractor.test.ts` as synthetic fixtures (`foo/bar`, `foo/next.js`). The real inspirations are identifiable by their *prose framing* — the `*Inspired by [...]*` italics blocks in `TODO.md` — which is a much higher-precision filter than the URL pattern alone.
+- **Same repo, two URLs:** `codeburn` appears as both `AgentSeal/codeburn` (README) and `getagentseal/codeburn` (TODO) — GitHub org renames mean dedup needs to happen on project identity, not URL string.
+
+---
+
+<!-- insight:49a4cb01b397 | session:06eabe1d-2d4b-4d0f-b9da-f557630aac28 | 2026-05-29T12:15:05.118Z -->
+## ★ Insight
+**Full suite green: 2619 passed, 1 skipped (236 files), typecheck exit 0.** The new `resolveCliLiveness` helper did double duty — it removed the duplicated ternary I'd first written inline in both branches *and* gave a server-dep-free unit-test surface, sidestepping the `server-only` import barrier that forced the rest of that test file into logic-mirroring.
+
+---
+
+<!-- insight:f0b65f88a5b0 | session:06eabe1d-2d4b-4d0f-b9da-f557630aac28 | 2026-05-29T12:07:21.653Z -->
+## ★ Insight
+**Preserving behavior at the `undefined` boundary:** `jsonlSession.isLive === true` is deliberately strict. The CLI signal is tri-state — `true` (PID confirmed alive), `false` (confirmed dead), `undefined` (CLI unavailable). By only promoting to `runningProcess: true`/`"cli"` on an explicit `true`, older Claude Code installs (where `isLive` is always `undefined`) keep the exact prior `false`/`"hook"` behavior — the fix widens the *best* case without regressing the *no-CLI* case.
+
+---
+
+<!-- insight:7efbe20786d2 | session:06eabe1d-2d4b-4d0f-b9da-f557630aac28 | 2026-05-29T12:05:57.714Z -->
+## ★ Insight
+**Sample-time vs. write-time freshness:** The bug here is a classic "when does the clock start" error. A TTL is only meaningful relative to *when the data was true*. Because `claude agents --json` reads the OS process table at invocation, the data's "as-of" time is the call *start*, not when the parse finishes. Stamping at resolution conflates fetch latency with freshness — harmless when calls are fast, but on a slow disk a 4s call effectively grants itself 14s of validity.
+
+---
+
+<!-- insight:b76eadaab7a2 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T04:22:50.039Z -->
+## ★ Insight
+- `react-hooks/refs` (React 19's lint plugin) flags ref mutation during render because concurrent rendering can discard and re-run a render — so `ref.current = x` during render may fire with stale or duplicated values. Moving it to `useEffect` guarantees it only runs on *committed* renders.
+- This is the "latest ref" pattern: it lets the long-lived 5s interval read the freshest `swarm.status` without listing `swarm` in the interval's own dep array (which would tear down/recreate the interval on every poll).
+
+---
+
+<!-- insight:89d18663381d | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T04:17:11.678Z -->
+## ★ Insight
+- **The `--frozen-lockfile` local pass is the strongest pre-flight signal.** CI's failing step was literally `npm ci` (now `pnpm install --frozen-lockfile`). Running that exact command locally and seeing "Lockfile is up to date" means the step that's been red for weeks will pass — the rest of the pipeline (lint/typecheck/test/build) was never the problem.
+- **Why the lockfile divergence happened at all**: pnpm and npm maintain *independent* lockfiles. PR #159 wrote the zod pin into `pnpm.overrides`, which only `pnpm-lock.yaml` honors. `package-lock.json` kept resolving zod transitively to 4.3.6. The two lockfiles drifted silently because nothing regenerated the npm one — and CI was the only consumer of it. Deleting it removes the entire class of drift.
+- **`packageManager` is the keystone**: it lets `pnpm/action-setup@v4` (CI) and `corepack` (local) agree on one pnpm version without hardcoding it in five places. Without it, action-setup would need an explicit `version:` input in every workflow.
+
+---
+
+<!-- insight:f58cca69a032 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T03:57:55.011Z -->
+## ★ Insight
+- **Step ordering matters for the cache**: `pnpm/action-setup@v4` must come *before* `actions/setup-node`. setup-node's `cache: 'pnpm'` runs `pnpm store path` to compute the cache key — if pnpm isn't on PATH yet, that step fails. This is the #1 gotcha when migrating GitHub Actions to pnpm.
+- **`pnpm/action-setup@v4` reads the version from `packageManager`** — no need to hardcode a pnpm version in the workflow. That's why adding `packageManager: "pnpm@10.30.3"` to package.json (next task) is load-bearing, not cosmetic.
+- **Global CLI installs stay on npm**: `npm install -g @anthropic-ai/claude-code` is a global binary, not a project dependency. Keeping it on npm avoids pnpm's global-store PATH setup, which needs an extra `pnpm setup` step in CI.
+
+---
+
+<!-- insight:313f0c904df1 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T02:32:44.271Z -->
+## ★ Insight
+- Issue #173 conflates two distinct problems. **Problem A** (MCP tests like `minder://stats`, `minder://usage/7d`): no HOME isolation at all — they walk the real 281-session/761 MiB dir. Confirmed by reading `tests/mcpResources.test.ts` which doesn't override `process.env.HOME` or spy `os.homedir`. **Problem B** (data-façade tests like `dataUsage.test.ts:153`): isolation works correctly — my probe proves `scanAllSessions` and `buildAllSessions` both read the tmp dir with 2 fixture sessions, taking 2-65ms. The 8-9s wall time is **entirely module-import cost from `vi.resetModules()`**, not file walking.
+- The audit-51-`os.homedir()`-callers fix the issue proposes won't help Problem B at all. It would help nothing currently broken.
+- Problem A is cleanly fixable (~20 LOC, add `beforeEach` HOME override to MCP tests). Problem B is a different design conversation: either replace `vi.resetModules` with surgical state reset, or accept module-import cost and bump timeouts.
+
+---
+
 <!-- insight:641860e99ce7 | session:c054cf9c-b4e1-4fbd-9ab4-e0ff436ed603 | 2026-05-27T01:44:00.848Z -->
 ## ★ Insight
 - The fix uses `file_path` because it's the only column on `sessions` that preserves the raw worktree dir name — ingest threads it through unchanged from `walkProjects`, while `project_dir_name` gets canonicalized two lines earlier (`canonicalDir = canonicalizeDirName(projectDirName)`).
