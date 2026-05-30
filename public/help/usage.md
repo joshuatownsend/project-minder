@@ -26,6 +26,15 @@ Four key metrics displayed at the top:
 - **Cache Hit Rate** — percentage of input tokens served from cache (higher is better, reduces cost)
 - **One-Shot Rate** — percentage of code changes that passed verification on the first attempt (Edit → test → pass without re-editing)
 
+## Compare (Period-over-Period)
+
+Click **Compare** in the toolbar to overlay a delta strip above the summary cards, showing how the current period stacks up against the period immediately before it — last 7 days vs the 7 days before that, and so on. The same five metrics (cost, tokens, sessions, cache hit, one-shot rate) each gain a change indicator:
+
+- **Volume metrics** (cost, tokens, sessions) show the relative change as a percentage, in a neutral tone — more or less activity is neither inherently good nor bad. A metric with no activity in the prior window is marked **new**.
+- **Quality metrics** (cache hit, one-shot rate) show the change in *percentage points* and are colored green when improving, red when regressing.
+
+The comparison always uses windows of **equal elapsed length**. For **Today** this means the current partial day is compared against the same number of hours ending at midnight — not against a full previous day — so the delta is honest first thing in the morning. Compare is unavailable for **All Time** (there is no earlier window to compare against) and requires the SQLite backend.
+
 ## Daily Cost Chart
 
 A bar chart showing daily spending across the selected period. Hover over bars to see exact cost, turn count, and token totals for each day.
