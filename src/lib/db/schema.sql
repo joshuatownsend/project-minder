@@ -1,4 +1,4 @@
--- Project Minder local index — SQLite schema, version 14.
+-- Project Minder local index — SQLite schema, version 16.
 --
 -- Design tenets:
 --
@@ -681,3 +681,23 @@ CREATE TABLE mcp_tool_fingerprints (
   last_seen_ms     INTEGER NOT NULL,
   PRIMARY KEY (server_id, tool_name)
 );
+
+-- ─── project_grade_snapshots ─────────────────────────────────────────────
+-- One row per (project, calendar day) recording the efficiency grade and
+-- finding-count breakdown computed that day (item 4b). Forward-only: the
+-- trend layer (new/improving/declining/stable) compares today's freshly
+-- computed grade to the most-recent prior day's snapshot. The composite PK
+-- also serves the "most-recent date < today" lookup, so no separate index.
+-- Written best-effort from the efficiency-grade cache + per-project route;
+-- never blocks grade serving. Mirrors migration v16.
+
+CREATE TABLE project_grade_snapshots (
+  project_slug   TEXT NOT NULL,
+  snapshot_date  TEXT NOT NULL,
+  grade          TEXT NOT NULL,
+  high_count     INTEGER NOT NULL DEFAULT 0,
+  med_count      INTEGER NOT NULL DEFAULT 0,
+  low_count      INTEGER NOT NULL DEFAULT 0,
+  created_at_ms  INTEGER NOT NULL,
+  PRIMARY KEY (project_slug, snapshot_date)
+) WITHOUT ROWID;

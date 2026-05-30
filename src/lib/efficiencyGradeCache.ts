@@ -3,6 +3,7 @@ import { loadCatalog } from "./indexer/catalog";
 import { runWasteOptimizer } from "./scanner/wasteOptimizer";
 import { gatherProjectTurns } from "./usage/projectMatch";
 import { getCachedScan } from "./cache";
+import { recordGradeSnapshots, type GradeSnapshotRow } from "./data/gradeSnapshots";
 
 export type EfficiencyGrade = "A" | "B" | "C" | "D" | "F";
 
@@ -69,6 +70,11 @@ class EfficiencyGradeCache {
       scan?.projects.map((p) => [p.slug, p.mcpServers?.servers ?? []]) ?? []
     );
 
+    // Grade + finding-count rows to snapshot once the drain finishes (item
+    // 4b). Accumulated across batches and written in one transaction at the
+    // end so the per-project loop stays CPU-only.
+    const snapshotRows: GradeSnapshotRow[] = [];
+
     // Drain queue: CPU-only per project after shared I/O is done.
     while (this.queue.length > 0) {
       const batch = this.queue.splice(0, 5);
@@ -83,7 +89,7 @@ class EfficiencyGradeCache {
         try {
           const path = projectPathMap.get(item.slug) ?? item.path;
           const turns = gatherProjectTurns(sessionMap, item.slug, path);
-          const { grade } = runWasteOptimizer({
+          const info = runWasteOptimizer({
             turns,
             configuredMcpServers: mcpMap.get(item.slug) ?? [],
             agents: catalog.agents.filter(
@@ -93,7 +99,8 @@ class EfficiencyGradeCache {
               (s) => !s.projectSlug || s.projectSlug === item.slug
             ),
           });
-          this.cache.set(item.slug, { grade, cachedAt: Date.now() });
+          this.cache.set(item.slug, { grade: info.grade, cachedAt: Date.now() });
+          snapshotRows.push({ slug: item.slug, grade: info.grade, counts: info.counts });
         } catch {
           // Skip this project; it'll be retried on the next enqueue cycle.
         }
@@ -105,6 +112,11 @@ class EfficiencyGradeCache {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
+
+    // Persist today's grade snapshots (best-effort; never throws, degrades to
+    // "no trend" when the DB is unavailable). Done after the drain so it
+    // doesn't reintroduce per-project I/O into the CPU-only loop.
+    await recordGradeSnapshots(snapshotRows);
 
     this.running = false;
     this.seen.clear();
