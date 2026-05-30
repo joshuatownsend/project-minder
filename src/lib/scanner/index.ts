@@ -39,6 +39,7 @@ const EMPTY_LINT_REPORT: Awaited<ReturnType<typeof runConfigLint>> = {
   countsByTarget: {},
   totalCounts: { P0: 0, P1: 0, P2: 0 },
   engineErrors: [],
+  hasBlocking: false,
 };
 const EMPTY_DOCKER: Awaited<ReturnType<typeof scanDockerCompose>> = {
   services: [],

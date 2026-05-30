@@ -25,6 +25,19 @@ Findings use the same P0/P1/P2 scale as the CLAUDE.md health audit:
 - **P1** — likely to cause problems; should be addressed before the next session.
 - **P2** — maintenance issues that degrade quality over time.
 
+## Strict gate
+
+The panel header shows a **STRICT: PASS / FAIL** badge. The gate **fails** whenever the project has at least one P0 or P1 finding, and **passes** when only P2 (or zero) findings remain. This is the single authoritative "does this config clear the bar" signal — a CI badge or `?tab=config-lint` deep link reads the same flag rather than re-counting findings. P2-only configurations still pass the strict gate, since P2s are maintenance-grade rather than blocking.
+
+## Formatter
+
+The **Formatter** control (visible on a project's Config Lint tab) wraps `claudelint format` (markdownlint + prettier; shellcheck is used when installed). It has two steps:
+
+1. **Check formatting** — a non-mutating dry run that lists which Claude files (e.g. `CLAUDE.md`, `.claude/settings.json`) would be rewritten. Safe to run anytime; nothing is changed.
+2. **Apply** — appears only when the check found files to format. Each target file is **backed up to Config History before it is rewritten**, so every format is reversible from the [Config History](config-history.md) tab. Apply only ever runs on this explicit click — formatting never happens automatically during a scan.
+
+After Apply, the control reports which files actually changed. Files the formatter left untouched have their redundant backup rolled back automatically. Because the formatter delegates to prettier, JSON-with-comments (JSONC) files keep their comments and trailing commas — there is no lossy parse-and-reserialize.
+
 ## Engine
 
 Config Lint uses a three-pass engine:

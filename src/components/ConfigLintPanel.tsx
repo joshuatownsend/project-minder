@@ -1,12 +1,22 @@
 "use client";
 
-import type { LintReport, LintFinding, LintTarget, AuditFindingSeverity } from "@/lib/types";
+import { useState } from "react";
+import type {
+  LintReport,
+  LintFinding,
+  LintTarget,
+  AuditFindingSeverity,
+  FormatFileResult,
+} from "@/lib/types";
 import { pluralize } from "@/lib/utils";
 import { FindingCard } from "./ui/FindingCard";
-import { severityTokens, type SeverityTone } from "./ui/design";
+import { severityTokens, ErrorBanner, type SeverityTone } from "./ui/design";
 
 interface Props {
   report: LintReport;
+  /** When provided, enables the formatter control (Check / Apply). Absent in
+   *  read-only contexts where the project path can't be resolved. */
+  projectSlug?: string;
 }
 
 const TARGET_LABEL: Record<LintTarget, string> = {
@@ -159,7 +169,185 @@ function TargetGroup({ target, findings }: { target: LintTarget; findings: LintF
   );
 }
 
-export function ConfigLintPanel({ report }: Props) {
+/** Strict-gate state: green PASS when no P0/P1, red FAIL otherwise. Reads the
+ *  single authoritative `report.hasBlocking` flag rather than re-deriving. */
+function StrictBadge({ hasBlocking }: { hasBlocking: boolean }) {
+  const tone = hasBlocking
+    ? severityTokens.crit
+    : { text: "var(--good)", bg: "var(--good-soft)", border: "var(--good-line)" };
+  return (
+    <span
+      title={
+        hasBlocking
+          ? "Strict gate: FAIL — at least one P0/P1 finding blocks this config."
+          : "Strict gate: PASS — no P0/P1 findings."
+      }
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: "0.62rem",
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        padding: "1px 6px",
+        borderRadius: "var(--radius-sm)",
+        color: tone.text,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+      }}
+    >
+      STRICT: {hasBlocking ? "FAIL" : "PASS"}
+    </span>
+  );
+}
+
+type FormatPhase = "idle" | "checking" | "checked" | "applying" | "applied";
+
+/** Formatter control: a non-mutating Check, then an explicit Apply that
+ *  backs up each file (revertable from Config History) before rewriting via
+ *  `claudelint format`. Apply only ever runs on this button click — never on
+ *  scan. */
+function FormatterControl({ projectSlug }: { projectSlug: string }) {
+  const [phase, setPhase] = useState<FormatPhase>("idle");
+  const [files, setFiles] = useState<string[]>([]);
+  const [applied, setApplied] = useState<FormatFileResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const endpoint = `/api/config-lint/${projectSlug}/format`;
+
+  // Single owner of the POST + error-extraction; throws on failure so each
+  // caller only has to describe its own success/revert transition.
+  async function postFormat(mode: "check" | "apply") {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.engineError) {
+      throw new Error(data.error ?? data.engineError ?? `Format ${mode} failed`);
+    }
+    return data;
+  }
+
+  async function runCheck() {
+    setPhase("checking");
+    setError(null);
+    try {
+      const data = await postFormat("check");
+      setFiles(data.filesNeedingFormat ?? []);
+      setPhase("checked");
+    } catch (e) {
+      setError(String(e));
+      setPhase("idle");
+    }
+  }
+
+  async function runApply() {
+    setPhase("applying");
+    setError(null);
+    try {
+      const data = await postFormat("apply");
+      setApplied(data.formatted ?? []);
+      setPhase("applied");
+    } catch (e) {
+      setError(String(e));
+      setPhase("checked");
+    }
+  }
+
+  const btnStyle: React.CSSProperties = {
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.72rem",
+    fontWeight: 600,
+    padding: "4px 10px",
+    borderRadius: "var(--radius-sm)",
+    background: "var(--card-bg)",
+    border: "1px solid var(--border)",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+  };
+
+  const changedCount = applied.filter((f) => f.changed).length;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        padding: "10px 14px",
+        background: "var(--card-bg)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+          Formatter
+        </span>
+        <button
+          type="button"
+          onClick={runCheck}
+          disabled={phase === "checking" || phase === "applying"}
+          style={btnStyle}
+        >
+          {phase === "checking" ? "Checking…" : "Check formatting"}
+        </button>
+        {phase === "checked" && files.length > 0 && (
+          <button
+            type="button"
+            onClick={runApply}
+            style={{ ...btnStyle, color: severityTokens.high.text, borderColor: severityTokens.high.border }}
+          >
+            Apply to {pluralize(files.length, "file")}
+          </button>
+        )}
+        <span
+          style={{
+            marginLeft: "auto",
+            fontSize: "0.7rem",
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-muted)",
+          }}
+        >
+          {phase === "checked" &&
+            (files.length === 0 ? "All files formatted ✓" : `${pluralize(files.length, "file")} need formatting`)}
+          {phase === "applying" && "Applying…"}
+          {phase === "applied" &&
+            (changedCount === 0
+              ? "No changes were needed ✓"
+              : `Formatted ${pluralize(changedCount, "file")} — backed up, revert in Config History`)}
+        </span>
+      </div>
+
+      {(phase === "checked" && files.length > 0) && (
+        <ul style={{ margin: 0, paddingLeft: "18px" }}>
+          {files.map((f) => (
+            <li key={f} style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+              {f}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {phase === "applied" && changedCount > 0 && (
+        <ul style={{ margin: 0, paddingLeft: "18px" }}>
+          {applied.filter((f) => f.changed).map((f) => (
+            <li key={f.file} style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+              {f.file}
+              {f.backupId === null && (
+                <span style={{ color: severityTokens.high.text }}> (not backed up)</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error && <ErrorBanner message={error} />}
+    </div>
+  );
+}
+
+export function ConfigLintPanel({ report, projectSlug }: Props) {
   const { findings, totalCounts, engineErrors } = report;
 
   const byTarget = new Map<LintTarget, LintFinding[]>();
@@ -190,6 +378,7 @@ export function ConfigLintPanel({ report }: Props) {
         {SEVERITY_ORDER.map((sev) => (
           <SeverityChip key={sev} sev={sev} count={totalCounts[sev]} />
         ))}
+        <StrictBadge hasBlocking={report.hasBlocking} />
         <span
           style={{
             marginLeft: "auto",
@@ -202,6 +391,8 @@ export function ConfigLintPanel({ report }: Props) {
           {pluralize(activeTargets.length, "surface")}
         </span>
       </div>
+
+      {projectSlug && <FormatterControl projectSlug={projectSlug} />}
 
       {activeTargets.length === 0 ? (
         <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: 0 }}>
