@@ -210,6 +210,87 @@ export interface ContributionCell {
   dayOfWeek: number;
 }
 
+// ── Period-over-period comparison ───────────────────────────────────────────
+// Scalar summary of one time window — the lean shape the Compare feature
+// diffs. Deliberately mirrors the five StatCells the UsageDashboard already
+// renders (cost / tokens / sessions+turns / cache-hit / 1-shot) so a delta is
+// shown only on numbers the user already knows, never a metric invented for
+// the compare. Computed by `queryPeriodSummary` (two aggregate queries), NOT
+// the full `loadUsageReportFromSql` — the full report's streak / calendar /
+// heatmap aggregates ignore the period filter and would be identical (and
+// meaningless) across both windows.
+export interface PeriodSummary {
+  cost: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  sessions: number;
+  turns: number;
+  cacheHitRate: number;
+  oneShotRate: number;
+  verifiedTasks: number;
+  oneShotTasks: number;
+}
+
+/** Inclusive-start, exclusive-end ISO bounds of a comparison window. */
+export interface TimeWindow {
+  start: string;
+  end: string;
+}
+
+/** One metric's current-vs-previous delta. `pct` is null when `previous` is
+ *  0 (the metric is "new" this period — a ratio would be +∞).
+ *
+ *  `basis` is true when the delta describes a real change. It's always true
+ *  for volume metrics (a 0 cost IS a measurement), but a *rate* metric whose
+ *  current or previous window measured nothing carries `basis: false` — its
+ *  0-fallback rate is absence, not a real 0%. Consumers must render a neutral
+ *  placeholder rather than a confident "↓-80pp" when `basis` is false. The
+ *  rule lives here, on the data, so every consumer (UI, export, MCP) inherits
+ *  it instead of re-deriving it. */
+export interface MetricDelta {
+  current: number;
+  previous: number;
+  absolute: number;
+  pct: number | null;
+  basis: boolean;
+}
+
+export interface ComparisonDeltas {
+  cost: MetricDelta;
+  tokens: MetricDelta;
+  sessions: MetricDelta;
+  cacheHitRate: MetricDelta;
+  oneShotRate: MetricDelta;
+}
+
+/**
+ * Period-over-period comparison: the current window vs the immediately
+ * preceding window of equal elapsed length.
+ *
+ * A discriminated union on `comparable` so the populated fields exist only
+ * when there's something to compare. `comparable: false` carries just the
+ * reason — emitted for "all" (no prior window), `MINDER_USE_DB=0`, and the
+ * v3-reconcile catch-up window (cost columns not yet populated).
+ */
+export type UsageComparison =
+  | {
+      comparable: true;
+      period: string;
+      current: PeriodSummary;
+      previous: PeriodSummary;
+      deltas: ComparisonDeltas;
+      currentWindow: TimeWindow;
+      previousWindow: TimeWindow;
+    }
+  | {
+      comparable: false;
+      period: string;
+      reason: string;
+    };
+
 export interface UsageReport {
   period: string;
   totalCost: number;

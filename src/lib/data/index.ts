@@ -7,6 +7,8 @@ import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
 import {
   loadUsageReportFromSql,
+  compareUsageFromSql,
+  buildNotComparable,
   getDbMaxMtimeMs,
   needsReconcileAfterV3,
 } from "./usageFromDb";
@@ -22,7 +24,7 @@ import type {
 } from "./sessionSearch";
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
-import type { UsageReport, AgentStats, SkillStats } from "@/lib/usage/types";
+import type { UsageReport, AgentStats, SkillStats, UsageComparison } from "@/lib/usage/types";
 import { getPeriodStart } from "@/lib/usage/periods";
 import type { Period } from "@/lib/usage/constants";
 import type { AggregatorPeriod } from "@/lib/usage/period";
@@ -556,6 +558,61 @@ export async function getUsage(
   );
   if (!project) await augmentPortfolioYield(report);
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+}
+
+export interface UsageCompareResult {
+  comparison: UsageComparison;
+  meta: UsageBackendMeta;
+}
+
+/**
+ * Period-over-period comparison (item 4a). SQL-only — there is no file-parse
+ * compare path, so this degrades to a `comparable: false` result rather than
+ * falling back:
+ *
+ * - `MINDER_USE_DB=0`: not comparable (comparison requires the SQL backend).
+ * - DB mode + v3-catch-up: not comparable (cost columns not yet populated —
+ *   running anyway would report misleading ~0 cost deltas).
+ * - DB mode + healthy DB: SQL-backed `compareUsageFromSql`.
+ * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
+ *
+ * "all" likewise resolves to `comparable: false` (no prior window) — that
+ * case is handled inside `compareUsageFromSql`.
+ */
+export async function getUsageCompare(
+  period: string,
+  project?: string,
+  source?: string
+): Promise<UsageCompareResult> {
+  if (!dbModeRequested()) {
+    return {
+      comparison: buildNotComparable(
+        period,
+        "Period comparison requires the SQLite backend (MINDER_USE_DB is off)."
+      ),
+      meta: { backend: "file", maxMtimeMs: 0 },
+    };
+  }
+
+  const db = await getReadyDb();
+  if (await checkV3Gate("getUsageCompare", db)) {
+    logIntentionalFallthrough(
+      "getUsageCompare",
+      "DB awaiting v3 reconcile (cost_usd not yet populated — comparison suppressed)"
+    );
+    return {
+      comparison: buildNotComparable(
+        period,
+        "Period comparison is unavailable while the index finishes building."
+      ),
+      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
+    };
+  }
+
+  const comparison = await callDbLoader("getUsageCompare", () =>
+    compareUsageFromSql(db, period, project, source)
+  );
+  return { comparison, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 
 export interface SessionDetailResult {

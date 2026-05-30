@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useUsage } from "@/hooks/useUsage";
+import { useUsageCompare } from "@/hooks/useUsageCompare";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCell } from "@/components/ui/StatCell";
 
@@ -11,8 +12,14 @@ const ToolExecutionFlow = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-72" /> }
 );
 import { VALID_PERIODS } from "@/lib/usage/constants";
-import type { CategoryType, ProjectDetail, PortfolioYield } from "@/lib/usage/types";
-import { Download, Layers, AlignJustify } from "lucide-react";
+import type {
+  CategoryType,
+  ProjectDetail,
+  PortfolioYield,
+  UsageComparison,
+  MetricDelta,
+} from "@/lib/usage/types";
+import { Download, Layers, AlignJustify, GitCompare, ArrowUp, ArrowDown, Minus } from "lucide-react";
 import { FeedbackAggregate } from "./FeedbackAggregate";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { HourlyDistributionChart } from "./HourlyDistributionChart";
@@ -20,7 +27,7 @@ import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
 import { ShareButton } from "./ShareButton";
 
-import { formatCost, formatCostCompact, formatTokens } from "@/lib/format";
+import { formatCost, formatCostCompact, formatTokens, formatPct } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 
 // ── Project name decode ────────────────────────────────────────────────────
@@ -501,14 +508,182 @@ function ChartLabel({ children }: { children: import("react").ReactNode }) {
   );
 }
 
+// ── Period-over-period compare strip ────────────────────────────────────────
+
+// A delta chip: arrow + magnitude, colored by tone. `mode` controls how the
+// magnitude reads — "ratio" shows relative % (volume metrics), "points" shows
+// the percentage-point change (rate metrics, where 50%→60% is +10pp, not
+// +20%). `tone: "quality"` colors up=good / down=bad; "neutral" stays muted
+// because more cost / more tokens is neither inherently good nor bad.
+function DeltaChip({ delta, mode, tone }: {
+  delta: MetricDelta;
+  mode: "ratio" | "points";
+  tone: "quality" | "neutral";
+}) {
+  // A delta with no measurement basis (a rate metric whose current or previous
+  // window measured nothing) would render a confident "↓-80pp" next to a "—"
+  // value, contradicting itself. The basis flag is computed on the data layer
+  // (`metricDelta`) so every consumer honors it; here we just show a dash.
+  if (!delta.basis) {
+    return (
+      <span style={{
+        display: "inline-flex", alignItems: "center",
+        fontFamily: "var(--font-mono)", fontSize: "0.66rem", color: "var(--text-muted)",
+      }}>
+        <Minus style={{ width: "10px", height: "10px" }} />
+      </span>
+    );
+  }
+  const dir = delta.absolute > 0 ? "up" : delta.absolute < 0 ? "down" : "flat";
+  const Icon = dir === "up" ? ArrowUp : dir === "down" ? ArrowDown : Minus;
+
+  let color = "var(--text-muted)";
+  if (tone === "quality" && dir !== "flat") {
+    color = dir === "up" ? "var(--status-active-text)" : "var(--status-error-text)";
+  } else if (tone === "neutral" && dir !== "flat") {
+    color = "var(--text-secondary)";
+  }
+
+  let label: string;
+  if (mode === "points") {
+    // Rate metric — show the percentage-point change.
+    const pp = delta.absolute * 100;
+    label = `${pp > 0 ? "+" : ""}${pp.toFixed(0)}pp`;
+  } else if (delta.pct === null) {
+    // No prior value — the metric is new this period.
+    label = delta.previous === 0 && delta.current === 0 ? "—" : "new";
+  } else {
+    const pct = delta.pct * 100;
+    label = `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`;
+  }
+
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "2px",
+      fontFamily: "var(--font-mono)", fontSize: "0.66rem", color,
+    }}>
+      <Icon style={{ width: "10px", height: "10px" }} />
+      {label}
+    </span>
+  );
+}
+
+function CompareCell({ label, value, delta, mode, tone, prev, last }: {
+  label: string;
+  value: string;
+  delta: MetricDelta;
+  mode: "ratio" | "points";
+  tone: "quality" | "neutral";
+  prev: string;
+  last?: boolean;
+}) {
+  return (
+    <div style={{
+      flex: "1 1 0", minWidth: "120px", padding: "10px 14px",
+      borderRight: last ? "none" : "1px solid var(--border-subtle)",
+      display: "flex", flexDirection: "column", gap: "3px",
+    }}>
+      <span style={{
+        fontSize: "0.58rem", fontWeight: 600, letterSpacing: "0.08em",
+        textTransform: "uppercase", color: "var(--text-muted)", fontFamily: "var(--font-body)",
+      }}>
+        {label}
+      </span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "7px" }}>
+        <span style={{ fontSize: "0.95rem", fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
+          {value}
+        </span>
+        <DeltaChip delta={delta} mode={mode} tone={tone} />
+      </div>
+      <span style={{ fontSize: "0.6rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+        was {prev}
+      </span>
+    </div>
+  );
+}
+
+function ComparePanel({ comparison, currency, fxRate }: {
+  comparison: UsageComparison;
+  currency: string;
+  fxRate: number;
+}) {
+  if (!comparison.comparable) {
+    return (
+      <div style={{
+        padding: "10px 14px", fontSize: "0.72rem", color: "var(--text-muted)",
+        fontFamily: "var(--font-body)",
+        background: "var(--bg-surface)", border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+      }}>
+        {comparison.reason}
+      </div>
+    );
+  }
+
+  // Rate-delta suppression (no measurement basis) now rides on `delta.basis`
+  // from the data layer — DeltaChip honors it, so the panel just renders.
+  const { current, previous, deltas } = comparison;
+  const oneShotValue = current.verifiedTasks > 0 ? formatPct(current.oneShotRate) : "—";
+  const oneShotPrev = previous.verifiedTasks > 0 ? formatPct(previous.oneShotRate) : "—";
+
+  return (
+    <div>
+      <SectionHeader label={`vs Previous Period`} />
+      <div style={{
+        display: "flex", flexWrap: "wrap",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+      }}>
+        <CompareCell
+          label="Total Cost" mode="ratio" tone="neutral"
+          value={formatCost(current.cost, currency, fxRate)}
+          prev={formatCost(previous.cost, currency, fxRate)}
+          delta={deltas.cost}
+        />
+        <CompareCell
+          label="Tokens" mode="ratio" tone="neutral"
+          value={formatTokens(current.tokens)}
+          prev={formatTokens(previous.tokens)}
+          delta={deltas.tokens}
+        />
+        <CompareCell
+          label="Sessions" mode="ratio" tone="neutral"
+          value={String(current.sessions)}
+          prev={String(previous.sessions)}
+          delta={deltas.sessions}
+        />
+        <CompareCell
+          label="Cache Hit" mode="points" tone="quality"
+          value={formatPct(current.cacheHitRate)}
+          prev={formatPct(previous.cacheHitRate)}
+          delta={deltas.cacheHitRate}
+        />
+        <CompareCell
+          label="1-Shot Rate" mode="points" tone="quality"
+          value={oneShotValue}
+          prev={oneShotPrev}
+          delta={deltas.oneShotRate}
+          last
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 
 export function UsageDashboard() {
   const [period, setPeriod] = useState<string>("30d");
   const [project, setProject] = useState<string | undefined>(undefined);
   const [breakdownMode, setBreakdownMode] = useState<"aggregate" | "by-project">("aggregate");
+  const [compare, setCompare] = useState(false);
   const { data, loading } = useUsage(period, project);
   const { currency, fxRate } = useCurrency();
+  // "all" has no prior window — keep the fetch gated off rather than firing a
+  // request that always returns comparable:false.
+  const compareEnabled = compare && period !== "all";
+  const { data: compareData } = useUsageCompare(period, project, compareEnabled);
   const { data: allData } = useUsage(period);
   const availableProjects = allData?.byProject ?? data?.byProject ?? [];
 
@@ -646,6 +821,30 @@ export function UsageDashboard() {
           </div>
         )}
 
+        {/* Compare toggle — period-over-period deltas. Hidden for "all"
+            (no prior window to compare against). */}
+        {period !== "all" && (
+          <button
+            onClick={() => setCompare((c) => !c)}
+            title="Compare with the previous period"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "5px",
+              padding: "5px 10px",
+              fontSize: "0.71rem", fontFamily: "var(--font-body)",
+              color: compare ? "var(--text-primary)" : "var(--text-secondary)",
+              background: compare ? "var(--bg-elevated)" : "var(--bg-surface)",
+              border: "1px solid",
+              borderColor: compare ? "var(--border-default)" : "var(--border-subtle)",
+              borderRadius: "var(--radius)",
+              cursor: "pointer", lineHeight: 1,
+              transition: "color 0.1s, background 0.1s, border-color 0.1s",
+            }}
+          >
+            <GitCompare style={{ width: "11px", height: "11px" }} />
+            Compare
+          </button>
+        )}
+
         {/* Share button */}
         <ShareButton period={period} project={project} />
 
@@ -702,6 +901,11 @@ export function UsageDashboard() {
       {/* ── Main content ─────────────────────────────────────────────────── */}
       {data && !loading && (
         <>
+          {/* Period-over-period comparison (toggle in header) */}
+          {compareEnabled && compareData && (
+            <ComparePanel comparison={compareData} currency={currency} fxRate={fxRate} />
+          )}
+
           {/* Stats strip */}
           <div style={{
             display: "flex", flexWrap: "wrap",

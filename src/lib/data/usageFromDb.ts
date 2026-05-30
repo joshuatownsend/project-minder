@@ -10,6 +10,9 @@ import type {
   ProjectDetail,
   McpServerStats,
   SourceBreakdown,
+  PeriodSummary,
+  MetricDelta,
+  UsageComparison,
 } from "@/lib/usage/types";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
@@ -549,4 +552,169 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
     mcpServers: mcpBySlug.get(h.projectSlug)?.servers ?? [],
     mcpCalls: mcpBySlug.get(h.projectSlug)?.calls ?? 0,
   }));
+}
+
+// ── Period-over-period comparison ───────────────────────────────────────────
+// Item 4a: current window vs the immediately preceding window of equal
+// *elapsed* length. The elapsed-duration framing (rather than nominal period
+// length) is what makes "today" honest: at 9am it compares the last ~9h to
+// the 9h before midnight, not a partial day against a full one. For rolling
+// windows (24h/7d/30d) elapsed == nominal length so the math is unchanged.
+//
+// Pure SQL over already-indexed columns — no schema change. Uses a focused
+// two-query summary per window (`queryPeriodSummary`), NOT `loadUsageReport-
+// FromSql`: the full report has no upper-bound filter and computes full-
+// history activity/streak/calendar aggregates that are meaningless in a
+// bounded compare.
+
+/** Inclusive-start, exclusive-end window plus the project/source filter. */
+interface WindowParams {
+  start: string;
+  end: string;
+  project: string | null;
+  source: string | null;
+}
+
+interface SummaryAggRow {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_create_tokens: number;
+  cache_read_tokens: number;
+  assistant_turns: number;
+}
+
+/**
+ * Scalar usage summary for one bounded [start, end) window. Three small
+ * aggregate queries (turn rollup, distinct sessions, one-shot rollup) — the
+ * same shape `queryTotals` + `queryOneShot` produce for the full report, but
+ * with an upper bound so a *previous* window can be isolated.
+ */
+function queryPeriodSummary(db: DatabaseT.Database, w: WindowParams): PeriodSummary {
+  const a = prepCached(db,
+      `SELECT
+         COALESCE(SUM(t.cost_usd), 0)            AS cost_usd,
+         COALESCE(SUM(t.input_tokens), 0)        AS input_tokens,
+         COALESCE(SUM(t.output_tokens), 0)       AS output_tokens,
+         COALESCE(SUM(t.cache_create_tokens), 0) AS cache_create_tokens,
+         COALESCE(SUM(t.cache_read_tokens), 0)   AS cache_read_tokens,
+         COUNT(*)                                AS assistant_turns
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.ts >= @start AND t.ts < @end
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
+    )
+    .get(w) as SummaryAggRow;
+  const sRow = prepCached(db,
+      `SELECT COUNT(DISTINCT t.session_id) AS sessions
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.ts >= @start AND t.ts < @end
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
+    )
+    .get(w) as { sessions: number };
+  const osRow = prepCached(db,
+      `SELECT
+         COALESCE(SUM(verified_task_count), 0) AS verified,
+         COALESCE(SUM(one_shot_task_count), 0) AS oneShot
+       FROM sessions
+       WHERE end_ts >= @start AND end_ts < @end
+         AND (@project IS NULL OR project_slug = @project)
+         AND (@source IS NULL OR source = @source)`
+    )
+    .get(w) as { verified: number; oneShot: number };
+
+  const tokens =
+    a.input_tokens + a.output_tokens + a.cache_create_tokens + a.cache_read_tokens;
+  const cacheHitDenominator = a.cache_read_tokens + a.input_tokens;
+  return {
+    cost: a.cost_usd,
+    tokens,
+    inputTokens: a.input_tokens,
+    outputTokens: a.output_tokens,
+    cacheReadTokens: a.cache_read_tokens,
+    cacheCreateTokens: a.cache_create_tokens,
+    sessions: sRow.sessions,
+    turns: a.assistant_turns,
+    cacheHitRate: cacheHitDenominator > 0 ? a.cache_read_tokens / cacheHitDenominator : 0,
+    verifiedTasks: osRow.verified,
+    oneShotTasks: osRow.oneShot,
+    oneShotRate: osRow.verified > 0 ? osRow.oneShot / osRow.verified : 0,
+  };
+}
+
+/** current − previous, with `pct` left null when previous is 0 (a ratio
+ *  would be +∞ — the UI renders this as a "new" badge instead of a number). */
+function metricDelta(current: number, previous: number, basis = true): MetricDelta {
+  return {
+    current,
+    previous,
+    absolute: current - previous,
+    pct: previous !== 0 ? (current - previous) / previous : null,
+    basis,
+  };
+}
+
+/** A not-comparable result carrying only the period + reason. Shared by the
+ *  "all" case here and the no-DB / v3-catch-up cases in the data façade so
+ *  every caller emits the same shape. */
+export function buildNotComparable(period: string, reason: string): UsageComparison {
+  return { comparable: false, period, reason };
+}
+
+/**
+ * Build a period-over-period `UsageComparison` from SQL aggregates. `now` is
+ * injectable so both window bounds derive from a single instant (tests pin it;
+ * production omits it). Returns a not-comparable result for "all" — there is
+ * no window before all-time.
+ */
+export function compareUsageFromSql(
+  db: DatabaseT.Database,
+  period: string,
+  project?: string,
+  source?: string,
+  now: Date = new Date()
+): UsageComparison {
+  const periodStart = periodStartIso(period, now);
+  if (periodStart === null) {
+    return buildNotComparable(period, "Select a bounded period (24h, 7d, or 30d) to compare against the one before it.");
+  }
+
+  const nowMs = now.getTime();
+  const elapsedMs = nowMs - new Date(periodStart).getTime();
+  const currentWindow = { start: periodStart, end: now.toISOString() };
+  const previousWindow = {
+    start: new Date(nowMs - 2 * elapsedMs).toISOString(),
+    end: periodStart,
+  };
+
+  const filter = { project: project ?? null, source: source ?? null };
+  const current = queryPeriodSummary(db, { ...currentWindow, ...filter });
+  const previous = queryPeriodSummary(db, { ...previousWindow, ...filter });
+
+  // Rate metrics only have a basis when BOTH windows actually measured the
+  // rate — otherwise the 0-fallback for an empty window reads as a real
+  // regression/improvement. Cache-hit's denominator is (input + cacheRead)
+  // tokens; one-shot's is verified tasks. Volume metrics need no guard.
+  const cacheBasis =
+    current.inputTokens + current.cacheReadTokens > 0 &&
+    previous.inputTokens + previous.cacheReadTokens > 0;
+  const oneShotBasis = current.verifiedTasks > 0 && previous.verifiedTasks > 0;
+
+  return {
+    comparable: true,
+    period,
+    current,
+    previous,
+    currentWindow,
+    previousWindow,
+    deltas: {
+      cost: metricDelta(current.cost, previous.cost),
+      tokens: metricDelta(current.tokens, previous.tokens),
+      sessions: metricDelta(current.sessions, previous.sessions),
+      cacheHitRate: metricDelta(current.cacheHitRate, previous.cacheHitRate, cacheBasis),
+      oneShotRate: metricDelta(current.oneShotRate, previous.oneShotRate, oneShotBasis),
+    },
+  };
 }
