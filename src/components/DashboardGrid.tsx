@@ -20,6 +20,7 @@ import { isShortcutMatch } from "@/lib/keyboardShortcuts";
 import { usePathname } from "next/navigation";
 import { formatRelativeTime } from "@/lib/utils";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
+import type { GradeTrend } from "@/lib/data/gradeSnapshots";
 
 type SortOption = "activity" | "name" | "claude";
 type ViewMode = "full" | "compact" | "list";
@@ -38,6 +39,7 @@ interface DashboardGridProps {
   scannedAt?: string;
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
   efficiencyGrades?: Record<string, EfficiencyGrade>;
+  efficiencyTrends?: Record<string, GradeTrend>;
 }
 
 const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };
@@ -70,6 +72,7 @@ export function DashboardGrid({
   scannedAt,
   gitDirtyOverrides,
   efficiencyGrades,
+  efficiencyTrends,
 }: DashboardGridProps) {
   const [search, setSearch]               = useState("");
   const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
@@ -540,6 +543,7 @@ export function DashboardGrid({
               pinned={pinnedSlugs.includes(project.slug)}
               onTogglePin={onTogglePin}
               efficiencyGrade={efficiencyGrades?.[project.slug]}
+              efficiencyTrend={efficiencyTrends?.[project.slug]}
             />
           ))}
           {filtered.length === 0 && (

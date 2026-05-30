@@ -95,7 +95,7 @@ Shows your Claude session history for this project:
 
 Appears when the project has Claude sessions. Shows three analytics panels:
 
-- **Waste Optimizer** — grades the project A–F and lists up to 5 findings: junk-directory reads, duplicate reads, unused MCP servers, ghost agent/skill capabilities, and low read/edit ratio. Each finding includes a severity level and actionable detail.
+- **Waste Optimizer** — grades the project A–F and lists up to 5 findings: junk-directory reads, duplicate reads, unused MCP servers, ghost agent/skill capabilities, and low read/edit ratio. Each finding includes a severity level and actionable detail. A **trend badge** beside the grade shows whether the grade has improved, declined, or stayed stable since the most recent earlier day on which the grade was recorded (`↑ improving` / `↓ declining` / `= stable` / `• new`). Trends populate over time as daily grade snapshots accumulate — a brand-new project, or the first day of tracking, shows **new**. The same movement appears as a small green ↑ / red ↓ arrow next to the grade letter on the dashboard project cards. (Grade snapshots and trends require the SQLite backend; with it disabled the grade still shows, just without a trend.)
 - **Session Yield** — classifies sessions as Productive, Reverted, or Abandoned by aligning session intervals with the main-branch commit log. Displays yield rate, total sessions analysed, and cost-per-shipped-commit when session cost data is available.
 - **By Work Mode** — colour-coded strip and percentage breakdown of how the project's assistant turns were classified across the four work modes (Exploration, Building, Testing, Other). Matches the per-session strips shown in the Sessions browser.
 

@@ -451,6 +451,30 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 16,
+    name: "item4b: project_grade_snapshots table for daily efficiency-grade trends",
+    up: (db) => {
+      // Idempotent IF NOT EXISTS — fresh DBs already have this table from
+      // v1's schema.sql; only DBs upgraded from <16 need the create. The
+      // composite PK (project_slug, snapshot_date) doubles as the index for
+      // the "most-recent snapshot before today" trend lookup, so no separate
+      // index is needed. No DERIVED_VERSION bump: snapshots are forward-only
+      // (trend history accrues from first run, never backfilled).
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS project_grade_snapshots (
+          project_slug   TEXT NOT NULL,
+          snapshot_date  TEXT NOT NULL,
+          grade          TEXT NOT NULL,
+          high_count     INTEGER NOT NULL DEFAULT 0,
+          med_count      INTEGER NOT NULL DEFAULT 0,
+          low_count      INTEGER NOT NULL DEFAULT 0,
+          created_at_ms  INTEGER NOT NULL,
+          PRIMARY KEY (project_slug, snapshot_date)
+        ) WITHOUT ROWID
+      `).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

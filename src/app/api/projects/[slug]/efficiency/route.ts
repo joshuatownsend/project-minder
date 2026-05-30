@@ -9,6 +9,7 @@ import { loadCatalog } from "@/lib/indexer/catalog";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
+import { recordGradeSnapshot, loadGradeTrend, type GradeTrend } from "@/lib/data/gradeSnapshots";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
@@ -26,6 +27,9 @@ interface EfficiencyResponse {
   waste: WasteOptimizerInfo;
   yieldReport: YieldResult;
   workMode: WorkModeDistribution;
+  /** Grade movement vs the most-recent prior-day snapshot (item 4b). null
+   *  when the DB is unavailable (render no trend indicator). */
+  trend: GradeTrend | null;
   generatedAt: string;
 }
 
@@ -108,11 +112,20 @@ export async function GET(
       .map((t) => ({ category: classifyTurn(t) }))
   );
 
+  // Record today's snapshot for this project, then classify the trend against
+  // the most-recent prior-day snapshot. Both are best-effort (no-op / null
+  // when the DB is unavailable) and never block the report. The write happens
+  // BEFORE the trend read, which queries snapshot_date < today — so today's
+  // just-written row can't pollute its own trend.
+  await recordGradeSnapshot({ slug, grade: waste.grade, counts: waste.counts });
+  const trend = await loadGradeTrend(slug, waste.grade);
+
   const data: EfficiencyResponse = {
     slug,
     waste,
     yieldReport,
     workMode,
+    trend,
     generatedAt: new Date().toISOString(),
   };
   cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });

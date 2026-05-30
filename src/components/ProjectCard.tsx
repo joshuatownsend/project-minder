@@ -16,13 +16,14 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "./ui/dropdown-menu";
-import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers, Zap } from "lucide-react";
+import { Archive, Database, MoreVertical, CheckSquare, ClipboardList, Lightbulb, Pin, PinOff, Layers, Zap, ArrowUp, ArrowDown } from "lucide-react";
 import { MarkAsTemplateModal } from "./MarkAsTemplateModal";
 import { SwarmComposer } from "./SwarmComposer";
 import { StatusDot } from "./ui/StatusDot";
 import { usePulse } from "./PulseProvider";
 import { ClaudeMdHealthBadge } from "./ClaudeMdAuditPanel";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
+import type { GradeTrend } from "@/lib/data/gradeSnapshots";
 
 function LiveStatusBadge({
   isLive,
@@ -96,6 +97,29 @@ interface ProjectCardProps {
   pinned?: boolean;
   onTogglePin?: (slug: string) => void;
   efficiencyGrade?: EfficiencyGrade;
+  efficiencyTrend?: GradeTrend;
+}
+
+// Trend arrow shown next to the efficiency grade (item 4b). Only the
+// actionable letter-movement signals render — improving (↑ green) and
+// declining (↓ red); "stable" and "new" show nothing to keep the card glance
+// uncluttered. Because the trend is grade-LETTER movement, an arrow always
+// accompanies a letter that just changed (e.g. ↑ next to a fresh "C" means
+// "was D"), so it never contradicts the letter beside it.
+function GradeTrendArrow({ trend }: { trend?: GradeTrend }) {
+  if (trend !== "improving" && trend !== "declining") return null;
+  const improving = trend === "improving";
+  const Icon = improving ? ArrowUp : ArrowDown;
+  return (
+    <Icon
+      aria-label={improving ? "grade improving" : "grade declining"}
+      style={{
+        width: "10px",
+        height: "10px",
+        color: improving ? "var(--status-active-text)" : "var(--status-error-text)",
+      }}
+    />
+  );
 }
 
 const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }> = {
@@ -106,7 +130,7 @@ const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }>
   F: { color: "var(--status-error-text)",  bg: "var(--status-error-bg)",  border: "var(--status-error-border)"  },
 };
 
-export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade }: ProjectCardProps) {
+export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade, efficiencyTrend }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
@@ -225,14 +249,22 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             )}
             {efficiencyGrade && GRADE_STYLE[efficiencyGrade] && (
               <span
-                title={`Efficiency grade: ${efficiencyGrade}`}
+                title={
+                  efficiencyTrend === "improving"
+                    ? `Efficiency grade: ${efficiencyGrade} (improving vs the previous snapshot)`
+                    : efficiencyTrend === "declining"
+                      ? `Efficiency grade: ${efficiencyGrade} (declining vs the previous snapshot)`
+                      : `Efficiency grade: ${efficiencyGrade}`
+                }
                 style={{
+                  display: "inline-flex", alignItems: "center", gap: "1px",
                   fontSize: "0.6rem", fontFamily: "var(--font-mono)", fontWeight: 700,
                   color: GRADE_STYLE[efficiencyGrade].color,
                   cursor: "default",
                 }}
               >
                 {efficiencyGrade}
+                <GradeTrendArrow trend={efficiencyTrend} />
               </span>
             )}
             <StatusBadge status={project.status} />
@@ -432,9 +464,15 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
             )}
             {gradeStyle && efficiencyGrade && (
               <span
-                title={`Efficiency grade: ${efficiencyGrade} — view Efficiency tab for details`}
+                title={
+                  efficiencyTrend === "improving"
+                    ? `Efficiency grade: ${efficiencyGrade} (improving vs the previous snapshot) — view Efficiency tab`
+                    : efficiencyTrend === "declining"
+                      ? `Efficiency grade: ${efficiencyGrade} (declining vs the previous snapshot) — view Efficiency tab`
+                      : `Efficiency grade: ${efficiencyGrade} — view Efficiency tab for details`
+                }
                 style={{
-                  display: "inline-flex", alignItems: "center",
+                  display: "inline-flex", alignItems: "center", gap: "2px",
                   fontSize: "0.72rem", fontWeight: 700, fontFamily: "var(--font-mono)",
                   color: gradeStyle.color, background: gradeStyle.bg,
                   border: `1px solid ${gradeStyle.border}`,
@@ -443,6 +481,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 }}
               >
                 {efficiencyGrade}
+                <GradeTrendArrow trend={efficiencyTrend} />
               </span>
             )}
             {pendingTodos > 0 && (

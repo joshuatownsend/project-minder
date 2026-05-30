@@ -20,7 +20,7 @@ export default function ProjectsPage() {
   useDocumentTitle("Projects");
   const { data, loading, rescan, archiveProject, unarchiveProject } = useProjects();
   const { statuses } = useGitDirtyStatus();
-  const { grades } = useEfficiencyGrades();
+  const { grades, trends } = useEfficiencyGrades();
   const [taskDispatcherEnabled, setTaskDispatcherEnabled] = useState(false);
 
   useEffect(() => {
@@ -45,6 +45,7 @@ export default function ProjectsPage() {
         scannedAt={data?.scannedAt}
         gitDirtyOverrides={statuses}
         efficiencyGrades={grades}
+        efficiencyTrends={trends}
       />
     </div>
   );

@@ -2,9 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
+import type { GradeTrend } from "@/lib/data/gradeSnapshots";
 
 interface GradesResponse {
   grades: Record<string, EfficiencyGrade>;
+  trends?: Record<string, GradeTrend>;
   pending: number;
   total: number;
 }
@@ -13,6 +15,7 @@ const POLL_INTERVAL = 5000;
 
 export function useEfficiencyGrades() {
   const [grades, setGrades] = useState<Record<string, EfficiencyGrade>>({});
+  const [trends, setTrends] = useState<Record<string, GradeTrend>>({});
   const [pending, setPending] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -26,6 +29,7 @@ export function useEfficiencyGrades() {
         if (!res.ok) return;
         const data: GradesResponse = await res.json();
         setGrades(data.grades);
+        setTrends(data.trends ?? {});
         setPending(data.pending);
 
         if (data.pending === 0 && data.total > 0 && intervalRef.current) {
@@ -46,5 +50,5 @@ export function useEfficiencyGrades() {
     };
   }, []);
 
-  return { grades, pending };
+  return { grades, trends, pending };
 }

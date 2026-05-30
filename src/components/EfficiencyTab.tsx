@@ -10,6 +10,7 @@ import type {
   WasteGrade,
 } from "@/lib/scanner/wasteOptimizer";
 import type { YieldResult, YieldOutcome } from "@/lib/usage/yieldAnalysis";
+import type { GradeTrend } from "@/lib/data/gradeSnapshots";
 import { WORK_MODE_DISPLAY, workModeToSegments, type WorkMode, type WorkModeBreakdown } from "@/lib/usage/workMode";
 import { formatCost, formatPct, formatTokensOrDash } from "@/lib/format";
 import { FindingCard } from "./ui/FindingCard";
@@ -34,7 +35,33 @@ interface EfficiencyResponse {
   waste: WasteOptimizerInfo;
   yieldReport: YieldResult;
   workMode?: WorkModeBreakdown;
+  trend?: GradeTrend | null;
   generatedAt: string;
+}
+
+// Trend chip beside the grade (item 4b). The detail view has room to label
+// all four states (the dashboard card shows only the improving/declining
+// arrows); both read the same grade-letter trend, so they never disagree.
+function TrendBadge({ trend }: { trend?: GradeTrend | null }) {
+  if (!trend) return null;
+  const STYLE: Record<GradeTrend, { label: string; color: string }> = {
+    improving: { label: "↑ improving", color: "var(--status-active-text)" },
+    declining: { label: "↓ declining", color: "var(--status-error-text)" },
+    stable: { label: "= stable", color: "var(--text-muted)" },
+    new: { label: "• new", color: "var(--text-muted)" },
+  };
+  const s = STYLE[trend];
+  return (
+    <span
+      title="Grade movement vs the most-recent prior-day snapshot"
+      style={{
+        fontFamily: "var(--font-mono)", fontSize: "0.62rem", fontWeight: 600,
+        color: s.color, letterSpacing: "0.04em",
+      }}
+    >
+      {s.label}
+    </span>
+  );
 }
 
 interface EfficiencyTabProps {
@@ -187,6 +214,7 @@ export function EfficiencyTab({ slug }: EfficiencyTabProps) {
             Waste optimizer
           </span>
           <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+          <TrendBadge trend={data.trend} />
           <span style={{
             display: "inline-flex", alignItems: "center", gap: "8px",
             padding: "4px 10px",
