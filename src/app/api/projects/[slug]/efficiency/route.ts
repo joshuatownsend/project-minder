@@ -117,8 +117,15 @@ export async function GET(
   // when the DB is unavailable) and never block the report. The write happens
   // BEFORE the trend read, which queries snapshot_date < today — so today's
   // just-written row can't pollute its own trend.
-  await recordGradeSnapshot({ slug, grade: waste.grade, counts: waste.counts });
-  const trend = await loadGradeTrend(slug, waste.grade);
+  //
+  // One `now` for BOTH calls: if the request crossed local midnight between
+  // them, separate `new Date()`s could write under yesterday's date while the
+  // read used today's — making the just-written row its own "prior" (a false
+  // self-comparison) and skipping the new day's snapshot. A single instant
+  // keeps the same-day exclusion invariant intact.
+  const now = new Date();
+  await recordGradeSnapshot({ slug, grade: waste.grade, counts: waste.counts }, now);
+  const trend = await loadGradeTrend(slug, waste.grade, now);
 
   const data: EfficiencyResponse = {
     slug,
