@@ -92,6 +92,30 @@ describe("redactConfig — value-shape backstop (secrets under innocent keys)", 
   });
 });
 
+describe("redactConfig — URL-embedded credentials", () => {
+  it("redacts userinfo in a URL under an innocent key, keeping host/path", () => {
+    const out = redactConfig({ url: "https://alice:s3cr3tpw@db.example.com/mcp" }) as any;
+    expect(out.url).toBe(`https://${REDACTED}@db.example.com/mcp`);
+  });
+
+  it("redacts secret query params (api_key/token/…), keeping the rest of the URL", () => {
+    const out = redactConfig({
+      a: "https://host/mcp?api_key=AIzaShortKey123&region=us",
+      b: "https://host/mcp?token=abc123&x=1",
+      c: "https://host/mcp?key=v",
+    }) as any;
+    expect(out.a).toBe(`https://host/mcp?api_key=${REDACTED}&region=us`);
+    expect(out.b).toBe(`https://host/mcp?token=${REDACTED}&x=1`);
+    expect(out.c).toBe(`https://host/mcp?key=${REDACTED}`);
+  });
+
+  it("leaves a credential-free URL untouched", () => {
+    const out = redactConfig({ url: "https://mcp.neon.tech/mcp", port: "https://host:8080/path" }) as any;
+    expect(out.url).toBe("https://mcp.neon.tech/mcp");
+    expect(out.port).toBe("https://host:8080/path"); // host:port is not userinfo
+  });
+});
+
 describe("redactConfig — structure preservation & safety", () => {
   it("preserves nested objects, arrays, booleans, numbers, and quoted-dotted keys", () => {
     const out = redactConfig({

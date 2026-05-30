@@ -38,6 +38,20 @@ const SECRET_KEY_RE =
 const SECRET_VALUE_RE =
   /(bearer\s+\S{8,}|sk-[A-Za-z0-9_-]{12,}|napi_[A-Za-z0-9]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9._-]{20,}|\b[A-Fa-f0-9]{40,}\b)/i;
 
+// URL-embedded credentials a value-shape check misses because the key (`url`,
+// `source`) is innocent and the secret may be short: `//user:pass@host` and
+// `?api_key=…` / `?token=…` query params. Redact the credential in place,
+// keeping the rest of the URL visible.
+const URL_USERINFO_RE = /(:\/\/)[^/@\s:]+:[^/@\s]+@/g;
+const URL_SECRET_PARAM_RE =
+  /([?&](?:api[_-]?key|apikey|key|access[_-]?token|token|secret|password|passwd|pwd|auth|sig|signature)=)[^&\s#]+/gi;
+
+function redactUrlCredentials(value: string): string {
+  return value
+    .replace(URL_USERINFO_RE, `$1${REDACTED}@`)
+    .replace(URL_SECRET_PARAM_RE, `$1${REDACTED}`);
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -55,7 +69,9 @@ function blankLeaves(value: unknown): unknown {
 }
 
 function redactString(value: string): string {
-  return SECRET_VALUE_RE.test(value) ? REDACTED : value;
+  if (SECRET_VALUE_RE.test(value)) return REDACTED;
+  // Not a whole-value secret — still scrub any URL-embedded credentials.
+  return redactUrlCredentials(value);
 }
 
 /**

@@ -397,9 +397,34 @@ async function readCodexConfigToml(
   }
 }
 
+/** Read at most `cap` bytes of a text file (plus one probe byte to detect
+ *  truncation) WITHOUT slurping the whole file into memory. Returns null on
+ *  any error. */
+async function readCappedText(
+  filePath: string,
+  cap: number
+): Promise<{ content: string; truncated: boolean } | null> {
+  let fh: FileHandle | undefined;
+  try {
+    fh = await fs.open(filePath, "r");
+    const buf = Buffer.allocUnsafe(cap + 1);
+    const { bytesRead } = await fh.read(buf, 0, cap + 1, 0);
+    return {
+      content: buf.toString("utf-8", 0, Math.min(bytesRead, cap)),
+      truncated: bytesRead > cap,
+    };
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
+  }
+}
+
 /** Read instruction/rules files under `<home>/rules` (`*.rules` / `*.md`),
  *  capping each file's content. Rules are user-authored prose (like CLAUDE.md),
- *  shown as-is. Returns [] when the dir is missing. */
+ *  shown as-is. The cap is enforced at READ time (bounded buffer), so a giant
+ *  rules file can't balloon this endpoint's memory. Returns [] when the dir is
+ *  missing. */
 async function readCodexRules(home: string): Promise<HarnessConfigRule[]> {
   const dir = path.join(home, "rules");
   let entries;
@@ -414,16 +439,9 @@ async function readCodexRules(home: string): Promise<HarnessConfigRule[]> {
     .sort();
   const rules: HarnessConfigRule[] = [];
   for (const name of files) {
-    try {
-      const content = await fs.readFile(path.join(dir, name), "utf-8");
-      rules.push({
-        name,
-        content: content.slice(0, RULES_CONTENT_CAP),
-        truncated: content.length > RULES_CONTENT_CAP,
-      });
-    } catch {
-      // Skip an unreadable rules file rather than failing the whole surface.
-    }
+    const r = await readCappedText(path.join(dir, name), RULES_CONTENT_CAP);
+    if (r) rules.push({ name, content: r.content, truncated: r.truncated });
+    // else: skip an unreadable rules file rather than failing the whole surface.
   }
   return rules;
 }

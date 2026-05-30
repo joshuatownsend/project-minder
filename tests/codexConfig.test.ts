@@ -22,6 +22,20 @@ import { REDACTED } from "@/lib/adapters/redact";
 const mockStat = vi.mocked(fs.stat) as unknown as ReturnType<typeof vi.fn>;
 const mockReadFile = vi.mocked(fs.readFile) as unknown as ReturnType<typeof vi.fn>;
 const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
+const mockOpen = vi.mocked(fs.open) as unknown as ReturnType<typeof vi.fn>;
+
+// Minimal FileHandle stub for the bounded rules read (open → read → close).
+function fakeHandle(content: string) {
+  const bytes = Buffer.from(content, "utf-8");
+  return {
+    read: async (buf: Buffer, offset: number, length: number) => {
+      const n = Math.min(length, bytes.length);
+      bytes.copy(buf, offset, 0, n);
+      return { bytesRead: n };
+    },
+    close: async () => {},
+  };
+}
 
 const HOME = "/home/tester";
 const CODEX = path.join(HOME, ".codex");
@@ -87,11 +101,15 @@ describe("codex readConfig — populated home", () => {
       }
       return Promise.reject(new Error("ENOENT"));
     });
-    mockReadFile.mockImplementation((p: string) => {
+    // config.toml is read whole (it must be parsed); rules go through the
+    // bounded open→read path.
+    mockReadFile.mockImplementation((p: string) =>
+      String(p).endsWith("config.toml") ? Promise.resolve(REAL_CONFIG) : Promise.reject(new Error("ENOENT"))
+    );
+    mockOpen.mockImplementation((p: string) => {
       const s = String(p);
-      if (s.endsWith("config.toml")) return Promise.resolve(REAL_CONFIG);
-      if (s.endsWith("default.rules")) return Promise.resolve("be concise");
-      if (s.endsWith("readme.txt")) return Promise.resolve("notes");
+      if (s.endsWith("default.rules")) return Promise.resolve(fakeHandle("be concise"));
+      if (s.endsWith("readme.txt")) return Promise.resolve(fakeHandle("notes"));
       return Promise.reject(new Error("ENOENT"));
     });
   });
@@ -126,6 +144,24 @@ describe("codex readConfig — populated home", () => {
     const def = r.rules.find((x) => x.name === "default.rules")!;
     expect(def.content).toBe("be concise");
     expect(def.truncated).toBe(false);
+  });
+
+  it("caps an oversized rules file at read time and flags truncation", async () => {
+    const big = "x".repeat(25_000); // > RULES_CONTENT_CAP (20_000)
+    mockReaddir.mockImplementation((p: string) =>
+      String(p).endsWith(`${path.sep}rules`)
+        ? Promise.resolve([dirent("default.rules")])
+        : Promise.reject(new Error("ENOENT"))
+    );
+    mockOpen.mockImplementation((p: string) =>
+      String(p).endsWith("default.rules")
+        ? Promise.resolve(fakeHandle(big))
+        : Promise.reject(new Error("ENOENT"))
+    );
+    const r = await codexAdapter.readConfig!();
+    const def = r.rules.find((x) => x.name === "default.rules")!;
+    expect(def.truncated).toBe(true);
+    expect(def.content.length).toBe(20_000);
   });
 
   it("reports resource presence without reading their contents", async () => {
