@@ -626,7 +626,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── CONFIG LINT ──────────────────────────────────────────── */}
           {activeTab === "config-lint" && project.configLint && (
-            <ConfigLintPanel report={project.configLint} />
+            <ConfigLintPanel report={project.configLint} projectSlug={project.slug} />
           )}
         </div>
       </div>

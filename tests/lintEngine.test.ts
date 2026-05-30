@@ -67,6 +67,27 @@ describe("runLintEngine (Wave A — adapter only)", () => {
     expect(report.countsByTarget).toEqual({});
   });
 
+  it("sets hasBlocking true when a P1 finding exists (strict gate)", async () => {
+    const report = await runLintEngine({ projectPath: "", claudeMdAudit: PRESENT });
+    expect(report.hasBlocking).toBe(true); // PRESENT carries a P1 file-size finding
+  });
+
+  it("sets hasBlocking false when only P2 findings exist", async () => {
+    const p2Only: ClaudeMdAuditPresent = {
+      ...PRESENT,
+      findings: [{ code: "long-index", severity: "P2", title: "Long index", fix: "Split", penalty: 3 }],
+    };
+    const report = await runLintEngine({ projectPath: "", claudeMdAudit: p2Only });
+    expect(report.totalCounts).toEqual({ P0: 0, P1: 0, P2: 1 });
+    expect(report.hasBlocking).toBe(false);
+  });
+
+  it("sets hasBlocking false for a clean audit", async () => {
+    const clean: ClaudeMdAuditPresent = { ...PRESENT, findings: [] };
+    const report = await runLintEngine({ projectPath: "", claudeMdAudit: clean });
+    expect(report.hasBlocking).toBe(false);
+  });
+
   it("surfaces skill findings when skills input is provided", async () => {
     const skill: SkillEntry = {
       kind: "skill",

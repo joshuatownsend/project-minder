@@ -132,5 +132,7 @@ function buildReport(
     countsByTarget[f.target] = tc;
   }
 
-  return { findings, countsByTarget, totalCounts, engineErrors };
+  // Strict gate: any P0/P1 is a blocking finding (see LintReport.hasBlocking).
+  const hasBlocking = totalCounts.P0 > 0 || totalCounts.P1 > 0;
+  return { findings, countsByTarget, totalCounts, engineErrors, hasBlocking };
 }

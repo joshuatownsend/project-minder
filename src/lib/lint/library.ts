@@ -30,6 +30,17 @@ interface CliReport {
 }
 
 /**
+ * Resolve the `claudelint` CLI bin path via the package's declared bin
+ * entry — not a path assumption relative to main (main → dist/index.js,
+ * bin → bin/claudelint). Shared with the formatter wrapper so both spawn
+ * the same binary.
+ */
+export function resolveClaudelintBin(): string {
+  const pkgRoot = path.dirname(require.resolve("claude-code-lint/package.json"));
+  return path.join(pkgRoot, "bin", "claudelint");
+}
+
+/**
  * Spawn `claude-code-lint check-all --format json` in the given project
  * directory, parse the output, and return findings. Any failure (spawn error,
  * timeout, JSON parse error) is recorded in `engineErrors` and returns [].
@@ -42,16 +53,14 @@ export async function runLibraryCli(
   engineErrors: LintReport["engineErrors"],
   timeoutMs = 20_000,
 ): Promise<LintFinding[]> {
-  // Resolve via package.json so we follow the declared bin entry, not a
-  // path assumption relative to main (main → dist/index.js, bin → bin/claudelint).
-  const pkgRoot = path.dirname(require.resolve("claude-code-lint/package.json"));
-  const cliBin = path.join(pkgRoot, "bin", "claudelint");
-
-  let stdout: string;
-  try {
-    stdout = await spawnCli(cliBin, projectPath, timeoutMs);
-  } catch (err) {
-    engineErrors.push({ engine: "library", message: String(err) });
+  const { stdout, error } = await spawnClaudelint(
+    "check-all",
+    ["--format", "json"],
+    projectPath,
+    timeoutMs,
+  );
+  if (error) {
+    engineErrors.push({ engine: "library", message: error });
     return [];
   }
 
@@ -95,17 +104,31 @@ function toFinding(msg: CliMessage, target: LintTarget): LintFinding {
   };
 }
 
-function spawnCli(cliBin: string, cwd: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
+/**
+ * Spawn `claudelint <subcommand> <args...>` in `cwd`. Resolves with stdout
+ * regardless of exit code (a non-zero exit just means findings/format issues
+ * exist), and resolves `{ error }` rather than rejecting on a spawn failure —
+ * a degrade-don't-throw contract both the linter pass and the formatter
+ * wrapper rely on. The single home for the stdio + timeout + `process.execPath
+ * + bin` invocation invariant, alongside `resolveClaudelintBin`.
+ */
+export function spawnClaudelint(
+  subcommand: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; error?: string }> {
+  const cliBin = resolveClaudelintBin();
+  return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
-      [cliBin, "check-all", "--format", "json"],
+      [cliBin, subcommand, ...args],
       { cwd, timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] },
     );
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
     // Non-zero exit is normal; resolve with whatever stdout arrived.
-    child.on("close", () => resolve(out));
-    child.on("error", reject);
+    child.on("close", () => resolve({ stdout: out }));
+    child.on("error", (err) => resolve({ stdout: out, error: String(err) }));
   });
 }
