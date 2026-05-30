@@ -42,6 +42,18 @@ Note: Gemini CLI does not report cache-creation tokens, so `cacheCreateTokens` w
 
 Go to **Settings → Adapters** to see which adapters are enabled. Disabling an adapter hides its sessions from the session browser and excludes them from analytics. All adapters, including Claude Code, can be toggled.
 
+## Harness config (read-only)
+
+The **Harnesses** page (under **Review** in the sidebar, route `/adapters`) shows a **read-only** view of an enabled harness's own configuration home. Codex is the first supported harness: it surfaces
+
+- the parsed `config.toml` (model, reasoning effort, sandbox settings, configured MCP servers, enabled plugins, marketplaces) as a structured tree;
+- `rules/` instruction files (content shown inline, capped per file);
+- presence flags for notable subdirs (`memories`, `plugins`, `automations`, `prompts`).
+
+This is **view-only** — there is no edit, copy, or share affordance, and it never reads credential files (`auth.json`). **Secrets are redacted server-side before the config ever leaves your machine's process**: bearer tokens, API keys, `[mcp_servers.*.env]` values, and `http_headers` are all blanked (the key is still shown so you can see *that* something is configured, just not its value). The config home is resolved the same way as session discovery — `$CODEX_HOME` if set, otherwise `~/.codex`.
+
+A harness appears here only when it both exposes a config surface and is enabled in `enabledAdapters`; if none qualify, the page explains how to enable one. Write/manage, per-harness backups, and security scanning for non-Claude harnesses are intentionally out of scope for this read-only first cut.
+
 ## Source badges
 
 A small source badge appears in the session row and session header to indicate which adapter produced the session, making it easy to distinguish sessions at a glance.

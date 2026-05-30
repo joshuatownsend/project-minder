@@ -2,14 +2,33 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import type { FileHandle } from "fs/promises";
-import type { SessionAdapter, SessionFile } from "./types";
+import { parse as parseToml } from "smol-toml";
+import type { SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
+import { redactConfig } from "./redact";
 
 const ADAPTER_ID = "codex" as const;
 const META_READ_CONCURRENCY = 16;
+const DISPLAY_NAME = "Codex" as const;
+
+// Per-rules-file content cap so a runaway rules file can't bloat the response.
+const RULES_CONTENT_CAP = 20_000;
+// Subdirs surfaced as presence flags (no content read — some, like
+// archived_sessions, are large; logs_2.sqlite is ~79 MB).
+const NOTABLE_RESOURCES = ["rules", "memories", "plugins", "automations", "prompts"] as const;
+
+/** Resolve the Codex config home: `$CODEX_HOME` if set, else `~/.codex`.
+ *  Shared by session discovery and the read-only config surface so both agree
+ *  on a machine that overrides the home. */
+function resolveCodexHome(): string {
+  const env = process.env.CODEX_HOME;
+  return typeof env === "string" && env.trim()
+    ? path.resolve(env.trim())
+    : path.join(os.homedir(), ".codex");
+}
 
 // ─── file walk ──────────────────────────────────────────────────────────────
 
@@ -353,17 +372,85 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
   return turns;
 }
 
+// ─── read-only config surface (item 1) ───────────────────────────────────────
+
+/** Read `<home>/config.toml`, parse it, and redact secrets from the parsed
+ *  object. Returns `{ config }` on success, `{ parseError }` if the file
+ *  exists but won't parse, and `{ config: null }` if it's simply absent. Never
+ *  throws. */
+async function readCodexConfigToml(
+  home: string
+): Promise<{ config: unknown | null; parseError?: string }> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(home, "config.toml"), "utf-8");
+  } catch {
+    return { config: null }; // absent (or unreadable) — not an error
+  }
+  try {
+    return { config: redactConfig(parseToml(raw)) };
+  } catch {
+    // Deliberately generic: the parser's error message echoes the offending
+    // source line, which could itself contain a secret — surfacing it raw
+    // would bypass object-redaction. The user has the file to debug syntax.
+    return { config: null, parseError: "config.toml could not be parsed (not valid TOML)." };
+  }
+}
+
+/** Read instruction/rules files under `<home>/rules` (`*.rules` / `*.md`),
+ *  capping each file's content. Rules are user-authored prose (like CLAUDE.md),
+ *  shown as-is. Returns [] when the dir is missing. */
+async function readCodexRules(home: string): Promise<HarnessConfigRule[]> {
+  const dir = path.join(home, "rules");
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = entries
+    .filter((e) => e.isFile() && /\.(rules|md|txt)$/i.test(e.name))
+    .map((e) => e.name)
+    .sort();
+  const rules: HarnessConfigRule[] = [];
+  for (const name of files) {
+    try {
+      const content = await fs.readFile(path.join(dir, name), "utf-8");
+      rules.push({
+        name,
+        content: content.slice(0, RULES_CONTENT_CAP),
+        truncated: content.length > RULES_CONTENT_CAP,
+      });
+    } catch {
+      // Skip an unreadable rules file rather than failing the whole surface.
+    }
+  }
+  return rules;
+}
+
+/** Presence-only check of notable subdirs — no content read. */
+async function checkCodexResources(home: string): Promise<HarnessResource[]> {
+  return Promise.all(
+    NOTABLE_RESOURCES.map(async (name) => {
+      let present = false;
+      try {
+        present = (await fs.stat(path.join(home, name))).isDirectory();
+      } catch {
+        present = false;
+      }
+      return { name, present };
+    })
+  );
+}
+
 // ─── adapter ─────────────────────────────────────────────────────────────────
 
 const codexAdapter: SessionAdapter = {
   id: ADAPTER_ID,
-  displayName: "Codex",
+  displayName: DISPLAY_NAME,
 
   async discover(): Promise<SessionFile[]> {
-    const codexHome =
-      typeof process.env.CODEX_HOME === "string" && process.env.CODEX_HOME.trim()
-        ? path.resolve(process.env.CODEX_HOME.trim())
-        : path.join(os.homedir(), ".codex");
+    const codexHome = resolveCodexHome();
 
     const searchDirs = [
       path.join(codexHome, "sessions"),
@@ -394,6 +481,38 @@ const codexAdapter: SessionAdapter = {
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {
     return parseCodexFile(file.filePath, file.projectDirName);
+  },
+
+  async readConfig(): Promise<HarnessConfig> {
+    const home = resolveCodexHome();
+    const base = { harnessId: ADAPTER_ID, displayName: DISPLAY_NAME, home };
+
+    let present = false;
+    try {
+      present = (await fs.stat(home)).isDirectory();
+    } catch {
+      present = false;
+    }
+    if (!present) {
+      return { ...base, present: false, config: null, rules: [], resources: [] };
+    }
+
+    // Read config.toml, rules, and resource presence concurrently — all
+    // degrade-silent, none touch the large session/log files or auth.json.
+    const [tomlResult, rules, resources] = await Promise.all([
+      readCodexConfigToml(home),
+      readCodexRules(home),
+      checkCodexResources(home),
+    ]);
+
+    return {
+      ...base,
+      present: true,
+      config: tomlResult.config,
+      parseError: tomlResult.parseError,
+      rules,
+      resources,
+    };
   },
 };
 
