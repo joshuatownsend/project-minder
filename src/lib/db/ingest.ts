@@ -22,7 +22,8 @@ import {
 import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { extractPrsFromEntries } from "@/lib/usage/prExtractor";
-import type { PrLink } from "@/lib/types";
+import { extractTicketsFromEntries, compareTicketLinks } from "@/lib/usage/ticketExtractor";
+import type { PrLink, TicketLink } from "@/lib/types";
 import {
   FILE_OP_BY_TOOL,
   AGENT_DISPATCH_TOOL,
@@ -279,6 +280,14 @@ interface ParsedSession {
    * pass producing the same URLs the first parse already saw is a NOOP.
    */
   prs: PrLink[];
+  /**
+   * Issue/ticket trackers referenced anywhere in the parsed entries
+   * (item 3). Harvested by an all-text URL scan — no `tool_use_id`
+   * pairing — so a tail-append pass only re-finds tickets in the new
+   * bytes; older ones are carried by `preservedTickets` on rewrite.
+   * INSERT OR IGNORE on `session_tickets` makes repeated passes a NOOP.
+   */
+  tickets: TicketLink[];
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -914,6 +923,11 @@ async function readJsonlSession(
     }
   }
 
+  // Filter to non-null parsed entries once and share between the PR and
+  // ticket extractors — both walk the identical entry list.
+  const entries: ConversationEntry[] = [];
+  for (const { entry } of parsedLines) if (entry) entries.push(entry);
+
   return {
     parsed: {
       sessionId,
@@ -962,7 +976,10 @@ async function readJsonlSession(
       // sessions that never invoked `gh pr create`. A throw here would
       // poison the whole session insert, so wrap defensively — the
       // session still indexes, the PR chip just doesn't render.
-      prs: safeExtractPrs(parsedLines, sessionId),
+      prs: safeExtractPrs(entries, sessionId),
+      // Same defensive wrapper as PRs — a throw must index the session
+      // anyway, just without ticket chips.
+      tickets: safeExtractTickets(entries, sessionId),
       turns,
       affectedDays,
       affectedCategoryTuples,
@@ -972,17 +989,26 @@ async function readJsonlSession(
   };
 }
 
-function safeExtractPrs(
-  parsedLines: Array<{ line: string; entry: ConversationEntry | null }>,
-  sessionId: string,
-): PrLink[] {
+// Both extractors take the SAME `ConversationEntry[]`, so the caller
+// builds it once (see `readJsonlSession`) and passes it to both — one
+// walk of `parsedLines`, not two. Each call stays independently guarded:
+// a throw in PR extraction must still let tickets index, and vice versa.
+function safeExtractPrs(entries: ConversationEntry[], sessionId: string): PrLink[] {
   try {
-    const entries: ConversationEntry[] = [];
-    for (const { entry } of parsedLines) if (entry) entries.push(entry);
     return extractPrsFromEntries(entries);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(`[ingest] PR extraction failed for ${sessionId}:`, err);
+    return [];
+  }
+}
+
+function safeExtractTickets(entries: ConversationEntry[], sessionId: string): TicketLink[] {
+  try {
+    return extractTicketsFromEntries(entries);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[ingest] ticket extraction failed for ${sessionId}:`, err);
     return [];
   }
 }
@@ -1000,6 +1026,20 @@ function mergePrLinks(current: PrLink[], preserved: PrLink[]): PrLink[] {
   for (const pr of preserved) byUrl.set(pr.url, pr);
   for (const pr of current) byUrl.set(pr.url, pr); // current overrides
   return Array.from(byUrl.values()).sort((a, b) => a.number - b.number);
+}
+
+/**
+ * Union two ticket-link lists, deduping by URL — the ticket analogue of
+ * `mergePrLinks`. `current` (fresh extraction) wins on overlap. Sorted by
+ * (provider, key, url) to match `extractTicketsFromText`'s post-sort and
+ * the SQL read's `ORDER BY provider, ticket_key, url`, so chip order stays
+ * aligned across the file-parse and DB backends.
+ */
+function mergeTicketLinks(current: TicketLink[], preserved: TicketLink[]): TicketLink[] {
+  const byUrl = new Map<string, TicketLink>();
+  for (const t of preserved) byUrl.set(t.url, t);
+  for (const t of current) byUrl.set(t.url, t); // current overrides
+  return Array.from(byUrl.values()).sort(compareTicketLinks);
 }
 
 /**
@@ -1129,6 +1169,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // the new-extraction-wins merge means a healthy re-extract still
   // supersedes them. Read review #2.
   let preservedPrs: PrLink[] = [];
+  // Same posture for tickets (item 3): the cascade DELETE wipes
+  // session_tickets too, so capture the prior rows first and merge them
+  // back so a thrown extractor (→ `[]`) on this pass doesn't lose them.
+  let preservedTickets: TicketLink[] = [];
   if (existingSession) {
     preservedPrs = (
       db
@@ -1141,6 +1185,21 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
         repo: string;
       }>
     ).map((r) => ({ url: r.pr_url, number: r.pr_number, repo: r.repo }));
+    preservedTickets = (
+      db
+        .prepare(
+          "SELECT url, provider, ticket_key FROM session_tickets WHERE session_id = ?",
+        )
+        .all(s.sessionId) as Array<{
+        url: string;
+        provider: string;
+        ticket_key: string;
+      }>
+    ).map((r) => ({
+      url: r.url,
+      provider: r.provider as TicketLink["provider"],
+      key: r.ticket_key,
+    }));
     db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(s.sessionId);
     db.prepare("DELETE FROM sessions WHERE session_id = ?").run(s.sessionId);
   }
@@ -1271,6 +1330,10 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
      VALUES (?, ?, ?, ?)`
   );
+  const insertSessionTicket = db.prepare(
+    `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
+     VALUES (?, ?, ?, ?)`
+  );
 
   // Persist PRs found by the extractor. The prior `DELETE FROM sessions`
   // (above, when an existing row was found) cascaded through the FK to
@@ -1282,6 +1345,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // soak-monitoring `rowsWritten` metric. Read review #2 and #6.
   for (const pr of mergePrLinks(s.prs, preservedPrs)) {
     const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo);
+    rows += Number(result.changes ?? 0);
+  }
+  // Tickets: same preserve-then-merge as PRs (item 3).
+  for (const t of mergeTicketLinks(s.tickets, preservedTickets)) {
+    const result = insertSessionTicket.run(s.sessionId, t.url, t.provider, t.key);
     rows += Number(result.changes ?? 0);
   }
 
@@ -1634,6 +1702,10 @@ function appendSessionTail(
     `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
      VALUES (?, ?, ?, ?)`
   );
+  const insertSessionTicket = db.prepare(
+    `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
+     VALUES (?, ?, ?, ?)`
+  );
 
   // T2.2: tail-parse only sees entries past the byte cursor. The straddle
   // case (call before cursor, result after) is recovered by a second
@@ -1643,6 +1715,14 @@ function appendSessionTail(
   // Read review #1 and #6.
   for (const pr of parsed.prs) {
     const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+    rows += Number(result.changes ?? 0);
+  }
+  // Tickets: no straddle case to recover — they come from a plain text
+  // scan, not a call→result pairing. A tail-append re-finds tickets only
+  // in the new bytes; older ones already persisted by the prior
+  // writeSession survive via INSERT OR IGNORE.
+  for (const t of parsed.tickets) {
+    const result = insertSessionTicket.run(sessionId, t.url, t.provider, t.key);
     rows += Number(result.changes ?? 0);
   }
 

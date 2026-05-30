@@ -763,6 +763,15 @@ export interface SessionSummary {
    * possible when a single session opens several PRs; deduped by URL.
    */
   prs?: PrLink[];
+  /**
+   * Issue/ticket trackers referenced anywhere in this session — harvested
+   * by scanning every text block (prompts, assistant text, tool results)
+   * for full Linear/Jira/GitHub-issue URLs and deduping by URL (T-item3).
+   * "Referenced", not "created": a ticket link is meaningful wherever it
+   * appears, so unlike `prs` there is no `gh … create` command pairing.
+   * Empty/absent for sessions that never mention a tracker URL.
+   */
+  tickets?: TicketLink[];
 }
 
 /**
@@ -775,6 +784,23 @@ export interface PrLink {
   url: string;
   number: number;
   repo: string;
+}
+
+/** Issue-tracker providers we can recognize from a verbatim URL. */
+export type TicketProvider = "linear" | "jira" | "github";
+
+/**
+ * An issue/ticket referenced during a session, parsed from a full URL.
+ * `key` is the human-facing identifier shown on the chip:
+ *   - linear / jira → the issue key, e.g. "ENG-123"
+ *   - github        → "owner/repo#42"
+ * `url` is the canonical link (slug/anchor/query stripped) and is the
+ * dedup + lookup key (the `?ticket=` filter matches it exactly).
+ */
+export interface TicketLink {
+  provider: TicketProvider;
+  key: string;
+  url: string;
 }
 
 export interface TimelineEvent {

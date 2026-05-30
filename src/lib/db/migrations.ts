@@ -426,6 +426,31 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 15,
+    name: "item3: session_tickets table for issue/ticket URL reverse-index",
+    up: (db) => {
+      // Same posture as session_prs (v14): idempotent IF NOT EXISTS so a
+      // partially-applied schema doesn't brick the indexer, INSERT OR
+      // IGNORE on the PK keeps tail-appends and reconciles idempotent.
+      // DERIVED_VERSION is bumped to 9 in the same change so the existing
+      // corpus is re-parsed once and backfilled (newly-modified sessions
+      // alone would otherwise be the only ones populating this table).
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS session_tickets (
+          session_id   TEXT NOT NULL,
+          url          TEXT NOT NULL,
+          provider     TEXT NOT NULL,
+          ticket_key   TEXT NOT NULL,
+          PRIMARY KEY (session_id, url),
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        ) WITHOUT ROWID
+      `).run();
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS session_tickets_by_url ON session_tickets(url)"
+      ).run();
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

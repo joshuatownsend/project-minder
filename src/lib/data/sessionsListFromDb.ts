@@ -3,7 +3,7 @@ import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
-import type { SessionSummary, SessionStatus, PrLink } from "@/lib/types";
+import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
 import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
@@ -271,6 +271,17 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as PrRow[]
   );
 
+  // item3: tickets referenced in each session — same single bulk-fetch
+  // posture as PRs. Empty for sessions that never mention a tracker URL.
+  const ticketsBySession = groupTickets(
+    prepCached(
+      db,
+      `SELECT session_id, url, provider, ticket_key
+       FROM session_tickets
+       ORDER BY session_id, provider, ticket_key, url`
+    ).all() as TicketRow[]
+  );
+
   const now = Date.now();
   const result: SessionSummary[] = [];
   for (const h of headers) {
@@ -370,6 +381,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       isWorktree: isWorktreeFilePath(h.file_path),
       source: h.source ?? "claude",
       prs: prsBySession.get(h.session_id),
+      tickets: ticketsBySession.get(h.session_id),
     });
   }
 
@@ -388,6 +400,28 @@ function groupPrs(rows: PrRow[]): Map<string, PrLink[]> {
   for (const r of rows) {
     const list = map.get(r.session_id);
     const link: PrLink = { url: r.pr_url, number: r.pr_number, repo: r.repo };
+    if (list) list.push(link);
+    else map.set(r.session_id, [link]);
+  }
+  return map;
+}
+
+interface TicketRow {
+  session_id: string;
+  url: string;
+  provider: string;
+  ticket_key: string;
+}
+
+function groupTickets(rows: TicketRow[]): Map<string, TicketLink[]> {
+  const map = new Map<string, TicketLink[]>();
+  for (const r of rows) {
+    const list = map.get(r.session_id);
+    const link: TicketLink = {
+      url: r.url,
+      provider: r.provider as TicketLink["provider"],
+      key: r.ticket_key,
+    };
     if (list) list.push(link);
     else map.set(r.session_id, [link]);
   }

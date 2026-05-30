@@ -61,6 +61,14 @@ Clicking a `PR #N` chip filters the in-page session list to just sessions that c
 
 Extraction happens at session-ingest time and matches the `gh pr create` Bash call to its `tool_result` by `tool_use_id` (not positional ordering), so parallel Bash dispatches can't cross-link results to the wrong call. Sessions written before this feature shipped backfill on the next reconcile via a DERIVED_VERSION bump.
 
+### Ticket chips
+
+When a session **references** an issue tracker by a full URL — Linear (`linear.app/<workspace>/issue/<KEY>`), Jira (`<host>/browse/<KEY>`), or a GitHub issue (`github.com/<owner>/<repo>/issues/<N>`) — the session row shows a ticket chip per distinct ticket (e.g. `ENG-123`, `PROJ-45`, `owner/repo#42`). Clicking a chip filters the in-page list to sessions that reference that ticket, with the same banner + clear-filter affordance as the PR chips (selecting a ticket clears any active PR filter, and vice versa, so the two filters never combine into an empty list).
+
+Unlike PR chips — which are tied to the *output* of a `gh pr create` command — a ticket reference is meaningful wherever it appears, so the extractor scans **all** session text (your prompts, Claude's replies, and tool output, including `gh issue create` results) for tracker URLs and dedupes by URL. There is no command pairing.
+
+Scope: **full URLs only.** A full URL is self-validating — provider, key, and the canonical link all derive from the URL itself, so this is effectively false-positive-free. Bare keys (`ABC-123`, bare `#N`) in branch names or commit messages are deliberately *not* matched yet: they need per-workspace configuration to build a link and are more prone to false positives (e.g. `UTF-8`). Like PR chips, sessions written before this feature backfill on the next reconcile via a DERIVED_VERSION bump.
+
 ## Search & Sort
 
 - **Search** — filter by prompt text, **message body content** (full-text via SQLite FTS5 when the index is available), project name, session ID, slug, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.

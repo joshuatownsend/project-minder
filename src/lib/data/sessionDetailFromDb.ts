@@ -16,6 +16,7 @@ import type {
   SubagentInfo,
   SessionStatus,
   PrLink,
+  TicketLink,
 } from "@/lib/types";
 
 // SQL-backed session detail loader. Mirrors `scanSessionDetail`'s output
@@ -257,6 +258,23 @@ export async function loadSessionDetailFromDb(
     repo: r.repo,
   }));
 
+  // Tickets referenced in this session (item 3). Surfaced on the detail
+  // object for API/MCP parity with the list path; chips themselves render
+  // from the list path's SessionSummary in ProjectSessions. Sorted to
+  // match the extractor + list read (`provider, ticket_key, url`).
+  const ticketRows = prepCached(db,
+      `SELECT url, provider, ticket_key
+       FROM session_tickets
+       WHERE session_id = ?
+       ORDER BY provider, ticket_key, url`
+    )
+    .all(sessionId) as { url: string; provider: string; ticket_key: string }[];
+  const tickets: TicketLink[] = ticketRows.map((r) => ({
+    url: r.url,
+    provider: r.provider as TicketLink["provider"],
+    key: r.ticket_key,
+  }));
+
   const jsonlPath = path.join(
     os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
   );
@@ -329,6 +347,7 @@ export async function loadSessionDetailFromDb(
     fileOperations: aggregates.fileOperations,
     subagents: aggregates.subagents,
     prs: prs.length > 0 ? prs : undefined,
+    tickets: tickets.length > 0 ? tickets : undefined,
     isWorktree: isWorktreeFilePath(session.file_path),
     source: session.source ?? "claude",
     workMode:
