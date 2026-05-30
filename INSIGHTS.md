@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:addbc35b7b93 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T15:16:19.891Z -->
+## ★ Insight
+The version mechanism here is the **"schema.sql IS migration v1"** pattern: a fresh DB runs the complete current schema as migration 1, then migrations 2…N (idempotent `IF NOT EXISTS` / guarded `ALTER`) replay as no-ops above it. This means every new table must be added in **two** places that must stay byte-identical in intent — schema.sql (plain DDL, for fresh installs) and a versioned migration (`IF NOT EXISTS`, for existing installs) — or fresh and upgraded DBs silently diverge. The advisor's "delete a scratch index.db and confirm v16 applies on both fresh and existing" is precisely the test that catches a divergence unit tests can't.
+
+---
+
 <!-- insight:af1dceb33eac | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T03:28:08.128Z -->
 ## ★ Insight
 The bug is a classic "absence vs zero" conflation: `queryPeriodSummary` returns `oneShotRate: 0` / `cacheHitRate: 0` for an *empty* window (the `verified > 0 ? ... : 0` fallback), which is indistinguishable from a genuine 0% measurement. The volume metrics are immune (0 cost *is* a real measurement), but rate metrics need a **basis guard**: only show a percentage-point delta when both windows actually measured something (`verifiedTasks > 0` for one-shot; a nonzero token denominator for cache-hit).
