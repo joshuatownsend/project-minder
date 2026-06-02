@@ -23,7 +23,7 @@ jobs:
       # pnpm/action-setup must run before setup-node so the pnpm binary is
       # on PATH when setup-node computes the `cache: 'pnpm'` key. Version is
       # read from the `packageManager` field in package.json.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
