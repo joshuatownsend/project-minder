@@ -187,7 +187,8 @@ export async function parseSessionTurns(
       const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
-      const content = entry.message?.content ?? [];
+      const rawContent = entry.message?.content;
+      const content = Array.isArray(rawContent) ? rawContent : [];
       const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
       let slashWindowConsumed = false;
       const toolCalls = (content as any[])
@@ -367,7 +368,8 @@ export async function parseSessionTurnsWithMeta(
       const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
-      const content = entry.message?.content ?? [];
+      const rawContent = entry.message?.content;
+      const content = Array.isArray(rawContent) ? rawContent : [];
       const slashCmdsMeta = prevUserTimestampMeta
         ? slashCommandsByTimestampMeta.get(prevUserTimestampMeta)
         : undefined;
