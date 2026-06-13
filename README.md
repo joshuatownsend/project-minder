@@ -226,6 +226,8 @@ All settings live in `.minder.json` at the repo root. The in-app **Config page**
 
 ### Environment overrides
 
+Copy `.env.example` to `.env.local` and uncomment what you need.
+
 Set in `.env.local` (gitignored) for persistent per-machine overrides:
 
 | Variable | Default | Effect |
