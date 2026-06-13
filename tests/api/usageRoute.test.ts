@@ -90,7 +90,7 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
-    // validatePeriod("") returns "30d"
+    // Absent param: params.get("period") is null → (null || "30d") → validatePeriod("30d") → "30d"
     expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
   });
 
@@ -107,6 +107,18 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+  });
+
+  it("defaults an invalid period value to '30d'", async () => {
+    const req = makeGetRequest({ period: "banana" });
+    await GET(req);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+  });
+
+  it("treats ?period=__proto__ as invalid and defaults to '30d'", async () => {
+    const req = makeGetRequest({ period: "__proto__" });
+    await GET(req);
     expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
   });
 
