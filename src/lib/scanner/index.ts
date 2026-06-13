@@ -32,7 +32,7 @@ import type { CommandEntry } from "../types";
 
 /** Side-channel payload carrying the entries walkProject* already computed
  *  inside scanProject — threaded into runCatalogLint so it can skip the
- *  redundant per-project re-walks (~60 traversals on a full scan). */
+ *  redundant per-project re-walks (~180 traversals on a full scan: 3 catalog subdirs × ~60 projects). */
 export interface ProjectCatalogWalk {
   skills: SkillEntry[];
   agents: AgentEntry[];
@@ -297,9 +297,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
     : ({} as Awaited<ReturnType<typeof loadProvenanceContext>>);
 
   const allProjects: ProjectData[] = [];
-  // Side-channel map: slug → catalog walk entries already computed by scanProject.
+  // Side-channel map: path → catalog walk entries already computed by scanProject.
   // Passed to runCatalogLint so it can skip redundant per-project re-walks.
-  const catalogWalkBySlug = new Map<string, ProjectCatalogWalk>();
+  const catalogWalkByPath = new Map<string, ProjectCatalogWalk>();
   // Track slugs seen so far to handle collisions across roots (first root wins)
   const seenSlugs = new Set<string>();
 
@@ -338,7 +338,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
         if (r) {
           rootProjects.push(r.project);
           seenSlugs.add(r.project.slug);
-          if (r.catalogWalk) catalogWalkBySlug.set(r.project.slug, r.catalogWalk);
+          if (r.catalogWalk) catalogWalkByPath.set(r.project.path, r.catalogWalk);
         }
       }
     }
@@ -368,7 +368,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
-  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx, catalogWalkBySlug);
+  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx, catalogWalkByPath);
 
   return {
     projects: allProjects,

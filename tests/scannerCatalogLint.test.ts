@@ -137,7 +137,7 @@ describe("runCatalogLint", () => {
   it("uses side-channel map — skips walkProjectSkills/Agents/Commands when slug is present", async () => {
     stubMocks();
     const walk = new Map([
-      ["a", { skills: [makeSkill()], agents: [makeAgent()], commands: [] }],
+      ["/x/a", { skills: [makeSkill()], agents: [makeAgent()], commands: [] }],
     ]);
     const project = { slug: "a", path: "/x/a" } as unknown as ProjectData;
     await runCatalogLint([project], FLAGS_ON, EMPTY_CTX, walk);
