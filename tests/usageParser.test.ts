@@ -114,6 +114,34 @@ describe("parseSessionTurns strict mode", () => {
   });
 });
 
+// ── parseSessionTurns: non-array assistant content guard (plan 003) ─────────────
+
+describe("parseSessionTurns non-array assistant content", () => {
+  it("does not throw when assistant message.content is a plain string", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "minder-test-"));
+    const file = path.join(dir, "test-session.jsonl");
+    const assistantLine = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-06-13T10:00:00Z",
+      message: {
+        model: "claude-sonnet-4-6",
+        usage: { input_tokens: 50, output_tokens: 20 },
+        content: "plain string body",
+      },
+    });
+    try {
+      await fs.writeFile(file, `${assistantLine}\n`);
+      const turns = await parseSessionTurns(file, "fake-dir");
+      expect(turns.length).toBe(1);
+      expect(turns[0].role).toBe("assistant");
+      expect(turns[0].toolCalls).toEqual([]);
+      expect(turns[0].assistantText).toBeUndefined();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── loadSessionTurnsBySessionId 404/500 distinction (Wave 3.1 PR #63 review fix) ─
 
 describe("loadSessionTurnsBySessionId", () => {
