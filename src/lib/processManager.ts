@@ -138,14 +138,14 @@ class ProcessManager {
     return info;
   }
 
-  stop(slug: string): DevServerInfo | undefined {
+  async stop(slug: string): Promise<DevServerInfo | undefined> {
     const entry = this.processes.get(slug);
     if (!entry) return undefined;
 
     const { proc, info } = entry;
 
     if (proc.exitCode === null && proc.pid) {
-      killProcessTree(proc.pid);
+      await killProcessTree(proc.pid);
     }
 
     info.status = "stopped";
@@ -154,8 +154,20 @@ class ProcessManager {
   }
 
   async restart(slug: string, projectPath: string, portOverride?: number): Promise<DevServerInfo> {
-    this.stop(slug);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const prevPort = this.processes.get(slug)?.info.port;
+    await this.stop(slug);
+    // Wait for the OS to release the port the old process held, instead of a
+    // blind fixed sleep. Bounded so a stuck port can't hang the request.
+    const targetPort = portOverride ?? prevPort;
+    if (targetPort) {
+      const deadlineMs = 5000;
+      const stepMs = 200;
+      let waited = 0;
+      while (waited < deadlineMs && (await isPortInUse(targetPort))) {
+        await new Promise((r) => setTimeout(r, stepMs));
+        waited += stepMs;
+      }
+    }
     this.processes.delete(slug);
     return this.start(slug, projectPath, portOverride);
   }
