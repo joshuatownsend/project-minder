@@ -83,25 +83,30 @@ export function spawnDevServer(
  * works when the process was spawned with detached:true (see spawnDevServer).
  * These two functions are a matched pair.
  */
-export function killProcessTree(pid: number): void {
-  if (isWindows) {
-    const taskkill = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-      stdio: "ignore",
-    });
-    taskkill.on("error", () => {
-      try {
-        process.kill(pid);
-      } catch {
-        // Process may have already exited
-      }
-    });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    // Process may have already exited
-  }
+export function killProcessTree(pid: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (isWindows) {
+      const taskkill = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+        stdio: "ignore",
+      });
+      taskkill.on("error", () => {
+        try {
+          process.kill(pid);
+        } catch {
+          // Process may have already exited
+        }
+        resolve();
+      });
+      taskkill.on("close", () => resolve());
+      return;
+    }
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      // Process may have already exited
+    }
+    resolve();
+  });
 }
 
 /**

@@ -52,7 +52,7 @@ export async function emergencyStop(): Promise<EmergencyStopResult> {
   for (const { pid, confirmed } of results) {
     if (confirmed) {
       try {
-        killProcessTree(pid);
+        await killProcessTree(pid);
         processesKilled++;
       } catch (err) {
         errors.push(`PID ${pid}: ${err instanceof Error ? err.message : String(err)}`);

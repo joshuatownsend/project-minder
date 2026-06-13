@@ -63,7 +63,7 @@ export async function POST(
         return NextResponse.json(info);
       }
       case "stop": {
-        const info = processManager.stop(slug);
+        const info = await processManager.stop(slug);
         return NextResponse.json(info || { status: "stopped", slug });
       }
       case "restart": {
