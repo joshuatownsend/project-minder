@@ -27,7 +27,17 @@ import { walkProjectAgents } from "../indexer/walkAgents";
 import { walkProjectSkills } from "../indexer/walkSkills";
 import { walkProjectCommands } from "../indexer/walkCommands";
 import { loadProvenanceContext } from "../indexer/provenance";
-import type { ProvenanceContext } from "../indexer/types";
+import type { ProvenanceContext, SkillEntry, AgentEntry } from "../indexer/types";
+import type { CommandEntry } from "../types";
+
+/** Side-channel payload carrying the entries walkProject* already computed
+ *  inside scanProject — threaded into runCatalogLint so it can skip the
+ *  redundant per-project re-walks (~60 traversals on a full scan). */
+export interface ProjectCatalogWalk {
+  skills: SkillEntry[];
+  agents: AgentEntry[];
+  commands: CommandEntry[];
+}
 
 // Neutral substitutes typed against the real scanner returns so downstream
 // code reads the same shape whether the scanner ran or was gated off.
@@ -68,7 +78,7 @@ async function scanProject(
   devRoot: string,
   flags: MinderConfig["featureFlags"],
   ctx: ProvenanceContext,
-): Promise<ProjectData | null> {
+): Promise<{ project: ProjectData; catalogWalk: ProjectCatalogWalk | null } | null> {
   const projectPath = path.join(devRoot, dirName);
 
   if (!(await isGitRepo(projectPath))) return null;
@@ -87,15 +97,27 @@ async function scanProject(
   // config-lint chain share the same promises (no double-scan).
   const mcpServersPromise = scanMcpServers(projectPath);
   const hooksPromise = scanClaudeHooks(projectPath);
+  // Hoist the three project catalog walks so both configLintPromise and the
+  // side-channel catalogWalk share the same promises (no double-scan in runCatalogLint).
+  const catalogLintEnabled = getFlag(flags, "configLint");
+  const skillsPromise = catalogLintEnabled
+    ? walkProjectSkills(projectPath, slug, ctx)
+    : Promise.resolve([] as SkillEntry[]);
+  const agentsPromise = catalogLintEnabled
+    ? walkProjectAgents(projectPath, slug, ctx)
+    : Promise.resolve([] as AgentEntry[]);
+  const commandsPromise = catalogLintEnabled
+    ? walkProjectCommands(projectPath, slug, ctx)
+    : Promise.resolve([] as CommandEntry[]);
   // Config lint chains off audit + mcpServers + hooks + project catalog.
-  const configLintPromise = getFlag(flags, "configLint")
+  const configLintPromise = catalogLintEnabled
     ? Promise.all([
         claudeMdAuditPromise,
         mcpServersPromise,
         hooksPromise,
-        walkProjectSkills(projectPath, slug, ctx),
-        walkProjectAgents(projectPath, slug, ctx),
-        walkProjectCommands(projectPath, slug, ctx),
+        skillsPromise,
+        agentsPromise,
+        commandsPromise,
       ]).then(([audit, mcp, hooksInfo, skills, agents, commands]) =>
         runConfigLint(projectPath, {
           claudeMdAudit: audit,
@@ -127,6 +149,9 @@ async function scanProject(
     catalogCounts,
     gsdPlanning,
     configLint,
+    skillsResult,
+    agentsResult,
+    commandsResult,
   ] = await Promise.all([
     scanPackageJson(projectPath),
     scanEnvFiles(projectPath),
@@ -158,6 +183,9 @@ async function scanProject(
       ? scanGsdPlanning(projectPath)
       : Promise.resolve(undefined),
     configLintPromise,
+    skillsPromise,
+    agentsPromise,
+    commandsPromise,
   ]);
 
   // Determine DB port from env or docker
@@ -180,7 +208,7 @@ async function scanProject(
     ? dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
     : undefined;
 
-  return {
+  const project: ProjectData = {
     slug,
     name: pkgResult.name || dirName,
     path: projectPath,
@@ -221,6 +249,10 @@ async function scanProject(
     lastActivity,
     scannedAt: new Date().toISOString(),
   };
+  const catalogWalk: ProjectCatalogWalk | null = catalogLintEnabled
+    ? { skills: skillsResult, agents: agentsResult, commands: commandsResult }
+    : null;
+  return { project, catalogWalk };
 }
 
 function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
@@ -265,6 +297,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
     : ({} as Awaited<ReturnType<typeof loadProvenanceContext>>);
 
   const allProjects: ProjectData[] = [];
+  // Side-channel map: slug → catalog walk entries already computed by scanProject.
+  // Passed to runCatalogLint so it can skip redundant per-project re-walks.
+  const catalogWalkBySlug = new Map<string, ProjectCatalogWalk>();
   // Track slugs seen so far to handle collisions across roots (first root wins)
   const seenSlugs = new Set<string>();
 
@@ -301,8 +336,9 @@ export async function scanAllProjects(): Promise<ScanResult> {
       const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx)));
       for (const r of results) {
         if (r) {
-          rootProjects.push(r);
-          seenSlugs.add(r.slug);
+          rootProjects.push(r.project);
+          seenSlugs.add(r.project.slug);
+          if (r.catalogWalk) catalogWalkBySlug.set(r.project.slug, r.catalogWalk);
         }
       }
     }
@@ -332,7 +368,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
-  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx);
+  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx, catalogWalkBySlug);
 
   return {
     projects: allProjects,

@@ -133,4 +133,31 @@ describe("runCatalogLint", () => {
     const findings = await runCatalogLint(PROJECTS, FLAGS_ON, EMPTY_CTX);
     expect(findings.some((f) => f.code === "agent/missing-description")).toBe(true);
   });
+
+  it("uses side-channel map — skips walkProjectSkills/Agents/Commands when slug is present", async () => {
+    stubMocks();
+    const walk = new Map([
+      ["a", { skills: [makeSkill()], agents: [makeAgent()], commands: [] }],
+    ]);
+    const project = { slug: "a", path: "/x/a" } as unknown as ProjectData;
+    await runCatalogLint([project], FLAGS_ON, EMPTY_CTX, walk);
+    expect(vi.mocked(walkProjectSkills)).not.toHaveBeenCalled();
+    expect(vi.mocked(walkProjectAgents)).not.toHaveBeenCalled();
+    expect(vi.mocked(walkProjectCommands)).not.toHaveBeenCalled();
+    // User/plugin command walks should still run
+    expect(vi.mocked(walkUserCommands)).toHaveBeenCalled();
+    expect(vi.mocked(walkPluginCommands)).toHaveBeenCalled();
+  });
+
+  it("falls back to walkProjectSkills/Agents/Commands when map is omitted", async () => {
+    stubMocks();
+    vi.mocked(walkProjectSkills).mockResolvedValue([]);
+    vi.mocked(walkProjectAgents).mockResolvedValue([]);
+    vi.mocked(walkProjectCommands).mockResolvedValue([]);
+    const project = { slug: "b", path: "/x/b" } as unknown as ProjectData;
+    await runCatalogLint([project], FLAGS_ON, EMPTY_CTX);
+    expect(vi.mocked(walkProjectSkills)).toHaveBeenCalledOnce();
+    expect(vi.mocked(walkProjectAgents)).toHaveBeenCalledOnce();
+    expect(vi.mocked(walkProjectCommands)).toHaveBeenCalledOnce();
+  });
 });

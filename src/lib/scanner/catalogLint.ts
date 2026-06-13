@@ -11,6 +11,7 @@ import {
 import type { ProvenanceContext } from "../indexer/types";
 import { getUserConfig } from "../userConfigCache";
 import { runGlobalLint } from "../lint/engine";
+import type { ProjectCatalogWalk } from "./index";
 
 /**
  * One-shot global catalog lint — runs once per scan after all projects resolve.
@@ -29,6 +30,7 @@ export async function runCatalogLint(
   projects: ProjectData[],
   flags: MinderConfig["featureFlags"],
   ctx: ProvenanceContext,
+  catalogWalkBySlug?: Map<string, ProjectCatalogWalk>,
 ): Promise<LintFinding[]> {
   if (!getFlag(flags, "configLint")) return [];
 
@@ -40,8 +42,12 @@ export async function runCatalogLint(
 
     // Walk project-scope agents/skills from the fresh scan instead of relying
     // on the stale getCachedScan() snapshot that loadCatalog(includeProjects:true) uses.
+    // When the side-channel map is present, reuse entries already computed by
+    // scanProject — avoids ~60 redundant traversals on a full scan.
     const projectEntryResults = await Promise.all(
       projects.map(async (p) => {
+        const pre = catalogWalkBySlug?.get(p.slug);
+        if (pre) return { skills: pre.skills, agents: pre.agents };
         const [pSkills, pAgents] = await Promise.all([
           walkProjectSkills(p.path, p.slug, ctx),
           walkProjectAgents(p.path, p.slug, ctx),
@@ -50,11 +56,17 @@ export async function runCatalogLint(
       })
     );
 
-    // Walk commands across all scopes (loadCatalog doesn't cover commands)
-    const [userCommands, pluginCommands, ...projectCommandSets] = await Promise.all([
+    // Walk commands across all scopes (loadCatalog doesn't cover commands).
+    // Project-scope commands also reuse the side-channel map when available.
+    const projectCommandSets = await Promise.all(
+      projects.map((p) => {
+        const pre = catalogWalkBySlug?.get(p.slug);
+        return pre ? Promise.resolve(pre.commands) : walkProjectCommands(p.path, p.slug, ctx);
+      })
+    );
+    const [userCommands, pluginCommands] = await Promise.all([
       walkUserCommands(ctx),
       walkPluginCommands(ctx.installedPlugins, ctx),
-      ...projects.map((p) => walkProjectCommands(p.path, p.slug, ctx)),
     ]);
     const allCommands = [userCommands, pluginCommands, ...projectCommandSets].flat();
 
