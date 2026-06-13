@@ -6,7 +6,10 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
 
 - **Next.js 16** (App Router) + TypeScript + React 19
 - **Tailwind CSS v4** + hand-rolled shadcn-style components (no shadcn CLI)
-- **No database** — filesystem is the database; user prefs in `.minder.json`
+- **SQLite index** (`better-sqlite3`, optional dep) at `~/.minder/index.db` — the
+  filesystem remains the source of truth; the DB is a derived, rebuildable index.
+  User prefs live in `.minder.json`. Set `MINDER_USE_DB=0` to disable the DB and fall
+  back to direct JSONL parsing.
 - **Dev port: 4100** — Turbopack is the default bundler in Next.js 16
 
 ## Commands
@@ -115,6 +118,16 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Skills: `SkillsBrowser` at `/skills` — same shape for skills. `ProjectSkillsTab` per-project. Supports bundled (`SKILL.md`-in-dir) and standalone `.md` layouts.
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton, toast)
+
+### Database (`src/lib/db/`, `src/lib/data/`)
+- SQLite index at `~/.minder/index.db` via `better-sqlite3` (optional dependency;
+  `connection.ts` wraps the `require` in try/catch and degrades gracefully if absent).
+- `ingest.ts` writes sessions/turns/tool-uses; `migrations.ts` versions the schema;
+  `maintenance.ts` handles pruning/vacuum; `otelQueries.ts` serves OTEL telemetry reads.
+- FTS5 (`prompts_fts`) backs session prompt search.
+- `src/lib/data/*FromDb.ts` are the DB-backed query modules; routes should obtain init
+  status via `probeInitStatus()` from `@/lib/data` rather than calling `initDb()` directly.
+- Backend selection: `MINDER_USE_DB` (default on; `=0` forces the direct-JSONL path).
 
 ## Known Limitations / Technical Debt
 
