@@ -162,14 +162,18 @@ async function parseGeminiFileWithMeta(
 
       const parts: string[] = [];
       if (m.thoughts && Array.isArray(m.thoughts)) {
-        if (m.thoughts.length > 0) hasThinking = true;
         for (const t of m.thoughts as unknown[]) {
           if (!t || typeof t !== "object" || Array.isArray(t)) continue;
           const thought = t as Record<string, unknown>;
           const desc =
             typeof thought.description === "string" ? thought.description.trim() :
             typeof thought.subject === "string" ? thought.subject.trim() : "";
-          if (desc) parts.push(desc);
+          // Only count thinking when a thought carries actual content — an empty
+          // or contentless `thoughts` array shouldn't flag hasThinking.
+          if (desc) {
+            parts.push(desc);
+            hasThinking = true;
+          }
         }
       }
       const mainText = extractTextContent(m.content ?? m.displayContent);
@@ -211,7 +215,7 @@ async function parseGeminiFileWithMeta(
   }
 
   const cliVersion =
-    typeof record.version === "string" && record.version.trim() ? record.version : null;
+    typeof record.version === "string" && record.version.trim() ? record.version.trim() : null;
   return { turns, meta: { compactBoundaries: [], cliVersion, hasThinking } };
 }
 

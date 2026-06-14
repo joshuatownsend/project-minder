@@ -213,4 +213,35 @@ describe("gemini adapter", () => {
     expect(meta.cliVersion).toBe("0.3.0");
     expect(meta.hasThinking).toBe(true);
   });
+
+  it("parseFileWithMeta() does not set hasThinking for contentless thoughts, and trims version", async () => {
+    const { default: geminiAdapter } = await import("@/lib/adapters/gemini");
+    const f = path.join(FIXTURE_DIR, "gemini-empty-thoughts.json");
+    fs.writeFileSync(
+      f,
+      JSON.stringify({
+        sessionId: "empty-thoughts",
+        startTime: "2025-06-01T10:00:00Z",
+        version: "  0.4.0  ",
+        messages: [
+          {
+            type: "gemini",
+            content: "answer",
+            model: "gemini-2.0-flash",
+            tokens: { input: 10, output: 5 },
+            thoughts: [{}, { description: "" }],
+          },
+        ],
+      }),
+      "utf-8"
+    );
+
+    const { meta } = await geminiAdapter.parseFileWithMeta!({
+      source: "gemini",
+      filePath: f,
+      projectDirName: "p",
+    });
+    expect(meta.hasThinking).toBe(false); // thoughts present but contentless
+    expect(meta.cliVersion).toBe("0.4.0"); // trimmed
+  });
 });
