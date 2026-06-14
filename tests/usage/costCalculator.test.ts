@@ -128,10 +128,47 @@ describe("costCalculator", () => {
   });
 
   describe("getModelPricing default fallback", () => {
-    it("completely unknown model returns sonnet pricing", () => {
-      const pricing = getModelPricing("totally-unknown-model-xyz");
+    it("an unrecognized Claude-family id falls back to sonnet pricing", () => {
+      // No opus/sonnet/haiku keyword and not in any map, but recognizably
+      // Claude — Sonnet is a reasonable same-family approximation.
+      const pricing = getModelPricing("claude-experimental-zzz");
       expect(pricing.inputCostPerToken).toBe(SONNET_INPUT);
       expect(pricing.outputCostPerToken).toBe(SONNET_OUTPUT);
+    });
+
+    it("an unknown non-Claude id returns zero (unknown) pricing, NOT Claude rates", () => {
+      // The offline fallback map is Claude-only, so these ids reach step 4b.
+      // They must be priced as unknown ($0), not silently billed at Sonnet.
+      for (const id of [
+        "gpt-5-turbo",
+        "gemini-3.0-pro",
+        "o4-mini",
+        "totally-unknown-model-xyz",
+      ]) {
+        const pricing = getModelPricing(id);
+        expect(pricing.inputCostPerToken, id).toBe(0);
+        expect(pricing.outputCostPerToken, id).toBe(0);
+        expect(pricing.cacheWriteCostPerToken, id).toBe(0);
+        expect(pricing.cacheReadCostPerToken, id).toBe(0);
+      }
+    });
+
+    it("an unknown non-Claude turn produces zero cost (not a fabricated Claude-rate cost)", async () => {
+      const turn = makeTurn({ model: "gpt-5-turbo", inputTokens: 1000, outputTokens: 500 });
+      const cost = await computeTurnCost(turn);
+      expect(cost).toBe(0);
+    });
+
+    it("the empty-string model sentinel keeps Sonnet pricing (Claude file-parse 'unknown' bucket)", () => {
+      // claudeConversations.ts maps its per-model "unknown" bucket to
+      // getModelPricing("") and expects the Sonnet estimate. The non-Claude
+      // zero fallback must NOT capture this Claude sentinel, or cache-hit
+      // Claude files would report $0. Whitespace-only behaves the same.
+      for (const sentinel of ["", "   "]) {
+        const pricing = getModelPricing(sentinel);
+        expect(pricing.inputCostPerToken, JSON.stringify(sentinel)).toBe(SONNET_INPUT);
+        expect(pricing.outputCostPerToken, JSON.stringify(sentinel)).toBe(SONNET_OUTPUT);
+      }
     });
   });
 
