@@ -26,6 +26,7 @@ interface Reloaded {
   conn: typeof import("@/lib/db/connection");
   mig: typeof import("@/lib/db/migrations");
   ingest: typeof import("@/lib/db/ingest");
+  data: typeof import("@/lib/data");
 }
 
 let tmpHome: string;
@@ -43,7 +44,8 @@ async function reloadModulesPointingAt(home: string): Promise<Reloaded> {
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
   const ingest = await import("@/lib/db/ingest");
-  return { conn, mig, ingest };
+  const data = await import("@/lib/data");
+  return { conn, mig, ingest, data };
 }
 
 interface JsonlEntry {
@@ -1809,6 +1811,131 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
     ).toBe(1);
+    reloaded.conn.closeDb();
+  });
+
+  // ── PR #209 review fixes ───────────────────────────────────────────────
+
+  it("replaces a stale row when the adapter resolves a different sessionId for the same file (UNIQUE file_path)", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    const codexFile = await makeCodexFile();
+    const sf: SessionFile = { source: "codex", filePath: codexFile, projectDirName: "codexproj" };
+
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude", "codex"]), adapterSessions: [sf],
+      parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1")],
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id='cx-1'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Same file, but the adapter now resolves a DIFFERENT id (e.g. a parser
+    // change). `force` bypasses the skip-gate. Must not throw on the
+    // UNIQUE(file_path) constraint, and must replace the stale row.
+    const stats = await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, force: true, config: cfg(["claude", "codex"]), adapterSessions: [sf],
+      parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-2")],
+    });
+    expect(stats.errors).toBe(0);
+    const rows = db
+      .prepare("SELECT session_id FROM sessions WHERE file_path = ?")
+      .all(codexFile) as Array<{ session_id: string }>;
+    expect(rows).toEqual([{ session_id: "cx-2" }]); // exactly one row, new id wins
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id='cx-1'").get() as { n: number }).n
+    ).toBe(0);
+    reloaded.conn.closeDb();
+  });
+
+  it("refreshes stale daily_costs tuples when an adapter file is rewritten with a different model", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    await fs.mkdir(projectsDir, { recursive: true });
+    const codexFile = await makeCodexFile();
+    const sf: SessionFile = { source: "codex", filePath: codexFile, projectDirName: "codexproj" };
+
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude", "codex"]), adapterSessions: [sf],
+      parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-4", "hi", "cx-1")],
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-4'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Rewrite the SAME file with a different model. The old (day|project|gpt-4)
+    // tuple must be refreshed away, not left stale (mirrors the Claude path's
+    // old+new tuple union).
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, force: true, config: cfg(["claude", "codex"]), adapterSessions: [sf],
+      parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1")],
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-4'").get() as { n: number }).n
+    ).toBe(0); // stale tuple recomputed → gone
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-5'").get() as { n: number }).n
+    ).toBe(1);
+    reloaded.conn.closeDb();
+  });
+
+  it("prunes non-Claude rows on adapter-disable even with no Claude tree (Codex-only user)", async () => {
+    const { reloaded } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    const codexFile = await makeCodexFile();
+    const missingProjectsDir = path.join(tmpHome, "no-such-claude", "projects");
+    const parseAdapterFile = vi.fn(async (_f: SessionFile): Promise<UsageTurn[]> => [
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1"),
+    ]);
+
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir: missingProjectsDir, config: cfg(["claude", "codex"]),
+      adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }],
+      parseAdapterFile,
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Disable codex (empty discovery), still no Claude tree. The early-return
+    // must NOT fire (existing non-Claude rows present), so the prune runs.
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir: missingProjectsDir, config: cfg(["claude"]), adapterSessions: [], parseAdapterFile,
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(0);
+    reloaded.conn.closeDb();
+  });
+
+  it("source-filtered byCategory excludes other sources (no rollup source-mixing)", async () => {
+    process.env.MINDER_USE_DB = "1";
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    // One real Claude session...
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "claude-1.jsonl"), [
+      userTurn("2026-05-01T09:00:00Z", "hi claude"),
+      assistantTurn("2026-05-01T09:00:01Z", "claude-sonnet-4-5", "hello"),
+    ]);
+    // ...and one Codex session, in the same DB.
+    const codexFile = await makeCodexFile();
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude", "codex"]),
+      adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }],
+      parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "do work", "cx-1")],
+    });
+
+    const sumTurns = (cats: Array<{ turns: number }>) => cats.reduce((n, c) => n + c.turns, 0);
+    const all = (await reloaded.data.getUsage("all", undefined)).report;
+    const codex = (await reloaded.data.getUsage("all", undefined, "codex")).report;
+    const claude = (await reloaded.data.getUsage("all", undefined, "claude")).report;
+
+    // All-sources byCategory sees both assistant turns; each source filter must
+    // see only its own (before the fix, the source-agnostic rollup leaked both
+    // into every source filter).
+    expect(sumTurns(all.byCategory)).toBe(2);
+    expect(sumTurns(codex.byCategory)).toBe(1);
+    expect(sumTurns(claude.byCategory)).toBe(1);
     reloaded.conn.closeDb();
   });
 });

@@ -2508,17 +2508,43 @@ async function reconcileAdapterSessionFile(
   const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
   if (!parsed) return empty;
 
+  // `sessions.file_path` is UNIQUE. Look up any row already holding this path:
+  // if its session_id DIFFERS from the freshly parsed one (an adapter parser
+  // change can alter the resolved id), `writeSession`'s session_id-keyed DELETE
+  // would leave it in place and the subsequent INSERT would collide on the
+  // UNIQUE(file_path) constraint. Capture the old id so we can both refresh the
+  // rollup tuples it contributed to and clear it before the write.
+  const existingRow = db
+    .prepare("SELECT session_id FROM sessions WHERE file_path = ?")
+    .get(file.filePath) as { session_id: string } | undefined;
+  const oldSessionId = existingRow?.session_id;
+
+  // Union the (day|project|model) and (day|project|category) tuples the OLD
+  // session contributed to, so a model/category/day move — or a
+  // DERIVED_VERSION reclassification on re-parse — doesn't strand a stale
+  // daily_costs / category_costs row. Mirrors the Claude full-replace path
+  // (`reconcileSessionFile`), which unions old + new tuples for the refresh.
+  const affectedDays = new Set<string>(parsed.affectedDays);
+  const affectedCategoryTuples = new Set<string>(parsed.affectedCategoryTuples);
+  if (oldSessionId) {
+    for (const t of collectExistingDailyTuples(db, oldSessionId)) affectedDays.add(t);
+    for (const t of collectExistingCategoryTuples(db, oldSessionId)) affectedCategoryTuples.add(t);
+  }
+
   let rows = 0;
   const txn = db.transaction(() => {
+    // Clear a stale row sharing this UNIQUE file_path under a different id
+    // (prompts_fts first, matching writeSession's delete contract) so the
+    // INSERT below can't hit the UNIQUE(file_path) constraint.
+    if (oldSessionId && oldSessionId !== parsed.sessionId) {
+      db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
+      db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId);
+    }
     rows = writeSession(db, parsed);
   });
   txn();
 
-  return {
-    rowsWritten: rows,
-    affectedDays: parsed.affectedDays,
-    affectedCategoryTuples: parsed.affectedCategoryTuples,
-  };
+  return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
 }
 
 export async function reconcileAllSessions(
@@ -2596,10 +2622,14 @@ export async function reconcileAllSessions(
     claudeWalkFailed = true;
   }
 
-  // Nothing to do from either source — preserve the original early return so a
-  // transient Claude readdir failure with no adapters enabled doesn't fall
-  // through to the prune pass and delete the whole Claude corpus.
-  if (claudeWalkFailed && adapterSessions.length === 0) {
+  // Nothing to discover AND nothing already indexed under a non-Claude source
+  // — preserve the original early return so a transient Claude readdir failure
+  // doesn't fall through to the prune pass and delete the whole Claude corpus.
+  // We must NOT early-return when non-Claude rows already exist (even with no
+  // Claude tree), or a Codex/Gemini-only user who disables an adapter could
+  // never prune its now-undiscovered sessions. The Claude prune-protection
+  // below still shields Claude rows on a Claude-walk failure.
+  if (claudeWalkFailed && adapterSessions.length === 0 && existingAdapterMeta.size === 0) {
     return stats;
   }
 

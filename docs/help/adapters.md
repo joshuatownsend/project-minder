@@ -40,7 +40,7 @@ Note: Gemini CLI does not report cache-creation tokens, so `cacheCreateTokens` w
 
 ## How non-Claude sessions are indexed
 
-When you enable Codex or Gemini, their sessions are indexed into the same SQLite index Claude Code sessions use, so they appear in the sessions browser and feed the usage analytics. Two things are worth knowing about how this works:
+When you enable Codex or Gemini, their sessions are indexed into the same SQLite index Claude Code sessions use, so they appear in the sessions browser and feed the usage analytics. A few things are worth knowing about how this works:
 
 - **Opt-in.** Indexing only happens for adapters listed in `enabledAdapters`. With the default (`["claude"]`), no Codex/Gemini data is read or written — enabling an adapter is what turns its indexing on. Disabling an adapter later removes its sessions from the index on the next scan.
 - **Lean index for non-Claude.** Claude Code sessions are parsed from their raw JSONL into the richest possible record. Codex/Gemini sessions are indexed through the adapter's own parser, which yields a slightly leaner record. What you **do** get: per-session and per-turn **cost**, **token** totals, **By Source / By Model / By Project / By Category** breakdowns, **work-mode** mix, **one-shot** rate, **tool usage**, and full **session list + detail** (timeline, tools). What is currently **Claude-only**: full-text prompt search richness, PR/ticket chips, resume-anomaly and compaction-loop flags, and per-turn context-fill.
