@@ -38,6 +38,17 @@ To enable Gemini CLI alongside Claude Code:
 
 Note: Gemini CLI does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Gemini sessions. Token values are treated as per-turn deltas. Cost estimates use Google model pricing when available.
 
+## How non-Claude sessions are indexed
+
+When you enable Codex or Gemini, their sessions are indexed into the same SQLite index Claude Code sessions use, so they appear in the sessions browser and feed the usage analytics. A few things are worth knowing about how this works:
+
+- **Opt-in.** Indexing only happens for adapters listed in `enabledAdapters`. With the default (`["claude"]`), no Codex/Gemini data is read or written — enabling an adapter is what turns its indexing on. Disabling an adapter later removes its sessions from the index on the next scan.
+- **Lean index for non-Claude.** Claude Code sessions are parsed from their raw JSONL into the richest possible record. Codex/Gemini sessions are indexed through the adapter's own parser, which yields a slightly leaner record. What you **do** get: per-session and per-turn **cost**, **token** totals, **By Source / By Model / By Project / By Category** breakdowns, **work-mode** mix, **one-shot** rate, **tool usage**, and full **session list + detail** (timeline, tools). What is currently **Claude-only**: full-text prompt search richness, PR/ticket chips, resume-anomaly and compaction-loop flags, and per-turn context-fill.
+- **Identity.** Each non-Claude session is keyed by the real session ID the harness records (Codex `session_meta.payload.id`, Gemini `record.sessionId`), not its filename — so sessions correlate correctly and never collide across harnesses.
+- **Freshness.** New/changed Codex/Gemini sessions are picked up by the background sweep (about every 30 seconds) rather than instantly, which is the cadence Claude sessions get from the per-file watcher.
+
+> **Pricing caveat:** cost for a non-Claude model is accurate when live pricing data includes that exact model id; an unknown `gpt-*`/`gemini-*` id currently falls back to Claude Sonnet pricing rather than being flagged. Treat non-Claude costs as estimates until model pricing is hardened.
+
 ## Managing adapters
 
 Go to **Settings → Adapters** to see which adapters are enabled. Disabling an adapter hides its sessions from the session browser and excludes them from analytics. All adapters, including Claude Code, can be toggled.

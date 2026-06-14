@@ -278,8 +278,40 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
 }
 
 function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreakdown[] {
-  // From the `category_costs` rollup. `oneShotRate` is intentionally
-  // omitted — see header comment.
+  // Source-filtered: the `category_costs` rollup is keyed only by
+  // (day, project, category) with no `source` column, so it can't answer
+  // per-source. Recompute from `turns` joined to `sessions` (same approach as
+  // `queryDaily` / `queryByModel`) — otherwise a `?source=` byCategory would
+  // mix all sources while every other breakdown on the report is
+  // source-filtered. The token formula matches the rollup's
+  // (`refreshCategoryCosts`): input + output + cache_create + cache_read.
+  if (f.source !== null) {
+    const rows = prepCached(db,
+        `SELECT
+           t.category                 AS category,
+           COUNT(*)                   AS turns,
+           COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+           COALESCE(SUM(t.cost_usd), 0) AS cost
+         FROM turns t JOIN sessions s USING (session_id)
+         WHERE t.role = 'assistant'
+           AND t.category IS NOT NULL
+           AND (@periodStart IS NULL OR t.ts >= @periodStart)
+           AND (@project IS NULL OR s.project_slug = @project)
+           AND (@source IS NULL OR s.source = @source)
+         GROUP BY t.category
+         ORDER BY cost DESC`
+      )
+      .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
+    return rows.map((r) => ({
+      category: r.category as CategoryType,
+      turns: r.turns,
+      tokens: r.tokens,
+      cost: r.cost,
+    }));
+  }
+
+  // Source-agnostic (the common case): read the fast `category_costs` rollup.
+  // `oneShotRate` is intentionally omitted — see header comment.
   const rows = prepCached(db,
       `SELECT
          category,
