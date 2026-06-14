@@ -27,6 +27,17 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
   },
 };
 
+// Zero-cost pricing for an unknown NON-Claude model id. Returned instead of the
+// Claude Sonnet default so an unpriceable `gpt-*` / `gemini-*` id surfaces as a
+// visible $0 ("unknown") in the By-Source / By-Model breakdowns rather than a
+// fabricated Claude-rate cost. See `getModelPricing` step 4b.
+const UNKNOWN_PRICING: ModelPricing = {
+  inputCostPerToken: 0,
+  outputCostPerToken: 0,
+  cacheWriteCostPerToken: 0,
+  cacheReadCostPerToken: 0,
+};
+
 // ── Module-level state ───────────────────────────────────────────────────────
 
 let pricingMap: Map<string, ModelPricing> | null = null;
@@ -175,9 +186,19 @@ export function getModelPricing(model: string): ModelPricing {
       base = map.get("claude-haiku-3.5") ?? FALLBACK_PRICING["claude-haiku-3.5"];
     } else if (lower.includes("sonnet")) {
       base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
-    } else {
-      // 4. Default fallback: sonnet pricing
+    } else if (lower.includes("claude")) {
+      // 4a. Unrecognized Claude-family id (no opus/sonnet/haiku keyword, not in
+      // any map) — Sonnet is a reasonable same-family approximation.
       base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
+    } else {
+      // 4b. Unknown NON-Claude model. Pricing is genuinely unknown — return
+      // zero rather than silently billing it at Claude Sonnet rates. A visible
+      // $0 ("unknown") is honest; a fabricated Claude-rate cost is not. When
+      // online, LiteLLM supplies real OpenAI/Google pricing via the exact/fuzzy
+      // match above, so this branch only hits unlisted ids (e.g. a gpt-*/
+      // gemini-* id while serving the Claude-only offline fallback). Users can
+      // still override via a pricing rule (applied below).
+      base = UNKNOWN_PRICING;
     }
   }
 
