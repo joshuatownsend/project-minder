@@ -106,4 +106,39 @@ describe("codex adapter", () => {
     expect(matchingFiles.length).toBe(1);
 
   });
+
+  it("parseFileWithMeta() returns the same turns plus session meta", async () => {
+    const { default: codexAdapter } = await import("@/lib/adapters/codex");
+    const filePath = path.join(SESSIONS_DIR, `${SESSION_ID}.jsonl`);
+    const file = { source: "codex", filePath, projectDirName: "home-user-my-project" };
+
+    const turns = await codexAdapter.parseFile(file);
+    const { turns: metaTurns, meta } = await codexAdapter.parseFileWithMeta!(file);
+
+    // parseFile delegates to the WithMeta helper, so turns are identical.
+    expect(metaTurns).toEqual(turns);
+    for (const t of metaTurns) expect(t.source).toBe("codex");
+
+    // SessionTurnsMeta shape.
+    expect(meta.compactBoundaries).toEqual([]); // Claude-only concept
+    expect(meta.cliVersion).toBe("1.0.0"); // from session_meta cli_version
+    expect(meta.hasThinking).toBe(false); // Codex emits output_text, not thinking
+  });
+
+  it("parseFileWithMeta() sets hasThinking when an assistant 'thinking' block is present", async () => {
+    const { default: codexAdapter } = await import("@/lib/adapters/codex");
+    const thinkingFile = path.join(FIXTURE_DIR, "codex-thinking.jsonl");
+    const jsonl =
+      JSON.stringify({ type: "session_meta", payload: { id: "codex-thinking", cwd: PROJECT_CWD, timestamp: "2025-06-01T10:00:00Z" } }) + "\n" +
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "thinking", text: "pondering" }, { type: "output_text", text: "answer" }] } }) + "\n";
+    fs.writeFileSync(thinkingFile, jsonl, "utf-8");
+
+    const { meta } = await codexAdapter.parseFileWithMeta!({
+      source: "codex",
+      filePath: thinkingFile,
+      projectDirName: "home-user-my-project",
+    });
+    expect(meta.hasThinking).toBe(true);
+    expect(meta.cliVersion).toBeNull(); // no cli_version / version fields in this fixture
+  });
 });

@@ -22,6 +22,7 @@ STOP conditions, and update your row below when done.
 | 004 | Make dev-server stop/restart deterministic + add tests | P2 | M | — | DONE (PR #205 merged) |
 | 005 | API-route characterization-test harness (spike + seed) | P3 | M | 003* | DONE (PR #207 merged — rebased onto post-004 main; cast fix + review fix) |
 | 006 | Multi-harness adapter parity — investigation & gap analysis (spike) | P3 | M | — | DONE (PR #206 merged); doc at `docs/adapters/multi-harness-parity.md` |
+| 007 | Harness-source abstraction — Codex/Gemini instructions catalog | P3 | M-L | — | TODO (deferred design, captured 2026-06-14 from the multi-harness workflow; multi-harness item 5) |
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED` (with one-line reason) |
 `REJECTED` (with one-line rationale — finding fixed independently or approach abandoned).
