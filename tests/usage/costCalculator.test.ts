@@ -158,6 +158,18 @@ describe("costCalculator", () => {
       const cost = await computeTurnCost(turn);
       expect(cost).toBe(0);
     });
+
+    it("the empty-string model sentinel keeps Sonnet pricing (Claude file-parse 'unknown' bucket)", () => {
+      // claudeConversations.ts maps its per-model "unknown" bucket to
+      // getModelPricing("") and expects the Sonnet estimate. The non-Claude
+      // zero fallback must NOT capture this Claude sentinel, or cache-hit
+      // Claude files would report $0. Whitespace-only behaves the same.
+      for (const sentinel of ["", "   "]) {
+        const pricing = getModelPricing(sentinel);
+        expect(pricing.inputCostPerToken, JSON.stringify(sentinel)).toBe(SONNET_INPUT);
+        expect(pricing.outputCostPerToken, JSON.stringify(sentinel)).toBe(SONNET_OUTPUT);
+      }
+    });
   });
 
   describe("computeTurnCost dollar amount", () => {

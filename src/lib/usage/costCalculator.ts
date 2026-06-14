@@ -186,9 +186,13 @@ export function getModelPricing(model: string): ModelPricing {
       base = map.get("claude-haiku-3.5") ?? FALLBACK_PRICING["claude-haiku-3.5"];
     } else if (lower.includes("sonnet")) {
       base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
-    } else if (lower.includes("claude")) {
+    } else if (lower.includes("claude") || model.trim() === "") {
       // 4a. Unrecognized Claude-family id (no opus/sonnet/haiku keyword, not in
-      // any map) — Sonnet is a reasonable same-family approximation.
+      // any map), OR the empty-string sentinel. The Claude file-parse path maps
+      // its per-model "unknown" bucket (cache-hit rows with no per-model token
+      // attribution) to `getModelPricing("")` and documents it as the Sonnet
+      // estimate (`claudeConversations.ts` computeCostFromPerModel / cache-hit
+      // accumulation). So `""` is a Claude sentinel — keep Sonnet, never $0.
       base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
     } else {
       // 4b. Unknown NON-Claude model. Pricing is genuinely unknown — return
