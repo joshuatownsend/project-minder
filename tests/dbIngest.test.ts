@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import type { UsageTurn } from "@/lib/usage/types";
+import type { SessionFile } from "@/lib/adapters/types";
+import type { MinderConfig } from "@/lib/types";
 
 // Ingest integration test. Lives in tmpHome with a synthetic
 // `.claude/projects/...` tree so we never touch real user data.
@@ -1582,6 +1585,230 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(prs).toEqual([
       { pr_url: "https://github.com/foo/bar/pull/88", pr_number: 88 },
     ]);
+    reloaded.conn.closeDb();
+  });
+});
+
+describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter pass", () => {
+  async function setup(): Promise<{ reloaded: Reloaded; projectsDir: string }> {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const init = await reloaded.mig.initDb();
+    expect(init.error).toBeNull();
+    expect(init.available).toBe(true);
+    return { reloaded, projectsDir: path.join(tmpHome, ".claude", "projects") };
+  }
+
+  function cfg(enabledAdapters: string[]): MinderConfig {
+    return { statuses: {}, hidden: [], portOverrides: {}, devRoot: tmpHome, enabledAdapters };
+  }
+
+  function uUser(ts: string, text: string, sessionId: string, slug = "codexproj"): UsageTurn {
+    return {
+      timestamp: ts, sessionId, projectSlug: slug, projectDirName: slug,
+      model: "", role: "user", inputTokens: 0, outputTokens: 0,
+      cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [], userMessageText: text,
+    };
+  }
+  function uAsst(
+    ts: string, model: string, text: string, sessionId: string,
+    toolCalls: UsageTurn["toolCalls"] = [], slug = "codexproj"
+  ): UsageTurn {
+    return {
+      timestamp: ts, sessionId, projectSlug: slug, projectDirName: slug,
+      model, role: "assistant", inputTokens: 200, outputTokens: 100,
+      cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls, assistantText: text,
+    };
+  }
+
+  async function makeCodexFile(name = "rollout-xyz.jsonl"): Promise<string> {
+    const fp = path.join(tmpHome, ".codex", "sessions", name);
+    await fs.mkdir(path.dirname(fp), { recursive: true });
+    await fs.writeFile(fp, "x"); // content irrelevant; parseAdapterFile is mocked
+    return fp;
+  }
+
+  // ── Unit: buildAdapterParsedSession (pure conversion) ──────────────────
+  it("buildAdapterParsedSession derives source/sessionId/cost/category from UsageTurn[]", async () => {
+    const { reloaded } = await setup();
+    const file: SessionFile = {
+      source: "codex",
+      filePath: "/home/u/.codex/sessions/r1.jsonl",
+      projectDirName: "codexproj",
+    };
+    const turns: UsageTurn[] = [
+      uUser("2026-05-01T10:00:00Z", "build a parser", "cx-real-id"),
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "on it", "cx-real-id", [
+        { name: "Read", arguments: { file_path: "/repo/a.ts" } },
+      ]),
+      uAsst("2026-05-01T10:00:02Z", "gpt-5", "done", "cx-real-id", [
+        { name: "Edit", arguments: { file_path: "/repo/a.ts", old_string: "x", new_string: "y" } },
+      ]),
+    ];
+    const parsed = reloaded.ingest.buildAdapterParsedSession(file, turns, 1_700_000_000_000, 1234)!;
+    expect(parsed).not.toBeNull();
+    expect(parsed.source).toBe("codex"); // NOT hardcoded "claude"
+    expect(parsed.sessionId).toBe("cx-real-id"); // from turns, NOT filename "r1"
+    expect(parsed.projectSlug).toBe("codexproj");
+    expect(parsed.turnCount).toBe(3);
+    expect(parsed.userTurnCount).toBe(1);
+    expect(parsed.assistantTurnCount).toBe(2);
+    expect(parsed.toolCallCount).toBe(2);
+    expect(parsed.primaryModel).toBe("gpt-5");
+    expect(parsed.costUsd).toBeGreaterThan(0);
+    expect(parsed.startTs).toBe("2026-05-01T10:00:00Z");
+    expect(parsed.endTs).toBe("2026-05-01T10:00:02Z");
+    expect(parsed.initialPrompt).toBe("build a parser");
+    expect(parsed.byteOffset).toBe(1234);
+    // assistant turns classified, user turn not
+    expect(parsed.turns[0].category).toBeNull();
+    expect(parsed.turns[1].category).toBeTypeOf("string");
+    // affected rollup tuple keyed on the real slug + model
+    expect([...parsed.affectedDays]).toContain("2026-05-01|codexproj|gpt-5");
+    reloaded.conn.closeDb();
+  });
+
+  it("buildAdapterParsedSession returns null for an empty session", async () => {
+    const { reloaded } = await setup();
+    const file: SessionFile = { source: "gemini", filePath: "/x/s.json", projectDirName: "p" };
+    expect(reloaded.ingest.buildAdapterParsedSession(file, [], 1, 0)).toBeNull();
+    reloaded.conn.closeDb();
+  });
+
+  // ── Integration: discover → parse → write via the reconcile seams ──────
+  it("ingests a non-Claude session with source/sessionId/turns/tool_uses", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    const codexFile = await makeCodexFile();
+    const adapterSessions: SessionFile[] = [
+      { source: "codex", filePath: codexFile, projectDirName: "codexproj" },
+    ];
+    const parseAdapterFile = vi.fn(async (_f: SessionFile): Promise<UsageTurn[]> => [
+      uUser("2026-05-01T10:00:00Z", "hello", "cx-1"),
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1", [
+        { name: "Edit", arguments: { file_path: "/repo/x.ts", old_string: "a", new_string: "b" } },
+      ]),
+    ]);
+
+    const stats = await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude", "codex"]), adapterSessions, parseAdapterFile,
+    });
+    expect(stats.errors).toBe(0);
+    expect(stats.filesChanged).toBe(1);
+
+    const session = db.prepare("SELECT * FROM sessions WHERE session_id = 'cx-1'").get() as any;
+    expect(session).toBeDefined();
+    expect(session.source).toBe("codex");
+    expect(session.primary_model).toBe("gpt-5");
+    expect(session.cost_usd).toBeGreaterThan(0);
+    expect(session.assistant_turn_count).toBe(1);
+
+    const turns = db
+      .prepare("SELECT role FROM turns WHERE session_id = 'cx-1' ORDER BY turn_index")
+      .all();
+    expect(turns).toHaveLength(2);
+    const tools = db.prepare("SELECT tool_name FROM tool_uses WHERE session_id = 'cx-1'").all();
+    expect(tools).toContainEqual({ tool_name: "Edit" });
+
+    // By-Source breakdown can now see a non-claude row.
+    const sources = db.prepare("SELECT DISTINCT source FROM sessions ORDER BY source").all();
+    expect(sources).toContainEqual({ source: "codex" });
+    reloaded.conn.closeDb();
+  });
+
+  it("skips an unchanged non-Claude file on a second reconcile (no re-parse)", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    const codexFile = await makeCodexFile();
+    const adapterSessions: SessionFile[] = [
+      { source: "codex", filePath: codexFile, projectDirName: "codexproj" },
+    ];
+    const parseAdapterFile = vi.fn(async (_f: SessionFile): Promise<UsageTurn[]> => [
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1"),
+    ]);
+    const opts = { projectsDir, config: cfg(["claude", "codex"]), adapterSessions, parseAdapterFile };
+
+    await reloaded.ingest.reconcileAllSessions(db, opts);
+    expect(parseAdapterFile).toHaveBeenCalledTimes(1);
+    const second = await reloaded.ingest.reconcileAllSessions(db, opts);
+    // mtime/size/derived_version unchanged → skip-gate returns before parsing.
+    expect(parseAdapterFile).toHaveBeenCalledTimes(1);
+    expect(second.filesChanged).toBe(0);
+    reloaded.conn.closeDb();
+  });
+
+  it("prunes a non-Claude session when its adapter is disabled (no longer discovered)", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    // Realistic scenario: the user has a Claude tree AND Codex, then disables
+    // Codex. The Claude walk must succeed (be enumerable) for the prune pass to
+    // run — a transient Claude-walk failure deliberately skips pruning.
+    await fs.mkdir(projectsDir, { recursive: true });
+    const codexFile = await makeCodexFile();
+    const parseAdapterFile = vi.fn(async (_f: SessionFile): Promise<UsageTurn[]> => [
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1"),
+    ]);
+
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude", "codex"]),
+      adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }],
+      parseAdapterFile,
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Adapter disabled → empty discovery → pruned.
+    await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir, config: cfg(["claude"]), adapterSessions: [], parseAdapterFile,
+    });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(0);
+    reloaded.conn.closeDb();
+  });
+
+  it("default config (claude only) ingests NO non-Claude rows but still indexes Claude", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    // A real Claude session in the tmp tree.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "claude-1.jsonl"), [
+      userTurn("2026-05-01T09:00:00Z", "hi claude"),
+      assistantTurn("2026-05-01T09:00:01Z", "claude-sonnet-4-5", "hello"),
+    ]);
+    // No adapterSessions / parseAdapterFile override: real discovery runs, but
+    // ~/.codex and ~/.gemini don't exist under tmpHome and enabledAdapters is
+    // claude-only anyway — so the adapter pass is a verified no-op.
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir, config: cfg(["claude"]) });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source<>'claude'").get() as { n: number }).n
+    ).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='claude'").get() as { n: number }).n
+    ).toBe(1);
+    reloaded.conn.closeDb();
+  });
+
+  it("ingests adapter sessions even when ~/.claude/projects does not exist (Codex-only user)", async () => {
+    const { reloaded } = await setup();
+    const db = (await reloaded.conn.getDb())!;
+    const codexFile = await makeCodexFile();
+    // Point projectsDir at a path that does NOT exist — the Claude walk fails,
+    // but that must no longer abort the whole reconcile.
+    const missingProjectsDir = path.join(tmpHome, "no-such-claude", "projects");
+    const parseAdapterFile = vi.fn(async (_f: SessionFile): Promise<UsageTurn[]> => [
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1"),
+    ]);
+
+    const stats = await reloaded.ingest.reconcileAllSessions(db, {
+      projectsDir: missingProjectsDir,
+      config: cfg(["claude", "codex"]),
+      adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }],
+      parseAdapterFile,
+    });
+    expect(stats.errors).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(1);
     reloaded.conn.closeDb();
   });
 });

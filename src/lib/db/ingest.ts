@@ -35,6 +35,10 @@ import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
 import { parseStoredArgs } from "./storedArgs";
 import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
+import { discoverAllSessions, getAdapter } from "@/lib/adapters";
+import type { SessionFile } from "@/lib/adapters/types";
+import { readConfig } from "@/lib/config";
+import type { MinderConfig } from "@/lib/types";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -1987,6 +1991,24 @@ export interface ReconcileOptions {
   projectsDir?: string;
   /** Force re-parse of every session, ignoring the mtime/size + version gate. */
   force?: boolean;
+  /**
+   * Resolved Minder config, used to enumerate enabled harness adapters for
+   * the non-Claude ingest pass. Defaults to `readConfig()`. Tests inject this
+   * to control `enabledAdapters` without touching `.minder.json`.
+   */
+  config?: MinderConfig;
+  /**
+   * Test seam: override the discovered non-Claude session files. Defaults to
+   * `discoverAllSessions(config)` minus Claude. Lets tests drive the adapter
+   * pass with fixtures instead of the real `~/.codex` / `~/.gemini` homes.
+   */
+  adapterSessions?: SessionFile[];
+  /**
+   * Test seam: override how a `SessionFile` is parsed into `UsageTurn[]`.
+   * Defaults to the registered adapter's `parseFile`. Lets tests supply
+   * canned turns without a real adapter or filesystem.
+   */
+  parseAdapterFile?: (file: SessionFile) => Promise<UsageTurn[]>;
 }
 
 export interface FileReconcileResult {
@@ -2200,6 +2222,305 @@ function collectExistingCategoryTuples(db: DatabaseT.Database, sessionId: string
  * Tests call this directly. The watcher (P2a-2.2) will call this for the
  * initial reconcile then react to chokidar events for incremental work.
  */
+/**
+ * Build a {@link ParsedSession} from a non-Claude harness adapter's
+ * `parseFile` output. This is the "lean" ingest path: the `SessionAdapter`
+ * contract returns `UsageTurn[]` (a cost/usage projection), which carries less
+ * than the rich `ParsedSession` that Claude's raw-JSONL reader produces. So
+ * Claude-specific richness that can't be recovered from turns alone (FTS byte
+ * offsets, work-mode from raw stream events, PR/ticket harvesting, resume
+ * anomaly, compaction-loop detection, per-turn context fill) is left neutral,
+ * while everything derivable from the turns themselves is computed with the
+ * SAME helpers the Claude path uses — `classifyTurn`, `applyPricing`,
+ * `detectOneShot`, `aggregateWorkMode` — so Codex/Gemini sessions get real
+ * By-Source / By-Model / By-Project / By-Category / one-shot / work-mode
+ * parity, not empty shells.
+ *
+ * The two identity fixes the keystone requires live here:
+ *   - `source` comes from the {@link SessionFile} (never hardcoded "claude").
+ *   - `sessionId` comes from the adapter-resolved id carried on the turns
+ *     (codex `session_meta.payload.id`, gemini `record.sessionId`), NOT the
+ *     filename — so cross-harness sessions can't collide or mis-prune.
+ *
+ * Returns `null` for an empty session so the caller skips writing a row.
+ *
+ * Exported for unit testing the conversion in isolation.
+ */
+export function buildAdapterParsedSession(
+  file: SessionFile,
+  turns: UsageTurn[],
+  fileMtimeMs: number,
+  fileSize: number
+): ParsedSession | null {
+  if (turns.length === 0) return null;
+
+  const sessionId =
+    turns.find((t) => t.sessionId)?.sessionId ||
+    path.basename(file.filePath).replace(/\.[^.]+$/, "");
+  const projectDirName =
+    turns.find((t) => t.projectDirName)?.projectDirName || file.projectDirName;
+  const projectSlug =
+    turns.find((t) => t.projectSlug)?.projectSlug || toSlug(projectDirName);
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheCreateTokens = 0;
+  let cacheReadTokens = 0;
+  let costUsd = 0;
+  let userTurnCount = 0;
+  let assistantTurnCount = 0;
+  let toolCallCount = 0;
+  let errorCount = 0;
+  let startTs: string | null = null;
+  let endTs: string | null = null;
+  let initialPrompt: string | null = null;
+  let lastPrompt: string | null = null;
+  const modelCounts = new Map<string, number>();
+
+  const parsedTurns: ParsedTurn[] = turns.map((turn, turnIndex): ParsedTurn => {
+    const ts = turn.timestamp;
+    if (!startTs || ts < startTs) startTs = ts;
+    if (!endTs || ts > endTs) endTs = ts;
+
+    inputTokens += turn.inputTokens;
+    outputTokens += turn.outputTokens;
+    cacheCreateTokens += turn.cacheCreateTokens;
+    cacheReadTokens += turn.cacheReadTokens;
+
+    const isError: 0 | 1 = turn.isError ? 1 : 0;
+    if (isError) errorCount++;
+
+    const toolUses: ParsedToolUse[] = turn.toolCalls.map(
+      (tc, sequenceInTurn): ParsedToolUse => {
+        const args =
+          tc.arguments && typeof tc.arguments === "object"
+            ? (tc.arguments as Record<string, unknown>)
+            : undefined;
+        const mcp = parseMcpTool(tc.name);
+        const { filePath: fp, fileOp } = extractFileOp(tc.name, args);
+        let argsJson: string | null = null;
+        if (args) {
+          try {
+            argsJson = truncateText(JSON.stringify(args), ARGS_JSON_LIMIT);
+          } catch {
+            argsJson = null;
+          }
+        }
+        return {
+          sequenceInTurn,
+          toolUseId: tc.id ?? null,
+          toolName: tc.name,
+          mcpServer: mcp?.server ?? null,
+          mcpTool: mcp?.tool ?? null,
+          agentName: extractAgentName(tc.name, args),
+          skillName: extractSkillName(tc.name, args),
+          argumentsJson: argsJson,
+          filePath: fp,
+          fileOp,
+          isError: tc.isError ? 1 : 0,
+          errorCategory: tc.errorCategory ?? null,
+          invocationSource: tc.invocationSource ?? "auto",
+        };
+      }
+    );
+    toolCallCount += toolUses.length;
+
+    let category: string | null = null;
+    let turnCostUsd = 0;
+    let textPreview: string | null;
+    let toolResultPreview: string | null = null;
+
+    if (turn.role === "assistant") {
+      assistantTurnCount++;
+      if (turn.model) modelCounts.set(turn.model, (modelCounts.get(turn.model) ?? 0) + 1);
+      category = classifyTurn({ ...turn, source: file.source });
+      if (turn.model) {
+        turnCostUsd = applyPricing(getModelPricing(turn.model), turn);
+        costUsd += turnCostUsd;
+      }
+      textPreview = truncateText(turn.assistantText ?? "", TEXT_PREVIEW_LIMIT);
+    } else {
+      userTurnCount++;
+      const userText = turn.userMessageText ?? "";
+      toolResultPreview = truncateText(turn.toolResultText ?? "", USAGE_TOOL_RESULT_LIMIT);
+      textPreview = truncateText(userText || (turn.toolResultText ?? ""), TEXT_PREVIEW_LIMIT);
+      // Track first/last *human* prompt — `isHumanText` excludes hook-injected
+      // payloads (text starting with `<`) and tool-result-only turns.
+      if (isHumanText(userText)) {
+        if (!initialPrompt) initialPrompt = textPreview;
+        lastPrompt = textPreview;
+      }
+    }
+
+    return {
+      turnIndex,
+      ts,
+      role: turn.role,
+      model: turn.role === "assistant" ? turn.model || null : null,
+      inputTokens: turn.inputTokens,
+      outputTokens: turn.outputTokens,
+      cacheCreateTokens: turn.cacheCreateTokens,
+      cacheReadTokens: turn.cacheReadTokens,
+      isError,
+      parentToolUseId: turn.parentToolUseId ?? null,
+      textPreview,
+      toolResultPreview,
+      toolUses,
+      usageTurn: { ...turn, source: file.source },
+      costUsd: turnCostUsd,
+      category,
+      contextFill: null,
+      turnDurationMs: turn.turnDurationMs ?? null,
+      hasThinking: 0,
+      textOffset: null,
+    };
+  });
+
+  const allUsageTurns = parsedTurns.map((t) => t.usageTurn);
+  const oneShot = detectOneShot(allUsageTurns);
+  const workMode = aggregateWorkMode(parsedTurns.map((t) => ({ category: t.category })));
+  // Same `cache_read / total` fallback the Claude path uses when the quality
+  // detector doesn't supply a ratio.
+  const cacheHitRatio =
+    cacheCreateTokens + cacheReadTokens > 0
+      ? cacheReadTokens / (cacheCreateTokens + cacheReadTokens)
+      : null;
+
+  // Derive the (day, project, model) and (day, project, category) tuples whose
+  // daily_costs / category_costs rollups this session touches — mirrors the
+  // Claude path so the caller can batch the refresh.
+  const affectedDays = new Set<string>();
+  const affectedCategoryTuples = new Set<string>();
+  for (const t of parsedTurns) {
+    if (t.role !== "assistant") continue;
+    const day = t.ts.slice(0, 10);
+    if (t.model) affectedDays.add(`${day}|${projectSlug}|${t.model}`);
+    if (t.category) affectedCategoryTuples.add(`${day}|${projectSlug}|${t.category}`);
+  }
+
+  return {
+    sessionId,
+    projectDirName,
+    projectSlug,
+    filePath: file.filePath,
+    fileMtimeMs,
+    fileSize,
+    // Non-Claude sessions are always full-replaced (no tail-append), so the
+    // safe cursor is simply the end of the file.
+    byteOffset: fileSize,
+    startTs,
+    endTs,
+    primaryModel: mostFrequent(modelCounts),
+    gitBranch: null,
+    initialPrompt,
+    lastPrompt,
+    turnCount: parsedTurns.length,
+    userTurnCount,
+    assistantTurnCount,
+    toolCallCount,
+    errorCount,
+    inputTokens,
+    outputTokens,
+    cacheCreateTokens,
+    cacheReadTokens,
+    costUsd,
+    cacheHitRatio,
+    maxContextFill: null,
+    hasCompactionLoop: 0,
+    hasToolFailureStreak: 0,
+    hasOneShot: oneShot.oneShotTasks > 0 ? 1 : 0,
+    verifiedTaskCount: oneShot.totalVerifiedTasks,
+    oneShotTaskCount: oneShot.oneShotTasks,
+    storedStatus: "inactive",
+    slug: null,
+    hasThinking: 0,
+    cliVersion: null,
+    compactBoundaryCount: 0,
+    hasResumeAnomaly: 0,
+    workModeExplorationPct: workMode.exploration,
+    workModeBuildingPct: workMode.building,
+    workModeTestingPct: workMode.testing,
+    workModeOtherPct: workMode.other,
+    source: file.source,
+    prs: [],
+    tickets: [],
+    turns: parsedTurns,
+    affectedDays,
+    affectedCategoryTuples,
+  };
+}
+
+/**
+ * Reconcile a single non-Claude session file into the DB via the lean adapter
+ * path. Mirrors {@link reconcileSessionFile}'s stat + skip-gate, but parses
+ * through the harness adapter's `parseFile` (→ `UsageTurn[]`) and the
+ * {@link buildAdapterParsedSession} converter instead of the raw-JSONL reader.
+ *
+ * The skip-gate is keyed on `file_path` (supplied via `existingMeta` from one
+ * up-front SELECT in {@link reconcileAllSessions}) because the real `sessionId`
+ * isn't known until the file is parsed — unlike Claude, where it's the
+ * filename. No tail-append: non-Claude formats (codex event streams, gemini
+ * single-JSON) don't share Claude's append-only line-delimited shape, so a
+ * changed file is always fully re-parsed and replaced via `writeSession`'s
+ * delete-then-insert.
+ */
+async function reconcileAdapterSessionFile(
+  db: DatabaseT.Database,
+  file: SessionFile,
+  parseAdapterFile: (f: SessionFile) => Promise<UsageTurn[]>,
+  existingMeta:
+    | { file_mtime_ms: number; file_size: number; derived_version: number }
+    | undefined,
+  force: boolean
+): Promise<FileReconcileResult> {
+  const empty: FileReconcileResult = {
+    rowsWritten: 0,
+    affectedDays: new Set(),
+    affectedCategoryTuples: new Set(),
+  };
+  let mtimeMs: number;
+  let size: number;
+  try {
+    const s = await fs.stat(file.filePath);
+    mtimeMs = Math.floor(s.mtimeMs);
+    size = s.size;
+  } catch {
+    return empty;
+  }
+  if (size > MAX_SESSION_FILE_SIZE) return empty;
+
+  if (
+    !force &&
+    existingMeta &&
+    existingMeta.file_mtime_ms === mtimeMs &&
+    existingMeta.file_size === size &&
+    existingMeta.derived_version === DERIVED_VERSION
+  ) {
+    return empty;
+  }
+
+  let turns: UsageTurn[];
+  try {
+    turns = await parseAdapterFile(file);
+  } catch {
+    return empty;
+  }
+  const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
+  if (!parsed) return empty;
+
+  let rows = 0;
+  const txn = db.transaction(() => {
+    rows = writeSession(db, parsed);
+  });
+  txn();
+
+  return {
+    rowsWritten: rows,
+    affectedDays: parsed.affectedDays,
+    affectedCategoryTuples: parsed.affectedCategoryTuples,
+  };
+}
+
 export async function reconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
@@ -2209,11 +2530,76 @@ export async function reconcileAllSessions(
 
   await loadPricing();
 
+  // ── Multi-harness setup ─────────────────────────────────────────────────
+  // Resolve config + discover non-Claude session files BEFORE the Claude walk
+  // so a missing `~/.claude/projects` (a Codex/Gemini-only user who never ran
+  // Claude) doesn't abort the whole reconcile. With the default config
+  // (`enabledAdapters` unset → ["claude"]) `discoverAllSessions` yields Claude
+  // files only and the `!== "claude"` filter empties the list — a pure no-op.
+  const config = options.config ?? (await readConfig());
+
+  // One up-front read of every existing non-Claude row: powers the per-file
+  // skip-gate (keyed on file_path, since the real sessionId isn't known until
+  // parse) AND lets us shield those rows from the prune pass if discovery
+  // throws — a discovery failure must never mass-delete already-indexed data.
+  const existingAdapterMeta = new Map<
+    string,
+    { file_mtime_ms: number; file_size: number; derived_version: number }
+  >();
+  for (const r of db
+    .prepare(
+      "SELECT file_path, file_mtime_ms, file_size, derived_version FROM sessions WHERE source <> 'claude'"
+    )
+    .all() as Array<{
+    file_path: string;
+    file_mtime_ms: number;
+    file_size: number;
+    derived_version: number;
+  }>) {
+    existingAdapterMeta.set(r.file_path, {
+      file_mtime_ms: r.file_mtime_ms,
+      file_size: r.file_size,
+      derived_version: r.derived_version,
+    });
+  }
+
+  let adapterSessions: SessionFile[];
+  let adapterDiscoveryFailed = false;
+  try {
+    adapterSessions =
+      options.adapterSessions ??
+      (await discoverAllSessions(config)).filter((f) => f.source !== "claude");
+  } catch (err) {
+    adapterSessions = [];
+    adapterDiscoveryFailed = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[ingest] adapter discovery failed: ${(err as Error).message}; preserving existing non-Claude sessions.`
+    );
+  }
+  const parseAdapterFile =
+    options.parseAdapterFile ??
+    (async (f: SessionFile): Promise<UsageTurn[]> => {
+      const adapter = getAdapter(f.source);
+      return adapter ? adapter.parseFile(f) : [];
+    });
+
   let subdirs: string[];
+  let claudeWalkFailed = false;
   try {
     const entries = await fs.readdir(projectsDir, { withFileTypes: true });
     subdirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
+    // Missing/unreadable `~/.claude/projects` is no longer fatal — a non-Claude
+    // user may have no Claude tree at all. Fall through to the adapter pass.
+    subdirs = [];
+    claudeWalkFailed = true;
+  }
+
+  // Nothing to do from either source — preserve the original early return so a
+  // transient Claude readdir failure with no adapters enabled doesn't fall
+  // through to the prune pass and delete the whole Claude corpus.
+  if (claudeWalkFailed && adapterSessions.length === 0) {
     return stats;
   }
 
@@ -2254,6 +2640,49 @@ export async function reconcileAllSessions(
         stats.errors++;
       }
     }
+  }
+
+  // ── Non-Claude adapter pass (multi-harness) ────────────────────────────
+  // Claude sessions are handled by the rich raw-JSONL walk above. Every OTHER
+  // enabled harness was discovered up top (`adapterSessions`); ingest each via
+  // the lean path: adapter.parseFile -> UsageTurn[] -> buildAdapterParsedSession
+  // -> writeSession. Each live file is registered so the prune pass below
+  // doesn't treat it as vanished.
+  for (const file of adapterSessions) {
+    liveFilePaths.add(file.filePath);
+    stats.filesSeen++;
+    try {
+      const result = await reconcileAdapterSessionFile(
+        db,
+        file,
+        parseAdapterFile,
+        existingAdapterMeta.get(file.filePath),
+        options.force ?? false
+      );
+      if (result.rowsWritten > 0) {
+        stats.filesChanged++;
+        stats.rowsWritten += result.rowsWritten;
+        for (const tuple of result.affectedDays) affectedDays.add(tuple);
+        for (const tuple of result.affectedCategoryTuples) affectedCategoryTuples.add(tuple);
+      }
+    } catch {
+      stats.errors++;
+    }
+  }
+
+  // Prune protection: if we couldn't enumerate a source this pass, keep its
+  // existing rows "live" so the prune below doesn't delete data we simply
+  // failed to re-list. Claude rows are protected on a Claude-walk failure;
+  // non-Claude rows on an adapter discovery failure.
+  if (claudeWalkFailed) {
+    for (const r of db
+      .prepare("SELECT file_path FROM sessions WHERE source = 'claude'")
+      .all() as Array<{ file_path: string }>) {
+      liveFilePaths.add(r.file_path);
+    }
+  }
+  if (adapterDiscoveryFailed) {
+    for (const fp of existingAdapterMeta.keys()) liveFilePaths.add(fp);
   }
 
   // Prune sessions whose JSONL file vanished. One SELECT pulls the full
