@@ -164,4 +164,53 @@ describe("gemini adapter", () => {
     // encodeProjectPath("/home/user/other-project") → "-home-user-other-project"
     expect(hashedFile!.projectDirName).toContain("other-project");
   });
+
+  it("parseFileWithMeta() returns the same turns plus session meta", async () => {
+    const { default: geminiAdapter } = await import("@/lib/adapters/gemini");
+    const filePath = path.join(TMP_DIR, PROJECT_NAME, "chats", `${SESSION_ID}.json`);
+    const file = { source: "gemini", filePath, projectDirName: "home-user-my-project" };
+
+    const turns = await geminiAdapter.parseFile(file);
+    const { turns: metaTurns, meta } = await geminiAdapter.parseFileWithMeta!(file);
+
+    // parseFile delegates to the WithMeta helper, so turns are identical.
+    expect(metaTurns).toEqual(turns);
+    for (const t of metaTurns) expect(t.source).toBe("gemini");
+
+    // SessionTurnsMeta shape — SAMPLE_SESSION has no top-level version and no thoughts.
+    expect(meta.compactBoundaries).toEqual([]);
+    expect(meta.cliVersion).toBeNull();
+    expect(meta.hasThinking).toBe(false);
+  });
+
+  it("parseFileWithMeta() captures version and thoughts when present", async () => {
+    const { default: geminiAdapter } = await import("@/lib/adapters/gemini");
+    const f = path.join(FIXTURE_DIR, "gemini-thinking.json");
+    fs.writeFileSync(
+      f,
+      JSON.stringify({
+        sessionId: "think-1",
+        startTime: "2025-06-01T10:00:00Z",
+        version: "0.3.0",
+        messages: [
+          {
+            type: "gemini",
+            content: "answer",
+            model: "gemini-2.0-flash",
+            tokens: { input: 10, output: 5 },
+            thoughts: [{ description: "reasoning..." }],
+          },
+        ],
+      }),
+      "utf-8"
+    );
+
+    const { meta } = await geminiAdapter.parseFileWithMeta!({
+      source: "gemini",
+      filePath: f,
+      projectDirName: "p",
+    });
+    expect(meta.cliVersion).toBe("0.3.0");
+    expect(meta.hasThinking).toBe(true);
+  });
 });

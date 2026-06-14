@@ -5,6 +5,7 @@ import type { FileHandle } from "fs/promises";
 import { parse as parseToml } from "smol-toml";
 import type { SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
+import type { SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
@@ -205,19 +206,52 @@ function createTurnState(): TurnState {
   return { parts: [], toolCalls: [], inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, model: null };
 }
 
+// Empty meta returned when a file is missing/unreadable/malformed. compactBoundaries
+// is always [] for Codex — compact boundaries are a Claude-specific system entry.
+const EMPTY_META: SessionTurnsMeta = { compactBoundaries: [], cliVersion: null, hasThinking: false };
+
+function mostFrequentVersion(counts: Map<string, number>): string | null {
+  let best: string | null = null;
+  let max = 0;
+  for (const [k, v] of counts) {
+    if (v > max) { max = v; best = k; }
+  }
+  return best;
+}
+
 async function parseCodexFile(filePath: string, fallbackProjectDirName: string): Promise<UsageTurn[]> {
+  return (await parseCodexFileWithMeta(filePath, fallbackProjectDirName)).turns;
+}
+
+/**
+ * Parse a Codex session file into turns plus session-level meta. `parseCodexFile`
+ * delegates here for backward compatibility (it returns just `.turns`).
+ *
+ * Meta semantics for Codex:
+ * - `cliVersion`: the session_meta `cli_version`, else the most-frequent `version`
+ *   field seen across entries, else null.
+ * - `hasThinking`: true if any assistant content block is `type: "thinking"`.
+ *   Standard Codex emits `output_text` blocks (no thinking), so this is normally false.
+ * - `compactBoundaries`: always [] (Claude-specific feature; Codex has no equivalent).
+ */
+async function parseCodexFileWithMeta(
+  filePath: string,
+  fallbackProjectDirName: string
+): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
   let content: string;
   try {
     content = await fs.readFile(filePath, "utf-8");
   } catch {
-    return [];
+    return { turns: [], meta: { ...EMPTY_META } };
   }
 
   const lines = content.split(/\r?\n/).filter(Boolean);
-  if (lines.length === 0) return [];
+  if (lines.length === 0) return { turns: [], meta: { ...EMPTY_META } };
 
   const firstEntry = safeParseJson(lines[0]);
-  if (!firstEntry || firstEntry.type !== "session_meta" || !firstEntry.payload) return [];
+  if (!firstEntry || firstEntry.type !== "session_meta" || !firstEntry.payload) {
+    return { turns: [], meta: { ...EMPTY_META } };
+  }
   const metaPayload = firstEntry.payload as Record<string, unknown>;
 
   const sessionId =
@@ -236,6 +270,16 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
     typeof metaPayload.model === "string" && metaPayload.model.trim() ? metaPayload.model : null;
   let previousTotals: RawUsage | null = null;
   let currentTurn: TurnState = createTurnState();
+
+  // ── meta accumulators ──────────────────────────────────────────────────────
+  // cliVersion: prefer session_meta cli_version; otherwise the most-frequent
+  // per-entry `version` string. hasThinking: any assistant "thinking" block.
+  const sessionCliVersion =
+    typeof metaPayload.cli_version === "string" && metaPayload.cli_version.trim()
+      ? metaPayload.cli_version.trim()
+      : null;
+  const versionCounts = new Map<string, number>();
+  let hasThinking = false;
 
   const baseTurn = () => makeBaseTurn(ADAPTER_ID, sessionTimestamp, sessionId, projectSlug, projectDirName);
 
@@ -263,6 +307,12 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
   for (let i = 1; i < lines.length; i++) {
     const entry = safeParseJson(lines[i]);
     if (!entry) continue;
+
+    // Collect a per-entry CLI version if present (fallback for cliVersion).
+    if (typeof entry.version === "string" && entry.version.trim()) {
+      const v = entry.version.trim();
+      versionCounts.set(v, (versionCounts.get(v) ?? 0) + 1);
+    }
 
     // ── turn boundary ──────────────────────────────────────────────────────
     if (entry.type === "turn_context") {
@@ -302,6 +352,8 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
               const c = item as Record<string, unknown>;
               if (c.type === "output_text" && typeof c.text === "string" && c.text.trim()) {
                 currentTurn.parts.push(c.text.trim());
+              } else if (c.type === "thinking") {
+                hasThinking = true;
               }
             }
           }
@@ -369,7 +421,8 @@ async function parseCodexFile(filePath: string, fallbackProjectDirName: string):
 
   flushTurn();
 
-  return turns;
+  const cliVersion = sessionCliVersion ?? mostFrequentVersion(versionCounts);
+  return { turns, meta: { compactBoundaries: [], cliVersion, hasThinking } };
 }
 
 // ─── read-only config surface (item 1) ───────────────────────────────────────
@@ -499,6 +552,15 @@ const codexAdapter: SessionAdapter = {
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {
     return parseCodexFile(file.filePath, file.projectDirName);
+  },
+
+  async parseFileWithMeta(
+    file: SessionFile
+  ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
+    // Turns are already source-stamped by `makeBaseTurn(ADAPTER_ID, …)`, so —
+    // unlike the Claude adapter (whose underlying parser doesn't stamp source)
+    // — no re-map is needed here.
+    return parseCodexFileWithMeta(file.filePath, file.projectDirName);
   },
 
   async readConfig(): Promise<HarnessConfig> {

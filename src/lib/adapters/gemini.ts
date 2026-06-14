@@ -3,11 +3,16 @@ import os from "os";
 import { promises as fs } from "fs";
 import type { SessionAdapter, SessionFile } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
+import type { SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
 
 const ADAPTER_ID = "gemini" as const;
+
+// Empty meta for a missing/unreadable/malformed file. compactBoundaries is
+// always [] for Gemini — compact boundaries are a Claude-specific concept.
+const EMPTY_META: SessionTurnsMeta = { compactBoundaries: [], cliVersion: null, hasThinking: false };
 
 // ─── project map ─────────────────────────────────────────────────────────────
 
@@ -84,24 +89,29 @@ function extractTokens(raw: unknown): { inputTokens: number; outputTokens: numbe
 
 // ─── file parser ──────────────────────────────────────────────────────────────
 
-async function parseGeminiFile(filePath: string, projectDirName: string): Promise<UsageTurn[]> {
+async function parseGeminiFileWithMeta(
+  filePath: string,
+  projectDirName: string
+): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
   let content: string;
   try {
     content = await fs.readFile(filePath, "utf-8");
   } catch {
-    return [];
+    return { turns: [], meta: { ...EMPTY_META } };
   }
 
   let record: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(content);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { turns: [], meta: { ...EMPTY_META } };
+    }
     record = parsed as Record<string, unknown>;
   } catch {
-    return [];
+    return { turns: [], meta: { ...EMPTY_META } };
   }
 
-  if (!Array.isArray(record.messages)) return [];
+  if (!Array.isArray(record.messages)) return { turns: [], meta: { ...EMPTY_META } };
 
   const sessionId =
     typeof record.sessionId === "string" && record.sessionId.trim()
@@ -115,6 +125,7 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
   const projectSlug = toSlug(projectDirName);
 
   const turns: UsageTurn[] = [];
+  let hasThinking = false;
 
   for (const msg of record.messages as unknown[]) {
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) continue;
@@ -151,6 +162,7 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
 
       const parts: string[] = [];
       if (m.thoughts && Array.isArray(m.thoughts)) {
+        if (m.thoughts.length > 0) hasThinking = true;
         for (const t of m.thoughts as unknown[]) {
           if (!t || typeof t !== "object" || Array.isArray(t)) continue;
           const thought = t as Record<string, unknown>;
@@ -198,7 +210,14 @@ async function parseGeminiFile(filePath: string, projectDirName: string): Promis
     // All other message types (info, error, warning) carry no turn data.
   }
 
-  return turns;
+  const cliVersion =
+    typeof record.version === "string" && record.version.trim() ? record.version : null;
+  return { turns, meta: { compactBoundaries: [], cliVersion, hasThinking } };
+}
+
+/** Backward-compatible turns-only parse; delegates to the WithMeta helper. */
+async function parseGeminiFile(filePath: string, projectDirName: string): Promise<UsageTurn[]> {
+  return (await parseGeminiFileWithMeta(filePath, projectDirName)).turns;
 }
 
 // ─── adapter ─────────────────────────────────────────────────────────────────
@@ -261,6 +280,13 @@ const geminiAdapter: SessionAdapter = {
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {
     return parseGeminiFile(file.filePath, file.projectDirName);
+  },
+
+  async parseFileWithMeta(
+    file: SessionFile
+  ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
+    // Turns are already source-stamped by `makeBaseTurn(ADAPTER_ID, …)`.
+    return parseGeminiFileWithMeta(file.filePath, file.projectDirName);
   },
 };
 
