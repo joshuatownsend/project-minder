@@ -80,6 +80,7 @@ The following endpoints accept an optional `?source=` query parameter to filter 
 - `GET /api/sessions?source=claude` — session list for a specific source
 - `GET /api/usage?source=claude` — usage report for a specific source
 - `GET /api/adapters` — list all registered adapters
+- `GET /api/instructions` — harness-native instruction artifacts (Codex `rules`/`AGENTS.md`/`prompts`), gated by `enabledAdapters`; filter with `?harness=`, `?source=`, or `?q=`
 
 ## Configuration
 
