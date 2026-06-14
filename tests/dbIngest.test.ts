@@ -1656,7 +1656,12 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     expect(parsed.assistantTurnCount).toBe(2);
     expect(parsed.toolCallCount).toBe(2);
     expect(parsed.primaryModel).toBe("gpt-5");
-    expect(parsed.costUsd).toBeGreaterThan(0);
+    // gpt-5 has no live pricing in this unit context (buildAdapterParsedSession
+    // doesn't call loadPricing, so the Claude-only fallback map is used) → it is
+    // priced as unknown ($0), NOT at Claude rates. See costCalculator step 4b /
+    // multi-harness item #2. Deterministic positive-cost coverage is in the
+    // "sums per-turn cost" test below.
+    expect(parsed.costUsd).toBe(0);
     expect(parsed.startTs).toBe("2026-05-01T10:00:00Z");
     expect(parsed.endTs).toBe("2026-05-01T10:00:02Z");
     expect(parsed.initialPrompt).toBe("build a parser");
@@ -1673,6 +1678,24 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     const { reloaded } = await setup();
     const file: SessionFile = { source: "gemini", filePath: "/x/s.json", projectDirName: "p" };
     expect(reloaded.ingest.buildAdapterParsedSession(file, [], 1, 0)).toBeNull();
+    reloaded.conn.closeDb();
+  });
+
+  it("sums per-turn cost from fallback pricing for a priceable model (deterministic, offline)", async () => {
+    const { reloaded } = await setup();
+    const file: SessionFile = { source: "codex", filePath: "/x/r2.jsonl", projectDirName: "p" };
+    // A model the Claude-only fallback map can price, so cost is deterministic
+    // even without live LiteLLM pricing — this guards the conversion's per-turn
+    // cost summation (the gpt-5 case above is correctly $0 / unknown offline).
+    const turns: UsageTurn[] = [
+      uAsst("2026-05-01T10:00:01Z", "claude-sonnet-4", "work", "cx-1"),
+      uAsst("2026-05-01T10:00:02Z", "claude-sonnet-4", "more", "cx-1"),
+    ];
+    const parsed = reloaded.ingest.buildAdapterParsedSession(file, turns, 1, 100)!;
+    expect(parsed.costUsd).toBeGreaterThan(0);
+    // Session cost equals the sum of its per-turn costs.
+    const turnSum = parsed.turns.reduce((n, t) => n + t.costUsd, 0);
+    expect(parsed.costUsd).toBeCloseTo(turnSum, 10);
     reloaded.conn.closeDb();
   });
 

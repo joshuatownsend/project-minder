@@ -22,7 +22,7 @@ To enable Codex alongside Claude Code:
 
 **Custom data location:** If your Codex data is not in `~/.codex/`, set the `CODEX_HOME` environment variable to the directory you want the adapter to scan. This takes precedence over the default `~/.codex/` path and is useful for CI environments or non-standard installs.
 
-Note: Codex does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Codex sessions. Cost estimates use OpenAI model pricing when available, falling back to Claude Sonnet pricing for unknown models.
+Note: Codex does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Codex sessions. Cost estimates use OpenAI model pricing when available; a model id with no pricing match is priced as **unknown ($0)** rather than billed at Claude rates (see the pricing note below).
 
 ## Gemini CLI adapter
 
@@ -47,7 +47,7 @@ When you enable Codex or Gemini, their sessions are indexed into the same SQLite
 - **Identity.** Each non-Claude session is keyed by the real session ID the harness records (Codex `session_meta.payload.id`, Gemini `record.sessionId`), not its filename — so sessions correlate correctly and never collide across harnesses.
 - **Freshness.** New/changed Codex/Gemini sessions are picked up by the background sweep (about every 30 seconds) rather than instantly, which is the cadence Claude sessions get from the per-file watcher.
 
-> **Pricing caveat:** cost for a non-Claude model is accurate when live pricing data includes that exact model id; an unknown `gpt-*`/`gemini-*` id currently falls back to Claude Sonnet pricing rather than being flagged. Treat non-Claude costs as estimates until model pricing is hardened.
+> **Pricing note:** cost for a non-Claude model is accurate when live pricing data (LiteLLM, refreshed daily) includes that exact model id — which it normally does for current OpenAI/Google models. A non-Claude id with **no** pricing match (e.g. a brand-new or unlisted model, or while running on the offline fallback) is priced as **unknown ($0)** rather than being silently billed at Claude rates, so a fabricated cost never inflates your totals. If you want a specific rate for such a model, add a **pricing rule** in Settings and it will be applied.
 
 ## Managing adapters
 
