@@ -75,11 +75,12 @@ The `/usage` page shows a **By Source** section whenever source data is availabl
 
 ## API
 
-The following endpoints accept an optional `?source=` query parameter to filter results by adapter:
+Several endpoints accept an optional `?source=` query parameter to filter results by adapter (`claude`, `codex`, `gemini`):
 
 - `GET /api/sessions?source=claude` — session list for a specific source
 - `GET /api/usage?source=claude` — usage report for a specific source
 - `GET /api/adapters` — list all registered adapters
+- `GET /api/instructions` — harness-native instruction artifacts (Codex `rules`/`AGENTS.md`/`prompts`), gated by `enabledAdapters`. Here `?harness=` selects the harness (`codex`/`gemini`/`claude`); `?source=` means the catalog **origin** (`user`/`plugin`/`project`), not the adapter; `?q=` is a free-text filter.
 
 ## Configuration
 

@@ -1,9 +1,16 @@
 # Plan 007: Harness-source abstraction for the agents/skills indexer (Codex/Gemini instructions catalog)
 
-> **Status: DEFERRED design (not yet built).** Captured 2026-06-14 from the
-> multi-harness workflow's investigation of TODO item 5. This is a real feature
-> (new catalog category + route + UI) with product decisions, **not** a path
-> swap — it was deliberately not auto-implemented. Pick it up when prioritized.
+> **Status: PARTIAL — data layer + API shipped (2026-06-14); Gemini walker + UI remain.**
+> Implemented on branch `feat/harness-instructions-catalog`: the `InstructionEntry`
+> type, a Codex instruction walker (`walkCodexInstructions`), a config-gated
+> `loadInstructions()` loader, and `GET /api/instructions` — covered by
+> `tests/instructions.test.ts`. **As-built deviation** from the design below:
+> instructions live in a dedicated `loadInstructions()` + `/api/instructions`
+> (its own cache) rather than being folded into `CatalogResult.instructions`,
+> keeping them fully decoupled from the agents/skills consumers (no ripple).
+> **Remaining:** (1) the Gemini instruction walker — its instruction-file model
+> still needs confirmation (open question below); (2) the `/instructions`
+> browser UI + AppNav entry + help-mapping.
 
 ## Status
 

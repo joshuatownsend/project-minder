@@ -109,6 +109,18 @@ export interface SkillEntry extends CatalogEntryBase {
   disabled?: boolean;
 }
 
+/**
+ * A harness-native instruction artifact (Codex `rules`/`AGENTS.md`/`prompts`,
+ * Gemini context files, etc.) — distinct from Claude agent/skill profiles, so
+ * it lives in its own catalog rather than `AgentEntry`/`SkillEntry`. `harness`
+ * names the owning tool; `source` keeps its usual meaning (filesystem origin),
+ * which for these is always `"user"` (the harness config home).
+ */
+export interface InstructionEntry extends CatalogEntryBase {
+  kind: "instruction";
+  harness: "claude" | "codex" | "gemini";
+}
+
 export type CatalogEntry = AgentEntry | SkillEntry;
 
 export interface CatalogResult {
