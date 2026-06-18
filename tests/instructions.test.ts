@@ -91,6 +91,39 @@ describe("walkCodexInstructions", () => {
     expect(bad).toBeDefined();
     expect((bad!.parseWarnings ?? []).length).toBeGreaterThan(0);
   });
+
+  it("reads only a bounded prefix but reports the true file size", async () => {
+    // A file far larger than the 64KB read cap: only a prefix is read for the
+    // excerpt, but fileBytes reflects the real on-disk size (from stat), and
+    // the excerpt stays capped at 400 chars.
+    const big = "a".repeat(200_000);
+    await write("rules/big.md", big);
+    const entries = await walkCodexInstructions();
+    const entry = entries.find((e) => e.slug === "big");
+    expect(entry).toBeDefined();
+    expect(entry!.fileBytes).toBe(200_000);
+    expect(entry!.bodyExcerpt.length).toBeLessThanOrEqual(400);
+  });
+
+  it("follows symlinked instruction files (degrades where symlinks need elevation)", async () => {
+    await write("rules/real.md", "real body");
+    let symlinked = false;
+    try {
+      await fs.symlink(
+        path.join(tmpHome, "rules", "real.md"),
+        path.join(tmpHome, "rules", "link.md")
+      );
+      symlinked = true;
+    } catch {
+      // Windows without Developer Mode / elevation can't create symlinks —
+      // skip the symlink assertion there; the real-file assertion still holds.
+    }
+    const entries = await walkCodexInstructions();
+    expect(entries.some((e) => e.slug === "real")).toBe(true);
+    if (symlinked) {
+      expect(entries.some((e) => e.slug === "link")).toBe(true);
+    }
+  });
 });
 
 describe("loadInstructions (enabledAdapters gating)", () => {
@@ -113,5 +146,20 @@ describe("loadInstructions (enabledAdapters gating)", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].harness).toBe("codex");
     expect(entries[0].slug).toBe("x");
+  });
+
+  it("reflects an adapter toggle within the TTL without an explicit cache invalidation", async () => {
+    // The cache is keyed by the enabled-adapter set, so flipping codex on (then
+    // off) is seen immediately — no invalidateInstructionsCache() call between.
+    await write("rules/x.md", "x");
+
+    vi.mocked(readConfig).mockResolvedValue({ enabledAdapters: ["claude"] } as never);
+    expect(await loadInstructions()).toEqual([]); // primes the cache (claude-only)
+
+    vi.mocked(readConfig).mockResolvedValue({ enabledAdapters: ["claude", "codex"] } as never);
+    expect(await loadInstructions()).toHaveLength(1); // key changed → cache miss
+
+    vi.mocked(readConfig).mockResolvedValue({ enabledAdapters: ["claude"] } as never);
+    expect(await loadInstructions()).toEqual([]); // toggled back off, still no invalidate
   });
 });

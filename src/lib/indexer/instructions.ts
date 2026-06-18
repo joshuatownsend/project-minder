@@ -15,6 +15,10 @@ import type { InstructionEntry } from "./types";
 
 const BODY_EXCERPT_CAP = 400;
 const CACHE_TTL_MS = 5 * 60 * 1000;
+// Bounded prefix read so a runaway file under CODEX_HOME can't be slurped whole
+// on every cache miss — we only ever surface frontmatter + a 400-char excerpt.
+// Mirrors the 64KB cap the Codex config reader uses (src/lib/config.ts).
+const READ_CAP_BYTES = 65536;
 
 type Harness = InstructionEntry["harness"];
 
@@ -34,7 +38,8 @@ function makeInstructionEntry(
   harness: Harness,
   category: string,
   mtime: Date,
-  ctime: Date
+  ctime: Date,
+  fileBytes: number
 ): InstructionEntry {
   const { fm, body, warnings } = parseFrontmatter(text);
   const slug = path.basename(filePath, path.extname(filePath));
@@ -55,26 +60,47 @@ function makeInstructionEntry(
     ctime: ctime.toISOString(),
     provenance: { kind: "user-local" },
     parseWarnings: warnings.length > 0 ? warnings : undefined,
-    fileBytes: Buffer.byteLength(text, "utf-8"),
+    fileBytes,
   };
 }
 
 /** Read a single instruction file into an entry. Defensive: any read/stat error
- *  (missing file, not a regular file) yields null rather than throwing. */
+ *  (missing file, not a regular file) yields null rather than throwing.
+ *
+ *  Only a bounded prefix (`READ_CAP_BYTES`) is read for frontmatter + excerpt;
+ *  the true total size comes from `stat.size`, so `fileBytes` stays accurate
+ *  even when the file is far larger than what we parse. `fs.stat` follows
+ *  symlinks, so a symlinked instruction file resolves to its real target here. */
 async function readInstruction(
   filePath: string,
   harness: Harness,
   category: string
 ): Promise<InstructionEntry | null> {
+  let handle;
   try {
-    const [text, stat] = await Promise.all([
-      fs.readFile(filePath, "utf-8"),
-      fs.stat(filePath),
-    ]);
+    const stat = await fs.stat(filePath);
     if (!stat.isFile()) return null;
-    return makeInstructionEntry(filePath, text, harness, category, stat.mtime, stat.ctime);
+    const toRead = Math.min(stat.size, READ_CAP_BYTES);
+    let text = "";
+    if (toRead > 0) {
+      handle = await fs.open(filePath, "r");
+      const buf = Buffer.alloc(toRead);
+      const { bytesRead } = await handle.read(buf, 0, toRead, 0);
+      text = buf.toString("utf-8", 0, bytesRead);
+    }
+    return makeInstructionEntry(
+      filePath,
+      text,
+      harness,
+      category,
+      stat.mtime,
+      stat.ctime,
+      stat.size
+    );
   } catch {
     return null;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -94,8 +120,13 @@ async function readInstructionDir(
   }
   const names = entries
     .filter(
+      // Accept symlinks too: a dirent for a symlinked file reports
+      // isSymbolicLink() (not isFile()), so stow/chezmoi-style symlinked Codex
+      // instructions would otherwise be dropped. readInstruction() then stats
+      // the target and re-checks it's a regular file, so a symlink-to-dir or a
+      // broken link still gets filtered out there.
       (e) =>
-        e.isFile() &&
+        (e.isFile() || e.isSymbolicLink()) &&
         !e.name.startsWith(".") &&
         exts.some((x) => e.name.toLowerCase().endsWith(x))
     )
@@ -129,11 +160,20 @@ export async function walkCodexInstructions(): Promise<InstructionEntry[]> {
 // ── loader (config-gated + cached) ───────────────────────────────────────────
 
 const g = globalThis as unknown as {
-  __instructionsCache?: { data: InstructionEntry[]; cachedAt: number } | null;
+  __instructionsCache?: { key: string; data: InstructionEntry[]; cachedAt: number } | null;
 };
 
 export function invalidateInstructionsCache(): void {
   g.__instructionsCache = null;
+}
+
+/** Cache key over every input that changes the result: the enabled-adapter set
+ *  (sorted, so order doesn't matter) and the resolved Codex home. A change to
+ *  either is a cache miss, so toggling an adapter in Settings takes effect at
+ *  once rather than after the TTL — without depending on the config route to
+ *  remember to call invalidateInstructionsCache(). */
+function cacheKey(enabled: string[]): string {
+  return `${[...enabled].sort().join(",")}|${process.env.CODEX_HOME ?? ""}`;
 }
 
 /**
@@ -146,16 +186,23 @@ export function invalidateInstructionsCache(): void {
  * model needs confirmation) — see `plans/007-harness-instructions-catalog.md`.
  */
 export async function loadInstructions(): Promise<InstructionEntry[]> {
-  const slot = g.__instructionsCache;
-  if (slot && Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot.data;
-
+  // readConfig() is itself cheaply cached (3s TTL), so consulting it on every
+  // call is fine — and necessary to detect an adapter toggle. The result cache
+  // is keyed by those inputs, so a key match within the TTL is a hit.
   const config = await readConfig();
-  const enabled = new Set(config.enabledAdapters ?? ["claude"]);
+  const enabled = config.enabledAdapters ?? ["claude"];
+  const key = cacheKey(enabled);
 
+  const slot = g.__instructionsCache;
+  if (slot && slot.key === key && Date.now() - slot.cachedAt < CACHE_TTL_MS) {
+    return slot.data;
+  }
+
+  const enabledSet = new Set(enabled);
   const groups: InstructionEntry[][] = [];
-  if (enabled.has("codex")) groups.push(await walkCodexInstructions());
+  if (enabledSet.has("codex")) groups.push(await walkCodexInstructions());
 
   const data = groups.flat();
-  g.__instructionsCache = { data, cachedAt: Date.now() };
+  g.__instructionsCache = { key, data, cachedAt: Date.now() };
   return data;
 }
