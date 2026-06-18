@@ -85,6 +85,17 @@ export function SettingsPage() {
   const { showToast } = useToast();
   const [active, setActive] = useState<SectionKey>("features");
   const [config, setConfig] = useState<MinderConfig | null>(null);
+
+  // Honor a `?section=` deep-link once on mount (e.g. the /instructions empty
+  // state links to /settings?section=adapters). Read from window rather than
+  // useSearchParams() to avoid the Suspense-boundary requirement that hook
+  // imposes on a client page. Invalid/absent values keep the default section.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("section");
+    if (requested && SECTIONS.some((s) => s.key === requested)) {
+      setActive(requested as SectionKey);
+    }
+  }, []);
   // Tracks every flag with an in-flight PATCH so overlapping toggles
   // don't clear each other's saving indicator. A single FeatureFlagKey
   // would race: toggle A starts → A's setSaving(A); toggle B starts →

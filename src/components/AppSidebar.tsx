@@ -7,7 +7,7 @@ import {
   Home, LayoutGrid, Activity,
   CheckSquare, Columns3, FileText, ListChecks, Calendar, Lightbulb,
   Layers, Brain, Clock, Sprout, Trash2, MonitorPlay,
-  Bot, Sparkles, Terminal, Plug, BookOpen, Network, Library,
+  Bot, Sparkles, ScrollText, Terminal, Plug, BookOpen, Network, Library,
   BarChart3, Wallet, HeartPulse, Webhook, Boxes, Database, Cpu,
   Sliders, Settings as SettingsIcon,
   ChevronRight, ChevronDown,
@@ -82,6 +82,7 @@ const GROUPS: NavGroup[] = [
     children: [
       { id: "agents",    label: "Agents",    href: "/agents",    icon: ico(Bot) },
       { id: "skills",    label: "Skills",    href: "/skills",    icon: ico(Sparkles) },
+      { id: "instructions", label: "Instructions", href: "/instructions", icon: ico(ScrollText) },
       { id: "commands",  label: "Commands",  href: "/commands",  icon: ico(Terminal) },
       { id: "plugins",   label: "Plugins",   href: "/plugins",   icon: ico(Plug) },
       { id: "templates", label: "Templates", href: "/templates", icon: ico(BookOpen) },
