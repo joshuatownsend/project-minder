@@ -7,11 +7,12 @@ import type { InstructionEntry } from "./types";
 
 // Harness-native instruction catalog (plan 007). Indexes the prose/instruction
 // artifacts a coding harness keeps in its config home — Codex `rules/`,
-// `AGENTS.md`, and `prompts/` today — into a uniform `InstructionEntry` shape,
-// gated by `enabledAdapters`. Deliberately separate from the agents/skills
-// `CatalogResult`: these are a different artifact (no model/tools/layout), so
-// they get their own type, loader, and `/api/instructions` route rather than
-// rippling the agent/skill consumers.
+// `AGENTS.md`, and `prompts/`, plus Gemini's global `GEMINI.md` context file —
+// into a uniform `InstructionEntry` shape, gated by `enabledAdapters`.
+// Deliberately separate from the agents/skills `CatalogResult`: these are a
+// different artifact (no model/tools/layout), so they get their own type,
+// loader, and `/api/instructions` route rather than rippling the agent/skill
+// consumers.
 
 const BODY_EXCERPT_CAP = 400;
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -30,6 +31,16 @@ function resolveCodexHome(): string {
   return typeof env === "string" && env.trim()
     ? path.resolve(env.trim())
     : path.join(os.homedir(), ".codex");
+}
+
+/** Resolve the Gemini config home: `$GEMINI_HOME` if set, else `~/.gemini` —
+ *  mirroring the Gemini session adapter's resolution (`src/lib/adapters/gemini.ts`)
+ *  exactly, so both agree on an overridden home. */
+function resolveGeminiHome(): string {
+  const env = process.env.GEMINI_HOME;
+  return typeof env === "string" && env.trim()
+    ? path.resolve(env.trim())
+    : path.join(os.homedir(), ".gemini");
 }
 
 function makeInstructionEntry(
@@ -157,6 +168,62 @@ export async function walkCodexInstructions(): Promise<InstructionEntry[]> {
   return [...rules, ...prompts, ...agentsMd];
 }
 
+/** Default Gemini context filename when settings don't override it. */
+const GEMINI_DEFAULT_CONTEXT_FILE = "GEMINI.md";
+
+/**
+ * Resolve the Gemini context filename, honoring a `settings.json` override.
+ * Gemini CLI lets you rename/extend the context file via the `context.fileName`
+ * setting (newer, nested) or a legacy flat `contextFileName`; either may be a
+ * single string or a list of accepted names. We read the file defensively (a
+ * missing/unreadable/malformed settings.json falls back to `GEMINI.md`) and,
+ * when a list is given, prefer an entry that equals the default `GEMINI.md`
+ * (the global context file we surface) else take the first entry. Never throws.
+ */
+async function resolveGeminiContextFileName(home: string): Promise<string> {
+  try {
+    const raw = await fs.readFile(path.join(home, "settings.json"), "utf-8");
+    const settings = JSON.parse(raw) as {
+      context?: { fileName?: unknown };
+      contextFileName?: unknown;
+    };
+    const configured =
+      (settings.context && settings.context.fileName) ?? settings.contextFileName;
+
+    if (typeof configured === "string" && configured.trim()) {
+      return configured.trim();
+    }
+    if (Array.isArray(configured)) {
+      const names = configured.filter(
+        (n): n is string => typeof n === "string" && n.trim().length > 0
+      );
+      if (names.length > 0) {
+        return names.find((n) => n === GEMINI_DEFAULT_CONTEXT_FILE) ?? names[0].trim();
+      }
+    }
+  } catch {
+    // Missing home, missing/unreadable settings.json, or invalid JSON — fall
+    // through to the default. Indexing the global context file never depends
+    // on settings.json existing.
+  }
+  return GEMINI_DEFAULT_CONTEXT_FILE;
+}
+
+/**
+ * Walk Gemini instruction artifacts under the resolved Gemini home: the global
+ * context file (`~/.gemini/GEMINI.md` by default, honoring a `context.fileName`
+ * override in `settings.json`), tagged `harness: "gemini"`, `category:
+ * "context"`. We deliberately index only the global context file in this cut —
+ * `commands/*.toml` are a different artifact (TOML command defs, not prose).
+ * Fully defensive — a missing home/file/settings just contributes nothing.
+ */
+export async function walkGeminiInstructions(): Promise<InstructionEntry[]> {
+  const home = resolveGeminiHome();
+  const fileName = await resolveGeminiContextFileName(home);
+  const entry = await readInstruction(path.join(home, fileName), "gemini", "context");
+  return entry ? [entry] : [];
+}
+
 // ── loader (config-gated + cached) ───────────────────────────────────────────
 
 const g = globalThis as unknown as {
@@ -168,22 +235,20 @@ export function invalidateInstructionsCache(): void {
 }
 
 /** Cache key over every input that changes the result: the enabled-adapter set
- *  (sorted, so order doesn't matter) and the resolved Codex home. A change to
- *  either is a cache miss, so toggling an adapter in Settings takes effect at
- *  once rather than after the TTL — without depending on the config route to
- *  remember to call invalidateInstructionsCache(). */
+ *  (sorted, so order doesn't matter) and each harness home env override (Codex,
+ *  Gemini). A change to any of these is a cache miss, so toggling an adapter in
+ *  Settings — or pointing a harness at a different home — takes effect at once
+ *  rather than after the TTL, without depending on the config route to remember
+ *  to call invalidateInstructionsCache(). */
 function cacheKey(enabled: string[]): string {
-  return `${[...enabled].sort().join(",")}|${process.env.CODEX_HOME ?? ""}`;
+  return `${[...enabled].sort().join(",")}|${process.env.CODEX_HOME ?? ""}|${process.env.GEMINI_HOME ?? ""}`;
 }
 
 /**
- * Load the harness-instruction catalog, gated by `enabledAdapters`. Codex
- * instructions appear only when `"codex"` is enabled; the default
+ * Load the harness-instruction catalog, gated by `enabledAdapters`. Codex and
+ * Gemini instructions appear only when their adapter is enabled; the default
  * (`["claude"]`) yields none — mirroring the opt-in model the session ingest
  * uses. Cached 5 minutes, like the agents/skills catalog.
- *
- * Gemini instruction indexing is a deliberate follow-up (its instruction-file
- * model needs confirmation) — see `plans/007-harness-instructions-catalog.md`.
  */
 export async function loadInstructions(): Promise<InstructionEntry[]> {
   // readConfig() is itself cheaply cached (3s TTL), so consulting it on every
@@ -201,6 +266,7 @@ export async function loadInstructions(): Promise<InstructionEntry[]> {
   const enabledSet = new Set(enabled);
   const groups: InstructionEntry[][] = [];
   if (enabledSet.has("codex")) groups.push(await walkCodexInstructions());
+  if (enabledSet.has("gemini")) groups.push(await walkGeminiInstructions());
 
   const data = groups.flat();
   g.__instructionsCache = { key, data, cachedAt: Date.now() };

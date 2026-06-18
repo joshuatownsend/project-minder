@@ -1,6 +1,6 @@
 # Plan 007: Harness-source abstraction for the agents/skills indexer (Codex/Gemini instructions catalog)
 
-> **Status: PARTIAL — data layer + API shipped (2026-06-14); Gemini walker + UI remain.**
+> **Status: COMPLETE — data layer + API + Codex/Gemini walkers + `/instructions` UI all shipped.**
 > Implemented on branch `feat/harness-instructions-catalog`: the `InstructionEntry`
 > type, a Codex instruction walker (`walkCodexInstructions`), a config-gated
 > `loadInstructions()` loader, and `GET /api/instructions` — covered by
@@ -8,9 +8,34 @@
 > instructions live in a dedicated `loadInstructions()` + `/api/instructions`
 > (its own cache) rather than being folded into `CatalogResult.instructions`,
 > keeping them fully decoupled from the agents/skills consumers (no ripple).
-> **Remaining:** (1) the Gemini instruction walker — its instruction-file model
-> still needs confirmation (open question below); (2) the `/instructions`
-> browser UI + AppNav entry + help-mapping.
+>
+> **Gemini walker now shipped** (`feat/gemini-instructions-walker`): the
+> open instruction-file question is resolved — Gemini CLI uses a hierarchical
+> context/memory file named `GEMINI.md`, and the **global** one
+> (`~/.gemini/GEMINI.md`) is the conservative artifact we index, tagged
+> `harness: "gemini"`, `category: "context"`. `walkGeminiInstructions` resolves
+> the home via `$GEMINI_HOME` ?? `~/.gemini` (mirroring the Gemini session
+> adapter) and honors a `context.fileName` override in `~/.gemini/settings.json`
+> (newer nested key, with a legacy flat `contextFileName` fallback; string or
+> list, preferring the global `GEMINI.md`). `commands/*.toml` are deliberately
+> excluded for this cut (TOML command defs, not prose). Gated into
+> `loadInstructions()` when `"gemini"` is enabled; the cache key now folds in
+> `$GEMINI_HOME`. Covered by new cases in `tests/instructions.test.ts`.
+>
+> **`/instructions` browser UI now shipped** (`feat/instructions-browser-ui`):
+> a cross-project `/instructions` page (sidebar → Library, beside Agents/Skills;
+> also in the command palette) renders `GET /api/instructions` with a harness
+> filter (Codex/Gemini/Claude) plus source filter, search, and sort mirroring
+> the Agents browser. Rows show harness/category/source badges, a projected-
+> context-cost chip, and a parse-warning indicator; the opt-in empty state links
+> to **Settings → Adapters**. New `src/components/InstructionsBrowser.tsx` +
+> `src/app/instructions/page.tsx`; nav/help wiring in `AppSidebar`, `AppTopbar`,
+> `commandPalette`, `help-mapping`, `HelpPanel`; help doc `docs/help/instructions.md`
+> (+ `public/help` mirror).
+>
+> **Remaining:** none for this plan. Optional future work: project/component-level
+> `GEMINI.md` files (out of scope — they belong to per-project scanning, not the
+> harness-home catalog), and Codex `commands/*.toml`.
 
 ## Status
 

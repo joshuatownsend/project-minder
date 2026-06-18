@@ -10,17 +10,23 @@ vi.mock("@/lib/config", () => ({ readConfig: vi.fn() }));
 import { readConfig } from "@/lib/config";
 import {
   walkCodexInstructions,
+  walkGeminiInstructions,
   loadInstructions,
   invalidateInstructionsCache,
 } from "@/lib/indexer/instructions";
 
 let tmpHome: string;
+let tmpGeminiHome: string;
 let originalCodexHome: string | undefined;
+let originalGeminiHome: string | undefined;
 
 beforeEach(async () => {
   tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "codex-instr-"));
+  tmpGeminiHome = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-instr-"));
   originalCodexHome = process.env.CODEX_HOME;
+  originalGeminiHome = process.env.GEMINI_HOME;
   process.env.CODEX_HOME = tmpHome;
+  process.env.GEMINI_HOME = tmpGeminiHome;
   invalidateInstructionsCache();
   vi.mocked(readConfig).mockReset();
 });
@@ -28,9 +34,16 @@ beforeEach(async () => {
 afterEach(async () => {
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
+  if (originalGeminiHome === undefined) delete process.env.GEMINI_HOME;
+  else process.env.GEMINI_HOME = originalGeminiHome;
   vi.restoreAllMocks();
   try {
     await fs.rm(tmpHome, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  try {
+    await fs.rm(tmpGeminiHome, { recursive: true, force: true });
   } catch {
     /* ignore */
   }
@@ -38,6 +51,12 @@ afterEach(async () => {
 
 async function write(rel: string, content: string): Promise<void> {
   const fp = path.join(tmpHome, rel);
+  await fs.mkdir(path.dirname(fp), { recursive: true });
+  await fs.writeFile(fp, content, "utf-8");
+}
+
+async function writeGemini(rel: string, content: string): Promise<void> {
+  const fp = path.join(tmpGeminiHome, rel);
   await fs.mkdir(path.dirname(fp), { recursive: true });
   await fs.writeFile(fp, content, "utf-8");
 }
@@ -126,6 +145,91 @@ describe("walkCodexInstructions", () => {
   });
 });
 
+describe("walkGeminiInstructions", () => {
+  it("returns [] when the gemini home has no context file", async () => {
+    expect(await walkGeminiInstructions()).toEqual([]);
+  });
+
+  it("indexes GEMINI.md with harness + category + frontmatter", async () => {
+    await writeGemini(
+      "GEMINI.md",
+      "---\nname: Global Context\ndescription: my default instructions\n---\nGlobal memory body"
+    );
+
+    const entries = await walkGeminiInstructions();
+
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    expect(entry.harness).toBe("gemini");
+    expect(entry.kind).toBe("instruction");
+    expect(entry.category).toBe("context");
+    expect(entry.source).toBe("user");
+    expect((entry.fileBytes ?? 0) > 0).toBe(true);
+    expect(entry.slug).toBe("GEMINI");
+    expect(entry.id).toBe("instruction:gemini:context:GEMINI");
+    expect(entry.name).toBe("Global Context"); // from frontmatter
+    expect(entry.description).toBe("my default instructions");
+  });
+
+  it("falls back to the slug when GEMINI.md has no frontmatter", async () => {
+    await writeGemini("GEMINI.md", "just prose, no frontmatter");
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].name).toBe("GEMINI"); // falls back to slug
+    expect(entries[0].description).toBeUndefined();
+  });
+
+  it("honors a context.fileName override (string) in settings.json", async () => {
+    await writeGemini("settings.json", JSON.stringify({ context: { fileName: "CONTEXT.md" } }));
+    await writeGemini("CONTEXT.md", "renamed context file body");
+    // A stray default-named file must NOT be picked when the override names another file.
+    await writeGemini("GEMINI.md", "should be ignored");
+
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].slug).toBe("CONTEXT");
+    expect(entries[0].bodyExcerpt).toContain("renamed context file body");
+  });
+
+  it("honors a context.fileName override (array, prefers GEMINI.md) in settings.json", async () => {
+    await writeGemini(
+      "settings.json",
+      JSON.stringify({ context: { fileName: ["AGENTS.md", "GEMINI.md"] } })
+    );
+    await writeGemini("GEMINI.md", "global memory wins from the list");
+
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].slug).toBe("GEMINI");
+  });
+
+  it("honors a legacy flat contextFileName override in settings.json", async () => {
+    await writeGemini("settings.json", JSON.stringify({ contextFileName: "MEMORY.md" }));
+    await writeGemini("MEMORY.md", "legacy flat key body");
+
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].slug).toBe("MEMORY");
+  });
+
+  it("falls back to GEMINI.md when settings.json is malformed", async () => {
+    await writeGemini("settings.json", "{ this is not valid json");
+    await writeGemini("GEMINI.md", "default still indexed despite bad settings");
+
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].slug).toBe("GEMINI");
+  });
+
+  it("reads only a bounded prefix but reports the true file size", async () => {
+    await writeGemini("GEMINI.md", "g".repeat(200_000));
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].fileBytes).toBe(200_000);
+    expect(entries[0].bodyExcerpt.length).toBeLessThanOrEqual(400);
+  });
+});
+
 describe("loadInstructions (enabledAdapters gating)", () => {
   it("returns [] when codex is not enabled (explicit claude-only)", async () => {
     await write("rules/x.md", "x");
@@ -146,6 +250,32 @@ describe("loadInstructions (enabledAdapters gating)", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].harness).toBe("codex");
     expect(entries[0].slug).toBe("x");
+  });
+
+  it("excludes gemini instructions when gemini is not enabled", async () => {
+    await writeGemini("GEMINI.md", "global context");
+    vi.mocked(readConfig).mockResolvedValue({ enabledAdapters: ["claude"] } as never);
+    expect(await loadInstructions()).toEqual([]);
+  });
+
+  it("includes gemini instructions when gemini is enabled", async () => {
+    await writeGemini("GEMINI.md", "global context");
+    vi.mocked(readConfig).mockResolvedValue({ enabledAdapters: ["claude", "gemini"] } as never);
+    const entries = await loadInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].harness).toBe("gemini");
+    expect(entries[0].slug).toBe("GEMINI");
+  });
+
+  it("includes both codex and gemini instructions when both are enabled", async () => {
+    await write("rules/x.md", "x");
+    await writeGemini("GEMINI.md", "global context");
+    vi.mocked(readConfig).mockResolvedValue({
+      enabledAdapters: ["claude", "codex", "gemini"],
+    } as never);
+    const entries = await loadInstructions();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.harness).sort()).toEqual(["codex", "gemini"]);
   });
 
   it("reflects an adapter toggle within the TTL without an explicit cache invalidation", async () => {

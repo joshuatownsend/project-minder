@@ -38,6 +38,8 @@ To enable Gemini CLI alongside Claude Code:
 
 Note: Gemini CLI does not report cache-creation tokens, so `cacheCreateTokens` will always be 0 for Gemini sessions. Token values are treated as per-turn deltas. Cost estimates use Google model pricing when available.
 
+When Gemini is enabled, the global `GEMINI.md` context file (at `~/.gemini/GEMINI.md`, or the name set via `context.fileName` in `~/.gemini/settings.json`) is surfaced in the harness instruction catalog (`/api/instructions`, `harness=gemini`).
+
 ## How non-Claude sessions are indexed
 
 When you enable Codex or Gemini, their sessions are indexed into the same SQLite index Claude Code sessions use, so they appear in the sessions browser and feed the usage analytics. A few things are worth knowing about how this works:
