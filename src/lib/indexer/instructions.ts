@@ -171,6 +171,24 @@ export async function walkCodexInstructions(): Promise<InstructionEntry[]> {
 /** Default Gemini context filename when settings don't override it. */
 const GEMINI_DEFAULT_CONTEXT_FILE = "GEMINI.md";
 
+/** A configured context filename is trusted only if it is a single plain file
+ *  name — no path separators, no drive/stream colon, no parent/current refs,
+ *  not absolute. Otherwise a malicious or careless `settings.json` (e.g.
+ *  `"../../secret.txt"` or `"/etc/passwd"`) could make the walker read a file
+ *  outside the Gemini home and expose it via `/api/instructions`
+ *  (`filePath`/`bodyExcerpt`). Unsafe values fall back to the default. */
+function isPlainFileName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !name.includes(":") &&
+    name !== ".." &&
+    name !== "." &&
+    !path.isAbsolute(name)
+  );
+}
+
 /**
  * Resolve the Gemini context filename, honoring a `settings.json` override.
  * Gemini CLI lets you rename/extend the context file via the `context.fileName`
@@ -190,16 +208,21 @@ async function resolveGeminiContextFileName(home: string): Promise<string> {
     const configured =
       (settings.context && settings.context.fileName) ?? settings.contextFileName;
 
+    let candidate: string | undefined;
     if (typeof configured === "string" && configured.trim()) {
-      return configured.trim();
-    }
-    if (Array.isArray(configured)) {
-      const names = configured.filter(
-        (n): n is string => typeof n === "string" && n.trim().length > 0
-      );
+      candidate = configured.trim();
+    } else if (Array.isArray(configured)) {
+      const names = configured
+        .filter((n): n is string => typeof n === "string" && n.trim().length > 0)
+        .map((n) => n.trim());
       if (names.length > 0) {
-        return names.find((n) => n === GEMINI_DEFAULT_CONTEXT_FILE) ?? names[0].trim();
+        candidate = names.find((n) => n === GEMINI_DEFAULT_CONTEXT_FILE) ?? names[0];
       }
+    }
+    // Only honor the override if it's a safe single filename; a value that
+    // could escape the Gemini home falls back to the default GEMINI.md.
+    if (candidate && isPlainFileName(candidate)) {
+      return candidate;
     }
   } catch {
     // Missing home, missing/unreadable settings.json, or invalid JSON — fall

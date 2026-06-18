@@ -228,6 +228,35 @@ describe("walkGeminiInstructions", () => {
     expect(entries[0].fileBytes).toBe(200_000);
     expect(entries[0].bodyExcerpt.length).toBeLessThanOrEqual(400);
   });
+
+  it("rejects a traversal context.fileName and never reads outside the home", async () => {
+    await writeGemini("GEMINI.md", "the safe default is indexed");
+    // Plant a secret as a sibling of the Gemini home; a "../" in the configured
+    // filename must NOT escape the home to reach it.
+    const secretName = `secret-${path.basename(tmpGeminiHome)}.txt`;
+    const secret = path.join(tmpGeminiHome, "..", secretName);
+    await fs.writeFile(secret, "TOP SECRET", "utf-8");
+    try {
+      await writeGemini(
+        "settings.json",
+        JSON.stringify({ context: { fileName: `../${secretName}` } })
+      );
+      const entries = await walkGeminiInstructions();
+      expect(entries).toHaveLength(1);
+      expect(entries[0].slug).toBe("GEMINI"); // fell back to the safe default
+      expect(entries.some((e) => e.bodyExcerpt.includes("TOP SECRET"))).toBe(false);
+    } finally {
+      await fs.rm(secret, { force: true });
+    }
+  });
+
+  it("rejects an absolute context.fileName and falls back to GEMINI.md", async () => {
+    await writeGemini("GEMINI.md", "safe default");
+    await writeGemini("settings.json", JSON.stringify({ contextFileName: "/etc/passwd" }));
+    const entries = await walkGeminiInstructions();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].slug).toBe("GEMINI");
+  });
 });
 
 describe("loadInstructions (enabledAdapters gating)", () => {

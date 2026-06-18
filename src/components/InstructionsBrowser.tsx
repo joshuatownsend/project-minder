@@ -79,6 +79,15 @@ function InstructionRowItem({
       <div
         style={{ display: "flex", alignItems: "flex-start", gap: "8px", cursor: "pointer" }}
         onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
       >
         <span style={{ marginTop: "2px", color: "var(--text-muted)", flexShrink: 0 }}>
           {expanded ? (
@@ -453,7 +462,7 @@ export function InstructionsBrowser() {
             opt-in: enable Codex or Gemini under Adapters to populate it.
           </p>
           <Link
-            href="/settings/adapters"
+            href="/settings?section=adapters"
             style={{
               display: "inline-flex",
               alignItems: "center",
