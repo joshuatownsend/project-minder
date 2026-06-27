@@ -4,11 +4,44 @@ import { watch, FSWatcher } from "fs";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { invalidateCache } from "./cache";
 import { readConfig, getDevRoots } from "./config";
-import { ManualStepsInfo } from "./types";
+import { ManualStepsInfo, ManualStepEntry } from "./types";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
 const CHANGE_RETENTION = 5 * 60_000; // 5 minutes
 const WORKTREE_SEP = "--claude-worktrees-";
+
+/**
+ * Stable identity for a MANUAL_STEPS.md entry — its dated header signature
+ * (`date | slug | title`). Used to detect genuinely new entries across edits
+ * (adds, prunes, archives, reorders) instead of relying on array position,
+ * which silently misses a new entry whenever the same edit also removes an
+ * older one. Required now that MANUAL_STEPS.md is a living checklist, not an
+ * append-only log.
+ */
+export function manualStepEntryKey(
+  e: Pick<ManualStepEntry, "date" | "featureSlug" | "title">
+): string {
+  return `${e.date}|${e.featureSlug}|${e.title}`;
+}
+
+/**
+ * Diff a fresh parse of MANUAL_STEPS.md against the entry keys we've already
+ * seen. Returns the entries that are new (absent from `prevKeys`) plus the full
+ * key set for the current file. Pure (no I/O) so it is unit-testable.
+ */
+export function diffNewManualStepEntries(
+  prevKeys: Set<string>,
+  entries: ManualStepEntry[]
+): { newEntries: ManualStepEntry[]; keys: Set<string> } {
+  const keys = new Set<string>();
+  const newEntries: ManualStepEntry[] = [];
+  for (const e of entries) {
+    const key = manualStepEntryKey(e);
+    keys.add(key);
+    if (!prevKeys.has(key)) newEntries.push(e);
+  }
+  return { newEntries, keys };
+}
 
 interface ChangeEvent {
   slug: string;
@@ -22,7 +55,7 @@ interface WatchedProject {
   name: string;
   filePath: string;
   watcher: FSWatcher | null;
-  entryCount: number;
+  seenKeys: Set<string>;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -107,7 +140,8 @@ class ManualStepsWatcher {
       name: dirName,
       filePath,
       watcher: null,
-      entryCount: info.entries.length,
+      // Seed with the current entries so existing steps don't fire on startup.
+      seenKeys: diffNewManualStepEntries(new Set(), info.entries).keys,
       debounceTimer: null,
     };
 
@@ -141,11 +175,14 @@ class ManualStepsWatcher {
       if (content.trim().length < 10) return;
 
       const info = parseManualStepsMd(content);
-      const newEntryCount = info.entries.length;
 
-      // Detect genuinely new entries (not just checkbox toggles)
-      if (newEntryCount > entry.entryCount) {
-        const newEntries = info.entries.slice(entry.entryCount);
+      // Detect genuinely new entries by header identity — robust to checkbox
+      // toggles, pruning, archiving, and reordering (the file is no longer
+      // append-only). Position-based diffing would miss a new entry whenever
+      // the same edit also removed an older one.
+      const { newEntries, keys } = diffNewManualStepEntries(entry.seenKeys, info.entries);
+
+      if (newEntries.length > 0) {
         for (const e of newEntries) {
           this.changes.push({
             slug: entry.slug,
@@ -166,7 +203,7 @@ class ManualStepsWatcher {
         invalidateCache();
       }
 
-      entry.entryCount = newEntryCount;
+      entry.seenKeys = keys;
 
       // Prune old changes
       const cutoff = Date.now() - CHANGE_RETENTION;
