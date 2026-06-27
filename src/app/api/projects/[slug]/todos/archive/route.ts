@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scanAllProjects } from "@/lib/scanner";
-import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { findProjectPathBySlug } from "@/lib/projectPath";
 import { scanTodoArchive } from "@/lib/scanner/todoMd";
 
 /**
@@ -15,17 +14,11 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  let result = getCachedScan();
-  if (!result) {
-    result = await scanAllProjects();
-    setCachedScan(result);
-  }
-
-  const project = result.projects.find((p) => p.slug === slug);
-  if (!project) {
+  const projectPath = await findProjectPathBySlug(slug);
+  if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const info = await scanTodoArchive(project.path);
+  const info = await scanTodoArchive(projectPath);
   return NextResponse.json(info ?? { total: 0, completed: 0, pending: 0, items: [] });
 }

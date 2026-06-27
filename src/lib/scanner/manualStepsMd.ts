@@ -58,6 +58,13 @@ export function parseManualStepsMd(content: string): ManualStepsInfo {
         lineNumber,
       };
       currentEntry.steps.push(currentStep);
+    } else if (currentStep === null && /^\s*>/.test(line)) {
+      // Entry-level note written under the header before any step
+      // (e.g. the `> archived YYYY-MM-DD — why` rationale the convention mandates).
+      const noteText = line.replace(/^\s*>\s?/, "").trim();
+      if (noteText) {
+        currentEntry.note = currentEntry.note ? `${currentEntry.note}\n${noteText}` : noteText;
+      }
     } else if (currentStep && line.match(/^\s{2,}/) && line.trim()) {
       // Indented detail line
       currentStep.details.push(line.trim());
@@ -107,7 +114,9 @@ export async function scanManualStepsArchive(
       "utf-8"
     );
     const info = parseManualStepsMd(content);
-    return info.totalSteps > 0 ? info : undefined;
+    // Gate on entries (not steps): an entry archived as "obsolete" may carry only
+    // a header + `> archived` note and no checkbox steps, yet should still surface.
+    return info.entries.length > 0 ? info : undefined;
   } catch {
     return undefined;
   }

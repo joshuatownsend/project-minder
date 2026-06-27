@@ -26,21 +26,30 @@ export function manualStepEntryKey(
 
 /**
  * Diff a fresh parse of MANUAL_STEPS.md against the entry keys we've already
- * seen. Returns the entries that are new (absent from `prevKeys`) plus the full
- * key set for the current file. Pure (no I/O) so it is unit-testable.
+ * seen, tracked as a MULTISET (per-key counts) rather than a plain set. Returns
+ * the entries that are new (the surplus over the previously-seen count for their
+ * key) plus the new count map. Counting matters because two entries can share an
+ * identical `date|slug|title` header — with a plain Set the second, genuinely-new
+ * one would be silently treated as already-seen. Pure (no I/O), so unit-testable.
  */
 export function diffNewManualStepEntries(
-  prevKeys: Set<string>,
+  prevCounts: Map<string, number>,
   entries: ManualStepEntry[]
-): { newEntries: ManualStepEntry[]; keys: Set<string> } {
-  const keys = new Set<string>();
+): { newEntries: ManualStepEntry[]; counts: Map<string, number> } {
+  const counts = new Map<string, number>();
+  const budget = new Map(prevCounts);
   const newEntries: ManualStepEntry[] = [];
   for (const e of entries) {
     const key = manualStepEntryKey(e);
-    keys.add(key);
-    if (!prevKeys.has(key)) newEntries.push(e);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const remaining = budget.get(key) ?? 0;
+    if (remaining > 0) {
+      budget.set(key, remaining - 1); // matches a previously-seen entry
+    } else {
+      newEntries.push(e); // surplus beyond the seen count → genuinely new
+    }
   }
-  return { newEntries, keys };
+  return { newEntries, counts };
 }
 
 interface ChangeEvent {
@@ -55,7 +64,7 @@ interface WatchedProject {
   name: string;
   filePath: string;
   watcher: FSWatcher | null;
-  seenKeys: Set<string>;
+  seenCounts: Map<string, number>;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -141,7 +150,7 @@ class ManualStepsWatcher {
       filePath,
       watcher: null,
       // Seed with the current entries so existing steps don't fire on startup.
-      seenKeys: diffNewManualStepEntries(new Set(), info.entries).keys,
+      seenCounts: diffNewManualStepEntries(new Map(), info.entries).counts,
       debounceTimer: null,
     };
 
@@ -176,11 +185,13 @@ class ManualStepsWatcher {
 
       const info = parseManualStepsMd(content);
 
-      // Detect genuinely new entries by header identity — robust to checkbox
-      // toggles, pruning, archiving, and reordering (the file is no longer
-      // append-only). Position-based diffing would miss a new entry whenever
-      // the same edit also removed an older one.
-      const { newEntries, keys } = diffNewManualStepEntries(entry.seenKeys, info.entries);
+      // Detect genuinely new entries by header identity, counted as a multiset —
+      // robust to checkbox toggles, pruning, archiving, reordering, AND a new
+      // entry whose header collides with an existing one (a plain Set would drop
+      // the duplicate; position-based diffing would miss an add coinciding with a
+      // removal).
+      const { newEntries, counts } = diffNewManualStepEntries(entry.seenCounts, info.entries);
+      const prevTotal = [...entry.seenCounts.values()].reduce((a, b) => a + b, 0);
 
       if (newEntries.length > 0) {
         for (const e of newEntries) {
@@ -199,11 +210,16 @@ class ManualStepsWatcher {
               console.warn("[manualStepsWatcher] dispatch failed:", err);
             });
         }
-        // New entries added — invalidate scan cache so counts update
+      }
+
+      // Invalidate the scan cache on any structural change — entries added OR
+      // removed/archived — so dashboard counts refresh after pruning too, not
+      // only on additions.
+      if (newEntries.length > 0 || info.entries.length !== prevTotal) {
         invalidateCache();
       }
 
-      entry.seenKeys = keys;
+      entry.seenCounts = counts;
 
       // Prune old changes
       const cutoff = Date.now() - CHANGE_RETENTION;

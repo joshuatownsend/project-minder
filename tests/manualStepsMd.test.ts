@@ -30,6 +30,17 @@ describe("scanManualStepsArchive", () => {
 });
 
 describe("parseManualStepsMd", () => {
+  it("captures an entry-level `> archived` note under the header", () => {
+    const md =
+      "## 2026-06-26 14:32 | auth | Clerk setup\n" +
+      "> archived 2026-06-26 — superseded by NextAuth\n\n" +
+      "- [x] Wire provider\n\n---\n";
+    const result = parseManualStepsMd(md);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].note).toBe("archived 2026-06-26 — superseded by NextAuth");
+    expect(result.entries[0].steps).toHaveLength(1);
+  });
+
   it("returns empty info for empty string", () => {
     const result = parseManualStepsMd("");
     expect(result.entries).toHaveLength(0);

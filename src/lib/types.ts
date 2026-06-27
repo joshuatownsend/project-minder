@@ -448,6 +448,7 @@ export interface ManualStepEntry {
   date: string;           // "2026-03-17 14:32"
   featureSlug: string;    // "auth"
   title: string;          // "Clerk + Vercel Authentication Setup"
+  note?: string;          // entry-level note under the header (e.g. `> archived YYYY-MM-DD — why`)
   steps: ManualStep[];
 }
 

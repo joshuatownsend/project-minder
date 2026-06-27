@@ -18,45 +18,61 @@ describe("manualStepEntryKey", () => {
 });
 
 describe("diffNewManualStepEntries", () => {
+  // Seed a "seen" multiset the way the watcher does on startup.
+  const seenFrom = (entries: ManualStepEntry[]) =>
+    diffNewManualStepEntries(new Map(), entries).counts;
+
   it("treats every entry as new against an empty seen set", () => {
     const entries = [
       entry("2026-06-26 10:00", "a", "One"),
       entry("2026-06-26 11:00", "b", "Two"),
     ];
-    const { newEntries, keys } = diffNewManualStepEntries(new Set(), entries);
+    const { newEntries, counts } = diffNewManualStepEntries(new Map(), entries);
     expect(newEntries).toHaveLength(2);
-    expect(keys.size).toBe(2);
+    expect(counts.size).toBe(2);
   });
 
   it("reports nothing new when the file is unchanged (e.g. a checkbox toggle)", () => {
     const entries = [entry("2026-06-26 10:00", "a", "One")];
-    const seen = diffNewManualStepEntries(new Set(), entries).keys;
-    // A checkbox toggle does not change any header, so the key set is identical.
+    const seen = seenFrom(entries);
+    // A checkbox toggle does not change any header, so the counts are identical.
     const { newEntries } = diffNewManualStepEntries(seen, entries);
     expect(newEntries).toHaveLength(0);
   });
 
   it("detects a genuinely new appended entry", () => {
     const before = [entry("2026-06-26 10:00", "a", "One")];
-    const seen = diffNewManualStepEntries(new Set(), before).keys;
+    const seen = seenFrom(before);
     const after = [...before, entry("2026-06-26 12:00", "c", "Three")];
     const { newEntries } = diffNewManualStepEntries(seen, after);
     expect(newEntries.map((e) => e.title)).toEqual(["Three"]);
   });
 
   it("detects a new entry even when older entries are archived in the SAME edit", () => {
-    // This is the regression the previous count+slice approach silently missed:
+    // The regression the previous count+slice approach silently missed:
     // archiving 2 entries (count 2 -> 1) made `newCount > prevCount` false, so a
     // brand-new entry produced no notification.
     const before = [
       entry("2026-06-26 10:00", "a", "One"),
       entry("2026-06-26 11:00", "b", "Two"),
     ];
-    const seen = diffNewManualStepEntries(new Set(), before).keys;
+    const seen = seenFrom(before);
     const after = [entry("2026-06-26 12:00", "c", "Three")]; // One & Two archived
-    const { newEntries, keys } = diffNewManualStepEntries(seen, after);
+    const { newEntries, counts } = diffNewManualStepEntries(seen, after);
     expect(newEntries.map((e) => e.title)).toEqual(["Three"]);
-    expect(keys.size).toBe(1);
+    expect(counts.size).toBe(1);
+  });
+
+  it("detects a new entry whose header DUPLICATES an existing one (multiset, not a plain set)", () => {
+    const before = [entry("2026-06-26 10:00", "a", "Dup")];
+    const seen = seenFrom(before);
+    // A second entry with an identical date|slug|title header is appended.
+    const after = [
+      entry("2026-06-26 10:00", "a", "Dup"),
+      entry("2026-06-26 10:00", "a", "Dup"),
+    ];
+    const { newEntries } = diffNewManualStepEntries(seen, after);
+    expect(newEntries).toHaveLength(1); // the surplus duplicate is genuinely new
   });
 
   it("reports nothing new when entries are only pruned/archived", () => {
@@ -64,7 +80,7 @@ describe("diffNewManualStepEntries", () => {
       entry("2026-06-26 10:00", "a", "One"),
       entry("2026-06-26 11:00", "b", "Two"),
     ];
-    const seen = diffNewManualStepEntries(new Set(), before).keys;
+    const seen = seenFrom(before);
     const after = [entry("2026-06-26 10:00", "a", "One")]; // Two archived
     const { newEntries } = diffNewManualStepEntries(seen, after);
     expect(newEntries).toHaveLength(0);
@@ -73,7 +89,7 @@ describe("diffNewManualStepEntries", () => {
   it("is order-independent — reordering entries is not 'new'", () => {
     const a = entry("2026-06-26 10:00", "a", "One");
     const b = entry("2026-06-26 11:00", "b", "Two");
-    const seen = diffNewManualStepEntries(new Set(), [a, b]).keys;
+    const seen = seenFrom([a, b]);
     const { newEntries } = diffNewManualStepEntries(seen, [b, a]);
     expect(newEntries).toHaveLength(0);
   });
