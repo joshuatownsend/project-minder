@@ -1,19 +1,18 @@
 import path from "path";
 import { WORKTREE_SEP } from "./scanner/worktreeCheck";
+import { isInside } from "./template/pathSafety";
+import { getDevRoots, readConfig } from "./config";
 
 export interface CanonicalResolution {
-  /** Canonical main-tree project directory (absolute). */
+  /** Canonical main-tree project directory. */
   canonicalPath: string;
-  /** True if the input was a worktree checkout that was redirected to its parent. */
+  /**
+   * Reserved for Phase 2 (MCP write-bridge provenance) — no consumer yet.
+   * True if the input was a worktree checkout that was redirected to its parent.
+   */
   wasWorktree: boolean;
-  /** Branch hint extracted from the worktree dir name, if any. */
+  /** Reserved for Phase 2 provenance — branch hint from the worktree dir name. */
   branchHint?: string;
-}
-
-/** True when `child` is `parent` or sits inside it. Case-insensitive on win32. */
-function isInside(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 /**
@@ -51,14 +50,25 @@ export function resolveCanonicalProjectPath(
 
   // Worktree and its parent project are siblings.
   const sibling = path.join(path.dirname(cwd), parentName);
+  const resolvedSibling = path.resolve(sibling);
 
-  const contained = devRoots.some((root) =>
-    isInside(path.resolve(root), path.resolve(sibling)),
-  );
+  const contained = devRoots.some((root) => isInside(resolvedSibling, path.resolve(root)));
   if (!contained) {
     // Refuse to redirect outside a known dev root — treat as canonical.
     return { canonicalPath: cwd, wasWorktree: false };
   }
 
   return { canonicalPath: sibling, wasWorktree: true, branchHint };
+}
+
+/**
+ * Resolve a project-ish cwd to its canonical main-tree project *directory*,
+ * reading dev roots from config. Thin impure wrapper over the pure
+ * `resolveCanonicalProjectPath` so planning writers have a single choke point
+ * instead of repeating the config-read + resolve at every call-site. (The pure
+ * function stays config-free for testability.)
+ */
+export async function canonicalProjectDir(cwd: string): Promise<string> {
+  const devRoots = getDevRoots(await readConfig());
+  return resolveCanonicalProjectPath(cwd, devRoots).canonicalPath;
 }

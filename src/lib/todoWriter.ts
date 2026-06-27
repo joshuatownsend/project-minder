@@ -3,8 +3,7 @@ import path from "path";
 import { scanTodoMd } from "./scanner/todoMd";
 import { TodoInfo } from "./types";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
-import { resolveCanonicalProjectPath } from "./canonicalProjectPath";
-import { getDevRoots, readConfig } from "./config";
+import { canonicalProjectDir } from "./canonicalProjectPath";
 
 const MAX_TODO_LENGTH = 500;
 
@@ -42,8 +41,7 @@ export async function appendTodosToFile(
   const sanitized = texts.map(sanitize);
   // Planning is project-scoped: redirect a worktree cwd to the canonical
   // main-tree project so appends never fragment into a worktree copy.
-  const devRoots = getDevRoots(await readConfig());
-  const { canonicalPath } = resolveCanonicalProjectPath(projectPath, devRoots);
+  const canonicalPath = await canonicalProjectDir(projectPath);
   const filePath = path.join(canonicalPath, "TODO.md");
 
   return withFileLock(filePath, async () => {
@@ -94,8 +92,7 @@ export async function toggleTodoInFile(
   // Defensive: resolve to the canonical project so a worktree path can never
   // toggle a worktree-local copy. The API only ever passes canonical paths
   // today, so this is a no-op for current callers.
-  const devRoots = getDevRoots(await readConfig());
-  const { canonicalPath } = resolveCanonicalProjectPath(projectPath, devRoots);
+  const canonicalPath = await canonicalProjectDir(projectPath);
   const filePath = path.join(canonicalPath, "TODO.md");
   return withFileLock(filePath, async () => {
     const content = await fs.readFile(filePath, "utf-8");

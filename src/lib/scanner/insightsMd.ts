@@ -5,8 +5,7 @@ import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
 import { writeFileAtomic, withFileLock } from "../atomicWrite";
-import { resolveCanonicalProjectPath } from "../canonicalProjectPath";
-import { getDevRoots, readConfig } from "../config";
+import { canonicalProjectDir } from "../canonicalProjectPath";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -169,8 +168,7 @@ export async function appendInsights(
 
   // Planning is project-scoped: an append from a worktree cwd lands in the
   // canonical main-tree INSIGHTS.md, never a worktree copy.
-  const devRoots = getDevRoots(await readConfig());
-  const { canonicalPath } = resolveCanonicalProjectPath(projectPath, devRoots);
+  const canonicalPath = await canonicalProjectDir(projectPath);
   const insightsMdPath = path.join(canonicalPath, "INSIGHTS.md");
 
   // Lock the entire read→dedupe→write sequence. `writeFileAtomic` alone
