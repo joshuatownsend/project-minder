@@ -1,5 +1,55 @@
 # Insights
 
+<!-- insight:e97bc79c0aae | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:32:44.945Z -->
+## ★ Insight
+**ESLint flat config doesn't honor `.gitignore`.** All 23 errors live in `.design-fetch/claudoscope/*.jsx` and `agentlytics-repo/ui/src/**/*.jsx` — both confirmed **git-ignored** (`git check-ignore` matched them) and **untracked** (`git ls-files` empty). They're stray sibling-project directories sitting in my working tree that eslint happily lints locally but which **don't exist in CI's clean checkout**.
+
+---
+
+<!-- insight:edfe45c51a48 | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:26:48.354Z -->
+## ★ Insight
+One deliberate inconsistency to flag: the README now says Diagnosis is **11-category** (stuck-loop added), but the landing site still reads "scored across **ten** quality dimensions." The site agent intentionally omitted stuck-loop (no standalone screenshot, and it judged the concept already implied by the existing compaction-loop/retry-cycle copy). The site's sentence stays internally consistent (it lists exactly ten and says "ten"). I'll leave it — a landing page saying "across N dimensions" loosely is fine, and the developer-facing README carries the precise count.
+
+---
+
+<!-- insight:6def342c0eb7 | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:25:57.546Z -->
+## ★ Insight
+Note the diff stat includes `tsconfig.json | 3 +-` — that's the **pre-existing** unrelated modification from before this session (it was `M tsconfig.json` in the opening git status, and the CRLF warning confirms it). When I stage, I'll name the four release files explicitly and **never** `git add -A`, so that stray change (and the untracked PNGs/`.agents/`/`PRODUCT.md`) stay out of the release commit.
+
+---
+
+<!-- insight:b183d9856ee0 | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:08:04.098Z -->
+## ★ Insight
+**Squash-merge creates a brand-new commit on `main`** that exists on neither the feature branch nor my local `main`. Tagging the branch tip would point `v1.1.0` at a tree that isn't in main's history — `release.yml` would then build the wrong commit. Correct order: merge → `git checkout main && git pull` → tag the pulled squash commit → verify tag SHA == merge SHA → push.
+
+---
+
+<!-- insight:cce1c406d9b3 | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:01:27.170Z -->
+## ★ Insight
+**The release pipeline is fully automation-driven** — two GitHub Actions do the heavy lifting:
+- `release.yml` fires on any `v*` tag push: it runs lint → typecheck → test → build, then `gh release create --generate-notes`. So **tagging *is* releasing** — pushing the tag is the irreversible, outward-facing step.
+- `gh-pages-publish.yml` mirrors `site/**` from `main` into the `gh-pages` branch on every push. So "updating GitHub Pages" means **editing `site/index.html` and merging to main** — the publish is automatic.
+
+---
+
+<!-- insight:ed968bd0e3b2 | session:be527506-0f1f-4778-a194-67903a9373c5 | 2026-05-31T02:42:14.489Z -->
+## ★ Insight
+**1. Backup seam confirmed (not a guess):** `apply.ts:38` imports `recordPreWrite`/`removeBackup`. The real pattern is **snapshot-before-write** (line 80, `recordPreWrite(f, {projectSlug, label})`) + **cleanup-on-no-op** (line 123, `removeBackup` when the apply didn't actually touch disk). The TODO's "after each successful write" wording was imprecise. This is a clean, harness-generic seam I can mirror for Codex.
+
+---
+
+<!-- insight:0103adf35cb2 | session:be527506-0f1f-4778-a194-67903a9373c5 | 2026-05-31T02:39:10.761Z -->
+## ★ Insight
+**The sharp design tension I found:** The read path is deliberately *lossy for security* — `readConfig()` runs `redactConfig()` so the browser **never receives real secret values** (the Neon bearer token in `config.toml` comes back as `<redacted>`). That's a great property to preserve, but it makes naïve write/manage dangerous: if the UI edits the rendered tree and POSTs it back, we'd write `<redacted>` *over* the user's real secrets and destroy them. So whole-object write is off the table — writes must be **targeted key-path patches applied to the raw on-disk file**, never a round-trip of the redacted object.
+
+---
+
+<!-- insight:bfacd53e8e6e | session:be527506-0f1f-4778-a194-67903a9373c5 | 2026-05-31T02:34:17.376Z -->
+## ★ Insight
+**Why explore before planning here:** This wave extends three *existing* subsystems rather than building greenfield. The read-only Codex surface (#193) already established the redaction contract ("parse → redact the object → render"), the Claude side already has a Copy-on-Write backup layer (`configHistory.ts`) and an MCP security scanner. The design risk isn't "can we build it" — it's "do we reuse the Claude machinery generically, or fork it per-harness." That decision needs an accurate map of what's already abstracted vs. Claude-specific.
+
+---
+
 <!-- insight:addbc35b7b93 | session:a9419f83-ca4e-4c74-9e7a-ffed0b9e1de2 | 2026-05-30T15:16:19.891Z -->
 ## ★ Insight
 The version mechanism here is the **"schema.sql IS migration v1"** pattern: a fresh DB runs the complete current schema as migration 1, then migrations 2…N (idempotent `IF NOT EXISTS` / guarded `ALTER`) replay as no-ops above it. This means every new table must be added in **two** places that must stay byte-identical in intent — schema.sql (plain DDL, for fresh installs) and a versioned migration (`IF NOT EXISTS`, for existing installs) — or fresh and upgraded DBs silently diverge. The advisor's "delete a scratch index.db and confirm v16 applies on both fresh and existing" is precisely the test that catches a divergence unit tests can't.

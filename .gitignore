@@ -79,3 +79,8 @@ workers/dist/
 # bundled MCP server artifact (built fresh via scripts/build-mcp-screenshot.mjs;
 # users run `npm run build:mcp-screenshot` once before `claude mcp add`)
 dist/
+
+# local agent/lint caches + throwaway session screenshots (not committed)
+.agents/
+.claudelint-cache/
+/t2.1-*.png
