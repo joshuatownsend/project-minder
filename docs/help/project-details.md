@@ -64,6 +64,10 @@ Shows TODO items parsed from the project's `TODO.md` file:
 - Each item listed with a checkmark (done) or open circle (pending)
 - A total count of completed vs. remaining items
 
+Completed or obsolete items are moved out of the active list into a companion
+`TODO.archive.md`. Expand the **Archived** disclosure at the bottom of the tab to
+review them — it loads the archive on demand and is read-only.
+
 ### Adding TODOs
 
 Use the **Add a new TODO...** field at the bottom of the tab to append a new

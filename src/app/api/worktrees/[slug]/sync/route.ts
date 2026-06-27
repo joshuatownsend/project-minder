@@ -37,7 +37,7 @@ export async function POST(
   if (body.file === "todos") {
     const [parentInfo, worktreeInfo] = await Promise.all([
       scanTodoMd(project.path),
-      scanTodoMd(body.worktreePath),
+      scanTodoMd(wt.worktreePath),
     ]);
     const newTexts = diffTodos(parentInfo?.items ?? [], worktreeInfo?.items ?? []);
     if (newTexts.length === 0) return NextResponse.json({ synced: 0 });
@@ -48,7 +48,7 @@ export async function POST(
   if (body.file === "manual-steps") {
     const [parentInfo, worktreeInfo] = await Promise.all([
       scanManualStepsMd(project.path),
-      scanManualStepsMd(body.worktreePath),
+      scanManualStepsMd(wt.worktreePath),
     ]);
     const newEntries = diffManualSteps(parentInfo?.entries ?? [], worktreeInfo?.entries ?? []);
     if (newEntries.length === 0) return NextResponse.json({ synced: 0 });
@@ -69,7 +69,7 @@ export async function POST(
   }
 
   if (body.file === "insights") {
-    const worktreeInfo = await scanInsightsMd(body.worktreePath);
+    const worktreeInfo = await scanInsightsMd(wt.worktreePath);
     if (!worktreeInfo || worktreeInfo.entries.length === 0) return NextResponse.json({ synced: 0 });
     let parentContent = "";
     try {

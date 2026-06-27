@@ -66,3 +66,5 @@ Key rules:
 - Header must match `## YYYY-MM-DD [HH:MM] | slug | title`
 - All list items must use `- [ ]` or `- [x]` checkbox syntax
 - Each entry must end with `---`
+
+`MANUAL_STEPS.md` and `TODO.md` are **living checklists** — completed or obsolete items are moved into companion `MANUAL_STEPS.archive.md` / `TODO.archive.md` files (committed too, but ignored by the scanners) rather than deleted, so the active files show only outstanding work.

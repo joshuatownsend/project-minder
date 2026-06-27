@@ -58,6 +58,13 @@ export function parseManualStepsMd(content: string): ManualStepsInfo {
         lineNumber,
       };
       currentEntry.steps.push(currentStep);
+    } else if (currentStep === null && /^\s*>/.test(line)) {
+      // Entry-level note written under the header before any step
+      // (e.g. the `> archived YYYY-MM-DD — why` rationale the convention mandates).
+      const noteText = line.replace(/^\s*>\s?/, "").trim();
+      if (noteText) {
+        currentEntry.note = currentEntry.note ? `${currentEntry.note}\n${noteText}` : noteText;
+      }
     } else if (currentStep && line.match(/^\s{2,}/) && line.trim()) {
       // Indented detail line
       currentStep.details.push(line.trim());
@@ -88,6 +95,28 @@ export async function scanManualStepsMd(
     );
     const info = parseManualStepsMd(content);
     return info.totalSteps > 0 ? info : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read the companion MANUAL_STEPS.archive.md (completed/obsolete entries moved
+ * out of the active list). On-demand only — the scan orchestrator never reads
+ * archive files, so active dashboard counts stay clean.
+ */
+export async function scanManualStepsArchive(
+  projectPath: string
+): Promise<ManualStepsInfo | undefined> {
+  try {
+    const content = await fs.readFile(
+      path.join(projectPath, "MANUAL_STEPS.archive.md"),
+      "utf-8"
+    );
+    const info = parseManualStepsMd(content);
+    // Gate on entries (not steps): an entry archived as "obsolete" may carry only
+    // a header + `> archived` note and no checkbox steps, yet should still surface.
+    return info.entries.length > 0 ? info : undefined;
   } catch {
     return undefined;
   }

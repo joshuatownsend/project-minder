@@ -9,7 +9,7 @@ import { WorktreeSection } from "./WorktreeSection";
 type FilterMode = "open" | "all" | "done";
 
 // ── Detail line renderer ───────────────────────────────────────────────────────
-function renderDetailLine(line: string) {
+export function renderDetailLine(line: string) {
   const parts = line.split(/(`[^`]+`)/g);
   return (
     <span>

@@ -26,7 +26,17 @@ vi.mock("fs", () => {
 
 import { createTask } from "@/lib/tasks/store";
 import { toggleTodoInFile } from "@/lib/todoWriter";
-import { delegateTodo, onTaskCompleteToggleTodo } from "@/lib/tasks/todoDelegation";
+import { delegateTodo, onTaskCompleteToggleTodo, resolveProjectPath } from "@/lib/tasks/todoDelegation";
+
+describe("resolveProjectPath path-traversal guard", () => {
+  it("rejects slugs that could escape the dev root, before any fs access", async () => {
+    expect(await resolveProjectPath("../escape", ["/mock/roots"])).toBeNull();
+    expect(await resolveProjectPath("..", ["/mock/roots"])).toBeNull();
+    expect(await resolveProjectPath("a/b", ["/mock/roots"])).toBeNull();
+    expect(await resolveProjectPath("a\\b", ["/mock/roots"])).toBeNull();
+    expect(await resolveProjectPath("", ["/mock/roots"])).toBeNull();
+  });
+});
 
 const mockCreateTask = vi.mocked(createTask);
 const mockToggleTodo = vi.mocked(toggleTodoInFile);

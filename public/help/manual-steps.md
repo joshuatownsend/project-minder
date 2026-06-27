@@ -4,7 +4,7 @@ The Manual Steps Tracker surfaces action items that Claude identifies during cod
 
 ## How It Works
 
-When Claude Code identifies a step you need to perform manually, it appends an entry to `MANUAL_STEPS.md` in your project root. Project Minder automatically detects these files and displays them in the dashboard.
+When Claude Code identifies a step you need to perform manually, it records an entry in `MANUAL_STEPS.md` in your project root — a living checklist of the actions still outstanding. Project Minder automatically detects these files and displays them in the dashboard.
 
 ## Where to Find Manual Steps
 
@@ -15,6 +15,12 @@ When Claude Code identifies a step you need to perform manually, it appends an e
 ## Checking Off Steps
 
 Click any step checkbox to mark it complete. This directly updates the `MANUAL_STEPS.md` file on disk, changing `- [ ]` to `- [x]`. You can also uncheck a step to mark it pending again.
+
+## Archiving Completed Steps
+
+`MANUAL_STEPS.md` is a living checklist, not an append-only log. When an entire entry is done or made obsolete by a newer plan, Claude moves it out of `MANUAL_STEPS.md` into a companion **`MANUAL_STEPS.archive.md`** (with a `> archived YYYY-MM-DD — why` note) so the active list — and the dashboard's pending counts — show only what's still outstanding. The archive file is committed to git for the historical record, but Project Minder's scanners ignore `*.archive.md`, so archived work never inflates your active counts.
+
+You can still review archived items any time: open a project's **Manual Steps** (or **TODOs**) tab and expand the **Archived** disclosure at the bottom. It loads the archive on demand and is read-only.
 
 ## Real-Time Notifications
 

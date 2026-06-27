@@ -21,11 +21,32 @@ export interface DelegateTodoResult {
 }
 
 export async function resolveProjectPath(slug: string, devRoots: string[]): Promise<string | null> {
+  // A project slug is a single directory name. Reject anything that could
+  // traverse outside a dev root (separators, parent refs, null bytes, absolute
+  // paths) before it ever reaches the filesystem.
+  if (
+    !slug ||
+    slug.includes("/") ||
+    slug.includes("\\") ||
+    slug.includes("\0") ||
+    slug === "." ||
+    slug === ".." ||
+    path.isAbsolute(slug)
+  ) {
+    return null;
+  }
   for (const root of devRoots) {
-    const candidate = path.join(root, slug);
+    const resolvedRoot = path.resolve(root);
+    // Resolve against the root and verify containment on the SAME value that is
+    // then stat'd and returned, so the check is a barrier on the exact path that
+    // flows downstream (not a sibling variable).
+    const safePath = path.resolve(resolvedRoot, slug);
+    if (safePath !== resolvedRoot && !safePath.startsWith(resolvedRoot + path.sep)) {
+      continue;
+    }
     try {
-      const stat = await fs.stat(candidate);
-      if (stat.isDirectory()) return candidate;
+      const stat = await fs.stat(safePath);
+      if (stat.isDirectory()) return safePath;
     } catch {
       // not found in this root — try next
     }

@@ -4,11 +4,53 @@ import { watch, FSWatcher } from "fs";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { invalidateCache } from "./cache";
 import { readConfig, getDevRoots } from "./config";
-import { ManualStepsInfo } from "./types";
+import { ManualStepsInfo, ManualStepEntry } from "./types";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
 const CHANGE_RETENTION = 5 * 60_000; // 5 minutes
 const WORKTREE_SEP = "--claude-worktrees-";
+
+/**
+ * Stable identity for a MANUAL_STEPS.md entry — its dated header signature
+ * (`date | slug | title`). Used to detect genuinely new entries across edits
+ * (adds, prunes, archives, reorders) instead of relying on array position,
+ * which silently misses a new entry whenever the same edit also removes an
+ * older one. Required now that MANUAL_STEPS.md is a living checklist, not an
+ * append-only log.
+ */
+export function manualStepEntryKey(
+  e: Pick<ManualStepEntry, "date" | "featureSlug" | "title">
+): string {
+  return `${e.date}|${e.featureSlug}|${e.title}`;
+}
+
+/**
+ * Diff a fresh parse of MANUAL_STEPS.md against the entry keys we've already
+ * seen, tracked as a MULTISET (per-key counts) rather than a plain set. Returns
+ * the entries that are new (the surplus over the previously-seen count for their
+ * key) plus the new count map. Counting matters because two entries can share an
+ * identical `date|slug|title` header — with a plain Set the second, genuinely-new
+ * one would be silently treated as already-seen. Pure (no I/O), so unit-testable.
+ */
+export function diffNewManualStepEntries(
+  prevCounts: Map<string, number>,
+  entries: ManualStepEntry[]
+): { newEntries: ManualStepEntry[]; counts: Map<string, number> } {
+  const counts = new Map<string, number>();
+  const budget = new Map(prevCounts);
+  const newEntries: ManualStepEntry[] = [];
+  for (const e of entries) {
+    const key = manualStepEntryKey(e);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const remaining = budget.get(key) ?? 0;
+    if (remaining > 0) {
+      budget.set(key, remaining - 1); // matches a previously-seen entry
+    } else {
+      newEntries.push(e); // surplus beyond the seen count → genuinely new
+    }
+  }
+  return { newEntries, counts };
+}
 
 interface ChangeEvent {
   slug: string;
@@ -22,7 +64,9 @@ interface WatchedProject {
   name: string;
   filePath: string;
   watcher: FSWatcher | null;
-  entryCount: number;
+  seenCounts: Map<string, number>;
+  prevTotalSteps: number;
+  prevCompletedSteps: number;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -107,7 +151,10 @@ class ManualStepsWatcher {
       name: dirName,
       filePath,
       watcher: null,
-      entryCount: info.entries.length,
+      // Seed with the current entries so existing steps don't fire on startup.
+      seenCounts: diffNewManualStepEntries(new Map(), info.entries).counts,
+      prevTotalSteps: info.totalSteps,
+      prevCompletedSteps: info.completedSteps,
       debounceTimer: null,
     };
 
@@ -141,11 +188,16 @@ class ManualStepsWatcher {
       if (content.trim().length < 10) return;
 
       const info = parseManualStepsMd(content);
-      const newEntryCount = info.entries.length;
 
-      // Detect genuinely new entries (not just checkbox toggles)
-      if (newEntryCount > entry.entryCount) {
-        const newEntries = info.entries.slice(entry.entryCount);
+      // Detect genuinely new entries by header identity, counted as a multiset —
+      // robust to checkbox toggles, pruning, archiving, reordering, AND a new
+      // entry whose header collides with an existing one (a plain Set would drop
+      // the duplicate; position-based diffing would miss an add coinciding with a
+      // removal).
+      const { newEntries, counts } = diffNewManualStepEntries(entry.seenCounts, info.entries);
+      const prevTotal = [...entry.seenCounts.values()].reduce((a, b) => a + b, 0);
+
+      if (newEntries.length > 0) {
         for (const e of newEntries) {
           this.changes.push({
             slug: entry.slug,
@@ -162,11 +214,23 @@ class ManualStepsWatcher {
               console.warn("[manualStepsWatcher] dispatch failed:", err);
             });
         }
-        // New entries added — invalidate scan cache so counts update
+      }
+
+      // Invalidate the scan cache on ANY change that affects the dashboard's
+      // view: entries added or removed/archived, OR step totals/completions
+      // changing (e.g. an agent ticking a box directly in the file). Otherwise
+      // card badges and the cross-project list keep a stale pending count until
+      // the cache TTL expires.
+      const stepsChanged =
+        info.totalSteps !== entry.prevTotalSteps ||
+        info.completedSteps !== entry.prevCompletedSteps;
+      if (newEntries.length > 0 || info.entries.length !== prevTotal || stepsChanged) {
         invalidateCache();
       }
 
-      entry.entryCount = newEntryCount;
+      entry.seenCounts = counts;
+      entry.prevTotalSteps = info.totalSteps;
+      entry.prevCompletedSteps = info.completedSteps;
 
       // Prune old changes
       const cutoff = Date.now() - CHANGE_RETENTION;
