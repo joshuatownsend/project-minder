@@ -10,6 +10,7 @@ import { WorktreePanel } from "./WorktreePanel";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
+import { ArchivedDisclosure } from "./ArchivedDisclosure";
 import { ProjectSessions } from "./ProjectSessions";
 import { GitStatusCompact } from "./GitStatus";
 import { MarkdownContent } from "./MarkdownContent";
@@ -544,6 +545,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   )}
                 </div>
               )}
+              <ArchivedDisclosure kind="todos" slug={project.slug} />
             </div>
           )}
 
@@ -566,6 +568,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                   No MANUAL_STEPS.md found for this project.
                 </p>
               )}
+              <ArchivedDisclosure kind="manual-steps" slug={project.slug} />
             </div>
           )}
 

@@ -20,6 +20,8 @@ Click any step checkbox to mark it complete. This directly updates the `MANUAL_S
 
 `MANUAL_STEPS.md` is a living checklist, not an append-only log. When an entire entry is done or made obsolete by a newer plan, Claude moves it out of `MANUAL_STEPS.md` into a companion **`MANUAL_STEPS.archive.md`** (with a `> archived YYYY-MM-DD — why` note) so the active list — and the dashboard's pending counts — show only what's still outstanding. The archive file is committed to git for the historical record, but Project Minder's scanners ignore `*.archive.md`, so archived work never inflates your active counts.
 
+You can still review archived items any time: open a project's **Manual Steps** (or **TODOs**) tab and expand the **Archived** disclosure at the bottom. It loads the archive on demand and is read-only.
+
 ## Real-Time Notifications
 
 When Claude adds new manual steps to any project, Project Minder will:

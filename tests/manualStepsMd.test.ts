@@ -1,5 +1,33 @@
-import { describe, it, expect } from "vitest";
-import { parseManualStepsMd } from "@/lib/scanner/manualStepsMd";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { parseManualStepsMd, scanManualStepsArchive } from "@/lib/scanner/manualStepsMd";
+
+vi.mock("fs", () => ({
+  promises: { readFile: vi.fn() },
+}));
+import { promises as fs } from "fs";
+const mockReadFile = vi.mocked(fs.readFile);
+
+describe("scanManualStepsArchive", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads MANUAL_STEPS.archive.md and parses entries", async () => {
+    mockReadFile.mockResolvedValue(
+      "## 2026-03-17 14:32 | notifications | Toast setup\n\n- [x] Grant permission\n\n---\n"
+    );
+    const result = await scanManualStepsArchive("C:\\dev\\fake-project");
+    expect(mockReadFile).toHaveBeenCalledWith(
+      expect.stringMatching(/MANUAL_STEPS\.archive\.md$/),
+      "utf-8"
+    );
+    expect(result?.totalSteps).toBe(1);
+    expect(result?.entries[0]?.title).toBe("Toast setup");
+  });
+
+  it("returns undefined when the archive does not exist", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    expect(await scanManualStepsArchive("C:\\dev\\fake-project")).toBeUndefined();
+  });
+});
 
 describe("parseManualStepsMd", () => {
   it("returns empty info for empty string", () => {

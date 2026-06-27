@@ -92,3 +92,23 @@ export async function scanManualStepsMd(
     return undefined;
   }
 }
+
+/**
+ * Read the companion MANUAL_STEPS.archive.md (completed/obsolete entries moved
+ * out of the active list). On-demand only — the scan orchestrator never reads
+ * archive files, so active dashboard counts stay clean.
+ */
+export async function scanManualStepsArchive(
+  projectPath: string
+): Promise<ManualStepsInfo | undefined> {
+  try {
+    const content = await fs.readFile(
+      path.join(projectPath, "MANUAL_STEPS.archive.md"),
+      "utf-8"
+    );
+    const info = parseManualStepsMd(content);
+    return info.totalSteps > 0 ? info : undefined;
+  } catch {
+    return undefined;
+  }
+}

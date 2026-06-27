@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { scanTodoMd } from "@/lib/scanner/todoMd";
+import { scanTodoMd, scanTodoArchive, parseTodoMd } from "@/lib/scanner/todoMd";
 
 // Mock fs so we don't hit the real filesystem
 vi.mock("fs", () => ({
@@ -65,5 +65,45 @@ describe("scanTodoMd", () => {
       pending: 1,
       items: [{ text: "Real item", completed: false, lineNumber: 5 }],
     });
+  });
+});
+
+describe("parseTodoMd", () => {
+  it("parses checkbox content directly (no fs)", () => {
+    expect(parseTodoMd("- [ ] a\n- [x] b\n")).toEqual({
+      total: 2,
+      completed: 1,
+      pending: 1,
+      items: [
+        { text: "a", completed: false, lineNumber: 1 },
+        { text: "b", completed: true, lineNumber: 2 },
+      ],
+    });
+  });
+
+  it("returns undefined when there are no items", () => {
+    expect(parseTodoMd("# TODO\n\njust prose\n")).toBeUndefined();
+  });
+});
+
+describe("scanTodoArchive", () => {
+  it("reads TODO.archive.md, not TODO.md", async () => {
+    mockReadFile.mockResolvedValue("- [x] Shipped feature\n");
+    const result = await scanTodoArchive("C:\\dev\\fake-project");
+    expect(mockReadFile).toHaveBeenCalledWith(
+      expect.stringMatching(/TODO\.archive\.md$/),
+      "utf-8"
+    );
+    expect(result).toEqual({
+      total: 1,
+      completed: 1,
+      pending: 0,
+      items: [{ text: "Shipped feature", completed: true, lineNumber: 1 }],
+    });
+  });
+
+  it("returns undefined when the archive does not exist", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    expect(await scanTodoArchive("C:\\dev\\fake-project")).toBeUndefined();
   });
 });

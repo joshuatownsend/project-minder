@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan, invalidateCache } from "@/lib/cache";
-import { scanManualStepsMd } from "@/lib/scanner/manualStepsMd";
+import { scanManualStepsMd, scanManualStepsArchive } from "@/lib/scanner/manualStepsMd";
 import { toggleStepInFile } from "@/lib/manualStepsWriter";
 
 async function findProjectPath(slug: string): Promise<string | null> {
@@ -16,7 +16,7 @@ async function findProjectPath(slug: string): Promise<string | null> {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
@@ -25,7 +25,11 @@ export async function GET(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const info = await scanManualStepsMd(projectPath);
+  // ?archived=1 reads the companion MANUAL_STEPS.archive.md instead of the active list.
+  const archived = request.nextUrl.searchParams.get("archived");
+  const info = archived
+    ? await scanManualStepsArchive(projectPath)
+    : await scanManualStepsMd(projectPath);
   return NextResponse.json(info ?? { entries: [], totalSteps: 0, pendingSteps: 0, completedSteps: 0 });
 }
 
