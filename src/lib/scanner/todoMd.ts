@@ -30,20 +30,15 @@ export function parseTodoMd(content: string): TodoInfo | undefined {
   };
 }
 
-async function scanTodoFile(
-  projectPath: string,
-  filename: string
-): Promise<TodoInfo | undefined> {
+export async function scanTodoMd(projectPath: string): Promise<TodoInfo | undefined> {
   try {
-    const content = await fs.readFile(path.join(projectPath, filename), "utf-8");
+    // Literal filename in the join (not a parameter) so static analysis sees a
+    // fixed path component — mirrors the manualStepsMd scanners.
+    const content = await fs.readFile(path.join(projectPath, "TODO.md"), "utf-8");
     return parseTodoMd(content);
   } catch {
     return undefined;
   }
-}
-
-export function scanTodoMd(projectPath: string): Promise<TodoInfo | undefined> {
-  return scanTodoFile(projectPath, "TODO.md");
 }
 
 /**
@@ -51,6 +46,11 @@ export function scanTodoMd(projectPath: string): Promise<TodoInfo | undefined> {
  * active list). On-demand only — the scan orchestrator never reads archive files,
  * so active dashboard counts stay clean.
  */
-export function scanTodoArchive(projectPath: string): Promise<TodoInfo | undefined> {
-  return scanTodoFile(projectPath, "TODO.archive.md");
+export async function scanTodoArchive(projectPath: string): Promise<TodoInfo | undefined> {
+  try {
+    const content = await fs.readFile(path.join(projectPath, "TODO.archive.md"), "utf-8");
+    return parseTodoMd(content);
+  } catch {
+    return undefined;
+  }
 }

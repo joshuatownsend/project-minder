@@ -152,7 +152,6 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     window.open(`wt.exe -d "${project.path}"`, "_blank");
   };
 
-  const hasManualSteps = !!(project.manualSteps || project.worktrees?.some((wt) => wt.manualSteps));
   const hasInsights = !!(
     (project.insights?.total ?? 0) > 0 ||
     project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
@@ -167,7 +166,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "context",     label: "Context" },
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
     ...(hasSessions     ? [{ key: "sessions"     as TabKey, label: "Sessions"     }] : []),
-    ...(hasManualSteps  ? [{ key: "manual-steps" as TabKey, label: "Manual Steps" }] : []),
+    // Always show Manual Steps (like TODOs) so the Archived disclosure stays
+    // reachable even after every active entry has been moved to the archive.
+    { key: "manual-steps", label: "Manual Steps" },
     ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
     { key: "memory",      label: "Memory" },
     ...(hasGsdPlanning   ? [{ key: "planning"     as TabKey, label: "Planning"    }] : []),

@@ -65,6 +65,8 @@ interface WatchedProject {
   filePath: string;
   watcher: FSWatcher | null;
   seenCounts: Map<string, number>;
+  prevTotalSteps: number;
+  prevCompletedSteps: number;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -151,6 +153,8 @@ class ManualStepsWatcher {
       watcher: null,
       // Seed with the current entries so existing steps don't fire on startup.
       seenCounts: diffNewManualStepEntries(new Map(), info.entries).counts,
+      prevTotalSteps: info.totalSteps,
+      prevCompletedSteps: info.completedSteps,
       debounceTimer: null,
     };
 
@@ -212,14 +216,21 @@ class ManualStepsWatcher {
         }
       }
 
-      // Invalidate the scan cache on any structural change — entries added OR
-      // removed/archived — so dashboard counts refresh after pruning too, not
-      // only on additions.
-      if (newEntries.length > 0 || info.entries.length !== prevTotal) {
+      // Invalidate the scan cache on ANY change that affects the dashboard's
+      // view: entries added or removed/archived, OR step totals/completions
+      // changing (e.g. an agent ticking a box directly in the file). Otherwise
+      // card badges and the cross-project list keep a stale pending count until
+      // the cache TTL expires.
+      const stepsChanged =
+        info.totalSteps !== entry.prevTotalSteps ||
+        info.completedSteps !== entry.prevCompletedSteps;
+      if (newEntries.length > 0 || info.entries.length !== prevTotal || stepsChanged) {
         invalidateCache();
       }
 
       entry.seenCounts = counts;
+      entry.prevTotalSteps = info.totalSteps;
+      entry.prevCompletedSteps = info.completedSteps;
 
       // Prune old changes
       const cutoff = Date.now() - CHANGE_RETENTION;

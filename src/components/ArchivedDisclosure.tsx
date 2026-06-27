@@ -69,7 +69,9 @@ export function ArchivedDisclosure({ kind, slug }: { kind: ArchivedKind; slug: s
       }}
     >
       <button
+        type="button"
         onClick={toggle}
+        aria-expanded={open}
         style={{
           display: "flex",
           alignItems: "center",
@@ -101,6 +103,7 @@ export function ArchivedDisclosure({ kind, slug }: { kind: ArchivedKind; slug: s
         <div style={{ marginTop: "8px", paddingLeft: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Couldn&apos;t load the archive.</span>
           <button
+            type="button"
             onClick={() => void load()}
             disabled={loading}
             style={{
