@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { delegateTodo, resolveProjectPath } from "@/lib/tasks/todoDelegation";
+import { delegateTodo } from "@/lib/tasks/todoDelegation";
 import { scanTodoMd } from "@/lib/scanner/todoMd";
-import { readConfig, getDevRoots } from "@/lib/config";
+import { findProjectPathBySlug } from "@/lib/projectPath";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +23,9 @@ export async function POST(request: Request, { params }: Params): Promise<NextRe
   }
 
   try {
-    const cfg = await readConfig();
-    const devRoots = getDevRoots(cfg);
-
-    const projectPath = await resolveProjectPath(slug, devRoots);
+    // Resolve via the allowlist of scanned projects (not slug-derived path
+    // construction), so the slug can never steer a filesystem read.
+    const projectPath = await findProjectPathBySlug(slug);
     if (!projectPath) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
