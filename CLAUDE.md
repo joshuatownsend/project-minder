@@ -243,6 +243,7 @@ Use this structure (one dated entry per session or feature):
 5. **Indented detail lines** start with two or more spaces beneath the step they belong to.
 6. **Format** — every list item is a `- [ ]` / `- [x]` checkbox, and every dated entry ends with a `---` separator.
 7. After changing the file, **tell me** what you added, checked off, or archived in one or two sentences.
+8. **Worktrees → canonical file.** If you're working inside a git worktree (a `…--claude-worktrees-…` directory), planning files are **project-scoped**, not branch-scoped: record manual steps — and `TODO.md` / `INSIGHTS.md` entries — in the **canonical main-tree** project (the parent checkout), never the worktree copy, so planning doesn't fragment into per-branch copies that are invisible until merge. Minder's own writers redirect to the canonical file automatically; when editing by hand, target the parent project directory.
 
 #### Example entry
 
