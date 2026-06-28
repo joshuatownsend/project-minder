@@ -25,6 +25,7 @@ vi.mock("fs", () => ({
 }));
 
 import { promises as fs } from "fs";
+import path from "path";
 import { createTask } from "@/lib/tasks/store";
 import { setCachedScan } from "@/lib/cache";
 import { buildMcpServerForTests } from "@/lib/mcp/server";
@@ -232,7 +233,9 @@ describe("board_promote_to_task", () => {
     expect(call.metadata).toMatchObject({
       sourceType: "board-issue",
       boardIssueId: "i-1111",
-      projectSlug: "myapp",
+      // platform-agnostic: source records path.basename(projectPath), which
+      // differs Windows vs POSIX CI for a "C:\..." literal — derive it the same way.
+      projectSlug: path.basename("C:\\dev\\myapp"),
       sessionId: "sess-xyz",
     });
   });

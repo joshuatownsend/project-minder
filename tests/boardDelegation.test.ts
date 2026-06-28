@@ -20,6 +20,7 @@ vi.mock("fs", () => ({
 }));
 
 import { promises as fs } from "fs";
+import path from "path";
 import { createTask } from "@/lib/tasks/store";
 import { BoardWriteError } from "@/lib/boardWriter";
 import {
@@ -100,7 +101,10 @@ describe("promoteBoardIssueToTask", () => {
     expect(call.metadata).toMatchObject({
       sourceType: "board-issue",
       boardIssueId: "i-1111",
-      projectSlug: "myapp",
+      // basename of the same input the source uses, so this matches on both
+      // Windows (→ "myapp") and POSIX CI (→ "C:\dev\myapp") — path.basename is
+      // platform-specific and the source records path.basename(projectPath).
+      projectSlug: path.basename("C:\\dev\\myapp"),
     });
 
     // The status flip wrote BOARD.md with the issue now in `doing`.
