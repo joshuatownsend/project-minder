@@ -58,7 +58,9 @@ export function resolveCanonicalProjectPath(
     return { canonicalPath: cwd, wasWorktree: false };
   }
 
-  return { canonicalPath: sibling, wasWorktree: true, branchHint };
+  // Return the resolved (normalized) sibling — the same value we validated for
+  // containment — so the canonical path is stable for path-based file locking.
+  return { canonicalPath: resolvedSibling, wasWorktree: true, branchHint };
 }
 
 /**
