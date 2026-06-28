@@ -53,6 +53,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "command-palette": "Command Palette",
   "mcp-server": "MCP Server",
   "keyboard-shortcuts": "Keyboard Shortcuts",
+  "github-activity": "GitHub Activity",
 };
 
 const iconBtnBase: React.CSSProperties = {

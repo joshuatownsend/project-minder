@@ -119,6 +119,7 @@ export const helpSlugs = [
   'command-palette',
   'keyboard-shortcuts',
   'mcp-server',
+  'github-activity',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

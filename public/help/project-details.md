@@ -43,6 +43,10 @@ Lists any external APIs or services detected in the project (e.g., AWS, Firebase
 - Last commit message
 - Number of uncommitted changes (if any)
 
+### GitHub
+
+When the project's remote is a `github.com` repo and the local `gh` CLI is authenticated, a **GitHub** section shows open PRs, the latest default-branch CI status, last push, and an expandable open-PR list (with a link to the session that opened each PR). See [GitHub Activity](github-activity.md) for details and setup.
+
 ### Git Activity
 
 When the project has Claude sessions, the **Git Activity** panel aggregates `git commit` and `git push` calls made across all recorded sessions. It shows:

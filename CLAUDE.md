@@ -56,6 +56,12 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - 5-min TTL matching scan cache; detail page on-demand checks also update this cache
 - Dashboard cards show amber `+N` indicators as results arrive
 
+### GitHub Activity Cache (`src/lib/githubActivityCache.ts`)
+- `globalThis` singleton mirroring `gitStatusCache`: queue + `seen` dedupe + `generation` `dispose()` guard, batched `processQueue` (`BATCH_SIZE=2`, `BATCH_DELAY=800ms` — gentler since each repo costs up to 3 `gh` round-trips), 5-min TTL, `get`/`getAll`/`pending`/`total`
+- Shells the local authenticated `gh` CLI via `execFile("gh", [array, args])` — **never a shell string**; `owner/repo` is extracted by `parseGitHubRemote` (`src/lib/githubRemote.ts`) and validated to `^[A-Za-z0-9._-]+$` before use as `-R owner/repo`
+- Fully defensive: `gh` missing/unauthenticated, non-`github.com` remote (decided before spawning), or non-repo → cached `available:false` sentinel with a `reason` enum; never throws, never blocks a scan, never re-shells within TTL
+- Enqueued (flag-gated, default-on `githubActivity`) by `/api/projects` on each dashboard load, carrying the scanned `remoteUrl`; polled by the client via `/api/github-activity` (hook `useGithubActivity`); drives the GitHub strip on `ProjectCard` + `ProjectDetail` (open PRs / CI / last push), with open PRs cross-linked to creating sessions via session `prLinks`
+
 ### Manual Steps Watcher (`src/lib/manualStepsWatcher.ts`)
 - `globalThis` singleton that watches `MANUAL_STEPS.md` files across all projects
 - `fs.watch` per file with 500ms debounce (Windows fires duplicate events)
@@ -103,6 +109,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `GET /api/board/[slug]` — one project's board (fresh read; `?archived=1` for `BOARD.archive.md`)
 - `POST /api/board/[slug]` — mutate `{action: "addIssue"|"addEpic"|"setStatus"|"editIssue"|"move"|"reorder"|"promoteTodo", ...}` via the serializing `boardWriter`; invalidates the scan cache
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
+- `GET /api/github-activity` — background GitHub activity cache (open PRs / CI / last push via `gh`, polled by dashboard)
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
 - `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
