@@ -7,6 +7,7 @@ import { registerUsageTools } from "./tools/usage";
 import { registerSessionTools } from "./tools/sessions";
 import { registerCatalogTools } from "./tools/catalog";
 import { registerManualStepsTools } from "./tools/manualSteps";
+import { registerBoardTools } from "./tools/board";
 import { registerInsightsTools } from "./tools/insights";
 import { registerGitTools } from "./tools/git";
 import { registerStatsTools } from "./tools/stats";
@@ -53,6 +54,7 @@ export function buildMcpServer(): McpServer {
   registerSessionTools(server);
   registerCatalogTools(server);
   registerManualStepsTools(server);
+  registerBoardTools(server);
   registerInsightsTools(server);
   registerGitTools(server);
   registerStatsTools(server);

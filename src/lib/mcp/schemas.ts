@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ProjectStatus } from "@/lib/types";
+import type { ProjectStatus, BoardStatus, BoardPriority } from "@/lib/types";
 
 // Shared Zod fragments used across multiple tool definitions. Defined as
 // `ZodRawShape` fragments rather than full schemas so they compose naturally
@@ -48,3 +48,23 @@ export const CatalogSourceSchema = z
 export const ProjectStatusSchema = z
   .enum(["active", "paused", "archived"] as const satisfies readonly ProjectStatus[])
   .describe("Project status (matches .minder.json statuses)");
+
+// Board enums — bound to `BoardStatus` / `BoardPriority` via the same
+// `satisfies` guard as ProjectStatusSchema. The board writer also validates
+// these at every mutation entry point (BoardWriteError "BAD_VALUE"); pinning
+// the MCP tool inputs to the same enum rejects an out-of-range value at the
+// JSON-RPC boundary before it ever reaches the writer.
+export const BoardStatusSchema = z
+  .enum([
+    "backlog",
+    "todo",
+    "doing",
+    "review",
+    "done",
+    "triage",
+  ] as const satisfies readonly BoardStatus[])
+  .describe("Board issue status (matches BOARD.md [status] tokens)");
+
+export const BoardPrioritySchema = z
+  .enum(["high", "med", "low"] as const satisfies readonly BoardPriority[])
+  .describe("Board issue priority (BOARD.md !priority marker)");
