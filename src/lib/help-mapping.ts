@@ -57,6 +57,7 @@ export const tabHelpMapping: Record<string, string> = {
   'manual-steps': 'manual-steps',
   insights: 'insights',
   board: 'board',
+  ops: 'operations',
   agents: 'agents',
   skills: 'skills',
   memory: 'memory',

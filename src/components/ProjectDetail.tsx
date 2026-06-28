@@ -11,6 +11,8 @@ import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
 import { BoardTab } from "./BoardTab";
+import { OpsPanel } from "./OpsPanel";
+import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
 import { ArchivedDisclosure } from "./ArchivedDisclosure";
 import { ProjectSessions } from "./ProjectSessions";
 import { GitStatusCompact } from "./GitStatus";
@@ -52,7 +54,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -159,6 +161,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
   const hasBoard = !!(project.board && project.board.total > 0);
+  const hasOps_ = hasOps(deriveOpsSummary(project));
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
   const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
   const hasConfigLint = !!project.configLint;
@@ -173,6 +176,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "manual-steps", label: "Manual Steps" },
     ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
     ...(hasBoard        ? [{ key: "board"        as TabKey, label: `Board${project.board ? ` (${project.board.total})` : ""}` }] : []),
+    ...(hasOps_         ? [{ key: "ops"          as TabKey, label: "Ops" }] : []),
     { key: "memory",      label: "Memory" },
     ...(hasGsdPlanning   ? [{ key: "planning"     as TabKey, label: "Planning"    }] : []),
     { key: "agents",      label: "Agents" },
@@ -585,6 +589,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {activeTab === "board" && (
             <BoardTab slug={project.slug} board={project.board} />
           )}
+
+          {/* ── OPS ───────────────────────────────────────────────────── */}
+          {activeTab === "ops" && <OpsPanel project={project} />}
 
           {/* ── MEMORY ────────────────────────────────────────────────── */}
           {activeTab === "memory" && (
