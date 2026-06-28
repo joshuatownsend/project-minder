@@ -241,6 +241,11 @@ class GithubActivityCache {
   private queue: QueueItem[] = [];
   private running = false;
   private seen = new Set<string>(); // prevent duplicate queue entries per cycle
+  // Items pulled off `queue` whose `gh` calls are still resolving. Counted into
+  // `pending` so the UI doesn't stop polling mid-batch: a batch is spliced out
+  // of `queue` *before* the (up to 3 sequential, 8s-timeout) gh calls finish,
+  // so without this `pending` would read 0 while results are still in flight.
+  private inFlight = 0;
   // Bumped by dispose(); processQueue() snapshots it at start and drops any
   // awaited results that landed after a dispose() — mirrors gitStatusCache.
   private generation = 0;
@@ -267,21 +272,29 @@ class GithubActivityCache {
     const myGen = this.generation;
     while (this.queue.length > 0) {
       const batch = this.queue.splice(0, BATCH_SIZE);
+      this.inFlight += batch.length;
 
-      const results = await Promise.all(
-        batch.map(async (item) => {
-          try {
-            const activity = await fetchActivity(item);
-            return { slug: item.slug, activity };
-          } catch {
-            // fetchActivity is internally defensive, but stay belt-and-suspenders.
-            return {
-              slug: item.slug,
-              activity: { available: false, reason: "error" as const },
-            };
-          }
-        })
-      );
+      let results: { slug: string; activity: Omit<GithubActivity, "checkedAt"> }[];
+      try {
+        results = await Promise.all(
+          batch.map(async (item) => {
+            try {
+              const activity = await fetchActivity(item);
+              return { slug: item.slug, activity };
+            } catch {
+              // fetchActivity is internally defensive, but stay belt-and-suspenders.
+              return {
+                slug: item.slug,
+                activity: { available: false, reason: "error" as const },
+              };
+            }
+          })
+        );
+      } finally {
+        // Release the in-flight credit — unless dispose() already zeroed the
+        // counter for a newer generation (avoids driving inFlight negative).
+        if (myGen === this.generation) this.inFlight -= batch.length;
+      }
 
       // Drop the batch if dispose() ran while we were awaiting.
       if (myGen !== this.generation) return;
@@ -317,7 +330,7 @@ class GithubActivityCache {
   }
 
   get pending(): number {
-    return this.queue.length;
+    return this.queue.length + this.inFlight;
   }
 
   get total(): number {
@@ -333,6 +346,7 @@ class GithubActivityCache {
     this.seen.clear();
     this.cache.clear();
     this.running = false;
+    this.inFlight = 0;
   }
 }
 

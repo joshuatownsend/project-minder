@@ -261,6 +261,53 @@ describe("githubActivityCache defensive failure classification", () => {
   });
 });
 
+describe("githubActivityCache.pending counts in-flight batches", () => {
+  it("stays > 0 while a batch is in flight and drops to 0 only after results land", async () => {
+    // Defer at the runGit step so the batch stays in-flight under our control.
+    const deferred: Array<(v: string) => void> = [];
+    mockRunGit.mockImplementation(
+      () => new Promise<string>((resolve) => deferred.push(resolve))
+    );
+
+    githubActivityCache.enqueue([{ slug: "a", path: "C:\\dev\\a" }]);
+    await flush();
+
+    // The item has been spliced out of `queue` but its gh/git work hasn't
+    // settled — pending must still report it (regression: previously read 0).
+    expect(deferred.length).toBe(1);
+    expect(githubActivityCache.pending).toBeGreaterThan(0);
+
+    // Resolve (empty ⇒ no-remote) and let the result land.
+    deferred[0]("");
+    await flush();
+
+    expect(githubActivityCache.pending).toBe(0);
+  });
+
+  it("dispose() while a batch is in flight leaves pending at 0 (no negative drift)", async () => {
+    const deferred: Array<(v: string) => void> = [];
+    mockRunGit.mockImplementation(
+      () => new Promise<string>((resolve) => deferred.push(resolve))
+    );
+
+    githubActivityCache.enqueue([
+      { slug: "a", path: "C:\\dev\\a" },
+      { slug: "b", path: "C:\\dev\\b" },
+    ]);
+    await flush();
+    expect(githubActivityCache.pending).toBeGreaterThan(0);
+
+    githubActivityCache.dispose();
+    expect(githubActivityCache.pending).toBe(0);
+
+    // The in-flight finally runs after dispose; it must not drive inFlight < 0.
+    deferred[0]("");
+    deferred[1]("");
+    await flush();
+    expect(githubActivityCache.pending).toBe(0);
+  });
+});
+
 describe("githubActivityCache.dispose() race protection", () => {
   it("drops in-flight batch results that land after dispose()", async () => {
     // Defer at the runGit step so the batch stays in-flight while we dispose().
