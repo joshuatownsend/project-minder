@@ -295,6 +295,72 @@ describe("round-trip stability", () => {
   });
 });
 
+describe("PR #224 review fixes", () => {
+  // Fix B — EOL preservation
+  it("preserves CRLF line endings through a mutation", () => {
+    const crlf = SAMPLE.replace(/\n/g, "\r\n");
+    const out = applySetIssueStatus(crlf, "i-1111", "done");
+    // No lone LF should remain — every newline is part of a CRLF pair.
+    expect(out.includes("\r\n")).toBe(true);
+    expect(/(^|[^\r])\n/.test(out)).toBe(false);
+    // And the change still applied.
+    expect(parseBoardMd(out)!.epics[0].issues[0].status).toBe("done");
+  });
+
+  it("preserves LF line endings (no CR introduced)", () => {
+    const out = applySetIssueStatus(SAMPLE, "i-1111", "done");
+    expect(out.includes("\r")).toBe(false);
+  });
+
+  it("keeps CRLF when appending a brand-new Inbox section", () => {
+    const crlf = "## Epic: A ^e-a\r\n- [ ] one ^i-1\r\n";
+    const out = applyAddIssue(crlf, { title: "fresh" });
+    expect(out.includes("\r\n")).toBe(true);
+    expect(/(^|[^\r])\n/.test(out)).toBe(false);
+    expect(parseBoardMd(out)!.inbox[0].title).toBe("fresh");
+  });
+
+  // Fix C — label slug normalization
+  it("slug-normalizes labels so they round-trip losslessly", () => {
+    const out = applyAddIssue(SAMPLE, {
+      title: "task",
+      epicId: "e-aaaa",
+      labels: ["needs review", "C++", "_leading"],
+    });
+    const issue = parseBoardMd(out)!.epics
+      .find((e) => e.id === "e-aaaa")!
+      .issues.find((i) => i.title === "task")!;
+    expect(issue.labels).toEqual(["needs-review", "C", "leading"]);
+    // The extra word must not have bled into the title.
+    expect(issue.title).toBe("task");
+  });
+
+  // Fix D — issue-ref lookup restricted to issue rows
+  it("does not mutate a ^i- ref that only appears in a detail/prose line", () => {
+    const md = `## Epic: A ^e-a
+- [ ] real issue ^i-1111  [todo]
+  see also ^i-2222 for context
+- [ ] other ^i-2222  [todo]
+`;
+    // Targeting i-2222 must rewrite the actual issue row, not the detail line
+    // above it that merely mentions ^i-2222.
+    const out = applySetIssueStatus(md, "i-2222", "done");
+    const lines = out.split("\n");
+    // The detail line is untouched.
+    expect(lines.find((l) => l.includes("see also"))).toBe(
+      "  see also ^i-2222 for context",
+    );
+    // The real i-2222 row flipped to done.
+    expect(parseBoardMd(out)!.epics[0].issues.find((i) => i.id === "i-2222")!.status).toBe(
+      "done",
+    );
+    // i-1111 untouched.
+    expect(parseBoardMd(out)!.epics[0].issues.find((i) => i.id === "i-1111")!.status).toBe(
+      "todo",
+    );
+  });
+});
+
 describe("addIssue (async wiring)", () => {
   it("resolves the canonical BOARD.md path, atomic-writes, and returns the board", async () => {
     const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });

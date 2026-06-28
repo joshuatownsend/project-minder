@@ -82,6 +82,7 @@ export function backfillIds(content: string): {
   changed: boolean;
 } {
   const ids = collectIds(content);
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
@@ -101,7 +102,7 @@ export function backfillIds(content: string): {
       changed = true;
     }
   }
-  return { content: changed ? lines.join("\n") : content, changed };
+  return { content: changed ? lines.join(eol) : content, changed };
 }
 
 // ── Line formatting ────────────────────────────────────────────────────────
@@ -112,10 +113,25 @@ function sanitizeTitle(s: string): string {
   return t;
 }
 
+/**
+ * Normalize a label to the parser's `#([A-Za-z0-9][\w-]*)` grammar so it
+ * round-trips losslessly. Without this, a label like "needs review" serializes
+ * as `#needs review` and reparses as just `needs` (with "review" bleeding into
+ * the title). Characters outside [A-Za-z0-9_-] collapse to a hyphen; the first
+ * character must be alphanumeric. "needs review" → "needs-review".
+ */
+function slugLabel(raw: string): string {
+  return raw
+    .replace(/^#+/, "")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+/g, "-")
+    .replace(/-+$/, "");
+}
+
 function cleanLabels(labels: string[] | undefined): string[] {
-  return (labels ?? [])
-    .map((l) => l.replace(/^#/, "").trim())
-    .filter(Boolean);
+  return (labels ?? []).map(slugLabel).filter(Boolean);
 }
 
 interface IssueLineFields {
@@ -161,10 +177,19 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Index of the line carrying this ^e-/^i- ref, or -1. */
-function findRefLine(lines: string[], id: string): number {
+/** Dominant end-of-line of `content`, so writes preserve CRLF vs LF. */
+function detectEol(content: string): string {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
+/**
+ * Index of the *issue row* carrying this `^i-` ref, or -1. Restricted to issue
+ * rows (ISSUE_LINE_RE) so a ref mentioned in a detail line, epic description,
+ * or comment is never mistaken for the issue itself and mutated/removed.
+ */
+function findIssueLine(lines: string[], id: string): number {
   const re = new RegExp("\\^" + escapeRegExp(id) + "(?![A-Za-z0-9])");
-  return lines.findIndex((l) => re.test(l));
+  return lines.findIndex((l) => ISSUE_LINE_RE.test(l) && re.test(l));
 }
 
 function findEpicHeaderLine(lines: string[], epicId: string): number {
@@ -244,6 +269,7 @@ export function applyAddIssue(content: string, issue: NewIssue): string {
     worktree: issue.worktree,
     sessionId: issue.sessionId,
   });
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
 
   let headerIdx: number;
@@ -256,13 +282,14 @@ export function applyAddIssue(content: string, issue: NewIssue): string {
     if (headerIdx === -1) {
       // No Inbox section yet — append one.
       const body = content.replace(/\s*$/, "");
-      return backfillIds(`${body}\n\n## Inbox\n${line}\n`).content;
+      return backfillIds(`${body}${eol}${eol}## Inbox${eol}${line}${eol}`)
+        .content;
     }
   }
 
   const at = containerInsertIndex(lines, headerIdx);
   lines.splice(at, 0, line);
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 export function applyAddEpic(
@@ -284,18 +311,20 @@ export function applyAddEpic(
     for (const dl of opts.description.split(/\r?\n/)) epicLines.push(`> ${dl}`);
   }
 
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
   const inboxIdx = lines.findIndex((l) => INBOX_HDR_RE.test(l));
   if (inboxIdx === -1) {
     const body = content.replace(/\s*$/, "");
-    return backfillIds(`${body}\n\n${epicLines.join("\n")}\n`).content;
+    return backfillIds(`${body}${eol}${eol}${epicLines.join(eol)}${eol}`)
+      .content;
   }
 
   // Insert the epic just before the Inbox (Inbox stays last), blank-separated.
   const insert = [...epicLines, ""];
   if (inboxIdx > 0 && lines[inboxIdx - 1].trim() !== "") insert.unshift("");
   lines.splice(inboxIdx, 0, ...insert);
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 export function applySetIssueStatus(
@@ -303,15 +332,16 @@ export function applySetIssueStatus(
   id: string,
   status: BoardStatus,
 ): string {
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
-  const p = findRefLine(lines, id);
+  const p = findIssueLine(lines, id);
   if (p === -1)
     throw new BoardWriteError(`Issue ${id} not found`, "NOT_FOUND");
   const issue = findIssue(parseBoardMd(content), id);
   if (!issue) throw new BoardWriteError(`Issue ${id} not found`, "NOT_FOUND");
   const indent = lines[p].match(/^\s*/)![0];
   lines[p] = indent + formatIssueLine({ ...issue, status });
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 export function applyEditIssue(
@@ -319,8 +349,9 @@ export function applyEditIssue(
   id: string,
   patch: Partial<Pick<NewIssue, "title" | "priority" | "labels">>,
 ): string {
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
-  const p = findRefLine(lines, id);
+  const p = findIssueLine(lines, id);
   if (p === -1)
     throw new BoardWriteError(`Issue ${id} not found`, "NOT_FOUND");
   const issue = findIssue(parseBoardMd(content), id);
@@ -334,7 +365,7 @@ export function applyEditIssue(
       priority: "priority" in patch ? patch.priority : issue.priority,
       labels: patch.labels !== undefined ? patch.labels : issue.labels,
     });
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 export function applyMoveIssue(
@@ -342,8 +373,9 @@ export function applyMoveIssue(
   id: string,
   toEpicId: string | "inbox",
 ): string {
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
-  const p = findRefLine(lines, id);
+  const p = findIssueLine(lines, id);
   if (p === -1)
     throw new BoardWriteError(`Issue ${id} not found`, "NOT_FOUND");
   const end = issueSpanEnd(lines, p);
@@ -354,8 +386,9 @@ export function applyMoveIssue(
   if (toEpicId === "inbox") {
     headerIdx = lines.findIndex((l) => INBOX_HDR_RE.test(l));
     if (headerIdx === -1) {
-      const body = lines.join("\n").replace(/\s*$/, "");
-      return backfillIds(`${body}\n\n## Inbox\n${span.join("\n")}\n`).content;
+      const body = lines.join(eol).replace(/\s*$/, "");
+      return backfillIds(`${body}${eol}${eol}## Inbox${eol}${span.join(eol)}${eol}`)
+        .content;
     }
   } else {
     headerIdx = findEpicHeaderLine(lines, toEpicId);
@@ -365,7 +398,7 @@ export function applyMoveIssue(
 
   const at = containerInsertIndex(lines, headerIdx);
   lines.splice(at, 0, ...span);
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 export function applyReorderIssue(
@@ -373,8 +406,9 @@ export function applyReorderIssue(
   id: string,
   newOrder: number,
 ): string {
+  const eol = detectEol(content);
   const lines = content.split(/\r?\n/);
-  const p = findRefLine(lines, id);
+  const p = findIssueLine(lines, id);
   if (p === -1)
     throw new BoardWriteError(`Issue ${id} not found`, "NOT_FOUND");
 
@@ -414,7 +448,7 @@ export function applyReorderIssue(
   const k = Math.max(0, Math.min(newOrder, issueIdxs.length));
   const at = k < issueIdxs.length ? issueIdxs[k] : bodyEnd;
   lines.splice(at, 0, ...span);
-  return backfillIds(lines.join("\n")).content;
+  return backfillIds(lines.join(eol)).content;
 }
 
 // ── Async public API (canonical-resolved, locked, atomic, re-parsed) ───────

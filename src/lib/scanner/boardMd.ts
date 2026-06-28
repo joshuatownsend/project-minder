@@ -146,7 +146,10 @@ export function parseBoardMd(content: string): BoardInfo | undefined {
         status: (statusM?.[1] as BoardStatus) ?? glyphToStatus(glyph),
         priority: prioM?.[1] as BoardPriority | undefined,
         labels: parseLabels(rest),
-        epicId: inInbox ? undefined : currentEpic?.id || undefined,
+        // Preserve "" for issues under a not-yet-backfilled epic: epicId is
+        // only undefined for genuine Inbox/orphan items, so `epicId !==
+        // undefined` reliably means "belongs to an epic" even pre-backfill.
+        epicId: inInbox ? undefined : currentEpic ? currentEpic.id : undefined,
         worktree: wtM?.[1],
         sessionId: sessM?.[1],
         line: i + 1,

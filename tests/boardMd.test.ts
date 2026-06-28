@@ -175,6 +175,16 @@ describe("parseBoardMd — tolerance of hand edits", () => {
     expect(board.epics[0].title).toBe("No ID Yet");
   });
 
+  it("keeps epicId '' (not undefined) for issues under a not-yet-backfilled epic", () => {
+    // Regression (PR #224 review): an un-ided epic's id is "", and its issues
+    // must NOT have that coerced to undefined — undefined is the Inbox/orphan
+    // sentinel, so `epicId !== undefined` must still mean "belongs to an epic".
+    const board = parseBoardMd("## Epic: No ID Yet\n- [ ] x\n")!;
+    const issue = board.epics[0].issues[0];
+    expect(issue.epicId).toBe("");
+    expect(issue.epicId).not.toBeUndefined();
+  });
+
   it("attaches indented detail lines to the preceding issue", () => {
     const md = `## Epic: E ^e-1
 - [ ] do it ^i-1
