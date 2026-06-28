@@ -8,6 +8,7 @@ import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
 import { onTaskCompleteToggleTodo } from "./todoDelegation";
+import { onTaskCompleteSyncBoard } from "./boardDelegation";
 
 const HEARTBEAT_PATH = path.join(os.homedir(), ".minder", "dispatcher-heartbeat.json");
 const TICK_INTERVAL_MS = 30_000;
@@ -111,7 +112,13 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         const swarmId = task.swarm_id;
 
         async function afterComplete(completedTask?: Task): Promise<void> {
-          if (completedTask) await onTaskCompleteToggleTodo(completedTask);
+          if (completedTask) {
+            // TODO-sourced tasks tick their TODO.md line (guarded by
+            // sourceFile==="TODO.md"); board-sourced tasks flip their issue to
+            // done. Both are best-effort and mutually exclusive by metadata.
+            await onTaskCompleteToggleTodo(completedTask);
+            await onTaskCompleteSyncBoard(completedTask);
+          }
           if (swarmId != null) {
             await updateSwarmStatus(swarmId).catch((err) =>
               console.error(`[dispatcher] updateSwarmStatus failed for swarm ${swarmId}:`, err)
@@ -137,8 +144,16 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         } else {
+          // Classic mode: runClassicTask returns a RunTaskResult, not the Task
+          // row, and (unlike stream/worktree) takes no onComplete callback — so
+          // re-read the completed Task and hand it to afterComplete. Without this
+          // the completion hooks (board sync / TODO toggle) never fire for classic
+          // tasks, which are the default for promoteBoardIssueToTask + delegateTodo.
           promise = runClassicTask(task, spawnFn)
-            .then(() => afterComplete())
+            .then(async () => {
+              const completedTask = await getTask(task!.id).catch(() => null);
+              await afterComplete(completedTask ?? undefined);
+            })
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         }

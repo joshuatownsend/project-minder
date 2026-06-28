@@ -4,6 +4,10 @@ import type { ChildProcess } from "child_process";
 
 // Mock server-only and filesystem before importing spawner
 vi.mock("server-only", () => ({}));
+// Directories that taskCwd() should treat as existing. Tests push paths here to
+// exercise the "metadata.projectPath is a real dir" branch; everything else is
+// reported missing so the stale-path fallback is covered too.
+const existingDirs = new Set<string>();
 vi.mock("fs", () => {
   const files = new Map<string, string>();
   return {
@@ -12,6 +16,8 @@ vi.mock("fs", () => {
       writeFileSync: vi.fn((p: string, v: string) => files.set(p, v)),
       unlinkSync: vi.fn((p: string) => files.delete(p)),
       readdirSync: vi.fn((): string[] => [...files.keys()].map((k) => k.split("/").pop()!)),
+      existsSync: vi.fn((p: string): boolean => existingDirs.has(p)),
+      statSync: vi.fn((p: string) => ({ isDirectory: () => existingDirs.has(p) })),
     },
   };
 });
@@ -22,7 +28,7 @@ vi.mock("../src/lib/tasks/store", () => ({
   setSessionId: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { runClassicTask, runStreamTask, sweepStalePids } from "../src/lib/tasks/spawner";
+import { runClassicTask, runStreamTask, sweepStalePids, taskCwd } from "../src/lib/tasks/spawner";
 import { completeTask, failTask, setSessionId } from "../src/lib/tasks/store";
 import type { Task } from "../src/lib/tasks/types";
 
@@ -301,5 +307,109 @@ describe("runStreamTask", () => {
       16,
       expect.objectContaining({ output_summary: "No newline", cost_usd: 0.003 })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task working directory (cwd) — board-promoted / delegated tasks (PR #227)
+// ---------------------------------------------------------------------------
+
+describe("task working directory (cwd)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    existingDirs.clear();
+  });
+
+  function spawnOpts(spawnFn: ReturnType<typeof vi.fn>) {
+    return spawnFn.mock.calls[0][2] as { cwd?: string };
+  }
+
+  it("taskCwd returns metadata.projectPath when it exists as a directory", () => {
+    existingDirs.add("C:\\dev\\some-proj");
+    const task = makeTask({ metadata: JSON.stringify({ projectPath: "C:\\dev\\some-proj" }) });
+    expect(taskCwd(task)).toBe("C:\\dev\\some-proj");
+  });
+
+  it("taskCwd falls back to metadata.worktreePath when projectPath absent", () => {
+    existingDirs.add("C:\\dev\\wt");
+    const task = makeTask({ metadata: JSON.stringify({ worktreePath: "C:\\dev\\wt" }) });
+    expect(taskCwd(task)).toBe("C:\\dev\\wt");
+  });
+
+  it("taskCwd returns undefined for a stale/missing path (no crash)", () => {
+    const task = makeTask({ metadata: JSON.stringify({ projectPath: "C:\\dev\\gone" }) });
+    expect(taskCwd(task)).toBeUndefined();
+  });
+
+  it("taskCwd returns undefined for malformed metadata", () => {
+    const task = makeTask({ metadata: "{not json" });
+    expect(taskCwd(task)).toBeUndefined();
+  });
+
+  it("runClassicTask spawns with cwd === metadata.projectPath when present", async () => {
+    existingDirs.add("C:\\dev\\promoted");
+    const { proc, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    const task = makeTask({ id: 20, metadata: JSON.stringify({ projectPath: "C:\\dev\\promoted" }) });
+    const promise = runClassicTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    emitClose(0);
+    await promise;
+
+    expect(spawnOpts(spawnFn).cwd).toBe("C:\\dev\\promoted");
+  });
+
+  it("runClassicTask spawns with no cwd when metadata has no projectPath", async () => {
+    const { proc, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    const task = makeTask({ id: 21 }); // metadata: null
+    const promise = runClassicTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    emitClose(0);
+    await promise;
+
+    expect(spawnOpts(spawnFn).cwd).toBeUndefined();
+  });
+
+  it("runStreamTask spawns with cwd === metadata.projectPath when present", async () => {
+    existingDirs.add("C:\\dev\\promoted-stream");
+    const { proc, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    const task = makeTask({
+      id: 22,
+      execution_mode: "stream",
+      metadata: JSON.stringify({ projectPath: "C:\\dev\\promoted-stream" }),
+    });
+    const promise = runStreamTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    emitClose(0);
+    await promise;
+
+    expect(spawnOpts(spawnFn).cwd).toBe("C:\\dev\\promoted-stream");
+  });
+
+  it("runStreamTask spawns with no cwd when metadata has no projectPath", async () => {
+    const { proc, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    const task = makeTask({ id: 23, execution_mode: "stream" }); // metadata: null
+    const promise = runStreamTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    emitClose(0);
+    await promise;
+
+    expect(spawnOpts(spawnFn).cwd).toBeUndefined();
+  });
+
+  it("spawns with no cwd when the project path is stale (defensive fallback)", async () => {
+    const { proc, emitClose } = makeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(proc);
+
+    // projectPath set but never added to existingDirs ⇒ treated as missing.
+    const task = makeTask({ id: 24, metadata: JSON.stringify({ projectPath: "C:\\dev\\gone" }) });
+    const promise = runClassicTask(task, spawnFn as unknown as typeof import("child_process").spawn);
+    emitClose(0);
+    await promise;
+
+    expect(spawnOpts(spawnFn).cwd).toBeUndefined();
   });
 });

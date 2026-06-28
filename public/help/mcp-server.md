@@ -43,7 +43,7 @@ Restart Claude Desktop and look for "project-minder" in the connection drawer.
 
 ## What it exposes
 
-The server registers ~35 tools and ~12 resources covering every major Project Minder surface.
+The server registers ~39 tools and ~12 resources covering every major Project Minder surface.
 
 ### Read tools — projects, usage, sessions
 
@@ -108,6 +108,17 @@ The server registers ~35 tools and ~12 resources covering every major Project Mi
 | `toggle-manual-step` | Toggles one MANUAL_STEPS.md checkbox in one project |
 | `refresh-catalog` | Re-walks ~/.claude/agents and ~/.claude/skills |
 | `refresh-git-status` | Forces a fresh git status check |
+
+### Write tools — board (agent write-bridge)
+
+These let a running Claude Code session push work into a project's canonical `BOARD.md` (and bridge it into the task dispatcher) without leaving the terminal. Each resolves the project by `slug`, writes the canonical board via the Phase 1 writer (atomic, file-locked), and returns the re-parsed board. Out-of-enum `status`/`priority` values are rejected at the JSON-RPC boundary; an unknown slug or a stale issue id surfaces as an `isError` result.
+
+| Tool | Effect |
+|---|---|
+| `board_create_issue` | Adds an issue under an epic (`epicId`) or the Inbox; optional `status`/`priority`/`labels` and `sessionId`/`worktree` provenance |
+| `board_log_finding` | Records an agent-discovered finding as a `(finding) …` Inbox row at status `triage` (with optional provenance) |
+| `board_postpone` | Snoozes an issue by setting its status (defaults to `backlog`) |
+| `board_promote_to_task` | Bridges an issue into a `~/.minder/tasks.db` task; the issue flips to `doing` on promote and back to `done` when the task completes. Returns `{ taskId, board }` |
 
 ### Resources
 

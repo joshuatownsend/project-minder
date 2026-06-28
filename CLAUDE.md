@@ -37,7 +37,8 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 
 ### Scanner (`src/lib/scanner/`)
 - `index.ts` — orchestrator: reads `C:\dev\*` dirs, runs scanner modules in parallel (batches of 10), detects port conflicts
-- 10 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`, `boardMd` (gated by `scanBoard`)
+- 11 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`, `boardMd` (gated by `scanBoard`), `operationsMd` (gated by `scanOps`)
+- `envFile` also tags a managed-DB `provider` from the `DATABASE_URL` host (Neon/PlanetScale/Supabase/Upstash/Railway/Render) and surfaces it as an `externalServices` entry
 - Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\my-app`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
@@ -55,6 +56,12 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - 5-min TTL matching scan cache; detail page on-demand checks also update this cache
 - Dashboard cards show amber `+N` indicators as results arrive
 
+### GitHub Activity Cache (`src/lib/githubActivityCache.ts`)
+- `globalThis` singleton mirroring `gitStatusCache`: queue + `seen` dedupe + `generation` `dispose()` guard, batched `processQueue` (`BATCH_SIZE=2`, `BATCH_DELAY=800ms` — gentler since each repo costs up to 3 `gh` round-trips), 5-min TTL, `get`/`getAll`/`pending`/`total`
+- Shells the local authenticated `gh` CLI via `execFile("gh", [array, args])` — **never a shell string**; `owner/repo` is extracted by `parseGitHubRemote` (`src/lib/githubRemote.ts`) and validated to `^[A-Za-z0-9._-]+$` before use as `-R owner/repo`
+- Fully defensive: `gh` missing/unauthenticated, non-`github.com` remote (decided before spawning), or non-repo → cached `available:false` sentinel with a `reason` enum; never throws, never blocks a scan, never re-shells within TTL
+- Enqueued (flag-gated, default-on `githubActivity`) by `/api/projects` on each dashboard load, carrying the scanned `remoteUrl`; polled by the client via `/api/github-activity` (hook `useGithubActivity`); drives the GitHub strip on `ProjectCard` + `ProjectDetail` (open PRs / CI / last push), with open PRs cross-linked to creating sessions via session `prLinks`
+
 ### Manual Steps Watcher (`src/lib/manualStepsWatcher.ts`)
 - `globalThis` singleton that watches `MANUAL_STEPS.md` files across all projects
 - `fs.watch` per file with 500ms debounce (Windows fires duplicate events)
@@ -69,6 +76,10 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Attaches `WorktreeOverlay[]` to parent project's `ProjectData` — purely read-only
 - Branch name resolved from worktree `.git` file's `gitdir:` → `HEAD` ref, with directory-name fallback
 - ManualStepsWatcher extended to also watch worktree MANUAL_STEPS.md files (composite slug `parentslug:worktree:branchhint`)
+
+### Operations Panel (`src/lib/ops/summary.ts`, `src/lib/scanner/operationsMd.ts`)
+- `deriveOpsSummary(project)` — pure derive-and-present layer (no FS, no scan): composes already-scanned fields (`cicd.hosting`, Vercel + GitHub-Actions `workflows[].cron` merged into one `OpsCron[]`, `dependabot`, `externalServices`, `database`, `operations`) into a serializable `OpsSummary`; runs client-side in the panel. `hasOps()` drives tab visibility.
+- `operationsMd.ts` — tolerant `OPERATIONS.md` parser: each `##` heading → one of five `OpsSectionKey`s (backups/monitoring/oncall/secrets/restore) via a synonym table; unknown headings → `other`. Gated by `scanOps` (default-on); attached as `ProjectData.operations`. Living-checklist: `scanOperationsArchive` reads `OPERATIONS.archive.md` on demand (orchestrator never reads `*.archive.md`). v1 is read-only; any future writer must canonicalize via `canonicalProjectDir`.
 
 ### Usage Module (`src/lib/usage/`)
 - `types.ts` — UsageTurn, UsageReport, CategoryType, ModelCost, ShellStats, McpServerStats, OneShotStats
@@ -96,8 +107,9 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `GET /api/insights/[slug]` — insights for one project
 - `GET /api/board` — boards cross-project from scan cache (`?project=slug`, `?status=`, `?q=`)
 - `GET /api/board/[slug]` — one project's board (fresh read; `?archived=1` for `BOARD.archive.md`)
-- `POST /api/board/[slug]` — mutate `{action: "addIssue"|"addEpic"|"setStatus"|"editIssue"|"move"|"reorder"|"promoteTodo", ...}` via the serializing `boardWriter`; invalidates the scan cache
+- `POST /api/board/[slug]` — mutate `{action: "addIssue"|"addEpic"|"setStatus"|"editIssue"|"move"|"reorder"|"promoteTodo"|"promoteToTask", ...}` via the serializing `boardWriter`; invalidates the scan cache. `promoteToTask` bridges a `^i-` issue into a `~/.minder/tasks.db` task via `src/lib/tasks/boardDelegation.ts` (`promoteBoardIssueToTask`) and returns `{taskId, board}` (two-way lifecycle: issue → `doing` on promote, → `done` on task completion via `onTaskCompleteSyncBoard`)
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
+- `GET /api/github-activity` — background GitHub activity cache (open PRs / CI / last push via `gh`, polled by dashboard)
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
 - `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
@@ -107,14 +119,15 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `GET /api/agents/[id]` — single agent entry with full body text + usage stats
 - `GET /api/skills` — catalog of all skills with usage stats; same query params
 - `GET /api/skills/[id]` — single skill entry with full body text + usage stats
-- `GET/POST/DELETE /api/mcp` — Model Context Protocol server (Streamable HTTP transport, stateless). Lets Claude Desktop and Claude Code connect and query token usage, sessions, agents, skills, OTEL telemetry, manual steps, insights, git status, and portfolio stats. Server factory: `src/lib/mcp/server.ts`. Tools registered per-domain under `src/lib/mcp/tools/`; resources in `src/lib/mcp/resources.ts`. Tools call lib functions directly — no HTTP loopback. DNS-rebinding protection pinned to `localhost:4100` / `127.0.0.1:4100`. See `docs/help/mcp-server.md` for the full surface and client setup.
+- `GET/POST/DELETE /api/mcp` — Model Context Protocol server (Streamable HTTP transport, stateless). Lets Claude Desktop and Claude Code connect and query token usage, sessions, agents, skills, OTEL telemetry, manual steps, insights, git status, and portfolio stats. Server factory: `src/lib/mcp/server.ts`. Tools registered per-domain under `src/lib/mcp/tools/`; resources in `src/lib/mcp/resources.ts`. Tools call lib functions directly — no HTTP loopback. Board write tools (`src/lib/mcp/tools/board.ts`): `board_create_issue`, `board_log_finding`, `board_postpone`, `board_promote_to_task` — write the canonical `BOARD.md` via `boardWriter`/`boardDelegation` (enum-validated at the JSON-RPC boundary; errors via `errorResult`). DNS-rebinding protection pinned to `localhost:4100` / `127.0.0.1:4100`. See `docs/help/mcp-server.md` for the full surface and client setup.
 
 ### UI (`src/components/`)
 - Dashboard: `DashboardGrid` with search, status filter, sort options, `ProjectCard` grid
 - Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude, Manual Steps) + `DevServerControl`
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
 - Insights: `InsightsBrowser` at `/insights`, `InsightsTab` per-project, `InsightsCompact` badge on cards
-- Board: `BoardBrowser` at `/board` (cross-project, search + status/project filters), `BoardTab` per-project (inline status edit + add-to-Inbox), `BoardCompact` open-count badge on cards. Shared chips in `BoardChips.tsx`; data hooks in `hooks/useBoard.ts`. `BOARD.md` parser is `scanner/boardMd.ts`; serializing writer (canonical-resolve → lock → atomic write → re-parse) is `boardWriter.ts`. Planning is canonical to the main tree (worktree writes redirect to the parent `BOARD.md`).
+- Board: `BoardBrowser` at `/board` (cross-project, search + status/project filters), `BoardTab` per-project (inline status edit + add-to-Inbox + per-issue "Promote to task" row action → `→ task #N`), `BoardCompact` open-count badge on cards. Shared chips in `BoardChips.tsx`; data hooks in `hooks/useBoard.ts`. `BOARD.md` parser is `scanner/boardMd.ts`; serializing writer (canonical-resolve → lock → atomic write → re-parse) is `boardWriter.ts`; board→task bridge is `tasks/boardDelegation.ts`. Planning is canonical to the main tree (worktree writes redirect to the parent `BOARD.md`).
+- Ops: `OpsPanel` per-project tab (props-driven; derives `OpsSummary` client-side via `deriveOpsSummary` — no API route). Shows the auto-detected half (deploy targets, services, DB + managed provider, merged schedules, Dependabot) and the curated `OPERATIONS.md` runbook half (five sections + "not documented" prompts + an "N of 9 facts captured" coverage line). Tab appears only when `hasOps` is true.
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
 - Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions with one-shot rate badges. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - Usage: `UsageDashboard` at `/usage` — token cost analytics with period filters, per-model/project/category breakdowns, daily cost chart, tool/shell/MCP stats, CSV/JSON export
@@ -265,3 +278,18 @@ Use this structure (one dated entry per session or feature):
 
 ---
 ```
+
+## Operations Runbook (OPERATIONS.md)
+
+`OPERATIONS.md` in the project root is the curated half of the per-project Operations panel — the operational truth Minder can't auto-detect. Record it under five `##` headings (recognized tolerantly, synonyms allowed):
+
+1. **Backups** — what's backed up, how often, retention.
+2. **Monitoring & Alerting** — dashboards, uptime checks, what pages whom.
+3. **On-call & Escalation** — who's responsible and the escalation path.
+4. **Secrets & Rotation** — where secrets live and how/when they rotate.
+5. **Restore & Recovery** — the step-by-step recovery procedure.
+
+Rules:
+- **Living checklist, not append-only.** Check off (`- [x]`) or prune done items; move completed/obsolete entries into a committed `OPERATIONS.archive.md` (ignored by the scanner) rather than deleting them. Don't remove anything you can't confirm is done — surface the uncertainty instead.
+- **Worktrees → canonical file.** Inside a git worktree, edit the **canonical main-tree** project's `OPERATIONS.md` (the parent checkout), never the worktree copy. v1 is read-only in Minder (no writer), so hand edits must target the parent directory.
+- Unknown headings are kept verbatim (shown under their own title), so adding extra sections is safe.

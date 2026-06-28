@@ -8,7 +8,7 @@ import {
   BoardIssue,
   BoardStatus,
 } from "@/lib/types";
-import { Inbox, Plus, LayoutDashboard } from "lucide-react";
+import { Inbox, Plus, LayoutDashboard, Rocket } from "lucide-react";
 import {
   StatusChip,
   PriorityChip,
@@ -38,10 +38,14 @@ async function postBoard(slug: string, body: unknown): Promise<boolean> {
 function IssueRow({
   issue,
   onStatus,
+  onPromote,
+  promotedTaskId,
   busy,
 }: {
   issue: BoardIssue;
   onStatus: (id: string, status: BoardStatus) => void;
+  onPromote: (id: string) => void;
+  promotedTaskId?: number;
   busy: boolean;
 }) {
   return (
@@ -100,6 +104,49 @@ function IssueRow({
       <PriorityChip priority={issue.priority} />
       <LabelChips labels={issue.labels} />
       <ProvenanceChips worktree={issue.worktree} sessionId={issue.sessionId} />
+
+      {/* Promote-to-task: only ^i- issues are addressable. Right-aligned so it
+          sits as the row's trailing action next to the status editor. Once
+          bridged, the button is replaced by the resulting task id. */}
+      {issue.id &&
+        (promotedTaskId != null ? (
+          <span
+            style={{
+              marginLeft: "auto",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.62rem",
+              color: "var(--text-muted)",
+              flexShrink: 0,
+            }}
+          >
+            → task #{promotedTaskId}
+          </span>
+        ) : (
+          <button
+            onClick={() => onPromote(issue.id)}
+            disabled={busy}
+            title="Promote this issue to an executable task"
+            style={{
+              marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "3px",
+              padding: "0 7px",
+              height: "20px",
+              fontSize: "0.6rem",
+              fontFamily: "var(--font-body)",
+              color: "var(--accent-strong)",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "3px",
+              cursor: busy ? "default" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Rocket style={{ width: "10px", height: "10px" }} />
+            Promote to task
+          </button>
+        ))}
     </div>
   );
 }
@@ -107,10 +154,14 @@ function IssueRow({
 function EpicBlock({
   epic,
   onStatus,
+  onPromote,
+  promoted,
   busyId,
 }: {
   epic: BoardEpic;
   onStatus: (id: string, status: BoardStatus) => void;
+  onPromote: (id: string) => void;
+  promoted: Record<string, number>;
   busyId: string | null;
 }) {
   return (
@@ -152,6 +203,8 @@ function EpicBlock({
             key={issue.id || `${epic.id}-${i}`}
             issue={issue}
             onStatus={onStatus}
+            onPromote={onPromote}
+            promotedTaskId={issue.id ? promoted[issue.id] : undefined}
             busy={!!issue.id && busyId === issue.id}
           />
         ))}
@@ -172,12 +225,34 @@ export function BoardTab({ slug, board: initialBoard }: BoardTabProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [adding, setAdding] = useState(false);
+  // issueId → bridged task id, so a promoted row shows "→ task #N".
+  const [promoted, setPromoted] = useState<Record<string, number>>({});
 
   const onStatus = async (id: string, status: BoardStatus) => {
     setBusyId(id);
     try {
       await postBoard(slug, { action: "setStatus", id, status });
       await refresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onPromote = async (id: string) => {
+    setBusyId(id);
+    try {
+      const res = await fetch(`/api/board/${slug}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "promoteToTask", id }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { taskId?: number };
+        if (typeof data.taskId === "number") {
+          setPromoted((prev) => ({ ...prev, [id]: data.taskId! }));
+        }
+        await refresh();
+      }
     } finally {
       setBusyId(null);
     }
@@ -250,6 +325,8 @@ export function BoardTab({ slug, board: initialBoard }: BoardTabProps) {
               key={epic.id || `epic-${i}`}
               epic={epic}
               onStatus={onStatus}
+              onPromote={onPromote}
+              promoted={promoted}
               busyId={busyId}
             />
           ))}
@@ -285,6 +362,8 @@ export function BoardTab({ slug, board: initialBoard }: BoardTabProps) {
                     key={issue.id || `inbox-${i}`}
                     issue={issue}
                     onStatus={onStatus}
+                    onPromote={onPromote}
+                    promotedTaskId={issue.id ? promoted[issue.id] : undefined}
                     busy={!!issue.id && busyId === issue.id}
                   />
                 ))}

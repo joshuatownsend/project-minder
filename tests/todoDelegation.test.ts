@@ -172,6 +172,19 @@ describe("onTaskCompleteToggleTodo", () => {
     expect(mockToggleTodo).not.toHaveBeenCalled();
   });
 
+  it("skips toggle for a board-sourced task (sourceType board-issue, no TODO line)", async () => {
+    const task = makeTask({
+      metadata: JSON.stringify({
+        sourceType: "board-issue",
+        boardIssueId: "i-1111",
+        projectPath: "/mock/roots/my-project",
+        projectSlug: "my-project",
+      }),
+    });
+    await onTaskCompleteToggleTodo(task);
+    expect(mockToggleTodo).not.toHaveBeenCalled();
+  });
+
   it("does not throw when toggleTodoInFile fails (best-effort)", async () => {
     const task = makeTask({ status: "done" });
     mockToggleTodo.mockRejectedValueOnce(new Error("file locked"));

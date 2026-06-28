@@ -115,6 +115,38 @@ function buildSpawnTarget(args: string[]): [string, string[]] {
 }
 
 /**
+ * Derive the working directory a task should run in, from its metadata.
+ * Board-promoted (`promoteBoardIssueToTask`) and delegated (`delegateTodo`)
+ * tasks store `projectPath`; the worktree convention may instead carry
+ * `worktreePath`. Returns the directory only if it exists and is a directory.
+ *
+ * Fully defensive: malformed metadata, a missing/stale path, or an fs error all
+ * yield `undefined`, so the spawn falls back to the server's cwd (current
+ * behavior) rather than crashing. Cron/manual tasks with no path are unchanged.
+ *
+ * Note: worktree tasks dispatch through `runWorktreeTask`, which wraps `spawnFn`
+ * to force the worktree cwd and thus overrides whatever this returns.
+ */
+export function taskCwd(task: Task): string | undefined {
+  let meta: { projectPath?: string; worktreePath?: string };
+  try {
+    meta = JSON.parse(task.metadata ?? "{}") as typeof meta;
+  } catch {
+    return undefined; // malformed metadata — inherit current cwd
+  }
+  const candidate = meta.projectPath ?? meta.worktreePath;
+  if (!candidate || typeof candidate !== "string") return undefined;
+  try {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  } catch {
+    // fs error (permissions, race) — treat as missing, never crash the spawn
+  }
+  return undefined;
+}
+
+/**
  * Spawn `claude -p "<prompt>"` for the task (classic mode).
  * Writes a PID marker file while the child is alive.
  * Updates the task row on completion via completeTask() / failTask().
@@ -132,6 +164,9 @@ export async function runClassicTask(
     const child = spawnFn(cmd, extraArgs, {
       stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
       env: { ...process.env, MINDER_DISPATCHED: "1" },
+      // Run in the task's project dir (board-promoted / delegated tasks); a
+      // missing/absent path resolves to undefined ⇒ inherit current cwd.
+      cwd: taskCwd(task),
     });
     const pid = child.pid;
     if (pid) writePidFile(pid);
@@ -231,6 +266,9 @@ export async function runStreamTask(
       // stdin is "pipe" so HITL can write answers; classic mode keeps "ignore"
       stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
       env: { ...process.env, MINDER_DISPATCHED: "1" },
+      // Run in the task's project dir (board-promoted / delegated tasks); a
+      // missing/absent path resolves to undefined ⇒ inherit current cwd.
+      cwd: taskCwd(task),
     });
     const pid = child.pid;
     if (pid) writePidFile(pid);

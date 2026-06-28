@@ -11,6 +11,8 @@ import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
 import { BoardTab } from "./BoardTab";
+import { OpsPanel } from "./OpsPanel";
+import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
 import { ArchivedDisclosure } from "./ArchivedDisclosure";
 import { ProjectSessions } from "./ProjectSessions";
 import { GitStatusCompact } from "./GitStatus";
@@ -27,6 +29,9 @@ import { ContextBudgetPanel } from "./ContextBudgetPanel";
 import { EfficiencyTab } from "./EfficiencyTab";
 import { HotFilesPanel } from "./HotFilesPanel";
 import { GitActivityPanel } from "./projects/GitActivityPanel";
+import { GithubActivityStrip } from "./GithubActivityStrip";
+import { useGithubActivity } from "@/hooks/useGithubActivity";
+import type { SessionSummary } from "@/lib/types";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -52,7 +57,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -101,7 +106,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 const VALID_TABS = new Set<TabKey>([
   "overview", "context", "todos", "sessions", "manual-steps", "insights",
-  "board", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
+  "board", "ops", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
 
@@ -111,6 +116,13 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [todos, setTodos] = useState<TodoInfo | undefined>(project.todos);
   const [hasConfigHistory, setHasConfigHistory] = useState(false);
+
+  // GitHub activity (Phase 4): poll the shared cache and pick this project's
+  // entry; build a best-effort `${repo}#${number}` → sessionId map so each
+  // open PR can link to the session that created it (reuses session prLinks).
+  const { statuses: githubStatuses } = useGithubActivity();
+  const githubActivity = githubStatuses[project.slug];
+  const [prSessionLinks, setPrSessionLinks] = useState<Record<string, string>>({});
 
   const initialTab = (searchParams.get("tab") ?? "overview") as TabKey;
   const [activeTab, setActiveTab] = useState<TabKey>(
@@ -145,6 +157,34 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     };
   }, [project.slug]);
 
+  // Cross-link open PRs ↔ the sessions that created them (best-effort, additive
+  // — the strip works without it). /api/sessions returns a SessionSummary[].
+  useEffect(() => {
+    if (!(project.claude && project.claude.sessionCount > 0)) return;
+    let cancelled = false;
+    fetch(`/api/sessions?project=${encodeURIComponent(project.slug)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: SessionSummary[] | null) => {
+        if (cancelled || !Array.isArray(data)) return;
+        const map: Record<string, string> = {};
+        for (const s of data) {
+          for (const pr of s.prs ?? []) {
+            if (pr?.repo && typeof pr.number === "number") {
+              map[`${pr.repo}#${pr.number}`] = s.sessionId;
+            }
+          }
+        }
+        if (!cancelled) setPrSessionLinks(map);
+      })
+      .catch(() => {
+        // Silent — the cross-link is additive; the strip renders without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.slug]);
+
   const openInVSCode = () => {
     window.open(`vscode://file/${project.path.replace(/\\/g, "/")}`, "_blank");
   };
@@ -159,6 +199,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
   const hasBoard = !!(project.board && project.board.total > 0);
+  const hasOps_ = hasOps(deriveOpsSummary(project));
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
   const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
   const hasConfigLint = !!project.configLint;
@@ -173,6 +214,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "manual-steps", label: "Manual Steps" },
     ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
     ...(hasBoard        ? [{ key: "board"        as TabKey, label: `Board${project.board ? ` (${project.board.total})` : ""}` }] : []),
+    ...(hasOps_         ? [{ key: "ops"          as TabKey, label: "Ops" }] : []),
     { key: "memory",      label: "Memory" },
     ...(hasGsdPlanning   ? [{ key: "planning"     as TabKey, label: "Planning"    }] : []),
     { key: "agents",      label: "Agents" },
@@ -417,6 +459,15 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
                 </div>
               )}
 
+              {/* GitHub activity — open PRs / CI / last push (Phase 4). Quiet
+                  when gh is unavailable or the remote isn't GitHub. */}
+              {githubActivity?.available && (
+                <div>
+                  <SectionHeader label="GitHub" />
+                  <GithubActivityStrip activity={githubActivity} prSessionLinks={prSessionLinks} />
+                </div>
+              )}
+
               {/* Git Activity (Claude-driven commits/pushes per branch) */}
               <GitActivityPanel slug={project.slug} />
 
@@ -585,6 +636,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {activeTab === "board" && (
             <BoardTab slug={project.slug} board={project.board} />
           )}
+
+          {/* ── OPS ───────────────────────────────────────────────────── */}
+          {activeTab === "ops" && <OpsPanel project={project} />}
 
           {/* ── MEMORY ────────────────────────────────────────────────── */}
           {activeTab === "memory" && (

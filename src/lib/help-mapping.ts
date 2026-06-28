@@ -57,6 +57,7 @@ export const tabHelpMapping: Record<string, string> = {
   'manual-steps': 'manual-steps',
   insights: 'insights',
   board: 'board',
+  ops: 'operations',
   agents: 'agents',
   skills: 'skills',
   memory: 'memory',
@@ -85,6 +86,7 @@ export const helpSlugs = [
   'sessions',
   'insights',
   'board',
+  'operations',
   'agents',
   'skills',
   'instructions',
@@ -117,6 +119,7 @@ export const helpSlugs = [
   'command-palette',
   'keyboard-shortcuts',
   'mcp-server',
+  'github-activity',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

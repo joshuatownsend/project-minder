@@ -23,6 +23,8 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "claudeStatusAlerts",
   "configLint",
   "scanBoard",
+  "scanOps",
+  "githubActivity",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -193,6 +195,24 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Reads BOARD.md (epics → issues) from each project for the Board.",
     group: "passive",
     appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "scanOps",
+    label: "Scan OPERATIONS.md",
+    description:
+      "Reads OPERATIONS.md (backups, monitoring, on-call, secrets, restore) for the per-project Operations panel.",
+    group: "passive",
+    appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "githubActivity",
+    label: "GitHub activity",
+    description:
+      "Background `gh` fetch of open PRs, CI status, and last push per project (drives the GitHub strip on cards + detail).",
+    group: "active",
+    appliesAt: "watcher",
     wired: true,
   },
 ];

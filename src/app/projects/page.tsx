@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useProjects } from "@/hooks/useProjects";
 import { useGitDirtyStatus } from "@/hooks/useGitDirtyStatus";
 import { useEfficiencyGrades } from "@/hooks/useEfficiencyGrades";
+import { useGithubActivity } from "@/hooks/useGithubActivity";
 import { DashboardGrid } from "@/components/DashboardGrid";
 import { DecisionsPanel } from "@/components/DecisionsPanel";
 import { InboxPanel } from "@/components/InboxPanel";
@@ -21,6 +22,7 @@ export default function ProjectsPage() {
   const { data, loading, rescan, archiveProject, unarchiveProject } = useProjects();
   const { statuses } = useGitDirtyStatus();
   const { grades, trends } = useEfficiencyGrades();
+  const { statuses: githubActivity } = useGithubActivity();
   const [taskDispatcherEnabled, setTaskDispatcherEnabled] = useState(false);
 
   useEffect(() => {
@@ -46,6 +48,7 @@ export default function ProjectsPage() {
         gitDirtyOverrides={statuses}
         efficiencyGrades={grades}
         efficiencyTrends={trends}
+        githubActivity={githubActivity}
       />
     </div>
   );

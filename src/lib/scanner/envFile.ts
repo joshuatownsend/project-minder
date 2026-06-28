@@ -28,7 +28,31 @@ const SERVICE_PATTERNS: Record<string, string[]> = {
   Google: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
   Pusher: ["PUSHER_APP_ID", "PUSHER_KEY"],
   Upstash: ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
+  // Dedicated PlanetScale keys only — DATABASE_URL alone is ambiguous, so the
+  // PlanetScale-from-DATABASE_URL case is handled by host-substring detection
+  // (DB_HOST_PROVIDERS) instead of listing DATABASE_URL here.
+  PlanetScale: ["PLANETSCALE_DB", "PSCALE_TOKEN"],
 };
+
+// Managed-DB providers recognized by a substring of the connection host. Purely
+// richer parsing of a string already in hand — no new file reads, no network.
+const DB_HOST_PROVIDERS: Array<[substr: string, name: string]> = [
+  [".neon.tech", "Neon"],
+  [".psdb.cloud", "PlanetScale"],
+  [".supabase.co", "Supabase"],
+  [".upstash.io", "Upstash"],
+  ["railway", "Railway"],
+  [".render.com", "Render"],
+];
+
+/** Infer a managed-DB provider from a connection hostname, or undefined. */
+function detectDbProvider(hostname: string): string | undefined {
+  const host = hostname.toLowerCase();
+  for (const [substr, name] of DB_HOST_PROVIDERS) {
+    if (host.includes(substr)) return name;
+  }
+  return undefined;
+}
 
 function parseDatabaseUrl(url: string): DatabaseInfo | undefined {
   try {
@@ -53,6 +77,7 @@ function parseDatabaseUrl(url: string): DatabaseInfo | undefined {
       host: parsed.hostname,
       port: parseInt(parsed.port, 10) || (type === "PostgreSQL" ? 5432 : type === "MySQL" ? 3306 : 27017),
       name: parsed.pathname.replace("/", ""),
+      provider: detectDbProvider(parsed.hostname),
     };
   } catch {
     return undefined;
@@ -106,6 +131,12 @@ export async function scanEnvFiles(projectPath: string): Promise<EnvResult> {
         break;
       }
     }
+  }
+
+  // Surface a managed-DB provider (inferred from the DATABASE_URL host) as a
+  // service too, so it appears in externalServices and the Operations panel.
+  if (result.database?.provider) {
+    detectedServices.add(result.database.provider);
   }
 
   result.externalServices = Array.from(detectedServices).sort();

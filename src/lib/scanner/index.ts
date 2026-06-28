@@ -14,6 +14,7 @@ import { scanClaudeSessions } from "./claudeSessions";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
 import { scanBoardMd } from "./boardMd";
+import { scanOperationsMd } from "./operationsMd";
 import { scanClaudeHooks } from "./claudeHooks";
 import { scanMcpServers } from "./mcpServers";
 import { scanCiCd } from "./cicd";
@@ -143,6 +144,7 @@ async function scanProject(
     manualSteps,
     insights,
     board,
+    operations,
     hooks,
     mcpServers,
     outputStyles,
@@ -177,6 +179,9 @@ async function scanProject(
       : Promise.resolve(undefined),
     getFlag(flags, "scanBoard")
       ? scanBoardMd(projectPath)
+      : Promise.resolve(undefined),
+    getFlag(flags, "scanOps")
+      ? scanOperationsMd(projectPath)
       : Promise.resolve(undefined),
     hooksPromise,
     mcpServersPromise,
@@ -243,6 +248,7 @@ async function scanProject(
     manualSteps,
     insights,
     board,
+    operations,
     hooks,
     mcpServers,
     outputStyles,

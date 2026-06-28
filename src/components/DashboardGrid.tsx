@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { ProjectData, ProjectStatus } from "@/lib/types";
+import { ProjectData, ProjectStatus, GithubActivity } from "@/lib/types";
 import { useLiveSessionStatus } from "@/hooks/useLiveSessionStatus";
 import { ProjectCard } from "./ProjectCard";
 import { SparklineList } from "./SparklineList";
@@ -40,6 +40,7 @@ interface DashboardGridProps {
   gitDirtyOverrides?: Record<string, DirtyStatusOverride>;
   efficiencyGrades?: Record<string, EfficiencyGrade>;
   efficiencyTrends?: Record<string, GradeTrend>;
+  githubActivity?: Record<string, GithubActivity>;
 }
 
 const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };
@@ -73,6 +74,7 @@ export function DashboardGrid({
   gitDirtyOverrides,
   efficiencyGrades,
   efficiencyTrends,
+  githubActivity,
 }: DashboardGridProps) {
   const [search, setSearch]               = useState("");
   const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
@@ -544,6 +546,7 @@ export function DashboardGrid({
               onTogglePin={onTogglePin}
               efficiencyGrade={efficiencyGrades?.[project.slug]}
               efficiencyTrend={efficiencyTrends?.[project.slug]}
+              githubActivity={githubActivity?.[project.slug]}
             />
           ))}
           {filtered.length === 0 && (

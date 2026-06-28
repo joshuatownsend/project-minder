@@ -9,7 +9,7 @@ The board lives in a `BOARD.md` file in each project root. The filesystem stays 
 ## Where you see it
 
 - **Cross-project page (`/board`)** — every project's board in one place. Search issue text, filter by status, and scope to a single project. Issues are grouped under their epic, with the Inbox shown as its own lane.
-- **Per-project Board tab** — appears on a project's detail page once it has a `BOARD.md`. Change an issue's status inline (a dropdown per issue) and add a new issue straight to the Inbox.
+- **Per-project Board tab** — appears on a project's detail page once it has a `BOARD.md`. Change an issue's status inline (a dropdown per issue), add a new issue straight to the Inbox, and **promote an issue to a task** (a row action that bridges it into the task dispatcher; once promoted the row shows `→ task #N`).
 - **Card badge** — each project card shows a count of open (non-done) issues.
 
 ## BOARD.md grammar
@@ -54,6 +54,23 @@ The Board tab writes through a serializing writer that edits only the targeted l
 ### TODO → Board promote path
 
 `TODO.md` stays your quick-capture inbox. When a TODO is ready to become tracked work, it can be **promoted** into a board issue: the issue is created from the TODO's text and the source TODO is marked done (idempotently — promoting the same item twice won't reopen it).
+
+### Promote to task
+
+A board issue (any row with a stable `^i-` id) can be **promoted to an executable task** that the task dispatcher runs. Use the "Promote to task" row action on the Board tab, or `POST /api/board/[slug]` with `{ "action": "promoteToTask", "id": "i-…" }`. This creates a `delegated-todo` task in `~/.minder/tasks.db` tagged with board provenance (`sourceType: "board-issue"`, `boardIssueId`, `projectSlug`), and returns `{ taskId, board }`.
+
+The lifecycle is two-way and best-effort: promoting flips the issue to `doing` (in flight), and when the dispatcher finishes the task it flips the same issue to `done`. A missing/edited issue never fails the task — the sync is swallowed.
+
+## Agent write-bridge (MCP)
+
+A running Claude Code session can write to the board over Project Minder's [MCP server](mcp-server) — no HTTP loopback, the tools call the same writer the UI does. Four tools are exposed:
+
+- **`board_create_issue`** — add an issue under an epic (`epicId`) or the Inbox, with optional `status`/`priority`/`labels` and `sessionId`/`worktree` provenance.
+- **`board_log_finding`** — record an agent-discovered finding as a `(finding) …` Inbox row at status `triage`, so you can triage it later.
+- **`board_postpone`** — snooze an issue by setting its status (defaults to `backlog`).
+- **`board_promote_to_task`** — bridge an issue into the task dispatcher (same path as the UI action above), returning `{ taskId, board }`.
+
+All four resolve the project by `slug`, write the canonical main-tree `BOARD.md`, and return the re-parsed board. Out-of-enum values are rejected at the JSON-RPC boundary; an unknown slug or stale issue id comes back as an error result.
 
 ## The done lane: BOARD.archive.md
 
