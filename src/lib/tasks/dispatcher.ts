@@ -144,8 +144,16 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         } else {
+          // Classic mode: runClassicTask returns a RunTaskResult, not the Task
+          // row, and (unlike stream/worktree) takes no onComplete callback — so
+          // re-read the completed Task and hand it to afterComplete. Without this
+          // the completion hooks (board sync / TODO toggle) never fire for classic
+          // tasks, which are the default for promoteBoardIssueToTask + delegateTodo.
           promise = runClassicTask(task, spawnFn)
-            .then(() => afterComplete())
+            .then(async () => {
+              const completedTask = await getTask(task!.id).catch(() => null);
+              await afterComplete(completedTask ?? undefined);
+            })
             .catch((err) => console.error(`[dispatcher] task ${task!.id} spawn error:`, err))
             .finally(() => inFlight.delete(task!.id));
         }

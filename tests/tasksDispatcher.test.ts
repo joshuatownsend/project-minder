@@ -15,6 +15,18 @@ vi.mock("../src/lib/tasks/store", () => ({
   claimPendingTask: vi.fn().mockResolvedValue(null),
   materializeSchedules: vi.fn().mockResolvedValue(0),
   promoteApprovalTasks: vi.fn().mockResolvedValue(0),
+  completeTask: vi.fn().mockResolvedValue(undefined),
+  recordDecision: vi.fn().mockResolvedValue(undefined),
+  getTask: vi.fn().mockResolvedValue(null),
+  updateSwarmStatus: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock the completion hooks so we can assert the dispatcher fires them.
+vi.mock("../src/lib/tasks/todoDelegation", () => ({
+  onTaskCompleteToggleTodo: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../src/lib/tasks/boardDelegation", () => ({
+  onTaskCompleteSyncBoard: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock spawner
@@ -24,8 +36,16 @@ vi.mock("../src/lib/tasks/spawner", () => ({
 }));
 
 import { initDispatcher, isDispatcherRunning, getDispatcherStats } from "../src/lib/tasks/dispatcher";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks } from "../src/lib/tasks/store";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask } from "../src/lib/tasks/store";
+import { onTaskCompleteSyncBoard } from "../src/lib/tasks/boardDelegation";
+import { onTaskCompleteToggleTodo } from "../src/lib/tasks/todoDelegation";
 import { sweepStalePids } from "../src/lib/tasks/spawner";
+
+/** Drain the microtask queue enough times for the classic-completion promise
+ *  chain (runClassicTask → getTask → afterComplete → hooks) to settle. */
+async function drainMicrotasks(n = 8): Promise<void> {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
 
 // Patch globalThis between tests
 function cleanupDispatcher() {
@@ -111,6 +131,31 @@ describe("dispatcher singleton", () => {
     await Promise.resolve();
 
     expect(runClassicTask).toHaveBeenCalledWith(mockTask, undefined);
+  });
+
+  it("fires board + TODO completion hooks for a classic task on completion", async () => {
+    const classicTask = {
+      id: 7, title: "promoted", description: "", status: "running", priority: 3, quadrant: "delegated-todo",
+      assigned_skill: null, model: null, execution_mode: "classic", scheduled_for: null,
+      requires_approval: 0, risk_level: "low", dry_run: 0, schedule_id: null, swarm_id: null,
+      approved_at: null, session_id: null, started_at: null, completed_at: null,
+      duration_ms: null, cost_usd: null, output_summary: null, error_message: null,
+      metadata: JSON.stringify({ sourceType: "board-issue", boardIssueId: "i-1111", projectPath: "C:\\dev\\x" }),
+      consecutive_failures: 0, created_at: new Date().toISOString(),
+    };
+    const completedTask = { ...classicTask, status: "done" };
+
+    vi.mocked(claimPendingTask).mockResolvedValueOnce(classicTask as never).mockResolvedValue(null);
+    vi.mocked(getTask).mockResolvedValue(completedTask as never);
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100);
+    await drainMicrotasks();
+
+    // The classic completion path re-reads the Task and feeds it to both hooks.
+    expect(getTask).toHaveBeenCalledWith(7);
+    expect(onTaskCompleteSyncBoard).toHaveBeenCalledWith(completedTask);
+    expect(onTaskCompleteToggleTodo).toHaveBeenCalledWith(completedTask);
   });
 
   it("skips dry_run tasks without spawning", async () => {
