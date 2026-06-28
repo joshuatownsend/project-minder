@@ -86,6 +86,7 @@ export const helpSlugs = [
   'sessions',
   'insights',
   'board',
+  'operations',
   'agents',
   'skills',
   'instructions',
