@@ -50,6 +50,9 @@ vi.mock("@/lib/scanner/manualStepsMd", () => ({
 vi.mock("@/lib/scanner/insightsMd", () => ({
   scanInsightsMd: vi.fn(),
 }));
+vi.mock("@/lib/scanner/boardMd", () => ({
+  scanBoardMd: vi.fn(),
+}));
 vi.mock("@/lib/scanner/claudeHooks", () => ({
   scanClaudeHooks: vi.fn(),
 }));
@@ -77,6 +80,7 @@ import { scanTodoMd } from "@/lib/scanner/todoMd";
 import { scanClaudeSessions } from "@/lib/scanner/claudeSessions";
 import { scanManualStepsMd } from "@/lib/scanner/manualStepsMd";
 import { scanInsightsMd } from "@/lib/scanner/insightsMd";
+import { scanBoardMd } from "@/lib/scanner/boardMd";
 import { scanClaudeHooks } from "@/lib/scanner/claudeHooks";
 import { scanMcpServers } from "@/lib/scanner/mcpServers";
 import { scanCiCd } from "@/lib/scanner/cicd";
@@ -95,6 +99,7 @@ const mockScanTodoMd = vi.mocked(scanTodoMd);
 const mockScanClaudeSessions = vi.mocked(scanClaudeSessions);
 const mockScanManualStepsMd = vi.mocked(scanManualStepsMd);
 const mockScanInsightsMd = vi.mocked(scanInsightsMd);
+const mockScanBoardMd = vi.mocked(scanBoardMd);
 const mockScanClaudeHooks = vi.mocked(scanClaudeHooks);
 const mockScanMcpServers = vi.mocked(scanMcpServers);
 const mockScanCiCd = vi.mocked(scanCiCd);
@@ -170,6 +175,7 @@ function setupHappyPath(flags?: MinderConfig["featureFlags"]) {
     completedSteps: 0,
   });
   mockScanInsightsMd.mockResolvedValue({ entries: [], total: 0 });
+  mockScanBoardMd.mockResolvedValue({ epics: [], inbox: [], total: 0 });
   mockScanClaudeHooks.mockResolvedValue({ entries: [] });
   mockScanMcpServers.mockResolvedValue({ servers: [] });
   mockScanCiCd.mockResolvedValue({
@@ -195,6 +201,7 @@ describe("scanAllProjects feature-flag gating", () => {
 
     expect(mockScanTodoMd).toHaveBeenCalledTimes(1);
     expect(mockScanInsightsMd).toHaveBeenCalledTimes(1);
+    expect(mockScanBoardMd).toHaveBeenCalledTimes(1);
     expect(mockScanManualStepsMd).toHaveBeenCalledTimes(1);
     expect(mockScanClaudeSessions).toHaveBeenCalledTimes(1);
     expect(mockScanDockerCompose).toHaveBeenCalledTimes(1);
@@ -202,6 +209,7 @@ describe("scanAllProjects feature-flag gating", () => {
 
     expect(p.todos?.pending).toBe(1);
     expect(p.insights?.total).toBe(0);
+    expect(p.board?.total).toBe(0);
     expect(p.manualSteps?.totalSteps).toBe(0);
     expect(p.claude?.sessionCount).toBe(5);
     expect(p.claude?.lastSessionDate).toBe("2026-05-01T00:00:00Z");
@@ -224,6 +232,15 @@ describe("scanAllProjects feature-flag gating", () => {
 
     expect(mockScanInsightsMd).not.toHaveBeenCalled();
     expect(result.projects[0].insights).toBeUndefined();
+    expect(mockScanTodoMd).toHaveBeenCalled();
+  });
+
+  it("scanBoard=false skips scanBoardMd and leaves board undefined", async () => {
+    setupHappyPath({ scanBoard: false });
+    const result = await scanAllProjects();
+
+    expect(mockScanBoardMd).not.toHaveBeenCalled();
+    expect(result.projects[0].board).toBeUndefined();
     expect(mockScanTodoMd).toHaveBeenCalled();
   });
 
@@ -270,6 +287,7 @@ describe("scanAllProjects feature-flag gating", () => {
   it("explicit true and absent map produce the same call counts", async () => {
     setupHappyPath({
       scanInsights: true,
+      scanBoard: true,
       scanTodos: true,
       scanManualSteps: true,
       scanClaudeSessions: true,
@@ -280,6 +298,7 @@ describe("scanAllProjects feature-flag gating", () => {
 
     expect(mockScanTodoMd).toHaveBeenCalledTimes(1);
     expect(mockScanInsightsMd).toHaveBeenCalledTimes(1);
+    expect(mockScanBoardMd).toHaveBeenCalledTimes(1);
     expect(mockScanManualStepsMd).toHaveBeenCalledTimes(1);
     expect(mockScanClaudeSessions).toHaveBeenCalledTimes(1);
     expect(mockScanDockerCompose).toHaveBeenCalledTimes(1);
@@ -292,6 +311,7 @@ describe("scanAllProjects feature-flag gating", () => {
     // must still fire — their flag wiring is intentionally absent today.
     setupHappyPath({
       scanInsights: false,
+      scanBoard: false,
       scanTodos: false,
       scanManualSteps: false,
       scanClaudeSessions: false,

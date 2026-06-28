@@ -10,6 +10,10 @@ import {
   applyMoveIssue,
   applyReorderIssue,
   addIssue,
+  addEpic,
+  setIssueStatus,
+  editIssue,
+  promoteTodoToBoard,
   BoardWriteError,
 } from "@/lib/boardWriter";
 import { parseBoardMd } from "@/lib/scanner/boardMd";
@@ -377,5 +381,131 @@ describe("addIssue (async wiring)", () => {
     expect(renameTarget.endsWith("BOARD.md")).toBe(true);
 
     expect(result?.inbox.map((i) => i.title)).toContain("first");
+  });
+});
+
+describe("input validation (status/priority enums)", () => {
+  // A stale/buggy client posting a value outside the enum must be rejected
+  // before the writer serializes an unreadable glyph/token into BOARD.md.
+  it("addIssue rejects a status outside the enum with BAD_VALUE", async () => {
+    await expect(
+      addIssue("C:\\dev\\x", { title: "t", status: "blocked" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("addIssue rejects a priority outside the enum", async () => {
+    await expect(
+      addIssue("C:\\dev\\x", { title: "t", priority: "urgent" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("setIssueStatus rejects an unsupported status", async () => {
+    await expect(
+      setIssueStatus("C:\\dev\\x", "i-1", "wip" as never),
+    ).rejects.toBeInstanceOf(BoardWriteError);
+  });
+
+  it("addEpic rejects an unsupported status", async () => {
+    await expect(
+      addEpic("C:\\dev\\x", "Epic", { status: "nope" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("editIssue rejects an unsupported priority", async () => {
+    await expect(
+      editIssue("C:\\dev\\x", "i-1", { priority: "huge" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("accepts a valid status and writes the issue", async () => {
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    mockReadFile.mockRejectedValue(enoent);
+    mockWriteFile.mockResolvedValue(undefined);
+    const result = await addIssue("C:\\dev\\x", {
+      title: "ok",
+      status: "review",
+    });
+    expect(result?.inbox.map((i) => i.title)).toContain("ok");
+  });
+});
+
+describe("promoteTodoToBoard (async wiring)", () => {
+  const ENOENT = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+
+  /** Fake a two-file FS: TODO.md returns `todo`, everything else is absent
+   *  (BOARD.md ⇒ skeleton; .minder.json ⇒ config defaults). */
+  function fsWithTodo(todo: string) {
+    return async (p: unknown) => {
+      if (String(p).endsWith("TODO.md")) return todo;
+      throw ENOENT;
+    };
+  }
+
+  const renameTargets = () =>
+    mockRename.mock.calls.map((c) => String(c[1]));
+
+  it("promotes a TODO line into the Inbox and ticks the source todo off", async () => {
+    mockReadFile.mockImplementation(
+      fsWithTodo("# TODO\n\n- [ ] Add dark mode\n- [ ] Other\n"),
+    );
+    mockWriteFile.mockResolvedValue(undefined);
+
+    const result = await promoteTodoToBoard({
+      projectPath: "C:\\dev\\myapp",
+      lineNumber: 3, // "Add dark mode"
+    });
+
+    expect(result?.inbox.map((i) => i.title)).toContain("Add dark mode");
+    // Wrote both BOARD.md (the new issue) and TODO.md (the tick-off).
+    const targets = renameTargets();
+    expect(targets.some((t) => t.endsWith("BOARD.md"))).toBe(true);
+    expect(targets.some((t) => t.endsWith("TODO.md"))).toBe(true);
+  });
+
+  it("routes into a target epic when epicId is given", async () => {
+    mockReadFile.mockImplementation(fsWithTodo("- [ ] ship it\n"));
+    mockWriteFile.mockResolvedValue(undefined);
+
+    // BOARD.md is absent (skeleton, no epic) → an unknown epic is a BAD_TARGET.
+    await expect(
+      promoteTodoToBoard({
+        projectPath: "C:\\dev\\myapp",
+        lineNumber: 1,
+        epicId: "e-nope",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_TARGET" });
+  });
+
+  it("leaves the source todo unchecked when checkOff is false", async () => {
+    mockReadFile.mockImplementation(fsWithTodo("- [ ] keep me open\n"));
+    mockWriteFile.mockResolvedValue(undefined);
+
+    await promoteTodoToBoard({
+      projectPath: "C:\\dev\\myapp",
+      lineNumber: 1,
+      checkOff: false,
+    });
+
+    const targets = renameTargets();
+    expect(targets.some((t) => t.endsWith("BOARD.md"))).toBe(true);
+    expect(targets.some((t) => t.endsWith("TODO.md"))).toBe(false);
+  });
+
+  it("does not toggle an already-completed todo", async () => {
+    mockReadFile.mockImplementation(fsWithTodo("- [x] already done\n"));
+    mockWriteFile.mockResolvedValue(undefined);
+
+    await promoteTodoToBoard({ projectPath: "C:\\dev\\myapp", lineNumber: 1 });
+
+    // Board still gets the issue, but the done todo is never re-toggled.
+    expect(renameTargets().some((t) => t.endsWith("TODO.md"))).toBe(false);
+  });
+
+  it("throws NOT_FOUND when there is no todo at that line", async () => {
+    mockReadFile.mockImplementation(fsWithTodo("- [ ] only line\n"));
+
+    await expect(
+      promoteTodoToBoard({ projectPath: "C:\\dev\\myapp", lineNumber: 99 }),
+    ).rejects.toBeInstanceOf(BoardWriteError);
   });
 });

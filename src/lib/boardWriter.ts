@@ -7,6 +7,8 @@ import {
   BoardPriority,
 } from "./types";
 import { parseBoardMd } from "./scanner/boardMd";
+import { scanTodoMd } from "./scanner/todoMd";
+import { setTodoCheckedInFile } from "./todoWriter";
 import { canonicalProjectDir } from "./canonicalProjectPath";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
 
@@ -27,7 +29,7 @@ const SKELETON = "# Board\n\n<!-- minder-board: v1 -->\n";
 export class BoardWriteError extends Error {
   constructor(
     message: string,
-    public code: "EMPTY_TITLE" | "NOT_FOUND" | "BAD_TARGET",
+    public code: "EMPTY_TITLE" | "NOT_FOUND" | "BAD_TARGET" | "BAD_VALUE",
   ) {
     super(message);
     this.name = "BoardWriteError";
@@ -51,6 +53,25 @@ const STATUS_GLYPH: Record<BoardStatus, string> = {
   done: "x",
   triage: " ",
 };
+
+// Enum guards — derived from STATUS_GLYPH so the valid set has one source of
+// truth. A status/priority outside the supported enum would serialize a glyph
+// or token the parser can't read back (e.g. `- [undefined] … [blocked]`), so we
+// reject it at the writer's entry points rather than corrupting BOARD.md.
+const VALID_STATUSES = Object.keys(STATUS_GLYPH) as BoardStatus[];
+const VALID_PRIORITIES: readonly BoardPriority[] = ["high", "med", "low"];
+
+function assertStatus(s: BoardStatus | undefined): void {
+  if (s !== undefined && !VALID_STATUSES.includes(s)) {
+    throw new BoardWriteError(`Invalid status: ${s}`, "BAD_VALUE");
+  }
+}
+
+function assertPriority(p: BoardPriority | undefined): void {
+  if (p !== undefined && !VALID_PRIORITIES.includes(p)) {
+    throw new BoardWriteError(`Invalid priority: ${p}`, "BAD_VALUE");
+  }
+}
 
 // ── ID generation + backfill (P2: random base36 surrogate keys) ────────────
 
@@ -473,34 +494,40 @@ async function mutate(
   });
 }
 
-export function addIssue(
+export async function addIssue(
   projectPath: string,
   issue: NewIssue,
 ): Promise<BoardInfo | undefined> {
+  assertStatus(issue.status);
+  assertPriority(issue.priority);
   return mutate(projectPath, (c) => applyAddIssue(c, issue));
 }
 
-export function addEpic(
+export async function addEpic(
   projectPath: string,
   title: string,
   opts?: { status?: BoardStatus; priority?: BoardPriority; description?: string },
 ): Promise<BoardInfo | undefined> {
+  assertStatus(opts?.status);
+  assertPriority(opts?.priority);
   return mutate(projectPath, (c) => applyAddEpic(c, title, opts));
 }
 
-export function setIssueStatus(
+export async function setIssueStatus(
   projectPath: string,
   id: string,
   status: BoardStatus,
 ): Promise<BoardInfo | undefined> {
+  assertStatus(status);
   return mutate(projectPath, (c) => applySetIssueStatus(c, id, status));
 }
 
-export function editIssue(
+export async function editIssue(
   projectPath: string,
   id: string,
   patch: Partial<Pick<NewIssue, "title" | "priority" | "labels">>,
 ): Promise<BoardInfo | undefined> {
+  assertPriority(patch.priority);
   return mutate(projectPath, (c) => applyEditIssue(c, id, patch));
 }
 
@@ -518,4 +545,56 @@ export function reorderIssue(
   newOrder: number,
 ): Promise<BoardInfo | undefined> {
   return mutate(projectPath, (c) => applyReorderIssue(c, id, newOrder));
+}
+
+// ── TODO → board promote path (§6.1) ───────────────────────────────────────
+
+export interface PromoteTodoInput {
+  projectPath: string;
+  /** 1-based line number of the `- [ ]` item in the project's TODO.md. */
+  lineNumber: number;
+  /** Target epic; omit ⇒ the issue lands in the Inbox. */
+  epicId?: string;
+  status?: BoardStatus;
+  priority?: BoardPriority;
+  labels?: string[];
+  /** Tick the source TODO off once promoted (default true). */
+  checkOff?: boolean;
+}
+
+/**
+ * Promote a TODO.md line into a board issue. Reads the todo's text by line
+ * number from the *canonical* TODO.md, creates a board issue from it, then (by
+ * default) checks the TODO off. Board and TODO writes take separate file locks
+ * — distinct files, so no deadlock. Canonicalizing the dir once up front means
+ * the line we read and the line we tick are guaranteed to be the same file.
+ */
+export async function promoteTodoToBoard(
+  input: PromoteTodoInput,
+): Promise<BoardInfo | undefined> {
+  const dir = await canonicalProjectDir(input.projectPath);
+  const todos = await scanTodoMd(dir);
+  const item = todos?.items.find((t) => t.lineNumber === input.lineNumber);
+  if (!item) {
+    throw new BoardWriteError(
+      `No TODO item at line ${input.lineNumber}`,
+      "NOT_FOUND",
+    );
+  }
+
+  const board = await addIssue(dir, {
+    title: item.text,
+    epicId: input.epicId,
+    status: input.status,
+    priority: input.priority,
+    labels: input.labels,
+  });
+
+  // Idempotently mark the source todo done (set, not toggle) so two overlapping
+  // promotes can't flip it back open — a no-op when it's already checked.
+  if (input.checkOff !== false) {
+    await setTodoCheckedInFile(dir, input.lineNumber, true);
+  }
+
+  return board;
 }
