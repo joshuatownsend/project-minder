@@ -288,6 +288,9 @@ export interface DatabaseInfo {
   host: string;
   port: number;
   name: string;
+  /** Managed-DB provider inferred from the connection host (e.g. "Neon",
+   *  "PlanetScale", "Supabase"); undefined for self-hosted/unknown hosts. */
+  provider?: string;
 }
 
 export interface GitInfo {
