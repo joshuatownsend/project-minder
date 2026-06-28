@@ -7,6 +7,8 @@ import {
   BoardPriority,
 } from "./types";
 import { parseBoardMd } from "./scanner/boardMd";
+import { scanTodoMd } from "./scanner/todoMd";
+import { toggleTodoInFile } from "./todoWriter";
 import { canonicalProjectDir } from "./canonicalProjectPath";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
 
@@ -518,4 +520,55 @@ export function reorderIssue(
   newOrder: number,
 ): Promise<BoardInfo | undefined> {
   return mutate(projectPath, (c) => applyReorderIssue(c, id, newOrder));
+}
+
+// ── TODO → board promote path (§6.1) ───────────────────────────────────────
+
+export interface PromoteTodoInput {
+  projectPath: string;
+  /** 1-based line number of the `- [ ]` item in the project's TODO.md. */
+  lineNumber: number;
+  /** Target epic; omit ⇒ the issue lands in the Inbox. */
+  epicId?: string;
+  status?: BoardStatus;
+  priority?: BoardPriority;
+  labels?: string[];
+  /** Tick the source TODO off once promoted (default true). */
+  checkOff?: boolean;
+}
+
+/**
+ * Promote a TODO.md line into a board issue. Reads the todo's text by line
+ * number from the *canonical* TODO.md, creates a board issue from it, then (by
+ * default) checks the TODO off. Board and TODO writes take separate file locks
+ * — distinct files, so no deadlock. Canonicalizing the dir once up front means
+ * the line we read and the line we tick are guaranteed to be the same file.
+ */
+export async function promoteTodoToBoard(
+  input: PromoteTodoInput,
+): Promise<BoardInfo | undefined> {
+  const dir = await canonicalProjectDir(input.projectPath);
+  const todos = await scanTodoMd(dir);
+  const item = todos?.items.find((t) => t.lineNumber === input.lineNumber);
+  if (!item) {
+    throw new BoardWriteError(
+      `No TODO item at line ${input.lineNumber}`,
+      "NOT_FOUND",
+    );
+  }
+
+  const board = await addIssue(dir, {
+    title: item.text,
+    epicId: input.epicId,
+    status: input.status,
+    priority: input.priority,
+    labels: input.labels,
+  });
+
+  // Only tick a pending item — toggling an already-done todo would un-check it.
+  if (input.checkOff !== false && !item.completed) {
+    await toggleTodoInFile(dir, input.lineNumber);
+  }
+
+  return board;
 }
