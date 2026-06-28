@@ -15,7 +15,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  // maxRetries/retryDelay: on Windows, recursive rm can transiently throw
+  // ENOTEMPTY/EBUSY when a just-closed file handle hasn't been released yet
+  // (AV/indexer); Node retries exactly those errors. Fixes a parallel-run flake.
+  await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 // ─── CLAUDE.md ────────────────────────────────────────────────────────────────
