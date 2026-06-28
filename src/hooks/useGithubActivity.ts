@@ -11,13 +11,14 @@ interface GithubActivityResponse {
 }
 
 const POLL_INTERVAL = 5000;
+const IDLE_POLL_INTERVAL = 30_000;
 const ERROR_TOAST_COOLDOWN = 60_000;
-// Consecutive idle polls (pending===0 AND total===0) tolerated before we give
-// up. Unlike git-status, GitHub activity may legitimately have nothing to wait
-// for — the feature flag is off, or no project has a GitHub remote — in which
-// case the queue never fills. Stopping on the very first idle poll would race
-// the enqueue (GET /api/projects populates the queue a moment after this hook's
-// first fetch), so we allow a short grace (~3 polls = ~15s) for work to appear.
+// After this many consecutive idle polls (pending===0 AND total===0) we BACK OFF
+// to a slow heartbeat instead of stopping. GitHub activity may legitimately have
+// nothing to wait for (flag off, or no project has a GitHub remote), but on a
+// cold load /api/projects only enqueues AFTER its scan finishes — which can
+// outlast a hard stop and leave the strip empty until remount. Slowing (not
+// stopping) keeps a late enqueue visible while avoiding a tight perpetual loop.
 const MAX_IDLE_POLLS = 3;
 
 /**
@@ -36,7 +37,12 @@ export function useGithubActivity() {
 
   useEffect(() => {
     let stopped = false;
+    let slowed = false;
 
+    function schedule(ms: number) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(poll, ms);
+    }
     function stopPolling() {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -54,16 +60,24 @@ export function useGithubActivity() {
         setPending(data.pending);
 
         if (data.pending > 0) {
-          // Work is streaming in — keep polling and reset the idle grace.
+          // Work is streaming in — reset the grace and resume fast polling.
           idlePolls.current = 0;
+          if (slowed) {
+            slowed = false;
+            schedule(POLL_INTERVAL);
+          }
         } else if (data.total > 0) {
           // All enqueued checks have settled — nothing left to wait for.
           stopPolling();
         } else {
-          // Nothing enqueued (flag off / no GitHub repos / pre-enqueue race).
-          // Give the enqueue a few polls to land, then stop polling forever.
+          // Nothing enqueued yet (cold scan still running, flag off, or no
+          // GitHub repos). Back off to a slow heartbeat after the grace instead
+          // of stopping, so a late enqueue from a slow scan is still observed.
           idlePolls.current += 1;
-          if (idlePolls.current >= MAX_IDLE_POLLS) stopPolling();
+          if (idlePolls.current >= MAX_IDLE_POLLS && !slowed) {
+            slowed = true;
+            schedule(IDLE_POLL_INTERVAL);
+          }
         }
       } catch {
         if (!stopped) {
