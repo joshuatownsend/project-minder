@@ -12,6 +12,7 @@ import {
   promoteTodoToBoard,
   BoardWriteError,
 } from "@/lib/boardWriter";
+import { promoteBoardIssueToTask } from "@/lib/tasks/boardDelegation";
 
 const EMPTY = { epics: [], inbox: [], total: 0 };
 
@@ -125,6 +126,24 @@ export async function POST(
           checkOff: body.checkOff,
         });
         break;
+      case "promoteToTask": {
+        if (!body.id) {
+          return NextResponse.json({ error: "id required" }, { status: 400 });
+        }
+        const result = await promoteBoardIssueToTask({
+          projectPath,
+          issueId: body.id,
+          assignedSkill: body.assignedSkill,
+          model: body.model,
+          priority: body.priority,
+          riskLevel: body.riskLevel,
+          sessionId: body.sessionId,
+        });
+        // Bridges into ~/.minder/tasks.db; returns { taskId, board } rather
+        // than the bare BoardInfo, so it short-circuits the shared response.
+        invalidateCache();
+        return NextResponse.json(result);
+      }
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
