@@ -19,6 +19,7 @@ const slugTitles: Record<HelpSlug, string> = {
   stats: "Stats Dashboard",
   sessions: "Sessions Browser",
   insights: "Insights",
+  board: "Board",
   agents: "Agents",
   skills: "Skills",
   instructions: "Instructions",

@@ -10,6 +10,7 @@ import { WorktreePanel } from "./WorktreePanel";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
+import { BoardTab } from "./BoardTab";
 import { ArchivedDisclosure } from "./ArchivedDisclosure";
 import { ProjectSessions } from "./ProjectSessions";
 import { GitStatusCompact } from "./GitStatus";
@@ -51,7 +52,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -100,7 +101,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 const VALID_TABS = new Set<TabKey>([
   "overview", "context", "todos", "sessions", "manual-steps", "insights",
-  "memory", "planning", "agents", "skills", "efficiency", "hot-files",
+  "board", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
 
@@ -157,6 +158,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
+  const hasBoard = !!(project.board && project.board.total > 0);
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
   const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
   const hasConfigLint = !!project.configLint;
@@ -170,6 +172,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     // reachable even after every active entry has been moved to the archive.
     { key: "manual-steps", label: "Manual Steps" },
     ...(hasInsights     ? [{ key: "insights"     as TabKey, label: "Insights"     }] : []),
+    ...(hasBoard        ? [{ key: "board"        as TabKey, label: `Board${project.board ? ` (${project.board.total})` : ""}` }] : []),
     { key: "memory",      label: "Memory" },
     ...(hasGsdPlanning   ? [{ key: "planning"     as TabKey, label: "Planning"    }] : []),
     { key: "agents",      label: "Agents" },
@@ -576,6 +579,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── INSIGHTS ──────────────────────────────────────────────── */}
           {activeTab === "insights" && (
             <InsightsTab slug={project.slug} worktrees={project.worktrees} />
+          )}
+
+          {/* ── BOARD ─────────────────────────────────────────────────── */}
+          {activeTab === "board" && (
+            <BoardTab slug={project.slug} board={project.board} />
           )}
 
           {/* ── MEMORY ────────────────────────────────────────────────── */}

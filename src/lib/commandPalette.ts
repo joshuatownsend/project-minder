@@ -23,6 +23,7 @@ const NAV_COMMANDS: CommandItem[] = [
   { id: "nav-/manual-steps", label: "Manual Steps", sublabel: "Build", href: "/manual-steps", badgeKey: "steps" },
   { id: "nav-/schedule",     label: "Schedule",     sublabel: "Build", href: "/schedule" },
   { id: "nav-/insights",     label: "Insights",     sublabel: "Build", href: "/insights" },
+  { id: "nav-/board",        label: "Board",        sublabel: "Build", href: "/board" },
 
   { id: "nav-/sessions", label: "Sessions", sublabel: "Sessions", href: "/sessions" },
   { id: "nav-/memory",   label: "Memory",   sublabel: "Sessions", href: "/memory" },
