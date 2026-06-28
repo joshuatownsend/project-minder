@@ -8,7 +8,7 @@ import {
 } from "./types";
 import { parseBoardMd } from "./scanner/boardMd";
 import { scanTodoMd } from "./scanner/todoMd";
-import { toggleTodoInFile } from "./todoWriter";
+import { setTodoCheckedInFile } from "./todoWriter";
 import { canonicalProjectDir } from "./canonicalProjectPath";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
 
@@ -29,7 +29,7 @@ const SKELETON = "# Board\n\n<!-- minder-board: v1 -->\n";
 export class BoardWriteError extends Error {
   constructor(
     message: string,
-    public code: "EMPTY_TITLE" | "NOT_FOUND" | "BAD_TARGET",
+    public code: "EMPTY_TITLE" | "NOT_FOUND" | "BAD_TARGET" | "BAD_VALUE",
   ) {
     super(message);
     this.name = "BoardWriteError";
@@ -53,6 +53,25 @@ const STATUS_GLYPH: Record<BoardStatus, string> = {
   done: "x",
   triage: " ",
 };
+
+// Enum guards — derived from STATUS_GLYPH so the valid set has one source of
+// truth. A status/priority outside the supported enum would serialize a glyph
+// or token the parser can't read back (e.g. `- [undefined] … [blocked]`), so we
+// reject it at the writer's entry points rather than corrupting BOARD.md.
+const VALID_STATUSES = Object.keys(STATUS_GLYPH) as BoardStatus[];
+const VALID_PRIORITIES: readonly BoardPriority[] = ["high", "med", "low"];
+
+function assertStatus(s: BoardStatus | undefined): void {
+  if (s !== undefined && !VALID_STATUSES.includes(s)) {
+    throw new BoardWriteError(`Invalid status: ${s}`, "BAD_VALUE");
+  }
+}
+
+function assertPriority(p: BoardPriority | undefined): void {
+  if (p !== undefined && !VALID_PRIORITIES.includes(p)) {
+    throw new BoardWriteError(`Invalid priority: ${p}`, "BAD_VALUE");
+  }
+}
 
 // ── ID generation + backfill (P2: random base36 surrogate keys) ────────────
 
@@ -475,34 +494,40 @@ async function mutate(
   });
 }
 
-export function addIssue(
+export async function addIssue(
   projectPath: string,
   issue: NewIssue,
 ): Promise<BoardInfo | undefined> {
+  assertStatus(issue.status);
+  assertPriority(issue.priority);
   return mutate(projectPath, (c) => applyAddIssue(c, issue));
 }
 
-export function addEpic(
+export async function addEpic(
   projectPath: string,
   title: string,
   opts?: { status?: BoardStatus; priority?: BoardPriority; description?: string },
 ): Promise<BoardInfo | undefined> {
+  assertStatus(opts?.status);
+  assertPriority(opts?.priority);
   return mutate(projectPath, (c) => applyAddEpic(c, title, opts));
 }
 
-export function setIssueStatus(
+export async function setIssueStatus(
   projectPath: string,
   id: string,
   status: BoardStatus,
 ): Promise<BoardInfo | undefined> {
+  assertStatus(status);
   return mutate(projectPath, (c) => applySetIssueStatus(c, id, status));
 }
 
-export function editIssue(
+export async function editIssue(
   projectPath: string,
   id: string,
   patch: Partial<Pick<NewIssue, "title" | "priority" | "labels">>,
 ): Promise<BoardInfo | undefined> {
+  assertPriority(patch.priority);
   return mutate(projectPath, (c) => applyEditIssue(c, id, patch));
 }
 
@@ -565,9 +590,10 @@ export async function promoteTodoToBoard(
     labels: input.labels,
   });
 
-  // Only tick a pending item — toggling an already-done todo would un-check it.
-  if (input.checkOff !== false && !item.completed) {
-    await toggleTodoInFile(dir, input.lineNumber);
+  // Idempotently mark the source todo done (set, not toggle) so two overlapping
+  // promotes can't flip it back open — a no-op when it's already checked.
+  if (input.checkOff !== false) {
+    await setTodoCheckedInFile(dir, input.lineNumber, true);
   }
 
   return board;

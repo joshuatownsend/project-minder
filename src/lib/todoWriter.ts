@@ -119,3 +119,44 @@ export async function toggleTodoInFile(
     return info ?? { total: 0, completed: 0, pending: 0, items: [] };
   });
 }
+
+/**
+ * Idempotently set a TODO line's checkbox to `checked` — unlike
+ * {@link toggleTodoInFile}, which flips the current state. The board's
+ * TODO→promote path uses this so two overlapping promotes of the same item both
+ * resolve to "done" (the second is a no-op) instead of the second toggle
+ * flipping the todo back open. A no-op when the line is already in the
+ * requested state. Resolves to the canonical project so a worktree path can
+ * never touch a worktree-local copy.
+ */
+export async function setTodoCheckedInFile(
+  projectPath: string,
+  lineNumber: number,
+  checked: boolean
+): Promise<TodoInfo> {
+  const canonicalPath = await canonicalProjectDir(projectPath);
+  const filePath = path.join(canonicalPath, "TODO.md");
+  return withFileLock(filePath, async () => {
+    const content = await fs.readFile(filePath, "utf-8");
+    const lines = content.split("\n");
+    const idx = lineNumber - 1;
+
+    let changed = false;
+    if (idx >= 0 && idx < lines.length) {
+      const m = lines[idx].match(/^(\s*-\s*)\[([ xX])\](.*)$/);
+      if (m) {
+        const current = m[2].toLowerCase() === "x";
+        if (current !== checked) {
+          lines[idx] = `${m[1]}[${checked ? "x" : " "}]${m[3]}`;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      await writeFileAtomic(filePath, lines.join("\n"));
+    }
+    const info = await scanTodoMd(canonicalPath);
+    return info ?? { total: 0, completed: 0, pending: 0, items: [] };
+  });
+}

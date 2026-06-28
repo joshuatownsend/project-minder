@@ -10,6 +10,9 @@ import {
   applyMoveIssue,
   applyReorderIssue,
   addIssue,
+  addEpic,
+  setIssueStatus,
+  editIssue,
   promoteTodoToBoard,
   BoardWriteError,
 } from "@/lib/boardWriter";
@@ -378,6 +381,51 @@ describe("addIssue (async wiring)", () => {
     expect(renameTarget.endsWith("BOARD.md")).toBe(true);
 
     expect(result?.inbox.map((i) => i.title)).toContain("first");
+  });
+});
+
+describe("input validation (status/priority enums)", () => {
+  // A stale/buggy client posting a value outside the enum must be rejected
+  // before the writer serializes an unreadable glyph/token into BOARD.md.
+  it("addIssue rejects a status outside the enum with BAD_VALUE", async () => {
+    await expect(
+      addIssue("C:\\dev\\x", { title: "t", status: "blocked" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("addIssue rejects a priority outside the enum", async () => {
+    await expect(
+      addIssue("C:\\dev\\x", { title: "t", priority: "urgent" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("setIssueStatus rejects an unsupported status", async () => {
+    await expect(
+      setIssueStatus("C:\\dev\\x", "i-1", "wip" as never),
+    ).rejects.toBeInstanceOf(BoardWriteError);
+  });
+
+  it("addEpic rejects an unsupported status", async () => {
+    await expect(
+      addEpic("C:\\dev\\x", "Epic", { status: "nope" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("editIssue rejects an unsupported priority", async () => {
+    await expect(
+      editIssue("C:\\dev\\x", "i-1", { priority: "huge" as never }),
+    ).rejects.toMatchObject({ code: "BAD_VALUE" });
+  });
+
+  it("accepts a valid status and writes the issue", async () => {
+    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    mockReadFile.mockRejectedValue(enoent);
+    mockWriteFile.mockResolvedValue(undefined);
+    const result = await addIssue("C:\\dev\\x", {
+      title: "ok",
+      status: "review",
+    });
+    expect(result?.inbox.map((i) => i.title)).toContain("ok");
   });
 });
 
