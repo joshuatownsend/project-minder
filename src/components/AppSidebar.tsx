@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
-  Home, LayoutGrid, Activity,
+  Home, LayoutGrid, LayoutDashboard, Activity,
   CheckSquare, Columns3, FileText, ListChecks, Calendar, Lightbulb,
   Layers, Brain, Clock, Sprout, Trash2, MonitorPlay,
   Bot, Sparkles, ScrollText, Terminal, Plug, BookOpen, Network, Library,
@@ -59,6 +59,7 @@ const GROUPS: NavGroup[] = [
       { id: "manual-steps", label: "Manual steps", href: "/manual-steps", icon: ico(ListChecks), badge: "steps" },
       { id: "schedule",     label: "Schedule",     href: "/schedule",     icon: ico(Calendar),    comingSoon: true },
       { id: "insights",     label: "Insights",     href: "/insights",     icon: ico(Lightbulb) },
+      { id: "board",        label: "Board",        href: "/board",        icon: ico(LayoutDashboard) },
     ],
   },
   {

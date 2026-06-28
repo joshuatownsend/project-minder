@@ -8,6 +8,7 @@ import { pluralize } from "@/lib/utils";
 import { StatusBadge } from "./StatusBadge";
 import { GitStatusCompact } from "./GitStatus";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
+import { BoardCompact } from "./BoardCompact";
 import { DevServerControl } from "./DevServerControl";
 import { PortEditor } from "./PortEditor";
 import {
@@ -529,6 +530,9 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
 
         {/* ── Row 4: claude session (tertiary) ─────────────────────────── */}
         {project.claude && <ClaudeSessionCompact claude={project.claude} />}
+
+        {/* ── Row 5: board (open issue count) ───────────────────────────── */}
+        {project.board && <BoardCompact board={project.board} />}
 
         {/* ── Footer: pushed to bottom ──────────────────────────────────── */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>

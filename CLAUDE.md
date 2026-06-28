@@ -37,7 +37,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 
 ### Scanner (`src/lib/scanner/`)
 - `index.ts` — orchestrator: reads `C:\dev\*` dirs, runs scanner modules in parallel (batches of 10), detects port conflicts
-- 9 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`
+- 10 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`, `boardMd` (gated by `scanBoard`)
 - Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\my-app`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
@@ -94,6 +94,9 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `GET /api/manual-steps/changes?since=ISO8601` — new-entry change events for notifications
 - `GET /api/insights` — all insights cross-project (`?project=slug`, `?q=searchterm`)
 - `GET /api/insights/[slug]` — insights for one project
+- `GET /api/board` — boards cross-project from scan cache (`?project=slug`, `?status=`, `?q=`)
+- `GET /api/board/[slug]` — one project's board (fresh read; `?archived=1` for `BOARD.archive.md`)
+- `POST /api/board/[slug]` — mutate `{action: "addIssue"|"addEpic"|"setStatus"|"editIssue"|"move"|"reorder"|"promoteTodo", ...}` via the serializing `boardWriter`; invalidates the scan cache
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
@@ -111,6 +114,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Detail: `ProjectDetail` with tabs (Overview, Context, TODOs, Claude, Manual Steps) + `DevServerControl`
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
 - Insights: `InsightsBrowser` at `/insights`, `InsightsTab` per-project, `InsightsCompact` badge on cards
+- Board: `BoardBrowser` at `/board` (cross-project, search + status/project filters), `BoardTab` per-project (inline status edit + add-to-Inbox), `BoardCompact` open-count badge on cards. Shared chips in `BoardChips.tsx`; data hooks in `hooks/useBoard.ts`. `BOARD.md` parser is `scanner/boardMd.ts`; serializing writer (canonical-resolve → lock → atomic write → re-parse) is `boardWriter.ts`. Planning is canonical to the main tree (worktree writes redirect to the parent `BOARD.md`).
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
 - Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions with one-shot rate badges. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - Usage: `UsageDashboard` at `/usage` — token cost analytics with period filters, per-model/project/category breakdowns, daily cost chart, tool/shell/MCP stats, CSV/JSON export
