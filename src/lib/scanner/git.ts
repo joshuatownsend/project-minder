@@ -4,7 +4,7 @@ import { GitInfo } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-async function runGit(args: string[], cwd: string): Promise<string> {
+export async function runGit(args: string[], cwd: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", args, { cwd, timeout: 2000 });
     return stdout.trim();
