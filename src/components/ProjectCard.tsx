@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ProjectData } from "@/lib/types";
+import { ProjectData, GithubActivity } from "@/lib/types";
 import { pluralize } from "@/lib/utils";
 import { StatusBadge } from "./StatusBadge";
 import { GitStatusCompact } from "./GitStatus";
+import { GithubActivityStrip } from "./GithubActivityStrip";
 import { ClaudeSessionCompact } from "./ClaudeSessionList";
 import { BoardCompact } from "./BoardCompact";
 import { DevServerControl } from "./DevServerControl";
@@ -99,6 +100,7 @@ interface ProjectCardProps {
   onTogglePin?: (slug: string) => void;
   efficiencyGrade?: EfficiencyGrade;
   efficiencyTrend?: GradeTrend;
+  githubActivity?: GithubActivity;
 }
 
 // Trend arrow shown next to the efficiency grade (item 4b). Only the
@@ -131,7 +133,7 @@ const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }>
   F: { color: "var(--status-error-text)",  bg: "var(--status-error-bg)",  border: "var(--status-error-border)"  },
 };
 
-export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade, efficiencyTrend }: ProjectCardProps) {
+export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade, efficiencyTrend, githubActivity }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
@@ -527,6 +529,9 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
 
         {/* ── Row 3: git status ─────────────────────────────────────────── */}
         {project.git && <GitStatusCompact git={project.git} />}
+
+        {/* ── Row 3.5: GitHub activity (open PRs / CI / last push) ───────── */}
+        {githubActivity && <GithubActivityStrip activity={githubActivity} compact />}
 
         {/* ── Row 4: claude session (tertiary) ─────────────────────────── */}
         {project.claude && <ClaudeSessionCompact claude={project.claude} />}
