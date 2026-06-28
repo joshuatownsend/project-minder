@@ -37,7 +37,8 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 
 ### Scanner (`src/lib/scanner/`)
 - `index.ts` — orchestrator: reads `C:\dev\*` dirs, runs scanner modules in parallel (batches of 10), detects port conflicts
-- 10 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`, `boardMd` (gated by `scanBoard`)
+- 11 scanner modules: `packageJson`, `envFile`, `dockerCompose`, `git`, `claudeMd`, `todoMd`, `claudeSessions`, `manualStepsMd`, `insightsMd`, `boardMd` (gated by `scanBoard`), `operationsMd` (gated by `scanOps`)
+- `envFile` also tags a managed-DB `provider` from the `DATABASE_URL` host (Neon/PlanetScale/Supabase/Upstash/Railway/Render) and surfaces it as an `externalServices` entry
 - Claude history: reads `~/.claude/history.jsonl` using **full Windows paths** (e.g., `C:\dev\my-app`), parsed once and cached in a Map
 - In-memory scan cache with 5-min TTL (`src/lib/cache.ts`)
 - User config in `.minder.json`: project statuses, hidden list, port overrides, `devRoot` (`src/lib/config.ts`)
@@ -69,6 +70,10 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Attaches `WorktreeOverlay[]` to parent project's `ProjectData` — purely read-only
 - Branch name resolved from worktree `.git` file's `gitdir:` → `HEAD` ref, with directory-name fallback
 - ManualStepsWatcher extended to also watch worktree MANUAL_STEPS.md files (composite slug `parentslug:worktree:branchhint`)
+
+### Operations Panel (`src/lib/ops/summary.ts`, `src/lib/scanner/operationsMd.ts`)
+- `deriveOpsSummary(project)` — pure derive-and-present layer (no FS, no scan): composes already-scanned fields (`cicd.hosting`, Vercel + GitHub-Actions `workflows[].cron` merged into one `OpsCron[]`, `dependabot`, `externalServices`, `database`, `operations`) into a serializable `OpsSummary`; runs client-side in the panel. `hasOps()` drives tab visibility.
+- `operationsMd.ts` — tolerant `OPERATIONS.md` parser: each `##` heading → one of five `OpsSectionKey`s (backups/monitoring/oncall/secrets/restore) via a synonym table; unknown headings → `other`. Gated by `scanOps` (default-on); attached as `ProjectData.operations`. Living-checklist: `scanOperationsArchive` reads `OPERATIONS.archive.md` on demand (orchestrator never reads `*.archive.md`). v1 is read-only; any future writer must canonicalize via `canonicalProjectDir`.
 
 ### Usage Module (`src/lib/usage/`)
 - `types.ts` — UsageTurn, UsageReport, CategoryType, ModelCost, ShellStats, McpServerStats, OneShotStats
@@ -115,6 +120,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Manual Steps: `ManualStepsDashboard` cross-project page at `/manual-steps`, `ManualStepsList` per-project checklist, `ManualStepsCompact` badge on cards
 - Insights: `InsightsBrowser` at `/insights`, `InsightsTab` per-project, `InsightsCompact` badge on cards
 - Board: `BoardBrowser` at `/board` (cross-project, search + status/project filters), `BoardTab` per-project (inline status edit + add-to-Inbox), `BoardCompact` open-count badge on cards. Shared chips in `BoardChips.tsx`; data hooks in `hooks/useBoard.ts`. `BOARD.md` parser is `scanner/boardMd.ts`; serializing writer (canonical-resolve → lock → atomic write → re-parse) is `boardWriter.ts`. Planning is canonical to the main tree (worktree writes redirect to the parent `BOARD.md`).
+- Ops: `OpsPanel` per-project tab (props-driven; derives `OpsSummary` client-side via `deriveOpsSummary` — no API route). Shows the auto-detected half (deploy targets, services, DB + managed provider, merged schedules, Dependabot) and the curated `OPERATIONS.md` runbook half (five sections + "not documented" prompts + an "N of 9 facts captured" coverage line). Tab appears only when `hasOps` is true.
 - Stats: `StatsDashboard` at `/stats` with `StatCard`, `BarChart`, `HealthBar` sub-components
 - Sessions: `SessionsBrowser` at `/sessions` lists all Claude Code sessions with one-shot rate badges. `SessionDetailView` at `/sessions/[sessionId]` with timeline, file ops, subagents tabs. Parser (`claudeConversations.ts`) reads `~/.claude/projects/` JSONL files
 - Usage: `UsageDashboard` at `/usage` — token cost analytics with period filters, per-model/project/category breakdowns, daily cost chart, tool/shell/MCP stats, CSV/JSON export
@@ -265,3 +271,18 @@ Use this structure (one dated entry per session or feature):
 
 ---
 ```
+
+## Operations Runbook (OPERATIONS.md)
+
+`OPERATIONS.md` in the project root is the curated half of the per-project Operations panel — the operational truth Minder can't auto-detect. Record it under five `##` headings (recognized tolerantly, synonyms allowed):
+
+1. **Backups** — what's backed up, how often, retention.
+2. **Monitoring & Alerting** — dashboards, uptime checks, what pages whom.
+3. **On-call & Escalation** — who's responsible and the escalation path.
+4. **Secrets & Rotation** — where secrets live and how/when they rotate.
+5. **Restore & Recovery** — the step-by-step recovery procedure.
+
+Rules:
+- **Living checklist, not append-only.** Check off (`- [x]`) or prune done items; move completed/obsolete entries into a committed `OPERATIONS.archive.md` (ignored by the scanner) rather than deleting them. Don't remove anything you can't confirm is done — surface the uncertainty instead.
+- **Worktrees → canonical file.** Inside a git worktree, edit the **canonical main-tree** project's `OPERATIONS.md` (the parent checkout), never the worktree copy. v1 is read-only in Minder (no writer), so hand edits must target the parent directory.
+- Unknown headings are kept verbatim (shown under their own title), so adding extra sections is safe.
