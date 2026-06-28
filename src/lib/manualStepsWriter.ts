@@ -1,14 +1,21 @@
 import { promises as fs } from "fs";
+import path from "path";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { ManualStepsInfo } from "./types";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
+import { canonicalProjectDir } from "./canonicalProjectPath";
 
 export async function toggleStepInFile(
   filePath: string,
   lineNumber: number
 ): Promise<ManualStepsInfo> {
-  return withFileLock(filePath, async () => {
-    const content = await fs.readFile(filePath, "utf-8");
+  // This writer takes a full file path (unlike the todo/insights writers which
+  // take a project dir). Canonicalize the *directory* so a worktree copy is
+  // redirected to the main-tree MANUAL_STEPS.md, then re-attach the filename.
+  const canonicalPath = await canonicalProjectDir(path.dirname(filePath));
+  const canonicalFile = path.join(canonicalPath, path.basename(filePath));
+  return withFileLock(canonicalFile, async () => {
+    const content = await fs.readFile(canonicalFile, "utf-8");
 
     // Safety: never overwrite a file with empty/near-empty content.
     // A real MANUAL_STEPS.md always has at least a ## header + one step.
@@ -32,7 +39,7 @@ export async function toggleStepInFile(
     }
 
     const newContent = lines.join("\n");
-    await writeFileAtomic(filePath, newContent);
+    await writeFileAtomic(canonicalFile, newContent);
     return parseManualStepsMd(newContent);
   });
 }

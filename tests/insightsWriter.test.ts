@@ -16,6 +16,7 @@ vi.mock("fs", () => ({
 import { promises as fs } from "fs";
 const mockReadFile = vi.mocked(fs.readFile);
 const mockWriteFile = vi.mocked(fs.writeFile);
+const mockRename = vi.mocked(fs.rename);
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -109,5 +110,24 @@ describe("appendInsights", () => {
     const newIdx = written.indexOf("insight:new1");
     const oldIdx = written.indexOf("insight:existing1");
     expect(newIdx).toBeLessThan(oldIdx);
+  });
+
+  // Regression guard (PR #223 review): appendInsights must NOT canonicalize a
+  // worktree path to its parent. syncInsightsFromSessions extracts a worktree's
+  // own session insights and relies on them landing in the worktree's own
+  // INSIGHTS.md so the worktree overlay shows worktree-local insights — not the
+  // entire parent feed mis-stamped as worktree-local.
+  it("writes to the worktree's own INSIGHTS.md, not the canonical parent", async () => {
+    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    mockWriteFile.mockResolvedValue();
+
+    const worktree = "C:\\dev\\myapp--claude-worktrees-feature-x";
+    await appendInsights(worktree, [makeEntry({ id: "wt1" })]);
+
+    // writeFileAtomic renames the temp file onto the final target; that target
+    // must be the worktree's own INSIGHTS.md, never the parent C:\dev\myapp.
+    const renameTarget = mockRename.mock.calls[0][1] as string;
+    expect(renameTarget).toContain("myapp--claude-worktrees-feature-x");
+    expect(renameTarget.endsWith("INSIGHTS.md")).toBe(true);
   });
 });

@@ -165,6 +165,12 @@ export async function appendInsights(
 ): Promise<{ count: number; content: string | null }> {
   if (entries.length === 0) return { count: 0, content: null };
 
+  // NOTE: appendInsights deliberately does NOT canonicalize worktree paths.
+  // Its internal caller syncInsightsFromSessions() extracts a worktree's own
+  // session insights and must write them to that worktree's INSIGHTS.md to feed
+  // the worktree overlay; redirecting here would write the parent feed and then
+  // mis-stamp it as worktree-local. Worktree→parent reconciliation is handled
+  // explicitly by the worktree-sync route, not by this writer.
   const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
 
   // Lock the entire read→dedupe→write sequence. `writeFileAtomic` alone

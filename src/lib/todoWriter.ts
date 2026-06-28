@@ -3,6 +3,7 @@ import path from "path";
 import { scanTodoMd } from "./scanner/todoMd";
 import { TodoInfo } from "./types";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
+import { canonicalProjectDir } from "./canonicalProjectPath";
 
 const MAX_TODO_LENGTH = 500;
 
@@ -38,7 +39,10 @@ export async function appendTodosToFile(
   texts: string[]
 ): Promise<TodoInfo> {
   const sanitized = texts.map(sanitize);
-  const filePath = path.join(projectPath, "TODO.md");
+  // Planning is project-scoped: redirect a worktree cwd to the canonical
+  // main-tree project so appends never fragment into a worktree copy.
+  const canonicalPath = await canonicalProjectDir(projectPath);
+  const filePath = path.join(canonicalPath, "TODO.md");
 
   return withFileLock(filePath, async () => {
     let existing: string;
@@ -67,7 +71,7 @@ export async function appendTodosToFile(
 
     await writeFileAtomic(filePath, appended);
 
-    const info = await scanTodoMd(projectPath);
+    const info = await scanTodoMd(canonicalPath);
     // scanTodoMd returns undefined only if zero items — after an append this
     // should never happen, but fall back to a safe empty shape just in case.
     return (
@@ -85,7 +89,11 @@ export async function toggleTodoInFile(
   projectPath: string,
   lineNumber: number
 ): Promise<TodoInfo> {
-  const filePath = path.join(projectPath, "TODO.md");
+  // Defensive: resolve to the canonical project so a worktree path can never
+  // toggle a worktree-local copy. The API only ever passes canonical paths
+  // today, so this is a no-op for current callers.
+  const canonicalPath = await canonicalProjectDir(projectPath);
+  const filePath = path.join(canonicalPath, "TODO.md");
   return withFileLock(filePath, async () => {
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.split("\n");
@@ -107,7 +115,7 @@ export async function toggleTodoInFile(
     if (changed) {
       await writeFileAtomic(filePath, lines.join("\n"));
     }
-    const info = await scanTodoMd(projectPath);
+    const info = await scanTodoMd(canonicalPath);
     return info ?? { total: 0, completed: 0, pending: 0, items: [] };
   });
 }
