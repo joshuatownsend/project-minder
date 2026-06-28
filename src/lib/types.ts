@@ -622,7 +622,8 @@ export type FeatureFlagKey =
   | "agentView"
   | "claudeStatusAlerts"
   | "configLint"
-  | "scanBoard";
+  | "scanBoard"
+  | "scanOps";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =

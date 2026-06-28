@@ -23,6 +23,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "claudeStatusAlerts",
   "configLint",
   "scanBoard",
+  "scanOps",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -191,6 +192,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     key: "scanBoard",
     label: "Scan BOARD.md",
     description: "Reads BOARD.md (epics → issues) from each project for the Board.",
+    group: "passive",
+    appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "scanOps",
+    label: "Scan OPERATIONS.md",
+    description:
+      "Reads OPERATIONS.md (backups, monitoring, on-call, secrets, restore) for the per-project Operations panel.",
     group: "passive",
     appliesAt: "scan",
     wired: true,

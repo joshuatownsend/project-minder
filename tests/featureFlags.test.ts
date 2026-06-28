@@ -26,6 +26,11 @@ describe("getFlag", () => {
     expect(getFlag({ scanInsights: true }, "scanInsights")).toBe(true);
   });
 
+  it("defaults scanOps on (Operations panel reads OPERATIONS.md by default)", () => {
+    expect(getFlag(undefined, "scanOps")).toBe(true);
+    expect(getFlag({ scanOps: false }, "scanOps")).toBe(false);
+  });
+
   it("does NOT silently swallow false → defaultOn (regression guard)", () => {
     // The accessor must distinguish `undefined` from `false`. The bug
     // refactor to guard against is `flags?.[key] || defaultOn` —
