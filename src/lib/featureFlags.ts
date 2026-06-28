@@ -193,9 +193,7 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Reads BOARD.md (epics → issues) from each project for the Board.",
     group: "passive",
     appliesAt: "scan",
-    // Wired in PR 3 (scanner integration). Until then the flag persists but no
-    // scanner reads it — the Settings UI shows the standard unwired hint.
-    wired: false,
+    wired: true,
   },
 ];
 
