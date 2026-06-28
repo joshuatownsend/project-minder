@@ -101,7 +101,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 const VALID_TABS = new Set<TabKey>([
   "overview", "context", "todos", "sessions", "manual-steps", "insights",
-  "memory", "planning", "agents", "skills", "efficiency", "hot-files",
+  "board", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
 
