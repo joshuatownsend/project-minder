@@ -22,6 +22,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentView",
   "claudeStatusAlerts",
   "configLint",
+  "scanBoard",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -185,6 +186,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "passive",
     appliesAt: "scan",
     wired: true,
+  },
+  {
+    key: "scanBoard",
+    label: "Scan BOARD.md",
+    description: "Reads BOARD.md (epics → issues) from each project for the Board.",
+    group: "passive",
+    appliesAt: "scan",
+    // Wired in PR 3 (scanner integration). Until then the flag persists but no
+    // scanner reads it — the Settings UI shows the standard unwired hint.
+    wired: false,
   },
 ];
 
