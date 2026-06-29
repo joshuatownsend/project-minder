@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAllSessions } from "@/hooks/useSessions";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
+import { sessionDetailQuery } from "@/lib/queryOptions";
 import { SessionSummary } from "@/lib/types";
 import {
   Search,
@@ -260,6 +262,13 @@ function SessionRow({
   search?: string;
 }) {
   const { currency, fxRate } = useCurrency();
+  const prefetch = useHoverPrefetch();
+  // Warm the session-detail query when the user hovers/focuses the row, so the
+  // detail page mounts from cache instead of waiting on /api/sessions/[id].
+  const warmDetail = useCallback(
+    () => prefetch(sessionDetailQuery(session.sessionId)),
+    [prefetch, session.sessionId],
+  );
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))
@@ -275,6 +284,8 @@ function SessionRow({
     <Link
       href={`/sessions/${session.sessionId}`}
       style={{ display: "block", textDecoration: "none" }}
+      onMouseEnter={warmDetail}
+      onFocus={warmDetail}
     >
       <div
         style={{

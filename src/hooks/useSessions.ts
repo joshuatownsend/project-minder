@@ -2,17 +2,11 @@
 
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { SessionSummary, SessionDetail } from "@/lib/types";
-import { queryKeys } from "@/lib/queryKeys";
+import { sessionsQuery, sessionDetailQuery } from "@/lib/queryOptions";
 
 export function useAllSessions() {
   const query = useQuery({
-    queryKey: queryKeys.sessions.all(),
-    queryFn: async ({ signal }): Promise<SessionSummary[]> => {
-      const res = await fetch("/api/sessions", { signal });
-      if (!res.ok) throw new Error(`Failed to load sessions: ${res.status}`);
-      return res.json();
-    },
+    ...sessionsQuery(),
     // Preserve the prior 15s live-refresh; TanStack pauses the interval
     // automatically while the tab is hidden (refetchIntervalInBackground=false).
     refetchInterval: 15_000,
@@ -28,11 +22,7 @@ export function useAllSessions() {
 
 export function useSessionDetail(sessionId: string) {
   const query = useQuery({
-    queryKey: queryKeys.sessions.detail(sessionId),
-    queryFn: async ({ signal }): Promise<SessionDetail | null> => {
-      const res = await fetch(`/api/sessions/${sessionId}`, { signal });
-      return res.ok ? res.json() : null;
-    },
+    ...sessionDetailQuery(sessionId),
     enabled: sessionId.length > 0,
   });
 
