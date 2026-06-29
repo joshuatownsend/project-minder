@@ -9,6 +9,7 @@ vi.mock("child_process", async (importOriginal) => {
 import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
+import path from "path";
 import { runLibraryCli } from "@/lib/lint/library";
 import type { LintReport } from "@/lib/types";
 
@@ -114,5 +115,22 @@ describe("runLibraryCli", () => {
     const findings = await runLibraryCli("/project", errors);
     expect(findings).toHaveLength(0);
     expect(errors).toHaveLength(0);
+  });
+
+  it("degrades gracefully when the claudelint bin cannot be resolved", async () => {
+    // Simulate a bin-resolution failure (e.g. bundler rewriting the dynamic
+    // require.resolve, or the package being absent). The wrapper must honor
+    // its degrade-don't-throw contract: record an engineError, return [], and
+    // never spawn — not throw synchronously and 500 the whole scan.
+    const dirnameSpy = vi
+      .spyOn(path, "dirname")
+      .mockImplementation(() => { throw new Error("bin resolve failed"); });
+    const errors: LintReport["engineErrors"] = [];
+    const findings = await runLibraryCli("/project", errors);
+    expect(findings).toHaveLength(0);
+    expect(errors[0].engine).toBe("library");
+    expect(errors[0].message).toMatch(/resolve claudelint bin/i);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    dirnameSpy.mockRestore();
   });
 });

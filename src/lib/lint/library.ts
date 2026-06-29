@@ -118,8 +118,18 @@ export function spawnClaudelint(
   cwd: string,
   timeoutMs: number,
 ): Promise<{ stdout: string; error?: string }> {
-  const cliBin = resolveClaudelintBin();
   return new Promise((resolve) => {
+    let cliBin: string;
+    try {
+      // Resolve inside the Promise so a resolution failure honors the
+      // degrade-don't-throw contract instead of throwing synchronously and
+      // taking down the entire scan (e.g. when bundling rewrites the dynamic
+      // require.resolve, or the package is absent).
+      cliBin = resolveClaudelintBin();
+    } catch (err) {
+      resolve({ stdout: "", error: `Failed to resolve claudelint bin: ${String(err)}` });
+      return;
+    }
     const child = spawn(
       process.execPath,
       [cliBin, subcommand, ...args],
