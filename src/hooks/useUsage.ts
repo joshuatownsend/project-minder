@@ -1,30 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { UsageReport } from "@/lib/usage/types";
+import { queryKeys } from "@/lib/queryKeys";
 
 export function useUsage(period: string, project?: string) {
-  const [data, setData] = useState<UsageReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const query = useQuery({
+    queryKey: queryKeys.usage(period, project),
+    queryFn: async ({ signal }): Promise<UsageReport> => {
+      const params = new URLSearchParams({ period });
+      if (project) params.set("project", project);
+      const res = await fetch(`/api/usage?${params}`, { signal });
+      if (!res.ok) throw new Error(`Failed to load usage: ${res.status}`);
+      return res.json();
+    },
+  });
 
-  useEffect(() => {
-    setLoading(true);
-    const controller = new AbortController();
-    const params = new URLSearchParams({ period });
-    if (project) params.set("project", project);
-
-    fetch(`/api/usage?${params}`, { signal: controller.signal })
-      .then((res) => res.json())
-      .then((report) => {
-        setData(report);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (err.name !== "AbortError") setLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [period, project]);
-
-  return { data, loading };
+  return { data: query.data ?? null, loading: query.isPending };
 }

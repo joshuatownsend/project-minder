@@ -12,6 +12,7 @@ import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { ConfigProvider } from "@/components/ConfigProvider";
+import { QueryProvider } from "@/components/QueryProvider";
 import { CommandPaletteProvider } from "@/components/CommandPaletteProvider";
 import { ScopeProvider } from "@/components/ScopeProvider";
 import { AppShell } from "@/components/AppShell";
@@ -54,37 +55,39 @@ export default async function RootLayout({
       <body suppressHydrationWarning>
         <ToastProvider>
           <ConfigProvider>
-            <PulseProvider>
-              <CommandPaletteProvider>
-                <HelpProvider>
-                  {/* Suspense wraps client providers that read useSearchParams() */}
-                  <Suspense fallback={null}>
-                    <ScopeProvider>
-                      <AppShell devRootLabel={rootLabel}>
-                        {/* Floating emergency stop, only when task dispatcher is on */}
-                        {taskDispatcherEnabled && (
-                          <div
-                            style={{
-                              position: "fixed",
-                              top: 12,
-                              right: 12,
-                              zIndex: 30,
-                            }}
-                          >
-                            <EmergencyStopButton />
-                          </div>
-                        )}
-                        {children}
-                      </AppShell>
-                    </ScopeProvider>
-                  </Suspense>
+            <QueryProvider>
+              <PulseProvider>
+                <CommandPaletteProvider>
+                  <HelpProvider>
+                    {/* Suspense wraps client providers that read useSearchParams() */}
+                    <Suspense fallback={null}>
+                      <ScopeProvider>
+                        <AppShell devRootLabel={rootLabel}>
+                          {/* Floating emergency stop, only when task dispatcher is on */}
+                          {taskDispatcherEnabled && (
+                            <div
+                              style={{
+                                position: "fixed",
+                                top: 12,
+                                right: 12,
+                                zIndex: 30,
+                              }}
+                            >
+                              <EmergencyStopButton />
+                            </div>
+                          )}
+                          {children}
+                        </AppShell>
+                      </ScopeProvider>
+                    </Suspense>
 
-                  <HelpPanel />
-                  <NotificationListener />
-                  <ClaudeStatusListener />
-                </HelpProvider>
-              </CommandPaletteProvider>
-            </PulseProvider>
+                    <HelpPanel />
+                    <NotificationListener />
+                    <ClaudeStatusListener />
+                  </HelpProvider>
+                </CommandPaletteProvider>
+              </PulseProvider>
+            </QueryProvider>
           </ConfigProvider>
         </ToastProvider>
       </body>

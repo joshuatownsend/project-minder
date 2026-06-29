@@ -1,48 +1,40 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SessionSummary, SessionDetail } from "@/lib/types";
+import { queryKeys } from "@/lib/queryKeys";
 
 export function useAllSessions() {
-  const [data, setData] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const query = useQuery({
+    queryKey: queryKeys.sessions.all(),
+    queryFn: async ({ signal }): Promise<SessionSummary[]> => {
+      const res = await fetch("/api/sessions", { signal });
+      if (!res.ok) throw new Error(`Failed to load sessions: ${res.status}`);
+      return res.json();
+    },
+    // Preserve the prior 15s live-refresh; TanStack pauses the interval
+    // automatically while the tab is hidden (refetchIntervalInBackground=false).
+    refetchInterval: 15_000,
+  });
 
+  const { refetch } = query;
   const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/sessions");
-      if (res.ok) setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    await refetch();
+  }, [refetch]);
 
-  useEffect(() => {
-    refresh();
-    const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") {
-        refresh();
-      }
-    }, 15_000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  return { data, loading, refresh };
+  return { data: query.data ?? [], loading: query.isPending, refresh };
 }
 
 export function useSessionDetail(sessionId: string) {
-  const [data, setData] = useState<SessionDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const query = useQuery({
+    queryKey: queryKeys.sessions.detail(sessionId),
+    queryFn: async ({ signal }): Promise<SessionDetail | null> => {
+      const res = await fetch(`/api/sessions/${sessionId}`, { signal });
+      return res.ok ? res.json() : null;
+    },
+    enabled: sessionId.length > 0,
+  });
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/sessions/${sessionId}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((d) => {
-        setData(d);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [sessionId]);
-
-  return { data, loading };
+  return { data: query.data ?? null, loading: query.isPending };
 }

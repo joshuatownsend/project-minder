@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useSessionDetail } from "@/hooks/useSessions";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCell } from "@/components/ui/StatCell";
 import { useToast } from "@/components/ToastProvider";
@@ -505,6 +507,17 @@ function TabBar({
 export function SessionDetailView({ sessionId }: { sessionId: string }) {
   const { data, loading } = useSessionDetail(sessionId);
   const { currency, fxRate } = useCurrency();
+  const queryClient = useQueryClient();
+  // Star/distill/title write to the server and update local state optimistically.
+  // Without this, the detail query's 30s staleTime would serve pre-mutation data
+  // on remount and the sync effect below would revert the change — so invalidate
+  // the cached detail to pull the canonical server state.
+  const invalidateDetail = useCallback(
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.detail(sessionId) });
+    },
+    [queryClient, sessionId],
+  );
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -528,7 +541,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     setDistilledAt(data?.distilledAt);
   }, [data?.generatedTitle, data?.starredAt, data?.distilledText, data?.distilledAt]);
 
-  const handleTitleGenerated = useCallback((title: string) => setGeneratedTitle(title), []);
+  const handleTitleGenerated = useCallback(
+    (title: string) => { setGeneratedTitle(title); invalidateDetail(); },
+    [invalidateDetail],
+  );
 
   if (loading) {
     return (
@@ -615,12 +631,12 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         <StarButton
           sessionId={sessionId}
           starredAt={starredAt}
-          onToggle={setStarredAt}
+          onToggle={(v) => { setStarredAt(v); invalidateDetail(); }}
         />
         <DistillButton
           sessionId={sessionId}
           hasDistillation={!!distilledText}
-          onDistilled={(text, at) => { setDistilledText(text); setDistilledAt(at); }}
+          onDistilled={(text, at) => { setDistilledText(text); setDistilledAt(at); invalidateDetail(); }}
         />
         <GenerateTitleButton
           sessionId={sessionId}
