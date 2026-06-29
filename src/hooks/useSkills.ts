@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Provenance } from "@/lib/indexer/types";
+import { queryKeys } from "@/lib/queryKeys";
 
 export interface SkillRow {
   entry?: {
@@ -44,27 +46,24 @@ export interface SkillRow {
 }
 
 export function useSkills(source?: string, project?: string, query?: string) {
-  const [data, setData] = useState<SkillRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const result = useQuery({
+    queryKey: queryKeys.skills(source, project, query),
+    queryFn: async ({ signal }): Promise<SkillRow[]> => {
+      const params = new URLSearchParams();
+      if (source) params.set("source", source);
+      if (project) params.set("project", project);
+      if (query) params.set("q", query);
+      const qs = params.toString();
+      const res = await fetch(`/api/skills${qs ? `?${qs}` : ""}`, { signal });
+      if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
+      return res.json();
+    },
+  });
 
+  const { refetch } = result;
   const refresh = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (source) params.set("source", source);
-    if (project) params.set("project", project);
-    if (query) params.set("q", query);
-    const qs = params.toString();
-    try {
-      const res = await fetch(`/api/skills${qs ? `?${qs}` : ""}`);
-      if (res.ok) setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [source, project, query]);
+    await refetch();
+  }, [refetch]);
 
-  useEffect(() => {
-    setLoading(true);
-    refresh();
-  }, [refresh]);
-
-  return { data, loading, refresh };
+  return { data: result.data ?? [], loading: result.isPending, refresh };
 }
