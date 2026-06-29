@@ -1,5 +1,71 @@
 # Insights
 
+<!-- insight:d3ce2f2dbfd3 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T13:37:07.944Z -->
+## ★ Insight
+**Why no hydration risk in this PR:** all pages are `"use client"`, so on the server they render with `useQuery` returning `isPending: true, data: undefined`. I map that to the *same* empty/loading state the old `useState` hooks showed pre-`useEffect`. Server HTML and the client's first render agree → clean hydration. The actual fetch still happens client-side. PR 3 (real RSC dehydration) is where hydration timestamps get tricky — not here.
+
+---
+
+<!-- insight:2e7a8b4b48a7 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T12:26:17.675Z -->
+## ★ Insight
+**The biggest risk isn't RSC — it's the dual-backend façade.** Every `@/lib/data` function has a `MINDER_USE_DB=0` file-parse fallback with *intentional* gates (v3 mid-migration, cold/empty index). An RSC that calls these must preserve that path or the no-DB config silently breaks. This is why I'd land the TanStack Query layer (pure client, backend-agnostic) *before* moving fetches server-side.
+
+---
+
+<!-- insight:3c69a0775272 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T12:20:00.870Z -->
+## ★ Insight
+**Why explore before coding here:** P3 rewires the app's entire data-fetching spine (client `fetch` hooks → RSC + TanStack Query + SSE). The risk isn't writing the new code — it's the *seams*: the SQLite façade (`MINDER_USE_DB=0` fallback), the `probeInitStatus()` entry-point discipline, and ~13 bespoke hooks each with their own polling/caching quirks. Mapping those seams first determines whether this is one PR or six.
+
+---
+
+<!-- insight:97c519a87c67 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T04:09:19.002Z -->
+## ★ Insight
+The capture step self-discovers via Minder's own `/api/projects` (finding a project whose `worktrees[]` is non-empty) rather than fs-scanning `C:\dev\` — this reuses Minder's existing worktree detection (the `WorktreeOverlay[]` the scanner already attaches) and is the TODO's "option (a): capture the feature as it appears in the wild." The key property is graceful degradation: when no worktree is active it **skips and warns**, so the site never ends up referencing a missing PNG.
+
+---
+
+<!-- insight:c1b509dad6d1 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T03:20:24.757Z -->
+## ★ Insight
+GitHub Actions billing only counts **private-repo** usage on standard GitHub-hosted runners. **Public repos get unlimited free minutes** on standard runners (`ubuntu-latest`/`windows`/`macos` standard sizes). The duration GitHub shows on each run is just wall-clock — for a public repo it never draws down your included/paid quota. So caching, parallelizing, or dropping redundant runs changes the *clock* but not your *bill* for this repo.
+
+---
+
+<!-- insight:5a5d40f32dd8 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T03:15:48.301Z -->
+## ★ Insight
+The **3-second install** is the whole answer. A cold install would spend 30s–2min downloading packages *and* compiling `better-sqlite3`'s native addon via node-gyp (it's in `onlyBuiltDependencies`, so its build script runs). Three seconds means two layers of cache are warm: `setup-node`'s `cache: 'pnpm'` restored the content-addressable store, **and** pnpm's side-effects cache inside that store reused the already-compiled `better-sqlite3` binary — so node-gyp doesn't re-run. Keyed on `pnpm-lock.yaml`, which is exactly right.
+
+---
+
+<!-- insight:0dc3a8e39fec | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T02:46:24.462Z -->
+## ★ Insight
+`serverExternalPackages` is the load-bearing fix, but the hardening matters architecturally: a *lint helper* — a non-essential enrichment — was able to take down the *entire* `/api/projects` response. The lesson the second fix encodes: enrichment paths should fail soft. The wrapper already documented a "degrade-don't-throw" contract; the bug was simply that one line (`resolveClaudelintBin()`) sat outside the Promise that enforced it.
+
+---
+
+<!-- insight:ffd184fc46e8 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T02:45:45.283Z -->
+## ★ Insight
+Let me revert the build's tsconfig edit:
+
+---
+
+<!-- insight:5fa6e911e971 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T02:36:51.498Z -->
+## ★ Insight
+The `serverExternalPackages` comment in `next.config.ts` already names the exact failure mode — "packages with dynamic requires must not be bundled." `claude-code-lint` slipped through because it's only reached transitively (scanner → config-lint → library wrapper), so nobody added it when it was introduced. The fix is to (1) add it to that allowlist so Turbopack leaves `require.resolve` as a real runtime resolve, and (2) close the contract gap so a resolution failure degrades gracefully instead of 500-ing the whole scan.
+
+---
+
+<!-- insight:4363b71b8a5d | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T02:34:18.601Z -->
+## ★ Insight
+The number **changed between builds** (`682512` in May → `688189` now) but is **stable within a single build** (both 500s this run show `688189`). That signature is diagnostic: it's not a runtime value like a file size or inode — it's a **bundler module ID**. Turbopack rewrites something like `require.resolve('…')` or `__dirname`/`import.meta.url` into a numeric module ID, and that number then flows into a `path`/`fs` call. This only happens in prod because dev doesn't bundle the server. That's why dev captures work and prod ones don't.
+
+---
+
+<!-- insight:4fa8deb6ce04 | session:ba40c66a-4bf3-40db-8a65-0a0a0d6b6c60 | 2026-06-29T01:46:16.408Z -->
+## ★ Insight
+Before recommending work, I verified each item against the live code rather than trusting the TODO prose — backlogs drift. That paid off: **item #5 is already implemented.** `scanProject` walks commands once (`scanner/index.ts:111`), stashes them in `catalogWalk.commands` (`:264`), the orchestrator collects them into `catalogWalkByPath` (`:353`), and `runCatalogLint` reuses them via `pre.commands` (`catalogLint.ts:66`) — exactly the "thread the per-project arrays out of scanProject" fix the TODO describes.
+
+---
+
 <!-- insight:e97bc79c0aae | session:6ecd3b9f-3e2f-48e6-aafa-7e0059bd3c9d | 2026-05-31T15:32:44.945Z -->
 ## ★ Insight
 **ESLint flat config doesn't honor `.gitignore`.** All 23 errors live in `.design-fetch/claudoscope/*.jsx` and `agentlytics-repo/ui/src/**/*.jsx` — both confirmed **git-ignored** (`git check-ignore` matched them) and **untracked** (`git ls-files` empty). They're stray sibling-project directories sitting in my working tree that eslint happily lints locally but which **don't exist in CI's clean checkout**.
