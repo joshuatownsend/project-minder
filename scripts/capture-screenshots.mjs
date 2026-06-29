@@ -129,8 +129,9 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   await go(page, '/manual-steps');
   await shoot(page, 'manual-steps');
 
-  // 9. TODOs tab — project detail, TODOs tab. (Previously misnamed "worktrees" —
-  // a separate real-worktree-overlay shot remains a follow-up; see TODO.md.)
+  // 9. TODOs tab — project detail, TODOs tab. (Previously misnamed "worktrees";
+  // the real worktree-overlay shot is step 15 below, captured only when an
+  // active worktree exists.)
   await go(page, '/project/project-minder', 900);
   try {
     await page.getByRole('tab', { name: 'TODOs' }).click();
@@ -157,6 +158,46 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   // 14. Card detail — element screenshot of the project-minder card link
   await go(page, '/');
   await shoot(page, 'card-detail', { selector: 'a[href="/project/project-minder"]' });
+
+  // 15. Worktree overlay — the dedicated "Worktrees" panel on a project that has
+  // an active Claude Code worktree (the `*--claude-worktrees-*` convention).
+  // Self-discovers the first project with a worktree overlay via /api/projects
+  // (reusing Minder's own detection), so it captures the feature "in the wild."
+  // When no worktree is active it SKIPS without writing a file, leaving any
+  // prior worktrees.png untouched — the site never references a missing/stale
+  // shot. See TODO.md "Capture a real worktree-overlay shot".
+  let worktreeProjectSlug = null;
+  try {
+    const presp = await page.goto(`${BASE}/api/projects`);
+    if (presp && presp.ok()) {
+      const data = await presp.json();
+      const projects = Array.isArray(data) ? data : (data.projects ?? []);
+      const withWorktree = projects.find(
+        (p) => Array.isArray(p.worktrees) && p.worktrees.length > 0,
+      );
+      worktreeProjectSlug = withWorktree?.slug ?? null;
+    }
+  } catch {
+    /* projects endpoint unavailable — handled by the skip below */
+  }
+
+  if (worktreeProjectSlug) {
+    await go(page, `/project/${worktreeProjectSlug}`, 900);
+    try {
+      // Expand the "Worktrees (N)" panel on the Overview tab, then let its
+      // per-worktree status rows (/api/worktrees) settle before shooting.
+      await page.getByRole('button', { name: /Worktrees \(\d+\)/ }).click();
+      await page.waitForTimeout(800);
+      await waitForStableUI(page, { timeout: 15000 });
+    } catch {
+      /* panel markup changed — capture whatever's on screen */
+    }
+    await shoot(page, 'worktrees');
+  } else {
+    console.warn(
+      '  ⚠  No active worktree overlay found in any project — worktrees.png not regenerated (see TODO.md).',
+    );
+  }
 
   await browser.close();
   console.log(`\nAll screenshots saved to:\n  ${OUT}\n`);

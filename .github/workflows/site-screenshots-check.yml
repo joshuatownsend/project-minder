@@ -1,0 +1,50 @@
+name: Site screenshots ↔ prose
+
+# Catches a common accident: someone regenerates the landing-page screenshots
+# (`pnpm capture:docs`) but forgets to update the surrounding copy/captions in
+# `site/index.html`. Only runs when screenshots actually change, so it costs
+# essentially nothing. Do NOT add this as a required status check — it only
+# triggers on `site/screenshots/**`, so most PRs never report it and a required
+# check would sit pending forever.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'site/screenshots/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  screenshots-prose-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if screenshots changed without updating site/index.html
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          files="$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)"
+          shots="$(printf '%s\n' "$files" | grep -E '^site/screenshots/.+\.png$' || true)"
+          prose="$(printf '%s\n' "$files" | grep -xF 'site/index.html' || true)"
+
+          if [ -n "$shots" ] && [ -z "$prose" ]; then
+            {
+              echo "## ⚠️ Screenshots changed without prose"
+              echo
+              echo "This PR changes \`site/screenshots/*.png\` but does **not** touch \`site/index.html\`."
+              echo "Landing-page screenshots are usually tied to copy/captions — update the prose too,"
+              echo "or, if this is an intentional visual-only refresh, add a trivial \`site/index.html\`"
+              echo "edit (or merge with admin override)."
+              echo
+              echo "Changed screenshots:"
+              printf '%s\n' "$shots" | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Screenshots changed without prose::site/screenshots/*.png changed but site/index.html was not updated"
+            exit 1
+          fi
+
+          echo "✓ Screenshots and prose are in sync (or no screenshot-only change)."
