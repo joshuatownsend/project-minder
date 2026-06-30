@@ -14,6 +14,15 @@ import {
 } from "lucide-react";
 import { usePulse } from "./PulseProvider";
 import { useScope } from "./ScopeProvider";
+import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
+import {
+  sessionsQuery,
+  statsQuery,
+  usageQuery,
+  agentsQuery,
+  skillsQuery,
+  insightsListQuery,
+} from "@/lib/queryOptions";
 
 type BadgeKind = "warn" | "danger" | "live" | "default";
 type BadgeKey = "steps" | "approval" | "live";
@@ -135,6 +144,31 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
   const currentType = searchParams?.get("type") ?? null;
   const { snapshot } = usePulse();
   const { scope } = useScope();
+  const prefetch = useHoverPrefetch();
+
+  // Bind each prefetchable route (by bare pathname) to a `() => void` warm
+  // handler so hovering the nav item warms that route's list query and the page
+  // mounts from cache. Only list pages with a `@/lib/queryOptions` factory
+  // appear here; `/usage` warms the dashboard's default period ("30d", see
+  // UsageDashboard). Building these in-component (rather than a module map) lets
+  // the generic `prefetch` infer each query's types per-call instead of
+  // widening to a shared options type.
+  const navPrefetch = useMemo<Record<string, () => void>>(
+    () => ({
+      "/sessions": () => prefetch(sessionsQuery()),
+      "/stats": () => prefetch(statsQuery()),
+      "/usage": () => prefetch(usageQuery("30d")),
+      "/agents": () => prefetch(agentsQuery()),
+      "/skills": () => prefetch(skillsQuery()),
+      "/insights": () => prefetch(insightsListQuery()),
+    }),
+    [prefetch],
+  );
+
+  // Hover/focus handler for a route, or `undefined` for routes without a
+  // migrated query (most of them).
+  const onPrefetchFor = (href: string): (() => void) | undefined =>
+    navPrefetch[href];
 
   // Render badges only AFTER hydration. Server-rendered HTML can't know the
   // current pulse counts (they'll always be zero on first paint anyway, but
@@ -237,6 +271,7 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
           active={isActive(it, pathname, currentType)}
           collapsed={collapsed}
           badge={{ count: badgeCount(it.badge), kind: badgeKindFor(it.badge) }}
+          onPrefetch={onPrefetchFor(it.href)}
         />
       ))}
 
@@ -266,6 +301,7 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
                   active={isActive(c, pathname, currentType)}
                   collapsed
                   badge={{ count: badgeCount(c.badge), kind: badgeKindFor(c.badge) }}
+                  onPrefetch={onPrefetchFor(c.href)}
                 />
               ))}
             </div>
@@ -297,6 +333,7 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
                   collapsed={false}
                   indent
                   badge={{ count: badgeCount(c.badge), kind: badgeKindFor(c.badge) }}
+                  onPrefetch={onPrefetchFor(c.href)}
                 />
               ))}
           </div>
@@ -314,6 +351,7 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
             active={isActive(it, pathname, currentType)}
             collapsed={collapsed}
             badge={{ count: 0, kind: "default" }}
+            onPrefetch={onPrefetchFor(it.href)}
           />
         ))}
       </div>
@@ -327,12 +365,15 @@ function NavRow({
   collapsed,
   indent,
   badge,
+  onPrefetch,
 }: {
   item: NavItem;
   active: boolean;
   collapsed: boolean;
   indent?: boolean;
   badge: { count: number; kind: BadgeKind };
+  /** Warms the destination route's query on hover/focus; undefined = no-op. */
+  onPrefetch?: () => void;
 }) {
   return (
     <Link
@@ -340,6 +381,8 @@ function NavRow({
       className={"nav-item" + (active ? " active" : "")}
       title={collapsed ? item.label : item.comingSoon ? `${item.label} — coming soon` : undefined}
       style={indent && !collapsed ? { paddingLeft: 24 } : undefined}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
     >
       <span className="ico">{item.icon}</span>
       {!collapsed && (

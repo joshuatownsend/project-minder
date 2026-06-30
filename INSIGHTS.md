@@ -1,5 +1,26 @@
 # Insights
 
+<!-- insight:f6fc2fbdb666 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T19:11:12.942Z -->
+## ★ Insight
+- **Next.js `<Link>` already prefetches the route bundle + RSC payload on hover** — but these pages are `"use client"` and fetch their data in `useQuery` *after mount*, so the **data** isn't warmed. Hover-prefetch closes that gap by populating the TanStack cache before the click.
+- **`prefetchQuery` is staleTime-aware**: with our 30s `staleTime`, a hover over a list visited <30s ago is a free no-op — no redundant network call.
+- **`queryOptions()` is the v5 idiom for sharing a query definition** between `useQuery` and `prefetchQuery`; co-locating key+fn in one factory is what prevents the prefetch path and the hook path from drifting.
+
+---
+
+<!-- insight:97a24f70cfce | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T17:48:23.127Z -->
+## ★ Insight
+- 3 from *this* session — the design reasoning behind the P3 work (why explore-first, the dual-backend façade risk, why no hydration risk in PR 1)
+- 1 from a *prior* session (`ba40c66a`) — the worktree-capture self-discovery note
+
+---
+
+<!-- insight:2ceedc4a95e3 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T13:59:32.445Z -->
+## ★ Insight
+**Why `refresh` maps to `refetch`, not a wrapper closure:** the old hooks returned a `useCallback`-memoized `refresh`, and some consumers list it in their own effect deps. TanStack's `refetch` is referentially stable, so wrapping it in `useCallback(async () => { await refetch() }, [refetch])` preserves both the `Promise<void>` type *and* a stable identity — a fresh closure each render would have caused infinite effect loops in any consumer that depends on `refresh`.
+
+---
+
 <!-- insight:d3ce2f2dbfd3 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T13:37:07.944Z -->
 ## ★ Insight
 **Why no hydration risk in this PR:** all pages are `"use client"`, so on the server they render with `useQuery` returning `isPending: true, data: undefined`. I map that to the *same* empty/loading state the old `useState` hooks showed pre-`useEffect`. Server HTML and the client's first render agree → clean hydration. The actual fetch still happens client-side. PR 3 (real RSC dehydration) is where hydration timestamps get tricky — not here.
