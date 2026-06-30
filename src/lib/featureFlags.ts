@@ -25,6 +25,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "scanBoard",
   "scanOps",
   "githubActivity",
+  "rscHydration",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -213,6 +214,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
       "Background `gh` fetch of open PRs, CI status, and last push per project (drives the GitHub strip on cards + detail).",
     group: "active",
     appliesAt: "watcher",
+    wired: true,
+  },
+  {
+    key: "rscHydration",
+    label: "Server-render data pages (RSC hydration)",
+    description:
+      "Read-heavy pages (sessions, usage, stats, agents, skills, insights, commands, manual-steps, templates, config) prefetch their data on the server and stream it into the TanStack Query cache, so they paint with data instead of a loading spinner. Opt-in: defaults OFF.",
+    group: "active",
+    appliesAt: "ui",
     wired: true,
   },
 ];

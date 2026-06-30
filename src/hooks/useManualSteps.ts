@@ -1,33 +1,16 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ManualStepsInfo } from "@/lib/types";
-
-interface ProjectManualSteps {
-  slug: string;
-  name: string;
-  path: string;
-  manualSteps: ManualStepsInfo;
-}
+import { manualStepsQuery } from "@/lib/queryOptions";
 
 export function useAllManualSteps() {
-  const [data, setData] = useState<ProjectManualSteps[]>([]);
-  const [loading, setLoading] = useState(true);
-
+  const query = useQuery(manualStepsQuery());
   const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/manual-steps");
-      if (res.ok) setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { data, loading, refresh };
+    await query.refetch();
+  }, [query]);
+  return { data: query.data ?? [], loading: query.isPending, refresh };
 }
 
 export function useProjectManualSteps(slug: string) {

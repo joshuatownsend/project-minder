@@ -7,6 +7,7 @@ import {
   isServer,
 } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
+import { queryClientDefaults } from "@/lib/queryConfig";
 
 // Devtools are dev-only: code-split into their own chunk via `next/dynamic` and
 // never fetched in production (the render is gated on NODE_ENV below). Loading
@@ -21,24 +22,10 @@ const ReactQueryDevtools = dynamic(
 );
 
 function makeQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        // Data is "fresh" for 30s: within that window, remounts and cross-page
-        // navigations serve from cache with no network hit (stale-while-revalidate).
-        staleTime: 30_000,
-        // Inactive (unmounted) query data is garbage-collected after 5 min,
-        // keeping browser memory stable on long-lived dashboard sessions.
-        gcTime: 5 * 60_000,
-        // This is a local dashboard — refetching every query on every window
-        // focus is pure noise, so disable it.
-        refetchOnWindowFocus: false,
-        // The local API rarely fails transiently (a dev-server restart blip at
-        // most); retry once rather than the library default of three.
-        retry: 1,
-      },
-    },
-  });
+  // Defaults live in an isomorphic module so the server-side prefetch factory
+  // (src/lib/server/prefetch.ts) builds an identically-configured client — a
+  // dehydrated server cache and this client must agree on staleTime/gcTime.
+  return new QueryClient({ defaultOptions: queryClientDefaults });
 }
 
 // The browser keeps a single QueryClient for the page lifetime so that React

@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Terminal, Search, ChevronDown, ChevronRight } from "lucide-react";
 import type { CommandEntry, LintFinding } from "@/lib/types";
+import { commandsQuery } from "@/lib/queryOptions";
 import { ApplyUnitButton } from "./ApplyUnitButton";
 import { CatalogLintChip } from "@/components/CatalogLintChip";
 import { CopyInvocationButton } from "@/components/CopyInvocationButton";
@@ -18,7 +20,6 @@ interface Row {
 type SourceFilter = "all" | "user" | "plugin" | "project";
 
 export function CommandsBrowser() {
-  const [rows, setRows] = useState<Row[] | null>(null);
   const [rawQuery, setRawQuery] = useState("");
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
@@ -29,23 +30,10 @@ export function CommandsBrowser() {
     return () => clearTimeout(t);
   }, [rawQuery]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      const params = new URLSearchParams();
-      if (sourceFilter !== "all") params.set("source", sourceFilter);
-      if (query) params.set("q", query);
-      const res = await fetch(`/api/commands?${params.toString()}`);
-      const data = (await res.json()) as Row[];
-      if (!cancelled) setRows(data);
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [sourceFilter, query]);
-
-  const visible = rows ?? [];
+  const { data } = useQuery(
+    commandsQuery(sourceFilter === "all" ? undefined : sourceFilter, undefined, query || undefined),
+  );
+  const visible = data ?? [];
   const { findingsByFile, projectSlugByFile } = useLintFindings();
 
   function toggle(id: string) {
@@ -135,12 +123,12 @@ export function CommandsBrowser() {
         </div>
       </div>
 
-      {rows === null && (
+      {data === undefined && (
         <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
           loading…
         </div>
       )}
-      {rows !== null && visible.length === 0 && (
+      {data !== undefined && visible.length === 0 && (
         <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
           no commands found
         </div>

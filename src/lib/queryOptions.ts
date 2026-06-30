@@ -27,9 +27,15 @@ import type {
   StatsData,
   InsightEntry,
   InsightsInfo,
+  CommandEntry,
+  TemplateManifest,
+  ManualStepsInfo,
 } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
 import type { Provenance } from "@/lib/indexer/types";
+// Type-only import (erased at runtime, so no client/server boundary or import
+// cycle): the config catalog payload shape is defined alongside the useConfig hook.
+import type { ConfigPayload } from "@/hooks/useConfig";
 
 /** One row of the `/api/agents` catalog (entry metadata joined with usage). */
 export interface AgentRow {
@@ -242,6 +248,82 @@ export function insightDetailQuery(slug: string) {
       const res = await fetch(`/api/insights/${slug}`, { signal });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`Failed to load insights: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+/** One row of the `/api/commands` catalog (a slash-command entry). */
+export interface CommandRow {
+  entry: CommandEntry;
+}
+
+/** Shape returned by `/api/templates` (GET): manifests + per-template errors. */
+export interface TemplatesListResult {
+  manifests: TemplateManifest[];
+  errors: Array<{ slug: string; reason: string }>;
+}
+
+/** One project's manual-steps summary from `/api/manual-steps`. */
+export interface ProjectManualSteps {
+  slug: string;
+  name: string;
+  path: string;
+  manualSteps: ManualStepsInfo;
+}
+
+/** Slash-command catalog filtered by source/project/search. */
+export function commandsQuery(source?: string, project?: string, query?: string) {
+  return queryOptions({
+    queryKey: queryKeys.commands(source, project, query),
+    queryFn: async ({ signal }): Promise<CommandRow[]> => {
+      const params = new URLSearchParams();
+      if (source) params.set("source", source);
+      if (project) params.set("project", project);
+      if (query) params.set("q", query);
+      const qs = params.toString();
+      const res = await fetch(`/api/commands${qs ? `?${qs}` : ""}`, { signal });
+      if (!res.ok) throw new Error(`Failed to load commands: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+/** Live template manifests + per-template parse errors. */
+export function templatesQuery() {
+  return queryOptions({
+    queryKey: queryKeys.templates(),
+    queryFn: async ({ signal }): Promise<TemplatesListResult> => {
+      const res = await fetch("/api/templates", { signal });
+      if (!res.ok) throw new Error(`Failed to load templates: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+/** Cross-project manual-steps summaries (all projects with a MANUAL_STEPS.md). */
+export function manualStepsQuery() {
+  return queryOptions({
+    queryKey: queryKeys.manualSteps(),
+    queryFn: async ({ signal }): Promise<ProjectManualSteps[]> => {
+      const res = await fetch("/api/manual-steps", { signal });
+      if (!res.ok) throw new Error(`Failed to load manual steps: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+/** Config catalog for one tab (`type`), filtered by project/search. */
+export function configQuery(type: string, project?: string, query?: string) {
+  return queryOptions({
+    queryKey: queryKeys.config(type, project, query),
+    queryFn: async ({ signal }): Promise<ConfigPayload> => {
+      const params = new URLSearchParams();
+      params.set("type", type);
+      if (project) params.set("project", project);
+      if (query) params.set("q", query);
+      const res = await fetch(`/api/claude-config?${params.toString()}`, { signal });
+      if (!res.ok) throw new Error(`Failed to load config: ${res.status}`);
       return res.json();
     },
   });

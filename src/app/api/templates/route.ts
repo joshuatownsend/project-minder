@@ -7,9 +7,9 @@ import {
 import { readConfig } from "@/lib/config";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
-import { listTemplates } from "@/lib/template/registry";
 import { createLiveTemplate } from "@/lib/template/promote";
 import { emptyInventory, inventoryKeyFor, isValidSlug } from "@/lib/template/manifest";
+import { loadTemplatesResponse } from "@/lib/server/queries/templates";
 
 const VALID_UNIT_KINDS: readonly UnitKind[] = [
   "agent",
@@ -23,9 +23,8 @@ const VALID_UNIT_KINDS: readonly UnitKind[] = [
 ];
 
 export async function GET() {
-  const config = await readConfig();
-  const { manifests, errors } = await listTemplates(config);
-  return NextResponse.json({ manifests, errors });
+  const body = await loadTemplatesResponse();
+  return NextResponse.json(body);
 }
 
 export async function POST(request: NextRequest) {

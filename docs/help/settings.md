@@ -42,6 +42,7 @@ Background work — watchers, ingest, indexers:
 - **Agent + skill indexer** — walks user/plugin/project trees to build the catalog.
 - **Dev server control** — per-project start/stop/restart buttons.
 - **Live activity (hook server)** — `POST /api/hooks` accepts Claude Code lifecycle events.
+- **Server-render data pages (RSC hydration)** — the read-heavy pages (sessions, usage, stats, agents, skills, insights, commands, manual steps, templates, config) prefetch their data on the server and stream it into the cache, so they paint with data instead of a loading spinner. **Opt-in: defaults off.** With it off, those pages fetch on mount exactly as before.
 
 > **Today**: active-subsystem toggles persist but require a server restart to take effect. A future wave will make them hot-toggle without restart. Toggles labelled **not wired** persist their value but no consumer reads them yet — flip them now if you want, the relevant wave will pick them up.
 

@@ -1,13 +1,20 @@
-"use client";
-
+import type { Metadata } from "next";
+import { HydrationBoundary } from "@tanstack/react-query";
 import { UsageDashboard } from "@/components/UsageDashboard";
-import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { maybeDehydrate } from "@/lib/server/prefetch";
+import { prefetchUsage } from "@/lib/server/queries/usage";
 
-export default function Page() {
-  useDocumentTitle("Usage");
+// Reads live usage data per request — never statically prerender.
+export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Usage — Project Minder" };
+
+export default async function UsagePage() {
+  const state = await maybeDehydrate([prefetchUsage]);
   return (
-    <div className="shell-content wide">
-      <UsageDashboard />
-    </div>
+    <HydrationBoundary state={state ?? undefined}>
+      <div className="shell-content wide">
+        <UsageDashboard />
+      </div>
+    </HydrationBoundary>
   );
 }

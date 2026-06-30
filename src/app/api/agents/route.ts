@@ -1,159 +1,20 @@
 import { NextRequest } from "next/server";
-import { loadCatalog } from "@/lib/indexer/catalog";
-import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
-import { getAgentUsage } from "@/lib/data";
-import { getCachedScan } from "@/lib/cache";
-import { pathToUsageSlug } from "@/lib/usage/slug";
-import { skillUpdateCache } from "@/lib/skillUpdateCache";
 import { jsonWithCacheControl } from "@/lib/httpCache";
-import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
-import type { QueueItem } from "@/lib/skillUpdateCache";
-import type { AgentStats } from "@/lib/usage/types";
-import type { AgentEntry } from "@/lib/indexer/types";
+import { loadAgentsResponse } from "@/lib/server/queries/agents";
 
-const CACHE_TTL_MS = 2 * 60 * 1000;
-
-interface AgentRow {
-  entry?: AgentEntry;
-  usage?: AgentStats;
-  catalogMissing?: boolean;
-}
-
-interface CacheSlot {
-  data: AgentRow[];
-  backend: "db" | "file";
-  cachedAt: number;
-}
-
-const globalForAgents = globalThis as unknown as {
-  __agentsRouteCache?: Map<string, CacheSlot>;
-};
-
-function getRouteCache(key: string): CacheSlot | null {
-  const cache = globalForAgents.__agentsRouteCache;
-  if (!cache) return null;
-  const slot = cache.get(key);
-  if (!slot) return null;
-  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot;
-  return null;
-}
-
-function setRouteCache(key: string, data: AgentRow[], backend: "db" | "file") {
-  if (!globalForAgents.__agentsRouteCache) {
-    globalForAgents.__agentsRouteCache = new Map();
-  }
-  globalForAgents.__agentsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
-}
-
-export function invalidateAgentsRouteCache() {
-  globalForAgents.__agentsRouteCache = new Map();
-}
-
-function buildUpdateItems(rows: AgentRow[]): QueueItem[] {
-  const items: QueueItem[] = [];
-  for (const row of rows) {
-    if (!row.entry?.provenance) continue;
-    const p = row.entry.provenance;
-    if (p.kind === "marketplace-plugin" && p.marketplaceRepo && p.gitCommitSha) {
-      items.push({ id: row.entry.id, kind: "marketplace-plugin", marketplace: p.marketplace, marketplaceRepo: p.marketplaceRepo, gitCommitSha: p.gitCommitSha });
-    } else if (p.kind === "lockfile" && p.sourceUrl && p.skillPath && p.skillFolderHash) {
-      items.push({ id: row.entry.id, kind: "lockfile", sourceUrl: p.sourceUrl, skillPath: p.skillPath, skillFolderHash: p.skillFolderHash });
-    }
-  }
-  return items;
-}
+// The whole response body lives in `@/lib/server/queries/agents` so the RSC
+// prefetch (PR 3) shares the cache + catalog/usage join + filter chain. Re-export
+// the cache invalidator so existing importers (`/api/scan`) are unaffected.
+export { invalidateAgentsRouteCache } from "@/lib/server/queries/agents";
 
 export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("source");
   const projectSlug = request.nextUrl.searchParams.get("project");
-  const query = request.nextUrl.searchParams.get("q")?.toLowerCase();
+  const query = request.nextUrl.searchParams.get("q");
 
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${query ?? ""}`;
-  const cached = getRouteCache(cacheKey);
-  if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    const response = jsonWithCacheControl(cached.data);
-    response.headers.set("X-Minder-Backend", cached.backend);
-    return response;
-  }
+  const { data, backend } = await loadAgentsResponse(source, projectSlug, query);
 
-  const [catalog, agentUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getAgentUsage(),
-  ]);
-
-  const statsArr = agentUsage.stats;
-  const aliasMap = buildAgentAliasMap(catalog.agents);
-  const rows: AgentRow[] = [];
-  const matchedNames = new Set<string>();
-
-  for (const entry of catalog.agents) {
-    const usage = statsArr.find(
-      (s) => aliasMap.get(s.name.toLowerCase()) === entry
-    );
-    if (usage) matchedNames.add(usage.name);
-    rows.push({ entry: withProjectedContextCost(entry), usage });
-  }
-
-  for (const stat of statsArr) {
-    if (!matchedNames.has(stat.name)) {
-      rows.push({ usage: stat, catalogMissing: true });
-    }
-  }
-
-  let result = rows;
-
-  if (source) {
-    // catalogMissing rows are orphan invocations — treat as plugin-origin only
-    result = result.filter(
-      (r) => r.entry?.source === source || (source === "plugin" && r.catalogMissing)
-    );
-  }
-
-  if (projectSlug) {
-    const scan = getCachedScan();
-    const projectPath = scan?.projects?.find((p) => p.slug === projectSlug)?.path;
-    const usageSlug = projectPath ? pathToUsageSlug(projectPath) : projectSlug;
-
-    result = result.filter(
-      (r) =>
-        r.entry?.projectSlug === projectSlug ||
-        (r.usage?.projects[usageSlug] ?? 0) > 0 ||
-        (r.usage?.projects[projectSlug] ?? 0) > 0
-    );
-
-    // Normalize: expose the count under the scanner slug so components don't
-    // need to know about the usage slug format.
-    if (usageSlug !== projectSlug) {
-      result = result.map((r) => {
-        if (!r.usage) return r;
-        const count = r.usage.projects[usageSlug] ?? 0;
-        if (count === 0 || r.usage.projects[projectSlug]) return r;
-        return { ...r, usage: { ...r.usage, projects: { ...r.usage.projects, [projectSlug]: count } } };
-      });
-    }
-  }
-
-  if (query) {
-    result = result.filter((r) => {
-      const text = [
-        r.entry?.name,
-        r.entry?.description,
-        r.entry?.category,
-        r.entry?.pluginName,
-        r.usage?.name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return text.includes(query);
-    });
-  }
-
-  setRouteCache(cacheKey, result, agentUsage.meta.backend);
-  skillUpdateCache.enqueue(buildUpdateItems(result));
-
-  const response = jsonWithCacheControl(result);
-  response.headers.set("X-Minder-Backend", agentUsage.meta.backend);
+  const response = jsonWithCacheControl(data);
+  response.headers.set("X-Minder-Backend", backend);
   return response;
 }

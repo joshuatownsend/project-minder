@@ -1,13 +1,20 @@
-"use client";
-
+import type { Metadata } from "next";
+import { HydrationBoundary } from "@tanstack/react-query";
 import { InsightsBrowser } from "@/components/InsightsBrowser";
-import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { maybeDehydrate } from "@/lib/server/prefetch";
+import { prefetchInsights } from "@/lib/server/queries/insights";
 
-export default function Page() {
-  useDocumentTitle("Insights");
+// Reads live INSIGHTS.md scan data per request — never statically prerender.
+export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Insights — Project Minder" };
+
+export default async function InsightsPage() {
+  const state = await maybeDehydrate([prefetchInsights]);
   return (
-    <div className="shell-content wide">
-      <InsightsBrowser />
-    </div>
+    <HydrationBoundary state={state ?? undefined}>
+      <div className="shell-content wide">
+        <InsightsBrowser />
+      </div>
+    </HydrationBoundary>
   );
 }
