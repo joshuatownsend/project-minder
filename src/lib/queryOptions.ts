@@ -131,13 +131,23 @@ export function sessionsQuery() {
   });
 }
 
-/** Full detail for one session. Resolves to `null` on a non-OK response. */
+/**
+ * Full detail for one session. A 404 resolves to `null` (genuinely not found —
+ * a stable result that's safe to cache); any *other* non-OK status throws, so a
+ * transient failure is recorded as a query error instead of being cached as
+ * fresh `null`. This matters because the query is hover-prefetched: caching
+ * `null` for the 30s stale window would make a subsequent click render
+ * "Session not found" without refetching — even after the API recovered
+ * (PR #239 Codex review). An errored query is stale, so the click refetches.
+ */
 export function sessionDetailQuery(sessionId: string) {
   return queryOptions({
     queryKey: queryKeys.sessions.detail(sessionId),
     queryFn: async ({ signal }): Promise<SessionDetail | null> => {
       const res = await fetch(`/api/sessions/${sessionId}`, { signal });
-      return res.ok ? res.json() : null;
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Failed to load session: ${res.status}`);
+      return res.json();
     },
   });
 }
@@ -218,13 +228,21 @@ export function insightsListQuery(projectFilter?: string, query?: string) {
   });
 }
 
-/** Insights for one project. Resolves to `null` on a non-OK response. */
+/**
+ * Insights for one project. Same null-vs-throw contract as
+ * {@link sessionDetailQuery}: a 404 is a stable "not found" (cache `null`), any
+ * other non-OK throws so a transient failure isn't cached as fresh `null`.
+ * (Not hover-prefetched today, but it's the identical detail-query hazard and a
+ * future prefetch site would re-introduce the bug, so it's hardened in lockstep.)
+ */
 export function insightDetailQuery(slug: string) {
   return queryOptions({
     queryKey: queryKeys.insights.detail(slug),
     queryFn: async ({ signal }): Promise<InsightsInfo | null> => {
       const res = await fetch(`/api/insights/${slug}`, { signal });
-      return res.ok ? res.json() : null;
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Failed to load insights: ${res.status}`);
+      return res.json();
     },
   });
 }

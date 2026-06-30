@@ -91,13 +91,20 @@ describe("queryOptions — requests", () => {
     await expect(runFn(sessionsQuery())).rejects.toThrow(/500/);
   });
 
-  it("sessionDetailQuery resolves null on a non-OK response", async () => {
+  it("sessionDetailQuery resolves null on a 404 (genuinely not found)", async () => {
     mockResponse(null, { ok: false, status: 404 });
     const data = await runFn(sessionDetailQuery("missing"));
     expect(fetchMock).toHaveBeenCalledWith("/api/sessions/missing", {
       signal: undefined,
     });
     expect(data).toBeNull();
+  });
+
+  it("sessionDetailQuery throws on a transient non-404 failure (not cached as null)", async () => {
+    // A 500 must NOT resolve null — otherwise the hover-prefetch would cache
+    // `null` as fresh data and a click would show "not found" without retrying.
+    mockResponse(null, { ok: false, status: 500 });
+    await expect(runFn(sessionDetailQuery("s1"))).rejects.toThrow(/500/);
   });
 
   it("statsQuery fetches /api/stats", async () => {
@@ -152,12 +159,17 @@ describe("queryOptions — requests", () => {
     );
   });
 
-  it("insightDetailQuery resolves null on a non-OK response", async () => {
+  it("insightDetailQuery resolves null on a 404 (genuinely not found)", async () => {
     mockResponse(null, { ok: false, status: 404 });
     const data = await runFn(insightDetailQuery("ghost"));
     expect(fetchMock).toHaveBeenCalledWith("/api/insights/ghost", {
       signal: undefined,
     });
     expect(data).toBeNull();
+  });
+
+  it("insightDetailQuery throws on a transient non-404 failure (not cached as null)", async () => {
+    mockResponse(null, { ok: false, status: 503 });
+    await expect(runFn(insightDetailQuery("minder"))).rejects.toThrow(/503/);
   });
 });

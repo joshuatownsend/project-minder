@@ -27,8 +27,11 @@ import {
  *     itself dedupes), so we read the client default and pass it through.
  *   - errors are **swallowed**: a prefetch is best-effort, so a failed warm
  *     must never surface. The real `useQuery` on the destination page owns
- *     error reporting and retries. (`prefetchQuery` already resolves rather
- *     than rejects; the `.catch` is belt-and-suspenders.)
+ *     error reporting and retries. (In query-core v5 `prefetchQuery` already
+ *     swallows internally — `fetchQuery(...).then(noop).catch(noop)` — so the
+ *     failed `queryFn` is recorded on the query as an error but the returned
+ *     promise never rejects; the `.catch` here is purely defensive against a
+ *     future version that surfaces the rejection.)
  *
  * Pass it a factory result from `@/lib/queryOptions` so the warmed request is
  * byte-for-byte the request the page's hook will make.
