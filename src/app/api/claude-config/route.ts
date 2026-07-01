@@ -1,56 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCachedScan, setCachedScan } from "@/lib/cache";
-import { scanAllProjects } from "@/lib/scanner";
-import { getUserConfig } from "@/lib/userConfigCache";
-import { makeHookKey } from "@/lib/template/unitKey";
-import {
-  CONFIG_TYPES,
-  CiCdInfo,
-  ConfigType,
-  HookEntry,
-  McpServer,
-  PluginEntry,
-  ProjectData,
-  SettingsKeyEntry,
-} from "@/lib/types";
+import { CONFIG_TYPES, ConfigType } from "@/lib/types";
+import type { ConfigPayload } from "@/hooks/useConfig";
+import { loadClaudeConfigResponse } from "@/lib/server/queries/config";
+
+// Response assembly lives in `@/lib/server/queries/config` so the RSC prefetch
+// (PR 3) produces a byte-identical body. This route keeps the per-(type,project)
+// 2-min response cache that fronts that computation for repeat dashboard loads.
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
 
-interface HookRow extends HookEntry {
-  projectSlug?: string;
-  projectName?: string;
-  /** Absolute project root for project/local-scope rows; absent for user/plugin. */
-  projectPath?: string;
-  /** Stable key for the first command — used by Template Mode "↗ copy to project". */
-  unitKey: string;
-}
-
-interface McpRow extends McpServer {
-  projectSlug?: string;
-  projectName?: string;
-}
-
-interface CicdRow {
-  projectSlug: string;
-  projectName: string;
-  cicd: CiCdInfo;
-}
-
-type SettingsKeyRow = SettingsKeyEntry;
-
-interface AggregatedPayload {
-  hooks: HookRow[];
-  plugins: PluginEntry[];
-  mcp: McpRow[];
-  cicd: CicdRow[];
-  settingsKeys: SettingsKeyRow[];
-}
-
 const globalForCC = globalThis as unknown as {
-  __claudeConfigCache?: Map<string, { data: AggregatedPayload; cachedAt: number }>;
+  __claudeConfigCache?: Map<string, { data: ConfigPayload; cachedAt: number }>;
 };
 
-function getRouteCache(key: string): AggregatedPayload | null {
+function getRouteCache(key: string): ConfigPayload | null {
   const cache = globalForCC.__claudeConfigCache;
   if (!cache) return null;
   const slot = cache.get(key);
@@ -60,7 +23,7 @@ function getRouteCache(key: string): AggregatedPayload | null {
   return null;
 }
 
-function setRouteCache(key: string, data: AggregatedPayload) {
+function setRouteCache(key: string, data: ConfigPayload) {
   let cache = globalForCC.__claudeConfigCache;
   if (!cache) {
     cache = new Map();
@@ -83,7 +46,7 @@ export async function GET(request: NextRequest) {
     ? (typeParam as ConfigType)
     : "all";
   const projectSlug = request.nextUrl.searchParams.get("project") ?? undefined;
-  const query = request.nextUrl.searchParams.get("q")?.toLowerCase() ?? undefined;
+  const query = request.nextUrl.searchParams.get("q") ?? undefined;
 
   const cacheable = !query;
   const cacheKey = `${type}|${projectSlug ?? ""}`;
@@ -92,155 +55,10 @@ export async function GET(request: NextRequest) {
     if (cached) return NextResponse.json(cached);
   }
 
-  const [scan, userConfig] = await Promise.all([
-    (async () => {
-      let result = getCachedScan();
-      if (!result) {
-        result = await scanAllProjects();
-        setCachedScan(result);
-      }
-      return result;
-    })(),
-    getUserConfig(),
-  ]);
+  const payload = await loadClaudeConfigResponse(type, projectSlug ?? null, query ?? null);
 
-  const allProjects = scan.projects;
-  const projects = projectSlug
-    ? allProjects.filter((p) => p.slug === projectSlug)
-    : allProjects;
-  const includeUserScope = !projectSlug;
-
-  const payload: AggregatedPayload = {
-    hooks: [],
-    plugins: [],
-    mcp: [],
-    cicd: [],
-    settingsKeys: [],
-  };
-
-  if (type === "hooks" || type === "all") {
-    payload.hooks = collectHooks(projects);
-    if (includeUserScope) {
-      for (const e of userConfig.hooks.entries) {
-        for (const inv of e.commands) {
-          payload.hooks.push({
-            ...e,
-            commands: [inv],
-            unitKey: makeHookKey(e.event, e.matcher, inv.command),
-          });
-        }
-      }
-    }
+  if (cacheable) {
+    setRouteCache(cacheKey, payload);
   }
-
-  if (type === "plugins" || type === "all") {
-    payload.plugins = userConfig.plugins.plugins;
-  }
-
-  if (type === "mcp" || type === "all") {
-    payload.mcp = collectMcp(projects);
-    if (includeUserScope) {
-      payload.mcp.push(...userConfig.mcpServers.servers.map((s) => ({ ...s })));
-    }
-  }
-
-  if (type === "cicd" || type === "all") {
-    payload.cicd = collectCicd(projects);
-  }
-
-  if ((type === "settingskeys" || type === "all") && includeUserScope) {
-    payload.settingsKeys = userConfig.settingsKeys;
-  }
-
-  if (query) {
-    applyQuery(payload, query);
-    return NextResponse.json(payload);
-  }
-
-  setRouteCache(cacheKey, payload);
   return NextResponse.json(payload);
-}
-
-/** Expands each multi-invocation HookEntry into one row per invocation so
- *  Template Mode's `↗ copy to project` button has a unique addressable unit
- *  for every command. Without this, only the first invocation of a tuple
- *  would be copyable. */
-function collectHooks(projects: ProjectData[]): HookRow[] {
-  const rows: HookRow[] = [];
-  for (const p of projects) {
-    if (!p.hooks) continue;
-    for (const e of p.hooks.entries) {
-      for (const inv of e.commands) {
-        rows.push({
-          ...e,
-          commands: [inv],
-          projectSlug: p.slug,
-          projectName: p.name,
-          projectPath: p.path,
-          unitKey: makeHookKey(e.event, e.matcher, inv.command),
-        });
-      }
-    }
-  }
-  return rows;
-}
-
-function collectMcp(projects: ProjectData[]): McpRow[] {
-  const rows: McpRow[] = [];
-  for (const p of projects) {
-    if (!p.mcpServers) continue;
-    for (const s of p.mcpServers.servers) {
-      rows.push({ ...s, projectSlug: p.slug, projectName: p.name });
-    }
-  }
-  return rows;
-}
-
-function collectCicd(projects: ProjectData[]): CicdRow[] {
-  const rows: CicdRow[] = [];
-  for (const p of projects) {
-    if (!p.cicd) continue;
-    rows.push({ projectSlug: p.slug, projectName: p.name, cicd: p.cicd });
-  }
-  return rows;
-}
-
-function applyQuery(payload: AggregatedPayload, q: string): void {
-  payload.hooks = payload.hooks.filter((h) =>
-    [h.event, h.matcher, h.projectName, h.projectSlug, h.commands.map((c) => c.command).join(" ")]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(q)
-  );
-
-  payload.plugins = payload.plugins.filter((p) =>
-    [p.name, p.marketplace, p.version].filter(Boolean).join(" ").toLowerCase().includes(q)
-  );
-
-  payload.mcp = payload.mcp.filter((m) =>
-    [m.name, m.command, m.url, m.transport, m.projectName, m.projectSlug]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(q)
-  );
-
-  payload.settingsKeys = payload.settingsKeys.filter((sk) =>
-    sk.keyPath.toLowerCase().includes(q)
-  );
-
-  payload.cicd = payload.cicd.filter((c) => {
-    const text = [
-      c.projectName,
-      c.projectSlug,
-      ...c.cicd.workflows.map((w) => w.name ?? w.file),
-      ...c.cicd.workflows.flatMap((w) => w.jobs.flatMap((j) => j.actionUses)),
-      ...c.cicd.hosting.map((h) => h.platform),
-      ...c.cicd.dependabot.map((d) => d.ecosystem),
-    ]
-      .join(" ")
-      .toLowerCase();
-    return text.includes(q);
-  });
 }

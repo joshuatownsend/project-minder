@@ -25,6 +25,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "scanBoard",
   "scanOps",
   "githubActivity",
+  "rscHydration",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -39,6 +40,12 @@ export interface FeatureFlagMeta {
    *  persists but no consumer reads it yet (later waves wire it). The
    *  Settings UI shows a hint for unwired flags. */
   wired: boolean;
+  /** The flag's effective default when its key is absent from config. Omitted
+   *  ⇒ ON (the historical default for every flag). Set explicitly to `false`
+   *  for opt-in flags whose server gate reads `getFlag(..., false)`, so the
+   *  Settings toggle reflects the real off-by-default state instead of showing
+   *  a misleading ON. Must match the default the consumer passes to getFlag. */
+  defaultOn?: boolean;
 }
 
 export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
@@ -214,6 +221,18 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "watcher",
     wired: true,
+  },
+  {
+    key: "rscHydration",
+    label: "Server-render data pages (RSC hydration)",
+    description:
+      "Read-heavy pages (sessions, usage, stats, agents, skills, insights, commands, manual-steps, templates, config) prefetch their data on the server and stream it into the TanStack Query cache, so they paint with data instead of a loading spinner. Opt-in: defaults OFF.",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
+    // Opt-in: the server gate reads getFlag(..., false), so the Settings toggle
+    // must default OFF too or it would show enabled while the feature is off.
+    defaultOn: false,
   },
 ];
 

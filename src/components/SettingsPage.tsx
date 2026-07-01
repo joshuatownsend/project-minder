@@ -425,7 +425,10 @@ function FlagGroup(props: {
       </div>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "1px" }}>
         {flags.map((f) => {
-          const value = getFlag(currentFlags, f.key);
+          // Honor each flag's real default so an opt-in flag (defaultOn:false)
+          // shows OFF until explicitly enabled, matching its server gate —
+          // rather than a misleading ON from the blanket default-on.
+          const value = getFlag(currentFlags, f.key, f.defaultOn ?? true);
           const isSaving = saving.has(f.key);
           return (
             <li

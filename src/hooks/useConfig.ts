@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { configQuery } from "@/lib/queryOptions";
 import type {
   CiCdInfo,
   ConfigType,
@@ -49,30 +51,20 @@ export function useConfig(
   project?: string,
   query?: string
 ) {
-  const [data, setData] = useState<ConfigPayload>(empty);
-  const [loading, setLoading] = useState(true);
-
+  // The catalog payload is fetched via the shared `configQuery` factory so a
+  // `?type=hooks` deep-link reads the RSC-prefetched cache entry instead of
+  // firing a first-mount round-trip. `enabled: !!type` guards the genuinely
+  // typeless case; in practice ConfigBrowser's settings/playground tabs pass
+  // `undefined`, which the `= "all"` default resolves to a `type=all` fetch
+  // (that fetch is what populates the nav tab-count badges).
+  const q = useQuery({ ...configQuery(type ?? "all", project, query), enabled: !!type });
+  // Depend on the stable `refetch` identity, not the whole query result (which
+  // changes each render), so `refresh` stays referentially stable — matches
+  // useAgents/useSkills and keeps ConfigBrowser's effect-deps from churning.
+  const { refetch } = q;
   const refresh = useCallback(async () => {
-    if (!type) {
-      setLoading(false);
-      return;
-    }
-    const params = new URLSearchParams();
-    params.set("type", type);
-    if (project) params.set("project", project);
-    if (query) params.set("q", query);
-    try {
-      const res = await fetch(`/api/claude-config?${params.toString()}`);
-      if (res.ok) setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [type, project, query]);
+    await refetch();
+  }, [refetch]);
 
-  useEffect(() => {
-    setLoading(true);
-    refresh();
-  }, [refresh]);
-
-  return { data, loading, refresh };
+  return { data: q.data ?? empty, loading: type ? q.isPending : false, refresh };
 }

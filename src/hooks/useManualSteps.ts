@@ -1,33 +1,20 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ManualStepsInfo } from "@/lib/types";
-
-interface ProjectManualSteps {
-  slug: string;
-  name: string;
-  path: string;
-  manualSteps: ManualStepsInfo;
-}
+import { manualStepsQuery } from "@/lib/queryOptions";
 
 export function useAllManualSteps() {
-  const [data, setData] = useState<ProjectManualSteps[]>([]);
-  const [loading, setLoading] = useState(true);
-
+  const query = useQuery(manualStepsQuery());
+  // Depend on the stable `refetch` identity (not the whole query result, which
+  // changes every render) so `refresh` stays referentially stable — matches the
+  // pattern in useAgents/useSkills and avoids churning consumer effect-deps.
+  const { refetch } = query;
   const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/manual-steps");
-      if (res.ok) setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { data, loading, refresh };
+    await refetch();
+  }, [refetch]);
+  return { data: query.data ?? [], loading: query.isPending, refresh };
 }
 
 export function useProjectManualSteps(slug: string) {

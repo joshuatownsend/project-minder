@@ -1,37 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Layers } from "lucide-react";
 import type { TemplateManifest } from "@/lib/types";
 import { inventoryCount } from "@/lib/template/inventoryUtils";
-
-interface ListResponse {
-  manifests: TemplateManifest[];
-  errors: Array<{ slug: string; reason: string }>;
-}
+import { templatesQuery } from "@/lib/queryOptions";
 
 export function TemplatesBrowser() {
-  const [data, setData] = useState<ListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/templates");
-        const json = (await res.json()) as ListResponse;
-        if (!cancelled) setData(json);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data, isPending: loading } = useQuery(templatesQuery());
+  const manifests = data?.manifests ?? [];
+  const errors = data?.errors ?? [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -57,7 +36,7 @@ export function TemplatesBrowser() {
 
       {loading && <div style={mutedRow}>loading…</div>}
 
-      {!loading && data && data.manifests.length === 0 && data.errors.length === 0 && (
+      {!loading && manifests.length === 0 && errors.length === 0 && (
         <div style={emptyState}>
           <strong style={{ display: "block", marginBottom: "6px" }}>No templates yet.</strong>
           To create one: pick a project on the dashboard, open its three-dot menu, and choose
@@ -66,20 +45,20 @@ export function TemplatesBrowser() {
         </div>
       )}
 
-      {!loading && data && data.manifests.length > 0 && (
+      {!loading && manifests.length > 0 && (
         <div>
-          {data.manifests.map((m) => (
+          {manifests.map((m) => (
             <TemplateRow key={m.slug} manifest={m} />
           ))}
         </div>
       )}
 
-      {!loading && data && data.errors.length > 0 && (
+      {!loading && errors.length > 0 && (
         <div style={errorsBlock}>
           <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "4px" }}>
-            invalid manifests ({data.errors.length})
+            invalid manifests ({errors.length})
           </div>
-          {data.errors.map((e) => (
+          {errors.map((e) => (
             <div key={e.slug} style={{ fontSize: "0.7rem", color: "var(--warning, #f59e0b)" }}>
               <code style={inlineCode}>{e.slug}</code> — {e.reason}
             </div>

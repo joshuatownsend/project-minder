@@ -1,191 +1,21 @@
 import { NextRequest } from "next/server";
-import { loadCatalog } from "@/lib/indexer/catalog";
-import { buildSkillAliasMap } from "@/lib/indexer/canonicalize";
-import { getSkillUsage } from "@/lib/data";
-import { getCachedScan } from "@/lib/cache";
-import { pathToUsageSlug } from "@/lib/usage/slug";
-import { skillUpdateCache } from "@/lib/skillUpdateCache";
 import { jsonWithCacheControl } from "@/lib/httpCache";
-import { getDb } from "@/lib/db/connection";
-import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
-import type { QueueItem } from "@/lib/skillUpdateCache";
-import type { SkillStats } from "@/lib/usage/types";
-import type { SkillEntry } from "@/lib/indexer/types";
+import { loadSkillsResponse } from "@/lib/server/queries/skills";
 
-const CACHE_TTL_MS = 2 * 60 * 1000;
-
-interface SkillRow {
-  entry?: SkillEntry;
-  usage?: SkillStats;
-  catalogMissing?: boolean;
-  slashCount?: number;
-  autoCount?: number;
-}
-
-interface CacheSlot {
-  data: SkillRow[];
-  backend: "db" | "file";
-  cachedAt: number;
-}
-
-const globalForSkills = globalThis as unknown as {
-  __skillsRouteCache?: Map<string, CacheSlot>;
-};
-
-function getRouteCache(key: string): CacheSlot | null {
-  const cache = globalForSkills.__skillsRouteCache;
-  if (!cache) return null;
-  const slot = cache.get(key);
-  if (!slot) return null;
-  if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot;
-  return null;
-}
-
-function setRouteCache(key: string, data: SkillRow[], backend: "db" | "file") {
-  if (!globalForSkills.__skillsRouteCache) {
-    globalForSkills.__skillsRouteCache = new Map();
-  }
-  globalForSkills.__skillsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
-}
-
-export function invalidateSkillsRouteCache() {
-  globalForSkills.__skillsRouteCache = new Map();
-}
-
-function buildUpdateItems(rows: SkillRow[]): QueueItem[] {
-  const items: QueueItem[] = [];
-  for (const row of rows) {
-    if (!row.entry?.provenance) continue;
-    const p = row.entry.provenance;
-    if (p.kind === "marketplace-plugin" && p.marketplaceRepo && p.gitCommitSha) {
-      items.push({ id: row.entry.id, kind: "marketplace-plugin", marketplace: p.marketplace, marketplaceRepo: p.marketplaceRepo, gitCommitSha: p.gitCommitSha });
-    } else if (p.kind === "lockfile" && p.sourceUrl && p.skillPath && p.skillFolderHash) {
-      items.push({ id: row.entry.id, kind: "lockfile", sourceUrl: p.sourceUrl, skillPath: p.skillPath, skillFolderHash: p.skillFolderHash });
-    }
-  }
-  return items;
-}
+// The whole response body lives in `@/lib/server/queries/skills` so the RSC
+// prefetch (PR 3) shares the cache + catalog/usage join + filter + DB
+// invocation-source augmentation. Re-export the cache invalidator so existing
+// importers (`/api/scan`, `/api/skills/[id]/toggle`) are unaffected.
+export { invalidateSkillsRouteCache } from "@/lib/server/queries/skills";
 
 export async function GET(request: NextRequest) {
   const source = request.nextUrl.searchParams.get("source");
   const projectSlug = request.nextUrl.searchParams.get("project");
-  const query = request.nextUrl.searchParams.get("q")?.toLowerCase();
+  const query = request.nextUrl.searchParams.get("q");
 
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${query ?? ""}`;
-  const cached = getRouteCache(cacheKey);
-  if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    const response = jsonWithCacheControl(cached.data);
-    response.headers.set("X-Minder-Backend", cached.backend);
-    return response;
-  }
+  const { data, backend } = await loadSkillsResponse(source, projectSlug, query);
 
-  const [catalog, skillUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getSkillUsage(),
-  ]);
-
-  const statsArr = skillUsage.stats;
-  const aliasMap = buildSkillAliasMap(catalog.skills);
-  const rows: SkillRow[] = [];
-  const matchedNames = new Set<string>();
-
-  for (const entry of catalog.skills) {
-    const usage = statsArr.find(
-      (s) => aliasMap.get(s.name.toLowerCase()) === entry
-    );
-    if (usage) matchedNames.add(usage.name);
-    rows.push({ entry: withProjectedContextCost(entry), usage });
-  }
-
-  for (const stat of statsArr) {
-    if (!matchedNames.has(stat.name)) {
-      rows.push({ usage: stat, catalogMissing: true });
-    }
-  }
-
-  let result = rows;
-
-  if (source) {
-    // catalogMissing rows are orphan invocations — treat as plugin-origin only
-    result = result.filter(
-      (r) => r.entry?.source === source || (source === "plugin" && r.catalogMissing)
-    );
-  }
-
-  if (projectSlug) {
-    const scan = getCachedScan();
-    const projectPath = scan?.projects?.find((p) => p.slug === projectSlug)?.path;
-    const usageSlug = projectPath ? pathToUsageSlug(projectPath) : projectSlug;
-
-    result = result.filter(
-      (r) =>
-        r.entry?.projectSlug === projectSlug ||
-        (r.usage?.projects[usageSlug] ?? 0) > 0 ||
-        (r.usage?.projects[projectSlug] ?? 0) > 0
-    );
-
-    // Normalize: expose the count under the scanner slug so components don't
-    // need to know about the usage slug format.
-    if (usageSlug !== projectSlug) {
-      result = result.map((r) => {
-        if (!r.usage) return r;
-        const count = r.usage.projects[usageSlug] ?? 0;
-        if (count === 0 || r.usage.projects[projectSlug]) return r;
-        return { ...r, usage: { ...r.usage, projects: { ...r.usage.projects, [projectSlug]: count } } };
-      });
-    }
-  }
-
-  if (query) {
-    result = result.filter((r) => {
-      const text = [
-        r.entry?.name,
-        r.entry?.description,
-        r.entry?.pluginName,
-        r.usage?.name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return text.includes(query);
-    });
-  }
-
-  // Augment with invocation-source breakdown from DB when available.
-  try {
-    const db = await getDb();
-    if (db) {
-      type InvRow = { skill_name: string; invocation_source: string; cnt: number };
-      const invRows = db.prepare(
-        `SELECT skill_name, invocation_source, COUNT(*) AS cnt
-         FROM tool_uses WHERE tool_name = 'Skill' AND skill_name IS NOT NULL
-         AND invocation_source IS NOT NULL
-         GROUP BY skill_name, invocation_source`
-      ).all() as InvRow[];
-      const slashMap = new Map<string, number>();
-      const autoMap = new Map<string, number>();
-      for (const r of invRows) {
-        if (r.invocation_source === "slash_command") slashMap.set(r.skill_name, (slashMap.get(r.skill_name) ?? 0) + r.cnt);
-        else autoMap.set(r.skill_name, (autoMap.get(r.skill_name) ?? 0) + r.cnt);
-      }
-      result = result.map((r) => {
-        const name = r.entry?.name ?? r.usage?.name;
-        if (!name) return r;
-        const slash = slashMap.get(name) ?? 0;
-        const auto = autoMap.get(name) ?? 0;
-        if (slash === 0 && auto === 0) return r;
-        return { ...r, slashCount: slash, autoCount: auto };
-      });
-    }
-  } catch {
-    // DB schema not ready (e.g. empty/new DB) — skip invocation-source augmentation
-  }
-
-  setRouteCache(cacheKey, result, skillUsage.meta.backend);
-  skillUpdateCache.enqueue(buildUpdateItems(result));
-
-  const response = jsonWithCacheControl(result);
-  response.headers.set("X-Minder-Backend", skillUsage.meta.backend);
+  const response = jsonWithCacheControl(data);
+  response.headers.set("X-Minder-Backend", backend);
   return response;
 }

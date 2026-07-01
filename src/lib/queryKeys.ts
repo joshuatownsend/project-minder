@@ -33,4 +33,12 @@ export const queryKeys = {
       ["insights", "list", project ?? null, query ?? null] as const,
     detail: (slug: string) => ["insights", "detail", slug] as const,
   },
+  commands: (source?: string, project?: string, query?: string) =>
+    ["commands", source ?? null, project ?? null, query ?? null] as const,
+  templates: () => ["templates"] as const,
+  manualSteps: () => ["manual-steps", "list"] as const,
+  // Config catalog is per-tab: `type` is the catalog tab (hooks/mcp/cicd/…).
+  // The settings/playground tabs don't fetch, so they never produce a key.
+  config: (type: string, project?: string, query?: string) =>
+    ["config", type, project ?? null, query ?? null] as const,
 } as const;
