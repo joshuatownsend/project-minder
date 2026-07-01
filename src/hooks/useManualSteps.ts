@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ManualStepsInfo } from "@/lib/types";
 import { manualStepsQuery } from "@/lib/queryOptions";
-import { useConfig } from "@/components/ConfigProvider";
-import { getFlag } from "@/lib/featureFlags";
+import { useServerActionsEnabled } from "@/components/ConfigProvider";
 import { toggleManualStepAction } from "@/lib/server/actions";
 
 export function useAllManualSteps() {
@@ -50,8 +49,7 @@ export function useToggleStep(slug: string) {
   // Opt-in `serverActions` flag routes the write through a Server Action
   // instead of the POST route; both hit the same core mutation, so the
   // `onSuccess(updated)` shape is identical. Defaults off → fetch path.
-  const config = useConfig();
-  const useAction = getFlag(config?.featureFlags, "serverActions", false);
+  const useAction = useServerActionsEnabled();
 
   const toggle = useCallback(
     (

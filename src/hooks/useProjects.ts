@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ScanResult, ProjectData, ProjectStatus } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
-import { useConfig } from "@/components/ConfigProvider";
-import { getFlag } from "@/lib/featureFlags";
+import { useServerActionsEnabled } from "@/components/ConfigProvider";
 import { setProjectStatusAction } from "@/lib/server/actions";
 
 export function useProjects() {
@@ -14,8 +13,7 @@ export function useProjects() {
   const { showToast } = useToast();
   // Opt-in `serverActions` flag routes the status write through a Server Action
   // instead of PUT /api/config; both hit the same core mutation. Defaults off.
-  const config = useConfig();
-  const useAction = getFlag(config?.featureFlags, "serverActions", false);
+  const useAction = useServerActionsEnabled();
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -94,17 +92,27 @@ export function useProjects() {
   return { data, loading, error, rescan, updateStatus, archiveProject, unarchiveProject };
 }
 
+/**
+ * Fetch one project, gating on `res.ok`. `fetch` resolves on 4xx/5xx — without
+ * the gate the route's error body (e.g. `{error: "Project not found"}` from a
+ * 404) becomes `project` and the consumer renders against a malformed shape
+ * (ProjectDetail crashed on `dockerPorts.length` before this gate existed).
+ * Shared by `useProject`'s mount effect and its on-demand `refresh`.
+ */
+async function fetchProject(slug: string): Promise<ProjectData | null> {
+  const res = await fetch(`/api/projects/${slug}`);
+  return res.ok ? ((await res.json()) as ProjectData) : null;
+}
+
 export function useProject(slug: string) {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Re-fetch this project on demand (e.g. after a status change) without a full
-  // page reload. Mirrors the effect's `res.ok` gate so a 404 body never becomes
-  // a malformed `project`.
+  // page reload.
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/projects/${slug}`);
-      setProject(res.ok ? ((await res.json()) as ProjectData) : null);
+      setProject(await fetchProject(slug));
     } catch {
       setProject(null);
     } finally {
@@ -113,15 +121,9 @@ export function useProject(slug: string) {
   }, [slug]);
 
   useEffect(() => {
-    // `fetch` resolves on 4xx/5xx — must gate on `res.ok` or the
-    // route's error body (e.g. `{error: "Project not found"}` from a
-    // 404) becomes `project` and the consumer renders against a
-    // malformed shape. ProjectDetail crashed on `dockerPorts.length`
-    // when this hook wasn't checking status.
     let cancelled = false;
-    fetch(`/api/projects/${slug}`)
-      .then(async (res) => {
-        const data = res.ok ? ((await res.json()) as ProjectData) : null;
+    fetchProject(slug)
+      .then((data) => {
         if (cancelled) return;
         setProject(data);
         setLoading(false);
