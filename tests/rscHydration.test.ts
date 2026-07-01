@@ -9,6 +9,7 @@ vi.mock("@/lib/config", () => ({
 }));
 
 import { readConfig } from "@/lib/config";
+import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { jsonClone, maybeDehydrate } from "@/lib/server/prefetch";
 import {
   sessionsQuery,
@@ -50,6 +51,21 @@ describe("jsonClone", () => {
     // `undefined` keys are dropped, exactly as JSON serialization drops them.
     expect("drop" in out).toBe(false);
     expect(out.nested).toEqual({ n: 1, list: [1, 2, 3] });
+  });
+});
+
+// ── flag default (Settings toggle vs server gate parity) ──────────────────────
+describe("rscHydration is opt-in (default off)", () => {
+  it("meta marks defaultOn:false so the Settings toggle matches the server gate", () => {
+    // Regression guard (PR #240 Codex review): the server gate reads
+    // getFlag(..., false), so the Settings UI — which reads
+    // getFlag(flags, key, meta.defaultOn ?? true) — must see defaultOn:false or
+    // it would render the toggle ON while the feature is actually off.
+    const meta = FEATURE_FLAG_META.find((m) => m.key === "rscHydration");
+    expect(meta?.defaultOn).toBe(false);
+    expect(getFlag({}, "rscHydration", meta?.defaultOn ?? true)).toBe(false);
+    // Server gate: absent key resolves off.
+    expect(getFlag(undefined, "rscHydration", false)).toBe(false);
   });
 });
 

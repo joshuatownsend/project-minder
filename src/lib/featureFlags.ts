@@ -40,6 +40,12 @@ export interface FeatureFlagMeta {
    *  persists but no consumer reads it yet (later waves wire it). The
    *  Settings UI shows a hint for unwired flags. */
   wired: boolean;
+  /** The flag's effective default when its key is absent from config. Omitted
+   *  ⇒ ON (the historical default for every flag). Set explicitly to `false`
+   *  for opt-in flags whose server gate reads `getFlag(..., false)`, so the
+   *  Settings toggle reflects the real off-by-default state instead of showing
+   *  a misleading ON. Must match the default the consumer passes to getFlag. */
+  defaultOn?: boolean;
 }
 
 export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
@@ -224,6 +230,9 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "ui",
     wired: true,
+    // Opt-in: the server gate reads getFlag(..., false), so the Settings toggle
+    // must default OFF too or it would show enabled while the feature is off.
+    defaultOn: false,
   },
 ];
 

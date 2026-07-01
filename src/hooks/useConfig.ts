@@ -58,9 +58,13 @@ export function useConfig(
   // `undefined`, which the `= "all"` default resolves to a `type=all` fetch
   // (that fetch is what populates the nav tab-count badges).
   const q = useQuery({ ...configQuery(type ?? "all", project, query), enabled: !!type });
+  // Depend on the stable `refetch` identity, not the whole query result (which
+  // changes each render), so `refresh` stays referentially stable — matches
+  // useAgents/useSkills and keeps ConfigBrowser's effect-deps from churning.
+  const { refetch } = q;
   const refresh = useCallback(async () => {
-    await q.refetch();
-  }, [q]);
+    await refetch();
+  }, [refetch]);
 
   return { data: q.data ?? empty, loading: type ? q.isPending : false, refresh };
 }

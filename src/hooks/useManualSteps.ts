@@ -7,9 +7,13 @@ import { manualStepsQuery } from "@/lib/queryOptions";
 
 export function useAllManualSteps() {
   const query = useQuery(manualStepsQuery());
+  // Depend on the stable `refetch` identity (not the whole query result, which
+  // changes every render) so `refresh` stays referentially stable — matches the
+  // pattern in useAgents/useSkills and avoids churning consumer effect-deps.
+  const { refetch } = query;
   const refresh = useCallback(async () => {
-    await query.refetch();
-  }, [query]);
+    await refetch();
+  }, [refetch]);
   return { data: query.data ?? [], loading: query.isPending, refresh };
 }
 

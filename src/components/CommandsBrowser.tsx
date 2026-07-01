@@ -30,7 +30,7 @@ export function CommandsBrowser() {
     return () => clearTimeout(t);
   }, [rawQuery]);
 
-  const { data } = useQuery(
+  const { data, isPending } = useQuery(
     commandsQuery(sourceFilter === "all" ? undefined : sourceFilter, undefined, query || undefined),
   );
   const visible = data ?? [];
@@ -123,12 +123,12 @@ export function CommandsBrowser() {
         </div>
       </div>
 
-      {data === undefined && (
+      {isPending && (
         <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
           loading…
         </div>
       )}
-      {data !== undefined && visible.length === 0 && (
+      {!isPending && visible.length === 0 && (
         <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
           no commands found
         </div>
