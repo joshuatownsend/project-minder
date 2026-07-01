@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
 import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES, SubscriptionTier } from "@/lib/types";
 import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
@@ -396,12 +397,11 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   const body = await request.json();
 
-  // Update status
+  // Update status — delegates to the same core mutation the
+  // `setProjectStatusAction` Server Action calls (it invalidates both caches
+  // internally), so the route and action stay behaviourally identical.
   if (body.slug && body.status) {
-    await mutateConfig((config) => {
-      config.statuses[body.slug] = body.status as ProjectStatus;
-    });
-    invalidateAll();
+    await setProjectStatus(body.slug, body.status as ProjectStatus);
     return NextResponse.json({ ok: true });
   }
 

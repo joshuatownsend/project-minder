@@ -6,6 +6,9 @@ import { ProjectDetail } from "@/components/ProjectDetail";
 import { ProjectStatus } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useConfig } from "@/components/ConfigProvider";
+import { getFlag } from "@/lib/featureFlags";
+import { setProjectStatusAction } from "@/lib/server/actions";
 
 export default function ProjectPage({
   params,
@@ -13,11 +16,20 @@ export default function ProjectPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = use(params);
-  const { project, loading } = useProject(slug);
+  const { project, loading, refresh } = useProject(slug);
+  const config = useConfig();
+  const useAction = getFlag(config?.featureFlags, "serverActions", false);
 
   useDocumentTitle(project?.name ?? slug);
 
   const handleStatusChange = async (status: ProjectStatus) => {
+    if (useAction) {
+      // Server Action path: write, then re-fetch just this project — no full
+      // page reload.
+      await setProjectStatusAction(slug, status);
+      await refresh();
+      return;
+    }
     await fetch("/api/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

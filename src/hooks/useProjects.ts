@@ -3,12 +3,19 @@
 import { useState, useEffect, useCallback } from "react";
 import { ScanResult, ProjectData, ProjectStatus } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
+import { useConfig } from "@/components/ConfigProvider";
+import { getFlag } from "@/lib/featureFlags";
+import { setProjectStatusAction } from "@/lib/server/actions";
 
 export function useProjects() {
   const [data, setData] = useState<ScanResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { showToast } = useToast();
+  // Opt-in `serverActions` flag routes the status write through a Server Action
+  // instead of PUT /api/config; both hit the same core mutation. Defaults off.
+  const config = useConfig();
+  const useAction = getFlag(config?.featureFlags, "serverActions", false);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -44,12 +51,16 @@ export function useProjects() {
   const updateStatus = useCallback(
     async (slug: string, status: ProjectStatus) => {
       try {
-        const res = await fetch("/api/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug, status }),
-        });
-        if (!res.ok) return;
+        if (useAction) {
+          await setProjectStatusAction(slug, status);
+        } else {
+          const res = await fetch("/api/config", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slug, status }),
+          });
+          if (!res.ok) return;
+        }
         setData((prev) => {
           if (!prev) return prev;
           return {
@@ -63,7 +74,7 @@ export function useProjects() {
         // network errors — local state left unchanged
       }
     },
-    []
+    [useAction]
   );
 
   useEffect(() => {
@@ -86,6 +97,20 @@ export function useProjects() {
 export function useProject(slug: string) {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Re-fetch this project on demand (e.g. after a status change) without a full
+  // page reload. Mirrors the effect's `res.ok` gate so a 404 body never becomes
+  // a malformed `project`.
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${slug}`);
+      setProject(res.ok ? ((await res.json()) as ProjectData) : null);
+    } catch {
+      setProject(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [slug]);
 
   useEffect(() => {
     // `fetch` resolves on 4xx/5xx — must gate on `res.ok` or the
@@ -111,5 +136,5 @@ export function useProject(slug: string) {
     };
   }, [slug]);
 
-  return { project, loading };
+  return { project, loading, refresh };
 }
