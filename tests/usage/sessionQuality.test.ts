@@ -25,9 +25,45 @@ describe("getModelContextWindow", () => {
     expect(getModelContextWindow("claude-sonnet-4-7[1m]")).toBe(1_000_000);
   });
 
-  it("returns 200K for opus and haiku families", () => {
-    expect(getModelContextWindow("claude-opus-4-7")).toBe(200_000);
+  it("returns 1M by default for Fable 5, Mythos 5, and Sonnet 5", () => {
+    expect(getModelContextWindow("claude-fable-5")).toBe(1_000_000);
+    expect(getModelContextWindow("claude-mythos-5")).toBe(1_000_000);
+    expect(getModelContextWindow("claude-sonnet-5")).toBe(1_000_000);
+  });
+
+  it("returns 1M by default for the current Opus line (4.6/4.7/4.8)", () => {
+    expect(getModelContextWindow("claude-opus-4-6")).toBe(1_000_000);
+    expect(getModelContextWindow("claude-opus-4-7")).toBe(1_000_000);
+    expect(getModelContextWindow("claude-opus-4-8")).toBe(1_000_000);
+    // The [1m] suffix path still wins for these too.
+    expect(getModelContextWindow("claude-opus-4-8[1m]")).toBe(1_000_000);
+  });
+
+  it("does not treat digit-adjacent lookalikes as the 1M lines", () => {
+    // Version boundary: `4-8` / `5` must not bleed into `4-80` / `50`.
+    // These fall through to the generic 200K rule, not the 1M tier.
+    expect(getModelContextWindow("claude-opus-4-80")).toBe(200_000);
+    expect(getModelContextWindow("claude-sonnet-50")).toBe(200_000);
+  });
+
+  it("does not warn for Fable 5 (previously an unknown model)", () => {
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (msg: string) => warnings.push(msg);
+    try {
+      expect(getModelContextWindow("claude-fable-5")).toBe(1_000_000);
+      expect(warnings.length).toBe(0);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("keeps 200K for haiku and the opt-in-1M SKUs (Sonnet 4.x, Opus 4.5)", () => {
     expect(getModelContextWindow("claude-haiku-4-5-20251001")).toBe(200_000);
+    expect(getModelContextWindow("claude-sonnet-4-6")).toBe(200_000);
+    expect(getModelContextWindow("claude-opus-4-5")).toBe(200_000);
+    // ...unless the [1m] suffix opts in.
+    expect(getModelContextWindow("claude-sonnet-4-6[1m]")).toBe(1_000_000);
   });
 
   it("returns 100K for legacy claude-2 family", () => {

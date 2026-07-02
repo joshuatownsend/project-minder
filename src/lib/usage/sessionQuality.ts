@@ -3,20 +3,35 @@ import { getModelPricing } from "./costCalculator";
 
 // ── Model context windows ─────────────────────────────────────────────────────
 //
-// Used to derive context-fill % per turn (input_tokens / window). The 1M-
-// context Sonnet 4.x SKU is opted into via the `[1m]` suffix on the model id
-// (Claude Code surfaces it in JSONL exactly that way); without the suffix,
-// the same model runs in the standard 200K window. Unknown models fall back
-// to 200K with a one-time stderr warn so degradation is visible — silent 0%
-// fill would mask real compaction-loop sessions during the rollout window
-// while we observe new model ids.
+// Used to derive context-fill % per turn (input_tokens / window).
+//
+// Two tiers of 1M-context models:
+//   • 1M *by default* — Fable 5, Mythos 5, Sonnet 5, and the current Opus line
+//     (4.6/4.7/4.8). These ship a 1M window with no opt-in, so they map to 1M
+//     directly below.
+//   • 1M *via opt-in* — the Sonnet 4.x SKU and Opus 4.5-and-earlier, opted into
+//     with the `[1m]` suffix on the model id (Claude Code surfaces it in JSONL
+//     exactly that way; handled first, before the table). Without the suffix
+//     these run in the standard 200K window.
+//
+// Unknown models fall back to 200K with a one-time stderr warn so degradation
+// is visible — silent 0% fill would mask real compaction-loop sessions while
+// we observe new model ids.
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const ONE_MILLION_CONTEXT = 1_000_000;
 
 /** Known context windows, keyed by lowercased model substring. Match order matters. */
 const KNOWN_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
-  // Newer Anthropic line — 200K standard
+  // 1M-by-default models. These MUST precede the generic opus|sonnet rule
+  // below, or e.g. `claude-sonnet-5` would be swallowed and read as 200K.
+  [/^claude-(fable|mythos)-/i, ONE_MILLION_CONTEXT],
+  // `(?![0-9])` pins the version so `claude-opus-4-8[1m]` / `-<date>` match
+  // but a hypothetical `claude-opus-4-80` / `claude-sonnet-50` doesn't.
+  [/^claude-opus-4-[678](?![0-9])/i, ONE_MILLION_CONTEXT],
+  [/^claude-sonnet-5(?![0-9])/i, ONE_MILLION_CONTEXT],
+  // Sonnet 4.x + Opus 4.5-and-earlier + Haiku — 200K standard (1M is opt-in
+  // via the `[1m]` suffix, resolved before this table).
   [/^claude-(opus|sonnet|haiku)-/i, 200_000],
   // Pre-4 Claude families
   [/^claude-3/i, 200_000],
@@ -26,9 +41,10 @@ const KNOWN_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
 const warnedModels = new Set<string>();
 
 /**
- * Look up a model's context window in tokens. Honors the `[1m]` suffix that
- * Claude Code uses to flag the 1M-context Sonnet 4.x SKU. Unknown models log
- * a one-time warn and fall back to 200K.
+ * Look up a model's context window in tokens. Fable 5 / Mythos 5 / Sonnet 5 /
+ * Opus 4.6–4.8 are 1M by default; the `[1m]` suffix additionally flags the
+ * opt-in 1M SKU on Sonnet 4.x / older Opus. Unknown models log a one-time warn
+ * and fall back to 200K.
  */
 export function getModelContextWindow(model: string): number {
   if (!model) return DEFAULT_CONTEXT_WINDOW;
