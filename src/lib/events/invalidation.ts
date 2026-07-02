@@ -22,5 +22,10 @@ export function eventToQueryPrefixes(type: MinderEventType): readonly (readonly 
     case "scan.invalidated":
       // Resources derived from the project scan cache.
       return [["insights"], ["stats"], ["manual-steps"]];
+    case "git-status.updated":
+    case "github-activity.updated":
+      // Drive the bespoke (non-TanStack-Query) git/github status hooks via the
+      // provider's subscriber fan-out, not the query cache — so no query key.
+      return [];
   }
 }

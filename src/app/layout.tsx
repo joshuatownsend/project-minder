@@ -13,7 +13,7 @@ import { readConfig, getDevRoots } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { ConfigProvider } from "@/components/ConfigProvider";
 import { QueryProvider } from "@/components/QueryProvider";
-import { LiveEventsBridge } from "@/components/LiveEventsBridge";
+import { LiveEventsProvider } from "@/components/LiveEventsProvider";
 import { CommandPaletteProvider } from "@/components/CommandPaletteProvider";
 import { ScopeProvider } from "@/components/ScopeProvider";
 import { AppShell } from "@/components/AppShell";
@@ -57,7 +57,7 @@ export default async function RootLayout({
         <ToastProvider>
           <ConfigProvider>
             <QueryProvider>
-              <LiveEventsBridge />
+              <LiveEventsProvider>
               <PulseProvider>
                 <CommandPaletteProvider>
                   <HelpProvider>
@@ -89,6 +89,7 @@ export default async function RootLayout({
                   </HelpProvider>
                 </CommandPaletteProvider>
               </PulseProvider>
+              </LiveEventsProvider>
             </QueryProvider>
           </ConfigProvider>
         </ToastProvider>
