@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ManualStepsInfo } from "@/lib/types";
 import { manualStepsQuery } from "@/lib/queryOptions";
+import { useServerActionsEnabled } from "@/components/ConfigProvider";
+import { toggleManualStepAction } from "@/lib/server/actions";
 
 export function useAllManualSteps() {
   const query = useQuery(manualStepsQuery());
@@ -44,6 +46,10 @@ export function useProjectManualSteps(slug: string) {
 export function useToggleStep(slug: string) {
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const [toggling, setToggling] = useState(false);
+  // Opt-in `serverActions` flag routes the write through a Server Action
+  // instead of the POST route; both hit the same core mutation, so the
+  // `onSuccess(updated)` shape is identical. Defaults off → fetch path.
+  const useAction = useServerActionsEnabled();
 
   const toggle = useCallback(
     (
@@ -54,15 +60,18 @@ export function useToggleStep(slug: string) {
       setToggling(true);
       queueRef.current = queueRef.current.then(async () => {
         try {
-          const res = await fetch(`/api/manual-steps/${slug}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lineNumber }),
-          });
-          if (res.ok) {
-            const updated: ManualStepsInfo = await res.json();
-            onSuccess(updated);
+          let updated: ManualStepsInfo | null = null;
+          if (useAction) {
+            updated = await toggleManualStepAction(slug, lineNumber);
+          } else {
+            const res = await fetch(`/api/manual-steps/${slug}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ lineNumber }),
+            });
+            if (res.ok) updated = (await res.json()) as ManualStepsInfo;
           }
+          if (updated) onSuccess(updated);
         } catch {
           // Network error — server-side mutex protects the file,
           // so worst case the toggle didn't happen. UI will resync on next fetch.
@@ -76,7 +85,7 @@ export function useToggleStep(slug: string) {
         }
       });
     },
-    [slug]
+    [slug, useAction]
   );
 
   return { toggle, toggling };
