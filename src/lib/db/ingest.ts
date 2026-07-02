@@ -7,6 +7,7 @@ import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
+import { emitMinderEvent } from "@/lib/events/bus";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
 import { computeSessionQuality, turnContextFill, type SessionQualitySummary } from "@/lib/usage/sessionQuality";
@@ -2143,6 +2144,9 @@ export async function reconcileSessionFile(
     if (rows > 0) {
       const slug = toSlug(canonicalizeDirName(projectDirName));
       bridgeJsonlAppendToEventBus(sessionId, slug);
+      // Signal SSE clients so the live sessions list invalidates (replaces the
+      // 15s poll when the liveEvents flag is on). Coalesced server-side.
+      emitMinderEvent("sessions.changed");
     }
     return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
   }

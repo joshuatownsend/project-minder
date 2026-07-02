@@ -662,7 +662,8 @@ export type FeatureFlagKey =
   | "scanOps"
   | "githubActivity"
   | "rscHydration"
-  | "serverActions";
+  | "serverActions"
+  | "liveEvents";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =

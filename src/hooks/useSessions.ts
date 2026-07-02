@@ -3,13 +3,17 @@
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { sessionsQuery, sessionDetailQuery } from "@/lib/queryOptions";
+import { useLiveEventsEnabled } from "@/components/ConfigProvider";
 
 export function useAllSessions() {
+  const liveEvents = useLiveEventsEnabled();
   const query = useQuery({
     ...sessionsQuery(),
-    // Preserve the prior 15s live-refresh; TanStack pauses the interval
-    // automatically while the tab is hidden (refetchIntervalInBackground=false).
-    refetchInterval: 15_000,
+    // When the SSE stream is on, `sessions.changed` events invalidate this
+    // query, so the 15s timer is redundant — drop it. Off (default): keep the
+    // prior 15s live-refresh; TanStack pauses the interval while the tab is
+    // hidden (refetchIntervalInBackground=false).
+    refetchInterval: liveEvents ? false : 15_000,
   });
 
   const { refetch } = query;

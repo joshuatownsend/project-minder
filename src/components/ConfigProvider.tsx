@@ -69,3 +69,13 @@ export function useServerActionsEnabled(): boolean {
   const config = useConfig();
   return getFlag(config?.featureFlags, "serverActions", false);
 }
+
+/**
+ * True when the opt-in `liveEvents` flag is on — the client should open the
+ * `/api/events` SSE stream and invalidate queries on push instead of polling
+ * (Performance P3 — PR 5a). Defaults off.
+ */
+export function useLiveEventsEnabled(): boolean {
+  const config = useConfig();
+  return getFlag(config?.featureFlags, "liveEvents", false);
+}

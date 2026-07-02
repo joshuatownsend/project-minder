@@ -1,4 +1,5 @@
 import { ScanResult } from "./types";
+import { emitMinderEvent } from "./events/bus";
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -22,4 +23,7 @@ export function setCachedScan(result: ScanResult): void {
 
 export function invalidateCache(): void {
   g.__scanCache = undefined;
+  // Signal connected SSE clients that scan-derived data changed so they can
+  // invalidate the matching queries (no-op when no client is listening).
+  emitMinderEvent("scan.invalidated");
 }
