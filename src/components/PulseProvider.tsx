@@ -9,8 +9,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useLiveEventsEnabled } from "@/components/ConfigProvider";
+import { useLiveEvent } from "@/components/LiveEventsProvider";
 
 const POLL_INTERVAL_MS = 5_000;
+// When the SSE stream is on, pulse-relevant changes (manual steps via
+// scan.invalidated, live-session activity via sessions.changed) trigger an
+// immediate refetch, so the timer is only a slow safety net for the few fields
+// with no event (dispatcher/CLI availability) — 20s instead of 5s.
+const SSE_FALLBACK_INTERVAL_MS = 20_000;
 
 export interface PulseChange {
   slug: string;
@@ -76,6 +83,15 @@ export function PulseProvider({ children }: { children: ReactNode }) {
   const lastCheckedRef = useRef<string>(new Date().toISOString());
   const listenersRef = useRef<Set<ChangeListener>>(new Set());
   const inFlightRef = useRef(false);
+  const liveEvents = useLiveEventsEnabled();
+  // Assigned inside the poll effect; lets the SSE subscriptions below trigger a
+  // refetch without threading the closure out. `poll` is single-flighted
+  // (inFlightRef), so overlapping event + timer calls collapse safely.
+  const tickRef = useRef<() => void>(() => {});
+
+  // SSE path: refetch pulse when a relevant class of data changes.
+  useLiveEvent("scan.invalidated", () => tickRef.current());
+  useLiveEvent("sessions.changed", () => tickRef.current());
 
   const subscribeChanges = useCallback((listener: ChangeListener) => {
     listenersRef.current.add(listener);
@@ -202,8 +218,11 @@ export function PulseProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // Expose the (hidden-tab-aware) refetch to the SSE subscriptions above.
+    tickRef.current = tick;
+
     void poll(); // prime the snapshot on mount
-    const intervalId = setInterval(tick, POLL_INTERVAL_MS);
+    const intervalId = setInterval(tick, liveEvents ? SSE_FALLBACK_INTERVAL_MS : POLL_INTERVAL_MS);
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", handleVisibility);
     }
@@ -215,7 +234,7 @@ export function PulseProvider({ children }: { children: ReactNode }) {
         document.removeEventListener("visibilitychange", handleVisibility);
       }
     };
-  }, []);
+  }, [liveEvents]);
 
   return (
     <PulseContext.Provider value={{ snapshot, subscribeChanges }}>

@@ -1,4 +1,5 @@
 import { scanGitDirtyStatus } from "./scanner/git";
+import { emitMinderEvent } from "./events/bus";
 
 interface DirtyStatus {
   isDirty: boolean;
@@ -69,6 +70,9 @@ class GitStatusCache {
           checkedAt: Date.now(),
         });
       }
+      // Tell SSE clients a batch landed so `useGitDirtyStatus` refetches
+      // (replaces its 5s poll when the liveEvents flag is on).
+      emitMinderEvent("git-status.updated");
 
       if (this.queue.length > 0) {
         await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));

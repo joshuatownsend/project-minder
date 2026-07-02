@@ -18,11 +18,18 @@ describe("eventToQueryPrefixes", () => {
     ]);
   });
 
-  it("returns a non-empty prefix list for every declared event type", () => {
+  it("maps the git/github cache events to no query keys (non-Query hooks)", () => {
+    // These drive useGitDirtyStatus / useGithubActivity via the provider's
+    // subscriber fan-out, not the TanStack Query cache.
+    expect(eventToQueryPrefixes("git-status.updated")).toEqual([]);
+    expect(eventToQueryPrefixes("github-activity.updated")).toEqual([]);
+  });
+
+  it("handles every declared event type and returns valid (possibly empty) key arrays", () => {
     for (const type of MINDER_EVENT_TYPES) {
       const prefixes = eventToQueryPrefixes(type);
-      expect(prefixes.length).toBeGreaterThan(0);
-      // Each prefix is a non-empty key array.
+      expect(Array.isArray(prefixes)).toBe(true);
+      // Any prefix returned is itself a non-empty key array.
       for (const key of prefixes) expect(key.length).toBeGreaterThan(0);
     }
   });

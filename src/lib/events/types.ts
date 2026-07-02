@@ -20,6 +20,14 @@ export const MINDER_EVENT_TYPES = [
    * deliberately no separate `manual-steps.changed`.
    */
   "scan.invalidated",
+  /**
+   * The background git-dirty-status cache stored a fresh batch of results.
+   * Consumed by `useGitDirtyStatus` (a non-Query hook), not the query cache, so
+   * it maps to no query key — see `@/lib/events/invalidation`.
+   */
+  "git-status.updated",
+  /** The background GitHub-activity cache stored a fresh batch of results. */
+  "github-activity.updated",
 ] as const;
 
 export type MinderEventType = (typeof MINDER_EVENT_TYPES)[number];

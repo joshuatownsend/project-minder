@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { runGit, detectMainBranch } from "./scanner/git";
 import { parseGitHubRemote } from "./githubRemote";
+import { emitMinderEvent } from "./events/bus";
 import type {
   GithubActivity,
   GithubActivityReason,
@@ -302,6 +303,9 @@ class GithubActivityCache {
       for (const { slug, activity } of results) {
         this.cache.set(slug, { ...activity, checkedAt: Date.now() });
       }
+      // Tell SSE clients a batch landed so `useGithubActivity` refetches
+      // (replaces its 5s poll when the liveEvents flag is on).
+      emitMinderEvent("github-activity.updated");
 
       if (this.queue.length > 0) {
         await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));
