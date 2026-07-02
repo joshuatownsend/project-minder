@@ -34,10 +34,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       // event into a single client-visible send.
       const coalesceTimers = new Map<MinderEventType, NodeJS.Timeout>();
       let heartbeatTimer: NodeJS.Timeout | null = null;
+      // Assigned once subscribed; close() is the single cleanup path so the bus
+      // listener is removed no matter how shutdown is triggered (client abort
+      // OR a failed enqueue in the heartbeat/flush catch blocks).
+      let unsubscribe: (() => void) | null = null;
 
       function close() {
         if (closed) return;
         closed = true;
+        if (unsubscribe) unsubscribe();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         for (const t of coalesceTimers.values()) clearTimeout(t);
         coalesceTimers.clear();
@@ -61,20 +66,25 @@ export async function GET(request: NextRequest): Promise<Response> {
         }, HEARTBEAT_MS);
       }
 
+      // The client may have already disconnected during route setup; if so the
+      // "abort" listener below would never fire, so bail (and clean up) now.
+      if (request.signal.aborted) {
+        close();
+        return;
+      }
+
       // Open the stream immediately so the client's `onopen` fires without
       // waiting for the first real event.
-      controller.enqueue(comment("connected"));
+      try { controller.enqueue(comment("connected")); } catch { close(); return; }
       scheduleHeartbeat();
 
-      const unsubscribe = onMinderEvent((ev) => {
+      unsubscribe = onMinderEvent((ev) => {
         if (closed) return;
         scheduleFlush(ev.type);
       });
 
-      request.signal.addEventListener("abort", () => {
-        unsubscribe();
-        close();
-      });
+      // `once` so the (idempotent) close runs exactly once on disconnect.
+      request.signal.addEventListener("abort", close, { once: true });
     },
   });
 

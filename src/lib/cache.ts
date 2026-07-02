@@ -1,3 +1,4 @@
+import "server-only";
 import { ScanResult } from "./types";
 import { emitMinderEvent } from "./events/bus";
 
