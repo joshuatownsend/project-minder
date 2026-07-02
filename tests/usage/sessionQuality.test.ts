@@ -39,6 +39,13 @@ describe("getModelContextWindow", () => {
     expect(getModelContextWindow("claude-opus-4-8[1m]")).toBe(1_000_000);
   });
 
+  it("does not treat digit-adjacent lookalikes as the 1M lines", () => {
+    // Version boundary: `4-8` / `5` must not bleed into `4-80` / `50`.
+    // These fall through to the generic 200K rule, not the 1M tier.
+    expect(getModelContextWindow("claude-opus-4-80")).toBe(200_000);
+    expect(getModelContextWindow("claude-sonnet-50")).toBe(200_000);
+  });
+
   it("does not warn for Fable 5 (previously an unknown model)", () => {
     const originalWarn = console.warn;
     const warnings: string[] = [];

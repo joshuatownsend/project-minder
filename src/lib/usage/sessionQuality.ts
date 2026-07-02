@@ -26,8 +26,10 @@ const KNOWN_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   // 1M-by-default models. These MUST precede the generic opus|sonnet rule
   // below, or e.g. `claude-sonnet-5` would be swallowed and read as 200K.
   [/^claude-(fable|mythos)-/i, ONE_MILLION_CONTEXT],
-  [/^claude-opus-4-[678]/i, ONE_MILLION_CONTEXT],
-  [/^claude-sonnet-5/i, ONE_MILLION_CONTEXT],
+  // `(?![0-9])` pins the version so `claude-opus-4-8[1m]` / `-<date>` match
+  // but a hypothetical `claude-opus-4-80` / `claude-sonnet-50` doesn't.
+  [/^claude-opus-4-[678](?![0-9])/i, ONE_MILLION_CONTEXT],
+  [/^claude-sonnet-5(?![0-9])/i, ONE_MILLION_CONTEXT],
   // Sonnet 4.x + Opus 4.5-and-earlier + Haiku — 200K standard (1M is opt-in
   // via the `[1m]` suffix, resolved before this table).
   [/^claude-(opus|sonnet|haiku)-/i, 200_000],
