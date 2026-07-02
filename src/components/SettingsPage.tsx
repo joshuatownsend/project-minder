@@ -5,6 +5,7 @@ import { Settings as SettingsIcon } from "lucide-react";
 import type { FeatureFlagKey, InitStatus, MinderConfig } from "@/lib/types";
 import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { useToast } from "@/components/ToastProvider";
+import { useConfigRefresh } from "@/components/ConfigProvider";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { IntegrationsSection } from "@/components/settings/IntegrationsSection";
 import { TerminalSection } from "@/components/settings/TerminalSection";
@@ -83,6 +84,10 @@ const SECTIONS: SectionDef[] = [
 
 export function SettingsPage() {
   const { showToast } = useToast();
+  // Re-pull the global ConfigProvider snapshot after a save so provider-backed
+  // reads (feature-flag gates like useServerActionsEnabled, useEffectiveShortcuts)
+  // reflect the change without a hard reload.
+  const refreshGlobalConfig = useConfigRefresh();
   const [active, setActive] = useState<SectionKey>("features");
   const [config, setConfig] = useState<MinderConfig | null>(null);
 
@@ -148,6 +153,8 @@ export function SettingsPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
+      // Keep the global provider (and its flag gates) in sync mid-session.
+      refreshGlobalConfig();
     } catch (e: unknown) {
       setConfig((curr) => {
         if (!curr) return curr;
@@ -210,6 +217,8 @@ export function SettingsPage() {
     }
     const updated = await res.json().catch(() => null);
     if (updated?.config) setConfig(updated.config as MinderConfig);
+    // Keep the global provider (and its flag gates) in sync mid-session.
+    refreshGlobalConfig();
   }
 
   return (

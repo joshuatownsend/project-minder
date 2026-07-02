@@ -21,19 +21,27 @@ export default function ProjectPage({
   useDocumentTitle(project?.name ?? slug);
 
   const handleStatusChange = async (status: ProjectStatus) => {
-    if (useAction) {
-      // Server Action path: write, then re-fetch just this project — no full
-      // page reload.
-      await setProjectStatusAction(slug, status);
-      await refresh();
-      return;
+    // Fired from StatusSelector.onSelect, which doesn't await/catch — so a
+    // rejection (e.g. the Server Action throwing) would surface as an unhandled
+    // promise rejection in the browser. Swallow here; the UI resyncs on next
+    // load, matching the dashboard's updateStatus.
+    try {
+      if (useAction) {
+        // Server Action path: write, then re-fetch just this project — no full
+        // page reload.
+        await setProjectStatusAction(slug, status);
+        await refresh();
+        return;
+      }
+      await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug, status }),
+      });
+      window.location.reload();
+    } catch {
+      // network / action error — leave current UI in place
     }
-    await fetch("/api/config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, status }),
-    });
-    window.location.reload();
   };
 
   if (loading) {

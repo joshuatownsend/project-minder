@@ -5,6 +5,7 @@ import {
   useContext,
   useState,
   useEffect,
+  useCallback,
   type ReactNode,
 } from "react";
 import type { MinderConfig } from "@/lib/types";
@@ -12,22 +13,44 @@ import { effectiveShortcuts, type ShortcutActionId } from "@/lib/keyboardShortcu
 import { getFlag } from "@/lib/featureFlags";
 
 const ConfigContext = createContext<MinderConfig | null>(null);
+const ConfigRefreshContext = createContext<() => void>(() => {});
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<MinderConfig | null>(null);
 
-  useEffect(() => {
+  // Exposed via `useConfigRefresh` so a mutation elsewhere in the SPA (e.g. the
+  // Settings page toggling a feature flag) can re-pull this snapshot. Without
+  // it, the provider fetched once on mount and every flag read through it
+  // (`useServerActionsEnabled`, `useEffectiveShortcuts`, …) stayed stale until a
+  // hard reload.
+  const refresh = useCallback(() => {
     fetch("/api/config")
       .then((r) => r.json())
       .then((d: MinderConfig) => setConfig(d))
       .catch(() => {});
   }, []);
 
-  return <ConfigContext.Provider value={config}>{children}</ConfigContext.Provider>;
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return (
+    <ConfigContext.Provider value={config}>
+      <ConfigRefreshContext.Provider value={refresh}>
+        {children}
+      </ConfigRefreshContext.Provider>
+    </ConfigContext.Provider>
+  );
 }
 
 export function useConfig(): MinderConfig | null {
   return useContext(ConfigContext);
+}
+
+/** Re-pull the global config snapshot. Call after mutating config elsewhere in
+ *  the SPA so provider-backed reads (flags, shortcuts) don't go stale. */
+export function useConfigRefresh(): () => void {
+  return useContext(ConfigRefreshContext);
 }
 
 export function useEffectiveShortcuts(): Record<ShortcutActionId, string> {
