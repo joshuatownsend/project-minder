@@ -27,6 +27,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "githubActivity",
   "rscHydration",
   "serverActions",
+  "liveEvents",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -240,6 +241,18 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     label: "Server Actions for mutations",
     description:
       "Routes the two live writes (toggle a manual step, change a project's status) through Next.js Server Actions instead of POST/PUT API routes. Same result, one fewer client fetch hop, and the project-status change no longer forces a full page reload. Opt-in: defaults OFF (the fetch/route path is the fallback).",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
+    // Opt-in: client callers read getFlag(..., false), so the Settings toggle
+    // must default OFF too or it would show enabled while the feature is off.
+    defaultOn: false,
+  },
+  {
+    key: "liveEvents",
+    label: "Live updates (SSE)",
+    description:
+      "Opens one Server-Sent Events stream (/api/events) that pushes 'data changed' signals so pages refresh in real time instead of on a timer (e.g. the sessions list drops its 15s poll). Opt-in: defaults OFF (pages poll/refetch as before).",
     group: "active",
     appliesAt: "ui",
     wired: true,
