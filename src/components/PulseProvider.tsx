@@ -229,6 +229,12 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      // Release the single-flight guard so the re-run (e.g. when `liveEvents`
+      // flips true once /api/config resolves) can immediately prime a fresh
+      // poll — otherwise the in-flight request this effect started resolves as
+      // `cancelled` (no state applied) while the new effect's prime is blocked,
+      // leaving the chrome on the all-zero snapshot until the fallback timer.
+      inFlightRef.current = false;
       clearInterval(intervalId);
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibility);

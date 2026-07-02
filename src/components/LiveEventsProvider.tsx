@@ -87,7 +87,12 @@ export function useLiveEvent(type: MinderEventType, handler: () => void): void {
   const subscribe = useContext(LiveEventsContext);
   const enabled = useLiveEventsEnabled();
   const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  // Keep the ref current in an effect (never during render — the react-hooks
+  // rule forbids ref access in the render body) so the stable subscription
+  // always invokes the latest handler.
+  useEffect(() => {
+    handlerRef.current = handler;
+  });
 
   useEffect(() => {
     if (!enabled) return;

@@ -33,7 +33,18 @@ export function useGitDirtyStatus() {
   const [pending, setPending] = useState(0);
   const liveEvents = useLiveEventsEnabled();
   const lastToastAt = useRef(0);
+  // Guards state application against a response that resolves after unmount (or
+  // after an effect is torn down) — replaces the old effect-local `stopped`
+  // check that the pre-refactor `poll` had before its setState calls.
+  const mountedRef = useRef(true);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Fetch + apply once (no scheduling). Returns the payload so the polling
   // fallback can drive its backoff; errors are toasted (cooldown'd) and
@@ -43,6 +54,7 @@ export function useGitDirtyStatus() {
       const res = await fetch("/api/git-status");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: GitStatusResponse = await res.json();
+      if (!mountedRef.current) return data;
       setStatuses(data.statuses);
       setPending(data.pending);
       return data;

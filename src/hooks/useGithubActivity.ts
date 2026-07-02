@@ -34,7 +34,18 @@ export function useGithubActivity() {
   const [pending, setPending] = useState(0);
   const liveEvents = useLiveEventsEnabled();
   const lastToastAt = useRef(0);
+  // Guards state application against a response that resolves after unmount (or
+  // after an effect is torn down) — replaces the old effect-local `stopped`
+  // check that the pre-refactor `poll` had before its setState calls.
+  const mountedRef = useRef(true);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Fetch + apply once (no scheduling). Returns the payload so the polling
   // fallback can drive its backoff; errors are toasted (cooldown'd) and
@@ -44,6 +55,7 @@ export function useGithubActivity() {
       const res = await fetch("/api/github-activity");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: GithubActivityResponse = await res.json();
+      if (!mountedRef.current) return data;
       setStatuses(data.statuses);
       setPending(data.pending);
       return data;
