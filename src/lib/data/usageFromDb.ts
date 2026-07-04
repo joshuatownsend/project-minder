@@ -19,7 +19,7 @@ import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { periodSinceIso } from "@/lib/usage/period";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
-import { bucketByHourDay } from "@/lib/usage/activityBuckets";
+import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
 import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 
@@ -126,9 +126,13 @@ export function loadUsageReportFromSql(
   const streak = computeStreaks(activityTurns);
   const contributionCalendar = computeContributionCalendar(activityTurns);
 
+  const subagent = querySubagentTotals(db, filter);
+
   const totalTokens =
     totals.input_tokens + totals.output_tokens + totals.cache_create_tokens + totals.cache_read_tokens;
-  const cacheHitDenominator = totals.cache_read_tokens + totals.input_tokens;
+  // A7: include cache-write tokens in the denominator (matches aggregator.ts).
+  const cacheHitDenominator =
+    totals.cache_read_tokens + totals.input_tokens + totals.cache_create_tokens;
   const cacheHitRate = cacheHitDenominator > 0 ? totals.cache_read_tokens / cacheHitDenominator : 0;
 
   return {
@@ -162,7 +166,35 @@ export function loadUsageReportFromSql(
     streak,
     contributionCalendar,
     bySource,
+    subagentCost: subagent.cost,
+    subagentTokens: subagent.tokens,
   };
+}
+
+/**
+ * A1: subagent (sidechain) spend broken out of the totals. Same period/project/
+ * source filters as `queryTotals`, restricted to `is_sidechain = 1` rows. These
+ * turns are already folded into the headline totals (their rows are counted by
+ * `queryTotals`/`queryByModel`/etc. with no is_sidechain filter); this query
+ * isolates just the subagent portion for the UI breakout.
+ */
+function querySubagentTotals(
+  db: DatabaseT.Database,
+  f: FilterParams
+): { cost: number; tokens: number } {
+  const row = prepCached(db,
+      `SELECT
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_read_tokens + t.cache_create_tokens), 0) AS tokens
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.is_sidechain = 1
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)`
+    )
+    .get(f) as { cost: number; tokens: number };
+  return { cost: row.cost, tokens: row.tokens };
 }
 
 // ── Query helpers ──────────────────────────────────────────────────────────
@@ -334,22 +366,34 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
-  return prepCached(db,
-      `SELECT
-         substr(t.ts, 1, 10)              AS date,
-         COALESCE(SUM(t.cost_usd), 0)     AS cost,
-         COALESCE(SUM(t.input_tokens), 0) AS inputTokens,
-         COALESCE(SUM(t.output_tokens), 0) AS outputTokens,
-         COUNT(*)                         AS turns
+  // A2: bucket by LOCAL calendar date. We CANNOT `GROUP BY substr(t.ts,1,10)`
+  // (UTC) and we don't group in SQL via `date(t.ts,'localtime')` either —
+  // instead we fetch the period-filtered assistant rows and bucket in JS with
+  // the SAME `toLocalDateStr` helper the file-parse aggregator uses. That
+  // guarantees byte-identical dates across both backends (a SQLite localtime
+  // conversion could drift from JS `Date` at tz-db edges). Sidechain rows are
+  // intentionally NOT filtered — subagent spend belongs in the daily chart.
+  const rows = prepCached(db,
+      `SELECT t.ts AS ts, t.cost_usd AS cost, t.input_tokens AS inputTokens, t.output_tokens AS outputTokens
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)
-       GROUP BY date
-       ORDER BY date ASC`
+         AND (@source IS NULL OR s.source = @source)`
     )
-    .all(f) as DailyBucket[];
+    .all(f) as Array<{ ts: string; cost: number; inputTokens: number; outputTokens: number }>;
+
+  const byDay = new Map<string, DailyBucket>();
+  for (const r of rows) {
+    const date = toLocalDateStr(r.ts);
+    const b = byDay.get(date) ?? { date, cost: 0, inputTokens: 0, outputTokens: 0, turns: 0 };
+    b.cost += r.cost;
+    b.inputTokens += r.inputTokens;
+    b.outputTokens += r.outputTokens;
+    b.turns++;
+    byDay.set(date, b);
+  }
+  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number][] {
@@ -415,6 +459,7 @@ function queryActivityTurns(
     `SELECT t.ts AS timestamp, t.cost_usd AS cost
        FROM turns t JOIN sessions s USING (session_id)
       WHERE t.role = 'assistant'
+        AND t.is_sidechain = 0
         AND (@project IS NULL OR s.project_slug = @project)
         AND (@source IS NULL OR s.source = @source)`
   ).all({ project: f.project, source: f.source }) as Array<{ timestamp: string; cost: number }>;
@@ -659,7 +704,8 @@ function queryPeriodSummary(db: DatabaseT.Database, w: WindowParams): PeriodSumm
 
   const tokens =
     a.input_tokens + a.output_tokens + a.cache_create_tokens + a.cache_read_tokens;
-  const cacheHitDenominator = a.cache_read_tokens + a.input_tokens;
+  // A7: include cache-write tokens in the denominator (matches aggregator.ts).
+  const cacheHitDenominator = a.cache_read_tokens + a.input_tokens + a.cache_create_tokens;
   return {
     cost: a.cost_usd,
     tokens,
@@ -730,8 +776,8 @@ export function compareUsageFromSql(
   // regression/improvement. Cache-hit's denominator is (input + cacheRead)
   // tokens; one-shot's is verified tasks. Volume metrics need no guard.
   const cacheBasis =
-    current.inputTokens + current.cacheReadTokens > 0 &&
-    previous.inputTokens + previous.cacheReadTokens > 0;
+    current.inputTokens + current.cacheReadTokens + current.cacheCreateTokens > 0 &&
+    previous.inputTokens + previous.cacheReadTokens + previous.cacheCreateTokens > 0;
   const oneShotBasis = current.verifiedTasks > 0 && previous.verifiedTasks > 0;
 
   return {

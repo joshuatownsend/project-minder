@@ -231,7 +231,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       db,
       `SELECT DISTINCT session_id, model
        FROM turns
-       WHERE role = 'assistant' AND model IS NOT NULL AND model <> '<synthetic>'`
+       WHERE role = 'assistant' AND is_sidechain = 0 AND model IS NOT NULL AND model <> '<synthetic>'`
     ).all() as ModelRow[]
   );
 

@@ -31,6 +31,15 @@ export interface UsageTurn {
   assistantText?: string;
   isError?: boolean;
   turnDurationMs?: number;
+  /**
+   * Text of the user prompt that triggered this assistant turn, propagated
+   * from the preceding user turn by both parser backends. Assistant turns
+   * carry zero `userMessageText` of their own, so intent-based classifier
+   * categories (Debugging/Refactoring/Planning/Brainstorming) can only
+   * attribute a token-bearing assistant turn's cost when the triggering
+   * prompt's text is threaded onto it here. See A3.
+   */
+  userIntentText?: string;
   /** Set when parsed with includeSidechains:true. Maps to the Task tool_use_id that spawned this sidechain. */
   parentToolUseId?: string;
   /** True when this turn belongs to a sidechain (subagent) session. */
@@ -144,6 +153,14 @@ export interface ModelPricing {
   outputCostPerToken: number;
   cacheWriteCostPerToken: number;
   cacheReadCostPerToken: number;
+  /**
+   * Tiered (>200k-context) surcharge rates from LiteLLM's
+   * `input_cost_per_token_above_200k_tokens` / `output_cost_per_token_above_200k_tokens`.
+   * When present, `applyPricing` bills tokens up to 200k at the base rate and
+   * tokens above 200k at this rate. Absent → flat pricing (backward compatible). See A4.
+   */
+  inputCostPerTokenAbove200k?: number;
+  outputCostPerTokenAbove200k?: number;
 }
 
 export interface PortfolioYield {
@@ -324,4 +341,12 @@ export interface UsageReport {
   /** Portfolio-level yield aggregate. Populated by augmentPortfolioYield() on both backends. */
   portfolioYield?: PortfolioYield;
   bySource: SourceBreakdown[];
+  /**
+   * Subagent (Task/sidechain) spend broken out of the headline totals. These
+   * turns' tokens and cost ARE folded into `totalCost`/`totalTokens`/`byModel`/
+   * `byProject`/`daily`/`byCategory`; this pair lets the UI show how much of the
+   * total came from subagents. Both backends populate identically. See A1.
+   */
+  subagentCost: number;
+  subagentTokens: number;
 }

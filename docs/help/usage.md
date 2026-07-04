@@ -18,6 +18,12 @@ Use the period toggle at the top to filter data:
 
 All cost estimates use per-model LiteLLM pricing (fetched from the LiteLLM pricing registry, cached for 24 hours) with built-in fallbacks for Opus, Sonnet, and Haiku. Cost numbers on the Usage page, Sessions list, and Stats page are computed from the same source and should match to within floating-point rounding.
 
+**What's counted:**
+- **Subagent (Task) spend is included.** Tokens and cost from subagent/sidechain turns fold into Total Cost, Total Tokens, and the by-model / by-project / daily / by-category breakdowns. Subagent turns are *not* counted toward tool stats, one-shot rate, or the activity heatmap (a subagent turn isn't a user-verified task or independent developer activity).
+- **Long-context pricing is tiered.** For models with a published >200k surcharge, tokens above the 200k boundary are billed at the higher rate; shorter turns use the flat base rate.
+- **Duplicates are removed.** A message that Claude Code re-logs (retry / resumed-session re-emit) is counted once, keyed by its message id.
+- **Cache Hit Rate** is `cacheRead / (cacheRead + input + cacheWrite)` — cache-write tokens are in the denominator so the rate isn't overstated on cache-write-heavy sessions.
+
 ## Summary Cards
 
 Four key metrics displayed at the top:
@@ -37,7 +43,7 @@ The comparison always uses windows of **equal elapsed length**. For **Today** th
 
 ## Daily Cost Chart
 
-A bar chart showing daily spending across the selected period. Hover over bars to see exact cost, turn count, and token totals for each day.
+A bar chart showing daily spending across the selected period. Hover over bars to see exact cost, turn count, and token totals for each day. Days are bucketed by your **local** calendar date, so the daily bars, the "Today" total, and the contribution calendar all agree.
 
 ## Breakdown Charts
 

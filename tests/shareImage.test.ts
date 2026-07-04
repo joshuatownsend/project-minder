@@ -36,6 +36,8 @@ function makeReport(overrides: Partial<UsageReport> = {}): UsageReport {
     streak: { currentDays: 7, longestDays: 21, lastActiveDate: "2026-05-09", totalActiveDays: 42 },
     contributionCalendar: [],
     bySource: [],
+    subagentCost: 0,
+    subagentTokens: 0,
     ...overrides,
   };
 }

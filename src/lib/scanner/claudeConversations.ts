@@ -162,6 +162,12 @@ async function scanSessionFile(
     let searchLen = 0;
     // Collect one-shot detection data during the same pass
     const lightTurns: UsageTurn[] = [];
+    // A3: propagate the most-recent primary user prompt onto following assistant
+    // turns so `classifyTurn` attributes intent — mirrors the DB ingest path so
+    // the per-session workMode (and any category-derived view) agrees across
+    // backends. Only primary (non-sidechain) user turns move the intent; the
+    // whole lightTurns block below is already gated on `!entry.isSidechain`.
+    let prevUserText: string | undefined;
 
     for (const line of lines) {
       try {
@@ -272,6 +278,15 @@ async function scanSessionFile(
                 }
               }
             }
+            // A3 intent tracking — same source selection as the DB ingest path
+            // (`message.content` if present, else top-level `content`; raw string
+            // or array-extracted text), so both backends classify identically.
+            const uMsg: unknown = entry.message?.content ?? [];
+            const uTop: unknown = entry.content ?? [];
+            const uMsgLen = typeof uMsg === "string" ? uMsg.length : Array.isArray(uMsg) ? uMsg.length : 0;
+            const uSource = uMsgLen > 0 ? uMsg : uTop;
+            const uText = typeof uSource === "string" ? uSource : extractTextContent(uSource as any[]);
+            if (uText) prevUserText = uText.slice(0, 500); // matches parser/ingest cap
           }
 
           // Token fields populated for assistant turns (used by
@@ -296,6 +311,9 @@ async function scanSessionFile(
             toolCalls: turnToolCalls,
             toolResultText: toolResultText.slice(0, 2000),
             isError: turnIsError,
+            // A3: only meaningful on assistant turns (classifyTurn reads it);
+            // harmless on user turns, whose category is never consumed.
+            userIntentText: entry.type === "assistant" ? prevUserText : undefined,
           });
         }
       } catch {
