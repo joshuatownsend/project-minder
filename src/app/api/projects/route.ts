@@ -49,7 +49,7 @@ function enrichAndEnqueue(
   projects: {
     slug: string;
     path: string;
-    git?: { isDirty: boolean; uncommittedCount: number; remoteUrl?: string };
+    git?: { isDirty: boolean; uncommittedCount: number; unknown?: boolean; remoteUrl?: string };
     claude?: { sessionCount: number };
   }[],
   flags: MinderConfig["featureFlags"]
@@ -63,6 +63,7 @@ function enrichAndEnqueue(
       if (cached) {
         p.git.isDirty = cached.isDirty;
         p.git.uncommittedCount = cached.uncommittedCount;
+        p.git.unknown = cached.unknown;
       } else {
         toEnqueueGit.push({ slug: p.slug, path: p.path });
       }

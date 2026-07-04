@@ -197,6 +197,12 @@ describe("parseBoardMd — tolerance of hand edits", () => {
     expect(second.detail).toBeUndefined();
   });
 
+  it("treats a single leading tab as sufficient indentation for a detail line (B8)", () => {
+    const md = "## Epic: E ^e-1\n- [ ] do it ^i-1\n\tsingle-tab detail\n";
+    const board = parseBoardMd(md)!;
+    expect(board.epics[0].issues[0].detail).toBe("single-tab detail");
+  });
+
   it("does not bleed detail across a blank line", () => {
     const md = `## Epic: E ^e-1
 - [ ] item ^i-1

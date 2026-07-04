@@ -86,7 +86,12 @@ function parseDatabaseUrl(url: string): DatabaseInfo | undefined {
 
 export async function scanEnvFiles(projectPath: string): Promise<EnvResult> {
   const result: EnvResult = { externalServices: [] };
-  const envFiles = [".env", ".env.local", ".env.example", ".env.development"];
+  // Only files that hold REAL configuration feed DATABASE_URL/service
+  // detection. Example/template files (.env.example, .env.sample,
+  // .env.template) are documentation with placeholder values — if a project
+  // has no real .env, its .env.example's dummy DATABASE_URL/keys must not
+  // masquerade as the project's actual infrastructure (B7).
+  const envFiles = [".env", ".env.local", ".env.development"];
   const allKeys = new Set<string>();
 
   for (const envFile of envFiles) {

@@ -122,9 +122,33 @@ export function getBinPath(projectPath: string, binName: string): string {
  * Normalizes a filesystem path to forward slashes.
  * Used for consistent Map key comparison — forward slashes work on all
  * platforms in Node.js, and Claude Code's history.jsonl uses them on Unix.
+ *
+ * NOTE: this does NOT lowercase — it's also used for display. For
+ * case-insensitive Map keying (Windows drive letters/segments can differ in
+ * case between what Claude Code recorded and what the scanner sees), use
+ * `normalizePathKey` instead.
  */
 export function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
+}
+
+/**
+ * Case-insensitive variant of `normalizePath`, for Map/Set keys that compare
+ * paths recorded by different sources (e.g. Claude Code's history.jsonl vs.
+ * a freshly-scanned directory). Windows paths are case-insensitive on disk
+ * but `normalizePath` alone doesn't account for that, so a `C:` vs `c:` or
+ * `Foo` vs `foo` mismatch silently misses lookups (see B1). Never use this
+ * for display — only as a comparison/lookup key.
+ */
+export function normalizePathKey(p: string): string {
+  const normalized = normalizePath(p);
+  // Only fold case on case-insensitive filesystems (Windows). On POSIX,
+  // `/home/me/foo` and `/home/me/Foo` are DIFFERENT directories, so
+  // lowercasing would merge distinct projects and misattribute their sessions
+  // (PR #251 review). The B1 mismatch this guards against — a history.jsonl
+  // drive-letter/segment casing differing from the scanned dir — is a Windows
+  // concern to begin with.
+  return isWindows ? normalized.toLowerCase() : normalized;
 }
 
 /**

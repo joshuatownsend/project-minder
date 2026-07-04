@@ -9,6 +9,9 @@ interface DirtyStatus {
   isDirty: boolean;
   uncommittedCount: number;
   checkedAt: number;
+  /** A failed git check (index.lock/timeout/git-missing) rather than a
+   *  confirmed-clean repo — threaded onto the card so it isn't shown clean. */
+  unknown?: boolean;
 }
 
 interface GitStatusResponse {

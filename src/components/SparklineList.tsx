@@ -357,6 +357,14 @@ export function SparklineList({ projects, activityData, pinnedSlugs, onTogglePin
                               +{project.git.uncommittedCount}
                             </span>
                           )}
+                          {!project.git.isDirty && project.git.unknown && (
+                            <span
+                              title="git status unavailable (check failed) — not confirmed clean"
+                              style={{ marginLeft: "4px", color: "var(--text-muted)" }}
+                            >
+                              ?
+                            </span>
+                          )}
                         </span>
                       ) : (
                         <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>—</span>

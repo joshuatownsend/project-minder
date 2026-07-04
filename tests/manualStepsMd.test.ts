@@ -120,6 +120,30 @@ describe("parseManualStepsMd", () => {
     expect(result.entries[0].steps[1].lineNumber).toBe(4);
   });
 
+  it("surfaces steps under a non-conforming ## header via a synthetic container entry (B8)", () => {
+    const md = `## Random Notes
+
+- [ ] Do the thing
+- [x] Did the other thing
+
+## 2026-04-10 | real | Real Entry
+
+- [ ] This is real
+
+---
+`;
+    const result = parseManualStepsMd(md);
+    // Previously the steps under "## Random Notes" hit \`if (!currentEntry)
+    // continue\` and vanished entirely. Now they surface under a synthetic
+    // container entry instead of being dropped.
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0].title).toBe("Random Notes");
+    expect(result.entries[0].steps).toHaveLength(2);
+    expect(result.entries[0].steps[0].text).toBe("Do the thing");
+    expect(result.totalSteps).toBe(3);
+    expect(result.entries[1].title).toBe("Real Entry");
+  });
+
   it("ignores content before any header", () => {
     const md = `# Manual Steps
 

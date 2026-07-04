@@ -30,8 +30,10 @@ export async function GET(
     const dirty = await scanGitDirtyStatus(project.path);
     project.git.isDirty = dirty.isDirty;
     project.git.uncommittedCount = dirty.uncommittedCount;
+    // Surface a failed git check as unknown, not as a confirmed-clean repo.
+    project.git.unknown = dirty.unknown;
     // Update background cache so it doesn't re-check this project
-    gitStatusCache.set(project.slug, dirty.isDirty, dirty.uncommittedCount);
+    gitStatusCache.set(project.slug, dirty.isDirty, dirty.uncommittedCount, dirty.unknown);
   }
 
   // GitHub activity (Portfolio Command Deck — Phase 4): default-on. The LIST

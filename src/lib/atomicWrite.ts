@@ -39,7 +39,13 @@ const fileLocks = new Map<string, Promise<unknown>>();
 const heldLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const normalized = path.resolve(filePath);
+  const resolved = path.resolve(filePath);
+  // Windows filesystems are case-insensitive, but path.resolve() doesn't
+  // normalize case — two differently-cased paths to the SAME file would
+  // otherwise get two different mutexes, defeating the lock entirely (a
+  // lost-update race, B9). POSIX filesystems are case-sensitive, so leave
+  // the key as-is there.
+  const normalized = process.platform === "win32" ? resolved.toLowerCase() : resolved;
   const heldByMe = heldLocks.getStore();
   if (heldByMe?.has(normalized)) {
     // Re-entrant acquisition in the same async chain — run inline; the

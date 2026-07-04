@@ -13,6 +13,28 @@ export async function runGit(args: string[], cwd: string): Promise<string> {
   }
 }
 
+export interface GitExecResult {
+  ok: boolean;
+  stdout: string;
+}
+
+/**
+ * Like `runGit`, but distinguishes an execution failure (non-zero exit,
+ * timeout, git missing) from a successful call that produced no output.
+ * `runGit` collapses both to `""`, which is fine for existence-style checks
+ * ("does this ref exist?") but wrong for callers where "no output" is
+ * itself meaningful — e.g. `git status --porcelain` returning "" legitimately
+ * means "clean", but a failed exec must NOT be reported as clean (B5).
+ */
+export async function runGitChecked(args: string[], cwd: string): Promise<GitExecResult> {
+  try {
+    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 2000 });
+    return { ok: true, stdout: stdout.trim() };
+  } catch {
+    return { ok: false, stdout: "" };
+  }
+}
+
 /**
  * Long-running git wrapper. `git log` over thousands of commits on
  * long-lived repos blows past the 2 s default in `runGit` and the 1 MB
@@ -108,8 +130,16 @@ export async function readBranchCommits(
 export async function scanGit(projectPath: string): Promise<GitInfo | undefined> {
   // Use a single git command to get branch + last commit info
   // Avoid `git status` entirely — it's extremely slow on Windows with many repos
-  const branch = await runGit(["branch", "--show-current"], projectPath);
-  if (!branch) return undefined;
+  let branch = await runGit(["branch", "--show-current"], projectPath);
+  if (!branch) {
+    // `branch --show-current` returns "" for detached HEAD (and for a repo
+    // with zero commits). Previously this discarded the entire GitInfo block
+    // — commit date/message/remote — for a perfectly valid repo (B4). Fall
+    // back to a short SHA as the branch label so it keeps populating.
+    const shortSha = await runGit(["rev-parse", "--short", "HEAD"], projectPath);
+    if (!shortSha) return undefined; // not a git repo, or no commits at all
+    branch = shortSha;
+  }
 
   const logLine = await runGit(
     ["log", "-1", "--format=%aI|||%s"],
@@ -170,11 +200,28 @@ export function filterCommitsInInterval(
   });
 }
 
+export interface GitDirtyStatus {
+  isDirty: boolean;
+  uncommittedCount: number;
+  /**
+   * True when the `git status --porcelain` invocation itself failed
+   * (index.lock, timeout, git missing) rather than succeeding with no
+   * output. Distinguishes "we don't know" from "confirmed clean" (B5) —
+   * callers should treat this as an unknown/error state, not render it as
+   * a clean repo.
+   */
+  unknown?: boolean;
+}
+
 export async function scanGitDirtyStatus(
   projectPath: string
-): Promise<{ isDirty: boolean; uncommittedCount: number }> {
-  const porcelain = await runGit(["status", "--porcelain"], projectPath);
-  if (!porcelain) return { isDirty: false, uncommittedCount: 0 };
-  const lines = porcelain.split("\n").filter((l) => l.trim());
+): Promise<GitDirtyStatus> {
+  const result = await runGitChecked(["status", "--porcelain"], projectPath);
+  if (!result.ok) {
+    // Exec failure — surface as unknown, NOT as clean.
+    return { isDirty: false, uncommittedCount: 0, unknown: true };
+  }
+  if (!result.stdout) return { isDirty: false, uncommittedCount: 0 };
+  const lines = result.stdout.split("\n").filter((l) => l.trim());
   return { isDirty: lines.length > 0, uncommittedCount: lines.length };
 }

@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   manualStepEntryKey,
   diffNewManualStepEntries,
+  shouldHandleWatchEvent,
 } from "@/lib/manualStepsWatcher";
 import { ManualStepEntry } from "@/lib/types";
 
@@ -92,5 +93,26 @@ describe("diffNewManualStepEntries", () => {
     const seen = seenFrom([a, b]);
     const { newEntries } = diffNewManualStepEntries(seen, [b, a]);
     expect(newEntries).toHaveLength(0);
+  });
+});
+
+describe("shouldHandleWatchEvent — parent-dir watch filtering (B3)", () => {
+  const target = "MANUAL_STEPS.md";
+
+  it("fires for an event matching the exact target filename", () => {
+    expect(shouldHandleWatchEvent(target, target)).toBe(true);
+  });
+
+  it("ignores events for other files in the same directory", () => {
+    expect(shouldHandleWatchEvent("TODO.md", target)).toBe(false);
+    expect(shouldHandleWatchEvent("INSIGHTS.md", target)).toBe(false);
+  });
+
+  it("ignores the writer's own atomic-write tmp file (different name than the target)", () => {
+    expect(shouldHandleWatchEvent("MANUAL_STEPS.md.tmp.1234.ab12cd", target)).toBe(false);
+  });
+
+  it("fires when the platform doesn't supply a filename (better to over-fire than miss a change)", () => {
+    expect(shouldHandleWatchEvent(null, target)).toBe(true);
   });
 });

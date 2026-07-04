@@ -49,7 +49,7 @@ export function registerGitTools(server: McpServer): void {
         if (!project) return errorResult(`No project with slug '${slug}'.`);
         try {
           const status = await scanGitDirtyStatus(project.path);
-          gitStatusCache.set(slug, status.isDirty, status.uncommittedCount);
+          gitStatusCache.set(slug, status.isDirty, status.uncommittedCount, status.unknown);
           return jsonResult({ slug, status });
         } catch (err) {
           return errorResult(`git status failed: ${(err as Error).message}`);

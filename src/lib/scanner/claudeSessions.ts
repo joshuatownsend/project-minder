@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
-import { normalizePath } from "../platform";
+import { normalizePathKey, isWindows } from "../platform";
 import { encodePath, type ConversationEntry } from "./claudeConversations";
 import { inferSessionStatus } from "./sessionStatus";
 import type { SessionStatus } from "../types";
@@ -44,7 +44,11 @@ async function getHistoryByProject(): Promise<Map<string, HistoryEntry[]>> {
       try {
         const entry = JSON.parse(line) as HistoryEntry;
         if (entry.project) {
-          const key = normalizePath(entry.project);
+          // Lowercased key: Windows drive-letter/segment casing recorded in
+          // history.jsonl can differ from the scanner's casing (B1) — a
+          // plain normalizePath() would miss the lookup and silently blank
+          // sessionCount/lastPrompt/lastSessionDate for the project.
+          const key = normalizePathKey(entry.project);
           const list = map.get(key) || [];
           list.push(entry);
           map.set(key, list);
@@ -92,7 +96,7 @@ export async function scanClaudeSessions(
   projectPath: string
 ): Promise<ClaudeSessionResult> {
   const result: ClaudeSessionResult = { sessionCount: 0 };
-  const normalizedPath = normalizePath(projectPath);
+  const normalizedPath = normalizePathKey(projectPath);
 
   const historyMap = await getHistoryByProject();
   const projectEntries = historyMap.get(normalizedPath) || [];
@@ -103,10 +107,17 @@ export async function scanClaudeSessions(
   const parentEncoded = encodePath(projectPath);
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
   const allDirs = cachedWorktreeDirs ?? [];
+  // Case-fold the startsWith comparison only on Windows — the on-disk dir name
+  // is encoded from whatever cwd casing was active during that Claude Code
+  // session, which can differ from the freshly-encoded parentEncoded (B1). On
+  // POSIX, encoded dir names differing only by case are different projects, so
+  // fold nothing there (PR #251 review).
+  const fold = (s: string): string => (isWindows ? s.toLowerCase() : s);
+  const parentEncodedFolded = fold(parentEncoded);
   let worktreeSessionCount = 0;
   for (const d of allDirs) {
     const suffix = d.slice(parentEncoded.length);
-    if (d.startsWith(parentEncoded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
+    if (fold(d).startsWith(parentEncodedFolded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
       try {
         const entries = await fs.readdir(path.join(projectsDir, d));
         worktreeSessionCount += entries.filter((e) => e.endsWith(".jsonl")).length;
