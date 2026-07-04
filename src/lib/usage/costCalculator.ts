@@ -260,21 +260,38 @@ export interface TokenCounts {
  * and the SQLite ingest path. Both must produce identical numbers when
  * P2b switches the read side over.
  */
+/** Prompt-size threshold that selects the long-context pricing tier. */
+const TIER_BOUNDARY = 200_000;
+
 export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number {
+  // Long-context pricing is a per-request TIER selected by prompt size, NOT a
+  // marginal per-bucket split. LiteLLM/Anthropic switch the rates based on the
+  // request's input (prompt) size: once it exceeds 200k, the ENTIRE request's
+  // input AND output are billed at the above-200k rates (A4). An earlier
+  // version split each bucket at 200k and left output at the base rate, which
+  // undercharged a 250k-input/short-output call vs provider billing.
+  // Cache tokens stay at their base rate — ModelPricing doesn't carry
+  // cache above-200k rates today.
+  const longContext =
+    tokens.inputTokens > TIER_BOUNDARY &&
+    (pricing.inputCostPerTokenAbove200k !== undefined ||
+      pricing.outputCostPerTokenAbove200k !== undefined);
+
+  const inputRate =
+    longContext && pricing.inputCostPerTokenAbove200k !== undefined
+      ? pricing.inputCostPerTokenAbove200k
+      : pricing.inputCostPerToken;
+  const outputRate =
+    longContext && pricing.outputCostPerTokenAbove200k !== undefined
+      ? pricing.outputCostPerTokenAbove200k
+      : pricing.outputCostPerToken;
+
   return (
-    tieredTokenCost(tokens.inputTokens, pricing.inputCostPerToken, pricing.inputCostPerTokenAbove200k) +
-    tieredTokenCost(tokens.outputTokens, pricing.outputCostPerToken, pricing.outputCostPerTokenAbove200k) +
+    tokens.inputTokens * inputRate +
+    tokens.outputTokens * outputRate +
     tokens.cacheCreateTokens * pricing.cacheWriteCostPerToken +
     tokens.cacheReadTokens * pricing.cacheReadCostPerToken
   );
-}
-
-/** Tokens up to the 200k boundary at `baseRate`; tokens beyond it at
- *  `aboveRate` when a tier is defined, else flat. See A4. */
-const TIER_BOUNDARY = 200_000;
-function tieredTokenCost(count: number, baseRate: number, aboveRate?: number): number {
-  if (aboveRate === undefined || count <= TIER_BOUNDARY) return count * baseRate;
-  return TIER_BOUNDARY * baseRate + (count - TIER_BOUNDARY) * aboveRate;
 }
 
 /**

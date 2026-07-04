@@ -200,15 +200,28 @@ describe("A4 — tiered >200k pricing", () => {
     outputCostPerTokenAbove200k: 0.0000225,
   };
 
-  it("splits input cost at the 200k boundary", () => {
+  it("bills the whole request at the above-200k rates once input exceeds 200k", () => {
+    // Per-request tier, not a marginal split: a 250k-input/10k-output call bills
+    // ALL input AND output at the above-200k rates (matches LiteLLM/provider).
     const cost = applyPricing(tiered, {
-      inputTokens: 300_000,
-      outputTokens: 0,
+      inputTokens: 250_000,
+      outputTokens: 10_000,
       cacheCreateTokens: 0,
       cacheReadTokens: 0,
     });
-    // 200k @ base + 100k @ surcharge
-    const expected = 200_000 * 0.000003 + 100_000 * 0.000006;
+    const expected = 250_000 * 0.000006 + 10_000 * 0.0000225;
+    expect(cost).toBeCloseTo(expected, 8);
+  });
+
+  it("uses base rates when input is at or below 200k", () => {
+    // 200k input (not over the boundary) + 50k output → everything at base.
+    const cost = applyPricing(tiered, {
+      inputTokens: 200_000,
+      outputTokens: 50_000,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 0,
+    });
+    const expected = 200_000 * 0.000003 + 50_000 * 0.000015;
     expect(cost).toBeCloseTo(expected, 8);
   });
 
