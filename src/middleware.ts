@@ -32,11 +32,13 @@ import { NextRequest, NextResponse } from "next/server";
 //      (dev-server start/stop, board mutations, widening `devRoots`, etc).
 //      Browsers always attach an `Origin` header to cross-origin
 //      fetch/XHR — page JS cannot suppress it — so we require it to match
-//      the same host allowlist. This applies to GET/HEAD too: a GET exemption
-//      would assume reads are side-effect-free, but some GET routes mutate
-//      (e.g. /api/tasks and /api/swarms start the dispatcher via
-//      initDispatcher()), and this dashboard is same-origin-only, so a
-//      cross-origin browser request is never legitimate regardless of method.
+//      the same host allowlist. This applies to GET/HEAD too: this dashboard
+//      is same-origin-only, so a cross-origin browser fetch/XHR is never
+//      legitimate regardless of method. This only catches requests that CARRY
+//      an Origin (scripted fetch/XHR); an origin-less cross-site GET (e.g. an
+//      `<img>` subresource) still passes, so side-effecting GETs were ALSO
+//      removed at the source — the task dispatcher now starts at server boot
+//      (instrumentation-node.ts), not on a GET to /api/tasks or /api/swarms.
 //
 //      If `Origin` is ABSENT, the request is allowed through this second
 //      check (the Host check above still applies to it). Browser-driven
@@ -118,12 +120,12 @@ export function evaluateRequest({
   }
 
   // Layer 2 — Origin allowlist, applied to ALL methods (including GET/HEAD).
-  // A GET exemption would rest on "reads can't mutate state," but that's false
-  // here: several GET routes have side effects — e.g. /api/tasks and
-  // /api/swarms call initDispatcher(), starting the background task dispatcher
-  // — so a cross-site scripted GET is a real CSRF vector. This dashboard is
-  // same-origin-only, so a cross-origin browser fetch/XHR (which always carries
-  // an Origin) is never legitimate regardless of method — block it.
+  // This dashboard is same-origin-only, so a cross-origin browser fetch/XHR
+  // (which always carries an Origin) is never legitimate regardless of method —
+  // block it. This catches scripted cross-origin requests; it does NOT stop an
+  // origin-less cross-site GET (an `<img>` subresource sends no Origin), so
+  // side-effecting GETs are removed at the source instead (the task dispatcher
+  // starts at boot, not on a GET). Applying the check to GET is defense-in-depth.
   if (!origin) {
     // Absent Origin ⇒ not a browser fetch/XHR (those always send it). Allow:
     // same-origin GETs frequently omit Origin, and non-browser callers (curl,

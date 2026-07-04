@@ -8,7 +8,10 @@ import { initDispatcher } from "@/lib/tasks/dispatcher";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<NextResponse> {
-  initDispatcher();
+  // No initDispatcher() here: GET is read-only. Starting the dispatcher (which
+  // claims pending tasks and spawns work) from a GET made it CSRF-reachable via
+  // an origin-less cross-site request. The dispatcher now starts at server boot
+  // (instrumentation-node.ts) and on task creation (POST below).
   try {
     const url = new URL(request.url);
     const filter: TaskListFilter = {};
