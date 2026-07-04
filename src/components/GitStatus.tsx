@@ -14,6 +14,15 @@ export function GitStatus({ git }: { git: GitInfo }) {
             {git.uncommittedCount} uncommitted
           </span>
         )}
+        {!git.isDirty && git.unknown && (
+          <span
+            className="flex items-center gap-1 text-[var(--muted-foreground)]"
+            title="git status check failed (index.lock, timeout, or git missing) — not a confirmed-clean repo"
+          >
+            <AlertCircle className="h-3 w-3" />
+            status unavailable
+          </span>
+        )}
       </div>
       {git.lastCommitDate && (
         <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
@@ -67,6 +76,19 @@ export function GitStatusCompact({ git }: { git: GitInfo }) {
           }}
         >
           +{git.uncommittedCount}
+        </span>
+      )}
+      {!git.isDirty && git.unknown && (
+        <span
+          title="git status unavailable (check failed) — not confirmed clean"
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontWeight: 600,
+            color: "var(--text-muted)",
+            fontSize: "0.68rem",
+          }}
+        >
+          ?
         </span>
       )}
       {git.lastCommitDate && (

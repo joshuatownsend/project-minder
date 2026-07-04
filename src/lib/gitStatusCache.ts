@@ -104,9 +104,13 @@ class GitStatusCache {
     return result;
   }
 
-  /** Update cache from an on-demand check (detail page). */
-  set(slug: string, isDirty: boolean, uncommittedCount: number) {
-    this.cache.set(slug, { isDirty, uncommittedCount, checkedAt: Date.now() });
+  /** Update cache from an on-demand check (detail page / MCP refresh tool).
+   *  `unknown` MUST be threaded through: a failed git invocation returns
+   *  isDirty:false/count:0, so without recording `unknown` the cache would
+   *  store an exec failure as indistinguishable from a confirmed-clean repo
+   *  (B5 / PR #251 review). */
+  set(slug: string, isDirty: boolean, uncommittedCount: number, unknown?: boolean) {
+    this.cache.set(slug, { isDirty, uncommittedCount, unknown, checkedAt: Date.now() });
   }
 
   get pending(): number {

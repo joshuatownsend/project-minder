@@ -299,6 +299,10 @@ export interface GitInfo {
   lastCommitMessage?: string;
   isDirty: boolean;
   uncommittedCount: number;
+  /** True when the git dirty-status check itself failed (index.lock, timeout,
+   *  git missing) rather than succeeding with a clean tree — so the UI can show
+   *  "status unavailable" instead of rendering a failure as a clean repo (B5). */
+  unknown?: boolean;
   remoteUrl?: string;
 }
 

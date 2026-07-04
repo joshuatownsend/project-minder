@@ -34,6 +34,32 @@ describe("normalizePath", () => {
   });
 });
 
+describe("normalizePathKey — case folding gated to Windows", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.resetModules();
+  });
+
+  it("lowercases on win32 (case-insensitive filesystem)", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.resetModules();
+    const { normalizePathKey } = await import("@/lib/platform");
+    expect(normalizePathKey("C:\\Dev\\MyApp")).toBe("c:/dev/myapp");
+  });
+
+  it("preserves case on POSIX (case-sensitive filesystem)", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    vi.resetModules();
+    const { normalizePathKey } = await import("@/lib/platform");
+    // /home/me/Foo and /home/me/foo are DIFFERENT directories — folding them
+    // would merge distinct projects and misattribute their sessions (B1 fix
+    // must not apply on POSIX).
+    expect(normalizePathKey("/home/me/Foo")).toBe("/home/me/Foo");
+    expect(normalizePathKey("/home/me/Foo")).not.toBe(normalizePathKey("/home/me/foo"));
+  });
+});
+
 describe("decodeDirName", () => {
   it("decodes Windows format: C--dev-project-minder (lossy — hyphens in name become backslashes)", async () => {
     const { decodeDirName } = await import("@/lib/platform");

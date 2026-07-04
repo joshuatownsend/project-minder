@@ -28,6 +28,23 @@ async function flushAsync() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+describe("gitStatusCache.set() — persists the unknown flag (B5 / PR #251)", () => {
+  it("records unknown so an on-demand failed check isn't cached as confirmed-clean", async () => {
+    const { gitStatusCache } = await import("@/lib/gitStatusCache");
+    gitStatusCache.dispose();
+
+    // A failed git check surfaces isDirty:false/count:0 but unknown:true.
+    gitStatusCache.set("failed-repo", false, 0, true);
+    const failed = gitStatusCache.get("failed-repo");
+    expect(failed?.unknown).toBe(true);
+    expect(failed?.isDirty).toBe(false);
+
+    // A genuine clean check leaves unknown falsy — distinguishable from a failure.
+    gitStatusCache.set("clean-repo", false, 0);
+    expect(gitStatusCache.get("clean-repo")?.unknown).toBeFalsy();
+  });
+});
+
 describe("gitStatusCache.dispose() race protection", () => {
   it("drops in-flight batch results that land after dispose()", async () => {
     // Fresh module for each test so the singleton doesn't leak state.

@@ -28,6 +28,7 @@ type ViewMode = "full" | "compact" | "list";
 interface DirtyStatusOverride {
   isDirty: boolean;
   uncommittedCount: number;
+  unknown?: boolean;
 }
 
 interface DashboardGridProps {

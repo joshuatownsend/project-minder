@@ -141,7 +141,14 @@ export function normalizePath(p: string): string {
  * for display — only as a comparison/lookup key.
  */
 export function normalizePathKey(p: string): string {
-  return normalizePath(p).toLowerCase();
+  const normalized = normalizePath(p);
+  // Only fold case on case-insensitive filesystems (Windows). On POSIX,
+  // `/home/me/foo` and `/home/me/Foo` are DIFFERENT directories, so
+  // lowercasing would merge distinct projects and misattribute their sessions
+  // (PR #251 review). The B1 mismatch this guards against — a history.jsonl
+  // drive-letter/segment casing differing from the scanned dir — is a Windows
+  // concern to begin with.
+  return isWindows ? normalized.toLowerCase() : normalized;
 }
 
 /**

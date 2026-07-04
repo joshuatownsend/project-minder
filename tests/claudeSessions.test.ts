@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // scanClaudeSessions reads ~/.claude/history.jsonl and lists
 // ~/.claude/projects/. Mock fs so we control both without touching disk.
@@ -15,11 +15,22 @@ const mockReadFile = vi.mocked(fs.readFile);
 const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
 const mockStat = vi.mocked(fs.stat);
 
+const originalPlatform = process.platform;
+
 describe("scanClaudeSessions — case-insensitive session lookup (B1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    // B1 case-folding is Windows-only (POSIX paths are case-sensitive, so
+    // folding is intentionally off there — PR #251 review). Simulate win32
+    // before the dynamic import below so platform.ts's `isWindows` gate is on
+    // when this runs on a Linux CI runner.
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     mockStat.mockRejectedValue(new Error("ENOENT"));
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
   it("matches a session whose recorded project path differs only in case from the scanned dir", async () => {

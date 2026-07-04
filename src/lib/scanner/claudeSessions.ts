@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
-import { normalizePathKey } from "../platform";
+import { normalizePathKey, isWindows } from "../platform";
 import { encodePath, type ConversationEntry } from "./claudeConversations";
 import { inferSessionStatus } from "./sessionStatus";
 import type { SessionStatus } from "../types";
@@ -107,14 +107,17 @@ export async function scanClaudeSessions(
   const parentEncoded = encodePath(projectPath);
   const projectsDir = path.join(os.homedir(), ".claude", "projects");
   const allDirs = cachedWorktreeDirs ?? [];
-  // Lowercased prefix for the startsWith comparison — the on-disk dir name
+  // Case-fold the startsWith comparison only on Windows — the on-disk dir name
   // is encoded from whatever cwd casing was active during that Claude Code
-  // session, which can differ from the freshly-encoded parentEncoded (B1).
-  const parentEncodedLower = parentEncoded.toLowerCase();
+  // session, which can differ from the freshly-encoded parentEncoded (B1). On
+  // POSIX, encoded dir names differing only by case are different projects, so
+  // fold nothing there (PR #251 review).
+  const fold = (s: string): string => (isWindows ? s.toLowerCase() : s);
+  const parentEncodedFolded = fold(parentEncoded);
   let worktreeSessionCount = 0;
   for (const d of allDirs) {
     const suffix = d.slice(parentEncoded.length);
-    if (d.toLowerCase().startsWith(parentEncodedLower + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
+    if (fold(d).startsWith(parentEncodedFolded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
       try {
         const entries = await fs.readdir(path.join(projectsDir, d));
         worktreeSessionCount += entries.filter((e) => e.endsWith(".jsonl")).length;
