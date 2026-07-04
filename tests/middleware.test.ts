@@ -143,6 +143,21 @@ describe("evaluateRequest", () => {
     expect(result.allow).toBe(true);
   });
 
+  it("blocks a port-less same-host Origin on POST (page served from http://localhost/ on port 80 is a different origin)", () => {
+    // Regression: the allowlist must require :4100 on the Origin. A page at
+    // http://localhost/ (default port 80) can POST to :4100 with a valid Host
+    // header; without the port requirement its Origin (`localhost`) would have
+    // matched a port-less allowlist entry and passed the CSRF check.
+    const result = evaluateRequest({
+      method: "POST",
+      host: ALLOWED_HOST,
+      origin: "http://localhost",
+      pathname: "/api/config",
+    });
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("cross-origin request blocked");
+  });
+
   it("is case-insensitive for the Host header", () => {
     const result = evaluateRequest({
       method: "GET",

@@ -121,6 +121,26 @@ class ProcessManager {
       }
     }
 
+    // S4 (race) — pre-spawn guard. detectDevCommand() and isPortInUse() above
+    // both yield the event loop, so a stop() (or a superseding start()) can
+    // land on the "starting" placeholder we registered before them. stop()
+    // mutates that exact object — the one we still hold as `placeholderInfo` —
+    // flipping its status to "stopped". If we spawned now, the caller who
+    // already received a "stopped" response would be left with a live server
+    // running behind their back. Re-check ownership before committing a child.
+    const entryBeforeSpawn = this.processes.get(slug);
+    if (entryBeforeSpawn?.info !== placeholderInfo) {
+      // A concurrent start() superseded us and owns the slot now — report
+      // whatever it registered rather than spawning a duplicate.
+      return entryBeforeSpawn?.info ?? placeholderInfo;
+    }
+    if (placeholderInfo.status === "stopped") {
+      // A concurrent stop() cancelled us during the awaits above. Clear the
+      // slot so it reads as stopped and don't spawn.
+      this.processes.delete(slug);
+      return placeholderInfo;
+    }
+
     const info: DevServerInfo = {
       slug,
       projectPath,
@@ -180,7 +200,13 @@ class ProcessManager {
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    if (info.status === "starting" && proc.exitCode === null) {
+    // Only promote to "running" if a concurrent stop() didn't remove/replace
+    // our entry (or already flip it to stopped/errored) while we waited.
+    if (
+      this.processes.get(slug)?.info === info &&
+      info.status === "starting" &&
+      proc.exitCode === null
+    ) {
       info.status = "running";
     }
 

@@ -266,6 +266,42 @@ describe("start() concurrency guard (S4)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Suite 2b: stop() during start()'s pre-spawn awaits (S4 race guard)
+// ---------------------------------------------------------------------------
+describe("start()/stop() race — pre-spawn guard", () => {
+  it("does not spawn a server when stop() lands while start() is detecting the command", async () => {
+    // Suspend start() inside detectDevCommand by making the package.json read
+    // hang until we release it — this is the window in which the placeholder
+    // is registered but no real child has spawned yet.
+    let releaseRead!: (value: string) => void;
+    const readGate = new Promise<string>((resolve) => {
+      releaseRead = resolve;
+    });
+    mockReadFile.mockReturnValueOnce(readGate);
+    setupNetMock([false]); // port free, so start() would otherwise spawn
+    mockSpawnDevServer.mockReturnValue(makeFakeProc(222));
+
+    const { processManager } = await import("@/lib/processManager");
+
+    // start() runs synchronously up to the suspended package.json read, so the
+    // "starting" placeholder is already registered when we call stop().
+    const startPromise = processManager.start("racy", "/fake/path");
+    const stopResult = await processManager.stop("racy");
+    expect(stopResult?.status).toBe("stopped");
+
+    // Let start() resume past command detection and hit the pre-spawn guard.
+    releaseRead(JSON.stringify({ scripts: { dev: "next dev --port 4100" } }));
+    const startResult = await startPromise;
+
+    // The guard must have aborted the spawn and surfaced the stopped state,
+    // rather than leaving a live server behind a "stopped" response.
+    expect(mockSpawnDevServer).not.toHaveBeenCalled();
+    expect(startResult.status).toBe("stopped");
+    expect(processManager.get("racy")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Suite 3: restart() polls isPortInUse before starting (fake timers)
 // ---------------------------------------------------------------------------
 describe("restart() polls port before start()", () => {

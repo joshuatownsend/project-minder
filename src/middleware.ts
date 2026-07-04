@@ -52,16 +52,22 @@ import { NextRequest, NextResponse } from "next/server";
 // for no added protection.
 // ---------------------------------------------------------------------------
 
-// Hosts this dashboard is actually served on. Keep in sync with
-// ALLOWED_HOSTS/ALLOWED_ORIGINS in src/lib/mcp/server.ts — if the dev port
-// ever changes from 4100, update both (and docs/help/mcp-server.md) together.
+// Hosts/origins this dashboard is actually served on. Every entry carries the
+// :4100 dev port on purpose. The port is what makes the Origin check
+// trustworthy: 4100 is non-default, so a browser never elides it, and a legit
+// same-origin request always presents `localhost:4100` (not bare `localhost`).
+// Allowing a port-less `localhost` would let a page served from
+// http://localhost/ (port 80 — a *different* origin) pass the Origin check and
+// drive state-changing endpoints (CSRF); requiring the port closes that.
+//
+// This is a superset of ALLOWED_HOSTS/ALLOWED_ORIGINS in src/lib/mcp/server.ts
+// (it adds the IPv6 loopback [::1]:4100); the shared invariant is that only the
+// :4100 entries are trusted. If the dev port ever changes from 4100, update
+// this set, the MCP server's lists, and docs/help/mcp-server.md together.
 const ALLOWED_HOSTS = new Set([
   "localhost:4100",
   "127.0.0.1:4100",
-  "localhost",
-  "127.0.0.1",
   "[::1]:4100",
-  "[::1]",
 ]);
 
 export interface EvaluateInput {

@@ -14,6 +14,17 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
+import path from "path";
+
+// Platform-appropriate scan-root fixtures. `validateProjectPath` in the route
+// uses POSIX `path.resolve`/`path.sep` on Linux CI (ubuntu-latest) and win32
+// semantics on Windows, so a hard-coded `C:\dev\...` fixture only validates on
+// Windows and 403s on CI. Derive both the root and the in/out-of-root paths
+// from the current platform so the success cases resolve consistently on both.
+const ROOT = process.platform === "win32" ? "C:\\dev" : "/dev";
+const INSIDE_ROOT = path.join(ROOT, "my-app");
+const OUTSIDE_ROOT =
+  process.platform === "win32" ? "C:\\other\\outside-root" : "/other/outside-root";
 
 // Mock lib boundaries BEFORE importing the route.
 
@@ -29,19 +40,24 @@ vi.mock("@/lib/processManager", () => ({
   },
 }));
 
-vi.mock("@/lib/config", () => ({
-  readConfig: vi.fn(async () => ({
-    statuses: {},
-    hidden: [],
-    portOverrides: {},
-    devRoot: "C:\\dev",
-    devRoots: ["C:\\dev"],
-    pinnedSlugs: [],
-  })),
-  getDevRoots: vi.fn((config: { devRoots?: string[]; devRoot?: string }) =>
-    config.devRoots ?? [config.devRoot ?? "C:\\dev"]
-  ),
-}));
+vi.mock("@/lib/config", () => {
+  // Hoisted factory — can't reference the module-scope ROOT const, so recompute
+  // the platform-appropriate root here (see the ROOT comment above).
+  const root = process.platform === "win32" ? "C:\\dev" : "/dev";
+  return {
+    readConfig: vi.fn(async () => ({
+      statuses: {},
+      hidden: [],
+      portOverrides: {},
+      devRoot: root,
+      devRoots: [root],
+      pinnedSlugs: [],
+    })),
+    getDevRoots: vi.fn((config: { devRoots?: string[]; devRoot?: string }) =>
+      config.devRoots ?? [config.devRoot ?? root]
+    ),
+  };
+});
 
 import { processManager } from "@/lib/processManager";
 import { POST } from "@/app/api/dev-server/[slug]/route";
@@ -65,11 +81,12 @@ function makePostRequest(
 
 /**
  * Same as makePostRequest, but stubs `.json()` to resolve with the exact
- * object given rather than round-tripping through JSON.stringify/parse.
- * Needed for values JSON can't represent on the wire (e.g. `NaN` serializes
- * to `null`) — this exercises the route's runtime validation directly
- * against the un-representable value, the way a non-JSON.stringify caller
- * (or a hand-crafted request) could still deliver it via a custom client.
+ * object given rather than round-tripping through JSON.stringify/parse. This
+ * is purely a unit-test seam: it lets us hand the route's parsed body a JS
+ * value that JSON can't carry on the wire (e.g. `NaN`, which `JSON.stringify`
+ * turns into `null`), so the route's runtime `isValidPort` guard is exercised
+ * directly against that value. It is not claiming a real HTTP client could
+ * deliver `NaN` — it's isolating the validation branch from the transport.
  */
 function makePostRequestRaw(
   slug: string,
@@ -103,7 +120,7 @@ describe("POST /api/dev-server/[slug]", () => {
   it('returns 403 when action is "start" with a projectPath outside configured roots', async () => {
     const [req, params] = makePostRequest("my-app", {
       action: "start",
-      projectPath: "C:\\other\\outside-root",
+      projectPath: OUTSIDE_ROOT,
     });
 
     const res = await POST(req, params);
@@ -157,7 +174,7 @@ describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
     it(`rejects action:"start" with an invalid port: ${label}`, async () => {
       const [req, params] = makePostRequestRaw("my-app", {
         action: "start",
-        projectPath: "C:\\dev\\my-app",
+        projectPath: INSIDE_ROOT,
         port,
       });
 
@@ -172,7 +189,7 @@ describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
     it(`rejects action:"restart" with an invalid port: ${label}`, async () => {
       const [req, params] = makePostRequestRaw("my-app", {
         action: "restart",
-        projectPath: "C:\\dev\\my-app",
+        projectPath: INSIDE_ROOT,
         port,
       });
 
@@ -188,7 +205,7 @@ describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
   it('accepts action:"start" with a valid port (4100) and passes it through', async () => {
     vi.mocked(processManager.start).mockResolvedValue({
       slug: "my-app",
-      projectPath: "C:\\dev\\my-app",
+      projectPath: INSIDE_ROOT,
       pid: 123,
       port: 4100,
       command: "next dev --port 4100",
@@ -199,20 +216,20 @@ describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
 
     const [req, params] = makePostRequest("my-app", {
       action: "start",
-      projectPath: "C:\\dev\\my-app",
+      projectPath: INSIDE_ROOT,
       port: 4100,
     });
 
     const res = await POST(req, params);
 
     expect(res.status).toBe(200);
-    expect(processManager.start).toHaveBeenCalledWith("my-app", "C:\\dev\\my-app", 4100);
+    expect(processManager.start).toHaveBeenCalledWith("my-app", INSIDE_ROOT, 4100);
   });
 
   it('allows action:"start" with no port at all (undefined passes through)', async () => {
     vi.mocked(processManager.start).mockResolvedValue({
       slug: "my-app",
-      projectPath: "C:\\dev\\my-app",
+      projectPath: INSIDE_ROOT,
       pid: 123,
       command: "next dev --port 3000",
       startedAt: new Date().toISOString(),
@@ -222,12 +239,12 @@ describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
 
     const [req, params] = makePostRequest("my-app", {
       action: "start",
-      projectPath: "C:\\dev\\my-app",
+      projectPath: INSIDE_ROOT,
     });
 
     const res = await POST(req, params);
 
     expect(res.status).toBe(200);
-    expect(processManager.start).toHaveBeenCalledWith("my-app", "C:\\dev\\my-app", undefined);
+    expect(processManager.start).toHaveBeenCalledWith("my-app", INSIDE_ROOT, undefined);
   });
 });
