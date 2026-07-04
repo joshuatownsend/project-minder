@@ -2,6 +2,7 @@ import { walkUserAgents, walkInstalledAgents, walkPluginAgents, walkProjectAgent
 import { walkUserSkills, walkPluginSkills, walkProjectSkills } from "./walkSkills";
 import { loadProvenanceContext } from "./provenance";
 import { getCachedScan } from "@/lib/cache";
+import { readConfig } from "@/lib/config";
 import type { AgentEntry, CatalogResult, SkillEntry } from "./types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -75,16 +76,34 @@ export async function loadCatalog(
     const projects = scan?.projects ?? [];
     hadProjectScan = projects.length > 0;
 
-    await Promise.all(
-      projects.map(async (project) => {
-        const [pAgents, pSkills] = await Promise.all([
-          walkProjectAgents(project.path, project.slug, ctx),
-          walkProjectSkills(project.path, project.slug, ctx),
-        ]);
+    // Walk projects in batches (same batch size the scanner uses for its own
+    // project fan-out — `config.scanBatchSize`, default 10) instead of one
+    // unbounded `Promise.all` over every project. At ~61 projects an
+    // unbounded fan-out opens that many directory walks concurrently and
+    // puts real pressure on the OS's open-fd limit; batching bounds
+    // concurrency to the same figure the scanner already tunes. Results are
+    // collected per-batch and flattened in project order, so output ordering
+    // is deterministic (an improvement over the prior unbounded fan-out,
+    // whose push order depended on filesystem completion timing).
+    const config = await readConfig();
+    const batchSize = Math.max(1, Math.round(config.scanBatchSize ?? 10));
+
+    for (let i = 0; i < projects.length; i += batchSize) {
+      const batch = projects.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async (project) => {
+          const [pAgents, pSkills] = await Promise.all([
+            walkProjectAgents(project.path, project.slug, ctx),
+            walkProjectSkills(project.path, project.slug, ctx),
+          ]);
+          return { pAgents, pSkills };
+        })
+      );
+      for (const { pAgents, pSkills } of batchResults) {
         agents.push(...pAgents);
         skills.push(...pSkills);
-      })
-    );
+      }
+    }
   }
 
   const result: CatalogResult = { agents, skills };

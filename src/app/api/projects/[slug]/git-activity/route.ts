@@ -4,6 +4,7 @@ import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { getProjectGitActivity } from "@/lib/projectGitActivity";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 interface GitActivityResponse {
   slug: string;
@@ -15,20 +16,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheSlot {
   data: GitActivityResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForGitActivity = globalThis as unknown as {
-  __gitActivityCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForGitActivity.__gitActivityCache) {
-    globalForGitActivity.__gitActivityCache = new Map();
-  }
-  return globalForGitActivity.__gitActivityCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("git-activity", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   _request: NextRequest,
@@ -36,10 +27,9 @@ export async function GET(
 ) {
   const { slug } = await params;
   try {
-    const cache = getCache();
     const cached = cache.get(slug);
     const currentMtime = getJsonlMaxMtime();
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime) {
       return NextResponse.json(cached.data);
     }
 
@@ -55,7 +45,7 @@ export async function GET(
 
     const activity = await getProjectGitActivity(slug, project.path);
     const data: GitActivityResponse = { slug, activity, generatedAt: new Date().toISOString() };
-    cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+    cache.set(slug, { data, jsonlMtime: currentMtime });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[git-activity] Error processing slug="${slug}":`, err);

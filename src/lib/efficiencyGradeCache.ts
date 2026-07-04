@@ -1,7 +1,7 @@
 import { parseAllSessions } from "./usage/parser";
 import { loadCatalog } from "./indexer/catalog";
 import { runWasteOptimizer } from "./scanner/wasteOptimizer";
-import { gatherProjectTurns } from "./usage/projectMatch";
+import { buildProjectTurnsIndex, lookupProjectTurns } from "./usage/projectMatch";
 import { getCachedScan } from "./cache";
 import { recordGradeSnapshots, type GradeSnapshotRow } from "./data/gradeSnapshots";
 
@@ -70,6 +70,13 @@ class EfficiencyGradeCache {
       scan?.projects.map((p) => [p.slug, p.mcpServers?.servers ?? []]) ?? []
     );
 
+    // Index the session map once (by projectSlug AND projectDirName — the
+    // same two keys `gatherProjectTurns` matches on) instead of re-scanning
+    // every session per project in the drain loop below. With N projects and
+    // M sessions that turns an O(N × M) full-map re-filter into one O(M)
+    // pass plus O(1) bucket lookups per project (C5).
+    const turnsIndex = buildProjectTurnsIndex(sessionMap);
+
     // Grade + finding-count rows to snapshot once the drain finishes (item
     // 4b). Accumulated across batches and written in one transaction at the
     // end so the per-project loop stays CPU-only.
@@ -88,7 +95,7 @@ class EfficiencyGradeCache {
       for (const item of batch) {
         try {
           const path = projectPathMap.get(item.slug) ?? item.path;
-          const turns = gatherProjectTurns(sessionMap, item.slug, path);
+          const turns = lookupProjectTurns(turnsIndex, item.slug, path);
           const info = runWasteOptimizer({
             turns,
             configuredMcpServers: mcpMap.get(item.slug) ?? [],

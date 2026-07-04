@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadOrchestrationGraph } from "@/lib/usage/orchestrationGraph";
 import type { OrchestrationGraph } from "@/lib/usage/orchestrationGraph";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
-const globalForOrch = globalThis as unknown as {
-  __orchestrationCache?: Map<string, { graph: OrchestrationGraph; expiresAt: number }>;
-};
-
-function getCache() {
-  if (!globalForOrch.__orchestrationCache) {
-    globalForOrch.__orchestrationCache = new Map();
-  }
-  return globalForOrch.__orchestrationCache;
-}
+const cache = getOrCreateRouteCache<OrchestrationGraph>("orchestration", { ttlMs: 60_000 });
 
 export async function GET(
   _request: NextRequest,
@@ -19,22 +11,14 @@ export async function GET(
 ) {
   const { sessionId } = await params;
 
-  const now = Date.now();
-  const cache = getCache();
   const cached = cache.get(sessionId);
-  if (cached && now < cached.expiresAt) {
-    return NextResponse.json(cached.graph);
-  }
+  if (cached) return NextResponse.json(cached);
 
   const graph = await loadOrchestrationGraph(sessionId);
   if (graph === null) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  cache.set(sessionId, { graph, expiresAt: now + 60_000 });
-  // Evict expired entries to bound cache size
-  for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
-  }
+  cache.set(sessionId, graph);
   return NextResponse.json(graph);
 }

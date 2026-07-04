@@ -225,6 +225,26 @@ class SkillUpdateCache {
   get total(): number {
     return this.cache.size;
   }
+
+  /** Drain the queue, forget everything (including `known` items — unlike
+   *  `refresh()`, this does NOT re-enqueue), and invalidate any in-flight
+   *  `processQueue()` batch via the same generation bump `processQueue`
+   *  already checks (`this.gen === myGen`) before writing results or
+   *  continuing its loop. Without this, an in-flight batch — e.g. a
+   *  `lsRemoteHead`/GitHub API call still awaiting — would write into the
+   *  cache after a dispose() cleared it, resurrecting stale entries.
+   *  Mirrors `gitStatusCache.dispose()` / `efficiencyGradeCache.dispose()`
+   *  so HMR reloads in dev don't leave a zombie `processQueue()` alive. */
+  dispose(): void {
+    this.gen++;
+    this.queue.length = 0;
+    this.activeBatch = 0;
+    this.seen.clear();
+    this.cache.clear();
+    this.known.clear();
+    this.marketplaceHeads.clear();
+    this.running = false;
+  }
 }
 
 async function lsRemoteHead(repoUrl: string): Promise<string | undefined> {

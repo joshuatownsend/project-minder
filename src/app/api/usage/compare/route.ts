@@ -3,6 +3,7 @@ import { validatePeriod } from "@/lib/usage/constants";
 import { getUsageCompare, dbModeRequested } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageComparison } from "@/lib/usage/types";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // Period-over-period comparison for /usage (item 4a). Mirrors the
 // /api/usage route's 2-minute slot cache: the comparison runs four
@@ -31,10 +32,7 @@ interface CompareCacheSlot {
   backend: "db" | "file";
 }
 
-const globalForCompare = globalThis as unknown as {
-  __usageCompareCache?: Map<string, CompareCacheSlot>;
-};
-globalForCompare.__usageCompareCache ??= new Map();
+const cache = getOrCreateRouteCache<CompareCacheSlot>("usage-compare", { ttlMs: CACHE_TTL });
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
@@ -44,11 +42,10 @@ export async function GET(request: NextRequest) {
 
   const requestedBackend = dbModeRequested() ? "db" : "file";
   const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
-  const cache = globalForCompare.__usageCompareCache!;
   const cached = cache.get(cacheKey);
 
   let slot: CompareCacheSlot;
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL) {
+  if (cached) {
     slot = cached;
   } else {
     const { comparison, meta } = await getUsageCompare(safePeriod, project, source);

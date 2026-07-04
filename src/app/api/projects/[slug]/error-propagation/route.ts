@@ -6,6 +6,7 @@ import { buildErrorPropagation, type ErrorReport } from "@/lib/usage/errorPropag
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 async function getProjectJsonlMaxMtime(projectPath: string): Promise<number> {
   const dir = path.join(os.homedir(), ".claude", "projects", encodeProjectPath(projectPath));
@@ -26,20 +27,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheSlot {
   data: ErrorReport;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForError = globalThis as unknown as {
-  __errorPropagationCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForError.__errorPropagationCache) {
-    globalForError.__errorPropagationCache = new Map();
-  }
-  return globalForError.__errorPropagationCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("error-propagation", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   _request: NextRequest,
@@ -48,8 +39,6 @@ export async function GET(
   const { slug } = await params;
 
   try {
-    const cache = getCache();
-
     let scan = getCachedScan();
     if (!scan) {
       scan = await scanAllProjects();
@@ -62,12 +51,12 @@ export async function GET(
 
     const currentMtime = await getProjectJsonlMaxMtime(project.path);
     const cached = cache.get(slug);
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime) {
       return NextResponse.json(cached.data);
     }
 
     const data = await buildErrorPropagation(project.path);
-    cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+    cache.set(slug, { data, jsonlMtime: currentMtime });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[error-propagation] slug="${slug}":`, err);

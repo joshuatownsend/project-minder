@@ -29,19 +29,16 @@ vi.mock("@/lib/httpCache", () => ({
 import { getUsage, dbModeRequested } from "@/lib/data";
 import { GET } from "@/app/api/usage/route";
 import type { UsageReport } from "@/lib/usage/types";
+import { disposeAllRouteCaches } from "@/lib/routeCache";
 
-/** Clear the route-level cache stored on globalThis between tests.
+/** Clear the route-level cache between tests.
  *
- * The route initializes `globalThis.__usageCache` at module load time
- * (`if (!globalForUsage.__usageCache) { ... = new Map() }`), so the
- * guard only runs once per module lifetime. After that, the Map lives
- * on globalThis for the duration of the test run. We reset it to a fresh
- * Map (rather than deleting the key) so the route's `cache.get()` still
- * has a valid Map to work with.
+ * The route's cache (`getOrCreateRouteCache("usage", ...)`) is a named
+ * instance pinned to `globalThis` via the shared route-cache registry (C3),
+ * so it lives for the duration of the test run unless explicitly cleared.
  */
 function clearUsageRouteCache() {
-  const g = globalThis as Record<string, unknown>;
-  g.__usageCache = new Map();
+  disposeAllRouteCaches();
 }
 
 /** Minimal UsageReport shape — only the fields the test assertions inspect. */

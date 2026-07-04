@@ -4,18 +4,20 @@ import { getHookBuffer } from "@/lib/hooks/buffer";
 import { resolveSessionJsonl, isValidSessionId } from "@/lib/usage/sessionPath";
 import { parseInsightsFromJsonl } from "@/lib/scanner/insightsMd";
 import type { InsightEntry } from "@/lib/types";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // Returns hook events + JSONL-sourced insights for a session.
 // Used by AgentPeekPanel — best-effort; errors return empty arrays.
 
 // Mtime-keyed per-session cache to avoid re-parsing JSONL on every peek open.
-const g = globalThis as unknown as {
-  __peekInsightsCache?: Map<string, { mtime: number; insights: InsightEntry[] }>;
-};
-function getInsightsCache() {
-  if (!g.__peekInsightsCache) g.__peekInsightsCache = new Map();
-  return g.__peekInsightsCache;
-}
+// Freshness is actually governed by the mtime comparison below, not the TTL —
+// the TTL here is only a backstop so a session that's never revisited still
+// gets evicted eventually instead of living on `globalThis` for the life of
+// the server (the C3 "unbounded growth" bug this consolidation fixes).
+const insightsCache = getOrCreateRouteCache<{ mtime: number; insights: InsightEntry[] }>(
+  "agent-view-peek-insights",
+  { ttlMs: 30 * 60_000, maxEntries: 300 }
+);
 
 async function loadInsightsForSession(
   sessionId: string,
@@ -34,8 +36,7 @@ async function loadInsightsForSession(
     return [];
   }
 
-  const cache = getInsightsCache();
-  const cached = cache.get(sessionId);
+  const cached = insightsCache.get(sessionId);
   if (cached && cached.mtime === mtime) return cached.insights;
 
   let jsonlContent: string;
@@ -46,7 +47,7 @@ async function loadInsightsForSession(
   }
 
   const insights = parseInsightsFromJsonl(jsonlContent, sessionId, slug, "");
-  cache.set(sessionId, { mtime, insights });
+  insightsCache.set(sessionId, { mtime, insights });
   return insights;
 }
 
