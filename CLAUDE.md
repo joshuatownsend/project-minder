@@ -135,6 +135,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - Skills: `SkillsBrowser` at `/skills` — same shape for skills. `ProjectSkillsTab` per-project. Supports bundled (`SKILL.md`-in-dir) and standalone `.md` layouts.
 - `DevServerControl` — compact mode on cards (start/stop badge), full mode on detail page (start/stop/restart, open in browser, output viewer)
 - Hand-rolled UI primitives in `src/components/ui/` (badge, button, input, tabs, skeleton, toast)
+- Additional routes: `/background` — background activity monitor, `/commands` — command catalog, `/projects` — project list dashboard, `/swarms` — multi-agent swarms orchestrator
 
 ### Database (`src/lib/db/`, `src/lib/data/`)
 - SQLite index at `~/.minder/index.db` via `better-sqlite3` (optional dependency;
