@@ -7,7 +7,8 @@ import { initDispatcher } from "@/lib/tasks/dispatcher";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<NextResponse> {
-  initDispatcher();
+  // No initDispatcher() here: GET is read-only (see the tasks route GET for the
+  // CSRF rationale). The dispatcher starts at server boot and on POST.
   try {
     const swarms = await listSwarms();
     return NextResponse.json({ swarms });

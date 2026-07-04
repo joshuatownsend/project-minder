@@ -23,6 +23,15 @@ import "server-only";
 // `MINDER_INDEXER=0` and `MINDER_USE_DB=0`.
 
 export async function startIngest(): Promise<void> {
+  // Start the task/swarm dispatcher at server boot rather than lazily on a GET
+  // request. Two reasons: (1) it resumes any pending tasks after a restart
+  // without waiting for a dashboard visit, and (2) it closes a CSRF vector —
+  // /api/tasks and /api/swarms GET handlers used to call initDispatcher(), so a
+  // cross-site origin-less `<img src>` GET could start the dispatcher (which
+  // claims pending tasks and spawns work). initDispatcher() is idempotent, and
+  // this runs independently of the indexer mode below.
+  await startDispatcher();
+
   if (process.env.MINDER_INDEXER_WORKER === "1") {
     try {
       const { startWorker, stopWorker } = await import("@/lib/db/workerHost");
@@ -75,6 +84,16 @@ export async function startIngest(): Promise<void> {
 
   if (process.env.MINDER_INDEXER !== "0") {
     await startInProcessWatcher();
+  }
+}
+
+async function startDispatcher(): Promise<void> {
+  try {
+    const { initDispatcher } = await import("@/lib/tasks/dispatcher");
+    initDispatcher();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[dispatcher] failed to start at boot: ${(err as Error).message}`);
   }
 }
 
