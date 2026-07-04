@@ -17,6 +17,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.19.0', '22.12.0']
     steps:
       - uses: actions/checkout@v7
 
@@ -27,10 +31,55 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fails loudly if the better-sqlite3 native driver didn't build, instead
+      # of silently letting the ~34 DB-backed test suites skip and CI go green.
+      - name: Assert better-sqlite3 native driver loaded
+        run: node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded')"
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type-check (tsgo)
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  verify-windows:
+    # Advisory-only Windows coverage: the app targets Windows (dev port, path
+    # handling, better-sqlite3 native build) but CI's required check runs on
+    # ubuntu. continue-on-error keeps a Windows-only build-tooling gap from
+    # blocking the required `verify` status check while still surfacing
+    # failures in the workflow run for visibility.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
           node-version: '20.19.0'
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
+
+      # Same native-driver assertion as the ubuntu job: on Windows the
+      # better-sqlite3 build can fail independently, and without this the
+      # DB-backed suites would silently skip and the advisory job go green,
+      # hiding the exact Windows-native signal this job exists to provide.
+      - name: Assert better-sqlite3 native driver loaded
+        run: node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded')"
 
       - name: Lint
         run: pnpm lint

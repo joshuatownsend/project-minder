@@ -19,7 +19,7 @@ Thank you for your interest in Project Minder! This is primarily a personal tool
 
 ## Pre-commit requirements
 
-The pre-commit hook runs `pnpm typecheck && pnpm test --pool=forks` before every commit. Both must pass. Set it up once with:
+The pre-commit hook runs `pnpm lint && pnpm typecheck && pnpm test --pool=forks` before every commit. All three must pass. Set it up once with:
 
 ```sh
 pnpm setup-hooks

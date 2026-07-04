@@ -181,7 +181,7 @@ Full tool/resource reference: `docs/help/mcp-server.md`.
 git clone https://github.com/joshuatownsend/project-minder.git
 cd project-minder
 pnpm install
-pnpm setup-hooks   # installs the pre-commit hook (typecheck + test)
+pnpm setup-hooks   # installs the pre-commit hook (lint + typecheck + test)
 ```
 
 Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `pnpm dev` (create it if it doesn't exist):
