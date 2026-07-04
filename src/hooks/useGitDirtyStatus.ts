@@ -95,6 +95,9 @@ export function useGitDirtyStatus() {
     }
 
     async function loop() {
+      // Don't poll a backgrounded tab — resume on the next tick after it's
+      // visible again (C2 review: pollers shouldn't run while hidden).
+      if (typeof document !== "undefined" && document.hidden) return;
       const data = await fetchStatus();
       if (stopped || !data) return;
 
@@ -120,11 +123,21 @@ export function useGitDirtyStatus() {
       }
     }
 
-    // When SSE drives refetches, just prime once and let events do the rest.
+    // When SSE drives refetches, prime once and keep a SLOW polling backstop.
+    // /api/events is a live in-process bus with no replay: a git batch that
+    // completes before the EventSource connects (or during a reconnect) loses
+    // its `git-status.updated` push, and the strip would otherwise stay at the
+    // initial (empty/pending) snapshot until remount. A slow heartbeat
+    // reconciles any missed event without the tight 5s cadence of the poll path.
     if (liveEvents) {
       void fetchStatus();
+      const backstopId = setInterval(() => {
+        if (typeof document !== "undefined" && document.hidden) return;
+        void fetchStatus();
+      }, IDLE_POLL_INTERVAL);
       return () => {
         stopped = true;
+        clearInterval(backstopId);
       };
     }
 

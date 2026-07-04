@@ -75,12 +75,13 @@ describe("event bus", () => {
 });
 
 // ── flag default (Settings toggle vs client gate parity) ─────────────────────
-describe("liveEvents is opt-in (default off)", () => {
-  it("meta marks defaultOn:false so the Settings toggle matches the client gate", () => {
+describe("liveEvents is default-on", () => {
+  it("meta marks defaultOn:true so the Settings toggle matches the client gate", () => {
     const meta = FEATURE_FLAG_META.find((m) => m.key === "liveEvents");
-    expect(meta?.defaultOn).toBe(false);
-    expect(getFlag({}, "liveEvents", meta?.defaultOn ?? true)).toBe(false);
-    expect(getFlag(undefined, "liveEvents", false)).toBe(false);
-    expect(getFlag({ liveEvents: true }, "liveEvents", false)).toBe(true);
+    expect(meta?.defaultOn).toBe(true);
+    expect(getFlag({}, "liveEvents", meta?.defaultOn ?? true)).toBe(true);
+    expect(getFlag(undefined, "liveEvents")).toBe(true);
+    // Fallback path still works: an explicit false turns it off.
+    expect(getFlag({ liveEvents: false }, "liveEvents")).toBe(false);
   });
 });

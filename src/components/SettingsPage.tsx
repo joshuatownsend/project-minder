@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Settings as SettingsIcon } from "lucide-react";
+import { queryKeys } from "@/lib/queryKeys";
 import type { FeatureFlagKey, InitStatus, MinderConfig } from "@/lib/types";
 import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { useToast } from "@/components/ToastProvider";
@@ -38,17 +40,6 @@ const DB_STATUS_COLOR: Record<InitStatus["state"], string> = {
   "permanent-failed": "var(--danger)",
 };
 
-function dbStatusEqual(a: InitStatus | null, b: InitStatus): boolean {
-  if (!a) return false;
-  return (
-    a.state === b.state &&
-    a.attempts === b.attempts &&
-    a.quarantineRuns === b.quarantineRuns &&
-    a.failedAt === b.failedAt &&
-    a.lastError?.message === b.lastError?.message &&
-    a.lastError?.code === b.lastError?.code
-  );
-}
 
 type SectionKey =
   | "features"
@@ -178,30 +169,24 @@ export function SettingsPage() {
 
   const activeSection = SECTIONS.find((s) => s.key === active);
 
-  // Polls /api/health every 15s. Each poll returns a fresh object even
-  // when nothing changed, so re-using the prior reference on a field-
-  // equal response avoids re-rendering InitStatusRow on every tick.
-  const [dbStatus, setDbStatus] = useState<InitStatus | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const fetchStatus = () => {
-      fetch("/api/health")
-        .then((r) => r.json())
-        .then((data: { db: InitStatus }) => {
-          if (cancelled) return;
-          setDbStatus((prev) => (dbStatusEqual(prev, data.db) ? prev : data.db));
-        })
-        .catch(() => {
-          /* health endpoint failures don't deserve a toast */
-        });
-    };
-    fetchStatus();
-    const id = setInterval(fetchStatus, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+  // Polls /api/health every 15s. Migrated from a setInterval loop to useQuery
+  // (C2): `refetchInterval` keeps the 15s cadence and `refetchIntervalInBackground:
+  // false` pauses it on a hidden tab. TanStack's structural sharing returns the
+  // prior reference when a field-equal response arrives, so the `select` below
+  // still avoids re-rendering InitStatusRow on an unchanged tick (replacing the
+  // old `dbStatusEqual` guard). Health failures stay quiet (no toast).
+  const dbStatusQuery = useQuery({
+    queryKey: queryKeys.health(),
+    queryFn: async ({ signal }): Promise<{ db: InitStatus }> => {
+      const res = await fetch("/api/health", { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    select: (data) => data.db,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+  });
+  const dbStatus: InitStatus | null = dbStatusQuery.data ?? null;
 
   async function patchConfig(patch: Partial<MinderConfig>): Promise<void> {
     const res = await fetch("/api/config", {

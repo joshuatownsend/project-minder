@@ -228,37 +228,40 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     key: "rscHydration",
     label: "Server-render data pages (RSC hydration)",
     description:
-      "Read-heavy pages (sessions, usage, stats, agents, skills, insights, commands, manual-steps, templates, config) prefetch their data on the server and stream it into the TanStack Query cache, so they paint with data instead of a loading spinner. Opt-in: defaults OFF.",
+      "Read-heavy pages (sessions, usage, stats, agents, skills, insights, commands, manual-steps, templates, config) prefetch their data on the server and stream it into the TanStack Query cache, so they paint with data instead of a loading spinner. Defaults ON; toggle OFF in Settings to fall back to client fetch-on-mount.",
     group: "active",
     appliesAt: "ui",
     wired: true,
-    // Opt-in: the server gate reads getFlag(..., false), so the Settings toggle
-    // must default OFF too or it would show enabled while the feature is off.
-    defaultOn: false,
+    // Defaults ON: the server gate reads getFlag(..., true) (the module default),
+    // so the Settings toggle reflects the on-by-default state. Toggling OFF falls
+    // back to the client fetch-on-mount path, which remains intact.
+    defaultOn: true,
   },
   {
     key: "serverActions",
     label: "Server Actions for mutations",
     description:
-      "Routes the two live writes (toggle a manual step, change a project's status) through Next.js Server Actions instead of POST/PUT API routes. Same result, one fewer client fetch hop, and the project-status change no longer forces a full page reload. Opt-in: defaults OFF (the fetch/route path is the fallback).",
+      "Routes the two live writes (toggle a manual step, change a project's status) through Next.js Server Actions instead of POST/PUT API routes. Same result, one fewer client fetch hop, and the project-status change no longer forces a full page reload. Defaults ON; toggle OFF in Settings to fall back to the POST/PUT route path.",
     group: "active",
     appliesAt: "ui",
     wired: true,
-    // Opt-in: client callers read getFlag(..., false), so the Settings toggle
-    // must default OFF too or it would show enabled while the feature is off.
-    defaultOn: false,
+    // Defaults ON: client callers read getFlag(..., true) (the module default),
+    // so the Settings toggle reflects the on-by-default state. Toggling OFF falls
+    // back to the POST/PUT fetch route path, which remains intact.
+    defaultOn: true,
   },
   {
     key: "liveEvents",
     label: "Live updates (SSE)",
     description:
-      "Opens one Server-Sent Events stream (/api/events) that pushes 'data changed' signals so pages refresh in real time instead of on a timer (e.g. the sessions list drops its 15s poll). Opt-in: defaults OFF (pages poll/refetch as before).",
+      "Opens one Server-Sent Events stream (/api/events) that pushes 'data changed' signals so pages refresh in real time instead of on a timer (e.g. the sessions list drops its 15s poll). Defaults ON; toggle OFF in Settings to fall back to timer-based polling.",
     group: "active",
     appliesAt: "ui",
     wired: true,
-    // Opt-in: client callers read getFlag(..., false), so the Settings toggle
-    // must default OFF too or it would show enabled while the feature is off.
-    defaultOn: false,
+    // Defaults ON: client callers read getFlag(..., true) (the module default),
+    // so the Settings toggle reflects the on-by-default state. Toggling OFF falls
+    // back to the timer-based polling path, which remains intact.
+    defaultOn: true,
   },
 ];
 
