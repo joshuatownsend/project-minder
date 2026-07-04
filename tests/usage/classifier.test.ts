@@ -56,6 +56,13 @@ describe("classifyTurn", () => {
     expect(classifyTurn(turn)).toBe("Testing");
   });
 
+  it("Testing: Bash with pnpm/yarn/bun test runners", () => {
+    for (const cmd of ["pnpm test", "pnpm run test", "yarn test", "bun test"]) {
+      const turn = makeTurn({ toolCalls: [bashTool(cmd)] });
+      expect(classifyTurn(turn), cmd).toBe("Testing");
+    }
+  });
+
   it("Testing: Edit targeting a test file", () => {
     const turn = makeTurn({
       toolCalls: [{ name: "Edit", arguments: { file_path: "tests/foo.test.ts", old_string: "a", new_string: "b" } }],
