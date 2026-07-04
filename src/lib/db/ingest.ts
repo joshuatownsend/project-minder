@@ -2,7 +2,7 @@ import "server-only";
 import path from "path";
 import os from "os";
 import { performance } from "perf_hooks";
-import { promises as fs, createReadStream } from "fs";
+import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
@@ -23,15 +23,21 @@ import {
 import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { extractPrsFromEntries } from "@/lib/usage/prExtractor";
-import { extractTicketsFromEntries, compareTicketLinks } from "@/lib/usage/ticketExtractor";
 import type { PrLink, TicketLink } from "@/lib/types";
+import { isFileWriteOp, type FileOp } from "@/lib/usage/toolNames";
 import {
-  FILE_OP_BY_TOOL,
-  AGENT_DISPATCH_TOOL,
-  SKILL_DISPATCH_TOOL,
-  isFileWriteOp,
-  type FileOp,
-} from "@/lib/usage/toolNames";
+  extractFileOp,
+  extractAgentName,
+  extractSkillName,
+  truncateText,
+  readTailToLastNewline,
+} from "./ingest/parseHelpers";
+import {
+  safeExtractPrs,
+  safeExtractTickets,
+  mergePrLinks,
+  mergeTicketLinks,
+} from "./ingest/merge";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
 import { parseStoredArgs } from "./storedArgs";
@@ -309,35 +315,8 @@ interface ParsedSession {
   affectedCategoryTuples: Set<string>;
 }
 
-// ── Tool-call classification helpers ───────────────────────────────────────
-
-/**
- * Map a tool call to a (file_path, file_op) pair when both can be derived.
- * `file_path` is the canonical Claude Code argument key for path-shaped
- * tools — Read, Write, Edit, MultiEdit. Returns null/null for non-file
- * tools or when the path is missing.
- */
-function extractFileOp(
-  toolName: string,
-  args: Record<string, unknown> | undefined
-): { filePath: string | null; fileOp: FileOp | null } {
-  if (!args) return { filePath: null, fileOp: null };
-  const fp = typeof args.file_path === "string" ? args.file_path : null;
-  if (!fp) return { filePath: null, fileOp: null };
-  return { filePath: fp, fileOp: FILE_OP_BY_TOOL[toolName] ?? null };
-}
-
-/** `Agent` tool args carry `subagent_type` per Claude Code's JSONL convention. */
-function extractAgentName(toolName: string, args: Record<string, unknown> | undefined): string | null {
-  if (toolName !== AGENT_DISPATCH_TOOL || !args) return null;
-  return typeof args.subagent_type === "string" ? args.subagent_type : null;
-}
-
-/** `Skill` tool args carry `skill` per Claude Code's JSONL convention. */
-function extractSkillName(toolName: string, args: Record<string, unknown> | undefined): string | null {
-  if (toolName !== SKILL_DISPATCH_TOOL || !args) return null;
-  return typeof args.skill === "string" ? args.skill : null;
-}
+// Tool-call classification helpers (`extractFileOp`, `extractAgentName`,
+// `extractSkillName`) moved to `./ingest/parseHelpers` (imported above).
 
 // `parseStoredArgs` and its `COMMAND_RECOVERY_RE` regex moved to
 // `./storedArgs` so the read-side data façade (`src/lib/data/usageFromDb.ts`)
@@ -345,45 +324,8 @@ function extractSkillName(toolName: string, args: Record<string, unknown> | unde
 
 // ── JSONL → ParsedSession ──────────────────────────────────────────────────
 
-function truncateText(s: string | undefined | null, max: number): string | null {
-  if (!s) return null;
-  return s.length > max ? s.slice(0, max) : s;
-}
-
-/**
- * Read [start, EOF) of a file and return the bytes up to the LAST `\n`
- * along with the byte position immediately after it. Anything after the
- * last newline is treated as a partial line that hasn't been flushed yet
- * and must NOT advance the cursor — otherwise a writer mid-flush could
- * cause us to skip a turn permanently when its first half lands before
- * a reconcile and the second half lands after.
- *
- * Returns `{ text: "", safeOffset: start }` when there's no `\n` in the
- * tail (purely partial content).
- *
- * Backed by `createReadStream({ start })` so the OS only delivers bytes
- * after `start`. The byte-vs-char distinction matters because we can't
- * use `String.lastIndexOf("\n")` here — we need the BYTE position to
- * compute a correct cursor on multi-byte UTF-8 content.
- */
-async function readTailToLastNewline(
-  filePath: string,
-  start: number
-): Promise<{ text: string; safeOffset: number }> {
-  const stream = createReadStream(filePath, { start });
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(chunk as Buffer);
-  const buf = Buffer.concat(chunks);
-  // Walk backwards looking for the last 0x0A. lastIndexOf on a Buffer is
-  // a single byte scan; cheaper than the BoyerMoore lookup ChainExt'd
-  // strings would do.
-  const lastNewline = buf.lastIndexOf(0x0a);
-  if (lastNewline === -1) {
-    return { text: "", safeOffset: start };
-  }
-  const text = buf.subarray(0, lastNewline + 1).toString("utf8");
-  return { text, safeOffset: start + lastNewline + 1 };
-}
+// `truncateText` and `readTailToLastNewline` moved to `./ingest/parseHelpers`
+// (imported above).
 
 interface ReadOptions {
   /** Byte position to start reading from. 0 = full file. */
@@ -1148,58 +1090,8 @@ async function readJsonlSession(
   };
 }
 
-// Both extractors take the SAME `ConversationEntry[]`, so the caller
-// builds it once (see `readJsonlSession`) and passes it to both — one
-// walk of `parsedLines`, not two. Each call stays independently guarded:
-// a throw in PR extraction must still let tickets index, and vice versa.
-function safeExtractPrs(entries: ConversationEntry[], sessionId: string): PrLink[] {
-  try {
-    return extractPrsFromEntries(entries);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(`[ingest] PR extraction failed for ${sessionId}:`, err);
-    return [];
-  }
-}
-
-function safeExtractTickets(entries: ConversationEntry[], sessionId: string): TicketLink[] {
-  try {
-    return extractTicketsFromEntries(entries);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(`[ingest] ticket extraction failed for ${sessionId}:`, err);
-    return [];
-  }
-}
-
-/**
- * Union two PR-link lists, deduping by URL. `current` (fresh extraction)
- * wins on overlap so a re-extract that corrects metadata (e.g., the
- * canonical URL form) supersedes the preserved row. Order matches
- * `extractPrsFromEntries`'s post-sort (pr_number ascending), so the
- * merged output and the SQL `ORDER BY session_id, pr_number` read
- * stay aligned across backends. Read review #2 and #7.
- */
-function mergePrLinks(current: PrLink[], preserved: PrLink[]): PrLink[] {
-  const byUrl = new Map<string, PrLink>();
-  for (const pr of preserved) byUrl.set(pr.url, pr);
-  for (const pr of current) byUrl.set(pr.url, pr); // current overrides
-  return Array.from(byUrl.values()).sort((a, b) => a.number - b.number);
-}
-
-/**
- * Union two ticket-link lists, deduping by URL — the ticket analogue of
- * `mergePrLinks`. `current` (fresh extraction) wins on overlap. Sorted by
- * (provider, key, url) to match `extractTicketsFromText`'s post-sort and
- * the SQL read's `ORDER BY provider, ticket_key, url`, so chip order stays
- * aligned across the file-parse and DB backends.
- */
-function mergeTicketLinks(current: TicketLink[], preserved: TicketLink[]): TicketLink[] {
-  const byUrl = new Map<string, TicketLink>();
-  for (const t of preserved) byUrl.set(t.url, t);
-  for (const t of current) byUrl.set(t.url, t); // current overrides
-  return Array.from(byUrl.values()).sort(compareTicketLinks);
-}
+// PR/ticket extraction + merge helpers (`safeExtractPrs`, `safeExtractTickets`,
+// `mergePrLinks`, `mergeTicketLinks`) moved to `./ingest/merge` (imported above).
 
 /**
  * T2.2 straddle-recovery (review #1). Reads the full JSONL file from
