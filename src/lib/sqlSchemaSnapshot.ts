@@ -40,7 +40,7 @@ export const SQL_SCHEMA: TableSchema[] = [
       "output_tokens", "cache_create_tokens", "cache_read_tokens", "context_fill",
       "is_error", "parent_tool_use_id", "text_offset", "text_preview", "cost_usd",
       "tool_result_preview", "category", "turn_duration_ms", "has_thinking",
-      "derived_version",
+      "derived_version", "is_sidechain",
     ],
   },
   {

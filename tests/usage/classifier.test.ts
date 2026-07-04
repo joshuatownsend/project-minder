@@ -85,6 +85,22 @@ describe("classifyTurn", () => {
     expect(classifyTurn(turn)).toBe("Debugging");
   });
 
+  it("A7: bare 'fix' in ordinary prose does NOT over-tag Debugging", () => {
+    // "fix the copy" has no debugging noun and no bare error/bug word.
+    const turn = makeTurn({ userMessageText: "fix the copy on the landing page" });
+    expect(classifyTurn(turn)).not.toBe("Debugging");
+  });
+
+  it("A3: propagated userIntentText drives Debugging on a token-bearing assistant turn", () => {
+    const turn = makeTurn({
+      role: "assistant",
+      userMessageText: undefined,
+      userIntentText: "fix the null pointer error",
+      toolCalls: [bashTool("node app.js")],
+    });
+    expect(classifyTurn(turn)).toBe("Debugging");
+  });
+
   it("Refactoring: user message mentions refactor", () => {
     const turn = makeTurn({ userMessageText: "refactor the auth module" });
     expect(classifyTurn(turn)).toBe("Refactoring");

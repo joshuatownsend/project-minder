@@ -7,7 +7,7 @@ import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot } from "./oneShotDetector";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
-import { bucketByHourDay, type ActivityData } from "./activityBuckets";
+import { bucketByHourDay, toLocalDateStr, type ActivityData } from "./activityBuckets";
 import { computeStreaks } from "./streaks";
 import { computeContributionCalendar } from "./contributionCalendar";
 import { computeProjectYield } from "./computeProjectYield";
@@ -42,7 +42,10 @@ export async function generateUsageReport(
   project?: string,
   source?: string
 ): Promise<UsageReport> {
-  const sessionMap = await parseAllSessions();
+  // includeSidechains: fold subagent (Task) turns into the usage aggregates.
+  // Their tokens/cost belong in the totals (A1); session-scoped detectors and
+  // activity aggregates still filter them out below.
+  const sessionMap = await parseAllSessions({ includeSidechains: true });
 
   let turns: UsageTurn[] = [];
   for (const sessionTurns of sessionMap.values()) {
@@ -58,7 +61,12 @@ export async function generateUsageReport(
     turns = turns.filter((t) => (t.source ?? "claude") === source);
   }
 
-  const assistantTurnsFullHistory = turns.filter((t) => t.role === "assistant");
+  // Activity/streak/heatmap reflect when the developer was working — subagent
+  // turns run inside a parent turn and aren't independent activity, so keep
+  // these on primary turns only (they also drove the historical numbers).
+  const assistantTurnsFullHistory = turns.filter(
+    (t) => t.role === "assistant" && !t.isSidechain
+  );
   const activity: ActivityData = {
     ...bucketByHourDay(assistantTurnsFullHistory),
     streak: computeStreaks(assistantTurnsFullHistory),
@@ -214,9 +222,18 @@ export async function aggregateUsage(
   let totalOutput = 0;
   let totalCacheRead = 0;
   let totalCacheWrite = 0;
+  // A1: subagent (sidechain) spend broken out of — but still folded into — the
+  // totals below.
+  let subagentCost = 0;
+  let subagentTokens = 0;
 
   for (const { turn, category, cost } of enriched) {
     const tokens = turn.inputTokens + turn.outputTokens + turn.cacheReadTokens + turn.cacheCreateTokens;
+    const isSub = turn.isSidechain === true;
+    if (isSub) {
+      subagentCost += cost;
+      subagentTokens += tokens;
+    }
 
     // Model
     const model = modelMap.get(turn.model) ?? {
@@ -247,12 +264,18 @@ export async function aggregateUsage(
     cat.tokens += tokens;
     cat.cost += cost;
     categoryMap.set(category, cat);
-    const catTurns = categoryTurnsMap.get(category) ?? [];
-    catTurns.push(turn);
-    categoryTurnsMap.set(category, catTurns);
+    // Per-category one-shot detection runs on primary turns only (A5 groups by
+    // session); a subagent turn isn't a user-verified task, so exclude it.
+    if (!isSub) {
+      const catTurns = categoryTurnsMap.get(category) ?? [];
+      catTurns.push(turn);
+      categoryTurnsMap.set(category, catTurns);
+    }
 
-    // Daily
-    const dateStr = turn.timestamp.slice(0, 10);
+    // Daily — bucket by LOCAL date so the daily bars, the "today" period
+    // filter (periods.ts, local midnight) and the contribution calendar
+    // (also local) all agree (A2).
+    const dateStr = toLocalDateStr(turn.timestamp);
     const day = dailyMap.get(dateStr) ?? { date: dateStr, cost: 0, inputTokens: 0, outputTokens: 0, turns: 0 };
     day.cost += cost;
     day.inputTokens += turn.inputTokens;
@@ -260,11 +283,14 @@ export async function aggregateUsage(
     day.turns++;
     dailyMap.set(dateStr, day);
 
-    // Tools
-    for (const tc of turn.toolCalls) {
-      allToolCalls.push(tc);
+    // Tools — subagent turns don't contribute tool/shell/mcp stats (mirrors the
+    // DB path, which never persists tool_uses for sidechain turns).
+    if (!isSub) {
+      for (const tc of turn.toolCalls) {
+        allToolCalls.push(tc);
+      }
+      bashCommands.push(...extractBashCommands(turn));
     }
-    bashCommands.push(...extractBashCommands(turn));
 
     // Per-project detail (category + tool + MCP breakdown)
     const detail = projectDetailAccum.get(turn.projectSlug) ?? {
@@ -281,12 +307,14 @@ export async function aggregateUsage(
     detailCat.cost += cost;
     detailCat.turns++;
     detail.categoryMap.set(category, detailCat);
-    for (const tc of turn.toolCalls) {
-      if (tc.name.startsWith("mcp__")) {
-        const server = tc.name.split("__")[1] ?? tc.name;
-        detail.mcpMap.set(server, (detail.mcpMap.get(server) ?? 0) + 1);
-      } else {
-        detail.toolMap.set(tc.name, (detail.toolMap.get(tc.name) ?? 0) + 1);
+    if (!isSub) {
+      for (const tc of turn.toolCalls) {
+        if (tc.name.startsWith("mcp__")) {
+          const server = tc.name.split("__")[1] ?? tc.name;
+          detail.mcpMap.set(server, (detail.mcpMap.get(server) ?? 0) + 1);
+        } else {
+          detail.toolMap.set(tc.name, (detail.toolMap.get(tc.name) ?? 0) + 1);
+        }
       }
     }
     projectDetailAccum.set(turn.projectSlug, detail);
@@ -308,12 +336,27 @@ export async function aggregateUsage(
     totalCacheWrite += turn.cacheCreateTokens;
   }
 
-  // Per-category one-shot rates
+  // Per-category one-shot rates. A5: segment each category's turns by
+  // sessionId before running detectOneShot so an edit in one session can't
+  // pair with a verification from another (the detector scans in array order).
+  // Mirrors the session-grouped headline logic below.
   for (const [cat, catTurns] of categoryTurnsMap.entries()) {
-    const stats = detectOneShot(catTurns);
+    const bySession = new Map<string, UsageTurn[]>();
+    for (const t of catTurns) {
+      const arr = bySession.get(t.sessionId) ?? [];
+      arr.push(t);
+      bySession.set(t.sessionId, arr);
+    }
+    let verified = 0;
+    let oneShot = 0;
+    for (const sessionCatTurns of bySession.values()) {
+      const stats = detectOneShot(sessionCatTurns);
+      verified += stats.totalVerifiedTasks;
+      oneShot += stats.oneShotTasks;
+    }
     const breakdown = categoryMap.get(cat);
-    if (breakdown && stats.totalVerifiedTasks > 0) {
-      breakdown.oneShotRate = stats.oneShotTasks / stats.totalVerifiedTasks;
+    if (breakdown && verified > 0) {
+      breakdown.oneShotRate = oneShot / verified;
     }
   }
 
@@ -325,11 +368,16 @@ export async function aggregateUsage(
     }
   }
 
+  // Primary (non-subagent) turns for session-scoped detectors. Subagent turns
+  // aren't user-verified tasks and their tool flow isn't the developer's, so
+  // one-shot and self-correction detection exclude them (A1).
+  const primaryTurns = turns.filter((t) => !t.isSidechain);
+
   // One-shot aggregate (needs both user+assistant turns for tool result detection)
   let totalVerified = 0;
   let totalOneShot = 0;
   const sessionGroups = new Map<string, UsageTurn[]>();
-  for (const t of turns) {
+  for (const t of primaryTurns) {
     const arr = sessionGroups.get(t.sessionId) ?? [];
     arr.push(t);
     sessionGroups.set(t.sessionId, arr);
@@ -340,15 +388,17 @@ export async function aggregateUsage(
     totalOneShot += stats.oneShotTasks;
   }
 
-  const cacheHitRate = totalCacheRead + totalInput > 0
-    ? totalCacheRead / (totalCacheRead + totalInput) : 0;
+  // A7: cache-hit-rate denominator includes cache WRITE tokens so the rate
+  // isn't overstated on cache-write-heavy sessions.
+  const cacheHitDenominator = totalCacheRead + totalInput + totalCacheWrite;
+  const cacheHitRate = cacheHitDenominator > 0 ? totalCacheRead / cacheHitDenominator : 0;
   const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
   const totalCost = [...modelMap.values()].reduce((s, m) => s + m.cost, 0);
 
   // Self-correction rate per primary model. The detector groups by
   // sessionId internally and attaches to byModel so the /usage table
   // can render the column without a second join.
-  const selfCorrection = detectSelfCorrectionPerModel(turns);
+  const selfCorrection = detectSelfCorrectionPerModel(primaryTurns);
   const selfCorrectionByModel = new Map(
     selfCorrection.byModel.map((s) => [s.model, s] as const)
   );
@@ -360,7 +410,9 @@ export async function aggregateUsage(
     }
   }
 
-  const toolTransitionData = computeToolTransitions(assistantTurns);
+  const toolTransitionData = computeToolTransitions(
+    assistantTurns.filter((t) => !t.isSidechain)
+  );
 
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
@@ -422,5 +474,7 @@ export async function aggregateUsage(
     streak: activity.streak,
     contributionCalendar: activity.contributionCalendar,
     bySource,
+    subagentCost,
+    subagentTokens,
   };
 }

@@ -475,6 +475,24 @@ const MIGRATIONS: Migration[] = [
       `).run();
     },
   },
+  {
+    version: 17,
+    name: "A1: turns.is_sidechain — persist subagent turns so their cost folds into usage totals",
+    up: (db) => {
+      // Subagent (Task/sidechain) assistant turns are now stored as `turns`
+      // rows (is_sidechain=1) so their tokens/cost appear in the usage totals.
+      // Existing rows are all primary → default 0 is correct with no backfill;
+      // DERIVED_VERSION 10 drives a re-parse that adds the new sidechain rows
+      // for sessions that used subagents. Guarded so a fresh DB (column already
+      // present from schema.sql) doesn't error.
+      const cols = db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "is_sidechain")) {
+        db.prepare(
+          "ALTER TABLE turns ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"
+        ).run();
+      }
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

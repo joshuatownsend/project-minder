@@ -198,6 +198,12 @@ CREATE TABLE turns (
   -- Wave 4.2 columns (schema v6 / DERIVED_VERSION 6):
   turn_duration_ms     INTEGER,
   has_thinking         INTEGER NOT NULL DEFAULT 0 CHECK (has_thinking IN (0,1)),
+  -- Schema v17 / DERIVED_VERSION 10: 1 for subagent (Task/sidechain) assistant
+  -- turns. These rows exist so their tokens/cost fold into the usage totals
+  -- (byModel/byProject/daily/byCategory) and the subagent breakout, but they
+  -- carry no tool_uses and are excluded from session-detail, activity, and
+  -- one-shot reads via `is_sidechain = 0` guards. Primary turns default to 0.
+  is_sidechain         INTEGER NOT NULL DEFAULT 0 CHECK (is_sidechain IN (0,1)),
   -- Same `derived_version` semantics as on sessions/agents/skills/commands:
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.

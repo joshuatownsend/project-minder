@@ -163,6 +163,64 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     expect(result.report.byProject.length).toBe(2);
   });
 
+  it("A1/A6: subagent tokens fold into totals + dedup by message.id — file/DB parity", async () => {
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const dupEntry = (ts: string, tok: number): JsonlEntry => ({
+      type: "assistant",
+      timestamp: ts,
+      message: {
+        id: "dup-1",
+        model: "claude-sonnet-4-5",
+        content: [{ type: "text", text: "hi" }],
+        usage: { input_tokens: tok, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    });
+    await writeJsonl(path.join(projectsDir, "C--dev-sub", "s.jsonl"), [
+      userTurn("2026-05-01T10:00:00Z", "do the thing"),
+      assistantTurn("2026-05-01T10:00:01Z", "claude-sonnet-4-5", "primary", [], 100, 50),
+      // Duplicate message.id — the second must be ignored (A6).
+      dupEntry("2026-05-01T10:00:02Z", 500),
+      dupEntry("2026-05-01T10:00:03Z", 500),
+      // Subagent (sidechain) assistant turn — must fold into totals (A1).
+      {
+        type: "assistant",
+        timestamp: "2026-05-01T10:00:04Z",
+        isSidechain: true,
+        message: {
+          id: "sc-1",
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "sub" }],
+          usage: { input_tokens: 400, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      },
+    ]);
+
+    // -- File backend --
+    process.env.MINDER_USE_DB = "0";
+    const { facade: fileFacade } = await reloadModules();
+    const fileR = (await fileFacade.getUsage("all", undefined)).report;
+
+    // -- DB backend --
+    process.env.MINDER_USE_DB = "1";
+    const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    const dbR = (await dbFacade.getUsage("all", undefined)).report;
+
+    // Subagent tokens broken out and folded into the totals.
+    expect(fileR.subagentTokens).toBe(600); // 400 in + 200 out
+    expect(fileR.subagentCost).toBeGreaterThan(0);
+    // Dedup: primary 150 + ONE dup 500 + subagent 600 = 1250.
+    expect(fileR.totalTokens).toBe(150 + 500 + 600);
+    expect(fileR.totalTurns).toBe(3); // primary + one dup + subagent
+    // Both backends agree.
+    expect(dbR.subagentTokens).toBe(fileR.subagentTokens);
+    expect(dbR.subagentCost).toBeCloseTo(fileR.subagentCost, 6);
+    expect(dbR.totalTokens).toBe(fileR.totalTokens);
+    expect(dbR.totalTurns).toBe(fileR.totalTurns);
+    expect(dbR.totalCost).toBeCloseTo(fileR.totalCost, 6);
+  });
+
   it("DB backend produces a report identical to file backend (modulo generatedAt)", async () => {
     const projectsDir = await setupFixture();
 

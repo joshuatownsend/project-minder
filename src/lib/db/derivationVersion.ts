@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 9;
+export const DERIVED_VERSION = 10;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -94,3 +94,13 @@ export const DERIVED_VERSION = 9;
 //     bytes are carried forward by `preservedTickets` on every rewrite.
 //
 //     No read-side gate — missing rows just mean no chip renders.
+// 10 — usage-accuracy fixes (A1/A3/A6). Schema v17 added `turns.is_sidechain`;
+//     subagent (Task/sidechain) assistant turns are now persisted as rows so
+//     their tokens/cost fold into the usage totals (A1). Ingest also
+//     propagates the triggering user prompt onto assistant turns before
+//     classification (A3, changes some `turns.category` values) and de-dups
+//     repeated `message.id` lines (A6). All three change previously-derived
+//     rows, so existing sessions (unchanged mtime/size) must re-parse to gain
+//     sidechain rows and corrected categories. No read-side gate — pre-
+//     reconcile the totals simply omit subagent spend (the prior behavior),
+//     which is degraded, not wrong.

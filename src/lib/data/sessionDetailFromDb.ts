@@ -226,6 +226,7 @@ export async function loadSessionDetailFromDb(
               text_preview, tool_result_preview, output_tokens, turn_duration_ms, has_thinking
        FROM turns
        WHERE session_id = ?
+         AND is_sidechain = 0
        ORDER BY turn_index`
     )
     .all(sessionId) as TurnRow[];

@@ -9,8 +9,13 @@ const BUILD_DEPLOY_RE =
 const TESTING_CMD_RE =
   /\b(vitest|jest|pytest|mocha|cypress|playwright|npm test|npm run test)\b/i;
 
+// Tightened so bare "fix"/"issue" in ordinary prose ("fix the copy",
+// "issue the refund") no longer over-tag Debugging (A7). Matches: strong
+// debugging keywords on their own; a fix/solve/diagnose verb sitting near a
+// debugging noun; or the reasonably specific bare words "error"/"bug". Tool
+// error context is handled separately by the `isError` short-circuit below.
 const DEBUGGING_RE =
-  /\b(debug|fix|error|bug|crash|broken|issue|traceback|stack.?trace|exception)\b/i;
+  /\b(debug(?:ging|ged)?|traceback|stack.?trace|stacktrace|exception|crash(?:ed|ing|es)?|broken|regression|segfault)\b|\b(?:fix|fixing|solve|solving|resolve|resolving|diagnose|troubleshoot|debugging)\b[\s\S]{0,40}\b(?:bug|error|crash|exception|failure|fail(?:ing|s|ed)?|traceback|regression|not\s+working)\b|\b(?:error|bug)s?\b/i;
 
 const REFACTORING_RE =
   /\b(refactor|rename|extract|move|reorganize|clean.?up|simplify|restructure)\b/i;
@@ -27,6 +32,13 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "Bash", "PowerShell", "MultiEdit"]
 export function classifyTurn(turn: UsageTurn): CategoryType {
   const { toolCalls, userMessageText, role, isError } = turn;
   const hasTools = toolCalls.length > 0;
+
+  // Intent text used by the Debugging/Refactoring/Planning/Brainstorming
+  // rules. A token-bearing assistant turn carries no `userMessageText` of its
+  // own, so we fall back to `userIntentText` — the triggering user prompt
+  // propagated onto the turn by both parser backends. Without this, those
+  // intent categories could never attribute an assistant turn's cost (A3).
+  const intentText = userMessageText ?? turn.userIntentText;
 
   // Helper: get command from Bash/PowerShell tool call
   const getCommand = (name: string, args?: Record<string, unknown>): string | undefined => {
@@ -60,10 +72,10 @@ export function classifyTurn(turn: UsageTurn): CategoryType {
 
   // 4. Debugging
   if (isError) return "Debugging";
-  if (userMessageText && DEBUGGING_RE.test(userMessageText)) return "Debugging";
+  if (intentText && DEBUGGING_RE.test(intentText)) return "Debugging";
 
   // 5. Refactoring
-  if (userMessageText && REFACTORING_RE.test(userMessageText)) return "Refactoring";
+  if (intentText && REFACTORING_RE.test(intentText)) return "Refactoring";
 
   // 6. Delegation
   for (const tc of toolCalls) {
@@ -71,10 +83,10 @@ export function classifyTurn(turn: UsageTurn): CategoryType {
   }
 
   // 7. Planning (no tool calls)
-  if (!hasTools && userMessageText && PLANNING_RE.test(userMessageText)) return "Planning";
+  if (!hasTools && intentText && PLANNING_RE.test(intentText)) return "Planning";
 
   // 8. Brainstorming (no tool calls)
-  if (!hasTools && userMessageText && BRAINSTORM_RE.test(userMessageText)) return "Brainstorming";
+  if (!hasTools && intentText && BRAINSTORM_RE.test(intentText)) return "Brainstorming";
 
   // 9. Exploration: all tool calls are read-only, at least one
   if (hasTools) {

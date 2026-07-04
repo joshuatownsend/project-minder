@@ -72,11 +72,18 @@ function parseLiteLLMEntry(entry: Record<string, unknown>): ModelPricing {
     (entry["cache_read_input_token_cost"] as number) ?? input * 0.1;
   const cacheWrite =
     (entry["cache_creation_input_token_cost"] as number) ?? input * 1.25;
+  // Tiered >200k pricing (Claude 1M-context / long-context surcharge). Only
+  // carried through when LiteLLM actually publishes the field for this model,
+  // so models without a tier keep flat pricing. See A4.
+  const inputAbove = entry["input_cost_per_token_above_200k_tokens"];
+  const outputAbove = entry["output_cost_per_token_above_200k_tokens"];
   return {
     inputCostPerToken: input,
     outputCostPerToken: output,
     cacheWriteCostPerToken: cacheWrite,
     cacheReadCostPerToken: cacheRead,
+    ...(typeof inputAbove === "number" ? { inputCostPerTokenAbove200k: inputAbove } : {}),
+    ...(typeof outputAbove === "number" ? { outputCostPerTokenAbove200k: outputAbove } : {}),
   };
 }
 
@@ -255,11 +262,19 @@ export interface TokenCounts {
  */
 export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number {
   return (
-    tokens.inputTokens * pricing.inputCostPerToken +
-    tokens.outputTokens * pricing.outputCostPerToken +
+    tieredTokenCost(tokens.inputTokens, pricing.inputCostPerToken, pricing.inputCostPerTokenAbove200k) +
+    tieredTokenCost(tokens.outputTokens, pricing.outputCostPerToken, pricing.outputCostPerTokenAbove200k) +
     tokens.cacheCreateTokens * pricing.cacheWriteCostPerToken +
     tokens.cacheReadTokens * pricing.cacheReadCostPerToken
   );
+}
+
+/** Tokens up to the 200k boundary at `baseRate`; tokens beyond it at
+ *  `aboveRate` when a tier is defined, else flat. See A4. */
+const TIER_BOUNDARY = 200_000;
+function tieredTokenCost(count: number, baseRate: number, aboveRate?: number): number {
+  if (aboveRate === undefined || count <= TIER_BOUNDARY) return count * baseRate;
+  return TIER_BOUNDARY * baseRate + (count - TIER_BOUNDARY) * aboveRate;
 }
 
 /**

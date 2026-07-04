@@ -158,6 +158,14 @@ export async function parseSessionTurns(
   }
 
   let prevUserTimestamp: string | null = null;
+  // A3: the most recent user prompt text, threaded onto following assistant
+  // turns as `userIntentText` so intent-based categories can attribute their cost.
+  let prevUserText: string | undefined;
+  // A6: dedup assistant usage by message.id (fallback requestId) within a
+  // session. Claude Code can re-log a message (retry / resumed-session re-emit);
+  // summing every line would double-count tokens/cost. Only guards ids that are
+  // actually present, so genuinely distinct turns (each a unique id) are kept.
+  const seenMessageIds = new Set<string>();
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -180,6 +188,14 @@ export async function parseSessionTurns(
     if (type === "assistant") {
       const model = entry.message?.model;
       if (!model || model === "<synthetic>") continue;
+
+      const messageId =
+        (entry.message as { id?: string } | undefined)?.id ??
+        (entry as { requestId?: string }).requestId;
+      if (messageId) {
+        if (seenMessageIds.has(messageId)) continue;
+        seenMessageIds.add(messageId);
+      }
 
       const usage = entry.message?.usage ?? {};
       const inputTokens = usage.input_tokens ?? 0;
@@ -230,6 +246,7 @@ export async function parseSessionTurns(
         toolCalls,
         assistantText,
         isError,
+        userIntentText: prevUserText,
         isSidechain: entry.isSidechain ? true : undefined,
         parentToolUseId: entry.parentToolUseID ?? undefined,
       });
@@ -259,6 +276,16 @@ export async function parseSessionTurns(
         toolResultText,
       });
       prevUserTimestamp = timestamp;
+      // A3 intent: prefer the array-extracted text, but fall back to a raw
+      // string `message.content` — real human prompts are stored as strings,
+      // which the array-only `extractText` above returns "" for. Only a real
+      // prompt updates the propagated intent; tool-result-only user turns
+      // leave the prior prompt's intent in effect.
+      // Sidechain (subagent) user turns don't move the propagated intent —
+      // subagent assistant turns are attributed to the primary task's prompt,
+      // matching the DB ingest path (which never sees sidechain user turns).
+      const intentText = userMessageText ?? (typeof textSource === "string" ? textSource : undefined);
+      if (intentText && !entry.isSidechain) prevUserText = intentText;
     }
   }
 
@@ -321,6 +348,8 @@ export async function parseSessionTurnsWithMeta(
     if (names.length > 0) slashCommandsByTimestampMeta.set(preEntry.timestamp, new Set(names));
   }
   let prevUserTimestampMeta: string | null = null;
+  let prevUserTextMeta: string | undefined;
+  const seenMessageIdsMeta = new Set<string>();
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -361,6 +390,14 @@ export async function parseSessionTurnsWithMeta(
     if (type === "assistant") {
       const model = entry.message?.model;
       if (!model || model === "<synthetic>") continue;
+
+      const messageId =
+        (entry.message as { id?: string } | undefined)?.id ??
+        (entry as { requestId?: string }).requestId;
+      if (messageId) {
+        if (seenMessageIdsMeta.has(messageId)) continue;
+        seenMessageIdsMeta.add(messageId);
+      }
 
       const usage = entry.message?.usage ?? {};
       const inputTokens = usage.input_tokens ?? 0;
@@ -421,6 +458,7 @@ export async function parseSessionTurnsWithMeta(
         toolCalls,
         assistantText,
         isError,
+        userIntentText: prevUserTextMeta,
         isSidechain: entry.isSidechain ? true : undefined,
         parentToolUseId: entry.parentToolUseID ?? undefined,
       });
@@ -448,6 +486,8 @@ export async function parseSessionTurnsWithMeta(
         toolResultText,
       });
       prevUserTimestampMeta = timestamp;
+      const intentText = userMessageText ?? (typeof textSource === "string" ? textSource : undefined);
+      if (intentText && !entry.isSidechain) prevUserTextMeta = intentText;
     }
   }
 
@@ -509,7 +549,12 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
             try {
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return [];
-              return await parseSessionTurns(fp, dirName);
+              // Parse WITH sidechains so the cached map carries subagent turns
+              // (tagged `isSidechain`). `parseAllSessions()` strips them by
+              // default for existing consumers; the usage aggregator opts in
+              // via `{ includeSidechains: true }` to fold subagent cost into
+              // the totals (A1).
+              return await parseSessionTurns(fp, dirName, { includeSidechains: true });
             } catch {
               return [];
             }
@@ -530,19 +575,32 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   return result;
 }
 
-export async function parseAllSessions(): Promise<Map<string, UsageTurn[]>> {
+export async function parseAllSessions(
+  options: { includeSidechains?: boolean } = {}
+): Promise<Map<string, UsageTurn[]>> {
   // Single-flight: if pulse + dashboard mount fire in parallel on a cold
   // server, only one of them does the 1.1 GB sweep — the rest await the
   // same promise. After the first call settles, subsequent calls hit the
   // FileCache directly and stat 3k files (cheap), no full re-parse.
-  if (globalForParser.__usageAllSessionsInFlight) {
-    return globalForParser.__usageAllSessionsInFlight;
+  let promise = globalForParser.__usageAllSessionsInFlight;
+  if (!promise) {
+    promise = buildAllSessions().finally(() => {
+      globalForParser.__usageAllSessionsInFlight = undefined;
+    });
+    globalForParser.__usageAllSessionsInFlight = promise;
   }
-  const promise = buildAllSessions().finally(() => {
-    globalForParser.__usageAllSessionsInFlight = undefined;
-  });
-  globalForParser.__usageAllSessionsInFlight = promise;
-  return promise;
+  const full = await promise;
+
+  // The cached map carries subagent (sidechain) turns. The usage aggregator
+  // opts in to see them; every other consumer gets the historical primary-only
+  // view so their per-session logic is unchanged (A1).
+  if (options.includeSidechains) return full;
+  const filtered = new Map<string, UsageTurn[]>();
+  for (const [sid, turns] of full) {
+    const primary = turns.filter((t) => !t.isSidechain);
+    if (primary.length > 0) filtered.set(sid, primary);
+  }
+  return filtered;
 }
 
 /**

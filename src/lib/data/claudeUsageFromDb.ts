@@ -168,6 +168,7 @@ export function loadClaudeUsageStatsFromDb(
        JOIN sessions s USING (session_id)
        WHERE s.project_dir_name IN (${placeholders})
          AND t.role = 'assistant'
+         AND t.is_sidechain = 0
          AND t.model IS NOT NULL
          AND t.model <> '<synthetic>'`
     )

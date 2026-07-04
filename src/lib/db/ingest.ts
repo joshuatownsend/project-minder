@@ -174,6 +174,12 @@ interface ParsedTurn {
   hasThinking: 0 | 1;
   /** Absolute byte offset of this JSONL line in the session file. Enables on-demand content reads. */
   textOffset: number | null;
+  /**
+   * 1 for subagent (Task/sidechain) assistant turns (A1). Stored so their
+   * tokens/cost fold into the usage totals, but excluded from session-detail /
+   * activity / one-shot reads. Primary turns are 0.
+   */
+  isSidechain: 0 | 1;
 }
 
 /**
@@ -544,6 +550,24 @@ async function readJsonlSession(
   // Tracks the timestamp of the most-recent user turn so the following
   // assistant turn can look up that turn's slash-command set.
   let prevUserTimestamp: string | null = null;
+  // A3: text of the most-recent human user prompt, threaded onto the following
+  // assistant turns as `userIntentText` so intent-based categories can attribute cost.
+  let prevUserText: string | undefined;
+  // A6: dedup assistant usage by message.id (fallback requestId) per session.
+  const seenMessageIds = new Set<string>();
+  // A1: subagent (sidechain) assistant turns collected here, then appended as
+  // `turns` rows AFTER the primary detectors run (so status/one-shot/quality
+  // stay primary-only) but BEFORE the write + rollup-tuple derivation (so their
+  // tokens/cost fold into daily_costs/category_costs and the usage totals).
+  const sidechainCollected: Array<{
+    ts: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreateTokens: number;
+    cacheReadTokens: number;
+    userIntentText?: string;
+  }> = [];
 
   const tParse = PROFILE ? performance.now() : 0;
   for (const { line, entry } of parsedLines) {
@@ -573,7 +597,36 @@ async function readJsonlSession(
       continue;
     }
 
-    if (entry.isSidechain || entry.isMeta || !entry.timestamp) continue;
+    if (entry.isMeta || !entry.timestamp) continue;
+    // A1: subagent (sidechain) turns don't participate in status inference,
+    // one-shot/quality detection, or tool_uses — but their assistant-turn
+    // tokens/cost must fold into the usage totals. Collect them here and append
+    // as rows after the primary pass; then `continue` so the primary logic below
+    // is untouched (identical to the pre-A1 skip for every other purpose).
+    if (entry.isSidechain) {
+      if (entry.type === "assistant") {
+        const model = entry.message?.model;
+        if (model && model !== "<synthetic>") {
+          const messageId =
+            (entry.message as { id?: string } | undefined)?.id ??
+            (entry as { requestId?: string }).requestId;
+          if (!messageId || !seenMessageIds.has(messageId)) {
+            if (messageId) seenMessageIds.add(messageId);
+            const usage = entry.message?.usage ?? {};
+            sidechainCollected.push({
+              ts: entry.timestamp,
+              model,
+              inputTokens: usage.input_tokens ?? 0,
+              outputTokens: usage.output_tokens ?? 0,
+              cacheCreateTokens: usage.cache_creation_input_tokens ?? 0,
+              cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+              userIntentText: prevUserText,
+            });
+          }
+        }
+      }
+      continue;
+    }
     const { type, timestamp } = entry;
     if (type !== "assistant" && type !== "user") continue;
 
@@ -594,6 +647,14 @@ async function readJsonlSession(
       }
       const model = entry.message?.model;
       if (!model || model === "<synthetic>") continue;
+      // A6: skip a re-logged assistant message (same message.id / requestId).
+      const messageId =
+        (entry.message as { id?: string } | undefined)?.id ??
+        (entry as { requestId?: string }).requestId;
+      if (messageId) {
+        if (seenMessageIds.has(messageId)) continue;
+        seenMessageIds.add(messageId);
+      }
       modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);
 
       const usage = entry.message?.usage ?? {};
@@ -691,6 +752,8 @@ async function readJsonlSession(
         // can fire on phrases past char 500 only when MINDER_USE_DB=1.
         assistantText: text ? text.slice(0, USAGE_USER_TEXT_LIMIT) : undefined,
         isError: !!isError,
+        // A3: triggering user prompt, so classifyTurn can attribute intent.
+        userIntentText: prevUserText,
       };
 
       lastAssistantTurnIdx = turns.length;
@@ -715,6 +778,7 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: hasTurnThinking ? 1 : 0,
         textOffset: fromOffset + thisLineOffset,
+        isSidechain: 0,
       });
 
       // Status inference: this assistant turn becomes the new "last
@@ -797,6 +861,7 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: 0,
         textOffset: null,
+        isSidechain: 0,
       });
 
       // Status inference: walk this user turn's content for
@@ -819,10 +884,15 @@ async function readJsonlSession(
         }
       }
       prevUserTimestamp = timestamp;
+      // A3: capture the human prompt text (handles both string and array
+      // shapes via `userText` above) for propagation onto following assistant turns.
+      if (userText) prevUserText = userText;
     }
   }
 
   if (PROFILE) tick("parseTurns", performance.now() - tParse);
+  // Skip a session with no primary turns (sidechain-only sessions don't occur —
+  // a subagent always runs inside a parent session that has primary turns).
   if (turns.length === 0) return { parsed: null, safeOffset, hasOrphanToolResults };
 
   const primaryModel = mostFrequent(modelCounts);
@@ -888,6 +958,70 @@ async function readJsonlSession(
     }
   }
 
+  // Primary turn count captured BEFORE appending sidechain rows so
+  // `sessions.turn_count` (a session-summary field, primary-only, mirrored by
+  // the file-parse ClaudeUsageStats) excludes subagent turns. The usage totals
+  // read `COUNT(*)`/`SUM` over the `turns` rows directly and DO include them.
+  const primaryTurnCount = turns.length;
+
+  // A1: append subagent (sidechain) turns as `turns` rows now — AFTER the
+  // primary detectors above (status/one-shot/quality/work-mode/resume all ran
+  // over primary turns only) and BEFORE the rollup-tuple derivation below (so
+  // their tokens/cost flow into daily_costs/category_costs and the usage
+  // totals). turn_index continues after the last primary turn so primary
+  // indices — and the (session_id, turn_index) tool_uses join — are unchanged.
+  // No tool_uses are created for these rows, so tool/shell/mcp stats exclude
+  // them automatically. Their cost is NOT added to the session-level `costUsd`
+  // (that column stays primary-only for the session list); the usage totals
+  // read `SUM(turns.cost_usd)` which includes these rows.
+  for (const sc of sidechainCollected) {
+    const usageTurn: UsageTurn = {
+      timestamp: sc.ts,
+      sessionId,
+      projectSlug,
+      projectDirName: canonicalDir,
+      model: sc.model,
+      role: "assistant",
+      inputTokens: sc.inputTokens,
+      outputTokens: sc.outputTokens,
+      cacheCreateTokens: sc.cacheCreateTokens,
+      cacheReadTokens: sc.cacheReadTokens,
+      toolCalls: [],
+      userIntentText: sc.userIntentText,
+      isSidechain: true,
+    };
+    const category = classifyTurn(usageTurn);
+    const scCost = applyPricing(getModelPricing(sc.model), {
+      inputTokens: sc.inputTokens,
+      outputTokens: sc.outputTokens,
+      cacheCreateTokens: sc.cacheCreateTokens,
+      cacheReadTokens: sc.cacheReadTokens,
+    });
+    turns.push({
+      turnIndex: startTurnIndex + turns.length,
+      ts: sc.ts,
+      role: "assistant",
+      model: sc.model,
+      inputTokens: sc.inputTokens,
+      outputTokens: sc.outputTokens,
+      cacheCreateTokens: sc.cacheCreateTokens,
+      cacheReadTokens: sc.cacheReadTokens,
+      isError: 0,
+      parentToolUseId: null,
+      textPreview: null,
+      toolResultPreview: null,
+      toolUses: [],
+      usageTurn,
+      costUsd: scCost,
+      category,
+      contextFill: null,
+      turnDurationMs: null,
+      hasThinking: 0,
+      textOffset: null,
+      isSidechain: 1,
+    });
+  }
+
   // Derive: affected (day, project, model) tuples for daily_costs.
   const affectedDays = new Set<string>();
   // Sister set keyed on category instead of model. Drives the
@@ -948,7 +1082,7 @@ async function readJsonlSession(
       gitBranch,
       initialPrompt,
       lastPrompt,
-      turnCount: turns.length,
+      turnCount: primaryTurnCount,
       userTurnCount,
       assistantTurnCount,
       toolCallCount,
@@ -1303,14 +1437,14 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd,
-       turn_duration_ms, has_thinking, text_offset,
+       turn_duration_ms, has_thinking, text_offset, is_sidechain,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd,
-       @turn_duration_ms, @has_thinking, @text_offset,
+       @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @derived_version
      )`
   );
@@ -1380,6 +1514,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       turn_duration_ms: t.turnDurationMs,
       has_thinking: t.hasThinking,
       text_offset: t.textOffset,
+      is_sidechain: t.isSidechain,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -1675,14 +1810,14 @@ function appendSessionTail(
        input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd,
-       turn_duration_ms, has_thinking, text_offset,
+       turn_duration_ms, has_thinking, text_offset, is_sidechain,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
        @input_tokens, @output_tokens, @cache_create_tokens, @cache_read_tokens,
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd,
-       @turn_duration_ms, @has_thinking, @text_offset,
+       @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @derived_version
      )`
   );
@@ -1752,6 +1887,7 @@ function appendSessionTail(
       turn_duration_ms: t.turnDurationMs,
       has_thinking: t.hasThinking,
       text_offset: t.textOffset,
+      is_sidechain: t.isSidechain,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -2377,6 +2513,7 @@ export function buildAdapterParsedSession(
       turnDurationMs: turn.turnDurationMs ?? null,
       hasThinking: 0,
       textOffset: null,
+      isSidechain: turn.isSidechain ? 1 : 0,
     };
   });
 

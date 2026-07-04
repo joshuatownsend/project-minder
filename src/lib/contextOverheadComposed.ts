@@ -55,6 +55,7 @@ async function loadObservedSamples(): Promise<number[]> {
        FROM turns t
        WHERE t.session_id = r.session_id
          AND t.role = 'assistant'
+         AND t.is_sidechain = 0
          AND t.cache_create_tokens > 0
        ORDER BY t.turn_index ASC
        LIMIT 1
