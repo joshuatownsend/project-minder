@@ -70,16 +70,26 @@ Single data interface with shared sort/merge post-processing over both backends'
 
 ## Status
 
-| PR | Status |
-|----|--------|
-| A | TODO |
-| B | TODO |
-| C | TODO |
-| D | TODO |
-| E | TODO |
-| F | TODO |
-| G | TODO |
-| H | TODO |
-| I | TODO |
+Overnight run 2026-07-03 → 07-04. All nine PRs opened as a stacked series off `main`; merge in order A→I. Baseline was 3046 tests; end state **3181 tests passing** + `pnpm build` green. Each PR verified by `pnpm typecheck` + full `pnpm test` (+ `pnpm build` for H and I).
 
-Updated live as the run proceeds.
+| PR | Branch | GitHub PR | Model | Status |
+|----|--------|-----------|-------|--------|
+| A | `cleanup/a-security` | #249 | Sonnet | DONE |
+| B | `cleanup/b-usage-accuracy` | #250 | Opus | DONE |
+| C | `cleanup/c-scanner-correctness` | #251 | Sonnet | DONE |
+| D | `cleanup/d-docs-deadcode` | #252 | Haiku | DONE |
+| E | `cleanup/e-infra` | #253 | Sonnet | DONE (D1 deferred) |
+| F | `cleanup/f-caches-perf` | #254 | Sonnet | DONE |
+| G | `cleanup/g-test-harness` | #255 | Sonnet | DONE (+ pnpm-test classifier fix) |
+| H | `cleanup/h-rsc-sse` | #256 | Opus | DONE |
+| I | `cleanup/i-backend-unify` | #257 | Opus | DONE (C4 dispatch + deep ingest split deferred) |
+
+## Deferred / follow-ups (need a supervised session)
+
+1. **D1 — pnpm overrides consolidation** (PR E): moving `hono`/`vite`/`@babel/core` overrides into `pnpm-workspace.yaml` unmasked real version drift (`postcss` 8.4.31→8.5.16, `zod@4.4.3` dropped), implying the workspace-file `postcss`/`zod` overrides aren't currently taking effect as the lockfile records. Needs a deliberate dependency-review session.
+2. **Component smoke suite** (PR G): requires adding `jsdom` + `@testing-library/react` + a `vitest.config` change (lockfile mutation) — deferred from the unattended run.
+3. **C4 full `MINDER_USE_DB` dispatch unification** (PR I): the safe shared post-processing was already shared; the full single-interface rewrite is a maintainability refactor whose main hazard is silent backend drift — do it supervised, leaning on the PR-B parity tests.
+4. **Deeper `ingest.ts` split** (PR I): `reconcile`/`write`/`adapterSessions` are coupled to module-level state + prepared-statement closures; extracting them would force circular imports and risk behavior change.
+5. **A7 per-turn `pricingSource`/estimated flag** (PR B): would touch the cost tuple + DB schema; low value vs scope.
+
+Manual verification worth doing before merging PR H: an interactive smoke pass of the data pages with RSC/SSE/Server-Actions on (the repo validates UI via build + manual).
