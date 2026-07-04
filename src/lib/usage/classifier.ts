@@ -7,7 +7,7 @@ const BUILD_DEPLOY_RE =
   /\b(npm run build|yarn build|pnpm build|docker build|docker compose|vercel|netlify|deploy|webpack|vite build|next build|tsc\b)/i;
 
 const TESTING_CMD_RE =
-  /\b(vitest|jest|pytest|mocha|cypress|playwright|npm test|npm run test)\b/i;
+  /\b(vitest|jest|pytest|mocha|cypress|playwright|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+test)\b/i;
 
 // Tightened so bare "fix"/"issue" in ordinary prose ("fix the copy",
 // "issue the refund") no longer over-tag Debugging (A7). Matches: strong
