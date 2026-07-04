@@ -59,8 +59,10 @@ const MONOREPO_DETECT: Record<string, string> = {
 
 function extractPort(scripts: Record<string, string>): number | undefined {
   const devScript = scripts.dev || scripts.start || "";
-  // Match --port N, --port=N, -p N, and -pN forms, plus PORT= (B6).
-  const portMatch = devScript.match(/(?:--port[= ]|-p ?)(\d+)/);
+  // Match --port N, --port=N, -p N, and -pN forms, plus PORT= (B6). Whitespace
+  // between flag and value is one-or-more spaces/tabs (\s+ / \s*), not a single
+  // literal space, so `--port    4100` or a tab-separated value still parse.
+  const portMatch = devScript.match(/(?:--port(?:=|\s+)|-p\s*)(\d+)/);
   if (portMatch) return parseInt(portMatch[1], 10);
   const envMatch = devScript.match(/PORT=(\d+)/);
   if (envMatch) return parseInt(envMatch[1], 10);

@@ -40,6 +40,16 @@ describe("scanPackageJson — devPort parsing (B6)", () => {
     expect(result.devPort).toBe(4100);
   });
 
+  it("parses --port with multiple spaces or a tab before the value", async () => {
+    // Regression (PR #251 review): the flag/value separator must be \s+, not a
+    // single literal space, or `--port    4100` / a tab falls through to 3000.
+    for (const script of ["next dev --port    4100", "next dev --port\t4100"]) {
+      withDevScript(script);
+      const result = await scanPackageJson("C:\\dev\\proj");
+      expect(result.devPort, script).toBe(4100);
+    }
+  });
+
   it("parses PORT=N env-prefix form (regression guard)", async () => {
     withDevScript("PORT=3001 node server.js");
     const result = await scanPackageJson("C:\\dev\\proj");

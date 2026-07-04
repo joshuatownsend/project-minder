@@ -272,7 +272,9 @@ class ProcessManager {
       const devScript = scripts.dev || scripts.start || "";
 
       // Detect port from script. Matches --port N, --port=N, -p N, -pN (B6).
-      const portMatch = devScript.match(/(?:--port[= ]|-p ?)(\d+)/);
+      // Flag/value separator is \s+ / \s* (any run of spaces/tabs), not a
+      // single literal space, so `--port    4100` or a tab still parse.
+      const portMatch = devScript.match(/(?:--port(?:=|\s+)|-p\s*)(\d+)/);
       const envMatch = devScript.match(/PORT=(\d+)/);
       let port: number | undefined;
 
