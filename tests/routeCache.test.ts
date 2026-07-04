@@ -107,6 +107,19 @@ describe("TtlCache", () => {
       for (let i = 0; i < 500; i++) cache.set(`k${i}`, i);
       expect(cache.size).toBe(500);
     });
+
+    it("keeps the most-recent entry when maxEntries=1 (never evicts to empty)", () => {
+      // Regression: floor(1 * 0.8) = 0 would evict EVERY entry the moment a
+      // second key is inserted, leaving the cache permanently empty.
+      const cache = new TtlCache<string>({ ttlMs: 100_000, maxEntries: 1 });
+      cache.set("a", "a");
+      vi.setSystemTime((vi.getMockedSystemTime() as Date).getTime() + 1);
+      cache.set("b", "b");
+      // The newer key survives; the cache is not wiped.
+      expect(cache.size).toBe(1);
+      expect(cache.get("b")).toBe("b");
+      expect(cache.get("a")).toBeUndefined();
+    });
   });
 });
 

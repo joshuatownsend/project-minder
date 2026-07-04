@@ -110,7 +110,11 @@ export class TtlCache<T> {
    *  cut and only re-sort once we're actually over budget. */
   private evictIfNeeded(): void {
     if (this.slots.size <= this.maxEntries) return;
-    const target = Math.floor(this.maxEntries * 0.8);
+    // Keep at least one entry: with maxEntries=1, floor(1 * 0.8) = 0, which
+    // would evict EVERY entry the moment the cache briefly holds two keys —
+    // leaving it permanently empty and defeating the cache. Clamp to 1 so a
+    // tiny cache still retains its most-recently-accessed slot.
+    const target = Math.max(1, Math.floor(this.maxEntries * 0.8));
     const entries = Array.from(this.slots.entries()).sort(
       (a, b) => a[1].lastAccess - b[1].lastAccess
     );

@@ -33,12 +33,12 @@ async function flushAsync() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function marketplaceItem(id: string, gitCommitSha: string) {
+function marketplaceItem(id: string, gitCommitSha: string, marketplaceRepo = "owner/repo") {
   return {
     id,
     kind: "marketplace-plugin" as const,
     marketplace: "test-marketplace",
-    marketplaceRepo: "owner/repo",
+    marketplaceRepo,
     gitCommitSha,
   };
 }
@@ -49,9 +49,12 @@ describe("skillUpdateCache.dispose() race protection", () => {
     const { skillUpdateCache } = await import("@/lib/skillUpdateCache");
     skillUpdateCache.dispose();
 
+    // Distinct repos so two `git ls-remote` calls fire deterministically —
+    // not by relying on both same-repo items missing a shared HEAD cache in a
+    // per-batch race (which a future repo-level dedup would collapse to one).
     skillUpdateCache.enqueue([
-      marketplaceItem("plugin-a", "aaa111"),
-      marketplaceItem("plugin-b", "bbb222"),
+      marketplaceItem("plugin-a", "aaa111", "owner/repo-a"),
+      marketplaceItem("plugin-b", "bbb222", "owner/repo-b"),
     ]);
 
     // processQueue has spawned the batch; deferredCallbacks holds the two
