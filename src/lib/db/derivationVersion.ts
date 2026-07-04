@@ -14,7 +14,7 @@
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
 // - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 10;
+export const DERIVED_VERSION = 11;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -104,3 +104,12 @@ export const DERIVED_VERSION = 10;
 //     sidechain rows and corrected categories. No read-side gate — pre-
 //     reconcile the totals simply omit subagent spend (the prior behavior),
 //     which is degraded, not wrong.
+// 11 — classifier: TESTING_CMD_RE now matches `pnpm test` / `yarn test` /
+//     `bun test` (and `pnpm run test`, etc.), so Bash turns running those move
+//     from `Coding` to `Testing`. Because this changes `classifyTurn` output,
+//     already-indexed sessions (unchanged mtime/size) would keep their stale
+//     `turns.category` / `category_costs` on the SQLite backend until the file
+//     next changed — undercounting Testing. Bumping forces a one-time re-parse
+//     so the corpus reclassifies. No read-side gate — pre-reconcile the
+//     affected turns just read as `Coding` (the prior behavior), degraded not
+//     wrong.
