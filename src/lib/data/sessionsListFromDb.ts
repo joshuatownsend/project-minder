@@ -197,6 +197,12 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             work_mode_testing_pct, work_mode_other_pct,
             source
      FROM sessions
+     -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
+     -- transcripts ingested from <session>/subagents/*.jsonl — needed so
+     -- their token spend reaches the usage rollups) aren't sessions the
+     -- user ran and would render as blank zero-turn cards; keep them out
+     -- of the browser.
+     WHERE turn_count > 0
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
 

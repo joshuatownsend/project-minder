@@ -1,5 +1,129 @@
 # Insights
 
+<!-- insight:e4a71c220b5f | session:027010ff-2845-45c0-b9ed-ac55d2c33867 | 2026-07-04T20:05:00.000Z -->
+## ★ Insight
+**The bumpy-startup cascade was one design flaw wearing four costumes.** The worker's `started` ack waited on the initial reconcile — work proportional to corpus size × staleness, so a `DERIVED_VERSION` bump made the 60 s handshake timeout structurally unreachable. The timeout's "fallback" then `terminate()`d a *healthy* worker mid-better-sqlite3-write (the documented corruption vector behind the FTS5 `prompts_fts` quarantine), and the same reconcile's writer-lock pressure surfaced as `SQLITE_BUSY` 500s on OTEL ingest. Two durable lessons: (1) a readiness ack must confirm *readiness to work*, never *work completed* — any ack gated on data-proportional work eventually outgrows a fixed timeout; (2) never hard-kill a thread that owns a SQLite connection — post `stop`, grace-wait for a clean exit between transactions, terminate only as a last resort. Related: SQL `SUM()` over zero rows is `NULL` (only `COUNT` is zero-safe) — the sidechain-only subagent transcripts (`<session>/subagents/agent-*.jsonl`, new Claude Code layout, parent file no longer inlines them) hit exactly this against a `NOT NULL` column, and the rolled-back transaction preserved its own preconditions, making a permanent retry storm.
+
+---
+
+<!-- insight:9cb63d71a8dc | session:04be673c-e34d-4b86-a837-77e73a7118bc | 2026-07-04T12:51:00.517Z -->
+## ★ Insight
+**Stacked branches don't auto-inherit upstream fixes until rebased.** My A-branch fix to `devServerRoute.test.ts` (the Ubuntu CI failure) lives only on `cleanup/a-security`. Branches B–I are stacked on the *old* A, so they still carry the broken test and their CI will red on it until each is rebased onto its fixed parent. The final merged state is correct (sequential A→I merge rebases each onto `main`), but the open PRs B–I will show that pre-existing failure meanwhile.
+
+---
+
+<!-- insight:6f31eacb19dc | session:04be673c-e34d-4b86-a837-77e73a7118bc | 2026-07-04T12:03:59.592Z -->
+## ★ Insight
+The `sqlSchemaSnapshot` "live DB column check" reads the *real* `~/.minder/index.db` on disk. During the overnight run, later branches migrated that DB to v17 (adding `is_sidechain`). Branch A predates that migration, so its snapshot correctly omits `is_sidechain` — but the test compares against the now-v17 on-disk DB and sees a column the snapshot lacks. On CI (fresh v16 DB built from branch-A migrations) this passes; only my machine's upgraded DB trips it. The test's `describe.skipIf(!existsSync(DB_PATH))` guard is designed exactly for "no local DB present."
+
+---
+
+<!-- insight:663335e7afb5 | session:04be673c-e34d-4b86-a837-77e73a7118bc | 2026-07-04T11:51:50.877Z -->
+## ★ Insight
+**Stacked-PR fix propagation.** Because each fix touches files *disjoint* from the other branches (A→middleware/processManager, B→parser/ingest, C→platform/git, etc.), I can commit each fix directly to its own branch as a fast-forward — no cascade rebase needed. The merge-base of each downstream PR stays pinned, so an upstream fix won't distort a downstream diff, and at sequential merge time each branch rebases onto the fixed `main` cleanly. A cascade rebase would be higher-risk for zero benefit here.
+
+---
+
+<!-- insight:ae79b4c2f1f3 | session:d4f68740-0b9b-40e5-a4f8-8eb66e5ca710 | 2026-07-02T04:34:02.139Z -->
+## ★ Insight
+- **The function structurally can't honor it.** `getModelContextWindow(model: string)` receives only the model id. A `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` session still reports bare `claude-sonnet-5` — the 200K signal the comment wants to key on simply isn't in the input. The only signals available are bare-id vs the `[1m]` suffix.
+- **It contradicts the explicit ask.** You asked to account for Sonnet 5 *as* a 1M model; 1M is its documented default. Declining bare `claude-sonnet-5` → 1M would undo the core of the PR.
+- **The two bot P2s point opposite ways.** One says "make Sonnet 4.6 1M too," the other says "don't even make Sonnet 5 1M." When automated reviewers disagree on direction, it's a defaults judgment call — an owner decision, not a bug fix.
+
+---
+
+<!-- insight:2e57ef9f0c3f | session:d4f68740-0b9b-40e5-a4f8-8eb66e5ca710 | 2026-07-02T03:39:27.210Z -->
+## ★ Insight
+- The distinction that matters is **default window vs. maximum window**. The model catalog lists Sonnet 4.6's *maximum* as 1M, but for the Sonnet 4.x line 1M is opt-in per session (signalled by the `[1m]` suffix), so 200K is the right *default* to assume — the original author was correct. Fable 5 / Sonnet 5 / Opus 4.8 differ: 1M is the default, no opt-in.
+- Ordering in the regex table is load-bearing: the specific 1M rules must precede the generic `/^claude-(opus|sonnet|haiku)-/` catch-all, or Sonnet 5 would be swallowed by the 200K rule (exactly today's bug).
+
+---
+
+<!-- insight:412426ba68bf | session:d4f68740-0b9b-40e5-a4f8-8eb66e5ca710 | 2026-07-02T03:37:07.529Z -->
+## ★ Insight
+- The warning fires because `getModelContextWindow()` in `src/lib/usage/sessionQuality.ts:33` walks an ordered regex table. `claude-fable-5` matches none of the patterns (the family group is `opus|sonnet|haiku`), so it hits the `warnedModels` fallback and logs once.
+- The subtler bug: `claude-sonnet-5` *does* match `/^claude-(opus|sonnet|haiku)-/i` → so it silently resolves to **200K**. Per the authoritative model catalog, Sonnet 5 (and Fable 5, Opus 4.8, Sonnet 4.6) all ship a **1M** context window by default. Only Haiku 4.5 and the pre-4 families are 200K.
+- That 5× underestimate matters for this module specifically: `turnContextFill` and `detectCompactionLoops` divide `input_tokens` by the window. A 200K window on a real 1M model makes a 160K-token turn read as 80% full (loop!) when it's actually 16% (healthy).
+
+---
+
+<!-- insight:c0b8d96cc768 | session:e3addc64-00e5-4d03-afe0-fdf34dfe5022 | 2026-07-02T02:30:53.624Z -->
+## ★ Insight
+The key move was **generalizing rather than duplicating**: PR 5a's `LiveEventsBridge` (one EventSource → `invalidateQueries`) became a `LiveEventsProvider` that *also* fans events out to a new `useLiveEvent(type, handler)` hook. That single abstraction let the three non-Query pollers subscribe without each opening its own EventSource — and it kept each poller's battle-tested interval+backoff logic intact as the exact flag-off fallback, so the risky part (rewiring the app-wide pulse poll) stays reversible by a flag flip.
+
+---
+
+<!-- insight:1920991b69b2 | session:e3addc64-00e5-4d03-afe0-fdf34dfe5022 | 2026-07-02T01:56:08.566Z -->
+## ★ Insight
+The cleanest simplification came from *not* building what the spec literally listed. I dropped the planned `manual-steps.changed` event entirely: the manual-steps toggle and the file watcher both already funnel through `invalidateCache()`, so a single `scan.invalidated` event covers manual-steps, insights, and stats — a dedicated event would've been a redundant emit and a dead event type. Two coarse events (`sessions.changed` + `scan.invalidated`) cover the whole Query-backed surface.
+
+---
+
+<!-- insight:86567deb7926 | session:e3addc64-00e5-4d03-afe0-fdf34dfe5022 | 2026-07-02T01:34:29.940Z -->
+## ★ Insight
+The spec says "one SSE stream → `invalidateQueries`, consolidating `/api/pulse` + git/github pollers." But those three pollers **aren't TanStack-Query-backed** — `PulseProvider`, `useGitDirtyStatus`, and `useGithubActivity` manage their own `useState` + `fetch`, so `invalidateQueries` doesn't reach them. Only the Query-backed resources (sessions, manual-steps, stats, insights, board, config, etc.) map cleanly to invalidation. So "consolidate everything" is really two jobs of different risk: (1) the clean SSE→invalidate mechanism, and (2) rewiring three bespoke pollers — `pulse` being the riskiest since it drives notifications, decision counts, and live-process badges.
+
+---
+
+<!-- insight:5db364c08bcd | session:e3addc64-00e5-4d03-afe0-fdf34dfe5022 | 2026-07-01T16:47:49.209Z -->
+## ★ Insight
+- **Single source of truth by construction:** rather than duplicating write logic between the route and the action (which could drift), I extracted plain core mutations into `src/lib/server/mutations/`, made the `'use server'` actions thin wrappers, and **refactored the existing POST/PUT routes to delegate to the same functions**. Route ≡ action, guaranteed.
+- **Flag-gated dual path** mirrors how PRs 1–3 shipped: clients branch via `useConfig()` + `getFlag(..., false)`, so flag-off is byte-identical to today. A `defaultOn:false` meta entry keeps the Settings toggle honest (the regression PR #240's review caught).
+- **The visible win:** the project-detail status change dropped its crude `window.location.reload()` for a scoped `useProject.refresh()` — a real UX improvement, not just plumbing.
+
+---
+
+<!-- insight:c522a693b6d3 | session:e3addc64-00e5-4d03-afe0-fdf34dfe5022 | 2026-07-01T16:33:05.267Z -->
+## ★ Insight
+- **Server Actions** replace the client `fetch(...)` + route handler with a `'use server'` async function imported directly into the client component. Next.js compiles it to an RPC endpoint automatically — no hand-written route, and the mutation runs in the same server module as `mutateConfig`/`manualStepsWriter`.
+- Pairing them with **`useMutation`** gives real optimistic updates + rollback via TanStack Query's cache (`onMutate`/`onError`/`onSettled`) — a big upgrade over today's manual `setData` and the `location.reload()` hack.
+- The `project/[slug]` reload is the clearest win: an optimistic `queryClient.setQueryData` on the project detail cache removes a full-page reload.
+
+---
+
+<!-- insight:564cc12178a5 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T18:22:47.963Z -->
+## ★ Insight
+**The whole feature is a no-op until you flip one toggle.** `maybeDehydrate()` returns `null` when `rscHydration` is off, and `<HydrationBoundary state={null ?? undefined}>` is a transparent pass-through — so every page fetches-on-mount exactly as before. That's what makes a 55-file architectural change safe to merge at full scope: the only behavior change is gated, and the build proved it by flipping all ten routes from a mix of static/dynamic to uniformly `ƒ (Dynamic)`.
+
+---
+
+<!-- insight:47bad6df772e | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T18:00:47.705Z -->
+## ★ Insight
+Config's default tab is **"settings"**, which maps `catalogType` to `undefined` — and `useConfig` deliberately **doesn't fetch** when type is undefined. So a bare `/config` load has *nothing* to prefetch; hydration only matters on `?type=hooks`-style deep-links. The RSC page must read `searchParams` (async in Next 16), map `type`→catalogType with the same settings/playground exclusion the component uses, and prefetch only when it resolves to a real catalog type.
+
+---
+
+<!-- insight:a49454dbef77 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T17:49:42.567Z -->
+## ★ Insight
+Usage, unlike sessions/stats, needs **no route refactor**: the `/api/usage` body is literally `getUsage(period).report` with no post-assembly. So the data façade *is already* the shared builder — the prefetch calls `getUsage("30d")` and JSON-clones the report, byte-identical to what the route serializes. The shared-builder extraction is only needed where a route does work *after* the façade (sessions' filter chain, stats' scatter+crosscheck assembly).
+
+---
+
+<!-- insight:1ade98ed3972 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T17:38:49.692Z -->
+## ★ Insight
+**Parity is enforced by construction, not by hope.** Three mechanisms: (1) server prefetch and client fetch share the *same* `queryKeys` factory, so the cache entry the server fills is the exact one the client reads; (2) each route's body-assembly is extracted into a shared loader that *both* the route handler and the server prefetch call — no duplicated filter logic to rot; (3) every server-prefetched value is JSON-cloned (`JSON.parse(JSON.stringify(x))`) so it's byte-identical to what `await res.json()` yields client-side — this neutralizes the Flight-serializes-`Date`-as-`Date` footgun in one place.
+
+---
+
+<!-- insight:822d0c3c7f45 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T17:25:19.827Z -->
+## ★ Insight
+PR 1 only put **6** resources on TanStack Query (`sessions`, `usage`, `stats`, `agents`, `skills`, `insights`). The other 4 routes are **not** on Query: `commands`, `templates` (plain `force-dynamic` RSCs already, rendering client browsers), `manual-steps`, and `config` (the latter entangled with `ConfigProvider` + `useSearchParams`). The HydrationBoundary prefetch→rehydrate pattern *only* works where the client island reads via `useQuery`. So the 4 non-Query routes can't take that pattern as-is — each would first need a full PR-1-style Query migration, or a different "server-load → pass initialData props" conversion.
+
+---
+
+<!-- insight:621d5d93a39b | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T17:20:53.713Z -->
+## ★ Insight
+1. **`src/lib/data/index.ts` opens with `import "server-only"`** — the data façade is *built* to be called from RSCs and forbidden from client bundles. That's the ideal prefetch source for the "no fetch hop" the spec wants. But it means the server prefetch needs its **own** server-only queryFn (the client `queryOptions` factories use `fetch()` and stay client-safe).
+2. **Each route does post-cache work the lib loader doesn't** — `/api/sessions` filters by `enabledAdapters`; `/api/stats` assembles `{...stats, sessions, crossCheck}`. So a server prefetch that calls `getSessionsList()` raw would dehydrate a *different* shape than the client's `fetch('/api/sessions')` returns → the hydrated cache and the first client refetch disagree. The disciplined fix is to extract a shared "build the response body" function that **both** the route and the prefetch call, guaranteeing byte-parity.
+
+---
+
+<!-- insight:7cf5c197fcef | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-30T17:18:59.982Z -->
+## ★ Insight
+**The API routes aren't directly reusable from an RSC, but the data layer underneath them is.** Each route (`/api/sessions`, `/api/stats`) wraps a clean lib function (`getSessionsList()`, `computeStats()`, `getClaudeUsage()`) with route-only concerns: ETag/304 handling, `globalThis` caches, query-param filtering, and response headers. Server-side prefetch can call the *lib function* directly — the "no fetch hop" the spec wants — but must return the **exact same JSON shape** the client's `fetch()` queryFn produces, or the hydrated cache and a later client refetch will disagree (the classic dehydration footgun: Flight serializes `Date` as `Date`, but the API's `JSON.stringify` already turned them into strings).
+
+---
+
 <!-- insight:f6fc2fbdb666 | session:05c19f48-667e-48b7-8be4-647b81fd7478 | 2026-06-29T19:11:12.942Z -->
 ## ★ Insight
 - **Next.js `<Link>` already prefetches the route bundle + RSC payload on hover** — but these pages are `"use client"` and fetch their data in `useQuery` *after mount*, so the **data** isn't warmed. Hover-prefetch closes that gap by populating the TanStack cache before the click.

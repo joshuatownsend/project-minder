@@ -37,7 +37,7 @@ export async function PATCH(request: NextRequest) {
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
   // isPathAllowed elsewhere): this PATCH route is origin-protected by
-  // src/middleware.ts, which blocks cross-site requests lacking a matching Origin.
+  // src/proxy.ts, which blocks cross-site requests lacking a matching Origin.
   if (Array.isArray(body.devRoots)) {
     if (body.devRoots.some((r: unknown) => typeof r !== "string")) {
       return NextResponse.json({ error: "devRoots elements must be strings" }, { status: 400 });

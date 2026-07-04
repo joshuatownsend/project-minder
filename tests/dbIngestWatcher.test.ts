@@ -182,6 +182,66 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     reloaded.conn.closeDb();
   });
 
+  it("derives the project dir from the first segment under the watch root (subagent nesting)", async () => {
+    // Chokidar watches the tree recursively; newer Claude Code nests
+    // subagent transcripts at <project>/<session-id>/subagents/*.jsonl.
+    // basename(dirname(..)) misattributed those to a "subagents" project.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = projectsDirOf(tmpHome);
+    const { projectDirNameFor } = reloaded.watcher;
+    expect(
+      projectDirNameFor(projectsDir, path.join(projectsDir, "C--dev-app", "s1.jsonl"))
+    ).toBe("C--dev-app");
+    expect(
+      projectDirNameFor(
+        projectsDir,
+        path.join(projectsDir, "C--dev-app", "sess-1", "subagents", "agent-x.jsonl")
+      )
+    ).toBe("C--dev-app");
+    // Outside the watch root → fall back to the immediate parent dir.
+    expect(
+      projectDirNameFor(projectsDir, path.join(tmpHome, "elsewhere", "s1.jsonl"))
+    ).toBe("elsewhere");
+  });
+
+  it("defers the initial reconcile when deferInitialReconcile is set", async () => {
+    // Worker mode acks `started` as soon as the watcher is armed; the
+    // initial reconcile runs behind the in-flight flag and reports
+    // completion via onInitialReconcile.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = projectsDirOf(tmpHome);
+    await writeJsonl(path.join(projectsDir, "C--dev-defer", "s0.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "before watcher"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+
+    let reconciled: { ms: number; error?: string } | null = null;
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      usePolling: true,
+      deferInitialReconcile: true,
+      onInitialReconcile: (r) => {
+        reconciled = r;
+      },
+    });
+    expect(status.running).toBe(true);
+
+    await waitFor(() => reconciled !== null, { timeoutMs: 10000, pollMs: 50 });
+    expect(reconciled!.error).toBeUndefined();
+
+    const db = (await reloaded.conn.getDb())!;
+    const count = (db
+      .prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id = 's0'")
+      .get() as { n: number }).n;
+    expect(count).toBe(1);
+    expect(reloaded.watcher.getWatcherStatus().initialReconcileMs).not.toBeNull();
+
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
   it("ingests a session created after the watcher starts", { timeout: 15000 }, async () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const projectsDir = projectsDirOf(tmpHome);
@@ -218,6 +278,19 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
 
     const status = reloaded.watcher.getWatcherStatus();
     expect(status.eventsHandled).toBeGreaterThan(0);
+
+    // Watcher-driven reconciles must refresh BOTH rollups. daily_costs was
+    // always refreshed; category_costs used to be skipped — and the sweep
+    // can't backfill it because the reconcile already advanced the file's
+    // cursor, so it stayed stale until a forced full re-parse.
+    const dailyRows = (db
+      .prepare("SELECT COUNT(*) AS n FROM daily_costs")
+      .get() as { n: number }).n;
+    const categoryRows = (db
+      .prepare("SELECT COUNT(*) AS n FROM category_costs")
+      .get() as { n: number }).n;
+    expect(dailyRows).toBeGreaterThan(0);
+    expect(categoryRows).toBeGreaterThan(0);
 
     await reloaded.watcher.stopIngestWatcher();
     reloaded.conn.closeDb();

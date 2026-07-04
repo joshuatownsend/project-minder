@@ -1,15 +1,15 @@
 /**
- * Unit tests for the pure decision function behind src/middleware.ts (S1).
+ * Unit tests for the pure decision function behind src/proxy.ts (S1).
  *
- * The middleware default export just adapts a NextRequest into the shape
+ * The `proxy` export just adapts a NextRequest into the shape
  * `evaluateRequest` needs and turns the result into a NextResponse — all the
  * actual host/origin allowlist logic lives in `evaluateRequest`, so it's
- * tested directly rather than through a constructed NextRequest/middleware
+ * tested directly rather than through a constructed NextRequest/proxy
  * invocation.
  */
 
 import { describe, it, expect } from "vitest";
-import { evaluateRequest } from "@/middleware";
+import { evaluateRequest } from "@/proxy";
 
 const ALLOWED_HOST = "localhost:4100";
 const ALLOWED_HOST_IP = "127.0.0.1:4100";

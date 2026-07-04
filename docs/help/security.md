@@ -1,6 +1,6 @@
 # Security
 
-Project Minder is a local-only tool — it runs on your machine and reads your local files. It has no user accounts or publicly exposed endpoints. `src/middleware.ts` enforces a Host allowlist on every `/api/*` request (defeating DNS-rebinding attacks from a hostile web page) and an Origin allowlist on state-changing requests (defeating cross-site request forgery); `/api/mcp` has its own equivalent protection built into the MCP transport.
+Project Minder is a local-only tool — it runs on your machine and reads your local files. It has no user accounts or publicly exposed endpoints. `src/proxy.ts` (Next.js 16's proxy convention, formerly `middleware.ts`) enforces a Host allowlist on every `/api/*` request (defeating DNS-rebinding attacks from a hostile web page) and an Origin allowlist on state-changing requests (defeating cross-site request forgery); `/api/mcp` has its own equivalent protection built into the MCP transport.
 
 ## Reporting an issue
 
