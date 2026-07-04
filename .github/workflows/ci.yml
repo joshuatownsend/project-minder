@@ -17,12 +17,54 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.19.0', '22.12.0']
     steps:
       - uses: actions/checkout@v7
 
       # pnpm/action-setup must run before setup-node so the pnpm binary is
       # on PATH when setup-node computes the `cache: 'pnpm'` key. Version is
       # read from the `packageManager` field in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fails loudly if the better-sqlite3 native driver didn't build, instead
+      # of silently letting the ~34 DB-backed test suites skip and CI go green.
+      - name: Assert better-sqlite3 native driver loaded
+        run: node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded')"
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type-check (tsgo)
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  verify-windows:
+    # Advisory-only Windows coverage: the app targets Windows (dev port, path
+    # handling, better-sqlite3 native build) but CI's required check runs on
+    # ubuntu. continue-on-error keeps a Windows-only build-tooling gap from
+    # blocking the required `verify` status check while still surfacing
+    # failures in the workflow run for visibility.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
