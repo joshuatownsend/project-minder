@@ -279,6 +279,19 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     const status = reloaded.watcher.getWatcherStatus();
     expect(status.eventsHandled).toBeGreaterThan(0);
 
+    // Watcher-driven reconciles must refresh BOTH rollups. daily_costs was
+    // always refreshed; category_costs used to be skipped — and the sweep
+    // can't backfill it because the reconcile already advanced the file's
+    // cursor, so it stayed stale until a forced full re-parse.
+    const dailyRows = (db
+      .prepare("SELECT COUNT(*) AS n FROM daily_costs")
+      .get() as { n: number }).n;
+    const categoryRows = (db
+      .prepare("SELECT COUNT(*) AS n FROM category_costs")
+      .get() as { n: number }).n;
+    expect(dailyRows).toBeGreaterThan(0);
+    expect(categoryRows).toBeGreaterThan(0);
+
     await reloaded.watcher.stopIngestWatcher();
     reloaded.conn.closeDb();
   });

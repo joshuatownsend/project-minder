@@ -6,6 +6,7 @@ import { initDb } from "./migrations";
 import {
   reconcileAllSessions,
   reconcileSessionFile,
+  refreshCategoryCosts,
   refreshDailyCosts,
 } from "./ingest";
 import { getDb, getDbSync } from "./connection";
@@ -224,10 +225,12 @@ export async function startIngestWatcher(
   };
 
   if (options.deferInitialReconcile) {
-    // Background mode: arm chokidar first, reconcile behind the flag. The
-    // per-file guard in `runReconcile` and the sweep-tick guard both check
-    // `initialReconcileInFlight`, so events arriving mid-reconcile are
-    // deferred (not dropped) until the full pass completes.
+    // Background mode: kick the reconcile NOW and keep going — chokidar is
+    // imported and armed below while the pass runs. Any events chokidar
+    // delivers before the pass completes hit the per-file guard in
+    // `runReconcile` (and the sweep-tick guard), which reschedules them
+    // until the flag clears — deferred, not dropped, and never reconciling
+    // the same file concurrently with the full pass.
     state.initialReconcileInFlight = true;
     void runInitialReconcile();
   } else {
@@ -435,6 +438,11 @@ async function runReconcile(state: WatcherState, filePath: string): Promise<void
     const result = await reconcileSessionFile(db, filePath, projectDirNameFor(state.projectsDir, filePath));
     if (result.rowsWritten > 0) {
       refreshDailyCosts(db, result.affectedDays);
+      // Sister rollup to daily_costs, keyed on category. Skipping it here
+      // left category_costs stale for watcher-driven appends: the sweep
+      // can't backfill because this reconcile already advanced the file's
+      // cursor/mtime, so the next sweep sees the file as unchanged.
+      refreshCategoryCosts(db, result.affectedCategoryTuples);
     }
     state.eventsHandled++;
   } catch (err) {
