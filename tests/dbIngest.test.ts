@@ -700,6 +700,136 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("ingests a subagent transcript (sidechain-only session) without NULL aggregate failures", async () => {
+    // Regression: newer Claude Code writes subagent transcripts to
+    // <project>/<session-id>/subagents/agent-*.jsonl with EVERY entry marked
+    // isSidechain. Such a session has zero primary turns, so the tail path's
+    // primary-filtered SUM aggregates evaluated to NULL and the UPDATE
+    // violated sessions.user_turn_count NOT NULL — rolling back, never
+    // advancing the cursor, and retry-failing on every append. Also covers:
+    // the sweep discovering nested subagent files at all, attribution to the
+    // parent PROJECT (not a literal "subagents" project), and prune-survival
+    // across a second sweep.
+    const { reloaded, projectsDir } = await setup();
+    const agentFile = path.join(
+      projectsDir,
+      "C--dev-subagents-proj",
+      "parent-session-id",
+      "subagents",
+      "agent-abc123.jsonl"
+    );
+    await writeJsonl(agentFile, [
+      { ...userTurn("2026-07-04T10:00:00Z", "do the delegated task"), isSidechain: true },
+      {
+        ...assistantTurn("2026-07-04T10:00:01Z", "claude-sonnet-4-5", "subagent reply"),
+        isSidechain: true,
+      },
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const row = db
+      .prepare(
+        "SELECT project_dir_name, turn_count, user_turn_count, start_ts, end_ts FROM sessions WHERE session_id = 'agent-abc123'"
+      )
+      .get() as {
+      project_dir_name: string;
+      turn_count: number;
+      user_turn_count: number;
+      start_ts: string | null;
+      end_ts: string | null;
+    };
+    expect(row).toBeDefined();
+    // Attributed to the project, not the "subagents" directory.
+    expect(row.project_dir_name).toBe("C--dev-subagents-proj");
+    // Aggregates are primary-only → zero, but NOT NULL.
+    expect(row.turn_count).toBe(0);
+    expect(row.user_turn_count).toBe(0);
+    // Time bounds fall back to the sidechain rows (only assistant sidechain
+    // entries become turn rows, so bounds start at the first assistant).
+    expect(row.start_ts).toBe("2026-07-04T10:00:01Z");
+    expect(row.end_ts).toBe("2026-07-04T10:00:01Z");
+
+    // Grow the file → tail-append path. Before the COALESCE fix this threw
+    // "NOT NULL constraint failed: sessions.user_turn_count".
+    await fs.appendFile(
+      agentFile,
+      JSON.stringify({
+        ...assistantTurn("2026-07-04T10:00:02Z", "claude-sonnet-4-5", "more subagent work"),
+        isSidechain: true,
+      }) + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(agentFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Session row survived the second sweep's prune pass (the walk registers
+    // subagent files as live) and the tail append committed.
+    const after2 = db
+      .prepare(
+        "SELECT user_turn_count, end_ts FROM sessions WHERE session_id = 'agent-abc123'"
+      )
+      .get() as { user_turn_count: number; end_ts: string | null };
+    expect(after2).toBeDefined();
+    expect(after2.user_turn_count).toBe(0);
+    expect(after2.end_ts).toBe("2026-07-04T10:00:02Z");
+    const sideCount = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM turns WHERE session_id = 'agent-abc123' AND is_sidechain = 1"
+      )
+      .get() as { n: number };
+    expect(sideCount.n).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("re-stamps a session row whose project attribution changed (mispinned 'subagents' self-heal)", async () => {
+    // Rows written before the subagent-path fix were pinned to a literal
+    // "subagents" project (the watcher derived the project from the file's
+    // immediate parent dir). The tail path never rewrites attribution, so
+    // reconcileSessionFile must detect the project_dir_name mismatch and
+    // force a full replace that re-stamps it.
+    const { reloaded, projectsDir } = await setup();
+    const agentFile = path.join(
+      projectsDir,
+      "C--dev-subagents-proj",
+      "parent-session-id",
+      "subagents",
+      "agent-heal1.jsonl"
+    );
+    await writeJsonl(agentFile, [
+      {
+        ...assistantTurn("2026-07-04T11:00:00Z", "claude-sonnet-4-5", "subagent reply"),
+        isSidechain: true,
+      },
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    // Simulate the pre-fix watcher: project derived from the parent dir.
+    await reloaded.ingest.reconcileSessionFile(db, agentFile, "subagents");
+    const before = db
+      .prepare("SELECT project_dir_name FROM sessions WHERE session_id = 'agent-heal1'")
+      .get() as { project_dir_name: string };
+    expect(before.project_dir_name).toBe("subagents");
+
+    // The sweep passes the real project dir; the mismatch must bypass both
+    // the no-op gate (file unchanged) and the tail path, and full-replace.
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const healed = db
+      .prepare("SELECT project_dir_name FROM sessions WHERE session_id = 'agent-heal1'")
+      .get() as { project_dir_name: string };
+    expect(healed.project_dir_name).toBe("C--dev-subagents-proj");
+    // Full replace, not append — the turn set must not have doubled.
+    const turnCount = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 'agent-heal1'")
+      .get() as { n: number };
+    expect(turnCount.n).toBe(1);
+
+    reloaded.conn.closeDb();
+  });
+
   it("falls back to full re-parse when the file shrinks", async () => {
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-shrink", "s1.jsonl");

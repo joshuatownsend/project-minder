@@ -34,7 +34,7 @@ export async function startIngest(): Promise<void> {
 
   if (process.env.MINDER_INDEXER_WORKER === "1") {
     try {
-      const { startWorker, stopWorker } = await import("@/lib/db/workerHost");
+      const { startWorker, stopWorker, onWorkerMessage } = await import("@/lib/db/workerHost");
       // awaitStart: false — return as soon as the worker is alive and
       // the watcher module is loaded. The initial reconcile runs in
       // the background; instrumentation doesn't block server startup
@@ -59,6 +59,21 @@ export async function startIngest(): Promise<void> {
         // eslint-disable-next-line no-console
         console.info(`[ingest-worker] spawned; entry=${status.workerEntry}`);
       }
+      // The worker acks `started` before its initial reconcile finishes
+      // (deferInitialReconcile) — log the completion message so a slow
+      // full re-parse after a DERIVED_VERSION bump is visible instead of
+      // silent.
+      onWorkerMessage((msg) => {
+        if (!msg || typeof msg !== "object") return;
+        const m = msg as { type?: string; ms?: number; error?: string };
+        if (m.type === "initial-reconcile") {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[ingest-worker] initial reconcile finished in ${m.ms} ms` +
+              (m.error ? ` (error: ${m.error})` : "")
+          );
+        }
+      });
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(

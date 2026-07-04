@@ -27,6 +27,13 @@ import { Worker } from "node:worker_threads";
 const WORKER_REL_PATH = path.join("workers", "ingestWorker.mjs");
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_START_TIMEOUT_MS = 60_000;
+// How long stopWorker waits for a post-ready worker to exit on its own
+// after the `stop` message before hard-terminating it. terminate() kills
+// the thread wherever it is — including inside a better-sqlite3 write,
+// a documented DB-corruption vector (FTS5 shadow tables are the usual
+// casualty) — so a clean `process.exit(0)` between transactions is
+// strongly preferred.
+const STOP_GRACE_MS = 5_000;
 const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -302,15 +309,46 @@ export async function stopWorker(): Promise<void> {
   }
   state.messageSubscribers.clear();
   if (state.worker) {
+    const worker = state.worker;
+    // threadId flips to -1 once the thread has exited — catches a worker
+    // that already died (its `exit` event fired before we attached), so
+    // the grace race below can't wait on an event that will never come.
+    let exited = worker.threadId === -1;
+    const exitPromise = new Promise<void>((resolve) => {
+      if (exited) {
+        resolve();
+        return;
+      }
+      worker.once("exit", () => {
+        exited = true;
+        resolve();
+      });
+    });
     try {
-      state.worker.postMessage({ type: "stop" });
+      worker.postMessage({ type: "stop" });
     } catch {
       /* worker may already be dead; fall through to terminate */
     }
-    try {
-      await state.worker.terminate();
-    } catch {
-      /* swallow */
+    // Grace period, but only for workers that reached `ready`: those may be
+    // mid-ingest on a better-sqlite3 connection, and their stop handler
+    // exits cleanly between transactions. A worker that never emitted
+    // `ready` is stuck or broken — it isn't running ingest, so terminate
+    // immediately (this also keeps stop-during-startup fast).
+    if (state.lastReadyAt !== null) {
+      await Promise.race([
+        exitPromise,
+        new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, STOP_GRACE_MS);
+          t.unref?.();
+        }),
+      ]);
+    }
+    if (!exited) {
+      try {
+        await worker.terminate();
+      } catch {
+        /* swallow */
+      }
     }
     state.worker = null;
   }

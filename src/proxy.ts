@@ -7,8 +7,9 @@ import { NextRequest, NextResponse } from "next/server";
 // on src/app/api/sql/route.ts for the same "no auth by design" posture on
 // that endpoint. No-auth is fine for a tool only your own machine can reach,
 // but that assumption only holds if nothing *else* can reach it either. Two
-// distinct browser-based threats close that gap, and this middleware
-// defends against both with two separate checks:
+// distinct browser-based threats close that gap, and this proxy (Next 16's
+// rename of the middleware file convention) defends against both with two
+// separate checks:
 //
 //   1. DNS rebinding (defended via Host). An attacker's page is served from
 //      a domain whose DNS they control. The browser resolves it to a public
@@ -89,7 +90,7 @@ export interface EvaluateResult {
 }
 
 /**
- * Pure decision function extracted out of the Next.js middleware so it can
+ * Pure decision function extracted out of the Next.js proxy so it can
  * be unit-tested directly (no NextRequest/NextResponse construction needed).
  * See the file-header comment above for the two-layer rationale.
  */
@@ -101,7 +102,7 @@ export function evaluateRequest({
   pathname,
 }: EvaluateInput): EvaluateResult {
   // Only the API surface is guarded — everything else (pages, static
-  // assets) is unaffected, and `config.matcher` below scopes the middleware
+  // assets) is unaffected, and `config.matcher` below scopes the proxy
   // invocation to /api/* anyway; this check is a defensive second gate.
   if (!pathname.startsWith("/api/")) {
     return { allow: true };
@@ -149,7 +150,7 @@ export function evaluateRequest({
   return { allow: true };
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const result = evaluateRequest({
     method: request.method,
     host: request.headers.get("host"),

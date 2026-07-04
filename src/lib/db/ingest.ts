@@ -984,6 +984,21 @@ async function readJsonlSession(
     });
   }
 
+  // Sidechain-only file (e.g. a `subagents/agent-*.jsonl` transcript): the
+  // primary loop never ran, so start/end are still null. Derive them from
+  // the sidechain rows so the session row gets real time bounds. Primary
+  // sessions are untouched — their bounds stay primary-only.
+  if (!startTs && turns.length > 0) {
+    let minTs = turns[0].ts;
+    let maxTs = turns[0].ts;
+    for (const t of turns) {
+      if (t.ts < minTs) minTs = t.ts;
+      if (t.ts > maxTs) maxTs = t.ts;
+    }
+    startTs = minTs;
+    endTs = maxTs;
+  }
+
   // Derive: affected (day, project, model) tuples for daily_costs.
   const affectedDays = new Set<string>();
   // Sister set keyed on category instead of model. Drives the
@@ -1853,17 +1868,23 @@ function appendSessionTail(
   // work. Sidechain cost still folds into the usage totals — those roll up
   // over the daily_costs / category_costs derivation below, which is NOT
   // filtered here.
+  // COALESCE every SUM: SQL's SUM over zero rows is NULL (only COUNT is
+  // zero-safe), and a sidechain-only session — e.g. a `subagents/agent-*.jsonl`
+  // transcript, whose rows are ALL is_sidechain=1 — matches zero rows here.
+  // Without the COALESCE the UPDATE below would write NULL into NOT NULL
+  // columns (user_turn_count etc.), the transaction would roll back, the
+  // cursor would never advance, and every append would retry-fail forever.
   const aggRow = db
     .prepare(
       `SELECT
          COUNT(*) AS turn_count,
-         SUM(CASE WHEN role='user'      THEN 1 ELSE 0 END) AS user_turn_count,
-         SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) AS assistant_turn_count,
-         SUM(is_error)                                     AS error_count,
-         SUM(input_tokens)        AS input_tokens,
-         SUM(output_tokens)       AS output_tokens,
-         SUM(cache_create_tokens) AS cache_create_tokens,
-         SUM(cache_read_tokens)   AS cache_read_tokens,
+         COALESCE(SUM(CASE WHEN role='user'      THEN 1 ELSE 0 END), 0) AS user_turn_count,
+         COALESCE(SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END), 0) AS assistant_turn_count,
+         COALESCE(SUM(is_error), 0)            AS error_count,
+         COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+         COALESCE(SUM(output_tokens), 0)       AS output_tokens,
+         COALESCE(SUM(cache_create_tokens), 0) AS cache_create_tokens,
+         COALESCE(SUM(cache_read_tokens), 0)   AS cache_read_tokens,
          SUM(cost_usd)            AS cost_usd,
          MIN(ts) AS start_ts,
          MAX(ts) AS end_ts
@@ -1897,6 +1918,18 @@ function appendSessionTail(
   const primaryModel = modelRow?.model ?? null;
 
   const costUsd = aggRow.cost_usd ?? 0;
+
+  // Sidechain-only session: the primary-filtered MIN/MAX above found no rows,
+  // so fall back to time bounds over ALL turns — otherwise the session keeps
+  // NULL start/end and sorts to the bottom of every time-ordered surface.
+  // Primary sessions keep their primary-only bounds (unchanged semantics).
+  if (aggRow.start_ts === null) {
+    const allBounds = db
+      .prepare("SELECT MIN(ts) AS start_ts, MAX(ts) AS end_ts FROM turns WHERE session_id = ?")
+      .get(sessionId) as { start_ts: string | null; end_ts: string | null };
+    aggRow.start_ts = allBounds.start_ts;
+    aggRow.end_ts = allBounds.end_ts;
+  }
 
   // One-shot detection over old + new combined.
   const allUsageTurns = loadExistingTurnsAsUsage(
@@ -2116,9 +2149,14 @@ export async function reconcileSessionFile(
   if (size > MAX_SESSION_FILE_SIZE) return empty;
 
   const sessionId = path.basename(filePath, ".jsonl");
+  // The row stores the CANONICAL dir name (worktree dirs collapse to their
+  // parent project) — canonicalize before comparing or every worktree file
+  // would look mispinned and full-replace on each sweep.
+  const canonicalDirName = canonicalizeDirName(projectDirName);
   let existing:
     | {
         file_path: string;
+        project_dir_name: string;
         file_mtime_ms: number;
         file_size: number;
         byte_offset: number;
@@ -2128,12 +2166,13 @@ export async function reconcileSessionFile(
   if (!options.force) {
     existing = db
       .prepare(
-        "SELECT file_path, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
+        "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
       )
       .get(sessionId) as typeof existing;
     if (
       existing &&
       existing.file_path === filePath &&
+      existing.project_dir_name === canonicalDirName &&
       existing.file_mtime_ms === mtimeMs &&
       existing.file_size === size &&
       existing.derived_version === DERIVED_VERSION
@@ -2147,10 +2186,17 @@ export async function reconcileSessionFile(
   // is the same, and the derivation version matches what the existing
   // rows were stamped with. Anything else means our cursor is invalid
   // and we have to re-parse from scratch.
+  // `project_dir_name` mismatch also forces a full replace: rows written
+  // before the subagent-path fix were mispinned to a literal "subagents"
+  // project (the watcher derived the project from the file's immediate
+  // parent dir). The tail path never rewrites attribution columns, so a
+  // full replace is the self-heal that re-stamps project_dir_name /
+  // project_slug and re-derives the rollup tuples under the right slug.
   const canTail =
     !options.force &&
     existing !== undefined &&
     existing.file_path === filePath &&
+    existing.project_dir_name === canonicalDirName &&
     existing.derived_version === DERIVED_VERSION &&
     size > existing.file_size &&
     mtimeMs >= existing.file_mtime_ms;
@@ -2714,15 +2760,36 @@ export async function reconcileAllSessions(
   // split if ingest throughput becomes a bottleneck.
   for (const dirName of subdirs) {
     const dirPath = path.join(projectsDir, dirName);
-    let files: string[];
+    let filePaths: string[];
+    let sessionDirs: string[];
     try {
-      const entries = await fs.readdir(dirPath);
-      files = entries.filter((f) => f.endsWith(".jsonl"));
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      filePaths = entries
+        .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
+        .map((e) => path.join(dirPath, e.name));
+      sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
       continue;
     }
-    for (const file of files) {
-      const filePath = path.join(dirPath, file);
+    // Newer Claude Code writes subagent transcripts to
+    // `<project>/<session-id>/subagents/agent-*.jsonl` instead of inlining
+    // sidechain entries in the parent session file. Walk one level down so
+    // (a) they're reconciled at boot/sweep like any other JSONL and (b)
+    // they land in `liveFilePaths` — otherwise the prune pass below would
+    // treat their session rows as vanished and delete them every sweep.
+    // They ingest under the PROJECT dir name, not "subagents".
+    for (const sessionDir of sessionDirs) {
+      const subagentsDir = path.join(dirPath, sessionDir, "subagents");
+      try {
+        const subEntries = await fs.readdir(subagentsDir);
+        for (const f of subEntries) {
+          if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
+        }
+      } catch {
+        /* no subagents dir for this session — the common case */
+      }
+    }
+    for (const filePath of filePaths) {
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {

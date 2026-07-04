@@ -88,6 +88,29 @@ function sessionFromResource(resource: OtlpResource | undefined): string | null 
   return typeof s === "string" && s.length > 0 ? s : null;
 }
 
+// ─── Busy retry ───────────────────────────────────────────────────────────
+
+// The ingest watcher (or its worker thread) can hold the WAL writer lock in
+// back-to-back reconcile transactions long enough to exhaust the connection's
+// `busy_timeout` (5 s), surfacing here as SQLITE_BUSY — observed during the
+// initial reconcile after a DERIVED_VERSION bump. OTEL exporters treat a 500
+// as batch loss, so retry a couple of times with an async backoff (which also
+// yields the event loop, unlike busy_timeout's synchronous block) before
+// giving up.
+const BUSY_RETRY_DELAYS_MS = [250, 750];
+
+async function withBusyRetry<T>(run: () => T): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return run();
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "SQLITE_BUSY" || attempt >= BUSY_RETRY_DELAYS_MS.length) throw err;
+      await new Promise((r) => setTimeout(r, BUSY_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 // ─── Log record ingest ────────────────────────────────────────────────────
 
 /**
@@ -119,11 +142,12 @@ export async function ingestLog(
 
   const payloadJson = JSON.stringify({ ts, body: record.body?.stringValue, attrs: payloadAttrs });
 
-  prepCached(
+  const stmt = prepCached(
     db,
     `INSERT INTO otel_events (ts, session_id, event_name, payload_json)
      VALUES (?, ?, ?, ?)`,
-  ).run(new Date(ts).toISOString(), sessionId, eventName, payloadJson);
+  );
+  await withBusyRetry(() => stmt.run(new Date(ts).toISOString(), sessionId, eventName, payloadJson));
 }
 
 // ─── Metric data point ingest ─────────────────────────────────────────────
@@ -158,7 +182,8 @@ export async function ingestMetric(
   );
 
   let rejected = 0;
-  db.transaction(() => {
+  await withBusyRetry(db.transaction(() => {
+    rejected = 0; // reset so a busy-retry re-run doesn't double-count
     for (const dp of dataPoints) {
       const ts = nanoToMs(dp.timeUnixNano);
       if (ts === null) { rejected++; continue; }
@@ -183,7 +208,7 @@ export async function ingestMetric(
 
       insertStmt.run(ts, sessionId, metricName, metricType, value, model, attrsJson);
     }
-  })();
+  }));
   return { rejected };
 }
 
@@ -236,9 +261,9 @@ export async function ingestLogBatch(
   }
 
   if (rows.length > 0) {
-    db.transaction(() => {
+    await withBusyRetry(db.transaction(() => {
       for (const row of rows) stmt.run(...row);
-    })();
+    }));
   }
 
   return { errors };

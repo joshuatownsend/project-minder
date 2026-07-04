@@ -92,6 +92,15 @@ async function handleStart(options) {
       ...options,
       // The host has already gated on env flags; don't double-check.
       bypassEnvFlag: true,
+      // Ack `started` as soon as the watcher is armed instead of after the
+      // initial reconcile. A DERIVED_VERSION bump turns the initial
+      // reconcile into a full corpus re-parse (minutes) — blocking here
+      // used to blow the host's 60 s start timeout, whose fallback then
+      // terminated this worker mid-write (a SQLite corruption vector).
+      deferInitialReconcile: true,
+      onInitialReconcile: (result) => {
+        parentPort.postMessage({ type: "initial-reconcile", ...result, at: Date.now() });
+      },
     });
     // Only mark started if the watcher actually entered a running
     // state. With `running: false` (e.g. DB driver unavailable, the

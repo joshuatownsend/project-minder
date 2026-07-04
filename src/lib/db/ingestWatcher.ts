@@ -63,6 +63,14 @@ interface WatcherState {
    * schedule one more pass.
    */
   needsAnotherPass: Set<string>;
+  /**
+   * True while the (possibly deferred) initial `reconcileAllSessions` is
+   * running. Per-file reconciles and sweep ticks are held off while set —
+   * a per-file tail-append racing the full sweep on the same session
+   * could double-insert turn indices (the cursor read and the write txn
+   * straddle awaits). Held-off work reschedules itself; nothing is lost.
+   */
+  initialReconcileInFlight: boolean;
   sweepTimer: NodeJS.Timeout | null;
   /** Stats surfaced by `getWatcherStatus()` for debug surfaces. */
   startedAt: number;
@@ -109,6 +117,23 @@ export interface StartIngestWatcherOptions {
   awaitWriteFinishMs?: number;
   /** Override the per-file debounce. Tests shorten this. */
   debounceMs?: number;
+  /**
+   * Run the initial `reconcileAllSessions` in the background instead of
+   * blocking `startIngestWatcher` on it. The worker host passes this so
+   * its `started` handshake acks as soon as the watcher is armed —
+   * after a DERIVED_VERSION bump the initial reconcile is a full
+   * re-parse of the corpus (minutes), and blocking on it used to blow
+   * the host's 60 s start timeout, which then terminated a healthy
+   * worker mid-write. Default false: the in-process path keeps its
+   * reconcile-then-watch ordering.
+   */
+  deferInitialReconcile?: boolean;
+  /**
+   * Invoked once the (deferred or inline) initial reconcile settles.
+   * The worker forwards this to the host as an `initial-reconcile`
+   * message for observability.
+   */
+  onInitialReconcile?: (result: { ms: number; error?: string }) => void;
 }
 
 export interface WatcherStatus {
@@ -166,6 +191,7 @@ export async function startIngestWatcher(
     pendingTimers: new Map(),
     inFlight: new Set(),
     needsAnotherPass: new Set(),
+    initialReconcileInFlight: false,
     sweepTimer: null,
     startedAt: Date.now(),
     initialReconcileMs: null,
@@ -175,21 +201,41 @@ export async function startIngestWatcher(
   };
   g.__minderIngestWatcher = state;
 
-  // Initial reconcile (synchronous-feeling — no race because the watcher
-  // hasn't started yet; chokidar's `ignoreInitial: true` means the `add`
-  // events for these files won't fire even after we attach).
-  const t0 = Date.now();
-  try {
-    const db = await getDb();
-    if (db) await reconcileAllSessions(db, { projectsDir });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[ingest-watcher] initial reconcile failed: ${(err as Error).message}`
-    );
-    state.errors++;
+  const runInitialReconcile = async (): Promise<void> => {
+    const t0 = Date.now();
+    let error: string | undefined;
+    try {
+      const db = await getDb();
+      if (db) await reconcileAllSessions(db, { projectsDir });
+    } catch (err) {
+      error = (err as Error).message;
+      // eslint-disable-next-line no-console
+      console.warn(`[ingest-watcher] initial reconcile failed: ${error}`);
+      state.errors++;
+    } finally {
+      state.initialReconcileInFlight = false;
+      state.initialReconcileMs = Date.now() - t0;
+    }
+    try {
+      options.onInitialReconcile?.({ ms: state.initialReconcileMs, error });
+    } catch {
+      /* observer callback must not destabilize the watcher */
+    }
+  };
+
+  if (options.deferInitialReconcile) {
+    // Background mode: arm chokidar first, reconcile behind the flag. The
+    // per-file guard in `runReconcile` and the sweep-tick guard both check
+    // `initialReconcileInFlight`, so events arriving mid-reconcile are
+    // deferred (not dropped) until the full pass completes.
+    state.initialReconcileInFlight = true;
+    void runInitialReconcile();
+  } else {
+    // Inline mode (in-process watcher): reconcile-then-watch, no race
+    // because chokidar hasn't started yet and `ignoreInitial: true` means
+    // the `add` events for these files won't fire even after we attach.
+    await runInitialReconcile();
   }
-  state.initialReconcileMs = Date.now() - t0;
 
   // Lazy import: `chokidar` ships with native binaries on some platforms
   // and is fine to skip in environments where it can't load. The runtime
@@ -370,6 +416,15 @@ function scheduleReconcile(state: WatcherState, filePath: string): void {
 
 async function runReconcile(state: WatcherState, filePath: string): Promise<void> {
   state.pendingTimers.delete(filePath);
+  // Hold off while the deferred initial reconcile is still sweeping — a
+  // per-file tail-append racing the full pass on the same session can
+  // double-insert turn indices. Reschedule instead of dropping; the event
+  // re-fires here until the flag clears.
+  if (state.initialReconcileInFlight) {
+    const timer = setTimeout(() => runReconcile(state, filePath), Math.max(state.debounceMs, 1_000));
+    state.pendingTimers.set(filePath, timer);
+    return;
+  }
   state.inFlight.add(filePath);
   try {
     const db = getDbSync() ?? (await getDb());
@@ -377,8 +432,7 @@ async function runReconcile(state: WatcherState, filePath: string): Promise<void
       state.errors++;
       return;
     }
-    const projectDirName = path.basename(path.dirname(filePath));
-    const result = await reconcileSessionFile(db, filePath, projectDirName);
+    const result = await reconcileSessionFile(db, filePath, projectDirNameFor(state.projectsDir, filePath));
     if (result.rowsWritten > 0) {
       refreshDailyCosts(db, result.affectedDays);
     }
@@ -425,6 +479,23 @@ function scheduleUnlink(state: WatcherState, filePath: string): void {
   state.pendingTimers.set(key, timer);
 }
 
+/**
+ * Project dir name for a watched JSONL = the FIRST path segment under the
+ * watch root, not the file's immediate parent. Chokidar watches the tree
+ * recursively, and newer Claude Code nests subagent transcripts at
+ * `<project>/<session-id>/subagents/agent-*.jsonl` — `basename(dirname(..))`
+ * would misattribute those to a literal "subagents" project.
+ * Exported for unit tests.
+ */
+export function projectDirNameFor(projectsDir: string, filePath: string): string {
+  const rel = path.relative(projectsDir, filePath);
+  const segments = rel.split(path.sep);
+  if (!rel.startsWith("..") && !path.isAbsolute(rel) && segments.length >= 2) {
+    return segments[0];
+  }
+  return path.basename(path.dirname(filePath));
+}
+
 function startSweep(state: WatcherState): void {
   // Self-scheduling setTimeout, NOT setInterval. Under a slow disk or a
   // very large project tree `reconcileAllSessions` could take longer
@@ -434,6 +505,10 @@ function startSweep(state: WatcherState): void {
   // at a time. `stopIngestWatcher` clears whichever phase is pending.
   const tick = async (): Promise<void> => {
     try {
+      // The deferred initial reconcile IS a full sweep; running a second
+      // one concurrently would race it file-by-file. Skip this tick and
+      // let the re-arm in `finally` pick up after it completes.
+      if (state.initialReconcileInFlight) return;
       const db = getDbSync() ?? (await getDb());
       if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
     } catch (err) {
