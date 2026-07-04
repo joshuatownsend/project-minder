@@ -69,6 +69,11 @@ export function DevServerControl({
     queryKey: queryKeys.devServer(slug),
     queryFn: async ({ signal }): Promise<DevServerInfo | null> => {
       const res = await fetch(`/api/dev-server/${slug}`, { signal });
+      if (!res.ok) {
+        // Transient non-2xx (e.g. mid-restart) — throw so useQuery keeps the
+        // last good status instead of clearing a known-running server to null.
+        throw new Error(`dev-server status ${res.status}`);
+      }
       const data = await res.json();
       return data.command ? (data as DevServerInfo) : null;
     },
