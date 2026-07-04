@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Activity, Clock, GitBranch, Layers } from "lucide-react";
+import { queryKeys } from "@/lib/queryKeys";
 
 /**
  * T2.3b — portfolio surface for `background_tasks` + `session_crons`
@@ -78,31 +79,20 @@ function renderUnknownEntry(entry: unknown): React.ReactNode {
 }
 
 export function BackgroundActivityBrowser() {
-  const [data, setData] = useState<BackgroundActivityResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      fetch("/api/hooks/background-activity")
-        .then((r) => r.json())
-        .then((j: BackgroundActivityResponse) => {
-          if (!cancelled) {
-            setData(j);
-            setLoading(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) setLoading(false);
-        });
-    };
-    load();
-    const t = setInterval(load, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
+  // Migrated from a 15s setInterval loop to useQuery (C2). `refetchInterval`
+  // keeps the 15s cadence; `refetchIntervalInBackground: false` pauses it on a
+  // hidden tab. `loading` maps to the first-load pending state (isPending),
+  // matching the old `loading` that only cleared once the first fetch settled.
+  const { data = null, isPending: loading } = useQuery({
+    queryKey: queryKeys.backgroundActivity(),
+    queryFn: async ({ signal }): Promise<BackgroundActivityResponse> => {
+      const res = await fetch("/api/hooks/background-activity", { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+  });
 
   if (loading) {
     return (

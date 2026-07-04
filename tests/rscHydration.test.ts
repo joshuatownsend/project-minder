@@ -55,17 +55,18 @@ describe("jsonClone", () => {
 });
 
 // ── flag default (Settings toggle vs server gate parity) ──────────────────────
-describe("rscHydration is opt-in (default off)", () => {
-  it("meta marks defaultOn:false so the Settings toggle matches the server gate", () => {
-    // Regression guard (PR #240 Codex review): the server gate reads
-    // getFlag(..., false), so the Settings UI — which reads
-    // getFlag(flags, key, meta.defaultOn ?? true) — must see defaultOn:false or
-    // it would render the toggle ON while the feature is actually off.
+describe("rscHydration is default-on", () => {
+  it("meta marks defaultOn:true so the Settings toggle matches the server gate", () => {
+    // The server gate now reads getFlag(..., true) (the module default), so the
+    // Settings UI — which reads getFlag(flags, key, meta.defaultOn ?? true) —
+    // must see defaultOn:true so the toggle reflects the on-by-default state.
     const meta = FEATURE_FLAG_META.find((m) => m.key === "rscHydration");
-    expect(meta?.defaultOn).toBe(false);
-    expect(getFlag({}, "rscHydration", meta?.defaultOn ?? true)).toBe(false);
-    // Server gate: absent key resolves off.
-    expect(getFlag(undefined, "rscHydration", false)).toBe(false);
+    expect(meta?.defaultOn).toBe(true);
+    expect(getFlag({}, "rscHydration", meta?.defaultOn ?? true)).toBe(true);
+    // Server gate: absent key resolves on.
+    expect(getFlag(undefined, "rscHydration")).toBe(true);
+    // Fallback path still works: an explicit false turns it off.
+    expect(getFlag({ rscHydration: false }, "rscHydration")).toBe(false);
   });
 });
 
@@ -73,7 +74,7 @@ describe("rscHydration is opt-in (default off)", () => {
 describe("maybeDehydrate", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("returns null when the rscHydration flag is off (default)", async () => {
+  it("returns null when the rscHydration flag is explicitly off (fallback path)", async () => {
     mockReadConfig.mockResolvedValue({ featureFlags: { rscHydration: false } });
     const state = await maybeDehydrate([
       async (qc) => {
@@ -83,14 +84,14 @@ describe("maybeDehydrate", () => {
     expect(state).toBeNull();
   });
 
-  it("defaults to off when the flag is unset", async () => {
+  it("dehydrates by default when the flag is unset", async () => {
     mockReadConfig.mockResolvedValue({ featureFlags: {} });
     const state = await maybeDehydrate([
       async (qc) => {
         await qc.prefetchQuery({ queryKey: ["t"], queryFn: async () => ({ ok: true }) });
       },
     ]);
-    expect(state).toBeNull();
+    expect(state).not.toBeNull();
   });
 
   it("dehydrates the prefetched queries when the flag is on", async () => {

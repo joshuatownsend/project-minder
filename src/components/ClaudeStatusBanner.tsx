@@ -5,28 +5,24 @@
  * incidents from status.claude.com.
  *
  * Renders nothing when:
- *   - The feature flag is off (server replies `{disabled: true}`)
+ *   - The feature flag is off (context reports `disabled`)
  *   - Overall status is `operational` (regardless of source — once we know
  *     things are fine, the banner is hidden even if the snapshot is stale)
  *   - The first poll hasn't completed within the initial 600ms suppress window
  *
- * Polls `/api/claude-status` every 60s. State only updates on successful
- * fetches — a transient network blip leaves the last good banner in place.
+ * Reads the shared snapshot from `ClaudeStatusProvider` (C2b) instead of
+ * running its own poll — one 60s request now feeds both this banner and the
+ * toast listener. The provider keeps the last good snapshot across transient
+ * failures, so a network blip leaves the last good banner in place.
  */
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
-import type { ClaudeStatusSnapshot, OverallStatus } from "@/lib/claudeStatus/types";
+import { useClaudeStatus } from "./ClaudeStatusProvider";
+import type { OverallStatus } from "@/lib/claudeStatus/types";
 
-const POLL_INTERVAL_MS = 60_000;
 const SUPPRESS_FIRST_RENDER_MS = 600;
-
-type ApiResponse = ClaudeStatusSnapshot | { disabled: true };
-
-function isDisabled(r: ApiResponse): r is { disabled: true } {
-  return (r as { disabled?: boolean }).disabled === true;
-}
 
 function bannerTone(overall: OverallStatus): "warn" | "danger" | null {
   if (overall === "incident") return "danger";
@@ -45,8 +41,7 @@ function ageLabel(fetchedAt: number): string {
 }
 
 export function ClaudeStatusBanner() {
-  const [snapshot, setSnapshot] = useState<ClaudeStatusSnapshot | null>(null);
-  const [disabled, setDisabled] = useState(false);
+  const { snapshot, disabled } = useClaudeStatus();
   const [allowRender, setAllowRender] = useState(false);
 
   // Suppress any UI for the first 600ms so the banner doesn't flash on
@@ -54,37 +49,6 @@ export function ClaudeStatusBanner() {
   useEffect(() => {
     const t = setTimeout(() => setAllowRender(true), SUPPRESS_FIRST_RENDER_MS);
     return () => clearTimeout(t);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const ctrl = new AbortController();
-
-    async function pull() {
-      try {
-        const res = await fetch("/api/claude-status", { signal: ctrl.signal });
-        if (!res.ok) return;
-        const data = (await res.json()) as ApiResponse;
-        if (cancelled) return;
-        if (isDisabled(data)) {
-          setDisabled(true);
-          setSnapshot(null);
-          return;
-        }
-        setDisabled(false);
-        setSnapshot(data);
-      } catch {
-        // Keep the last good snapshot; transient errors shouldn't unmount the banner.
-      }
-    }
-
-    pull();
-    const id = setInterval(pull, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      ctrl.abort();
-      clearInterval(id);
-    };
   }, []);
 
   if (!allowRender || disabled || !snapshot) return null;

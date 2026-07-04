@@ -59,23 +59,25 @@ export function useEffectiveShortcuts(): Record<ShortcutActionId, string> {
 }
 
 /**
- * True when the opt-in `serverActions` flag routes the two live mutations
+ * True when the `serverActions` flag routes the two live mutations
  * (toggle a manual step, change a project's status) through Server Actions
- * instead of the POST/PUT API routes (Performance P3 — PR 4). Defaults off, so
- * the API-route path is the fallback. Centralizes the flag read that all three
- * mutation call sites share.
+ * instead of the POST/PUT API routes (Performance P3 — PR 4). Defaults ON;
+ * toggling the flag OFF in Settings falls back to the API-route path, which
+ * remains intact. Centralizes the flag read that all three mutation call sites
+ * share.
  */
 export function useServerActionsEnabled(): boolean {
   const config = useConfig();
-  return getFlag(config?.featureFlags, "serverActions", false);
+  return getFlag(config?.featureFlags, "serverActions");
 }
 
 /**
- * True when the opt-in `liveEvents` flag is on — the client should open the
- * `/api/events` SSE stream and invalidate queries on push instead of polling
- * (Performance P3 — PR 5a). Defaults off.
+ * True when the `liveEvents` flag is on — the client opens the
+ * `/api/events` SSE stream and invalidates queries on push instead of polling
+ * (Performance P3 — PR 5a). Defaults ON; toggling OFF falls back to timer-based
+ * polling.
  */
 export function useLiveEventsEnabled(): boolean {
   const config = useConfig();
-  return getFlag(config?.featureFlags, "liveEvents", false);
+  return getFlag(config?.featureFlags, "liveEvents");
 }

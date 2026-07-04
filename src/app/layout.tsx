@@ -6,7 +6,7 @@ import { HelpProvider } from "@/components/HelpProvider";
 import { HelpPanel } from "@/components/HelpPanel";
 import { ToastProvider } from "@/components/ToastProvider";
 import { NotificationListener } from "@/components/NotificationListener";
-import { ClaudeStatusListener } from "@/components/ClaudeStatusListener";
+import { ClaudeStatusProvider } from "@/components/ClaudeStatusProvider";
 import { PulseProvider } from "@/components/PulseProvider";
 import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
@@ -61,31 +61,34 @@ export default async function RootLayout({
               <PulseProvider>
                 <CommandPaletteProvider>
                   <HelpProvider>
-                    {/* Suspense wraps client providers that read useSearchParams() */}
-                    <Suspense fallback={null}>
-                      <ScopeProvider>
-                        <AppShell devRootLabel={rootLabel}>
-                          {/* Floating emergency stop, only when task dispatcher is on */}
-                          {taskDispatcherEnabled && (
-                            <div
-                              style={{
-                                position: "fixed",
-                                top: 12,
-                                right: 12,
-                                zIndex: 30,
-                              }}
-                            >
-                              <EmergencyStopButton />
-                            </div>
-                          )}
-                          {children}
-                        </AppShell>
-                      </ScopeProvider>
-                    </Suspense>
+                    {/* One shared claude-status poll feeds both the banner (in
+                        AppShell) and the toast listener folded into the provider. */}
+                    <ClaudeStatusProvider>
+                      {/* Suspense wraps client providers that read useSearchParams() */}
+                      <Suspense fallback={null}>
+                        <ScopeProvider>
+                          <AppShell devRootLabel={rootLabel}>
+                            {/* Floating emergency stop, only when task dispatcher is on */}
+                            {taskDispatcherEnabled && (
+                              <div
+                                style={{
+                                  position: "fixed",
+                                  top: 12,
+                                  right: 12,
+                                  zIndex: 30,
+                                }}
+                              >
+                                <EmergencyStopButton />
+                              </div>
+                            )}
+                            {children}
+                          </AppShell>
+                        </ScopeProvider>
+                      </Suspense>
 
-                    <HelpPanel />
-                    <NotificationListener />
-                    <ClaudeStatusListener />
+                      <HelpPanel />
+                      <NotificationListener />
+                    </ClaudeStatusProvider>
                   </HelpProvider>
                 </CommandPaletteProvider>
               </PulseProvider>

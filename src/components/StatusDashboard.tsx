@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 import { StatusCard } from "./StatusCard";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 // Use the canonical payload type rather than a local copy. The local interface
@@ -43,25 +45,20 @@ function SectionHeader({ label, count, color }: { label: string; count: number; 
 }
 
 export function StatusDashboard() {
-  const [data, setData] = useState<StatusPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchStatus() {
-      try {
-        const res = await fetch("/api/status");
-        if (!res.ok) return;
-        const json = await res.json() as StatusPayload;
-        setData(prev => prev?.generatedAt === json.generatedAt ? prev : json);
-      } catch { /* network errors are non-fatal; stale data stays */ }
-      finally {
-        setLoading(false);
-      }
-    }
-    fetchStatus();
-    const id = setInterval(fetchStatus, 3_000);
-    return () => clearInterval(id);
-  }, []);
+  // Migrated from a 3s setInterval loop to useQuery (C2). `refetchInterval`
+  // keeps the 3s cadence; `refetchIntervalInBackground: false` pauses it on a
+  // hidden tab. A failed poll keeps the last good payload (TanStack retains
+  // `data` across a background refetch error), matching the old silent catch.
+  const { data = null, isPending: loading } = useQuery({
+    queryKey: queryKeys.liveStatus(),
+    queryFn: async ({ signal }): Promise<StatusPayload> => {
+      const res = await fetch("/api/status", { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchInterval: 3_000,
+    refetchIntervalInBackground: false,
+  });
 
   const buckets = useMemo(() => {
     const b: Record<LiveSessionStatus, LiveSession[]> = { approval: [], working: [], waiting: [], other: [] };

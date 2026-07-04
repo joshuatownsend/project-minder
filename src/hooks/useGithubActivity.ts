@@ -93,6 +93,9 @@ export function useGithubActivity() {
     }
 
     async function loop() {
+      // Don't poll a backgrounded tab — resume on the next tick after it's
+      // visible again (C2 review: pollers shouldn't run while hidden).
+      if (typeof document !== "undefined" && document.hidden) return;
       const data = await fetchStatus();
       if (stopped || !data) return;
 

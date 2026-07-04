@@ -41,4 +41,15 @@ export const queryKeys = {
   // The settings/playground tabs don't fetch, so they never produce a key.
   config: (type: string, project?: string, query?: string) =>
     ["config", type, project ?? null, query ?? null] as const,
+  // ── Live/background pollers migrated from bespoke setInterval loops to
+  //    useQuery(refetchInterval) (C2). Keys are namespaced so a future
+  //    prefetch/invalidate path can target them the same way as the rest.
+  liveStatus: () => ["live-status"] as const,
+  // Single shared claude-status poll (snapshot + change events) consumed by
+  // both the banner and the toast listener via ClaudeStatusProvider (C2b).
+  claudeStatus: () => ["claude-status", "live"] as const,
+  health: () => ["health"] as const,
+  efficiencyGrades: () => ["efficiency-grades"] as const,
+  backgroundActivity: () => ["background-activity"] as const,
+  devServer: (slug: string) => ["dev-server", slug] as const,
 } as const;

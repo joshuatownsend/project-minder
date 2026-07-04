@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./ui/button";
 import { Play, Square, RotateCw, Terminal, ExternalLink, AlertCircle } from "lucide-react";
+import { queryKeys } from "@/lib/queryKeys";
 import { useToast } from "./ToastProvider";
 
 interface DevServerInfo {
@@ -50,41 +52,32 @@ export function DevServerControl({
   devPort,
   compact = false,
 }: DevServerControlProps) {
-  const [server, setServer] = useState<DevServerInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
   const outputRef = useRef<HTMLPreElement>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/dev-server/${slug}`);
+  // Migrated from a bespoke conditional setInterval to useQuery (C2). The
+  // status is polled every 2s only while the server is running/starting (via a
+  // function `refetchInterval` that returns `false` once it settles — the same
+  // gate the old effect used to start/stop its interval), and never while the
+  // tab is backgrounded. Action mutations write straight into this cache entry
+  // via `setQueryData`, so the UI updates instantly and the poll cadence
+  // re-evaluates from the new status.
+  const { data: server = null } = useQuery({
+    queryKey: queryKeys.devServer(slug),
+    queryFn: async ({ signal }): Promise<DevServerInfo | null> => {
+      const res = await fetch(`/api/dev-server/${slug}`, { signal });
       const data = await res.json();
-      if (data.command) {
-        setServer(data);
-      } else {
-        setServer(null);
-      }
-    } catch {
-      // network errors are expected during dev server restarts
-    }
-  }, [slug]);
-
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
-
-  useEffect(() => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    const shouldPoll = server?.status === "running" || server?.status === "starting";
-    if (shouldPoll) {
-      pollRef.current = setInterval(fetchStatus, 2000);
-    }
-    return () => {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    };
-  }, [server?.status, fetchStatus]);
+      return data.command ? (data as DevServerInfo) : null;
+    },
+    refetchInterval: (q) => {
+      const s = q.state.data;
+      return s?.status === "running" || s?.status === "starting" ? 2000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
 
   useEffect(() => {
     if (outputRef.current && showOutput) {
@@ -105,12 +98,12 @@ export function DevServerControl({
         throw new Error(data.error || `Server responded ${res.status}`);
       }
       if (data.command) {
-        setServer(data);
+        queryClient.setQueryData(queryKeys.devServer(slug), data as DevServerInfo);
         if (action === "start" || action === "restart") {
           setShowOutput(true);
         }
       } else {
-        setServer(null);
+        queryClient.setQueryData(queryKeys.devServer(slug), null);
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : "";

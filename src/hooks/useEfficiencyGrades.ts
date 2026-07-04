@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 import type { EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 import type { GradeTrend } from "@/lib/data/gradeSnapshots";
 
@@ -13,42 +14,41 @@ interface GradesResponse {
 
 const POLL_INTERVAL = 5000;
 
+const EMPTY_GRADES: Record<string, EfficiencyGrade> = {};
+const EMPTY_TRENDS: Record<string, GradeTrend> = {};
+
+/**
+ * Background efficiency grades, polled while the server-side batch is still
+ * grading. Migrated from a hand-rolled setInterval loop to TanStack Query (C2):
+ *   - `refetchInterval` re-polls every 5s and stops once the batch has settled
+ *     (`pending === 0 && total > 0`) — the same terminal condition the old loop
+ *     used to clear its interval.
+ *   - `refetchIntervalInBackground: false` pauses polling on a hidden tab, so a
+ *     backgrounded dashboard no longer hammers the endpoint (a review win).
+ * The public return shape (`{ grades, trends, pending }`) is unchanged.
+ */
 export function useEfficiencyGrades() {
-  const [grades, setGrades] = useState<Record<string, EfficiencyGrade>>({});
-  const [trends, setTrends] = useState<Record<string, GradeTrend>>({});
-  const [pending, setPending] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const query = useQuery({
+    queryKey: queryKeys.efficiencyGrades(),
+    queryFn: async ({ signal }): Promise<GradesResponse> => {
+      const res = await fetch("/api/efficiency-grades", { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    // Enhancement-only chips: a failed poll should stay quiet, not surface an
+    // error, matching the old loop's silent catch.
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      if (data && data.pending === 0 && data.total > 0) return false;
+      return POLL_INTERVAL;
+    },
+    refetchIntervalInBackground: false,
+  });
 
-  useEffect(() => {
-    let stopped = false;
-
-    async function poll() {
-      try {
-        const res = await fetch("/api/efficiency-grades");
-        if (stopped) return;
-        if (!res.ok) return;
-        const data: GradesResponse = await res.json();
-        setGrades(data.grades);
-        setTrends(data.trends ?? {});
-        setPending(data.pending);
-
-        if (data.pending === 0 && data.total > 0 && intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      } catch {
-        // Fail silently — grade chips are enhancement-only.
-      }
-    }
-
-    poll();
-    intervalRef.current = setInterval(poll, POLL_INTERVAL);
-
-    return () => {
-      stopped = true;
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
-
-  return { grades, trends, pending };
+  const data = query.data;
+  return {
+    grades: data?.grades ?? EMPTY_GRADES,
+    trends: data?.trends ?? EMPTY_TRENDS,
+    pending: data?.pending ?? 0,
+  };
 }

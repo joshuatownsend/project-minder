@@ -67,7 +67,7 @@ export async function maybeDehydrate(
   prefetchers: Prefetcher[],
 ): Promise<DehydratedState | null> {
   const config = await readConfig();
-  if (!getFlag(config.featureFlags, "rscHydration", false)) return null;
+  if (!getFlag(config.featureFlags, "rscHydration")) return null;
 
   const qc = makeServerQueryClient();
   // prefetchQuery never rejects (it swallows queryFn errors internally), so a

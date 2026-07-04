@@ -91,14 +91,14 @@ describe("setProjectStatus", () => {
 });
 
 // ── flag default (Settings toggle vs client gate parity) ─────────────────────
-describe("serverActions is opt-in (default off)", () => {
-  it("meta marks defaultOn:false so the Settings toggle matches the client gate", () => {
+describe("serverActions is default-on", () => {
+  it("meta marks defaultOn:true so the Settings toggle matches the client gate", () => {
     const meta = FEATURE_FLAG_META.find((m) => m.key === "serverActions");
-    expect(meta?.defaultOn).toBe(false);
-    // Client callers read getFlag(flags, "serverActions", false): absent → off.
-    expect(getFlag({}, "serverActions", meta?.defaultOn ?? true)).toBe(false);
-    expect(getFlag(undefined, "serverActions", false)).toBe(false);
-    // Explicit on is honoured.
-    expect(getFlag({ serverActions: true }, "serverActions", false)).toBe(true);
+    expect(meta?.defaultOn).toBe(true);
+    // Client callers read getFlag(flags, "serverActions"): absent → on.
+    expect(getFlag({}, "serverActions", meta?.defaultOn ?? true)).toBe(true);
+    expect(getFlag(undefined, "serverActions")).toBe(true);
+    // Fallback path still works: an explicit false turns it off.
+    expect(getFlag({ serverActions: false }, "serverActions")).toBe(false);
   });
 });
