@@ -554,6 +554,12 @@ async function readJsonlSession(
   // assistant turns as `userIntentText` so intent-based categories can attribute cost.
   let prevUserText: string | undefined;
   // A6: dedup assistant usage by message.id (fallback requestId) per session.
+  // KNOWN LIMITATION (tail path): for an incremental tail parse this set starts
+  // empty rather than seeded from the persisted prefix, because turns rows don't
+  // carry message.id (no such column). A message re-logged across the byte
+  // cursor with the same id therefore isn't recognized and its tokens/cost can
+  // be inserted twice. Full-file parses dedup correctly. A proper fix needs a
+  // `turns.message_id` column (a schema migration) to seed this set — deferred.
   const seenMessageIds = new Set<string>();
   // A1: subagent (sidechain) assistant turns collected here, then appended as
   // `turns` rows AFTER the primary detectors run (so status/one-shot/quality
@@ -567,6 +573,9 @@ async function readJsonlSession(
     cacheCreateTokens: number;
     cacheReadTokens: number;
     userIntentText?: string;
+    // parentToolUseID of the spawning Task call, so DB-backed sidechain turns
+    // can be grouped by their parent (parity with the file parser).
+    parentToolUseId?: string;
   }> = [];
 
   const tParse = PROFILE ? performance.now() : 0;
@@ -621,6 +630,7 @@ async function readJsonlSession(
               cacheCreateTokens: usage.cache_creation_input_tokens ?? 0,
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
               userIntentText: prevUserText,
+              parentToolUseId: entry.parentToolUseID ?? undefined,
             });
           }
         }
@@ -989,6 +999,7 @@ async function readJsonlSession(
       toolCalls: [],
       userIntentText: sc.userIntentText,
       isSidechain: true,
+      parentToolUseId: sc.parentToolUseId,
     };
     const category = classifyTurn(usageTurn);
     const scCost = applyPricing(getModelPricing(sc.model), {
@@ -1007,7 +1018,7 @@ async function readJsonlSession(
       cacheCreateTokens: sc.cacheCreateTokens,
       cacheReadTokens: sc.cacheReadTokens,
       isError: 0,
-      parentToolUseId: null,
+      parentToolUseId: sc.parentToolUseId ?? null,
       textPreview: null,
       toolResultPreview: null,
       toolUses: [],
@@ -1715,12 +1726,17 @@ function loadExistingTurnsAsUsage(
   projectSlug: string,
   projectDirName: string
 ): UsageTurn[] {
+  // `is_sidechain = 0`: one-shot / quality detectors run over primary turns
+  // only (see the turns.is_sidechain schema note). This is the tail path's
+  // only caller; the full-replace path runs the same detectors over its
+  // primary parsed turns, so filtering here keeps the two paths in parity now
+  // that sidechain turns are persisted as rows.
   const turnRows = db
     .prepare(
       `SELECT turn_index, ts, role, model,
               input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
               is_error, text_preview, tool_result_preview
-       FROM turns WHERE session_id = ? ORDER BY turn_index`
+       FROM turns WHERE session_id = ? AND is_sidechain = 0 ORDER BY turn_index`
     )
     .all(sessionId) as Array<{
     turn_index: number;
@@ -1927,6 +1943,15 @@ function appendSessionTail(
   // detector is window-based.
   // cost_usd folds in via SUM(turns.cost_usd) — no second JS pricing
   // pass since each turn's cost was stamped at insert.
+  //
+  // `is_sidechain = 0`: the session-row aggregates are primary-only, matching
+  // the full-replace path (writeSession derives them from `primaryTurnCount`
+  // captured before appending sidechain rows). Without this filter a tail
+  // append that carries sidechain assistant rows would inflate the session's
+  // turn_count / assistant_turn_count / cost_usd / token totals with subagent
+  // work. Sidechain cost still folds into the usage totals — those roll up
+  // over the daily_costs / category_costs derivation below, which is NOT
+  // filtered here.
   const aggRow = db
     .prepare(
       `SELECT
@@ -1941,7 +1966,7 @@ function appendSessionTail(
          SUM(cost_usd)            AS cost_usd,
          MIN(ts) AS start_ts,
          MAX(ts) AS end_ts
-       FROM turns WHERE session_id = ?`
+       FROM turns WHERE session_id = ? AND is_sidechain = 0`
     )
     .get(sessionId) as {
     turn_count: number;
@@ -1964,7 +1989,7 @@ function appendSessionTail(
   const modelRow = db
     .prepare(
       `SELECT model, COUNT(*) AS n FROM turns
-       WHERE session_id = ? AND role='assistant' AND model IS NOT NULL
+       WHERE session_id = ? AND role='assistant' AND model IS NOT NULL AND is_sidechain = 0
        GROUP BY model ORDER BY n DESC LIMIT 1`
     )
     .get(sessionId) as { model: string; n: number } | undefined;
@@ -2027,7 +2052,7 @@ function appendSessionTail(
   // full reconcile. Acceptable trade-off for the ~150-session corpus.
   // Recompute work-mode over all turns (old + new) now that new turns are inserted.
   const allCategoryRows = db
-    .prepare("SELECT category FROM turns WHERE session_id = ? AND role = 'assistant'")
+    .prepare("SELECT category FROM turns WHERE session_id = ? AND role = 'assistant' AND is_sidechain = 0")
     .all(sessionId) as Array<{ category: string | null }>;
   const tailWorkMode = aggregateWorkMode(allCategoryRows);
 

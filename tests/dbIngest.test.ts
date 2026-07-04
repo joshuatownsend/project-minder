@@ -55,6 +55,7 @@ interface JsonlEntry {
   content?: any;
   isSidechain?: boolean;
   isMeta?: boolean;
+  parentToolUseID?: string;
   gitBranch?: string;
   slug?: string;
 }
@@ -593,6 +594,61 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(sessionRowAfter.assistant_turn_count).toBe(2);
     expect(sessionRowAfter.user_turn_count).toBe(2);
     expect(sessionRowAfter.byte_offset).toBe(sessionRowAfter.file_size);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("tail append keeps session aggregates primary-only and persists sidechain parentToolUseId", async () => {
+    // Regression (PR #250 review): a tail append that carries a sidechain
+    // (subagent) assistant row must not inflate the session-row aggregates —
+    // the full-replace path derives them primary-only, and the tail recompute
+    // must match. The sidechain row is still persisted (so its cost folds into
+    // the usage rollups) with is_sidechain = 1 and its parentToolUseId kept.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-tailside", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "first prompt"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "first reply"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Tail-append a sidechain assistant turn (spawned by tool call
+    // "toolu_parent") plus a real primary assistant turn.
+    const tailEntries: JsonlEntry[] = [
+      {
+        ...assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "subagent work"),
+        isSidechain: true,
+        parentToolUseID: "toolu_parent",
+      },
+      assistantTurn("2026-04-30T10:00:03Z", "claude-sonnet-4-5", "second reply"),
+    ];
+    await fs.appendFile(
+      sessionFile,
+      tailEntries.map((e) => JSON.stringify(e)).join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Session-row aggregates exclude the sidechain: user + 2 primary assistants.
+    const sessionRow = db
+      .prepare("SELECT turn_count, assistant_turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { turn_count: number; assistant_turn_count: number };
+    expect(sessionRow.turn_count).toBe(3);
+    expect(sessionRow.assistant_turn_count).toBe(2);
+
+    // The sidechain turn IS persisted (folds into usage totals) with its
+    // is_sidechain flag and spawning parentToolUseId preserved.
+    const sideRows = db
+      .prepare(
+        "SELECT parent_tool_use_id FROM turns WHERE session_id = 's1' AND is_sidechain = 1"
+      )
+      .all() as Array<{ parent_tool_use_id: string | null }>;
+    expect(sideRows.length).toBe(1);
+    expect(sideRows[0].parent_tool_use_id).toBe("toolu_parent");
 
     reloaded.conn.closeDb();
   });

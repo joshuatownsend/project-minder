@@ -88,6 +88,41 @@ describe("A1 — subagent tokens included in totals", () => {
     expect(toolNames).toContain("Read");
     expect(toolNames).not.toContain("Bash"); // subagent tool excluded
   });
+
+  it("tags sidechain USER turns so the primary-only filter can strip them", async () => {
+    // parseSessionTurns is the parser buildAllSessions uses; parseAllSessions
+    // strips subagent turns by the isSidechain tag. Previously only assistant
+    // sidechain turns were tagged, so subagent user/tool_result turns leaked
+    // into primary-only consumers (one-shot/yield/session flows).
+    await withTempSession(
+      [
+        {
+          type: "user",
+          timestamp: "2025-01-01T12:00:00Z",
+          isSidechain: true,
+          message: { role: "user", content: [{ type: "text", text: "subagent prompt" }] },
+        },
+        {
+          type: "assistant",
+          timestamp: "2025-01-01T12:00:01Z",
+          isSidechain: true,
+          message: {
+            model: "claude-sonnet-4",
+            usage: { input_tokens: 10, output_tokens: 5 },
+            content: [{ type: "text", text: "subagent reply" }],
+          },
+        },
+      ],
+      (turns) => {
+        const userTurns = turns.filter((t) => t.role === "user");
+        expect(userTurns).toHaveLength(1);
+        expect(userTurns[0].isSidechain).toBe(true);
+        // The primary-only filter parseAllSessions applies now drops every turn.
+        expect(turns.filter((t) => !t.isSidechain)).toHaveLength(0);
+      },
+      { includeSidechains: true }
+    );
+  });
 });
 
 // ── A2: daily buckets use LOCAL date ─────────────────────────────────────────

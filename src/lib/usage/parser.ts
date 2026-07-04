@@ -274,6 +274,14 @@ export async function parseSessionTurns(
         toolCalls: [],
         userMessageText,
         toolResultText,
+        // Tag sidechain (subagent) user turns so the primary-only filter in
+        // parseAllSessions strips them (A1). Previously only assistant
+        // sidechain turns were tagged, so subagent user/tool_result turns
+        // leaked into primary-only consumers (one-shot/yield/session flows).
+        // parentToolUseId gives file/DB parity for grouping by the spawning
+        // Task call.
+        isSidechain: entry.isSidechain ? true : undefined,
+        parentToolUseId: entry.parentToolUseID ?? undefined,
       });
       prevUserTimestamp = timestamp;
       // A3 intent: prefer the array-extracted text, but fall back to a raw
@@ -484,6 +492,14 @@ export async function parseSessionTurnsWithMeta(
         toolCalls: [],
         userMessageText,
         toolResultText,
+        // Tag sidechain (subagent) user turns so the primary-only filter in
+        // parseAllSessions strips them (A1). Previously only assistant
+        // sidechain turns were tagged, so subagent user/tool_result turns
+        // leaked into primary-only consumers (one-shot/yield/session flows).
+        // parentToolUseId gives file/DB parity for grouping by the spawning
+        // Task call.
+        isSidechain: entry.isSidechain ? true : undefined,
+        parentToolUseId: entry.parentToolUseID ?? undefined,
       });
       prevUserTimestampMeta = timestamp;
       const intentText = userMessageText ?? (typeof textSource === "string" ? textSource : undefined);
