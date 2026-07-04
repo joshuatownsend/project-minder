@@ -43,6 +43,10 @@ export const helpMapping: Record<string, string> = {
   '/memory': 'memory',
   '/memory/seed': 'memory',
   '/memory/triage': 'memory',
+  '/background': 'background',
+  '/commands': 'commands',
+  '/projects': 'projects',
+  '/swarms': 'swarms',
 }
 
 /**
@@ -120,6 +124,10 @@ export const helpSlugs = [
   'keyboard-shortcuts',
   'mcp-server',
   'github-activity',
+  'background',
+  'commands',
+  'projects',
+  'swarms',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

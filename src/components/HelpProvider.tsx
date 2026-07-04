@@ -43,6 +43,10 @@ export function HelpProvider({ children }: { children: ReactNode }) {
     if (!slug && pathname.startsWith("/sessions/")) {
       slug = helpMapping["/sessions/[sessionId]"];
     }
+    // /swarms/<id> detail pages share the /swarms help doc (no exact mapping).
+    if (!slug && pathname.startsWith("/swarms/")) {
+      slug = helpMapping["/swarms"];
+    }
     setActiveSlug((slug ?? "getting-started") as HelpSlug);
   }, []);
 
