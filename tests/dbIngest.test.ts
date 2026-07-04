@@ -653,6 +653,53 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("folds a sidechain-only tail window instead of advancing past it", async () => {
+    // Regression (PR #250 re-review): a tail window containing ONLY sidechain
+    // entries (the indexer ran between a parent Agent call and the next primary
+    // turn) must still persist those rows so their cost folds into the usage
+    // rollups — not return null and advance byte_offset past them, dropping the
+    // subagent tokens.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-sideonly", "s1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "spawn a subagent"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "on it"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const before = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 's1' AND is_sidechain = 1")
+      .get() as { n: number };
+    expect(before.n).toBe(0);
+
+    // Tail-append ONLY a sidechain assistant turn — no primary turn in the window.
+    await fs.appendFile(
+      sessionFile,
+      JSON.stringify({
+        ...assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "subagent work"),
+        isSidechain: true,
+      }) + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    // The sidechain row was persisted (folds into usage totals), not dropped.
+    const after = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 's1' AND is_sidechain = 1")
+      .get() as { n: number };
+    expect(after.n).toBe(1);
+    // Session-row aggregates stay primary-only: still just the 2 primary turns.
+    const sess = db
+      .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
+      .get() as { turn_count: number };
+    expect(sess.turn_count).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
   it("falls back to full re-parse when the file shrinks", async () => {
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-shrink", "s1.jsonl");

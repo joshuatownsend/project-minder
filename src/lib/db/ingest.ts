@@ -901,9 +901,18 @@ async function readJsonlSession(
   }
 
   if (PROFILE) tick("parseTurns", performance.now() - tParse);
-  // Skip a session with no primary turns (sidechain-only sessions don't occur —
-  // a subagent always runs inside a parent session that has primary turns).
-  if (turns.length === 0) return { parsed: null, safeOffset, hasOrphanToolResults };
+  // Skip only when the window yielded NOTHING to persist. A full session always
+  // has primary turns (a subagent runs inside a parent that has them), but a
+  // *tail* window can legitimately contain only sidechain (subagent) entries —
+  // the indexer ran between a parent Agent call and the next primary turn.
+  // Those rows still carry tokens/cost that must fold into the usage rollups;
+  // returning null here would advance byte_offset past them and lose them
+  // (PR #250 re-review). So proceed whenever we collected any sidechain turns —
+  // the derivations below no-op cleanly on empty primary turns, and the
+  // sidechain rows are appended and priced afterward.
+  if (turns.length === 0 && sidechainCollected.length === 0) {
+    return { parsed: null, safeOffset, hasOrphanToolResults };
+  }
 
   const primaryModel = mostFrequent(modelCounts);
   const cliVersion = mostFrequent(versionCounts);
