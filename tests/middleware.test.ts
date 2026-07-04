@@ -81,11 +81,34 @@ describe("evaluateRequest", () => {
     expect(result.allow).toBe(true);
   });
 
-  it("allows a GET with a cross-origin Origin header (reads aren't a CSRF vector, but Host is still checked)", () => {
+  it("blocks a GET with a cross-origin Origin header (some GET routes mutate, e.g. initDispatcher)", () => {
+    // The Origin allowlist applies to GET too — a cross-site scripted GET to a
+    // side-effecting route (/api/tasks, /api/swarms) is a CSRF vector.
     const result = evaluateRequest({
       method: "GET",
       host: ALLOWED_HOST,
       origin: DISALLOWED_ORIGIN,
+      pathname: "/api/tasks",
+    });
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("cross-origin request blocked");
+  });
+
+  it("allows a GET with a same-origin Origin header", () => {
+    const result = evaluateRequest({
+      method: "GET",
+      host: ALLOWED_HOST,
+      origin: ALLOWED_ORIGIN,
+      pathname: "/api/tasks",
+    });
+    expect(result.allow).toBe(true);
+  });
+
+  it("allows a GET with NO Origin header (same-origin GETs often omit it; non-browser callers)", () => {
+    const result = evaluateRequest({
+      method: "GET",
+      host: ALLOWED_HOST,
+      origin: null,
       pathname: "/api/sql",
     });
     expect(result.allow).toBe(true);
@@ -102,14 +125,15 @@ describe("evaluateRequest", () => {
     expect(result.reason).toBe("host not allowed");
   });
 
-  it("treats HEAD like GET — allowed host, cross-origin Origin still passes", () => {
+  it("blocks a HEAD with a cross-origin Origin (Origin allowlist applies to all methods)", () => {
     const result = evaluateRequest({
       method: "HEAD",
       host: ALLOWED_HOST,
       origin: DISALLOWED_ORIGIN,
       pathname: "/api/projects",
     });
-    expect(result.allow).toBe(true);
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("cross-origin request blocked");
   });
 
   it("blocks HEAD on a disallowed host", () => {

@@ -24,7 +24,7 @@ import { NextRequest, NextResponse } from "next/server";
 //      index — see that route's header comment). Origin-only protection
 //      would miss this: rebinding doesn't require a state-changing request.
 //
-//   2. Cross-site request forgery (defended via Origin, non-GET/HEAD only).
+//   2. Cross-site request forgery (defended via Origin, ALL methods).
 //      Any other site open in your browser can fire a same-origin-policy-
 //      legal "simple request" (e.g. a `Content-Type: text/plain` POST, which
 //      skips CORS preflight) at `http://localhost:4100/api/...`, using your
@@ -32,7 +32,11 @@ import { NextRequest, NextResponse } from "next/server";
 //      (dev-server start/stop, board mutations, widening `devRoots`, etc).
 //      Browsers always attach an `Origin` header to cross-origin
 //      fetch/XHR — page JS cannot suppress it — so we require it to match
-//      the same host allowlist for any non-GET/HEAD request.
+//      the same host allowlist. This applies to GET/HEAD too: a GET exemption
+//      would assume reads are side-effect-free, but some GET routes mutate
+//      (e.g. /api/tasks and /api/swarms start the dispatcher via
+//      initDispatcher()), and this dashboard is same-origin-only, so a
+//      cross-origin browser request is never legitimate regardless of method.
 //
 //      If `Origin` is ABSENT, the request is allowed through this second
 //      check (the Host check above still applies to it). Browser-driven
@@ -88,7 +92,8 @@ export interface EvaluateResult {
  * See the file-header comment above for the two-layer rationale.
  */
 export function evaluateRequest({
-  method,
+  // `method` is part of EvaluateInput (and still passed by callers/tests) but
+  // the allowlist now applies to every method, so it isn't read here.
   host,
   origin,
   pathname,
@@ -112,17 +117,18 @@ export function evaluateRequest({
     return { allow: false, reason: "host not allowed" };
   }
 
-  // Layer 2 — Origin allowlist, state-changing methods only. Reads can't
-  // mutate state, so they aren't a CSRF vector (the Host check above still
-  // covers them).
-  const upperMethod = method.toUpperCase();
-  if (upperMethod === "GET" || upperMethod === "HEAD") {
-    return { allow: true };
-  }
-
+  // Layer 2 — Origin allowlist, applied to ALL methods (including GET/HEAD).
+  // A GET exemption would rest on "reads can't mutate state," but that's false
+  // here: several GET routes have side effects — e.g. /api/tasks and
+  // /api/swarms call initDispatcher(), starting the background task dispatcher
+  // — so a cross-site scripted GET is a real CSRF vector. This dashboard is
+  // same-origin-only, so a cross-origin browser fetch/XHR (which always carries
+  // an Origin) is never legitimate regardless of method — block it.
   if (!origin) {
-    // Absent Origin ⇒ not a browser fetch/XHR (those always send it) ⇒ no
-    // CSRF vector. Allow non-browser clients (curl, MCP tools, scripts).
+    // Absent Origin ⇒ not a browser fetch/XHR (those always send it). Allow:
+    // same-origin GETs frequently omit Origin, and non-browser callers (curl,
+    // MCP tools, the in-process dev-server tools) have no confused browser to
+    // exploit. The Host check above still guards these against DNS rebinding.
     return { allow: true };
   }
 
