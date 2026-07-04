@@ -84,8 +84,13 @@ class ProcessManager {
     try {
       detected = await this.detectDevCommand(projectPath);
     } catch (err) {
-      // Don't leave a zombie "starting" placeholder behind if detection throws.
-      this.processes.delete(slug);
+      // Don't leave a zombie "starting" placeholder behind if detection throws
+      // — but only remove it if it's still OURS. A concurrent start() during
+      // this await may have superseded our placeholder; deleting unconditionally
+      // would drop the newer entry (S4 race).
+      if (this.processes.get(slug)?.info === placeholderInfo) {
+        this.processes.delete(slug);
+      }
       throw err;
     }
 
@@ -105,9 +110,15 @@ class ProcessManager {
     if (port) {
       const inUse = await isPortInUse(port);
       if (inUse) {
-        // Clean up the placeholder — this path returns an "errored" result
-        // without ever registering a real process.
-        this.processes.delete(slug);
+        // Clean up the placeholder — but only if it's still OURS. A concurrent
+        // stop() then start() during the isPortInUse() await above can replace
+        // this entry with a newer start's placeholder (or a spawned child);
+        // deleting unconditionally would drop that newer entry and leave its
+        // child untracked/unstoppable (S4 race). We still return the errored
+        // result — this start() spawned nothing regardless.
+        if (this.processes.get(slug)?.info === placeholderInfo) {
+          this.processes.delete(slug);
+        }
         return {
           slug,
           projectPath,
