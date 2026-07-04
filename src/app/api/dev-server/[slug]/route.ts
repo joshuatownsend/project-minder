@@ -5,6 +5,15 @@ import { readConfig, getDevRoots } from "@/lib/config";
 
 export const runtime = "nodejs";
 
+// S2 — `port` arrives as untyped JSON, not the `number` the body type
+// claims. It flows into processManager.start/restart -> String(portOverride)
+// -> spawn args (processManager.ts, platform.ts), so anything that isn't a
+// plausible TCP port must be rejected here, before it ever reaches process
+// spawning. Runtime-check against `unknown`, not the (unenforced) TS type.
+function isValidPort(port: unknown): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
 /** Verify projectPath is a subdirectory of one of the configured devRoots. */
 async function validateProjectPath(projectPath: string): Promise<string | null> {
   const config = await readConfig();
@@ -44,8 +53,19 @@ export async function POST(
     const { action, projectPath, port } = body as {
       action: "start" | "stop" | "restart";
       projectPath: string;
-      port?: number;
+      port?: unknown;
     };
+
+    // S2 — validate `port` before it can reach either "start" or "restart".
+    // Absent/null means "no override, let processManager detect one" and is
+    // fine; anything present that isn't an integer 1-65535 is rejected.
+    if (port !== undefined && port !== null && !isValidPort(port)) {
+      return NextResponse.json(
+        { error: "port must be an integer 1-65535" },
+        { status: 400 }
+      );
+    }
+    const validatedPort = isValidPort(port) ? port : undefined;
 
     switch (action) {
       case "start": {
@@ -59,7 +79,7 @@ export async function POST(
         if (pathErr) {
           return NextResponse.json({ error: pathErr }, { status: 403 });
         }
-        const info = await processManager.start(slug, projectPath, port);
+        const info = await processManager.start(slug, projectPath, validatedPort);
         return NextResponse.json(info);
       }
       case "stop": {
@@ -77,7 +97,7 @@ export async function POST(
         if (pathErr2) {
           return NextResponse.json({ error: pathErr2 }, { status: 403 });
         }
-        const info = await processManager.restart(slug, projectPath, port);
+        const info = await processManager.restart(slug, projectPath, validatedPort);
         return NextResponse.json(info);
       }
       default:

@@ -63,6 +63,23 @@ function makePostRequest(
   return [req, params];
 }
 
+/**
+ * Same as makePostRequest, but stubs `.json()` to resolve with the exact
+ * object given rather than round-tripping through JSON.stringify/parse.
+ * Needed for values JSON can't represent on the wire (e.g. `NaN` serializes
+ * to `null`) — this exercises the route's runtime validation directly
+ * against the un-representable value, the way a non-JSON.stringify caller
+ * (or a hand-crafted request) could still deliver it via a custom client.
+ */
+function makePostRequestRaw(
+  slug: string,
+  body: Record<string, unknown>
+): [NextRequest, { params: Promise<{ slug: string }> }] {
+  const [req, params] = makePostRequest(slug, {});
+  req.json = vi.fn().mockResolvedValue(body);
+  return [req, params];
+}
+
 describe("POST /api/dev-server/[slug]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,5 +128,106 @@ describe("POST /api/dev-server/[slug]", () => {
     expect(processManager.stop).toHaveBeenCalledWith("my-app");
     const body = await res.json();
     expect(body).toMatchObject({ status: "stopped", slug: "my-app" });
+  });
+});
+
+/**
+ * S2 — runtime port validation.
+ *
+ * `port` is typed `number` in the route but arrives as unvalidated JSON at
+ * runtime; it flows into processManager.start/restart -> String(portOverride)
+ * -> spawn args. These tests assert the route rejects anything that isn't a
+ * plausible TCP port (400) before processManager is ever called, and that a
+ * genuinely valid port passes through untouched.
+ */
+describe("POST /api/dev-server/[slug] — port validation (S2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const invalidPorts: Array<[string, unknown]> = [
+    ["0", 0],
+    ["70000 (out of range)", 70000],
+    ['"4100&calc" (string, injection attempt)', "4100&calc"],
+    ["3.5 (non-integer)", 3.5],
+    ["NaN", NaN],
+  ];
+
+  for (const [label, port] of invalidPorts) {
+    it(`rejects action:"start" with an invalid port: ${label}`, async () => {
+      const [req, params] = makePostRequestRaw("my-app", {
+        action: "start",
+        projectPath: "C:\\dev\\my-app",
+        port,
+      });
+
+      const res = await POST(req, params);
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body).toMatchObject({ error: "port must be an integer 1-65535" });
+      expect(processManager.start).not.toHaveBeenCalled();
+    });
+
+    it(`rejects action:"restart" with an invalid port: ${label}`, async () => {
+      const [req, params] = makePostRequestRaw("my-app", {
+        action: "restart",
+        projectPath: "C:\\dev\\my-app",
+        port,
+      });
+
+      const res = await POST(req, params);
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body).toMatchObject({ error: "port must be an integer 1-65535" });
+      expect(processManager.restart).not.toHaveBeenCalled();
+    });
+  }
+
+  it('accepts action:"start" with a valid port (4100) and passes it through', async () => {
+    vi.mocked(processManager.start).mockResolvedValue({
+      slug: "my-app",
+      projectPath: "C:\\dev\\my-app",
+      pid: 123,
+      port: 4100,
+      command: "next dev --port 4100",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      output: [],
+    });
+
+    const [req, params] = makePostRequest("my-app", {
+      action: "start",
+      projectPath: "C:\\dev\\my-app",
+      port: 4100,
+    });
+
+    const res = await POST(req, params);
+
+    expect(res.status).toBe(200);
+    expect(processManager.start).toHaveBeenCalledWith("my-app", "C:\\dev\\my-app", 4100);
+  });
+
+  it('allows action:"start" with no port at all (undefined passes through)', async () => {
+    vi.mocked(processManager.start).mockResolvedValue({
+      slug: "my-app",
+      projectPath: "C:\\dev\\my-app",
+      pid: 123,
+      command: "next dev --port 3000",
+      startedAt: new Date().toISOString(),
+      status: "running",
+      output: [],
+    });
+
+    const [req, params] = makePostRequest("my-app", {
+      action: "start",
+      projectPath: "C:\\dev\\my-app",
+    });
+
+    const res = await POST(req, params);
+
+    expect(res.status).toBe(200);
+    expect(processManager.start).toHaveBeenCalledWith("my-app", "C:\\dev\\my-app", undefined);
   });
 });

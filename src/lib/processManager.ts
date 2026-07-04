@@ -22,6 +22,19 @@ export interface DevServerInfo {
 
 const MAX_OUTPUT_LINES = 200;
 
+// S2 defense-in-depth: the API route (src/app/api/dev-server/[slug]/route.ts)
+// already validates `port` before calling us, but this is the last line of
+// defense before an attacker- or bug-controlled value reaches
+// `String(portOverride)` in the spawn args below and in platform.ts. Treat
+// anything that isn't a plausible TCP port as "no override" rather than
+// throwing — portOverride is optional by design, and a confused caller
+// shouldn't crash the whole start()/restart() call.
+function sanitizePort(port: number | undefined): number | undefined {
+  if (port === undefined || port === null) return undefined;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  return port;
+}
+
 class ProcessManager {
   private processes = new Map<string, { proc: ChildProcess; info: DevServerInfo }>();
 
@@ -39,11 +52,42 @@ class ProcessManager {
   }
 
   async start(slug: string, projectPath: string, portOverride?: number): Promise<DevServerInfo> {
+    portOverride = sanitizePort(portOverride);
+
     if (this.isRunning(slug)) {
       return this.processes.get(slug)!.info;
     }
 
-    const detected = await this.detectDevCommand(projectPath);
+    // S4 — reserve the slot synchronously, before the first `await` below.
+    // Without this, two overlapping start() calls for the same slug both
+    // pass the isRunning() check above (the map entry doesn't exist yet),
+    // both proceed to detect a command and spawn, and the first child gets
+    // silently overwritten in `this.processes` — orphaned, untracked, and
+    // never killed by stop(). Setting a "starting" placeholder here means a
+    // concurrent call's isRunning() check sees it and returns early instead
+    // of racing. The placeholder's `proc` is a stub — it's replaced
+    // wholesale once the real child process spawns below, and removed if we
+    // bail out before then (port detection throws, port already in use).
+    const placeholderInfo: DevServerInfo = {
+      slug,
+      projectPath,
+      pid: 0,
+      port: portOverride,
+      command: "",
+      startedAt: new Date().toISOString(),
+      status: "starting",
+      output: [],
+    };
+    this.processes.set(slug, { proc: {} as ChildProcess, info: placeholderInfo });
+
+    let detected: { command: string; args: string[]; port?: number };
+    try {
+      detected = await this.detectDevCommand(projectPath);
+    } catch (err) {
+      // Don't leave a zombie "starting" placeholder behind if detection throws.
+      this.processes.delete(slug);
+      throw err;
+    }
 
     // Apply port override if provided
     const port = portOverride || detected.port;
@@ -61,6 +105,9 @@ class ProcessManager {
     if (port) {
       const inUse = await isPortInUse(port);
       if (inUse) {
+        // Clean up the placeholder — this path returns an "errored" result
+        // without ever registering a real process.
+        this.processes.delete(slug);
         return {
           slug,
           projectPath,
@@ -127,6 +174,8 @@ class ProcessManager {
       info.output.push(`Error: ${err.message}`);
     });
 
+    // Replace the placeholder with the real process/info now that the
+    // process has actually spawned.
     this.processes.set(slug, { proc, info });
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -154,6 +203,7 @@ class ProcessManager {
   }
 
   async restart(slug: string, projectPath: string, portOverride?: number): Promise<DevServerInfo> {
+    portOverride = sanitizePort(portOverride);
     const prevPort = this.processes.get(slug)?.info.port;
     await this.stop(slug);
     // Wait for the OS to release the port the old process held, instead of a

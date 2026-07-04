@@ -227,6 +227,45 @@ describe("stop() awaits killProcessTree before resolving", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Suite 2b: start() concurrency guard (S4) — check-then-act race
+// ---------------------------------------------------------------------------
+describe("start() concurrency guard (S4)", () => {
+  it("two overlapping start() calls for the same slug result in exactly one spawn", async () => {
+    mockReadFile.mockResolvedValueOnce(
+      JSON.stringify({ scripts: { dev: "next dev --port 4300" } })
+    );
+    setupNetMock([false]); // port 4300 is free (only the winning call checks it)
+
+    const fakeProc = makeFakeProc(555);
+    mockSpawnDevServer.mockReturnValue(fakeProc);
+
+    const { processManager } = await import("@/lib/processManager");
+
+    // Fire both calls back-to-back, synchronously, before either can await
+    // past its first suspension point — this is exactly the race S4 guards
+    // against. Without the synchronous placeholder reservation, both would
+    // pass isRunning() and both would spawn.
+    const p1 = processManager.start("concurrent-app", "/fake/path");
+    const p2 = processManager.start("concurrent-app", "/fake/path");
+
+    const [info1, info2] = await Promise.all([p1, p2]);
+
+    // Only the first call should have ever reached detectDevCommand/spawn.
+    expect(mockReadFile).toHaveBeenCalledTimes(1);
+    expect(mockSpawnDevServer).toHaveBeenCalledTimes(1);
+
+    // The winning call completes the real start flow.
+    expect(info1.pid).toBe(555);
+    expect(info1.status).toBe("running");
+
+    // The losing call observed the synchronously-reserved placeholder and
+    // returned early without spawning anything of its own.
+    expect(info2.pid).toBe(0);
+    expect(info2.slug).toBe("concurrent-app");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Suite 3: restart() polls isPortInUse before starting (fake timers)
 // ---------------------------------------------------------------------------
 describe("restart() polls port before start()", () => {
