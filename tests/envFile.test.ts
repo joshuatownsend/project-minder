@@ -65,6 +65,43 @@ describe("scanEnvFiles — managed DB provider detection", () => {
   });
 });
 
+describe("scanEnvFiles — .env.example is excluded from detection (B7)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("does not report a database/provider when only .env.example has a placeholder DATABASE_URL", async () => {
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const file = String(p);
+      if (file.endsWith(".env.example")) {
+        return "DATABASE_URL=postgres://user:pass@ep-cool-1.us-east-2.aws.neon.tech/app\nSTRIPE_SECRET_KEY=sk_test_placeholder\n";
+      }
+      throw new Error("ENOENT");
+    });
+    const result = await scanEnvFiles("C:\\dev\\proj");
+    expect(result.database).toBeUndefined();
+    expect(result.externalServices).toEqual([]);
+    // .env.example must never even be read for detection purposes.
+    for (const call of mockReadFile.mock.calls) {
+      expect(String(call[0])).not.toMatch(/\.env\.example$/);
+    }
+  });
+
+  it("still detects a real DATABASE_URL from .env even when .env.example also exists with a placeholder", async () => {
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const file = String(p);
+      if (file.endsWith(".env.example")) {
+        return "DATABASE_URL=postgres://placeholder@fake-example-host.neon.tech/app\n";
+      }
+      if (file.endsWith(".env")) {
+        return "DATABASE_URL=postgres://user:pass@localhost:5432/realapp\n";
+      }
+      throw new Error("ENOENT");
+    });
+    const result = await scanEnvFiles("C:\\dev\\proj");
+    expect(result.database?.host).toBe("localhost");
+    expect(result.database?.name).toBe("realapp");
+  });
+});
+
 describe("scanEnvFiles — key-name service detection", () => {
   beforeEach(() => vi.clearAllMocks());
 

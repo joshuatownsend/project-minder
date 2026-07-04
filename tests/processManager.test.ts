@@ -172,6 +172,36 @@ describe("detectDevCommand — port parsing via start()", () => {
     expect(info.port).toBe(3000);
     expect(info.command).toContain("3000");
   });
+
+  it("detects --port=N (equals form, B6)", async () => {
+    mockReadFile.mockResolvedValueOnce(
+      JSON.stringify({ scripts: { dev: "next dev --port=4100" } })
+    );
+    setupNetMock([false]); // port 4100 is free
+
+    const fakeProc = makeFakeProc(444);
+    mockSpawnDevServer.mockReturnValue(fakeProc);
+
+    const { processManager } = await import("@/lib/processManager");
+    const info = await processManager.start("equals-app", "/fake/path");
+
+    expect(info.port).toBe(4100);
+  });
+
+  it("detects -pN (no-space short form, B6)", async () => {
+    mockReadFile.mockResolvedValueOnce(
+      JSON.stringify({ scripts: { dev: "vite -p4100" } })
+    );
+    setupNetMock([false]); // port 4100 is free
+
+    const fakeProc = makeFakeProc(445);
+    mockSpawnDevServer.mockReturnValue(fakeProc);
+
+    const { processManager } = await import("@/lib/processManager");
+    const info = await processManager.start("vite-app", "/fake/path");
+
+    expect(info.port).toBe(4100);
+  });
 });
 
 // ---------------------------------------------------------------------------

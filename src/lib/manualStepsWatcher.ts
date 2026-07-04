@@ -52,6 +52,24 @@ export function diffNewManualStepEntries(
   return { newEntries, counts };
 }
 
+/**
+ * Decide whether a raw `fs.watch` event fired on the PARENT directory (see
+ * B3) should trigger the debounced re-parse of `targetName`. Watching the
+ * directory rather than the file itself means every change in the folder
+ * reaches this listener — sibling files (TODO.md, .git housekeeping), and
+ * the writer's own tmp-file intermediate from `atomicWrite.ts` — so events
+ * must be filtered down to just the target file. Some platforms omit
+ * `filename` entirely; when that happens we can't filter, so err on the
+ * side of firing rather than silently missing a real change.
+ */
+export function shouldHandleWatchEvent(
+  filename: string | null,
+  targetName: string
+): boolean {
+  if (filename == null) return true;
+  return filename === targetName;
+}
+
 interface ChangeEvent {
   slug: string;
   projectName: string;
@@ -70,7 +88,7 @@ interface WatchedProject {
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
-class ManualStepsWatcher {
+export class ManualStepsWatcher {
   private watched = new Map<string, WatchedProject>();
   private changes: ChangeEvent[] = [];
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -158,22 +176,39 @@ class ManualStepsWatcher {
       debounceTimer: null,
     };
 
+    // Watch the PARENT directory rather than the file itself, filtered to
+    // the target filename (B3). A single-file `fs.watch` breaks once the
+    // writer's tmp-file rename (`atomicWrite.ts`) replaces the underlying
+    // inode — inotify stays bound to the unlinked old inode on Linux/macOS
+    // (Windows generally survives this, but the parent-dir approach is
+    // robust everywhere and needs no re-arming after every write).
+    const parentDir = path.dirname(filePath);
+    const targetName = path.basename(filePath);
+
     try {
-      entry.watcher = watch(filePath, (_event, filename) => {
-        // Ignore our atomic-write temp files
-        if (filename && filename.includes(".tmp.")) return;
+      entry.watcher = watch(parentDir, (_event, filename) => {
+        if (!shouldHandleWatchEvent(filename, targetName)) return;
         // Debounce — Windows fs.watch fires duplicate events
         if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
         entry.debounceTimer = setTimeout(() => this.onFileChanged(entry), DEBOUNCE_MS);
       });
 
       entry.watcher.on("error", () => {
-        // File may have been deleted
+        // Directory watch broke (e.g. the dir itself was removed, or the
+        // watch descriptor otherwise died). Evict the slug from `watched`
+        // so the next 60s poll re-discovers and re-watches the file if it
+        // still exists (or reappears) — otherwise a deleted-then-recreated
+        // MANUAL_STEPS.md is orphaned until server restart (B2).
         entry.watcher?.close();
         entry.watcher = null;
+        if (entry.debounceTimer) {
+          clearTimeout(entry.debounceTimer);
+          entry.debounceTimer = null;
+        }
+        this.watched.delete(slug);
       });
     } catch {
-      // watch can throw if file is deleted between access check and watch
+      // watch can throw if the dir is deleted between access check and watch
     }
 
     this.watched.set(slug, entry);

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { writeFileAtomic, renameWithRetry } from "@/lib/atomicWrite";
+import { writeFileAtomic, renameWithRetry, withFileLock } from "@/lib/atomicWrite";
 
 // Regression coverage for issue #105: writeFileAtomic used a raw fs.rename,
 // which intermittently failed on Windows with EPERM when a parallel worker
@@ -86,6 +86,49 @@ describe("writeFileAtomic", () => {
     const leftovers = (await fs.readdir(dir)).filter((f) => f.includes(".tmp."));
     expect(leftovers).toHaveLength(0);
     await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("withFileLock — case-insensitive lock key on win32 (B9)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("serializes two acquisitions on differently-cased paths to the same file on win32", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    const events: string[] = [];
+    const a = withFileLock("C:\\Dev\\Project\\File.txt", async () => {
+      events.push("a-start");
+      await new Promise((r) => setTimeout(r, 20));
+      events.push("a-end");
+    });
+    const b = withFileLock("c:\\dev\\project\\file.txt", async () => {
+      events.push("b-start");
+      await new Promise((r) => setTimeout(r, 5));
+      events.push("b-end");
+    });
+    await Promise.all([a, b]);
+    // Same lock key (lowercased) -> FIFO: a fully completes before b starts.
+    expect(events).toEqual(["a-start", "a-end", "b-start", "b-end"]);
+  });
+
+  it("does NOT lowercase (and so does not share a lock across case) on non-win32 platforms", async () => {
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    const events: string[] = [];
+    const a = withFileLock("/tmp/Case-Fixture-B9", async () => {
+      events.push("a-start");
+      await new Promise((r) => setTimeout(r, 20));
+      events.push("a-end");
+    });
+    const b = withFileLock("/tmp/case-fixture-b9", async () => {
+      events.push("b-start");
+      await new Promise((r) => setTimeout(r, 5));
+      events.push("b-end");
+    });
+    await Promise.all([a, b]);
+    // Different lock keys on POSIX -> run concurrently; b (shorter delay)
+    // finishes before a even though it started later.
+    expect(events.indexOf("b-end")).toBeLessThan(events.indexOf("a-end"));
   });
 });
 

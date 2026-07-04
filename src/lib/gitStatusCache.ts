@@ -5,6 +5,10 @@ interface DirtyStatus {
   isDirty: boolean;
   uncommittedCount: number;
   checkedAt: number;
+  /** Passed through from scanGitDirtyStatus (B5) — a failed git invocation,
+   *  not a confirmed-clean repo. Optional so existing callers/tests that
+   *  don't check it are unaffected. */
+  unknown?: boolean;
 }
 
 interface QueueItem {

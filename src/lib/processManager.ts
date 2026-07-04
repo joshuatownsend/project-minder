@@ -271,8 +271,8 @@ class ProcessManager {
       const scripts = pkg.scripts || {};
       const devScript = scripts.dev || scripts.start || "";
 
-      // Detect port from script
-      const portMatch = devScript.match(/(?:--port|-p)\s+(\d+)/);
+      // Detect port from script. Matches --port N, --port=N, -p N, -pN (B6).
+      const portMatch = devScript.match(/(?:--port[= ]|-p ?)(\d+)/);
       const envMatch = devScript.match(/PORT=(\d+)/);
       let port: number | undefined;
 

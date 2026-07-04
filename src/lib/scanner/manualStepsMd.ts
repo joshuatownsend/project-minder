@@ -3,6 +3,10 @@ import path from "path";
 import { ManualStepsInfo, ManualStepEntry, ManualStep } from "../types";
 
 const HEADER_RE = /^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s*\|\s*([^|]+?)\s*\|\s*(.+)$/;
+// Any `##` heading, used as a fallback container so steps under a
+// differently-formatted header still surface rather than silently dropping
+// (B8) — the canonical HEADER_RE above is tried first and wins when it matches.
+const ANY_HEADER_RE = /^##\s+(.*)$/;
 const COMPLETED_RE = /^\s*-\s*\[x\]\s+(.*)/i;
 const PENDING_RE = /^\s*-\s*\[\s\]\s+(.*)/;
 
@@ -23,6 +27,24 @@ export function parseManualStepsMd(content: string): ManualStepsInfo {
         date: headerMatch[1].trim(),
         featureSlug: headerMatch[2].trim(),
         title: headerMatch[3].trim(),
+        steps: [],
+      };
+      entries.push(currentEntry);
+      currentStep = null;
+      continue;
+    }
+
+    // A `##` heading that doesn't match the canonical `date | slug | title`
+    // format (hand-written notes, a different convention, a typo in the
+    // separators, …). Rather than let steps underneath it hit
+    // `if (!currentEntry) continue` and vanish, start a synthetic container
+    // entry keyed by the heading text itself so they still surface (B8).
+    const anyHeaderMatch = line.match(ANY_HEADER_RE);
+    if (anyHeaderMatch) {
+      currentEntry = {
+        date: "",
+        featureSlug: "untitled",
+        title: anyHeaderMatch[1].trim() || "Untitled",
         steps: [],
       };
       entries.push(currentEntry);

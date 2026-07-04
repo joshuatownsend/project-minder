@@ -161,8 +161,11 @@ export function parseBoardMd(content: string): BoardInfo | undefined {
     }
 
     // Indented continuation line → detail of the last issue. Uses the raw line
-    // so leading indentation is what's tested.
-    if (lastIssue && /^\s{2,}\S/.test(raw)) {
+    // so leading indentation is what's tested. A single leading tab counts as
+    // sufficient indentation too (B8) — `\s{2,}` alone requires 2+ whitespace
+    // chars, which a lone `\t` (one char) never satisfies even though it
+    // renders as equivalent indentation to 2+ spaces.
+    if (lastIssue && /^(?:\t|\s{2,})\S/.test(raw)) {
       const text = raw.trim();
       lastIssue.detail = lastIssue.detail
         ? `${lastIssue.detail}\n${text}`

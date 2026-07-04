@@ -59,8 +59,8 @@ const MONOREPO_DETECT: Record<string, string> = {
 
 function extractPort(scripts: Record<string, string>): number | undefined {
   const devScript = scripts.dev || scripts.start || "";
-  // Match --port, -p, or PORT= patterns
-  const portMatch = devScript.match(/(?:--port|-p)\s+(\d+)/);
+  // Match --port N, --port=N, -p N, and -pN forms, plus PORT= (B6).
+  const portMatch = devScript.match(/(?:--port[= ]|-p ?)(\d+)/);
   if (portMatch) return parseInt(portMatch[1], 10);
   const envMatch = devScript.match(/PORT=(\d+)/);
   if (envMatch) return parseInt(envMatch[1], 10);
