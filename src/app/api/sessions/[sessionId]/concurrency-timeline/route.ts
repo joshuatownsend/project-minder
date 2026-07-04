@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildConcurrencyTimeline, type TimelineReport } from "@/lib/usage/concurrencyTimeline";
 import { findSessionFile, parseSessionTurns } from "@/lib/usage/parser";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
-const globalForConcurrency = globalThis as unknown as {
-  __concurrencyCache?: Map<string, { report: TimelineReport; expiresAt: number }>;
-};
-
-function getCache() {
-  if (!globalForConcurrency.__concurrencyCache) {
-    globalForConcurrency.__concurrencyCache = new Map();
-  }
-  return globalForConcurrency.__concurrencyCache;
-}
+const cache = getOrCreateRouteCache<TimelineReport>("concurrency-timeline", { ttlMs: 60_000 });
 
 export async function GET(
   _request: NextRequest,
@@ -19,10 +11,8 @@ export async function GET(
 ) {
   const { sessionId } = await params;
 
-  const now = Date.now();
-  const cache = getCache();
   const cached = cache.get(sessionId);
-  if (cached && now < cached.expiresAt) return NextResponse.json(cached.report);
+  if (cached) return NextResponse.json(cached);
 
   const found = await findSessionFile(sessionId);
   if (!found) return NextResponse.json({ error: "Session not found" }, { status: 404 });
@@ -30,9 +20,6 @@ export async function GET(
   const turns = await parseSessionTurns(found.filePath, found.projectDirName, { includeSidechains: true });
   const report = buildConcurrencyTimeline(turns);
 
-  cache.set(sessionId, { report, expiresAt: now + 60_000 });
-  for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
-  }
+  cache.set(sessionId, report);
   return NextResponse.json(report);
 }

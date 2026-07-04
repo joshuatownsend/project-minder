@@ -6,6 +6,7 @@ import { loadCatalog } from "@/lib/indexer/catalog";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // Cross-session workflow pattern detection for a project. Cached with a 5-min
 // TTL + jsonlMtime invalidation — same pattern as efficiency/hot-files routes.
@@ -21,20 +22,10 @@ interface PatternsResponse {
 
 interface CacheSlot {
   data: PatternsResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForPatterns = globalThis as unknown as {
-  __patternsCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForPatterns.__patternsCache) {
-    globalForPatterns.__patternsCache = new Map();
-  }
-  return globalForPatterns.__patternsCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("patterns", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   _request: NextRequest,
@@ -42,14 +33,9 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const cache = getCache();
   const cached = cache.get(slug);
   const currentMtime = getJsonlMaxMtime();
-  if (
-    cached &&
-    Date.now() - cached.cachedAt < CACHE_TTL_MS &&
-    cached.jsonlMtime === currentMtime
-  ) {
+  if (cached && cached.jsonlMtime === currentMtime) {
     return NextResponse.json(cached.data);
   }
 
@@ -81,6 +67,6 @@ export async function GET(
     ...result,
     meta: { cachedAt: now, jsonlMtime: currentMtime },
   };
-  cache.set(slug, { data, cachedAt: now, jsonlMtime: currentMtime });
+  cache.set(slug, { data, jsonlMtime: currentMtime });
   return NextResponse.json(data);
 }

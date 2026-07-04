@@ -4,6 +4,7 @@ import { buildHotFiles, type HotFilesResult } from "@/lib/usage/fileTracker";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 interface HotFilesResponse {
   slug: string;
@@ -15,20 +16,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheSlot {
   data: HotFilesResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForHotFiles = globalThis as unknown as {
-  __hotFilesCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForHotFiles.__hotFilesCache) {
-    globalForHotFiles.__hotFilesCache = new Map();
-  }
-  return globalForHotFiles.__hotFilesCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("hot-files", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   _request: NextRequest,
@@ -36,10 +27,9 @@ export async function GET(
 ) {
   const { slug } = await params;
   try {
-    const cache = getCache();
     const cached = cache.get(slug);
     const currentMtime = getJsonlMaxMtime();
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime) {
       return NextResponse.json(cached.data);
     }
 
@@ -58,7 +48,7 @@ export async function GET(
 
     const result = buildHotFiles(projectTurns);
     const data: HotFilesResponse = { slug, result, generatedAt: new Date().toISOString() };
-    cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+    cache.set(slug, { data, jsonlMtime: currentMtime });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[hot-files] Error processing slug="${slug}":`, err);

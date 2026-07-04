@@ -14,6 +14,7 @@ import {
 import type { HandoffFacts, CompactionFidelity } from "@/lib/usage/sessionHandoff";
 import { generateHandoffDoc } from "@/lib/usage/sessionHandoffDoc";
 import type { HandoffVerbosity } from "@/lib/usage/sessionHandoffDoc";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 const VALID_VERBOSITIES = new Set<HandoffVerbosity>([
   "minimal",
@@ -34,20 +35,10 @@ interface HandoffResponse {
 
 interface CacheSlot {
   data: HandoffResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForHandoff = globalThis as unknown as {
-  __handoffCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForHandoff.__handoffCache) {
-    globalForHandoff.__handoffCache = new Map();
-  }
-  return globalForHandoff.__handoffCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("handoff", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   request: NextRequest,
@@ -68,14 +59,9 @@ export async function GET(
   const verbosity = verbosityParam as HandoffVerbosity;
 
   const cacheKey = `${sessionId}:${verbosity}`;
-  const cache = getCache();
   const cached = cache.get(cacheKey);
   const currentMtime = getJsonlMaxMtime();
-  if (
-    cached &&
-    Date.now() - cached.cachedAt < CACHE_TTL_MS &&
-    cached.jsonlMtime === currentMtime
-  ) {
+  if (cached && cached.jsonlMtime === currentMtime) {
     return NextResponse.json(cached.data);
   }
 
@@ -132,6 +118,6 @@ export async function GET(
     doc,
     meta: { durationMs: now - start },
   };
-  cache.set(cacheKey, { data, cachedAt: now, jsonlMtime: currentMtime });
+  cache.set(cacheKey, { data, jsonlMtime: currentMtime });
   return NextResponse.json(data);
 }

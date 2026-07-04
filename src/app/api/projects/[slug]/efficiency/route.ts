@@ -10,6 +10,7 @@ import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { recordGradeSnapshot, loadGradeTrend, type GradeTrend } from "@/lib/data/gradeSnapshots";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
@@ -37,20 +38,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheSlot {
   data: EfficiencyResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForEfficiency = globalThis as unknown as {
-  __efficiencyCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForEfficiency.__efficiencyCache) {
-    globalForEfficiency.__efficiencyCache = new Map();
-  }
-  return globalForEfficiency.__efficiencyCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("efficiency", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   _request: NextRequest,
@@ -58,14 +49,9 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const cache = getCache();
   const cached = cache.get(slug);
   const currentMtime = getJsonlMaxMtime();
-  if (
-    cached &&
-    Date.now() - cached.cachedAt < CACHE_TTL_MS &&
-    cached.jsonlMtime === currentMtime
-  ) {
+  if (cached && cached.jsonlMtime === currentMtime) {
     return NextResponse.json(cached.data);
   }
 
@@ -135,6 +121,6 @@ export async function GET(
     trend,
     generatedAt: new Date().toISOString(),
   };
-  cache.set(slug, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+  cache.set(slug, { data, jsonlMtime: currentMtime });
   return NextResponse.json(data);
 }

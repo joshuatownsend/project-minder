@@ -3,11 +3,10 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { getSessionCostsInWindow } from "@/lib/data";
 import type { GsdPlanningInfo } from "@/lib/types";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
-const globalForGsd = globalThis as unknown as {
-  __gsdPlanningCache?: Map<string, { data: GsdPlanningInfo; cachedAt: number }>;
-};
 const TTL_MS = 5 * 60_000;
+const cache = getOrCreateRouteCache<GsdPlanningInfo>("gsd-planning", { ttlMs: TTL_MS });
 
 export async function GET(
   _req: NextRequest,
@@ -15,9 +14,9 @@ export async function GET(
 ): Promise<NextResponse> {
   const { slug } = await params;
 
-  const cached = globalForGsd.__gsdPlanningCache?.get(slug);
-  if (cached && Date.now() - cached.cachedAt < TTL_MS) {
-    return NextResponse.json(cached.data);
+  const cached = cache.get(slug);
+  if (cached) {
+    return NextResponse.json(cached);
   }
 
   let result = getCachedScan();
@@ -46,10 +45,7 @@ export async function GET(
     ),
   };
 
-  if (!globalForGsd.__gsdPlanningCache) {
-    globalForGsd.__gsdPlanningCache = new Map();
-  }
-  globalForGsd.__gsdPlanningCache.set(slug, { data: info, cachedAt: Date.now() });
+  cache.set(slug, info);
 
   return NextResponse.json(info);
 }

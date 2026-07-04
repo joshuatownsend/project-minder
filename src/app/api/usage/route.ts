@@ -3,6 +3,7 @@ import { validatePeriod } from "@/lib/usage/constants";
 import { getUsage, dbModeRequested } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -19,13 +20,7 @@ interface UsageCacheSlot {
   backend: "db" | "file";
 }
 
-const globalForUsage = globalThis as unknown as {
-  __usageCache?: Map<string, UsageCacheSlot>;
-};
-
-if (!globalForUsage.__usageCache) {
-  globalForUsage.__usageCache = new Map();
-}
+const cache = getOrCreateRouteCache<UsageCacheSlot>("usage", { ttlMs: CACHE_TTL });
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
@@ -39,13 +34,11 @@ export async function GET(request: NextRequest) {
   // db-backend caller for the rest of the 2-min TTL window.
   const requestedBackend = dbModeRequested() ? "db" : "file";
   const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
-  const cache = globalForUsage.__usageCache!;
   const cached = cache.get(cacheKey);
-  const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL;
 
   let slot: UsageCacheSlot;
-  if (fresh) {
-    slot = cached!;
+  if (cached) {
+    slot = cached;
   } else {
     const { report, meta } = await getUsage(safePeriod, project, source);
     slot = {

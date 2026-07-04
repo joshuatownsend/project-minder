@@ -4,6 +4,7 @@ import { buildFileCoupling, type FileCouplingResult } from "@/lib/usage/fileCoup
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 interface FileCouplingResponse {
   slug: string;
@@ -15,20 +16,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheSlot {
   data: FileCouplingResponse;
-  cachedAt: number;
   jsonlMtime: number;
 }
 
-const globalForFileCoupling = globalThis as unknown as {
-  __fileCouplingCache?: Map<string, CacheSlot>;
-};
-
-function getCache(): Map<string, CacheSlot> {
-  if (!globalForFileCoupling.__fileCouplingCache) {
-    globalForFileCoupling.__fileCouplingCache = new Map();
-  }
-  return globalForFileCoupling.__fileCouplingCache;
-}
+const cache = getOrCreateRouteCache<CacheSlot>("file-coupling", { ttlMs: CACHE_TTL_MS });
 
 export async function GET(
   request: NextRequest,
@@ -41,10 +32,9 @@ export async function GET(
   try {
     // Cache key includes the threshold so changing ?min= yields fresh data.
     const cacheKey = `${slug}:${minCoOccurrences}`;
-    const cache = getCache();
     const cached = cache.get(cacheKey);
     const currentMtime = getJsonlMaxMtime();
-    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime) {
       return NextResponse.json(cached.data);
     }
 
@@ -63,7 +53,7 @@ export async function GET(
 
     const result = buildFileCoupling(projectTurns, minCoOccurrences);
     const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };
-    cache.set(cacheKey, { data, cachedAt: Date.now(), jsonlMtime: currentMtime });
+    cache.set(cacheKey, { data, jsonlMtime: currentMtime });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[file-coupling] Error processing slug="${slug}":`, err);

@@ -12,6 +12,8 @@ vi.mock("@/lib/scanner/wasteOptimizer", () => ({
 }));
 vi.mock("@/lib/usage/projectMatch", () => ({
   gatherProjectTurns: vi.fn().mockReturnValue([]),
+  buildProjectTurnsIndex: vi.fn().mockReturnValue({ bySlug: new Map(), byDirName: new Map() }),
+  lookupProjectTurns: vi.fn().mockReturnValue([]),
 }));
 vi.mock("@/lib/cache", () => ({
   getCachedScan: vi.fn().mockReturnValue(null),

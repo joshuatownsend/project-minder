@@ -3,24 +3,11 @@ import { getSessionsList } from "@/lib/data";
 import { getFacetsAggregate } from "@/lib/scanner/claudeFacets";
 import { validatePeriod } from "@/lib/usage/constants";
 import { getPeriodStart } from "@/lib/usage/periods";
-
-interface FeedbackCacheSlot {
-  data: object;
-  cachedAt: number;
-}
-
-const globalForFeedback = globalThis as unknown as {
-  __feedbackCache?: Map<string, FeedbackCacheSlot>;
-};
+import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 const CACHE_TTL = 2 * 60_000;
 
-function getFeedbackCache(): Map<string, FeedbackCacheSlot> {
-  if (!globalForFeedback.__feedbackCache) {
-    globalForFeedback.__feedbackCache = new Map();
-  }
-  return globalForFeedback.__feedbackCache;
-}
+const cache = getOrCreateRouteCache<object>("feedback", { ttlMs: CACHE_TTL });
 
 // `GET /api/feedback?period=month&project=slug` — cross-session aggregate of
 // Claude qualitative feedback (facets). Reads the session list filtered by
@@ -34,10 +21,9 @@ export async function GET(request: NextRequest) {
   const projectSlug = params.get("project") ?? null;
   const cacheKey = `${period}|${projectSlug ?? ""}`;
 
-  const cache = getFeedbackCache();
-  const slot = cache.get(cacheKey);
-  if (slot && Date.now() - slot.cachedAt < CACHE_TTL) {
-    return NextResponse.json(slot.data);
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return NextResponse.json(cached);
   }
 
   const { sessions } = await getSessionsList();
@@ -56,7 +42,7 @@ export async function GET(request: NextRequest) {
   const aggregate = await getFacetsAggregate(sessionIds);
 
   const result = { period, projectSlug, ...aggregate };
-  cache.set(cacheKey, { data: result, cachedAt: Date.now() });
+  cache.set(cacheKey, result);
 
   return NextResponse.json(result);
 }
