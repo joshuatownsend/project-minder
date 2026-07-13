@@ -39,7 +39,7 @@ jobs:
       # Fails loudly if the better-sqlite3 native driver didn't build, instead
       # of silently letting the ~34 DB-backed test suites skip and CI go green.
       - name: Assert better-sqlite3 native driver loaded
-        run: node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded')"
+        run: node -e "const D=require('better-sqlite3'); const db=new D(':memory:'); db.prepare('select 1 as x').get(); db.close(); console.log('better-sqlite3 native driver OK')"
 
       - name: Lint
         run: pnpm lint
@@ -67,9 +67,16 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      # Node 22 (not 20) is deliberate on Windows: better-sqlite3@12.11.1 ships
+      # a prebuilt win32-x64 binary for Node 22's ABI (node-v127) but NOT for
+      # Node 20's (ABI 115). On Node 20 `prebuild-install` finds no prebuilt and
+      # falls back to `node-gyp`, which cannot detect Visual Studio 2026 (v18)
+      # on the current windows-latest image (issue #264) — so the native driver
+      # never builds and every DB-backed suite fails. Node 22 gets the prebuilt
+      # binary with zero compiler involvement. Node 20 stays covered on ubuntu.
       - uses: actions/setup-node@v6
         with:
-          node-version: '20.19.0'
+          node-version: '22.12.0'
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
@@ -79,7 +86,7 @@ jobs:
       # DB-backed suites would silently skip and the advisory job go green,
       # hiding the exact Windows-native signal this job exists to provide.
       - name: Assert better-sqlite3 native driver loaded
-        run: node -e "require('better-sqlite3'); console.log('better-sqlite3 loaded')"
+        run: node -e "const D=require('better-sqlite3'); const db=new D(':memory:'); db.prepare('select 1 as x').get(); db.close(); console.log('better-sqlite3 native driver OK')"
 
       - name: Lint
         run: pnpm lint
