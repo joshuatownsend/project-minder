@@ -11,6 +11,8 @@ import { scanClaudeMd } from "./claudeMd";
 import { auditClaudeMd } from "./claudeMdAudit";
 import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
+import { encodePath, toSlug as usageToSlug } from "./claudeConversations";
+import { canonicalizeDirName } from "../usage/parser";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
 import { scanBoardMd } from "./boardMd";
@@ -86,6 +88,12 @@ async function scanProject(
   if (!(await isGitRepo(projectPath))) return null;
 
   const slug = toSlug(dirName);
+  // Usage aggregates key on the encoded-conversation-dir slug, which differs
+  // from the filesystem-basename route slug above. Derive it here (server-side,
+  // using the same encode→canonicalize→toSlug pipeline the usage parser uses)
+  // so cost/usage views can join a scanned project to its usage data. See the
+  // `usageSlug` field doc on ProjectData.
+  const usageSlug = usageToSlug(canonicalizeDirName(encodePath(projectPath)));
 
   const claudeMdPromise = scanClaudeMd(projectPath);
   // Audit reuses the buffer scanClaudeMd already read so we don't pay
@@ -220,6 +228,7 @@ async function scanProject(
 
   const project: ProjectData = {
     slug,
+    usageSlug,
     name: pkgResult.name || dirName,
     path: projectPath,
     status: "active", // Will be overridden from config

@@ -18,6 +18,15 @@ export interface ProjectData {
   path: string;
   status: ProjectStatus;
 
+  // The `projectSlug` key the usage module aggregates turns under — derived
+  // from the `~/.claude/projects/` encoded dir name, NOT the route slug above.
+  // (e.g. route slug `project-minder` ↔ usage slug `dev-project-minder`.) The
+  // two diverge because usage slugs are computed from the encoded conversation
+  // dir while route slugs come from the filesystem basename. Precomputed here
+  // so cost/usage views can cross-reference a scanned project to its usage
+  // aggregates without re-deriving the encoding client-side.
+  usageSlug: string;
+
   // Tech stack
   framework?: string;
   frameworkVersion?: string;

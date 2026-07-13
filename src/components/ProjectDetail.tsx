@@ -10,6 +10,7 @@ import { WorktreePanel } from "./WorktreePanel";
 import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
+import { CostsTab } from "./CostsTab";
 import { BoardTab } from "./BoardTab";
 import { OpsPanel } from "./OpsPanel";
 import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
@@ -57,7 +58,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "costs" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -105,7 +106,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 // ── Main Component ─────────────────────────────────────────────────────────
 
 const VALID_TABS = new Set<TabKey>([
-  "overview", "context", "todos", "sessions", "manual-steps", "insights",
+  "overview", "context", "todos", "sessions", "costs", "manual-steps", "insights",
   "board", "ops", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
@@ -209,6 +210,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "context",     label: "Context" },
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
     ...(hasSessions     ? [{ key: "sessions"     as TabKey, label: "Sessions"     }] : []),
+    ...(hasSessions     ? [{ key: "costs"        as TabKey, label: "Costs"        }] : []),
     // Always show Manual Steps (like TODOs) so the Archived disclosure stays
     // reachable even after every active entry has been moved to the archive.
     { key: "manual-steps", label: "Manual Steps" },
@@ -630,6 +632,11 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── INSIGHTS ──────────────────────────────────────────────── */}
           {activeTab === "insights" && (
             <InsightsTab slug={project.slug} worktrees={project.worktrees} />
+          )}
+
+          {/* ── COSTS ─────────────────────────────────────────────────── */}
+          {activeTab === "costs" && (
+            <CostsTab usageSlug={project.usageSlug} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}

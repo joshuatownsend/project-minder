@@ -25,6 +25,7 @@ const slugTitles: Record<HelpSlug, string> = {
   skills: "Skills",
   instructions: "Instructions",
   usage: "Usage Dashboard",
+  "cost-report": "Cost Report",
   status: "System Status",
   memory: "Memory Browser",
   "claude-md-audit": "CLAUDE.md Audit & Context",

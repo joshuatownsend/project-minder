@@ -16,6 +16,7 @@ import type { ProjectData } from "@/lib/types";
 function project(slug: string, projectPath: string): ProjectData {
   return {
     slug,
+    usageSlug: `dev-${slug}`,
     name: slug,
     path: projectPath,
     status: "active",

@@ -6,6 +6,7 @@ import type { ProjectData } from "@/lib/types";
 function project(opts: Partial<ProjectData> & { slug: string; path: string; name?: string }): ProjectData {
   return {
     slug: opts.slug,
+    usageSlug: opts.usageSlug ?? `dev-${opts.slug}`,
     name: opts.name ?? opts.slug,
     path: opts.path,
     status: opts.status ?? "active",

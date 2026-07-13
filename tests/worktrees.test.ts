@@ -36,6 +36,7 @@ beforeEach(() => vi.clearAllMocks());
 function makeProject(name: string, dirPath: string): ProjectData {
   return {
     slug: name.toLowerCase(),
+    usageSlug: `dev-${name.toLowerCase()}`,
     name,
     path: dirPath,
     status: "active",
