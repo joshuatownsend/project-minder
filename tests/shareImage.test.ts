@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { composeShareSvg } from "@/lib/shareImage";
 import type { UsageReport } from "@/lib/usage/types";
+import type { Period } from "@/lib/usage/constants";
 
 function makeReport(overrides: Partial<UsageReport> = {}): UsageReport {
   return {
@@ -59,6 +60,41 @@ describe("composeShareSvg", () => {
   it("uses default width 1200", () => {
     const result = composeShareSvg(makeReport());
     expect(result).toContain('width="1200"');
+  });
+
+  // Regression: every VALID_PERIODS value must have a share label, else the
+  // header renders "undefined · <date>". Guards the 90d/1y additions and the
+  // pre-existing 24h gap.
+  it.each([
+    ["24h", "Last 24 hours"],
+    ["today", "Today"],
+    ["7d", "Last 7 days"],
+    ["30d", "Last 30 days"],
+    ["90d", "Last 90 days"],
+    ["1y", "Last year"],
+    ["all", "All time"],
+  ])("renders a real period label for %s (never 'undefined')", (period, label) => {
+    const result = composeShareSvg(makeReport(), { period: period as Period });
+    expect(result).toContain(`${label} ·`);
+    expect(result).not.toContain("undefined ·");
+  });
+
+  it("falls back to the raw period string for an unmapped period", () => {
+    // Cast simulates a future/unmapped period value reaching the renderer.
+    const result = composeShareSvg(makeReport(), { period: "42d" as Period });
+    expect(result).toContain("42d ·");
+    expect(result).not.toContain("undefined ·");
+  });
+
+  it("escapes SVG-unsafe characters in an unmapped period fallback", () => {
+    // The fallback path interpolates the raw period; a value with markup must
+    // be escaped so it can't inject SVG (defense-in-depth behind /api/share's
+    // validatePeriod).
+    const result = composeShareSvg(makeReport(), {
+      period: "<script>x</script>" as Period,
+    });
+    expect(result).not.toContain("<script>");
+    expect(result).toContain("&lt;script&gt;");
   });
 
   it("honours custom width", () => {

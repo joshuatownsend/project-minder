@@ -49,8 +49,21 @@ describe("parseUsagePeriod", () => {
 });
 
 describe("DETAIL_PERIODS", () => {
-  it("excludes 'today' but includes 24h/7d/30d/all in order", () => {
-    expect(DETAIL_PERIODS.map((p) => p.value)).toEqual(["24h", "7d", "30d", "all"]);
+  it("excludes 'today' but includes 24h/7d/30d/90d/1y/all in order", () => {
+    expect(DETAIL_PERIODS.map((p) => p.value)).toEqual(["24h", "7d", "30d", "90d", "1y", "all"]);
+  });
+});
+
+describe("parseUsagePeriod — 90d / 1y periods and aliases", () => {
+  it("accepts the new 90d and 1y periods", () => {
+    expect(parseUsagePeriod("90d")).toBe("90d");
+    expect(parseUsagePeriod("1y")).toBe("1y");
+  });
+
+  it("resolves aliases quarter→90d and year/365d→1y", () => {
+    expect(parseUsagePeriod("quarter")).toBe("90d");
+    expect(parseUsagePeriod("year")).toBe("1y");
+    expect(parseUsagePeriod("365d")).toBe("1y");
   });
 });
 
@@ -69,6 +82,14 @@ describe("periodSinceIso", () => {
 
   it("computes the 30d lower bound", () => {
     expect(periodSinceIso("30d", NOW)).toBe("2026-04-11T12:00:00.000Z");
+  });
+
+  it("computes the 90d rolling lower bound", () => {
+    expect(periodSinceIso("90d", NOW)).toBe("2026-02-10T12:00:00.000Z");
+  });
+
+  it("computes the 1y (365d) rolling lower bound", () => {
+    expect(periodSinceIso("1y", NOW)).toBe("2025-05-11T12:00:00.000Z");
   });
 
   it("computes calendar-today as local-timezone midnight of NOW", () => {
