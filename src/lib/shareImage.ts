@@ -86,7 +86,7 @@ export function composeShareSvg(
     `<text x="${PAD}" y="${headerY + 24}" font-size="22" font-weight="700" fill="${p.textPrimary}">Project Minder</text>`,
   );
   parts.push(
-    `<text x="${PAD}" y="${headerY + 44}" font-size="13" fill="${p.textSecondary}">${periodLabel[period] ?? period} · ${report.generatedAt ? new Date(report.generatedAt).toLocaleDateString() : ""}</text>`,
+    `<text x="${PAD}" y="${headerY + 44}" font-size="13" fill="${p.textSecondary}">${periodLabel[period] ?? escSvg(period)} · ${report.generatedAt ? new Date(report.generatedAt).toLocaleDateString() : ""}</text>`,
   );
 
   // ── Row 1: 4 KPI cards ────────────────────────────────────────────────────

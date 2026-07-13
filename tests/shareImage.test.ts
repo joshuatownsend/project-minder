@@ -86,6 +86,17 @@ describe("composeShareSvg", () => {
     expect(result).not.toContain("undefined ·");
   });
 
+  it("escapes SVG-unsafe characters in an unmapped period fallback", () => {
+    // The fallback path interpolates the raw period; a value with markup must
+    // be escaped so it can't inject SVG (defense-in-depth behind /api/share's
+    // validatePeriod).
+    const result = composeShareSvg(makeReport(), {
+      period: "<script>x</script>" as Period,
+    });
+    expect(result).not.toContain("<script>");
+    expect(result).toContain("&lt;script&gt;");
+  });
+
   it("honours custom width", () => {
     const result = composeShareSvg(makeReport(), { width: 800 });
     expect(result).toContain('width="800"');
