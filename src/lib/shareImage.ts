@@ -58,12 +58,17 @@ export function composeShareSvg(
   // Map periods to display labels. Includes legacy `week`/`month` keys for
   // back-compat with stored ShareButton URLs that haven't been re-rendered.
   const periodLabel: Record<string, string> = {
+    "24h": "Last 24 hours",
     today: "Today",
     "7d": "Last 7 days",
     "30d": "Last 30 days",
+    "90d": "Last 90 days",
+    "1y": "Last year",
     all: "All time",
     week: "Last 7 days",
     month: "Last 30 days",
+    quarter: "Last 90 days",
+    year: "Last year",
   };
 
   const parts: string[] = [];
@@ -81,7 +86,7 @@ export function composeShareSvg(
     `<text x="${PAD}" y="${headerY + 24}" font-size="22" font-weight="700" fill="${p.textPrimary}">Project Minder</text>`,
   );
   parts.push(
-    `<text x="${PAD}" y="${headerY + 44}" font-size="13" fill="${p.textSecondary}">${periodLabel[period]} · ${report.generatedAt ? new Date(report.generatedAt).toLocaleDateString() : ""}</text>`,
+    `<text x="${PAD}" y="${headerY + 44}" font-size="13" fill="${p.textSecondary}">${periodLabel[period] ?? period} · ${report.generatedAt ? new Date(report.generatedAt).toLocaleDateString() : ""}</text>`,
   );
 
   // ── Row 1: 4 KPI cards ────────────────────────────────────────────────────
