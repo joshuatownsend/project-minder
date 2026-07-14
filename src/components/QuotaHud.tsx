@@ -39,7 +39,10 @@ function formatClock(ms: number): string {
 
 export function QuotaHud() {
   const enabled = useBurnHudEnabled();
-  const quota = useQuota();
+  // Persistent surface: re-check every 60s so the chip can't sit on stale
+  // headers past the 5-min quota TTL or across a window reset. The underlying
+  // client only refetches once its own TTL lapses, so this is a cheap poll.
+  const quota = useQuota(60_000);
   const config = useConfig();
   const { openHelp } = useHelp();
   const [open, setOpen] = useState(false);

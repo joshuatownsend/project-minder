@@ -35,14 +35,38 @@ async function loadQuotaClient(): Promise<QuotaResult> {
   return quotaLoadPromise;
 }
 
-export function useQuota(): QuotaResult | null {
+/**
+ * Read the Claude quota snapshot.
+ *
+ * By default this fetches once on mount — correct for page-scoped callers
+ * (Settings) that remount on navigation. Pass `pollMs` for a *persistent*
+ * consumer (the top-bar burn HUD stays mounted for the whole SPA session): the
+ * hook then re-checks on that cadence, but `loadQuotaClient` only hits the
+ * network once its own 5-min TTL lapses, so a 60s poll is almost always a
+ * cheap cache read. Polling pauses on a backgrounded tab, matching the app's
+ * SSE/poller convention (no work while hidden).
+ */
+export function useQuota(pollMs?: number): QuotaResult | null {
   const [quota, setQuota] = useState<QuotaResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    loadQuotaClient().then((q) => { if (!cancelled) setQuota(q); });
-    return () => { cancelled = true; };
-  }, []);
+    const load = () => {
+      loadQuotaClient().then((q) => { if (!cancelled) setQuota(q); });
+    };
+    load();
+
+    if (!pollMs) return () => { cancelled = true; };
+
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      load();
+    }, pollMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [pollMs]);
 
   return quota;
 }
