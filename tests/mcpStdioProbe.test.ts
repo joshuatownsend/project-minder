@@ -113,6 +113,32 @@ describe("probeStdioHandshake", () => {
     expect(r.detail).toMatch(/initialize error/i);
   });
 
+  it("redacts the server's own env secret from an error detail", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({ command: "node", envKeys: ["API_KEY"] }), {
+      spawnFn: (() => child) as never,
+      timeoutMs: 500,
+      readEnv: async () => ({ API_KEY: "sk-supersecret-123456" }),
+      killFn: () => {},
+    });
+    await tick();
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "bad key sk-supersecret-123456 rejected" } }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).not.toContain("sk-supersecret-123456"); // secret scrubbed
+    expect(r.detail).toContain("***");
+  });
+
+  it("is down when stdout exceeds the buffer cap (no unbounded retention)", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 2000, ...helpers });
+    await tick();
+    child.stdout.emit("data", "x".repeat(70 * 1024)); // > 64 KB, no newline
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/excessive output/i);
+  });
+
   it("ignores non-JSON log lines before the response", async () => {
     const child = makeChild();
     const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });

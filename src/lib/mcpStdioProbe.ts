@@ -19,6 +19,10 @@ import type { McpServer } from "./types";
  */
 
 const HANDSHAKE_TIMEOUT_MS = 4_000;
+// Cap buffered stdout so a command that streams a huge unterminated line (or
+// continuous non-JSON noise) can't make Minder retain arbitrary output per
+// in-flight probe. An initialize response is tiny; 64 KB is generous.
+const MAX_STDOUT_BYTES = 64 * 1024;
 
 // Only these vars are inherited by the spawned server — never all of
 // `process.env`. Minder may be launched with unrelated credentials (shell
@@ -112,6 +116,19 @@ async function readServerEnvValues(server: McpServer): Promise<Record<string, st
 function normalizeDetail(v: unknown): string {
   if (v == null) return "";
   return String(v).replace(/\s+/g, " ").trim().slice(0, 60);
+}
+
+/** Redact the server's own transient env values from any text before it's
+ *  cached/returned. A server can echo a credential it just received (a bad
+ *  token, a DSN) in its initialize error; that text flows into the health
+ *  `detail`, so scrub the known secret values first. */
+function redactSecrets(text: string, env: Record<string, string>): string {
+  let out = text;
+  for (const value of Object.values(env)) {
+    // Skip trivially short values to avoid over-redacting common substrings.
+    if (value && value.length >= 4) out = out.split(value).join("***");
+  }
+  return out;
 }
 
 /** Kill the spawned child AND its tree. The configured command is often a
@@ -226,6 +243,10 @@ export async function probeStdioHandshake(
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       buf += chunk;
+      if (buf.length > MAX_STDOUT_BYTES) {
+        finish({ ok: false, detail: "excessive output before initialize response" });
+        return;
+      }
       // MCP stdio framing is line-delimited JSON; servers also log non-JSON to
       // stdout sometimes, so parse per line and ignore anything that isn't our
       // response.
@@ -269,7 +290,7 @@ export async function probeStdioHandshake(
             finish({ ok: false, detail: "invalid initialize response (missing required fields)" });
           }
         } else if (m.error) {
-          const message = normalizeDetail(m.error.message);
+          const message = normalizeDetail(redactSecrets(String(m.error.message ?? ""), serverEnv));
           finish({ ok: false, detail: `initialize error${message ? `: ${message}` : ""}` });
         }
         return;
