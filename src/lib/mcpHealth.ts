@@ -1,4 +1,4 @@
-import { promises as fs } from "fs";
+import { promises as fs, constants as fsConstants } from "fs";
 import path from "path";
 import type { McpServer, McpHealth, McpHealthStatus } from "./types";
 
@@ -21,9 +21,16 @@ import type { McpServer, McpHealth, McpHealthStatus } from "./types";
 
 const HTTP_TIMEOUT_MS = 5_000;
 
-async function fileExists(p: string): Promise<boolean> {
+/**
+ * Access check for command resolution. On win32 we only need existence
+ * (executability there is decided by extension via PATHEXT, not a mode bit);
+ * on POSIX we require the execute bit (X_OK), so a file that's on PATH but not
+ * executable isn't reported as "launchable" — the real spawn would fail with
+ * EACCES.
+ */
+async function isAccessible(p: string, mode: number): Promise<boolean> {
   try {
-    await fs.access(p);
+    await fs.access(p, mode);
     return true;
   } catch {
     return false;
@@ -44,6 +51,7 @@ export async function resolveCommandOnPath(
   if (!command) return null;
 
   const isWin = platform === "win32";
+  const mode = isWin ? fsConstants.F_OK : fsConstants.X_OK;
   const exts = isWin
     ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((e) => e.trim()).filter(Boolean)]
     : [""];
@@ -53,7 +61,7 @@ export async function resolveCommandOnPath(
   // never against PATH.
   if (command.includes("/") || command.includes("\\")) {
     for (const cand of withExts(command)) {
-      if (await fileExists(cand)) return cand;
+      if (await isAccessible(cand, mode)) return cand;
     }
     return null;
   }
@@ -63,7 +71,7 @@ export async function resolveCommandOnPath(
   const dirs = raw.split(path.delimiter).filter(Boolean);
   for (const dir of dirs) {
     for (const cand of withExts(path.join(dir, command))) {
-      if (await fileExists(cand)) return cand;
+      if (await isAccessible(cand, mode)) return cand;
     }
   }
   return null;

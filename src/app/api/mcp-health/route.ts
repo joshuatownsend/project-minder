@@ -3,6 +3,7 @@ import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { readUserScopeMcpFromClaudeJson } from "@/lib/scanner/claudeJsonMcp";
 import { mcpHealthCache } from "@/lib/mcpHealthCache";
+import type { McpHealth } from "@/lib/types";
 
 /**
  * GET /api/mcp-health — live health of user-scope MCP servers.
@@ -20,17 +21,30 @@ export async function GET() {
     return NextResponse.json({ enabled: false, servers: {}, pending: 0, total: 0 });
   }
 
+  const configuredNames = new Set<string>();
   try {
-    const servers = await readUserScopeMcpFromClaudeJson();
-    if (servers.length > 0) mcpHealthCache.enqueue(servers);
+    const configured = await readUserScopeMcpFromClaudeJson();
+    for (const s of configured) configuredNames.add(s.name);
+    if (configured.length > 0) mcpHealthCache.enqueue(configured);
   } catch {
     // Defensive: a missing/broken ~/.claude.json must never blank the strip.
   }
 
+  // Filter cached health to the CURRENTLY-configured servers. The cache is
+  // keyed by name and holds entries for the full TTL, so a server removed from
+  // ~/.claude.json (or an emptied list) would otherwise linger on the strip —
+  // with a stale count — until its 5-min entry expires. Filtering here drops it
+  // immediately.
+  const all = mcpHealthCache.getAll();
+  const servers: Record<string, McpHealth> = {};
+  for (const [name, health] of Object.entries(all)) {
+    if (configuredNames.has(name)) servers[name] = health;
+  }
+
   return NextResponse.json({
     enabled: true,
-    servers: mcpHealthCache.getAll(), // Record<name, McpHealth>
+    servers,
     pending: mcpHealthCache.pending,
-    total: mcpHealthCache.total,
+    total: configuredNames.size,
   });
 }

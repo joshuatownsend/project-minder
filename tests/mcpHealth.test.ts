@@ -7,6 +7,8 @@ vi.mock("fs", () => ({
   promises: {
     access: vi.fn(),
   },
+  // resolveCommandOnPath imports `constants` for F_OK / X_OK.
+  constants: { F_OK: 0, X_OK: 1 },
 }));
 
 import { promises as fs } from "fs";
@@ -50,7 +52,9 @@ describe("resolveCommandOnPath", () => {
   });
 
   it("tries PATHEXT extensions on win32", async () => {
-    const dir = path.join("C:\\tools");
+    // A colon-free dir: a Windows drive path ("C:\\tools") would be split by
+    // POSIX path.delimiter (":") when the test runs on Linux CI.
+    const dir = path.join("opt", "wintools");
     const target = path.join(dir, "mytool") + ".EXE";
     existsOnly(target);
 
