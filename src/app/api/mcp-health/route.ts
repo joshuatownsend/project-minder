@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
-import { readUserScopeMcpFromClaudeJson } from "@/lib/scanner/claudeJsonMcp";
+import { getUserConfig } from "@/lib/userConfigCache";
 import { mcpHealthCache } from "@/lib/mcpHealthCache";
 import type { McpHealth } from "@/lib/types";
 
@@ -23,11 +23,16 @@ export async function GET() {
 
   const configuredNames = new Set<string>();
   try {
-    const configured = await readUserScopeMcpFromClaudeJson();
+    // The full user-scope MCP surface — the same merged reader the rest of the
+    // app uses (managed policy + ~/.claude/settings.json + ~/.claude.json +
+    // Claude Desktop + plugins), not just the ~/.claude.json slice, so no
+    // configured server is silently missing from the strip.
+    const { mcpServers } = await getUserConfig();
+    const configured = mcpServers.servers;
     for (const s of configured) configuredNames.add(s.name);
     if (configured.length > 0) mcpHealthCache.enqueue(configured);
   } catch {
-    // Defensive: a missing/broken ~/.claude.json must never blank the strip.
+    // Defensive: a missing/broken config source must never blank the strip.
   }
 
   // Filter cached health to the CURRENTLY-configured servers. The cache is
