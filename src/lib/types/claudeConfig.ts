@@ -95,6 +95,28 @@ export interface McpServersInfo {
   servers: McpServer[];
 }
 
+/** Live-health verdict for one configured MCP server.
+ *
+ *  - "up"      — reachable (http/sse) or launchable (stdio command resolves)
+ *  - "down"    — unreachable (http/sse) or misconfigured (command missing)
+ *  - "unknown" — no probe applies (disabled, unknown transport, probe error)
+ */
+export type McpHealthStatus = "up" | "down" | "unknown";
+
+export interface McpHealth {
+  name: string;
+  transport: McpTransport;
+  status: McpHealthStatus;
+  /** Human-readable one-liner for the tooltip (e.g. "reachable (HTTP 200)"). */
+  detail: string;
+  /** How the verdict was reached — clarifies what "up" actually asserts.
+   *  "http" = real reachability; "command" = launchability, NOT probed;
+   *  "none" = not probed at all. */
+  probeKind: "http" | "command" | "none";
+  /** Unix ms when the probe ran; drives the cache TTL. */
+  checkedAt: number;
+}
+
 export interface PluginEntry {
   name: string;
   marketplace: string;

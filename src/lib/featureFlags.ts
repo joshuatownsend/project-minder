@@ -25,6 +25,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "scanBoard",
   "scanOps",
   "githubActivity",
+  "mcpHealth",
   "rscHydration",
   "serverActions",
   "liveEvents",
@@ -222,6 +223,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
       "Background `gh` fetch of open PRs, CI status, and last push per project (drives the GitHub strip on cards + detail).",
     group: "active",
     appliesAt: "watcher",
+    wired: true,
+  },
+  {
+    key: "mcpHealth",
+    label: "MCP server health",
+    description:
+      "Background reachability probes of user-scope MCP servers (drives the health strip in the top bar).",
+    group: "active",
+    appliesAt: "ui",
     wired: true,
   },
   {
