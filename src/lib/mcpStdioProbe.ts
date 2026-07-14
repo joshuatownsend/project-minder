@@ -243,9 +243,26 @@ export async function probeStdioHandshake(
         const m = msg as { id?: unknown; result?: Record<string, unknown>; error?: { message?: unknown } };
         if (m.id !== 1) continue;
         if (m.result && typeof m.result === "object") {
-          const info = m.result.serverInfo as { name?: string } | undefined;
-          const name = normalizeDetail(info?.name);
-          finish({ ok: true, detail: `initialize ok${name ? ` — ${name}` : ""}` });
+          // A real MCP initialize result carries protocolVersion + capabilities
+          // + serverInfo. Requiring them stops a broken JSON-RPC process that
+          // just echoes `{"id":1,"result":{}}` from earning a green dot.
+          const result = m.result as {
+            protocolVersion?: unknown;
+            capabilities?: unknown;
+            serverInfo?: { name?: string };
+          };
+          const valid =
+            typeof result.protocolVersion === "string" &&
+            !!result.capabilities &&
+            typeof result.capabilities === "object" &&
+            !!result.serverInfo &&
+            typeof result.serverInfo === "object";
+          if (valid) {
+            const name = normalizeDetail(result.serverInfo?.name);
+            finish({ ok: true, detail: `initialize ok${name ? ` — ${name}` : ""}` });
+          } else {
+            finish({ ok: false, detail: "invalid initialize response (missing required fields)" });
+          }
         } else if (m.error) {
           const message = normalizeDetail(m.error.message);
           finish({ ok: false, detail: `initialize error${message ? `: ${message}` : ""}` });

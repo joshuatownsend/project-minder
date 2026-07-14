@@ -162,7 +162,7 @@ describe("probeMcpServer — stdio", () => {
     await new Promise((r) => setImmediate(r)); // macrotask: after spawn + stdin.write, no wall-clock flake
     child.stdout.emit(
       "data",
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "n" } } }) + "\n",
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "n" } } }) + "\n",
     );
     const r = await p;
     expect(r.probeKind).toBe("handshake");

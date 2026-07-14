@@ -42,16 +42,17 @@ const helpers = { readEnv: async () => ({}), killFn: () => {} };
 // no wall-clock dependency (unlike a fixed setTimeout, which can flake on slow CI).
 const tick = () => new Promise((r) => setImmediate(r));
 
+// A spec-valid MCP initialize result (protocolVersion + capabilities + serverInfo).
+const OK_RESULT = { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: {} };
+const okResult = (name: string) => ({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name } });
+
 describe("probeStdioHandshake", () => {
   it("is up on a valid initialize result (and reports serverInfo name)", async () => {
     const child = makeChild();
     const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
     await tick();
     expect(child.stdin.write).toHaveBeenCalled(); // sent initialize
-    child.stdout.emit(
-      "data",
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", serverInfo: { name: "my-mcp" } } }) + "\n",
-    );
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: okResult("my-mcp") }) + "\n");
     const r = await p;
     expect(r.ok).toBe(true);
     expect(r.detail).toContain("my-mcp");
@@ -68,11 +69,22 @@ describe("probeStdioHandshake", () => {
     const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
     await tick();
     const nasty = "evil\n\n" + "x".repeat(200); // newlines + very long
-    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: nasty } } }) + "\n");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: okResult(nasty) }) + "\n");
     const r = await p;
     expect(r.ok).toBe(true);
     expect(r.detail).not.toContain("\n");
     expect(r.detail.length).toBeLessThan(80); // "initialize ok — " + capped name
+  });
+
+  it("is down on a result missing required initialize fields", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    // A broken JSON-RPC process that just echoes an empty result must not pass.
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/invalid initialize/i);
   });
 
   it("is down on a JSON-RPC error response", async () => {
@@ -90,7 +102,7 @@ describe("probeStdioHandshake", () => {
     const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
     await tick();
     child.stdout.emit("data", "starting up...\n[info] listening\n"); // noise, not our frame
-    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: {} } }) + "\n");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
     const r = await p;
     expect(r.ok).toBe(true);
   });
@@ -141,7 +153,7 @@ describe("probeStdioHandshake", () => {
     expect(capturedOpts?.env?.MY_SERVER_KEY).toBe("v"); // server's own env passed
     expect(capturedOpts?.env?.MINDER_UNRELATED_SECRET).toBeUndefined(); // Minder's secret NOT leaked
     expect(capturedOpts?.env?.PATH ?? capturedOpts?.env?.Path).toBeDefined(); // minimal system env present
-    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: {} } }) + "\n");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
     await p;
     delete process.env.MINDER_UNRELATED_SECRET;
   });
@@ -170,7 +182,7 @@ describe("probeStdioHandshake", () => {
     });
     await tick();
     expect(capturedOpts?.cwd).toBe("/path/to/server");
-    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: {} } }) + "\n");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
     await p;
   });
 
