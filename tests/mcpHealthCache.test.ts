@@ -33,6 +33,7 @@ function server(overrides: Partial<McpServer>): McpServer {
 const id = (s: McpServer) => serverIdentity(s);
 
 beforeEach(() => {
+  mcpHealthCache.setStdioHandshake(false); // reset opt-in mode between tests
   mcpHealthCache.dispose(); // fresh singleton state per test
   probe.mockClear();
 });
@@ -96,6 +97,19 @@ describe("mcpHealthCache", () => {
     // Same identity + command/args, but an env key added → different signature.
     const s2 = server({ name: "a", command: "node", envKeys: ["A", "B"] });
     mcpHealthCache.enqueue([s2]);
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+  });
+
+  it("toggling the stdio handshake flag disposes cached verdicts so they re-probe", async () => {
+    const s = server({ name: "a", command: "node" });
+    mcpHealthCache.enqueue([s]);
+    await vi.waitFor(() => expect(mcpHealthCache.get(id(s))).not.toBeNull());
+    probe.mockClear();
+
+    mcpHealthCache.setStdioHandshake(true); // flag flip → dispose
+    expect(mcpHealthCache.get(id(s))).toBeNull(); // verdicts cleared
+
+    mcpHealthCache.enqueue([s]); // re-probe under the new mode
     await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
   });
 

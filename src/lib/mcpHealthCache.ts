@@ -113,6 +113,10 @@ class McpHealthCache {
   private async processQueue() {
     const myGen = this.generation;
     while (this.queue.length > 0) {
+      // A dispose() (e.g. flag hot-toggle) between batches bumps the generation
+      // and a fresh worker takes over. Bail BEFORE splicing so this stale worker
+      // can't steal — and then drop — items the new worker just enqueued.
+      if (myGen !== this.generation) return;
       const batch = this.queue.splice(0, BATCH_SIZE);
       this.inFlight += batch.length;
 
