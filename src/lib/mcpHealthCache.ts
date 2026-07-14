@@ -116,6 +116,7 @@ class McpHealthCache {
                 health: {
                   name: s.name,
                   transport: s.transport,
+                  source: s.source,
                   status: "unknown" as const,
                   detail: "probe error",
                   probeKind: "none" as const,

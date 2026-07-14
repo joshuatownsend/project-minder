@@ -53,6 +53,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "insights-report": "Insights Report",
   "command-palette": "Command Palette",
   "mcp-server": "MCP Server",
+  "mcp-health": "MCP Server Health",
   "keyboard-shortcuts": "Keyboard Shortcuts",
   "github-activity": "GitHub Activity",
   background: "Background Activity",

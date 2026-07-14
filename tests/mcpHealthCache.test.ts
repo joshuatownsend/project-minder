@@ -6,6 +6,7 @@ vi.mock("@/lib/mcpHealth", () => ({
   probeMcpServer: vi.fn(async (s: McpServer) => ({
     name: s.name,
     transport: s.transport,
+    source: s.source,
     status: "up" as const,
     // Echo the probe target so a redefinition is observable in the verdict.
     detail: s.command ?? s.url ?? "",

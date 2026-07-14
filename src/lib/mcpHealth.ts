@@ -121,7 +121,7 @@ export async function probeMcpServer(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
 ): Promise<Omit<McpHealth, "checkedAt">> {
-  const base = { name: server.name, transport: server.transport };
+  const base = { name: server.name, transport: server.transport, source: server.source };
 
   if (server.disabled) {
     return { ...base, status: "unknown", detail: "disabled in settings", probeKind: "none" };

@@ -3,6 +3,7 @@ import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { getUserConfig } from "@/lib/userConfigCache";
 import { mcpHealthCache, serverIdentity } from "@/lib/mcpHealthCache";
+import { mcpConfigWatcher } from "@/lib/mcpConfigWatcher";
 import type { McpHealth } from "@/lib/types";
 
 /**
@@ -20,6 +21,11 @@ export async function GET() {
   if (!getFlag(config.featureFlags, "mcpHealth")) {
     return NextResponse.json({ enabled: false, servers: {}, pending: 0, total: 0 });
   }
+
+  // Watch the user-scope MCP config files so an externally-removed server drops
+  // from the strip immediately instead of at the 5-min config-cache TTL.
+  // Idempotent; only invalidates the cache when the mcpServers slice changes.
+  mcpConfigWatcher.ensureStarted();
 
   const configuredIds = new Set<string>();
   try {

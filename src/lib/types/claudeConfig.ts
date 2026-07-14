@@ -106,6 +106,9 @@ export type McpHealthStatus = "up" | "down" | "unknown";
 export interface McpHealth {
   name: string;
   transport: McpTransport;
+  /** Which config source defined this server (user/project/plugin/desktop/…),
+   *  carried through so the strip's popover can disambiguate same-name servers. */
+  source: McpSource;
   status: McpHealthStatus;
   /** Human-readable one-liner for the tooltip (e.g. "reachable (HTTP 200)"). */
   detail: string;
