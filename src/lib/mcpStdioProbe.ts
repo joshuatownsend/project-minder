@@ -20,6 +20,33 @@ import type { McpServer } from "./types";
 
 const HANDSHAKE_TIMEOUT_MS = 4_000;
 
+// Only these vars are inherited by the spawned server — never all of
+// `process.env`. Minder may be launched with unrelated credentials (shell
+// tokens, service-manager secrets); passing the whole environment to every
+// configured MCP server during a health check would leak them and undermine the
+// transient-secret model (the server gets ONLY its own declared env + the
+// minimum needed to actually run: PATH, temp dirs, home, and on Windows the
+// vars cmd.exe requires).
+const INHERITED_ENV_KEYS = [
+  "PATH", "Path", "PATHEXT",
+  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "SystemRoot", "windir", "ComSpec", "OS", "NUMBER_OF_PROCESSORS",
+  "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "ProgramData",
+  "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+  "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SHELL", "USER", "LOGNAME", "NODE_ENV",
+];
+
+/** A minimal inherited environment — the vars a process needs to launch,
+ *  nothing more. Merged with (and overridden by) the server's own env. */
+function minimalEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of INHERITED_ENV_KEYS) {
+    const v = process.env[key];
+    if (typeof v === "string") out[key] = v;
+  }
+  return out;
+}
+
 const INITIALIZE_REQUEST = {
   jsonrpc: "2.0",
   id: 1,
@@ -148,7 +175,11 @@ export async function probeStdioHandshake(
     try {
       const isWin = process.platform === "win32";
       child = spawnFn(server.command as string, server.args ?? [], {
-        env: { ...process.env, ...serverEnv },
+        // Minimal inherited env + the server's own env — never all of
+        // process.env (would leak Minder's unrelated secrets to the server).
+        // Cast: the ProcessEnv augmentation marks NODE_ENV required, which a
+        // plain Record<string,string> can't statically satisfy.
+        env: { ...minimalEnv(), ...serverEnv } as NodeJS.ProcessEnv,
         // Spawn where the server expects (relative scripts/config resolve
         // correctly) — undefined falls back to the current directory.
         cwd: server.cwd,
@@ -223,6 +254,11 @@ export async function probeStdioHandshake(
       }
     });
 
+    // A command that closes stdin early (daemonizes, exits after validation)
+    // can fail the write ASYNCHRONOUSLY via an 'error'/EPIPE on the stream —
+    // without this listener that would be an unhandled error crashing the
+    // server, not a down verdict. Attach before writing.
+    child.stdin?.on("error", () => finish({ ok: false, detail: "stdin unavailable (closed early)" }));
     try {
       child.stdin?.write(JSON.stringify(INITIALIZE_REQUEST) + "\n");
     } catch {

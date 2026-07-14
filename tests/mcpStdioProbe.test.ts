@@ -19,12 +19,14 @@ function server(overrides: Partial<McpServer>): McpServer {
 function makeChild() {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
-    stdin: { write: ReturnType<typeof vi.fn> };
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
     stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = 4242;
-  child.stdin = { write: vi.fn() };
+  const stdin = new EventEmitter() as EventEmitter & { write: ReturnType<typeof vi.fn> };
+  stdin.write = vi.fn();
+  child.stdin = stdin;
   const stdout = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
   stdout.setEncoding = vi.fn();
   child.stdout = stdout;
@@ -119,6 +121,39 @@ describe("probeStdioHandshake", () => {
     const r = await probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 30, ...helpers });
     expect(r.ok).toBe(false);
     expect(r.detail).toMatch(/timed out/i);
+  });
+
+  it("passes only a minimal inherited env plus the server's own env (no process.env leak)", async () => {
+    process.env.MINDER_UNRELATED_SECRET = "leak-me";
+    const child = makeChild();
+    let capturedOpts: { env?: Record<string, string> } | undefined;
+    const spawnFn = ((_c: string, _a: string[], o: { env?: Record<string, string> }) => {
+      capturedOpts = o;
+      return child;
+    }) as never;
+    const p = probeStdioHandshake(server({ command: "node" }), {
+      spawnFn,
+      timeoutMs: 500,
+      readEnv: async () => ({ MY_SERVER_KEY: "v" }),
+      killFn: () => {},
+    });
+    await tick();
+    expect(capturedOpts?.env?.MY_SERVER_KEY).toBe("v"); // server's own env passed
+    expect(capturedOpts?.env?.MINDER_UNRELATED_SECRET).toBeUndefined(); // Minder's secret NOT leaked
+    expect(capturedOpts?.env?.PATH ?? capturedOpts?.env?.Path).toBeDefined(); // minimal system env present
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: {} } }) + "\n");
+    await p;
+    delete process.env.MINDER_UNRELATED_SECRET;
+  });
+
+  it("is down (not a crash) when stdin errors — command closed it early", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({ command: "node" }), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/stdin/i);
   });
 
   it("passes the configured cwd to spawn", async () => {

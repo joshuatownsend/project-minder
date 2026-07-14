@@ -140,12 +140,14 @@ describe("probeMcpServer — stdio", () => {
   it("routes to the real handshake when stdioHandshake is on", async () => {
     const child = new EventEmitter() as EventEmitter & {
       pid: number;
-      stdin: { write: () => void };
+      stdin: EventEmitter & { write: () => void };
       stdout: EventEmitter & { setEncoding: () => void };
       kill: () => void;
     };
     child.pid = 1;
-    child.stdin = { write: () => {} };
+    const stdin = new EventEmitter() as EventEmitter & { write: () => void };
+    stdin.write = () => {};
+    child.stdin = stdin;
     const stdout = new EventEmitter() as EventEmitter & { setEncoding: () => void };
     stdout.setEncoding = () => {};
     child.stdout = stdout;
