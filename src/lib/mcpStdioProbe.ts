@@ -145,6 +145,9 @@ export async function probeStdioHandshake(
       const isWin = process.platform === "win32";
       child = spawnFn(server.command as string, server.args ?? [], {
         env: { ...process.env, ...serverEnv },
+        // Spawn where the server expects (relative scripts/config resolve
+        // correctly) — undefined falls back to the current directory.
+        cwd: server.cwd,
         windowsHide: true,
         // Windows: npx/npm/pnpm resolve to `.cmd` shims that Node can't exec
         // directly (must go through cmd.exe) — without this, launchable servers

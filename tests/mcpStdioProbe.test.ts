@@ -115,6 +115,24 @@ describe("probeStdioHandshake", () => {
     expect(r.detail).toMatch(/timed out/i);
   });
 
+  it("passes the configured cwd to spawn", async () => {
+    const child = makeChild();
+    let capturedOpts: { cwd?: string } | undefined;
+    const spawnFn = ((_cmd: string, _args: string[], opts: { cwd?: string }) => {
+      capturedOpts = opts;
+      return child;
+    }) as never;
+    const p = probeStdioHandshake(server({ command: "node", args: ["server.js"], cwd: "/path/to/server" }), {
+      spawnFn,
+      timeoutMs: 500,
+      ...helpers,
+    });
+    await tick();
+    expect(capturedOpts?.cwd).toBe("/path/to/server");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: {} } }) + "\n");
+    await p;
+  });
+
   it("is down without spawning when there's no command", async () => {
     const spawnFn = vi.fn();
     const r = await probeStdioHandshake(server({ command: undefined }), { spawnFn: spawnFn as never, ...helpers });

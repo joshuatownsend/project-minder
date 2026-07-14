@@ -47,6 +47,7 @@ function serverSignature(s: McpServer): string {
     s.command ?? "",
     (s.args ?? []).join(" "),
     s.url ?? "",
+    s.cwd ?? "",
     s.disabled ? "1" : "0",
   ].join(SEP);
 }

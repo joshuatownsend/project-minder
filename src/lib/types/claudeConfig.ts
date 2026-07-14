@@ -83,6 +83,10 @@ export interface McpServer {
   command?: string;
   args?: string[];
   url?: string;
+  /** Configured working directory for a stdio server, if any. Not sensitive
+   *  (a filesystem path); needed so a real handshake spawns where the server
+   *  expects (relative scripts/config resolve correctly). */
+  cwd?: string;
   /** Env variable KEY NAMES only — never values (avoid leaking secrets). */
   envKeys?: string[];
   source: McpSource;
