@@ -47,15 +47,18 @@ export function utilColor(utilization: number): string {
 
 /**
  * Seconds elapsed into the current window, or null when the reset header gives
- * us nothing usable: no reset at all, a reset further out than the window
- * length (bogus / just-reset), or a window that hasn't advanced yet (no rate to
- * project from).
+ * us nothing usable: no reset at all, a reset already in the past (a client
+ * cache that outlived the reset moment — the header is stale until the next
+ * refetch), a reset further out than the window length (bogus / just-reset), or
+ * a window that hasn't advanced yet (no rate to project from).
  */
 function elapsedSecs(window: QuotaWindow, key: WindowKey, nowMs: number): number | null {
   const now = nowMs / 1000;
   const total = windowDurationSecs(key);
   const secsLeft = window.reset - now;
-  if (window.reset <= 0 || secsLeft > total) return null;
+  // reset in the past → negative secsLeft; without this the projection would
+  // show a nonsensical "~N% projected" (< current util) beside "resets in now".
+  if (window.reset <= 0 || secsLeft <= 0 || secsLeft > total) return null;
   const elapsed = total - secsLeft;
   return elapsed > 0 ? elapsed : null;
 }

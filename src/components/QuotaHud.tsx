@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { QuotaData, QuotaWindow } from "@/lib/quota";
+import type { QuotaWindow } from "@/lib/quota";
 import type { ScheduleMode } from "@/lib/types";
 import {
   computeBurnHeadline,

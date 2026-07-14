@@ -55,6 +55,20 @@ describe("computeProjectedUtilization", () => {
     expect(computeProjectedUtilization(w, "5h", "24x7", NOW_MS)).toBeNull();
   });
 
+  it("returns null once the reset moment has already passed (stale cache)", () => {
+    // A client cache that outlived its reset: reset is 10 min in the past.
+    const w: QuotaWindow = {
+      utilization: 0.5,
+      status: "allowed",
+      reset: Math.round(NOW_S - 600),
+      resetAt: "",
+    };
+    // Without the secsLeft<=0 guard this would divide by an elapsedFrac > 1 and
+    // return a projection *below* the current 50% util — a contradictory value.
+    expect(computeProjectedUtilization(w, "5h", "24x7", NOW_MS)).toBeNull();
+    expect(computeCapTimeMs(w, "5h", NOW_MS)).toBeNull();
+  });
+
   it("returns null for a bogus reset further out than the window length", () => {
     const total = windowDurationSecs("5h");
     const w: QuotaWindow = {
