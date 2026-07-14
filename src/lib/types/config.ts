@@ -31,6 +31,7 @@ export type FeatureFlagKey =
   | "githubActivity"
   | "mcpHealth"
   | "mcpHealthStdioProbe"
+  | "burnHud"
   | "rscHydration"
   | "serverActions"
   | "liveEvents";
