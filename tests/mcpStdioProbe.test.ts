@@ -1,0 +1,237 @@
+import { describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "events";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
+import { probeStdioHandshake } from "@/lib/mcpStdioProbe";
+import type { McpServer } from "@/lib/types";
+
+function server(overrides: Partial<McpServer>): McpServer {
+  return {
+    name: "srv",
+    transport: "stdio",
+    source: "user",
+    sourcePath: "/x/.claude.json",
+    command: "node",
+    ...overrides,
+  };
+}
+
+/** Minimal ChildProcess stand-in the tests drive by hand. */
+function makeChild() {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.pid = 4242;
+  const stdin = new EventEmitter() as EventEmitter & { write: ReturnType<typeof vi.fn> };
+  stdin.write = vi.fn();
+  child.stdin = stdin;
+  const stdout = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stdout.setEncoding = vi.fn();
+  child.stdout = stdout;
+  child.kill = vi.fn();
+  return child;
+}
+
+// Common injected helpers: no real env read, no real process kill.
+const helpers = { readEnv: async () => ({}), killFn: () => {} };
+
+// Let the awaited readEnv microtask + the Promise executor (spawn + stdin.write)
+// run. setImmediate is a macrotask, so it always fires after those microtasks —
+// no wall-clock dependency (unlike a fixed setTimeout, which can flake on slow CI).
+const tick = () => new Promise((r) => setImmediate(r));
+
+// A spec-valid MCP initialize result (protocolVersion + capabilities +
+// serverInfo with the required name + version).
+const OK_RESULT = { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name: "test-srv", version: "1.0.0" } };
+const okResult = (name: string) => ({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name, version: "1.0.0" } });
+
+describe("probeStdioHandshake", () => {
+  it("is up on a valid initialize result (and reports serverInfo name)", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    expect(child.stdin.write).toHaveBeenCalled(); // sent initialize
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: okResult("my-mcp") }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain("my-mcp");
+    expect(child.kill).not.toHaveBeenCalled(); // killFn injected, real kill untouched
+
+    // The initialize request advertises the current SDK protocol version.
+    const sent = JSON.parse((child.stdin.write.mock.calls[0] as [string])[0]);
+    expect(sent.method).toBe("initialize");
+    expect(sent.params.protocolVersion).toBe(LATEST_PROTOCOL_VERSION);
+  });
+
+  it("normalizes and truncates a hostile serverInfo.name", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    const nasty = "evil\n\n" + "x".repeat(200); // newlines + very long
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: okResult(nasty) }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(r.detail).not.toContain("\n");
+    expect(r.detail.length).toBeLessThan(80); // "initialize ok — " + capped name
+  });
+
+  it("is down on a result missing required initialize fields", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    // A broken JSON-RPC process that just echoes an empty result must not pass.
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/invalid initialize/i);
+  });
+
+  it("is down when serverInfo lacks the required name/version", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    // Has protocolVersion + capabilities but serverInfo is empty — a real
+    // client rejects this, so it must not earn a green dot.
+    child.stdout.emit(
+      "data",
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "x", capabilities: {}, serverInfo: {} } }) + "\n",
+    );
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/invalid initialize/i);
+  });
+
+  it("is down on a JSON-RPC error response", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "bad protocol" } }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/initialize error/i);
+  });
+
+  it("redacts the server's own env secret from an error detail", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({ command: "node", envKeys: ["API_KEY"] }), {
+      spawnFn: (() => child) as never,
+      timeoutMs: 500,
+      readEnv: async () => ({ API_KEY: "sk-supersecret-123456" }),
+      killFn: () => {},
+    });
+    await tick();
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "bad key sk-supersecret-123456 rejected" } }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).not.toContain("sk-supersecret-123456"); // secret scrubbed
+    expect(r.detail).toContain("***");
+  });
+
+  it("is down when stdout exceeds the buffer cap (no unbounded retention)", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 2000, ...helpers });
+    await tick();
+    child.stdout.emit("data", "x".repeat(70 * 1024)); // > 64 KB, no newline
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/excessive output/i);
+  });
+
+  it("ignores non-JSON log lines before the response", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    child.stdout.emit("data", "starting up...\n[info] listening\n"); // noise, not our frame
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(true);
+  });
+
+  it("is down when the process exits before responding", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    child.emit("exit", 1, null);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/exited/i);
+  });
+
+  it("is down (command not found) on an ENOENT spawn error", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    const err = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+    child.emit("error", err);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/not found/i);
+  });
+
+  it("times out when the server never answers", async () => {
+    const child = makeChild();
+    const r = await probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 30, ...helpers });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/timed out/i);
+  });
+
+  it("passes only a minimal inherited env plus the server's own env (no process.env leak)", async () => {
+    process.env.MINDER_UNRELATED_SECRET = "leak-me";
+    const child = makeChild();
+    let capturedOpts: { env?: Record<string, string> } | undefined;
+    const spawnFn = ((_c: string, _a: string[], o: { env?: Record<string, string> }) => {
+      capturedOpts = o;
+      return child;
+    }) as never;
+    const p = probeStdioHandshake(server({ command: "node" }), {
+      spawnFn,
+      timeoutMs: 500,
+      readEnv: async () => ({ MY_SERVER_KEY: "v" }),
+      killFn: () => {},
+    });
+    await tick();
+    expect(capturedOpts?.env?.MY_SERVER_KEY).toBe("v"); // server's own env passed
+    expect(capturedOpts?.env?.MINDER_UNRELATED_SECRET).toBeUndefined(); // Minder's secret NOT leaked
+    expect(capturedOpts?.env?.PATH ?? capturedOpts?.env?.Path).toBeDefined(); // minimal system env present
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
+    await p;
+    delete process.env.MINDER_UNRELATED_SECRET;
+  });
+
+  it("is down (not a crash) when stdin errors — command closed it early", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({ command: "node" }), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/stdin/i);
+  });
+
+  it("passes the configured cwd to spawn", async () => {
+    const child = makeChild();
+    let capturedOpts: { cwd?: string } | undefined;
+    const spawnFn = ((_cmd: string, _args: string[], opts: { cwd?: string }) => {
+      capturedOpts = opts;
+      return child;
+    }) as never;
+    const p = probeStdioHandshake(server({ command: "node", args: ["server.js"], cwd: "/path/to/server" }), {
+      spawnFn,
+      timeoutMs: 500,
+      ...helpers,
+    });
+    await tick();
+    expect(capturedOpts?.cwd).toBe("/path/to/server");
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
+    await p;
+  });
+
+  it("is down without spawning when there's no command", async () => {
+    const spawnFn = vi.fn();
+    const r = await probeStdioHandshake(server({ command: undefined }), { spawnFn: spawnFn as never, ...helpers });
+    expect(r.ok).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+});

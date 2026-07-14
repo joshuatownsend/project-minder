@@ -43,14 +43,15 @@ describe("mcpServersSignature", () => {
     expect(mcpServersSignature(before)).not.toBe(mcpServersSignature(after));
   });
 
-  it("excludes env VALUES — a rotated secret does not change the signature", () => {
-    // env values may be credentials; they must never sit in the watcher's
-    // lastSig, and rotating one must not thrash the cache.
+  it("detects an env value rotation but never embeds the raw secret (hashed)", () => {
+    // A rotated token flips a real handshake verdict, so it must change the
+    // signature — but the value itself must never sit in the watcher's lastSig.
     const before = withServers({ foo: { command: "node", env: { API_KEY: "secret-v1" } } });
     const after = withServers({ foo: { command: "node", env: { API_KEY: "secret-v2" } } });
     const sig = mcpServersSignature(before);
-    expect(sig).toBe(mcpServersSignature(after));
-    expect(sig).not.toContain("secret-v1"); // value never retained
+    expect(sig).not.toBe(mcpServersSignature(after)); // rotation detected → re-probe
+    expect(sig).not.toContain("secret-v1"); // only the digest is stored, not the value
+    expect(mcpServersSignature(after)).not.toContain("secret-v2");
   });
 
   it("changes when an env KEY is added (a config change, not a secret rotation)", () => {

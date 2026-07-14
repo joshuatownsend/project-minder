@@ -84,12 +84,14 @@ export function parseMcpServers(
       command?: unknown;
       args?: unknown;
       url?: unknown;
+      cwd?: unknown;
       type?: unknown;
       env?: unknown;
     };
 
     const command = typeof entry.command === "string" ? entry.command : undefined;
     const url = typeof entry.url === "string" ? entry.url : undefined;
+    const cwd = typeof entry.cwd === "string" ? entry.cwd : undefined;
     const declared =
       typeof entry.type === "string" ? entry.type.toLowerCase() : "";
 
@@ -117,6 +119,7 @@ export function parseMcpServers(
       command,
       args,
       url,
+      cwd,
       envKeys: envKeys && envKeys.length > 0 ? envKeys : undefined,
       source,
       sourcePath,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "events";
 import path from "path";
 import { resolveCommandOnPath, probeMcpServer } from "@/lib/mcpHealth";
 import type { McpServer } from "@/lib/types";
@@ -115,11 +116,10 @@ describe("probeMcpServer — stdio", () => {
     const target = path.posix.join("/usr", "bin", "node");
     existsOnly(target);
 
-    const r = await probeMcpServer(
-      server({ transport: "stdio", command: "node" }),
-      { PATH: path.posix.join("/usr", "bin") },
-      "linux",
-    );
+    const r = await probeMcpServer(server({ transport: "stdio", command: "node" }), {
+      env: { PATH: path.posix.join("/usr", "bin") },
+      platform: "linux",
+    });
     expect(r.status).toBe("up");
     expect(r.probeKind).toBe("command");
     expect(r.detail).toMatch(/launchable/i);
@@ -128,14 +128,45 @@ describe("probeMcpServer — stdio", () => {
   it("is down when the command is missing from PATH", async () => {
     existsOnly(/* nothing */);
 
-    const r = await probeMcpServer(
-      server({ transport: "stdio", command: "does-not-exist" }),
-      { PATH: path.posix.join("/usr", "bin") },
-      "linux",
-    );
+    const r = await probeMcpServer(server({ transport: "stdio", command: "does-not-exist" }), {
+      env: { PATH: path.posix.join("/usr", "bin") },
+      platform: "linux",
+    });
     expect(r.status).toBe("down");
     expect(r.probeKind).toBe("command");
     expect(r.detail).toMatch(/not found/i);
+  });
+
+  it("routes to the real handshake when stdioHandshake is on", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stdin: EventEmitter & { write: () => void };
+      stdout: EventEmitter & { setEncoding: () => void };
+      kill: () => void;
+    };
+    child.pid = 1;
+    const stdin = new EventEmitter() as EventEmitter & { write: () => void };
+    stdin.write = () => {};
+    child.stdin = stdin;
+    const stdout = new EventEmitter() as EventEmitter & { setEncoding: () => void };
+    stdout.setEncoding = () => {};
+    child.stdout = stdout;
+    child.kill = () => {};
+
+    const p = probeMcpServer(server({ transport: "stdio", command: "node" }), {
+      stdioHandshake: true,
+      spawnFn: (() => child) as never,
+      handshakeTimeoutMs: 500,
+      handshakeSpawnHelpers: { readEnv: async () => ({}), killFn: () => {} },
+    });
+    await new Promise((r) => setImmediate(r)); // macrotask: after spawn + stdin.write, no wall-clock flake
+    child.stdout.emit(
+      "data",
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "n", version: "1.0.0" } } }) + "\n",
+    );
+    const r = await p;
+    expect(r.probeKind).toBe("handshake");
+    expect(r.status).toBe("up");
   });
 });
 

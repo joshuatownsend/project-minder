@@ -47,6 +47,10 @@ function serverSignature(s: McpServer): string {
     s.command ?? "",
     (s.args ?? []).join(" "),
     s.url ?? "",
+    s.cwd ?? "",
+    // Key NAMES only (never values) — but a handshake verdict depends on which
+    // env is set, so an added/removed key must re-probe, not wait out the TTL.
+    (s.envKeys ?? []).join(","),
     s.disabled ? "1" : "0",
   ].join(SEP);
 }
@@ -67,6 +71,18 @@ class McpHealthCache {
   // Bumped by dispose(); processQueue() snapshots it and drops results that
   // land after a dispose().
   private generation = 0;
+  // Opt-in stdio `initialize` handshake mode (the mcpHealthStdioProbe flag),
+  // set by the route each poll. Threaded into every probe.
+  private stdioHandshake = false;
+
+  /** Toggle the stdio handshake mode. Changing it clears the cache so every
+   *  server re-probes with the new mode on the next enqueue (a handshake verdict
+   *  differs from the launchability one). */
+  setStdioHandshake(enabled: boolean) {
+    if (enabled === this.stdioHandshake) return;
+    this.stdioHandshake = enabled;
+    this.dispose();
+  }
 
   enqueue(servers: McpServer[]) {
     for (const s of servers) {
@@ -97,6 +113,10 @@ class McpHealthCache {
   private async processQueue() {
     const myGen = this.generation;
     while (this.queue.length > 0) {
+      // A dispose() (e.g. flag hot-toggle) between batches bumps the generation
+      // and a fresh worker takes over. Bail BEFORE splicing so this stale worker
+      // can't steal — and then drop — items the new worker just enqueued.
+      if (myGen !== this.generation) return;
       const batch = this.queue.splice(0, BATCH_SIZE);
       this.inFlight += batch.length;
 
@@ -107,7 +127,7 @@ class McpHealthCache {
             const id = serverIdentity(s);
             const sig = serverSignature(s);
             try {
-              return { id, sig, health: await probeMcpServer(s) };
+              return { id, sig, health: await probeMcpServer(s, { stdioHandshake: this.stdioHandshake }) };
             } catch {
               // probeMcpServer is internally defensive; belt-and-suspenders.
               return {

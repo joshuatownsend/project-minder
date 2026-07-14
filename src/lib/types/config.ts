@@ -30,6 +30,7 @@ export type FeatureFlagKey =
   | "scanOps"
   | "githubActivity"
   | "mcpHealth"
+  | "mcpHealthStdioProbe"
   | "rscHydration"
   | "serverActions"
   | "liveEvents";

@@ -1,8 +1,10 @@
 import { promises as fs, watch, FSWatcher } from "fs";
 import path from "path";
 import os from "os";
+import { createHash } from "crypto";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { invalidateUserConfigCache } from "./userConfigCache";
+import { mcpHealthCache } from "./mcpHealthCache";
 
 /**
  * MCP Config Watcher — makes the top-bar MCP health strip drop an
@@ -35,6 +37,18 @@ const DEBOUNCE_MS = 400;
  * `lastSig` for the watcher's lifetime). `args` order is preserved — it's
  * significant for the spawned command.
  */
+/** Hash of an env block (keys AND values). Lets the signature CHANGE when a
+ *  secret rotates — so a fixed/rotated token forces a re-probe of the real
+ *  stdio handshake — WITHOUT ever embedding the raw value: only the digest is
+ *  retained. Sorted, so key order is stable. */
+function hashEnvBlock(env: Record<string, unknown>): string {
+  const entries = Object.entries(env)
+    .filter(([, v]) => typeof v === "string")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v as string}`);
+  return "sha256:" + createHash("sha256").update(entries.join("\n")).digest("hex").slice(0, 16);
+}
+
 function normalizeServerDef(def: unknown): unknown {
   if (!def || typeof def !== "object") return def ?? null;
   const obj = def as Record<string, unknown>;
@@ -42,7 +56,9 @@ function normalizeServerDef(def: unknown): unknown {
   for (const key of Object.keys(obj).sort()) {
     const val = obj[key];
     if (key === "env" && val && typeof val === "object" && !Array.isArray(val)) {
-      out.env = Object.keys(val as Record<string, unknown>).sort(); // keys only
+      // Hash (keys + values) rather than raw values: a rotated secret changes
+      // the signature (forcing a re-probe) but is never stored in cleartext.
+      out.env = hashEnvBlock(val as Record<string, unknown>);
     } else {
       out[key] = val;
     }
@@ -53,10 +69,11 @@ function normalizeServerDef(def: unknown): unknown {
 /**
  * Signature of the `mcpServers` slice of a config document. Pure + testable.
  * Returns a stable string that changes iff the set/definition of MCP servers
- * changes — NOT when unrelated runtime-state fields change, keys are reordered,
- * or an `env` secret value rotates. Never includes `env` values (secrets stay
- * out of `lastSig`). A missing/unparseable slice collapses to a sentinel so a
- * broken write doesn't look like a change every time.
+ * changes — including a rotated `env` value (which flips a real handshake
+ * verdict) — but NOT when unrelated runtime-state fields change or keys are
+ * reordered. Env values are HASHED, never embedded, so secrets stay out of
+ * `lastSig`. A missing/unparseable slice collapses to a sentinel so a broken
+ * write doesn't look like a change every time.
  */
 export function mcpServersSignature(rawJson: string): string {
   const doc = tryParseJsonc<{ mcpServers?: unknown }>(rawJson);
@@ -134,6 +151,10 @@ class McpConfigWatcher {
       // The MCP server set changed — drop the shared config cache so the next
       // poll re-reads it and the strip reflects the edit immediately.
       invalidateUserConfigCache();
+      // Also drop cached health verdicts so they re-probe: the config change
+      // (incl. a rotated env value the real handshake depends on) can flip a
+      // verdict, and the health cache's own signature only tracks env KEY names.
+      mcpHealthCache.dispose();
     }
     // else: an unrelated runtime-state write — do nothing (no cache thrash).
   }

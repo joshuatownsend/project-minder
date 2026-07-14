@@ -83,6 +83,10 @@ export interface McpServer {
   command?: string;
   args?: string[];
   url?: string;
+  /** Configured working directory for a stdio server, if any. Not sensitive
+   *  (a filesystem path); needed so a real handshake spawns where the server
+   *  expects (relative scripts/config resolve correctly). */
+  cwd?: string;
   /** Env variable KEY NAMES only — never values (avoid leaking secrets). */
   envKeys?: string[];
   source: McpSource;
@@ -113,9 +117,9 @@ export interface McpHealth {
   /** Human-readable one-liner for the tooltip (e.g. "reachable (HTTP 200)"). */
   detail: string;
   /** How the verdict was reached — clarifies what "up" actually asserts.
-   *  "http" = real reachability; "command" = launchability, NOT probed;
-   *  "none" = not probed at all. */
-  probeKind: "http" | "command" | "none";
+   *  "http" = real reachability; "handshake" = real stdio `initialize`
+   *  round-trip; "command" = launchability, NOT probed; "none" = not probed. */
+  probeKind: "http" | "handshake" | "command" | "none";
   /** Unix ms when the probe ran; drives the cache TTL. */
   checkedAt: number;
 }

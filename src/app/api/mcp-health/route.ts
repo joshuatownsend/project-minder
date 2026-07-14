@@ -27,6 +27,10 @@ export async function GET() {
   // Idempotent; only invalidates the cache when the mcpServers slice changes.
   mcpConfigWatcher.ensureStarted();
 
+  // Opt-in (default off): real stdio `initialize` handshake vs launchability.
+  // Toggling clears the cache so stdio servers re-probe with the new mode.
+  mcpHealthCache.setStdioHandshake(getFlag(config.featureFlags, "mcpHealthStdioProbe", false));
+
   const configuredIds = new Set<string>();
   try {
     // The full user-scope MCP surface — the same merged reader the rest of the

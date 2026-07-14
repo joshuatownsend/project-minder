@@ -26,6 +26,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "scanOps",
   "githubActivity",
   "mcpHealth",
+  "mcpHealthStdioProbe",
   "rscHydration",
   "serverActions",
   "liveEvents",
@@ -233,6 +234,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "ui",
     wired: true,
+  },
+  {
+    key: "mcpHealthStdioProbe",
+    label: "MCP stdio handshake (opt-in)",
+    description:
+      "Upgrades stdio MCP servers from a PATH launchability check to a real `initialize` JSON-RPC handshake. OFF by default because it spawns the actual server process (which may connect to real backends).",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
+    defaultOn: false,
   },
   {
     key: "rscHydration",

@@ -33,6 +33,7 @@ function server(overrides: Partial<McpServer>): McpServer {
 const id = (s: McpServer) => serverIdentity(s);
 
 beforeEach(() => {
+  mcpHealthCache.setStdioHandshake(false); // reset opt-in mode between tests
   mcpHealthCache.dispose(); // fresh singleton state per test
   probe.mockClear();
 });
@@ -85,6 +86,31 @@ describe("mcpHealthCache", () => {
     mcpHealthCache.enqueue([s2]);
     await vi.waitFor(() => expect(mcpHealthCache.get(id(s2))?.detail).toBe("https://x"));
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-probes when an env key is added/removed (handshake verdict depends on it)", async () => {
+    const s1 = server({ name: "a", command: "node", envKeys: ["A"] });
+    mcpHealthCache.enqueue([s1]);
+    await vi.waitFor(() => expect(mcpHealthCache.get(id(s1))).not.toBeNull());
+    probe.mockClear();
+
+    // Same identity + command/args, but an env key added → different signature.
+    const s2 = server({ name: "a", command: "node", envKeys: ["A", "B"] });
+    mcpHealthCache.enqueue([s2]);
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+  });
+
+  it("toggling the stdio handshake flag disposes cached verdicts so they re-probe", async () => {
+    const s = server({ name: "a", command: "node" });
+    mcpHealthCache.enqueue([s]);
+    await vi.waitFor(() => expect(mcpHealthCache.get(id(s))).not.toBeNull());
+    probe.mockClear();
+
+    mcpHealthCache.setStdioHandshake(true); // flag flip → dispose
+    expect(mcpHealthCache.get(id(s))).toBeNull(); // verdicts cleared
+
+    mcpHealthCache.enqueue([s]); // re-probe under the new mode
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
   });
 
   it("keeps two same-name servers from different sources as distinct entries", async () => {
