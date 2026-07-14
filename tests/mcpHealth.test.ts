@@ -41,39 +41,42 @@ describe("resolveCommandOnPath", () => {
     expect(mockAccess).not.toHaveBeenCalled();
   });
 
+  // Build expected paths with the SAME platform-pure implementation the
+  // function uses, so these assertions are faithful (and host-independent):
+  // path.posix for the POSIX cases, path.win32 for the win32 case.
   it("resolves a bare name against each PATH dir (POSIX)", async () => {
-    const binA = path.join("/usr", "bin");
-    const binB = path.join("/opt", "bin");
-    const target = path.join(binB, "mytool");
+    const binA = path.posix.join("/usr", "bin");
+    const binB = path.posix.join("/opt", "bin");
+    const target = path.posix.join(binB, "mytool");
     existsOnly(target);
 
-    const env = { PATH: [binA, binB].join(path.delimiter) };
+    const env = { PATH: [binA, binB].join(path.posix.delimiter) };
     expect(await resolveCommandOnPath("mytool", env, "linux")).toBe(target);
   });
 
-  it("tries PATHEXT extensions on win32", async () => {
-    // A colon-free dir: a Windows drive path ("C:\\tools") would be split by
-    // POSIX path.delimiter (":") when the test runs on Linux CI.
-    const dir = path.join("opt", "wintools");
-    const target = path.join(dir, "mytool") + ".EXE";
+  it("tries PATHEXT extensions on win32 (with Windows path semantics)", async () => {
+    const dir = "C:\\tools";
+    const target = path.win32.join(dir, "mytool") + ".EXE";
     existsOnly(target);
 
+    // The drive-letter colon is safe: the function splits PATH by
+    // path.win32.delimiter (";"), not the host's ":" — the point of the fix.
     const env = { Path: dir, PATHEXT: ".COM;.EXE;.CMD" };
     expect(await resolveCommandOnPath("mytool", env, "win32")).toBe(target);
   });
 
   it("resolves an explicit path directly, not against PATH", async () => {
-    const explicit = path.join("/abs", "path", "tool");
+    const explicit = path.posix.join("/abs", "path", "tool");
     existsOnly(explicit);
 
     // PATH is irrelevant here — the command carries a separator.
-    const env = { PATH: path.join("/usr", "bin") };
+    const env = { PATH: path.posix.join("/usr", "bin") };
     expect(await resolveCommandOnPath(explicit, env, "linux")).toBe(explicit);
   });
 
   it("returns null when the command is nowhere on PATH", async () => {
     existsOnly(/* nothing exists */);
-    const env = { PATH: path.join("/usr", "bin") };
+    const env = { PATH: path.posix.join("/usr", "bin") };
     expect(await resolveCommandOnPath("ghost", env, "linux")).toBeNull();
   });
 });
@@ -109,12 +112,12 @@ describe("probeMcpServer — http/sse", () => {
 
 describe("probeMcpServer — stdio", () => {
   it("is up (launchable) when the command resolves on PATH", async () => {
-    const target = path.join("/usr", "bin", "node");
+    const target = path.posix.join("/usr", "bin", "node");
     existsOnly(target);
 
     const r = await probeMcpServer(
       server({ transport: "stdio", command: "node" }),
-      { PATH: path.join("/usr", "bin") },
+      { PATH: path.posix.join("/usr", "bin") },
       "linux",
     );
     expect(r.status).toBe("up");
@@ -127,7 +130,7 @@ describe("probeMcpServer — stdio", () => {
 
     const r = await probeMcpServer(
       server({ transport: "stdio", command: "does-not-exist" }),
-      { PATH: path.join("/usr", "bin") },
+      { PATH: path.posix.join("/usr", "bin") },
       "linux",
     );
     expect(r.status).toBe("down");

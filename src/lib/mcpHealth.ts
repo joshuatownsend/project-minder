@@ -51,6 +51,11 @@ export async function resolveCommandOnPath(
   if (!command) return null;
 
   const isWin = platform === "win32";
+  // Use the platform-pure path implementation matching the injected `platform`,
+  // not the host's — so PATH splitting/joining honors `platform: "win32"` even
+  // when running on POSIX (and vice-versa), and the unit tests exercise real
+  // Windows semantics rather than the host's.
+  const p = isWin ? path.win32 : path.posix;
   const mode = isWin ? fsConstants.F_OK : fsConstants.X_OK;
   const exts = isWin
     ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((e) => e.trim()).filter(Boolean)]
@@ -68,9 +73,9 @@ export async function resolveCommandOnPath(
 
   // Bare name: scan each PATH dir. (Windows populates `Path`; POSIX `PATH`.)
   const raw = env.PATH ?? env.Path ?? "";
-  const dirs = raw.split(path.delimiter).filter(Boolean);
+  const dirs = raw.split(p.delimiter).filter(Boolean);
   for (const dir of dirs) {
-    for (const cand of withExts(path.join(dir, command))) {
+    for (const cand of withExts(p.join(dir, command))) {
       if (await isAccessible(cand, mode)) return cand;
     }
   }
