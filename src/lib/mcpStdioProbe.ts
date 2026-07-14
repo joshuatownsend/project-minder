@@ -1,5 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import type { McpServer } from "./types";
 
@@ -24,7 +25,10 @@ const INITIALIZE_REQUEST = {
   id: 1,
   method: "initialize",
   params: {
-    protocolVersion: "2024-11-05",
+    // Advertise the current protocol version from the bundled MCP SDK (not a
+    // pinned old revision), so a server that dropped older revisions still
+    // negotiates instead of rejecting the handshake as unsupported.
+    protocolVersion: LATEST_PROTOCOL_VERSION,
     capabilities: {},
     clientInfo: { name: "project-minder-health", version: "1.0.0" },
   },

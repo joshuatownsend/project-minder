@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "events";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { probeStdioHandshake } from "@/lib/mcpStdioProbe";
 import type { McpServer } from "@/lib/types";
 
@@ -53,6 +54,11 @@ describe("probeStdioHandshake", () => {
     expect(r.ok).toBe(true);
     expect(r.detail).toContain("my-mcp");
     expect(child.kill).not.toHaveBeenCalled(); // killFn injected, real kill untouched
+
+    // The initialize request advertises the current SDK protocol version.
+    const sent = JSON.parse((child.stdin.write.mock.calls[0] as [string])[0]);
+    expect(sent.method).toBe("initialize");
+    expect(sent.params.protocolVersion).toBe(LATEST_PROTOCOL_VERSION);
   });
 
   it("normalizes and truncates a hostile serverInfo.name", async () => {

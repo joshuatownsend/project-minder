@@ -87,6 +87,18 @@ describe("mcpHealthCache", () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
+  it("re-probes when an env key is added/removed (handshake verdict depends on it)", async () => {
+    const s1 = server({ name: "a", command: "node", envKeys: ["A"] });
+    mcpHealthCache.enqueue([s1]);
+    await vi.waitFor(() => expect(mcpHealthCache.get(id(s1))).not.toBeNull());
+    probe.mockClear();
+
+    // Same identity + command/args, but an env key added → different signature.
+    const s2 = server({ name: "a", command: "node", envKeys: ["A", "B"] });
+    mcpHealthCache.enqueue([s2]);
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+  });
+
   it("keeps two same-name servers from different sources as distinct entries", async () => {
     // getUserConfig preserves both; a name-only key would collapse them.
     const userDup = server({ name: "dup", source: "user", sourcePath: "/u/.claude.json", command: "u-cmd" });

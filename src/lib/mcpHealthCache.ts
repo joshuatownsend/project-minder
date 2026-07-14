@@ -48,6 +48,9 @@ function serverSignature(s: McpServer): string {
     (s.args ?? []).join(" "),
     s.url ?? "",
     s.cwd ?? "",
+    // Key NAMES only (never values) — but a handshake verdict depends on which
+    // env is set, so an added/removed key must re-probe, not wait out the TTL.
+    (s.envKeys ?? []).join(","),
     s.disabled ? "1" : "0",
   ].join(SEP);
 }
