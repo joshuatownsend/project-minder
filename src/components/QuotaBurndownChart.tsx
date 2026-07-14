@@ -2,67 +2,19 @@
 
 import { useEffect, useState } from "react";
 import type { QuotaData, QuotaWindow } from "@/lib/quota";
-import { SCHEDULE_MODES } from "@/lib/types";
 import type { ScheduleMode } from "@/lib/types";
+import {
+  computeProjectedUtilization,
+  formatCountdown,
+  scheduleLabel,
+  utilColor,
+  type WindowKey,
+} from "@/lib/quotaProjection";
 
 const VIEW_W = 500;
 const BAR_H = 12;
 const BAR_X = 0;
 const ROW_H = 62;
-
-function scheduleLabel(mode: ScheduleMode): string {
-  return SCHEDULE_MODES.find((m) => m.value === mode)?.label ?? mode;
-}
-
-// Fraction of 7d window that is "active" given schedule mode.
-function scheduleActiveFraction(mode: ScheduleMode): number {
-  switch (mode) {
-    case "weekdays":   return 5 / 7;
-    case "vibe-coder": return 0.7;
-    case "custom":
-    case "24x7":       return 1;
-  }
-}
-
-function formatCountdown(secsLeft: number): string {
-  if (secsLeft <= 0) return "now";
-  const h = Math.floor(secsLeft / 3600);
-  const m = Math.floor((secsLeft % 3600) / 60);
-  if (h >= 24) {
-    const d = Math.floor(h / 24);
-    const rh = h % 24;
-    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
-  }
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-}
-
-function windowDurationSecs(key: "5h" | "7d"): number {
-  return key === "5h" ? 5 * 3600 : 7 * 24 * 3600;
-}
-
-function computeProjected(
-  window: QuotaWindow,
-  key: "5h" | "7d",
-  scheduleMode: ScheduleMode,
-  nowMs: number
-): number | null {
-  const now = nowMs / 1000;
-  const secsLeft = window.reset - now;
-  const totalSecs = windowDurationSecs(key);
-  if (window.reset <= 0 || secsLeft > totalSecs) return null;
-  const elapsedSecs = totalSecs - secsLeft;
-  if (elapsedSecs <= 0) return null;
-  const elapsedFrac = elapsedSecs / totalSecs;
-  const activeFrac = key === "7d" ? scheduleActiveFraction(scheduleMode) : 1;
-  const projected = (window.utilization / elapsedFrac) * activeFrac;
-  return Math.min(projected, 2); // cap at 200% for display
-}
-
-function utilColor(utilization: number): string {
-  if (utilization >= 0.9) return "var(--status-error-text, #f87171)";
-  if (utilization >= 0.7) return "var(--warning, #fb923c)";
-  return "var(--status-active-text, #4ade80)";
-}
 
 function UtilRow({
   label,
@@ -74,7 +26,7 @@ function UtilRow({
 }: {
   label: string;
   window: QuotaWindow;
-  windowKey: "5h" | "7d";
+  windowKey: WindowKey;
   scheduleMode: ScheduleMode;
   nowMs: number;
   y: number;
@@ -84,7 +36,7 @@ function UtilRow({
   const now = nowMs / 1000;
   const secsLeft = Math.max(0, window.reset - now);
   const countdown = formatCountdown(secsLeft);
-  const projected = computeProjected(window, windowKey, scheduleMode, nowMs);
+  const projected = computeProjectedUtilization(window, windowKey, scheduleMode, nowMs);
   const projPct = projected !== null ? Math.round(projected * 100) : null;
   const barFill = Math.min(window.utilization, 1) * VIEW_W;
 

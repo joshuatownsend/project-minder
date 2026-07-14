@@ -27,6 +27,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "githubActivity",
   "mcpHealth",
   "mcpHealthStdioProbe",
+  "burnHud",
   "rscHydration",
   "serverActions",
   "liveEvents",
@@ -244,6 +245,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     appliesAt: "ui",
     wired: true,
     defaultOn: false,
+  },
+  {
+    key: "burnHud",
+    label: "Burn HUD (top bar)",
+    description:
+      "Shows a persistent rate-limit burn indicator in the top bar — the more-utilized of your 5h/7d quota windows plus a projected cap time. Reads the same authoritative rate-limit headers as the /settings burndown chart. Defaults on; self-hides when Claude quota data isn't available.",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
   },
   {
     key: "rscHydration",

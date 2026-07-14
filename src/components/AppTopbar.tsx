@@ -8,6 +8,7 @@ import { usePulse } from "./PulseProvider";
 import { useScope } from "./ScopeProvider";
 import { PortConflictIndicator } from "./PortConflictIndicator";
 import { McpHealthIndicator } from "./McpHealthIndicator";
+import { QuotaHud } from "./QuotaHud";
 import { HelpButton } from "./HelpButton";
 
 const TITLE_MAP: Record<string, string> = {
@@ -147,6 +148,8 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
       </button>
 
       <PortConflictIndicator />
+
+      <QuotaHud />
 
       <McpHealthIndicator />
 

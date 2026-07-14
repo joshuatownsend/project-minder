@@ -81,3 +81,14 @@ export function useLiveEventsEnabled(): boolean {
   const config = useConfig();
   return getFlag(config?.featureFlags, "liveEvents");
 }
+
+/**
+ * True when the `burnHud` flag is on — the top bar shows the persistent quota
+ * burn indicator (`QuotaHud`). Defaults ON; the HUD additionally self-hides
+ * whenever Claude quota data isn't configured, so this only governs the
+ * explicit user opt-out.
+ */
+export function useBurnHudEnabled(): boolean {
+  const config = useConfig();
+  return getFlag(config?.featureFlags, "burnHud");
+}

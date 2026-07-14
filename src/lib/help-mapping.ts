@@ -127,6 +127,7 @@ export const helpSlugs = [
   'keyboard-shortcuts',
   'mcp-server',
   'mcp-health',
+  'burn-hud',
   'github-activity',
   'background',
   'commands',
