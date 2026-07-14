@@ -33,9 +33,18 @@ import { useHelp } from "./HelpProvider";
  *   - the first fetch hasn't resolved yet.
  */
 
-/** "3:40 PM" — locale-aware clock for a projected cap moment. */
-function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/**
+ * Locale-aware label for a projected cap moment. Same-day caps read as a bare
+ * clock ("3:40 PM"); caps on a later day (common for the 7d window, possible
+ * for a late-night 5h cap) prepend the weekday ("Tue 3:40 PM") so a future cap
+ * isn't mistaken for today. A 7d cap is at most ~7 days out, so the weekday is
+ * unambiguous within the window.
+ */
+function formatCap(ms: number, nowMs: number): string {
+  const cap = new Date(ms);
+  const clock = cap.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (cap.toDateString() === new Date(nowMs).toDateString()) return clock;
+  return `${cap.toLocaleDateString([], { weekday: "short" })} ${clock}`;
 }
 
 export function QuotaHud() {
@@ -84,7 +93,15 @@ export function QuotaHud() {
   const headline = computeBurnHeadline(quota.windows, nowMs);
   const pct = Math.round(headline.worstUtil * 100);
   const color = utilColor(headline.worstUtil);
-  const capText = headline.capAtMs !== null ? `cap ~${formatClock(headline.capAtMs)}` : null;
+  // The soonest cap can belong to a *different* window than the headline % (e.g.
+  // 7d most-utilized but 5h capping first) — name the window when it differs so
+  // the chip never implies the cap is for the window whose % it shows.
+  const capText =
+    headline.capAtMs !== null
+      ? headline.capKey && headline.capKey !== headline.worstKey
+        ? `${headline.capKey} cap ~${formatCap(headline.capAtMs, nowMs)}`
+        : `cap ~${formatCap(headline.capAtMs, nowMs)}`
+      : null;
 
   return (
     <div ref={rootRef} style={{ position: "relative", display: "flex", alignItems: "center" }}>
@@ -257,7 +274,7 @@ function WindowRow({
       >
         <span>resets in {formatCountdown(secsLeft)}</span>
         {capMs !== null ? (
-          <span style={{ color }}>cap ~{formatClock(capMs)}</span>
+          <span style={{ color }}>cap ~{formatCap(capMs, nowMs)}</span>
         ) : projPct !== null ? (
           <span style={{ color: projPct >= 90 ? "var(--status-error-text, #f87171)" : projPct >= 70 ? "var(--warning, #fb923c)" : "var(--text-3)" }}>
             ~{projPct}% projected
