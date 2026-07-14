@@ -43,6 +43,28 @@ describe("mcpServersSignature", () => {
     expect(mcpServersSignature(before)).not.toBe(mcpServersSignature(after));
   });
 
+  it("excludes env VALUES — a rotated secret does not change the signature", () => {
+    // env values may be credentials; they must never sit in the watcher's
+    // lastSig, and rotating one must not thrash the cache.
+    const before = withServers({ foo: { command: "node", env: { API_KEY: "secret-v1" } } });
+    const after = withServers({ foo: { command: "node", env: { API_KEY: "secret-v2" } } });
+    const sig = mcpServersSignature(before);
+    expect(sig).toBe(mcpServersSignature(after));
+    expect(sig).not.toContain("secret-v1"); // value never retained
+  });
+
+  it("changes when an env KEY is added (a config change, not a secret rotation)", () => {
+    const before = withServers({ foo: { command: "node", env: { A: "1" } } });
+    const after = withServers({ foo: { command: "node", env: { A: "1", B: "2" } } });
+    expect(mcpServersSignature(before)).not.toBe(mcpServersSignature(after));
+  });
+
+  it("is stable across key reorder inside a server definition", () => {
+    const a = withServers({ foo: { command: "node", url: "https://x", env: { A: "1", B: "2" } } });
+    const b = withServers({ foo: { env: { B: "2", A: "1" }, url: "https://x", command: "node" } });
+    expect(mcpServersSignature(a)).toBe(mcpServersSignature(b));
+  });
+
   it("collapses a missing or non-object mcpServers to a stable sentinel", () => {
     expect(mcpServersSignature("{}")).toBe("∅");
     expect(mcpServersSignature('{"mcpServers": null}')).toBe("∅");

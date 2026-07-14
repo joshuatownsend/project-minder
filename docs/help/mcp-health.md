@@ -25,7 +25,7 @@ Probes run in a small background cache with a **5-minute TTL** (mirroring the gi
 
 ### Freshness of the server list
 
-The list of *which* servers exist comes from Minder's shared config cache. A server you **add or remove inside Minder** (Rescan, or any config write) refreshes immediately. A server you hand-edit into `~/.claude.json` **outside** Minder appears/disappears within about 5 minutes — the same cadence every other Minder surface sees that edit.
+The list of *which* servers exist comes from Minder's shared config cache. A server you **add or remove inside Minder** (Rescan, or any config write) refreshes immediately. A server you hand-edit into **`~/.claude.json` or `~/.claude/settings.json`** outside Minder is picked up **within seconds** — a background watcher invalidates the config cache when (and only when) the `mcpServers` block actually changes. Edits to the other sources (Claude Desktop, plugins, managed policy) surface within about **5 minutes** (the config-cache TTL).
 
 ## Turning it off
 

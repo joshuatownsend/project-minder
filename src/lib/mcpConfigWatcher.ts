@@ -27,21 +27,46 @@ import { invalidateUserConfigCache } from "./userConfigCache";
 const DEBOUNCE_MS = 400;
 
 /**
+ * Canonicalize one server definition for the signature: sort its top-level keys
+ * (so a rewrite that reorders `command`/`env`/… doesn't look like a change) and
+ * — critically — reduce any `env` block to its sorted KEY NAMES. The values in
+ * `env` may be credentials; like every other MCP reader in the codebase, the
+ * watcher must never retain raw secret values in memory (they'd otherwise sit in
+ * `lastSig` for the watcher's lifetime). `args` order is preserved — it's
+ * significant for the spawned command.
+ */
+function normalizeServerDef(def: unknown): unknown {
+  if (!def || typeof def !== "object") return def ?? null;
+  const obj = def as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    const val = obj[key];
+    if (key === "env" && val && typeof val === "object" && !Array.isArray(val)) {
+      out.env = Object.keys(val as Record<string, unknown>).sort(); // keys only
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+/**
  * Signature of the `mcpServers` slice of a config document. Pure + testable.
  * Returns a stable string that changes iff the set/definition of MCP servers
- * changes — NOT when unrelated runtime-state fields in the same file change.
- * A missing/unparseable slice collapses to a sentinel so a broken write doesn't
- * look like a change every time.
+ * changes — NOT when unrelated runtime-state fields change, keys are reordered,
+ * or an `env` secret value rotates. Never includes `env` values (secrets stay
+ * out of `lastSig`). A missing/unparseable slice collapses to a sentinel so a
+ * broken write doesn't look like a change every time.
  */
 export function mcpServersSignature(rawJson: string): string {
   const doc = tryParseJsonc<{ mcpServers?: unknown }>(rawJson);
   const servers = doc?.mcpServers;
   if (!servers || typeof servers !== "object") return "∅";
-  // Sort keys so object insertion order (which Claude Code may rewrite) doesn't
-  // register as a change.
-  const entries = Object.entries(servers as Record<string, unknown>).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
+  // Sort server names so insertion order (which Claude Code may rewrite)
+  // doesn't register as a change; normalize each definition (env → keys).
+  const entries = Object.entries(servers as Record<string, unknown>)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, def]) => [name, normalizeServerDef(def)]);
   return JSON.stringify(entries);
 }
 
