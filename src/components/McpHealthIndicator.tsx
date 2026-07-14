@@ -59,15 +59,17 @@ export function McpHealthIndicator() {
 
   if (!data || !data.enabled) return null;
 
-  const servers = Object.values(data.servers).sort((a, b) => a.name.localeCompare(b.name));
-  if (servers.length === 0) return null; // probing — avoid a flash of an empty strip
+  // Keyed by opaque server identity (unique across same-name servers from
+  // different sources); render values, key React elements by that identity.
+  const entries = Object.entries(data.servers).sort(([, a], [, b]) => a.name.localeCompare(b.name));
+  if (entries.length === 0) return null; // probing — avoid a flash of an empty strip
 
-  const downCount = servers.filter((s) => s.status === "down").length;
+  const downCount = entries.filter(([, s]) => s.status === "down").length;
 
   return (
     <div
       className="mcp-health-strip"
-      title={`MCP servers — ${servers.length} configured${downCount > 0 ? `, ${downCount} down` : ""}`}
+      title={`MCP servers — ${entries.length} configured${downCount > 0 ? `, ${downCount} down` : ""}`}
       style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
     >
       <span
@@ -81,9 +83,9 @@ export function McpHealthIndicator() {
         MCP
       </span>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {servers.map((s) => (
+        {entries.map(([id, s]) => (
           <span
-            key={s.name}
+            key={id}
             title={`${s.name} — ${s.detail}`}
             aria-label={`${s.name}: ${s.status}`}
             style={{

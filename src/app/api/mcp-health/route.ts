@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { getUserConfig } from "@/lib/userConfigCache";
-import { mcpHealthCache } from "@/lib/mcpHealthCache";
+import { mcpHealthCache, serverIdentity } from "@/lib/mcpHealthCache";
 import type { McpHealth } from "@/lib/types";
 
 /**
@@ -21,7 +21,7 @@ export async function GET() {
     return NextResponse.json({ enabled: false, servers: {}, pending: 0, total: 0 });
   }
 
-  const configuredNames = new Set<string>();
+  const configuredIds = new Set<string>();
   try {
     // The full user-scope MCP surface — the same merged reader the rest of the
     // app uses (managed policy + ~/.claude/settings.json + ~/.claude.json +
@@ -29,27 +29,27 @@ export async function GET() {
     // configured server is silently missing from the strip.
     const { mcpServers } = await getUserConfig();
     const configured = mcpServers.servers;
-    for (const s of configured) configuredNames.add(s.name);
+    for (const s of configured) configuredIds.add(serverIdentity(s));
     if (configured.length > 0) mcpHealthCache.enqueue(configured);
   } catch {
     // Defensive: a missing/broken config source must never blank the strip.
   }
 
-  // Filter cached health to the CURRENTLY-configured servers. The cache is
-  // keyed by name and holds entries for the full TTL, so a server removed from
-  // ~/.claude.json (or an emptied list) would otherwise linger on the strip —
-  // with a stale count — until its 5-min entry expires. Filtering here drops it
-  // immediately.
+  // Filter cached health to the CURRENTLY-configured servers (by identity, so
+  // two same-name servers from different sources are both kept). The cache
+  // holds entries for the full TTL, so a server removed from config (or an
+  // emptied list) would otherwise linger on the strip — with a stale count —
+  // until its 5-min entry expires. Filtering here drops it immediately.
   const all = mcpHealthCache.getAll();
   const servers: Record<string, McpHealth> = {};
-  for (const [name, health] of Object.entries(all)) {
-    if (configuredNames.has(name)) servers[name] = health;
+  for (const [id, health] of Object.entries(all)) {
+    if (configuredIds.has(id)) servers[id] = health;
   }
 
   return NextResponse.json({
     enabled: true,
     servers,
     pending: mcpHealthCache.pending,
-    total: configuredNames.size,
+    total: configuredIds.size,
   });
 }
