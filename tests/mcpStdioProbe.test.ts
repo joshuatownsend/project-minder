@@ -34,8 +34,10 @@ function makeChild() {
 // Common injected helpers: no real env read, no real process kill.
 const helpers = { readEnv: async () => ({}), killFn: () => {} };
 
-// Let the awaited readEnv microtask + the Promise executor (spawn + stdin.write) run.
-const tick = () => new Promise((r) => setTimeout(r, 5));
+// Let the awaited readEnv microtask + the Promise executor (spawn + stdin.write)
+// run. setImmediate is a macrotask, so it always fires after those microtasks —
+// no wall-clock dependency (unlike a fixed setTimeout, which can flake on slow CI).
+const tick = () => new Promise((r) => setImmediate(r));
 
 describe("probeStdioHandshake", () => {
   it("is up on a valid initialize result (and reports serverInfo name)", async () => {
@@ -51,6 +53,18 @@ describe("probeStdioHandshake", () => {
     expect(r.ok).toBe(true);
     expect(r.detail).toContain("my-mcp");
     expect(child.kill).not.toHaveBeenCalled(); // killFn injected, real kill untouched
+  });
+
+  it("normalizes and truncates a hostile serverInfo.name", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    const nasty = "evil\n\n" + "x".repeat(200); // newlines + very long
+    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: nasty } } }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(r.detail).not.toContain("\n");
+    expect(r.detail.length).toBeLessThan(80); // "initialize ok — " + capped name
   });
 
   it("is down on a JSON-RPC error response", async () => {

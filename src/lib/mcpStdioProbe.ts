@@ -74,12 +74,39 @@ async function readServerEnvValues(server: McpServer): Promise<Record<string, st
   }
 }
 
-/** Kill the spawned child and its tree. On Windows a bare `child.kill()` leaves
- *  the real server (often a `node`/`npx` grandchild) running, so use taskkill. */
+/** External-process strings (server name / error message) are shown in the UI,
+ *  so collapse whitespace and cap length — a malicious/buggy server can't blow
+ *  out the popover layout, tooltips, or logs with a huge or newline-filled
+ *  value. */
+function normalizeDetail(v: unknown): string {
+  if (v == null) return "";
+  return String(v).replace(/\s+/g, " ").trim().slice(0, 60);
+}
+
+/** Kill the spawned child AND its tree. The configured command is often a
+ *  wrapper (`npx`, `sh -c …`, a `.cmd` shim) that runs the real server as a
+ *  grandchild, and a bare `child.kill()` leaves that grandchild running. On
+ *  Windows use `taskkill /T`; on POSIX the child is spawned `detached` (its own
+ *  process group), so a negative-PID signal reaches the whole group. */
 function killChild(child: ChildProcess): void {
-  if (child.pid && process.platform === "win32") {
+  if (!child.pid) {
+    try {
+      child.kill();
+    } catch {
+      /* already dead */
+    }
+    return;
+  }
+  if (process.platform === "win32") {
     try {
       execFile("taskkill", ["/F", "/T", "/PID", String(child.pid)], () => {});
+      return;
+    } catch {
+      /* fall through to child.kill */
+    }
+  } else {
+    try {
+      process.kill(-child.pid, "SIGKILL"); // negative PID → the process group
       return;
     } catch {
       /* fall through to child.kill */
@@ -115,9 +142,16 @@ export async function probeStdioHandshake(
   return new Promise<StdioProbeResult>((resolve) => {
     let child: ChildProcess;
     try {
+      const isWin = process.platform === "win32";
       child = spawnFn(server.command as string, server.args ?? [], {
         env: { ...process.env, ...serverEnv },
         windowsHide: true,
+        // Windows: npx/npm/pnpm resolve to `.cmd` shims that Node can't exec
+        // directly (must go through cmd.exe) — without this, launchable servers
+        // would spuriously report "spawn error". POSIX: run in a fresh process
+        // group so killChild can tear down the whole tree, not just a wrapper.
+        shell: isWin,
+        detached: !isWin,
         stdio: ["pipe", "pipe", "ignore"],
       });
     } catch {
@@ -172,9 +206,10 @@ export async function probeStdioHandshake(
         if (m.id !== 1) continue;
         if (m.result && typeof m.result === "object") {
           const info = m.result.serverInfo as { name?: string } | undefined;
-          finish({ ok: true, detail: `initialize ok${info?.name ? ` — ${info.name}` : ""}` });
+          const name = normalizeDetail(info?.name);
+          finish({ ok: true, detail: `initialize ok${name ? ` — ${name}` : ""}` });
         } else if (m.error) {
-          const message = String(m.error.message ?? "").slice(0, 60);
+          const message = normalizeDetail(m.error.message);
           finish({ ok: false, detail: `initialize error${message ? `: ${message}` : ""}` });
         }
         return;

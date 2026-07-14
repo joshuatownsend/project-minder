@@ -157,7 +157,7 @@ describe("probeMcpServer — stdio", () => {
       handshakeTimeoutMs: 500,
       handshakeSpawnHelpers: { readEnv: async () => ({}), killFn: () => {} },
     });
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setImmediate(r)); // macrotask: after spawn + stdin.write, no wall-clock flake
     child.stdout.emit(
       "data",
       JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "n" } } }) + "\n",
