@@ -54,14 +54,13 @@ jobs:
         run: pnpm build
 
   verify-windows:
-    # Advisory-only Windows coverage: the app targets Windows (dev port, path
-    # handling, better-sqlite3 native build) but CI's required check runs on
-    # ubuntu. continue-on-error keeps a Windows-only build-tooling gap from
-    # blocking the required `verify` status check while still surfacing
-    # failures in the workflow run for visibility.
+    # Windows coverage: the app targets Windows (dev port, path handling,
+    # better-sqlite3 native driver). Previously advisory (continue-on-error)
+    # while a windows-latest native-build gap kept it red (#264); now that the
+    # job builds cleanly via the Node 22 prebuilt binary it is a hard gate, so
+    # future Windows-only regressions block the merge instead of being masked.
     runs-on: windows-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
