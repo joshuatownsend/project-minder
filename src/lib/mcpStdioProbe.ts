@@ -249,16 +249,21 @@ export async function probeStdioHandshake(
           const result = m.result as {
             protocolVersion?: unknown;
             capabilities?: unknown;
-            serverInfo?: { name?: string };
+            serverInfo?: { name?: unknown; version?: unknown };
           };
+          const info = result.serverInfo;
           const valid =
             typeof result.protocolVersion === "string" &&
             !!result.capabilities &&
             typeof result.capabilities === "object" &&
-            !!result.serverInfo &&
-            typeof result.serverInfo === "object";
+            !!info &&
+            typeof info === "object" &&
+            // MCP requires serverInfo.name + serverInfo.version — a real client
+            // rejects init without them, so a `serverInfo: {}` isn't healthy.
+            typeof info.name === "string" &&
+            typeof info.version === "string";
           if (valid) {
-            const name = normalizeDetail(result.serverInfo?.name);
+            const name = normalizeDetail(info.name);
             finish({ ok: true, detail: `initialize ok${name ? ` — ${name}` : ""}` });
           } else {
             finish({ ok: false, detail: "invalid initialize response (missing required fields)" });

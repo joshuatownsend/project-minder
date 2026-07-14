@@ -42,9 +42,10 @@ const helpers = { readEnv: async () => ({}), killFn: () => {} };
 // no wall-clock dependency (unlike a fixed setTimeout, which can flake on slow CI).
 const tick = () => new Promise((r) => setImmediate(r));
 
-// A spec-valid MCP initialize result (protocolVersion + capabilities + serverInfo).
-const OK_RESULT = { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: {} };
-const okResult = (name: string) => ({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name } });
+// A spec-valid MCP initialize result (protocolVersion + capabilities +
+// serverInfo with the required name + version).
+const OK_RESULT = { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name: "test-srv", version: "1.0.0" } };
+const okResult = (name: string) => ({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, serverInfo: { name, version: "1.0.0" } });
 
 describe("probeStdioHandshake", () => {
   it("is up on a valid initialize result (and reports serverInfo name)", async () => {
@@ -82,6 +83,21 @@ describe("probeStdioHandshake", () => {
     await tick();
     // A broken JSON-RPC process that just echoes an empty result must not pass.
     child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }) + "\n");
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/invalid initialize/i);
+  });
+
+  it("is down when serverInfo lacks the required name/version", async () => {
+    const child = makeChild();
+    const p = probeStdioHandshake(server({}), { spawnFn: (() => child) as never, timeoutMs: 500, ...helpers });
+    await tick();
+    // Has protocolVersion + capabilities but serverInfo is empty — a real
+    // client rejects this, so it must not earn a green dot.
+    child.stdout.emit(
+      "data",
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "x", capabilities: {}, serverInfo: {} } }) + "\n",
+    );
     const r = await p;
     expect(r.ok).toBe(false);
     expect(r.detail).toMatch(/invalid initialize/i);
