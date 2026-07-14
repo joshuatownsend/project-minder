@@ -8,6 +8,7 @@ import { S } from "./styles";
 import { SUPPORTED_CURRENCIES, CURRENCY_NAMES } from "@/lib/currencies";
 import { invalidateCurrencyCache } from "@/hooks/useCurrency";
 import { useQuota } from "@/hooks/useQuota";
+import { DEFAULT_SCHEDULE_MODE } from "@/lib/quotaProjection";
 import { QuotaBurndownChart } from "@/components/QuotaBurndownChart";
 
 interface FxData {
@@ -46,7 +47,7 @@ export function CostSection({
   const [rulesSaving, setRulesSaving] = useState(false);
   const [rulesMsg, setRulesMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(config?.scheduleMode ?? "weekdays");
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(config?.scheduleMode ?? DEFAULT_SCHEDULE_MODE);
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
   // Budget / subscription tier state
@@ -74,7 +75,7 @@ export function CostSection({
   }, [config?.pricingRules]);
 
   useEffect(() => {
-    setScheduleMode(config?.scheduleMode ?? "weekdays");
+    setScheduleMode(config?.scheduleMode ?? DEFAULT_SCHEDULE_MODE);
   }, [config?.scheduleMode]);
 
   useEffect(() => {

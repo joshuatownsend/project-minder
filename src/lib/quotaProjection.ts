@@ -17,6 +17,11 @@ import { SCHEDULE_MODES } from "./types";
 
 export type WindowKey = "5h" | "7d";
 
+/** Fallback schedule when a config has no saved `scheduleMode`. Shared by every
+ *  quota surface (the /settings burndown chart and the top-bar HUD) so the
+ *  schedule-scaled 7d projection is identical across both. */
+export const DEFAULT_SCHEDULE_MODE: ScheduleMode = "weekdays";
+
 /** Total length of a rolling window in seconds. */
 export function windowDurationSecs(key: WindowKey): number {
   return key === "5h" ? 5 * 3600 : 7 * 24 * 3600;

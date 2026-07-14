@@ -10,6 +10,7 @@ import {
   formatCountdown,
   scheduleLabel,
   utilColor,
+  DEFAULT_SCHEDULE_MODE,
   type WindowKey,
 } from "@/lib/quotaProjection";
 import { useQuota } from "@/hooks/useQuota";
@@ -39,11 +40,14 @@ function formatClock(ms: number): string {
 
 export function QuotaHud() {
   const enabled = useBurnHudEnabled();
-  // Persistent surface: re-check every 60s so the chip can't sit on stale
-  // headers past the 5-min quota TTL or across a window reset. The underlying
-  // client only refetches once its own TTL lapses, so this is a cheap poll.
-  const quota = useQuota(60_000);
   const config = useConfig();
+  // Only touch the quota API once we KNOW the flag is on — config resolved
+  // (not still loading) AND enabled. This makes the opt-out a real opt-out: a
+  // disabled HUD issues no /api/integrations/quota fetch and no Anthropic probe,
+  // not just a hidden chip. Persistent surface, so we poll every 60s; the client
+  // only refetches once its own 5-min TTL lapses, so this is a cheap poll.
+  const quotaActive = config !== null && enabled;
+  const quota = useQuota(60_000, quotaActive);
   const { openHelp } = useHelp();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -76,7 +80,7 @@ export function QuotaHud() {
   if (!enabled) return null;
   if (!quota || !quota.configured) return null; // loading, no creds, or probe failed
 
-  const scheduleMode: ScheduleMode = config?.scheduleMode ?? "24x7";
+  const scheduleMode: ScheduleMode = config?.scheduleMode ?? DEFAULT_SCHEDULE_MODE;
   const headline = computeBurnHeadline(quota.windows, nowMs);
   const pct = Math.round(headline.worstUtil * 100);
   const color = utilColor(headline.worstUtil);
