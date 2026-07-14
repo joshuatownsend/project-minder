@@ -113,9 +113,9 @@ export interface McpHealth {
   /** Human-readable one-liner for the tooltip (e.g. "reachable (HTTP 200)"). */
   detail: string;
   /** How the verdict was reached — clarifies what "up" actually asserts.
-   *  "http" = real reachability; "command" = launchability, NOT probed;
-   *  "none" = not probed at all. */
-  probeKind: "http" | "command" | "none";
+   *  "http" = real reachability; "handshake" = real stdio `initialize`
+   *  round-trip; "command" = launchability, NOT probed; "none" = not probed. */
+  probeKind: "http" | "handshake" | "command" | "none";
   /** Unix ms when the probe ran; drives the cache TTL. */
   checkedAt: number;
 }

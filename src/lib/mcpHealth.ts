@@ -1,6 +1,25 @@
 import { promises as fs, constants as fsConstants } from "fs";
 import path from "path";
+import type { spawn } from "child_process";
+import { probeStdioHandshake } from "./mcpStdioProbe";
 import type { McpServer, McpHealth, McpHealthStatus } from "./types";
+
+export interface ProbeMcpServerOptions {
+  /** PATH-resolution env (defaults to process.env). */
+  env?: Record<string, string | undefined>;
+  /** Platform for PATH semantics (defaults to process.platform). */
+  platform?: NodeJS.Platform;
+  /** Opt-in: run a real `initialize` handshake for stdio servers instead of the
+   *  launchability check. Gated by the `mcpHealthStdioProbe` flag upstream. */
+  stdioHandshake?: boolean;
+  /** Injected for tests / tuning. */
+  handshakeTimeoutMs?: number;
+  spawnFn?: typeof spawn;
+  handshakeSpawnHelpers?: {
+    readEnv?: (server: McpServer) => Promise<Record<string, string>>;
+    killFn?: (child: import("child_process").ChildProcess) => void;
+  };
+}
 
 /**
  * MCP server health probing — the pure, testable half of the live "MCP
@@ -118,9 +137,9 @@ async function probeHttp(url: string): Promise<{ status: McpHealthStatus; detail
  */
 export async function probeMcpServer(
   server: McpServer,
-  env: Record<string, string | undefined> = process.env,
-  platform: NodeJS.Platform = process.platform,
+  opts: ProbeMcpServerOptions = {},
 ): Promise<Omit<McpHealth, "checkedAt">> {
+  const { env = process.env, platform = process.platform, stdioHandshake = false } = opts;
   const base = { name: server.name, transport: server.transport, source: server.source };
 
   if (server.disabled) {
@@ -133,6 +152,22 @@ export async function probeMcpServer(
   }
 
   if (server.transport === "stdio" && server.command) {
+    // Opt-in: a real `initialize` handshake (spawns the server) beats the
+    // launchability check when the flag is on.
+    if (stdioHandshake) {
+      const r = await probeStdioHandshake(server, {
+        timeoutMs: opts.handshakeTimeoutMs,
+        spawnFn: opts.spawnFn,
+        readEnv: opts.handshakeSpawnHelpers?.readEnv,
+        killFn: opts.handshakeSpawnHelpers?.killFn,
+      });
+      return {
+        ...base,
+        status: r.ok ? "up" : "down",
+        detail: r.detail,
+        probeKind: "handshake",
+      };
+    }
     const resolved = await resolveCommandOnPath(server.command, env, platform);
     return resolved
       ? {
