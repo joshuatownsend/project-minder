@@ -269,6 +269,9 @@
 
 ## Completed items lifted from active sections
 
+### From: agentic-os-dashboard ports
+- [x] **Demo-mode fast-follow (cosmetic): hide the session-derived project tabs** — Done 2026-07-15. Why: the per-project **Hot Files**, **Errors**, and **Patterns** tabs read real `~/.claude` JSONL keyed on the fake `C:\dev\<slug>` demo path, so they rendered **empty** in demo mode (no leak — just no synthetic data). Fix mirrors `SessionDetailView`'s payload-keyed demo detection: added a payload-borne `demo?: boolean` marker to `ProjectData` (set only by `src/lib/demo/projects.ts`, so it's robust to both `MINDER_DEMO=1` and the `demoMode` flag — the client-only flag never sees the env toggle), and `ProjectDetail` gates the three tabs on `showSessionAnalysisTabs = hasSessions && !isDemoProject`. **Efficiency stays** — its route already carries a demo guard and renders a structured report. Test: `tests/demoProjects.test.ts` asserts `demo: true` on every fixture. Deferred from PR #271 after 13 Codex rounds; non-blocking.
+
 ### From: Performance
 - [x] **Background git dirty status** — Background batch worker checks repos 3 at a time, dashboard polls for results and shows amber `+N` indicators as they come in.
 

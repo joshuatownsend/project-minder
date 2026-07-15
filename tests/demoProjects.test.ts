@@ -50,6 +50,16 @@ describe("demoProjects", () => {
     expect(ps.some((p) => (p.todos?.total ?? 0) > 0)).toBe(true);
   });
 
+  it("marks every project demo:true so the client can hide session-derived tabs", () => {
+    // Hot Files / Errors / Patterns read real ~/.claude JSONL keyed on the fake
+    // C:\dev\<slug> path and render empty in demo mode. ProjectDetail keys off
+    // this payload-borne marker (robust to both MINDER_DEMO=1 and the flag) to
+    // suppress those three tabs. A missing marker would let them render blank.
+    for (const p of demoProjects(NOW)) {
+      expect(p.demo).toBe(true);
+    }
+  });
+
   it("git dirtiness is internally consistent (isDirty ⇔ uncommittedCount>0)", () => {
     for (const p of demoProjects(NOW)) {
       if (p.git) expect(p.git.isDirty).toBe(p.git.uncommittedCount > 0);

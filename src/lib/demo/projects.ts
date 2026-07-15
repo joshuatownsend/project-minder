@@ -470,6 +470,9 @@ function buildProject(seed: Seed, nowMs: number): ProjectData {
     operations: rich ? demoOps() : undefined,
     lastActivity: iso(nowMs, Math.min(seed.sessionOffset, seed.commitOffset)),
     scannedAt: new Date(nowMs).toISOString(),
+    // Payload-borne demo marker — lets the client hide the session-derived tabs
+    // (Hot Files / Errors / Patterns) whose endpoints have no demo fixtures.
+    demo: true,
   };
 }
 

@@ -113,6 +113,13 @@ const VALID_TABS = new Set<TabKey>([
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
 
+// Session-derived analysis tabs. Hidden for projects without sessions and for
+// demo projects (their fixtures don't back the underlying JSONL). Used both to
+// build the tab bar and to redirect a deep link that targets a hidden one.
+const SESSION_ANALYSIS_TABS: ReadonlySet<TabKey> = new Set<TabKey>([
+  "hot-files", "errors", "patterns",
+]);
+
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -208,6 +215,24 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const hasConfigLint = !!project.configLint;
   const launcherEnabled = useWorkflowLauncherEnabled();
 
+  // Hot Files / Errors / Patterns read real ~/.claude JSONL keyed on the fake
+  // C:\dev\<slug> path, so they render empty for a demo project. Hide them —
+  // mirroring SessionDetailView's demo-tab suppression. Efficiency stays: its
+  // route carries a demo guard and renders a structured report.
+  const isDemoProject = project.demo === true;
+  const showSessionAnalysisTabs = hasSessions && !isDemoProject;
+
+  // Deep-link guard: a bookmarked/shared `?tab=hot-files|errors|patterns` (or a
+  // stale query string after enabling demo mode) still initializes activeTab to
+  // that value even when the tab button is hidden — and the content branch would
+  // otherwise render the empty panel this suppression is meant to hide. Fall
+  // back to Overview whenever the active session-analysis tab isn't shown.
+  useEffect(() => {
+    if (!showSessionAnalysisTabs && SESSION_ANALYSIS_TABS.has(activeTab)) {
+      handleTabChange("overview");
+    }
+  }, [showSessionAnalysisTabs, activeTab, handleTabChange]);
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
     { key: "context",     label: "Context" },
@@ -225,9 +250,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
     ...(hasSessions ? [{ key: "efficiency"   as TabKey, label: "Efficiency"   }] : []),
-    ...(hasSessions ? [{ key: "hot-files"   as TabKey, label: "Hot Files"    }] : []),
-    ...(hasSessions ? [{ key: "errors"      as TabKey, label: "Errors"       }] : []),
-    ...(hasSessions ? [{ key: "patterns"    as TabKey, label: "Patterns"     }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "hot-files"   as TabKey, label: "Hot Files"    }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "errors"      as TabKey, label: "Errors"       }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "patterns"    as TabKey, label: "Patterns"     }] : []),
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
     ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
     ...(hasConfigLint   ? [{ key: "config-lint"  as TabKey, label: "Config Lint"  }] : []),
@@ -693,17 +718,17 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           )}
 
           {/* ── HOT FILES ────────────────────────────────────────────── */}
-          {activeTab === "hot-files" && (
+          {activeTab === "hot-files" && showSessionAnalysisTabs && (
             <HotFilesPanel slug={project.slug} />
           )}
 
           {/* ── ERRORS ───────────────────────────────────────────────── */}
-          {activeTab === "errors" && (
+          {activeTab === "errors" && showSessionAnalysisTabs && (
             <ErrorPropagationMap slug={project.slug} />
           )}
 
           {/* ── PATTERNS ─────────────────────────────────────────────── */}
-          {activeTab === "patterns" && (
+          {activeTab === "patterns" && showSessionAnalysisTabs && (
             <PatternsPanel slug={project.slug} />
           )}
 
