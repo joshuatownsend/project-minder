@@ -31,6 +31,8 @@ import { EfficiencyTab } from "./EfficiencyTab";
 import { HotFilesPanel } from "./HotFilesPanel";
 import { GitActivityPanel } from "./projects/GitActivityPanel";
 import { GithubActivityStrip } from "./GithubActivityStrip";
+import { LauncherChips } from "./LauncherChips";
+import { useWorkflowLauncherEnabled } from "./ConfigProvider";
 import { useGithubActivity } from "@/hooks/useGithubActivity";
 import type { SessionSummary } from "@/lib/types";
 import dynamic from "next/dynamic";
@@ -204,6 +206,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
   const hasGsdPlanning = !!(project.gsdPlanning && project.gsdPlanning.totalPhases > 0);
   const hasConfigLint = !!project.configLint;
+  const launcherEnabled = useWorkflowLauncherEnabled();
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
@@ -357,6 +360,23 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           </div>
         )}
       </div>
+
+      {/* ── Quick-launch strip ──────────────────────────────────────────── */}
+      {launcherEnabled && (
+        <div style={{
+          padding: "10px 24px",
+          background: "var(--bg-surface)",
+          borderLeft: "1px solid var(--border-subtle)",
+          borderRight: "1px solid var(--border-subtle)",
+          borderTop: "1px solid var(--border-subtle)",
+        }}>
+          <LauncherChips
+            projectPath={project.path}
+            projectName={project.name}
+            label="Quick Launch"
+          />
+        </div>
+      )}
 
       {/* ── Tab section ─────────────────────────────────────────────────── */}
       <div style={{

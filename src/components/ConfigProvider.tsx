@@ -92,3 +92,20 @@ export function useBurnHudEnabled(): boolean {
   const config = useConfig();
   return getFlag(config?.featureFlags, "burnHud");
 }
+
+/**
+ * True when the `workflowLauncher` flag is on — the one-click launcher chips
+ * appear (per-project strip on the project page + a global row under the top
+ * bar). Defaults ON; toggling OFF in Settings hides both placements. Gates the
+ * client render only; the underlying POST /api/tasks path is always available.
+ */
+export function useWorkflowLauncherEnabled(): boolean {
+  const config = useConfig();
+  // This gates a *mutating* surface (the chips POST to /api/tasks), so unknown
+  // config counts as disabled: stay off during the initial `null` state and if
+  // /api/config fails, otherwise a user who turned the launcher off would still
+  // see a flash of active chips before the config resolves. Once config loads,
+  // the flag's own default-on applies.
+  if (config === null) return false;
+  return getFlag(config.featureFlags, "workflowLauncher");
+}

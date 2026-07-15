@@ -55,6 +55,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "mcp-server": "MCP Server",
   "mcp-health": "MCP Server Health",
   "burn-hud": "Burn HUD",
+  "workflow-launcher": "Workflow Launcher",
   "demo-mode": "Demo Mode",
   "keyboard-shortcuts": "Keyboard Shortcuts",
   "github-activity": "GitHub Activity",

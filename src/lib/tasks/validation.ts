@@ -17,6 +17,20 @@ import { validateCron } from "./cron";
 
 type ValidationResult = { ok: true } | { ok: false; error: string; field?: string };
 
+/**
+ * Metadata keys a caller may set through the public `POST /api/tasks` route.
+ * Restricted to the launcher's spawn-cwd + provenance. Trusted internal
+ * provenance that drives file mutations on task completion — `sourceFile`/
+ * `lineNumber` (toggles TODO.md) and `sourceType: "board-issue"`/`boardIssueId`
+ * (updates BOARD.md) — is set by internal callers (`todoDelegation`/
+ * `boardDelegation`) that bypass this validator, so it must never be accepted
+ * from a public request. `worktreePath` is deliberately absent: worktree tasks
+ * are created internally (swarms), and on this public classic/stream path a
+ * bare `worktreePath` would only set the spawn cwd, so it's rejected outright
+ * below. Everything outside this allowlist is dropped in validateCreateTask.
+ */
+const PUBLIC_METADATA_KEYS = ["projectPath", "source", "launcherId"] as const;
+
 function isTaskStatus(v: unknown): v is TaskStatus {
   return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
 }
@@ -82,6 +96,42 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
       return { error: "blockedBy must be an array of positive integers", field: "blockedBy" };
     }
   }
+  // `metadata` carries the working-directory context the spawner reads
+  // (`metadata.projectPath` / `metadata.worktreePath` → the child's cwd). It was
+  // previously dropped on this path, so a POST /api/tasks always ran in the
+  // server's cwd; the workflow launcher needs it to target a project. Accept a
+  // plain JSON object and type-check the two path keys the spawner consumes.
+  if (b.metadata !== undefined && b.metadata !== null) {
+    if (typeof b.metadata !== "object" || Array.isArray(b.metadata)) {
+      return { error: "metadata must be a JSON object", field: "metadata" };
+    }
+    const m = b.metadata as Record<string, unknown>;
+    if (m.projectPath !== undefined && typeof m.projectPath !== "string") {
+      return { error: "metadata.projectPath must be a string", field: "metadata.projectPath" };
+    }
+    // worktreePath is not accepted on this public route: worktree tasks are
+    // created internally, and here a bare worktreePath would just steer the
+    // spawn cwd (taskCwd falls back to it), so reject its presence outright.
+    if (m.worktreePath !== undefined) {
+      return {
+        error: "metadata.worktreePath is not accepted on this route",
+        field: "metadata.worktreePath",
+      };
+    }
+  }
+
+  // Whitelist the metadata to the public allowlist (see PUBLIC_METADATA_KEYS):
+  // drop any other key so a public request can't smuggle internal provenance
+  // (e.g. sourceFile/sourceType) and trigger TODO.md/BOARD.md mutations.
+  let metadata: Record<string, unknown> | undefined;
+  if (typeof b.metadata === "object" && b.metadata !== null && !Array.isArray(b.metadata)) {
+    const src = b.metadata as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of PUBLIC_METADATA_KEYS) {
+      if (src[key] !== undefined) out[key] = src[key];
+    }
+    metadata = Object.keys(out).length > 0 ? out : undefined;
+  }
 
   return {
     title: (b.title as string).trim(),
@@ -96,6 +146,7 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
     risk_level: b.risk_level as RiskLevel | undefined,
     dry_run: typeof b.dry_run === "boolean" ? b.dry_run : undefined,
     blockedBy: Array.isArray(b.blockedBy) ? (b.blockedBy as number[]) : undefined,
+    metadata,
   };
 }
 

@@ -129,6 +129,7 @@ export const helpSlugs = [
   'mcp-server',
   'mcp-health',
   'burn-hud',
+  'workflow-launcher',
   'github-activity',
   'background',
   'commands',
