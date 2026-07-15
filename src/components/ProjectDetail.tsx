@@ -113,6 +113,13 @@ const VALID_TABS = new Set<TabKey>([
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
 
+// Session-derived analysis tabs. Hidden for projects without sessions and for
+// demo projects (their fixtures don't back the underlying JSONL). Used both to
+// build the tab bar and to redirect a deep link that targets a hidden one.
+const SESSION_ANALYSIS_TABS: ReadonlySet<TabKey> = new Set<TabKey>([
+  "hot-files", "errors", "patterns",
+]);
+
 export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -214,6 +221,17 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   // route carries a demo guard and renders a structured report.
   const isDemoProject = project.demo === true;
   const showSessionAnalysisTabs = hasSessions && !isDemoProject;
+
+  // Deep-link guard: a bookmarked/shared `?tab=hot-files|errors|patterns` (or a
+  // stale query string after enabling demo mode) still initializes activeTab to
+  // that value even when the tab button is hidden — and the content branch would
+  // otherwise render the empty panel this suppression is meant to hide. Fall
+  // back to Overview whenever the active session-analysis tab isn't shown.
+  useEffect(() => {
+    if (!showSessionAnalysisTabs && SESSION_ANALYSIS_TABS.has(activeTab)) {
+      handleTabChange("overview");
+    }
+  }, [showSessionAnalysisTabs, activeTab, handleTabChange]);
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
@@ -700,17 +718,17 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           )}
 
           {/* ── HOT FILES ────────────────────────────────────────────── */}
-          {activeTab === "hot-files" && (
+          {activeTab === "hot-files" && showSessionAnalysisTabs && (
             <HotFilesPanel slug={project.slug} />
           )}
 
           {/* ── ERRORS ───────────────────────────────────────────────── */}
-          {activeTab === "errors" && (
+          {activeTab === "errors" && showSessionAnalysisTabs && (
             <ErrorPropagationMap slug={project.slug} />
           )}
 
           {/* ── PATTERNS ─────────────────────────────────────────────── */}
-          {activeTab === "patterns" && (
+          {activeTab === "patterns" && showSessionAnalysisTabs && (
             <PatternsPanel slug={project.slug} />
           )}
 
