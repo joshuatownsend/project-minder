@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { getDb } from "@/lib/db/connection";
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { sessionId } = await params;
 
   const db = await getDb();

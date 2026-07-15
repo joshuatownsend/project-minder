@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { getDb } from "@/lib/db/connection";
 import { getSessionDetail } from "@/lib/data";
 import { distillSession } from "@/lib/llm/distill";
@@ -9,6 +10,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { sessionId } = await params;
   const body = await request.json().catch(() => ({}));
   const regenerate = body?.regenerate === true;
