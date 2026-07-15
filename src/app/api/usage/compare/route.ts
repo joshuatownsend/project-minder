@@ -4,6 +4,7 @@ import { getUsageCompare, dbModeRequested } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageComparison } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { demoMode } from "@/lib/demo/demoMode";
 
 // Period-over-period comparison for /usage (item 4a). Mirrors the
 // /api/usage route's 2-minute slot cache: the comparison runs four
@@ -41,7 +42,10 @@ export async function GET(request: NextRequest) {
   const source = params.get("source") || undefined;
 
   const requestedBackend = dbModeRequested() ? "db" : "file";
-  const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
+  // Salt with demo state so toggling the in-app `demoMode` flag invalidates the
+  // slot immediately (see the /api/usage route for the rationale).
+  const demo = (await demoMode()) ? "demo:" : "";
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
   const cached = cache.get(cacheKey);
 
   let slot: CompareCacheSlot;
@@ -54,7 +58,7 @@ export async function GET(request: NextRequest) {
   }
 
   const etag = computeETag({
-    salt: `usage-compare-v1-${slot.backend}`,
+    salt: `usage-compare-v1-${slot.backend}${demo ? "-demo" : ""}`,
     maxMtimeMs: slot.maxMtime,
     parts: [safePeriod, project ?? "", source ?? "", String(slot.cachedAt)],
   });

@@ -4,6 +4,7 @@ import { getUsage, dbModeRequested } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { demoMode } from "@/lib/demo/demoMode";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -33,7 +34,11 @@ export async function GET(request: NextRequest) {
   // — without this, a cached file-backend report could be served to a
   // db-backend caller for the rest of the 2-min TTL window.
   const requestedBackend = dbModeRequested() ? "db" : "file";
-  const cacheKey = `${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
+  // Salt the key with demo state too: toggling the in-app `demoMode` flag must
+  // invalidate the slot immediately, else the usage page serves real data after
+  // enabling (or synthetic after disabling) for the rest of the 2-min TTL.
+  const demo = (await demoMode()) ? "demo:" : "";
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
   const cached = cache.get(cacheKey);
 
   let slot: UsageCacheSlot;
@@ -54,7 +59,7 @@ export async function GET(request: NextRequest) {
   // toggles MINDER_USE_DB between server starts) invalidates client caches
   // — backends could differ on edge cases until the schema is fully aligned.
   const etag = computeETag({
-    salt: `usage-v3-${slot.backend}`,
+    salt: `usage-v3-${slot.backend}${demo ? "-demo" : ""}`,
     maxMtimeMs: slot.maxMtime,
     parts: [safePeriod, project ?? "", source ?? ""],
   });
