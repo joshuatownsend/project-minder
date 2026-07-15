@@ -5,7 +5,7 @@ import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
-import { readConfig } from "@/lib/config";
+import { readConfig, getDevRoots } from "@/lib/config";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -19,34 +19,45 @@ function isWithin(root: string, child: string): boolean {
 }
 
 /**
- * A task's `metadata.projectPath` becomes the spawned agent's cwd (`taskCwd` in
- * the spawner). Two risks are guarded here, because this commit newly threads
- * `metadata` through this public route:
- *   1. A stale/missing path silently falls back to the *server's* own directory,
- *      so an autonomous `claude -p` would run against project-minder itself.
- *   2. An arbitrary existing server directory would let any dashboard-reachable
- *      caller spawn an agent outside the configured project set.
- * So the path must exist, be a directory, and live under the configured dev
- * root (which is where every scanned project — and its worktrees — resides).
- * `worktreePath` is intentionally not checked — the worktree runner creates it.
+ * A task's cwd is derived from metadata by the spawner: `taskCwd` uses
+ * `metadata.projectPath ?? metadata.worktreePath` for classic/stream tasks. This
+ * commit newly threads `metadata` through this public route, so both keys are a
+ * potential cwd-injection sink and are guarded here:
+ *   - A stale/missing path silently falls back to the *server's* own directory,
+ *     so an autonomous `claude -p` would run against project-minder itself.
+ *   - An arbitrary existing server directory would let any dashboard-reachable
+ *     caller spawn an agent outside the configured project set.
+ * Both `projectPath` and `worktreePath`, when present, must live under one of the
+ * configured dev roots (where every scanned project and its worktrees reside).
+ * `projectPath` must additionally already exist as a directory; `worktreePath`
+ * need not (the worktree runner creates it), but the containment boundary still
+ * applies so it can't point the cwd outside the roots.
  */
 async function projectPathError(metadata: unknown): Promise<string | null> {
   if (!metadata || typeof metadata !== "object") return null;
-  const projectPath = (metadata as { projectPath?: unknown }).projectPath;
-  if (typeof projectPath !== "string" || projectPath === "") return null;
+  const { projectPath, worktreePath } = metadata as {
+    projectPath?: unknown;
+    worktreePath?: unknown;
+  };
 
-  let isDir = false;
-  try {
-    isDir = (await stat(projectPath)).isDirectory();
-  } catch {
-    return "metadata.projectPath does not exist";
-  }
-  if (!isDir) return "metadata.projectPath is not a directory";
+  const roots = getDevRoots(await readConfig());
+  const withinRoots = (p: string) => roots.length === 0 || roots.some((r) => isWithin(r, p));
 
-  const { devRoot } = await readConfig();
-  if (devRoot && !isWithin(devRoot, projectPath)) {
-    return "metadata.projectPath must be within the configured dev root";
+  if (typeof projectPath === "string" && projectPath !== "") {
+    let isDir = false;
+    try {
+      isDir = (await stat(projectPath)).isDirectory();
+    } catch {
+      return "metadata.projectPath does not exist";
+    }
+    if (!isDir) return "metadata.projectPath is not a directory";
+    if (!withinRoots(projectPath)) return "metadata.projectPath must be within a configured dev root";
   }
+
+  if (typeof worktreePath === "string" && worktreePath !== "") {
+    if (!withinRoots(worktreePath)) return "metadata.worktreePath must be within a configured dev root";
+  }
+
   return null;
 }
 
