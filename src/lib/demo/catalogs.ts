@@ -435,3 +435,111 @@ export function demoSkills(nowMs: number): SkillRow[] {
     autoCount: seed.autoCount,
   }));
 }
+
+// ── Loader parity ─────────────────────────────────────────────────────────────
+// The real catalog loaders filter by source/project/query and, for a project
+// tab, normalize the `dev-<slug>` usage key back under the route slug (so
+// `ProjectAgentsTab`/`ProjectSkillsTab`, which read `usage.projects[routeSlug]`,
+// render counts). The demo guards must apply the SAME logic or per-project tabs
+// show every agent/skill at zero. Self-contained (no scan-cache dependency): in
+// demo mode the usage slug is always `dev-<routeSlug>`.
+
+type CatalogRowLike = {
+  entry?: { source?: string; projectSlug?: string; name?: string; description?: string; pluginName?: string; category?: string };
+  usage?: { name?: string; projects: Record<string, number> };
+  catalogMissing?: boolean;
+};
+
+export function filterDemoCatalogRows<T extends CatalogRowLike>(
+  rows: T[],
+  source: string | null,
+  projectSlug: string | null,
+  query: string | null,
+): T[] {
+  let result = rows;
+
+  if (source) {
+    result = result.filter(
+      (r) => r.entry?.source === source || (source === "plugin" && r.catalogMissing),
+    );
+  }
+
+  if (projectSlug) {
+    const usageSlug = `dev-${projectSlug}`;
+    result = result.filter(
+      (r) =>
+        r.entry?.projectSlug === projectSlug ||
+        (r.usage?.projects[usageSlug] ?? 0) > 0 ||
+        (r.usage?.projects[projectSlug] ?? 0) > 0,
+    );
+    // Expose the count under the route slug so components don't need to know
+    // the usage-slug format — mirrors the real loader's normalization.
+    result = result.map((r) => {
+      if (!r.usage) return r;
+      const count = r.usage.projects[usageSlug] ?? 0;
+      if (count === 0 || r.usage.projects[projectSlug]) return r;
+      return { ...r, usage: { ...r.usage, projects: { ...r.usage.projects, [projectSlug]: count } } };
+    });
+  }
+
+  if (query) {
+    const q = query.toLowerCase();
+    result = result.filter((r) =>
+      [r.entry?.name, r.entry?.description, r.entry?.category, r.entry?.pluginName, r.usage?.name]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  }
+
+  return result;
+}
+
+// ── Detail resolvers ──────────────────────────────────────────────────────────
+// The `/api/agents/[id]` and `/api/skills/[id]` routes resolve by catalog id and
+// read the file body; demo ids aren't in the real catalog, so those routes 404
+// (and detail/expansion break) without a demo path. Synthesize a plausible body
+// from the frontmatter + description.
+
+function synthBody(
+  name: string,
+  description: string,
+  frontmatter: Record<string, unknown>,
+  kind: string,
+): string {
+  const front = ["---", ...Object.entries(frontmatter).map(([k, v]) => `${k}: ${String(v)}`), "---"];
+  return [
+    ...front,
+    "",
+    `# ${name}`,
+    "",
+    description,
+    "",
+    `## When to use`,
+    "",
+    `Invoke \`${name}\` when you need its focused capability during a session.`,
+    "",
+    `_(Demo content — this ${kind} is synthetic.)_`,
+  ].join("\n");
+}
+
+export function demoAgentDetail(
+  id: string,
+  nowMs: number,
+): { entry: AgentEntry; bodyFull: string; usage?: AgentStats } | null {
+  const row = demoAgents(nowMs).find((r) => r.entry?.id === id);
+  if (!row?.entry) return null;
+  const e = row.entry;
+  return { entry: e, bodyFull: synthBody(e.name, e.description ?? "", e.frontmatter ?? {}, "agent"), usage: row.usage };
+}
+
+export function demoSkillDetail(
+  id: string,
+  nowMs: number,
+): { entry: SkillEntry; bodyFull: string; usage?: SkillStats } | null {
+  const row = demoSkills(nowMs).find((r) => r.entry?.id === id);
+  if (!row?.entry) return null;
+  const e = row.entry;
+  return { entry: e, bodyFull: synthBody(e.name, e.description ?? "", e.frontmatter ?? {}, "skill"), usage: row.usage };
+}

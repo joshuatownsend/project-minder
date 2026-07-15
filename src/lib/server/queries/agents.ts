@@ -12,7 +12,7 @@ import type { AgentEntry } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
-import { demoAgents } from "@/lib/demo/catalogs";
+import { demoAgents, filterDemoCatalogRows } from "@/lib/demo/catalogs";
 
 /**
  * Shared `/api/agents` response computation, used by BOTH the route (client
@@ -87,7 +87,9 @@ export async function loadAgentsResponse(
   projectSlug: string | null,
   query: string | null,
 ): Promise<AgentsResponse> {
-  if (await demoMode()) return { data: demoAgents(Date.now()), backend: "file" };
+  if (await demoMode()) {
+    return { data: filterDemoCatalogRows(demoAgents(Date.now()), source, projectSlug, query), backend: "file" };
+  }
   const q = query?.toLowerCase() ?? null;
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
   const cached = getRouteCache(cacheKey);

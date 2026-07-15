@@ -13,7 +13,7 @@ import type { SkillEntry } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
-import { demoSkills } from "@/lib/demo/catalogs";
+import { demoSkills, filterDemoCatalogRows } from "@/lib/demo/catalogs";
 
 /**
  * Shared `/api/skills` response computation — the skills twin of
@@ -87,7 +87,9 @@ export async function loadSkillsResponse(
   projectSlug: string | null,
   query: string | null,
 ): Promise<SkillsResponse> {
-  if (await demoMode()) return { data: demoSkills(Date.now()), backend: "file" };
+  if (await demoMode()) {
+    return { data: filterDemoCatalogRows(demoSkills(Date.now()), source, projectSlug, query), backend: "file" };
+  }
   const q = query?.toLowerCase() ?? null;
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
   const cached = getRouteCache(cacheKey);

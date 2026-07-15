@@ -588,6 +588,15 @@ export async function getUsageCompare(
   project?: string,
   source?: string
 ): Promise<UsageCompareResult> {
+  if (await demoMode()) {
+    // Demo mode doesn't model two comparable historical windows; return a
+    // not-comparable sentinel so the Compare toggle shows a message instead of
+    // hitting SQLite (which would 500 on a machine with no index).
+    return {
+      comparison: buildNotComparable(period, "Period comparison isn't available in demo mode."),
+      meta: { backend: "file", maxMtimeMs: 0 },
+    };
+  }
   if (!dbModeRequested()) {
     return {
       comparison: buildNotComparable(
