@@ -100,6 +100,17 @@ export interface ProjectData {
   // Timestamps
   lastActivity?: string;
   scannedAt: string;
+
+  // Demo-mode marker. Set only on synthetic fixtures produced by `src/lib/demo/`
+  // so the client can distinguish a demo project from a real one on the returned
+  // payload — mirroring how `SessionDetailView` keys off `data.sessionId`
+  // ("demo-…") rather than the URL. Robust to BOTH activation paths (the
+  // `MINDER_DEMO=1` env var and the `demoMode` flag), unlike reading the
+  // client-side flag which never sees the env toggle. Used to hide the
+  // session-derived tabs (Hot Files / Errors / Patterns) whose endpoints read
+  // real `~/.claude` JSONL keyed on the fake `C:\dev\<slug>` path and so render
+  // empty in demo mode. Absent (undefined) on every real scanned project.
+  demo?: boolean;
 }
 
 export interface GsdPlanningInfo {

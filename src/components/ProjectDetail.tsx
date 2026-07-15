@@ -208,6 +208,13 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   const hasConfigLint = !!project.configLint;
   const launcherEnabled = useWorkflowLauncherEnabled();
 
+  // Hot Files / Errors / Patterns read real ~/.claude JSONL keyed on the fake
+  // C:\dev\<slug> path, so they render empty for a demo project. Hide them —
+  // mirroring SessionDetailView's demo-tab suppression. Efficiency stays: its
+  // route carries a demo guard and renders a structured report.
+  const isDemoProject = project.demo === true;
+  const showSessionAnalysisTabs = hasSessions && !isDemoProject;
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "overview",    label: "Overview" },
     { key: "context",     label: "Context" },
@@ -225,9 +232,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "agents",      label: "Agents" },
     { key: "skills",      label: "Skills" },
     ...(hasSessions ? [{ key: "efficiency"   as TabKey, label: "Efficiency"   }] : []),
-    ...(hasSessions ? [{ key: "hot-files"   as TabKey, label: "Hot Files"    }] : []),
-    ...(hasSessions ? [{ key: "errors"      as TabKey, label: "Errors"       }] : []),
-    ...(hasSessions ? [{ key: "patterns"    as TabKey, label: "Patterns"     }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "hot-files"   as TabKey, label: "Hot Files"    }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "errors"      as TabKey, label: "Errors"       }] : []),
+    ...(showSessionAnalysisTabs ? [{ key: "patterns"    as TabKey, label: "Patterns"     }] : []),
     ...(hasConfig       ? [{ key: "config"       as TabKey, label: "Config"       }] : []),
     ...(hasConfigHistory ? [{ key: "config-history" as TabKey, label: "Config History" }] : []),
     ...(hasConfigLint   ? [{ key: "config-lint"  as TabKey, label: "Config Lint"  }] : []),

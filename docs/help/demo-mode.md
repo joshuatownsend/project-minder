@@ -26,5 +26,6 @@ After toggling the Settings flag, use **Rescan** (or wait out the ~5-minute scan
 ## What it does *not* do
 
 - It's **read-only synthetic data** — no files are created, and none of your real projects, sessions, or credentials are touched or exposed.
-- Writes (toggling a real manual step, editing a board) aren't meaningful against fixtures.
+- Writes (toggling a real manual step, editing a board, launching a workflow) aren't meaningful against fixtures and are blocked with a "read-only in demo mode" notice.
+- The per-project **Hot Files**, **Errors**, and **Patterns** tabs are **hidden** for demo projects: they analyze real session JSONL keyed on the actual project path, which the fixtures don't provide, so they'd otherwise render empty. The **Efficiency** tab still renders.
 - Turn it off (unset the env var / flip the flag off) to return to your real data.
