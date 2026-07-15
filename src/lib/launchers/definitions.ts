@@ -93,7 +93,9 @@ export const LAUNCHER_WORKFLOWS: readonly LauncherWorkflow[] = [
 /** What a launcher click resolves to before it becomes a POST body. */
 export interface LauncherDispatch {
   title: string;
-  description: string;
+  /** Optional — the spawner's `buildPrompt` joins non-empty [title, description],
+   *  so skill chips omit this to send a single bare `/slug` invocation. */
+  description?: string;
   execution_mode?: ExecutionMode;
   risk_level?: RiskLevel;
   requires_approval?: boolean;
@@ -141,10 +143,11 @@ export function buildSkillDispatch(
   skill: SkillChip,
   projectPath: string,
 ): LauncherDispatch {
-  const invocation = `/${skill.slug}`;
+  // The invocation lives only in the title. The spawner's buildPrompt joins the
+  // non-empty [title, description], so carrying `/slug` in both fields would
+  // dispatch `/slug\n\n/slug` — invoking the skill twice. Leave description unset.
   return {
-    title: invocation,
-    description: invocation,
+    title: `/${skill.slug}`,
     risk_level: "low",
     metadata: {
       projectPath,

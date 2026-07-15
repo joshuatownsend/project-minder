@@ -84,12 +84,14 @@ describe("buildWorkflowDispatch", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildSkillDispatch", () => {
-  it("dispatches the bare /slug invocation with a skill: launcherId", () => {
+  it("dispatches the bare /slug invocation exactly once (title only, no description)", () => {
     // Display name differs from the slug — the invocation must use the slug
     // (the real slash token), not the prose name ("/Code Review" is invalid).
     const d = buildSkillDispatch({ slug: "code-review", name: "Code Review" }, "C:\\dev\\minder");
     expect(d.title).toBe("/code-review");
-    expect(d.description).toBe("/code-review");
+    // description is omitted so buildPrompt (title + description) doesn't send
+    // "/code-review\n\n/code-review" and invoke the skill twice.
+    expect(d.description).toBeUndefined();
     expect(d.metadata.launcherId).toBe("skill:code-review");
     expect(d.metadata.projectPath).toBe("C:\\dev\\minder");
     expect(d.metadata.source).toBe("workflow-launcher");
