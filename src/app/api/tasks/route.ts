@@ -5,8 +5,30 @@ import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
+import { stat } from "node:fs/promises";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * A task's `metadata.projectPath` becomes the spawned agent's cwd (`taskCwd` in
+ * the spawner). A stale/missing path there silently falls back to the *server's*
+ * own directory, so an autonomous `claude -p` would run against project-minder
+ * instead of the intended repo. Reject a non-existent / non-directory
+ * `projectPath` up front. (`worktreePath` is intentionally not checked — the
+ * worktree runner creates it on demand.)
+ */
+async function projectPathError(metadata: unknown): Promise<string | null> {
+  if (!metadata || typeof metadata !== "object") return null;
+  const projectPath = (metadata as { projectPath?: unknown }).projectPath;
+  if (typeof projectPath !== "string" || projectPath === "") return null;
+  try {
+    const st = await stat(projectPath);
+    if (!st.isDirectory()) return "metadata.projectPath is not a directory";
+    return null;
+  } catch {
+    return "metadata.projectPath does not exist";
+  }
+}
 
 export async function GET(request: Request): Promise<NextResponse> {
   // No initDispatcher() here: GET is read-only. Starting the dispatcher (which
@@ -57,6 +79,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         { error: validated.error, field: validated.field },
         { status: 400 }
       );
+    }
+    const pathError = await projectPathError(validated.metadata);
+    if (pathError) {
+      return NextResponse.json({ error: pathError, field: "metadata.projectPath" }, { status: 400 });
     }
     const task = await createTask(validated);
     return NextResponse.json({ task }, { status: 201 });

@@ -123,9 +123,9 @@ export function buildWorkflowDispatch(
 
 /** A user-invocable skill surfaced as a chip. */
 export interface SkillChip {
-  /** Catalog slug (stable id). */
+  /** Catalog slug — the real slash-invocation token (`/<slug>`). */
   slug: string;
-  /** The `/name` invocation token. */
+  /** Display name from frontmatter (may be prose); used only for tooltips. */
   name: string;
   description?: string;
 }
@@ -133,13 +133,15 @@ export interface SkillChip {
 /**
  * Build the dispatch payload for a skill chip. The prompt is the bare slash
  * invocation — exactly what the developer would type — so the chip runs the
- * skill against the chosen project.
+ * skill against the chosen project. The **slug** is the invocation token (a
+ * skill's frontmatter `name` may be display text like "Code Review", which
+ * would produce an invalid `/Code Review`); this matches `CatalogActionStrip`.
  */
 export function buildSkillDispatch(
   skill: SkillChip,
   projectPath: string,
 ): LauncherDispatch {
-  const invocation = `/${skill.name}`;
+  const invocation = `/${skill.slug}`;
   return {
     title: invocation,
     description: invocation,
@@ -178,6 +180,6 @@ export function selectSkillChips(
         !!e && e.userInvocable === true && e.disabled !== true && !!e.name && !!e.slug,
     )
     .map((e) => ({ slug: e.slug!, name: e.name!, description: e.description }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
     .slice(0, limit);
 }

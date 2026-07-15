@@ -92,8 +92,10 @@ export function LauncherChips({ projectPath, projectName, label }: LauncherChips
     const ctrl = new AbortController();
     fetch("/api/skills", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d: { data?: unknown }) => {
-        setSkillChips(selectSkillChips(Array.isArray(d?.data) ? (d.data as never[]) : []));
+      .then((d: unknown) => {
+        // GET /api/skills returns the SkillRow[] array directly (the route
+        // unwraps loadSkillsResponse), not an object with a `data` property.
+        setSkillChips(selectSkillChips(Array.isArray(d) ? (d as never[]) : []));
       })
       .catch(() => {
         /* offline / demo-empty / error — curated chips still render */
@@ -183,8 +185,10 @@ export function LauncherChips({ projectPath, projectName, label }: LauncherChips
   const skillTargets: ClickTarget[] = skillChips.map((s) => ({
     id: `skill:${s.slug}`,
     icon: "⚡",
-    label: `/${s.name}`,
-    title: s.description ?? `Run the /${s.name} skill on this project`,
+    // The slug is the real slash token (matches CatalogActionStrip); `name`
+    // may be display text, so it's only used as the tooltip.
+    label: `/${s.slug}`,
+    title: s.description ?? s.name ?? `Run the /${s.slug} skill on this project`,
     build: (p) => buildSkillDispatch(s, p),
   }));
 

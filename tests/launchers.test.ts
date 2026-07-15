@@ -84,8 +84,10 @@ describe("buildWorkflowDispatch", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildSkillDispatch", () => {
-  it("dispatches the bare /name invocation with a skill: launcherId", () => {
-    const d = buildSkillDispatch({ slug: "code-review", name: "code-review" }, "C:\\dev\\minder");
+  it("dispatches the bare /slug invocation with a skill: launcherId", () => {
+    // Display name differs from the slug — the invocation must use the slug
+    // (the real slash token), not the prose name ("/Code Review" is invalid).
+    const d = buildSkillDispatch({ slug: "code-review", name: "Code Review" }, "C:\\dev\\minder");
     expect(d.title).toBe("/code-review");
     expect(d.description).toBe("/code-review");
     expect(d.metadata.launcherId).toBe("skill:code-review");
