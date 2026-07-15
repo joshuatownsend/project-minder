@@ -1,5 +1,185 @@
 # Insights
 
+<!-- insight:bd96e2187946 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T15:58:27.423Z -->
+## ★ Insight
+This is the principle-of-least-authority endpoint of the seam: the route's job is to accept *intended project targets*, and "the scanned project set" is exactly that set — tighter and more meaningful than "anything under the dev root." Crucially, it's **safe to implement**: the launcher only ever sends paths that came from `/api/projects` (i.e. scanned projects), and `TaskComposer` sends no metadata at all — so no real caller breaks. The only cost is a (cached) scan-cache read in the route. That makes this a clear "implement" rather than a debatable tradeoff.
+
+---
+
+<!-- insight:51db1ab4e5ab | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T15:38:47.317Z -->
+## ★ Insight
+Round 4 is the most instructive: the metadata whitelist wasn't about the cwd at all — it's that my "accept arbitrary JSON metadata" decision let a public caller reach a *different* trusted sink (the completion hooks that write TODO.md/BOARD.md by provenance). One permissive input, two independent dangerous sinks. The lesson repeated across all four rounds: **when you widen what an untrusted boundary accepts, you have to enumerate *every* place that data lands** — cwd *and* provenance — not just the one you added it for.
+
+---
+
+<!-- insight:f36e869d3676 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T15:18:04.570Z -->
+## ★ Insight
+Worth calling out: the P1 was a real security escalation the *first* fix (mine + Copilot's) missed. Copilot said "reject non-existent paths"; I did — but Codex correctly pushed further: *existence isn't the boundary, authorization is*. Threading `metadata` through a public route is the kind of change where "does this input reach a dangerous sink?" (here: a spawn cwd) matters more than "is this input well-formed." Constraining to the dev root turns an open cwd into a bounded one. Good adversarial review earns its keep on exactly these seams.
+
+---
+
+<!-- insight:0106027d5e81 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T13:54:20.528Z -->
+## ★ Insight
+The feature turned out to hinge on a **latent bug in someone else's code path**: `validateCreateTask` silently dropped `metadata`, so *every* `POST /api/tasks` had been running in the server's own cwd regardless of what the caller sent. Only the internal `createSwarm` path could target a project directory. Fixing that one validator gap is what unlocked per-project launching — a good reminder that "add a feature" often means "finish a half-wired seam" rather than bolt on something new.
+
+---
+
+<!-- insight:fa9e72d752ec | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T13:27:34.190Z -->
+## ★ Insight
+Adding a feature flag in this codebase is a **four-file contract kept deliberately redundant**: the `FeatureFlagKey` union (types), the `FEATURE_FLAG_KEYS` array + `FEATURE_FLAG_META` (runtime), and a client hook. The union is the single source of truth — TypeScript's exhaustiveness then *forces* the array and metadata to stay in sync (a missing key won't compile), so the redundancy is compiler-enforced rather than hopeful.
+
+---
+
+<!-- insight:4eb85d3b82a8 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T13:21:59.995Z -->
+## ★ Insight
+**The metadata gap is the linchpin.** `createTask` (store) *does* persist `metadata`, and the spawner's `taskCwd()` reads `metadata.projectPath` to set the child's working directory (falling back to the server's cwd if absent). But `validateCreateTask` silently *drops* `metadata` when building its output — so today a `POST /api/tasks` can't target a project directory; only the internal `createSwarm` path can. To make a per-project launcher actually run *in that project*, I must thread `metadata` through the validator. That's a small, correct fix (the field is already documented on `CreateTaskInput`) and it's the enabler for the whole feature.
+
+---
+
+<!-- insight:f8de319f40a1 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T12:40:20.846Z -->
+## ★ Insight
+Three findings shape the design:
+- **The dispatch primitive is `POST /api/tasks`** → writes an `ops_tasks` row to `~/.minder/tasks.db`; the singleton dispatcher loop claims it within ~2–30s. So a "one-click launch" is literally one POST with a `{title, description, metadata:{projectPath}}` body. No new backend machinery needed.
+- **The existing `/api/templates` system is a red herring** — it's config/project *scaffolding* (copying agents/skills/settings between projects), not workflow prompts. Name collision only; I'll build a distinct concept and avoid the `/templates` route.
+- **`SwarmComposer` → `POST /api/swarms`** is the heavy multi-member flow. My chips are the light path: a single task, no swarm.
+
+---
+
+<!-- insight:6e9cc71f2758 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T11:55:52.625Z -->
+## ★ Insight
+The key uncertainty I'm resolving before writing any code: **there's already a `/api/templates/[slug]/apply` route**. If those "templates" are workflow/prompt templates, my launcher chips should build *on* them rather than inventing a parallel concept. If they're project-scaffolding templates (files to create), it's a name collision and I'll need a distinct concept. Designing before confirming this would risk building the wrong abstraction — hence orientation first.
+
+---
+
+<!-- insight:a1b8ad06484e | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T05:36:51.494Z -->
+## ★ Insight
+**P2:** my round-10 `buildReport([])` empty path still has `Math.max(1, …)` floors on turns/sessions, so `?source=codex` shows "1 turn, 1 session" ghost activity instead of true zeros. **P3:** my round-6 tab-hiding keyed on the *URL* `sessionId`, but `demoSessionDetail` returns a `demo-`-prefixed id even when opened by slug or via the unknown-id fallback — so the check should key on the returned `data.sessionId`, not the prop. Both are cheap, correct refinements of what I just shipped.
+
+---
+
+<!-- insight:9eba6b85e530 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T03:56:42.778Z -->
+## ★ Insight
+**Writes:** I blocked TODO/board/manual-step, but `/api/setup/[slug]` (`applySetup`) and `/api/memory/seed` (`writeMemoryFile`) are *also* scan-backed writers — using those UIs in demo would create files under fake paths, breaking the "no files created" promise. **Session tabs:** I guarded `getSessionDetail`, but `SessionDetailView` fans out to `/handoff`, `/quality`, `/orchestration`, `/concurrency-timeline`, `/agent-network`, which bypass it and 404 on demo IDs. I'll enumerate *all* remaining write routes and *all* session sub-endpoints this time, rather than get flagged incrementally.
+
+---
+
+<!-- insight:561328efc4dc | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T03:36:20.524Z -->
+## ★ Insight
+The per-project `/api/board/[slug]` GET intentionally re-reads `BOARD.md` fresh (for latest + archived support) rather than from the scan cache — so in demo mode it reads the fake `C:\dev\<slug>` path: EMPTY off-Windows (clears the fixture board `BoardTab` just rendered) or a real local `BOARD.md` on Windows. I fixed the write but not this read. Its per-slug siblings (insights, manual-steps) may share the pattern — let me check all three to head off a round 6.
+
+---
+
+<!-- insight:ca39a008cd9d | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T03:09:47.581Z -->
+## ★ Insight
+**The demo guard on `scanAllProjects()` feeds write routes too, not just readers.** A `POST` to toggle a demo project's TODO/board/manual-step resolves the slug → gets the fake `C:\dev\…` path → hands it to a file writer, which either 500s (dir doesn't exist) or — worse in principle — writes to a real dir that happens to match. My help doc *says* demo is read-only, but nothing *enforces* it. **#2:** the stats page's `__claudeUsageCache` (10-min) isn't demo-salted — same class as R2. Let me find every write route + that cache.
+
+---
+
+<!-- insight:96a71d3eeb7b | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T02:51:09.517Z -->
+## ★ Insight
+`/api/sessions/activity` (the list-mode dashboard sparklines) filters sessions by whether their re-encoded `projectPath` starts with a configured **devRoot** prefix. My demo sessions use `C:\dev\<slug>`, so on any install whose devRoot isn't `C:\dev` (a customized Windows root, or the `~/dev` default elsewhere) the demo sessions get filtered out and the sparklines go empty. It's the same lesson as R1: a downstream route re-derives scope from the fake paths. The clean fix is a demo guard that skips the devRoot filter (all fixtures are in-scope by definition).
+
+---
+
+<!-- insight:0cf8e6411810 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T02:30:54.752Z -->
+## ★ Insight
+My guards live *inside* `getUsage`/`getUsageCompare`, but the `/api/usage` routes have their own route-cache layer *above* them, keyed only by backend/period/project/source — and `/api/config` only invalidates the scan cache on a flag change. So toggling the in-app `demoMode` flag while a usage slot is warm serves stale data for up to the 2-min TTL (real data after enabling, synthetic after disabling). The env-var path is immune (set at boot), but the flag path is exactly the live-demo use case. The fix: make demo state part of the cache identity.
+
+---
+
+<!-- insight:c9f3a0ce33fc | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T02:01:20.240Z -->
+## ★ Insight
+These are exactly the edge cases a shallow demo would miss. **A:** the project routes still run *real* git checks on the fake `C:\dev\…` paths and write `{unknown,0}` back into the cached `ProjectData` — so opening a demo project *erases* its synthetic dirty badge. **B:** my catalog guards return demo rows *before* the route-slug→usage-slug normalization, so per-project Agents/Skills tabs (which read `usage.projects[routeSlug]`) show zero. **C:** `/api/usage/compare` → `getUsageCompare()` has no demo guard → hits SQLite → 500 on a no-DB machine. **D:** agent/skill *detail* endpoints 404 on demo IDs. Injecting at a data seam isn't enough when downstream routes re-enrich or re-resolve — I need to close those paths too.
+
+---
+
+<!-- insight:f67bfa379708 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T20:26:20.036Z -->
+## ★ Insight
+**P2 is a genuine mislabel I baked in.** The chip shows `worstKey` (most-utilized window) but the cap time can belong to a *different* window — a 7d window at 80% that resets before capping, next to a 5h window at 70% capping soon, renders `BURN 80% 7d cap ~…` where the cap is actually 5h. `computeBurnHeadline` already returns `capKey`; I just wasn't using it in the label. **P3:** `toLocaleTimeString` drops the date, so a 7d cap days out reads `cap ~3:40 PM` as if it were today. Both are real — I'll label the cap with its window when it differs from the headline window, and include a weekday when the cap isn't today.
+
+---
+
+<!-- insight:e7dd52624701 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T20:10:06.212Z -->
+## ★ Insight
+**A negative cache that "never expires" is fine for a page you navigate to, but wrong for a poller.** `loadQuotaClient` stores a `configured: false` result (e.g. creds missing) and returns it forever — the original comment even says "errors don't expire (user must reload)." That was correct when every caller remounted on navigation. But the HUD I just made *persistent* polls that same cache every 60s, so once the first load fails, the poll keeps handing back the stale failure and the HUD stays hidden even after the user fixes their credentials — the exact bug my own polling change introduced. Fix: give negative results a short TTL (60s, matching the server's own `FAILURE_TTL_MS`) so the poll can recover.
+
+---
+
+<!-- insight:f167f6393bae | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T19:50:23.920Z -->
+## ★ Insight
+**Codex #1/#2 are the same real issue: the opt-out only hides the chip, it doesn't stop the work.** `useQuota(60_000)` is called *before* the `if (!enabled) return null` gate — and Rules of Hooks forbid calling it conditionally — so a user who disabled `burnHud` still triggers the `/api/integrations/quota` fetch (and its Anthropic probe on cache-miss) plus a 60s poll for a hidden component. The fix is to thread an `active` flag into `useQuota` so a disabled HUD does *zero* quota work. **#3 is a cross-surface consistency bug:** I defaulted the missing `scheduleMode` to `24x7`, but Settings defaults it to something else before rendering the same chart — so default users would see different 7d projections in the two places.
+
+---
+
+<!-- insight:ffeac2bd07e4 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T19:38:17.319Z -->
+## ★ Insight
+**Comment 2 is a real correctness bug, and a subtle one.** My guard `secsLeft > total` catches a reset that's *too far out*, but not one that's already **in the past** — with a stale client cache, `reset` can be earlier than `now`, making `secsLeft` negative. That slips through the guard: `elapsed = total − secsLeft` becomes *greater* than `total`, so `computeProjectedUtilization` divides by an `elapsedFrac > 1` and produces a projection *lower* than current usage, shown next to a "resets in now" countdown. `computeCapTimeMs` was already safe (its `secsToCap >= secsLeft` check trips on negative `secsLeft`), but the projection wasn't. The clean fix is one guard in the shared `elapsedSecs` helper — it fixes both call sites at once.
+
+---
+
+<!-- insight:80ad57273fdc | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T18:58:22.008Z -->
+## ★ Insight
+**Projection source — a deliberate deviation from the TODO's wording.** The TODO says "compute a burn-rate projection from recent usage turns," but the quota **rate-limit headers are the authoritative burn signal**: `anthropic-ratelimit-unified-*-utilization` already reflects real consumption across *all* Claude clients on the account, not just what Minder happens to have indexed under `~/.claude/projects`. Re-deriving from usage turns would produce a *second* number that can visibly disagree with the rate-limit state shown right next to it. So the projection is a linear extrapolation of the authoritative utilization — the same math the existing `QuotaBurndownChart` already uses — which I'll extract into a testable pure lib.
+
+---
+
+<!-- insight:39ac85464145 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T13:44:05.115Z -->
+## ★ Insight
+The load-bearing design decision was **refusing to over-claim on stdio**. A naive port would spawn every stdio server to "check health" — but that *starts the real MCP server* with all its side effects on every dashboard poll. Instead stdio health = PATH-launchability (a pure `fs.access` walk, zero spawns), and the `probeKind` field lets the tooltip say "launchable — not probed" so the green dot doesn't lie. http/sse gets the real reachability probe because there we can observe without side effects.
+
+---
+
+<!-- insight:27bf7ec219ad | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T13:35:05.927Z -->
+## ★ Insight
+The honest design tension here is **what "health" can even mean per transport**. For `http`/`sse` I can do a real reachability probe (any HTTP response — even 401/405 — proves the server is *listening*), and `fetch` resolves on response *headers* so an SSE endpoint that holds its body open still reads as up. For `stdio` I *cannot* verify health without spawning the server (which has side effects), so the most I can honestly assert is "the command resolves on PATH" — launchability, not health. The types carry a `probeKind` so the UI never over-claims.
+
+---
+
+<!-- insight:48912194b302 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-14T02:27:52.670Z -->
+## ★ Insight
+- The two projects **converged on the same architecture** (spawn `claude -p`, parse `stream-json`, JSON-file/DB intent queue) but Minder's is the more defensible implementation: reading Anthropic's own rate-limit headers beats scraping a skill-written CSV, and a DB-backed dispatcher with worktree isolation beats a filesystem-polling daemon.
+- The dashboard's real edge isn't capability — it's **presentation density**: a single always-visible header HUD (burn %, projection, MCP dots) as the persistent "cockpit" frame. That's a UX idea, not an engineering one.
+
+---
+
+<!-- insight:b6eb2ca1feb2 | session:db7433e5-aa2e-48ca-b49d-27f9bdc7c594 | 2026-07-13T21:38:04.514Z -->
+## ★ Insight
+**The issue's stated symptom was stale — the real failure is subtler.** The current run shows the "Assert better-sqlite3 native driver loaded" step *passing* (top-level `require('better-sqlite3')` loads the JS lazily), but the **Test** step failing on `Could not locate the bindings file` when tests actually open a DB. So the native `.node` binary is genuinely missing.
+
+---
+
+<!-- insight:f7f519cdac8c | session:a0cb8a11-1b11-4956-bafb-ff103883480c | 2026-07-13T18:50:15.401Z -->
+## ★ Insight
+This screenshot is the payoff of the earlier empirical detour. The non-zero $672.27 confirms the whole chain resolved: `project.usageSlug` → `useUsage(period, "dev-project-minder")` → `/api/usage?project=…` → the aggregator's `t.projectSlug === project` filter matched. Had I trusted the intuitive `project.slug`, this panel would read "No cost recorded" — a bug that types and unit tests would never have caught, only end-to-end verification.
+
+---
+
+<!-- insight:6c0d7c064497 | session:a0cb8a11-1b11-4956-bafb-ff103883480c | 2026-07-13T18:30:22.319Z -->
+## ★ Insight
+This slug divergence is exactly the class of latent bug that surfaces only when you cross a boundary that was never crossed before. The route side and usage side each had an internally-consistent slug, so per-project *sessions*/*insights* (route-slug keyed) and the *usage dashboard's own* project filter (usage-slug keyed) both worked — but no feature had ever asked "give me usage for *this route slug*." My new Costs tab is the first, so I have to build the bridge.
+
+---
+
+<!-- insight:ebe94ce8e277 | session:a0cb8a11-1b11-4956-bafb-ff103883480c | 2026-07-13T18:20:28.570Z -->
+## ★ Insight
+The single-period-switcher choice is the low-risk one architecturally: `/api/usage?period=X` already returns `byProject` for **all** projects (the home/`/usage` views just *slice* it to 6/12). So the new dashboard is essentially "render the full `byProject` array instead of `.slice(0,6)`" — the data plumbing already exists end-to-end. The only genuinely new backend work is teaching the period vocabulary two new cutoffs.
+
+---
+
+<!-- insight:ae034b1bd236 | session:027010ff-2845-45c0-b9ed-ac55d2c33867 | 2026-07-04T18:18:54.615Z -->
+## ★ Insight
+- Handshake timeouts conflate "failed to start" with "starting slowly." Any ack that waits on data-proportional work (here, reconcile time ∝ corpus size × version-bump staleness) will eventually exceed a fixed timeout — acks should confirm *readiness to work*, not *work completed*.
+- WAL mode makes SQLite crash-safe against process death, but not against a thread being terminated inside the library: worker threads share the process's WAL-index memory, so `worker.terminate()` mid-write can leave it inconsistent — which is precisely the corruption class better-sqlite3 warns about, and FTS5 blob trees are usually the first casualty.
+
+---
+
+<!-- insight:efa1eee53a3c | session:027010ff-2845-45c0-b9ed-ac55d2c33867 | 2026-07-04T18:13:51.021Z -->
+## ★ Insight
+- SQL's `SUM()` returns `NULL` (not 0) when no rows match — a classic trap when an aggregate feeds a `NOT NULL` column. `COUNT(*)` is the only aggregate that's zero-safe by default, which is exactly why `turn_count` survived while `user_turn_count` blew up.
+- Failed transactions that don't advance a cursor create *retry storms*: the rollback preserves the exact preconditions that caused the failure, so the watcher re-fails on every file event. Durable ingest pipelines usually need either poison-file quarantine or idempotent progress on failure.
+
+---
+
 <!-- insight:e4a71c220b5f | session:027010ff-2845-45c0-b9ed-ac55d2c33867 | 2026-07-04T20:05:00.000Z -->
 ## ★ Insight
 **The bumpy-startup cascade was one design flaw wearing four costumes.** The worker's `started` ack waited on the initial reconcile — work proportional to corpus size × staleness, so a `DERIVED_VERSION` bump made the 60 s handshake timeout structurally unreachable. The timeout's "fallback" then `terminate()`d a *healthy* worker mid-better-sqlite3-write (the documented corruption vector behind the FTS5 `prompts_fts` quarantine), and the same reconcile's writer-lock pressure surfaced as `SQLITE_BUSY` 500s on OTEL ingest. Two durable lessons: (1) a readiness ack must confirm *readiness to work*, never *work completed* — any ack gated on data-proportional work eventually outgrows a fixed timeout; (2) never hard-kill a thread that owns a SQLite connection — post `stop`, grace-wait for a clean exit between transactions, terminate only as a last resort. Related: SQL `SUM()` over zero rows is `NULL` (only `COUNT` is zero-safe) — the sidechain-only subagent transcripts (`<session>/subagents/agent-*.jsonl`, new Claude Code layout, parent file no longer inlines them) hit exactly this against a `NOT NULL` column, and the rolled-back transaction preserved its own preconditions, making a permanent retry storm.
