@@ -19,14 +19,17 @@ type ValidationResult = { ok: true } | { ok: false; error: string; field?: strin
 
 /**
  * Metadata keys a caller may set through the public `POST /api/tasks` route.
- * Restricted to spawn-cwd + launcher provenance. Trusted internal provenance
- * that drives file mutations on task completion — `sourceFile`/`lineNumber`
- * (toggles TODO.md) and `sourceType: "board-issue"`/`boardIssueId` (updates
- * BOARD.md) — is set by internal callers (`todoDelegation`/`boardDelegation`)
- * that bypass this validator, so it must never be accepted from a public
- * request. Everything outside this allowlist is dropped in validateCreateTask.
+ * Restricted to the launcher's spawn-cwd + provenance. Trusted internal
+ * provenance that drives file mutations on task completion — `sourceFile`/
+ * `lineNumber` (toggles TODO.md) and `sourceType: "board-issue"`/`boardIssueId`
+ * (updates BOARD.md) — is set by internal callers (`todoDelegation`/
+ * `boardDelegation`) that bypass this validator, so it must never be accepted
+ * from a public request. `worktreePath` is deliberately absent: worktree tasks
+ * are created internally (swarms), and on this public classic/stream path a
+ * bare `worktreePath` would only set the spawn cwd, so it's rejected outright
+ * below. Everything outside this allowlist is dropped in validateCreateTask.
  */
-const PUBLIC_METADATA_KEYS = ["projectPath", "worktreePath", "source", "launcherId"] as const;
+const PUBLIC_METADATA_KEYS = ["projectPath", "source", "launcherId"] as const;
 
 function isTaskStatus(v: unknown): v is TaskStatus {
   return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
@@ -106,8 +109,14 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
     if (m.projectPath !== undefined && typeof m.projectPath !== "string") {
       return { error: "metadata.projectPath must be a string", field: "metadata.projectPath" };
     }
-    if (m.worktreePath !== undefined && typeof m.worktreePath !== "string") {
-      return { error: "metadata.worktreePath must be a string", field: "metadata.worktreePath" };
+    // worktreePath is not accepted on this public route: worktree tasks are
+    // created internally, and here a bare worktreePath would just steer the
+    // spawn cwd (taskCwd falls back to it), so reject its presence outright.
+    if (m.worktreePath !== undefined) {
+      return {
+        error: "metadata.worktreePath is not accepted on this route",
+        field: "metadata.worktreePath",
+      };
     }
   }
 

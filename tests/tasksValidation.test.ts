@@ -95,7 +95,6 @@ describe("validateCreateTask", () => {
       title: "t",
       metadata: {
         projectPath: "C:\\dev\\minder",
-        worktreePath: "C:\\dev\\minder--wt",
         source: "workflow-launcher",
         launcherId: "x",
         // dangerous internal-provenance keys — must be dropped:
@@ -109,11 +108,16 @@ describe("validateCreateTask", () => {
     if (!("error" in r)) {
       expect(r.metadata).toEqual({
         projectPath: "C:\\dev\\minder",
-        worktreePath: "C:\\dev\\minder--wt",
         source: "workflow-launcher",
         launcherId: "x",
       });
     }
+  });
+
+  it("rejects metadata.worktreePath outright (worktree tasks are created internally)", () => {
+    const r = validateCreateTask({ title: "t", metadata: { worktreePath: "C:\\dev\\minder--wt" } });
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.field).toBe("metadata.worktreePath");
   });
 
   it("drops metadata entirely when only non-whitelisted keys are present", () => {

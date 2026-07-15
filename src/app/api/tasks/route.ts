@@ -5,19 +5,11 @@ import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
-import { readConfig, getDevRoots } from "@/lib/config";
 import { scanAllProjects } from "@/lib/scanner";
 import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
 
 export const dynamic = "force-dynamic";
-
-/** True when `child` is `root` or lives under it (case-insensitive on Windows). */
-function isWithin(root: string, child: string): boolean {
-  const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
-  const rel = path.relative(norm(root), norm(child));
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
 
 /** Case-insensitive path equality on Windows (both args already resolved). */
 function samePath(a: string, b: string): boolean {
@@ -25,9 +17,9 @@ function samePath(a: string, b: string): boolean {
 }
 
 /**
- * Resolve symlinks so containment compares real targets — a symlink *under* a
- * dev root can point *outside* it. Falls back to a plain resolve when the path
- * doesn't exist yet (a worktreePath the runner will create — nothing to follow).
+ * Resolve symlinks so comparison uses the real target — a symlink *inside* a
+ * project set could otherwise point *outside* it. Falls back to a plain resolve
+ * when the path can't be resolved.
  */
 async function resolveReal(p: string): Promise<string> {
   try {
@@ -38,53 +30,33 @@ async function resolveReal(p: string): Promise<string> {
 }
 
 /**
- * A task's cwd is derived from metadata by the spawner: `taskCwd` uses
- * `metadata.projectPath ?? metadata.worktreePath` for classic/stream tasks. This
- * commit newly threads `metadata` through this public route, so both keys are a
- * potential cwd-injection sink:
- *   - `projectPath` must be one of the actual scanned projects (the set the
- *     launcher/picker exposes), resolved through symlinks — not merely an
- *     existing directory, and not any arbitrary sub-folder under a dev root.
- *   - `worktreePath` (rarely set on this public path; the worktree runner
- *     creates it, so it may not exist yet) must at least live under a configured
- *     dev root so it can't point the cwd outside the roots.
- * A stale/absent/foreign path would otherwise let the spawn fall back to the
- * server's own cwd or run an autonomous `claude -p` in an unintended directory.
+ * The spawner's `taskCwd` uses `metadata.projectPath` as the child's cwd, and
+ * this route threads `metadata` from a public request — a cwd-injection sink. So
+ * `projectPath`, when set, must be one of the actual scanned projects (the exact
+ * set the launcher/picker exposes), compared on realpath'd absolute paths so a
+ * symlink or case difference can't slip a foreign directory in. (`worktreePath`
+ * is rejected earlier, in validateCreateTask — worktree tasks are created
+ * internally, never through this public route.)
  */
 async function projectPathError(metadata: unknown): Promise<string | null> {
   if (!metadata || typeof metadata !== "object") return null;
-  const { projectPath, worktreePath } = metadata as {
-    projectPath?: unknown;
-    worktreePath?: unknown;
-  };
+  const { projectPath } = metadata as { projectPath?: unknown };
+  if (typeof projectPath !== "string" || projectPath === "") return null;
 
-  if (typeof projectPath === "string" && projectPath !== "") {
-    let isDir = false;
-    try {
-      isDir = (await stat(projectPath)).isDirectory();
-    } catch {
-      return "metadata.projectPath does not exist";
-    }
-    if (!isDir) return "metadata.projectPath is not a directory";
-
-    // Must match a scanned project (the exact set the picker exposes), compared
-    // on realpath'd absolute paths so symlinks/case can't slip a foreign dir in.
-    const real = await resolveReal(projectPath);
-    const { projects } = await scanAllProjects();
-    const known = await Promise.all(projects.map((p) => resolveReal(p.path)));
-    if (!known.some((k) => samePath(k, real))) {
-      return "metadata.projectPath must be a scanned project";
-    }
+  let isDir = false;
+  try {
+    isDir = (await stat(projectPath)).isDirectory();
+  } catch {
+    return "metadata.projectPath does not exist";
   }
+  if (!isDir) return "metadata.projectPath is not a directory";
 
-  if (typeof worktreePath === "string" && worktreePath !== "") {
-    const realRoots = await Promise.all(getDevRoots(await readConfig()).map(resolveReal));
-    const real = await resolveReal(worktreePath);
-    if (realRoots.length > 0 && !realRoots.some((r) => isWithin(r, real))) {
-      return "metadata.worktreePath must be within a configured dev root";
-    }
+  const real = await resolveReal(projectPath);
+  const { projects } = await scanAllProjects();
+  const known = await Promise.all(projects.map((p) => resolveReal(p.path)));
+  if (!known.some((k) => samePath(k, real))) {
+    return "metadata.projectPath must be a scanned project";
   }
-
   return null;
 }
 

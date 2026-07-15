@@ -101,5 +101,11 @@ export function useBurnHudEnabled(): boolean {
  */
 export function useWorkflowLauncherEnabled(): boolean {
   const config = useConfig();
-  return getFlag(config?.featureFlags, "workflowLauncher");
+  // This gates a *mutating* surface (the chips POST to /api/tasks), so unknown
+  // config counts as disabled: stay off during the initial `null` state and if
+  // /api/config fails, otherwise a user who turned the launcher off would still
+  // see a flash of active chips before the config resolves. Once config loads,
+  // the flag's own default-on applies.
+  if (config === null) return false;
+  return getFlag(config.featureFlags, "workflowLauncher");
 }
