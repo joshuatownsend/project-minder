@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { invalidateCache } from "@/lib/cache";
 import { findProjectPathBySlug } from "@/lib/projectPath";
 import { demoMode } from "@/lib/demo/demoMode";
+import { demoProjects } from "@/lib/demo/projects";
 import { scanBoardMd, scanBoardArchive } from "@/lib/scanner/boardMd";
 import {
   addIssue,
@@ -22,6 +23,18 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
+  const archived = request.nextUrl.searchParams.get("archived") === "1";
+
+  // Demo mode: this route fresh-reads BOARD.md from disk, so without a guard it
+  // would read the fake C:\dev\<slug> path (empty off-Windows, or a real local
+  // BOARD.md on Windows) and clobber the fixture board the tab already rendered.
+  // Serve the synthetic board directly; the archive lane has no fixture.
+  if (await demoMode()) {
+    if (archived) return NextResponse.json(EMPTY);
+    const p = demoProjects(Date.now()).find((dp) => dp.slug === slug);
+    return NextResponse.json(p?.board ?? EMPTY);
+  }
+
   const projectPath = await findProjectPathBySlug(slug);
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -29,7 +42,6 @@ export async function GET(
 
   // Fresh read (not the cache) so a board mutated since the last scan reflects
   // immediately. ?archived=1 serves the companion BOARD.archive.md done lane.
-  const archived = request.nextUrl.searchParams.get("archived") === "1";
   const info = archived
     ? await scanBoardArchive(projectPath)
     : await scanBoardMd(projectPath);
