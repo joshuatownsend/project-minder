@@ -24,6 +24,9 @@ import type {
 } from "./sessionSearch";
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
+import { demoMode } from "@/lib/demo/demoMode";
+import { demoSessionsList, demoSessionDetail } from "@/lib/demo/sessions";
+import { demoUsage, demoClaudeUsage, demoAgentUsage, demoSkillUsage } from "@/lib/demo/usage";
 import type { UsageReport, AgentStats, SkillStats, UsageComparison } from "@/lib/usage/types";
 import { getPeriodStart } from "@/lib/usage/periods";
 import type { Period } from "@/lib/usage/constants";
@@ -543,6 +546,7 @@ export async function getUsage(
   project?: string,
   source?: string
 ): Promise<UsageResult> {
+  if (await demoMode()) return demoUsage(period, project, Date.now());
   if (!dbModeRequested()) return runFileUsage(period, project, source);
 
   const db = await getReadyDb();
@@ -633,6 +637,7 @@ export interface SessionDetailResult {
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSessionDetail(idOrSlug: string): Promise<SessionDetailResult> {
+  if (await demoMode()) return demoSessionDetail(idOrSlug, Date.now());
   const result = await resolveSessionDetail(idOrSlug);
   // Enrich with Claude Code's own per-session metadata here in the façade —
   // above both the DB and file-parse paths AND shared by every consumer (the
@@ -747,6 +752,7 @@ export interface SessionsListResult {
  * Matches the file-parse route's existing post-cache filter pattern.
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
+  if (await demoMode()) return demoSessionsList(Date.now());
   if (!dbModeRequested()) return runFileSessionsList();
 
   const db = await getReadyDb();
@@ -811,6 +817,7 @@ export interface AgentUsageResult {
  * file-parse (no schema migration required) and merged into the stats.
  */
 export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageResult> {
+  if (await demoMode()) return demoAgentUsage(period, Date.now());
   const { computeAgentCostFromFiles } = await import("@/lib/usage/agentCost");
 
   // Per-agent cost is computed by walking sidechain JSONL turns and does
@@ -888,6 +895,7 @@ export interface SkillUsageResult {
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
+  if (await demoMode()) return demoSkillUsage(period, Date.now());
   if (!dbModeRequested()) return runFileSkillUsage(period);
 
   const db = await getReadyDb();
@@ -942,6 +950,7 @@ export interface ClaudeUsageResult {
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult> {
+  if (await demoMode()) return demoClaudeUsage(projectPaths, Date.now());
   if (!dbModeRequested()) return runFileClaudeUsage(projectPaths);
 
   const db = await getReadyDb();
@@ -1002,6 +1011,11 @@ export async function searchSessions(
   scope: SessionSearchScope = "both",
   limit?: number
 ): Promise<SessionSearchResult> {
+  // Demo mode has no FTS index; return an empty (valid) result rather than
+  // touch the DB. Prompt search over fixtures isn't needed for screenshots.
+  if (await demoMode()) {
+    return { hits: [], meta: { backend: "file" } };
+  }
   if (!dbModeRequested()) {
     return { hits: [], meta: { backend: "file" } };
   }
