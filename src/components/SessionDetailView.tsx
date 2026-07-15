@@ -940,20 +940,26 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "tools" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                <ChartBlock title="Edit Acceptance">
-                  <EditAcceptanceCard
-                    sessionId={data.sessionId}
-                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
-                  />
-                </ChartBlock>
-                <ChartBlock title="Tool Latency">
-                  <ToolLatencyCard
-                    sessionId={data.sessionId}
-                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
-                  />
-                </ChartBlock>
-              </div>
+              {/* The telemetry cards query the OTEL SQLite tables by session id;
+                  demo sessions aren't in the index (and a first-run demo has no
+                  index at all), so they'd render 500-backed error cards. Skip
+                  them for demo — the tool-usage bar chart comes from the payload. */}
+              {!isDemoSession && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                  <ChartBlock title="Edit Acceptance">
+                    <EditAcceptanceCard
+                      sessionId={data.sessionId}
+                      since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                    />
+                  </ChartBlock>
+                  <ChartBlock title="Tool Latency">
+                    <ToolLatencyCard
+                      sessionId={data.sessionId}
+                      since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                    />
+                  </ChartBlock>
+                </div>
+              )}
               <BarChart data={data.toolUsage} color="var(--accent)" maxItems={20} />
             </div>
           )}

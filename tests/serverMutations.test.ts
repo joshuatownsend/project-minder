@@ -93,6 +93,14 @@ describe("setProjectStatus", () => {
     expect(mockInvalidateCache).toHaveBeenCalledOnce();
     expect(mockInvalidateClaude).toHaveBeenCalledOnce();
   });
+
+  it("no-ops in demo mode (never persists a synthetic slug's status)", async () => {
+    process.env.MINDER_DEMO = "1";
+    await setProjectStatus("aurora-commerce", "archived");
+    expect(mockMutateConfig).not.toHaveBeenCalled();
+    expect(mockInvalidateCache).not.toHaveBeenCalled();
+    delete process.env.MINDER_DEMO;
+  });
 });
 
 // ── flag default (Settings toggle vs client gate parity) ─────────────────────
