@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { getCachedScan } from "@/lib/cache";
@@ -27,6 +28,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await params;
   const body = (await req.json()) as {
     action: "start-server" | "remove";

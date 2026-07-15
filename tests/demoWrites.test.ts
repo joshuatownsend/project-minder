@@ -6,6 +6,7 @@ vi.mock("@/lib/manualStepsWriter", () => ({ toggleStepInFile: vi.fn() }));
 
 import { toggleStepInFile } from "@/lib/manualStepsWriter";
 import { toggleManualStep, ProjectNotFoundError } from "@/lib/server/mutations/manualSteps";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 
 const writer = vi.mocked(toggleStepInFile);
 
@@ -28,5 +29,12 @@ describe("demo mode is read-only (write no-op)", () => {
     process.env.MINDER_DEMO = "1";
     await expect(toggleManualStep("no-such-project", 1)).rejects.toBeInstanceOf(ProjectNotFoundError);
     expect(writer).not.toHaveBeenCalled();
+  });
+
+  it("demoWriteBlock returns a 409 response in demo mode (guards project-path writers)", async () => {
+    process.env.MINDER_DEMO = "1";
+    const blocked = await demoWriteBlock();
+    expect(blocked).not.toBeNull();
+    expect(blocked!.status).toBe(409);
   });
 });

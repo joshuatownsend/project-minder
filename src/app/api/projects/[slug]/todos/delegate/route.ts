@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { delegateTodo } from "@/lib/tasks/todoDelegation";
 import { scanTodoMd } from "@/lib/scanner/todoMd";
 import { findProjectPathBySlug } from "@/lib/projectPath";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 type Params = { params: Promise<{ slug: string }> };
 
 export async function POST(request: Request, { params }: Params): Promise<NextResponse> {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await params;
 
   let body: unknown;

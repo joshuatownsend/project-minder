@@ -519,6 +519,11 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     [queryClient, sessionId],
   );
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  // Demo sessions (synthetic ids) exist only as the main detail payload; the
+  // deep-analysis tabs fetch secondary endpoints that resolve the id against the
+  // real JSONL/DB and 404. Hide them for demo sessions — the core tabs (timeline
+  // / tools / files / skills / subagents) come from the guarded detail payload.
+  const isDemoSession = sessionId.startsWith("demo-");
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
@@ -581,19 +586,25 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
       : []),
-    ...(data.subagentCount > 0
+    ...(data.subagentCount > 0 && !isDemoSession
       ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
       : []),
-    ...(data.subagents.length > 0
+    ...(data.subagents.length > 0 && !isDemoSession
       ? ([
           { key: "concurrency", label: "Concurrency" },
           { key: "delegation",  label: "Delegation"  },
           { key: "network",     label: "Network"     },
         ] as { key: TabKey; label: string }[])
       : []),
-    { key: "handoff",   label: "Handoff"   },
-    { key: "diagnosis", label: "Diagnosis" },
-    { key: "feedback",  label: "Feedback"  },
+    // Handoff / Diagnosis / Feedback fetch id-keyed endpoints that 404 for demo
+    // sessions — omit them there.
+    ...(!isDemoSession
+      ? ([
+          { key: "handoff",   label: "Handoff"   },
+          { key: "diagnosis", label: "Diagnosis" },
+          { key: "feedback",  label: "Feedback"  },
+        ] as { key: TabKey; label: string }[])
+      : []),
   ];
 
   const statCells = [
