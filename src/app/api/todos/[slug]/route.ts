@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan, invalidateCache } from "@/lib/cache";
 import { appendTodosToFile, toggleTodoInFile, TodoWriteError } from "@/lib/todoWriter";
+import { demoMode } from "@/lib/demo/demoMode";
 
 async function findProjectPath(slug: string): Promise<string | null> {
   let result = getCachedScan();
@@ -18,6 +19,10 @@ export async function POST(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+  // Demo projects have fake C:\dev paths — never resolve a write target to one.
+  if (await demoMode()) {
+    return NextResponse.json({ error: "Read-only in demo mode." }, { status: 409 });
+  }
   const projectPath = await findProjectPath(slug);
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -77,6 +82,10 @@ export async function PATCH(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+  // Demo projects have fake C:\dev paths — never resolve a write target to one.
+  if (await demoMode()) {
+    return NextResponse.json({ error: "Read-only in demo mode." }, { status: 409 });
+  }
   const projectPath = await findProjectPath(slug);
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });

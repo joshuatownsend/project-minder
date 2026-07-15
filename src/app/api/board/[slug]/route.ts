@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { invalidateCache } from "@/lib/cache";
 import { findProjectPathBySlug } from "@/lib/projectPath";
+import { demoMode } from "@/lib/demo/demoMode";
 import { scanBoardMd, scanBoardArchive } from "@/lib/scanner/boardMd";
 import {
   addIssue,
@@ -40,6 +41,10 @@ export async function POST(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
+  // Demo projects have fake C:\dev paths — never resolve a write target to one.
+  if (await demoMode()) {
+    return NextResponse.json({ error: "Read-only in demo mode." }, { status: 409 });
+  }
   // findProjectPathBySlug validates the slug against scanned projects; the board
   // writer canonicalizes again internally, so a worktree path can't slip through.
   const projectPath = await findProjectPathBySlug(slug);

@@ -5,7 +5,12 @@ import path from "path";
 vi.mock("@/lib/projectPath", () => ({ findProjectPathBySlug: vi.fn() }));
 vi.mock("@/lib/manualStepsWriter", () => ({ toggleStepInFile: vi.fn() }));
 vi.mock("@/lib/cache", () => ({ invalidateCache: vi.fn() }));
-vi.mock("@/lib/config", () => ({ mutateConfig: vi.fn() }));
+// readConfig is consumed by the demoMode() guard in toggleManualStep; return a
+// config with demo off so these (non-demo) cases take the real write path.
+vi.mock("@/lib/config", () => ({
+  mutateConfig: vi.fn(),
+  readConfig: vi.fn(async () => ({ featureFlags: {} })),
+}));
 vi.mock("@/app/api/claude-config/route", () => ({
   invalidateClaudeConfigRouteCache: vi.fn(),
 }));

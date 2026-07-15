@@ -3,6 +3,8 @@ import path from "path";
 import { invalidateCache } from "@/lib/cache";
 import { findProjectPathBySlug } from "@/lib/projectPath";
 import { toggleStepInFile } from "@/lib/manualStepsWriter";
+import { demoMode } from "@/lib/demo/demoMode";
+import { demoProjects } from "@/lib/demo/projects";
 import type { ManualStepsInfo } from "@/lib/types";
 
 /**
@@ -32,6 +34,15 @@ export async function toggleManualStep(
 ): Promise<ManualStepsInfo> {
   if (typeof lineNumber !== "number") {
     throw new TypeError("lineNumber must be a number");
+  }
+  // Demo mode is read-only synthetic data on fake C:\dev paths — never write.
+  // No-op the toggle and return the demo project's steps unchanged (the
+  // optimistic UI reverts to this on refetch). Covers both the POST route and
+  // the toggleManualStepAction Server Action, which both funnel through here.
+  if (await demoMode()) {
+    const p = demoProjects(Date.now()).find((dp) => dp.slug === slug);
+    if (!p) throw new ProjectNotFoundError(slug);
+    return p.manualSteps ?? { entries: [], totalSteps: 0, pendingSteps: 0, completedSteps: 0 };
   }
   const projectPath = await findProjectPathBySlug(slug);
   if (!projectPath) throw new ProjectNotFoundError(slug);
