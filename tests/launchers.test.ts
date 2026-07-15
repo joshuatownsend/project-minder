@@ -102,17 +102,25 @@ describe("buildSkillDispatch", () => {
 
 describe("selectSkillChips", () => {
   const rows = [
-    { entry: { slug: "b-skill", name: "b-skill", userInvocable: true } },
-    { entry: { slug: "a-skill", name: "a-skill", userInvocable: true } },
+    { entry: { slug: "b-skill", name: "b-skill", userInvocable: true, source: "user" } },
+    { entry: { slug: "a-skill", name: "a-skill", userInvocable: true, source: "plugin" } },
     { entry: { slug: "auto-only", name: "auto-only", userInvocable: false } }, // excluded
     { entry: { slug: "disabled", name: "disabled", userInvocable: true, disabled: true } }, // excluded
+    { entry: { slug: "proj-local", name: "proj-local", userInvocable: true, source: "project" } }, // excluded (project-local)
     { entry: undefined }, // no entry — excluded
     { entry: { slug: "", name: "", userInvocable: true } }, // empty ids — excluded
   ];
 
-  it("keeps only user-invocable, non-disabled skills with ids, sorted by name", () => {
+  it("keeps only user-invocable, non-disabled, non-project skills with ids, sorted by slug", () => {
     const chips = selectSkillChips(rows);
     expect(chips.map((c) => c.slug)).toEqual(["a-skill", "b-skill"]);
+  });
+
+  it("excludes project-local skills (they can't resolve from another project's cwd)", () => {
+    const only = selectSkillChips([
+      { entry: { slug: "deploy", name: "deploy", userInvocable: true, source: "project" } },
+    ]);
+    expect(only).toEqual([]);
   });
 
   it("caps the result at the limit", () => {

@@ -158,8 +158,11 @@ export function buildSkillDispatch(
 export const MAX_SKILL_CHIPS = 8;
 
 /**
- * Pick which catalog skills become chips: user-invocable, not disabled, sorted
- * by name, capped. Pure so the selection is unit-testable independent of fetch.
+ * Pick which catalog skills become chips: user-invocable, not disabled,
+ * **globally available** (user/plugin scope — not project-local), sorted by
+ * slug, capped. Project-local skills are excluded because a launcher dispatches
+ * a fresh `claude -p` in the chosen project's cwd, where another project's local
+ * `/deploy` can't resolve. Pure so the selection is unit-testable without fetch.
  */
 export function selectSkillChips(
   rows: Array<{
@@ -167,6 +170,7 @@ export function selectSkillChips(
       slug?: string;
       name?: string;
       description?: string;
+      source?: string;
       userInvocable?: boolean;
       disabled?: boolean;
     };
@@ -177,7 +181,12 @@ export function selectSkillChips(
     .map((r) => r.entry)
     .filter(
       (e): e is NonNullable<typeof e> =>
-        !!e && e.userInvocable === true && e.disabled !== true && !!e.name && !!e.slug,
+        !!e &&
+        e.userInvocable === true &&
+        e.disabled !== true &&
+        e.source !== "project" &&
+        !!e.name &&
+        !!e.slug,
     )
     .map((e) => ({ slug: e.slug!, name: e.name!, description: e.description }))
     .sort((a, b) => a.slug.localeCompare(b.slug))

@@ -5,29 +5,49 @@ import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
+import { readConfig } from "@/lib/config";
 import { stat } from "node:fs/promises";
+import path from "node:path";
 
 export const dynamic = "force-dynamic";
 
+/** True when `child` is `root` or lives under it (case-insensitive on Windows). */
+function isWithin(root: string, child: string): boolean {
+  const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const rel = path.relative(norm(root), norm(child));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 /**
  * A task's `metadata.projectPath` becomes the spawned agent's cwd (`taskCwd` in
- * the spawner). A stale/missing path there silently falls back to the *server's*
- * own directory, so an autonomous `claude -p` would run against project-minder
- * instead of the intended repo. Reject a non-existent / non-directory
- * `projectPath` up front. (`worktreePath` is intentionally not checked — the
- * worktree runner creates it on demand.)
+ * the spawner). Two risks are guarded here, because this commit newly threads
+ * `metadata` through this public route:
+ *   1. A stale/missing path silently falls back to the *server's* own directory,
+ *      so an autonomous `claude -p` would run against project-minder itself.
+ *   2. An arbitrary existing server directory would let any dashboard-reachable
+ *      caller spawn an agent outside the configured project set.
+ * So the path must exist, be a directory, and live under the configured dev
+ * root (which is where every scanned project — and its worktrees — resides).
+ * `worktreePath` is intentionally not checked — the worktree runner creates it.
  */
 async function projectPathError(metadata: unknown): Promise<string | null> {
   if (!metadata || typeof metadata !== "object") return null;
   const projectPath = (metadata as { projectPath?: unknown }).projectPath;
   if (typeof projectPath !== "string" || projectPath === "") return null;
+
+  let isDir = false;
   try {
-    const st = await stat(projectPath);
-    if (!st.isDirectory()) return "metadata.projectPath is not a directory";
-    return null;
+    isDir = (await stat(projectPath)).isDirectory();
   } catch {
     return "metadata.projectPath does not exist";
   }
+  if (!isDir) return "metadata.projectPath is not a directory";
+
+  const { devRoot } = await readConfig();
+  if (devRoot && !isWithin(devRoot, projectPath)) {
+    return "metadata.projectPath must be within the configured dev root";
+  }
+  return null;
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
