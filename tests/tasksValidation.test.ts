@@ -82,6 +82,36 @@ describe("validateCreateTask", () => {
     expect("error" in r).toBe(true);
     if ("error" in r) expect(r.field).toBe("requires_approval");
   });
+
+  it("threads a metadata object through (workflow launcher needs projectPath as cwd)", () => {
+    const meta = { projectPath: "C:\\dev\\minder", source: "workflow-launcher", launcherId: "review-diff" };
+    const r = validateCreateTask({ title: "t", metadata: meta });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.metadata).toEqual(meta);
+  });
+
+  it("omits metadata when absent", () => {
+    const r = validateCreateTask({ title: "t" });
+    if (!("error" in r)) expect(r.metadata).toBeUndefined();
+  });
+
+  it("rejects array metadata (must be a plain object)", () => {
+    const r = validateCreateTask({ title: "t", metadata: [1, 2] });
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.field).toBe("metadata");
+  });
+
+  it("rejects non-string metadata.projectPath", () => {
+    const r = validateCreateTask({ title: "t", metadata: { projectPath: 42 } });
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.field).toBe("metadata.projectPath");
+  });
+
+  it("treats null metadata as absent", () => {
+    const r = validateCreateTask({ title: "t", metadata: null });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.metadata).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

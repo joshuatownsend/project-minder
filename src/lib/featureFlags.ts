@@ -32,6 +32,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "serverActions",
   "liveEvents",
   "demoMode",
+  "workflowLauncher",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -304,6 +305,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     appliesAt: "scan",
     wired: true,
     defaultOn: false,
+  },
+  {
+    key: "workflowLauncher",
+    label: "Workflow launcher chips",
+    description:
+      "Shows one-click 'run this workflow' chips — a curated gallery of pre-written prompts (test & fix, review diff, tidy TODO…) plus your user-invocable skills — that dispatch a task run in a single click. Appears as a strip on each project page and a global row under the top bar (which opens a project picker). A gentler on-ramp than the full Swarm composer. Defaults ON.",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
+    defaultOn: true,
   },
 ];
 

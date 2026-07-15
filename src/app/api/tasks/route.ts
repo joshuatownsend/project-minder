@@ -4,6 +4,7 @@ import { validateCreateTask } from "@/lib/tasks/validation";
 import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,12 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // Demo mode is read-only: every project resolves to a synthetic path, so
+  // spawning a real task against it would be incoherent. Block before starting
+  // the dispatcher or writing a row.
+  const blocked = await demoWriteBlock();
+  if (blocked) return blocked;
+
   initDispatcher();
   try {
     const body = await request.json().catch(() => null);

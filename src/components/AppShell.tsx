@@ -14,6 +14,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AppSidebar } from "./AppSidebar";
 import { AppTopbar } from "./AppTopbar";
 import { ClaudeStatusBanner } from "./ClaudeStatusBanner";
+import { GlobalLauncherRow } from "./GlobalLauncherRow";
 import { ProjectScopeMenu } from "./ProjectScopeMenu";
 import { useScope } from "./ScopeProvider";
 import type { ProjectData } from "@/lib/types";
@@ -99,6 +100,7 @@ export function AppShell({ children, devRootLabel }: AppShellProps) {
           onOpenScopePicker={() => setScopeOpen(true)}
           devRootLabel={devRootLabel}
         />
+        <GlobalLauncherRow />
         <ClaudeStatusBanner />
         {children}
       </div>

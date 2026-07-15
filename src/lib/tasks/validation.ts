@@ -82,6 +82,28 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
       return { error: "blockedBy must be an array of positive integers", field: "blockedBy" };
     }
   }
+  // `metadata` carries the working-directory context the spawner reads
+  // (`metadata.projectPath` / `metadata.worktreePath` → the child's cwd). It was
+  // previously dropped on this path, so a POST /api/tasks always ran in the
+  // server's cwd; the workflow launcher needs it to target a project. Accept a
+  // plain JSON object and type-check the two path keys the spawner consumes.
+  if (b.metadata !== undefined && b.metadata !== null) {
+    if (typeof b.metadata !== "object" || Array.isArray(b.metadata)) {
+      return { error: "metadata must be a JSON object", field: "metadata" };
+    }
+    const m = b.metadata as Record<string, unknown>;
+    if (m.projectPath !== undefined && typeof m.projectPath !== "string") {
+      return { error: "metadata.projectPath must be a string", field: "metadata.projectPath" };
+    }
+    if (m.worktreePath !== undefined && typeof m.worktreePath !== "string") {
+      return { error: "metadata.worktreePath must be a string", field: "metadata.worktreePath" };
+    }
+  }
+
+  const metadata =
+    typeof b.metadata === "object" && b.metadata !== null && !Array.isArray(b.metadata)
+      ? b.metadata
+      : undefined;
 
   return {
     title: (b.title as string).trim(),
@@ -96,6 +118,7 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
     risk_level: b.risk_level as RiskLevel | undefined,
     dry_run: typeof b.dry_run === "boolean" ? b.dry_run : undefined,
     blockedBy: Array.isArray(b.blockedBy) ? (b.blockedBy as number[]) : undefined,
+    metadata,
   };
 }
 
