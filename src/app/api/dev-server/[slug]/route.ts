@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import path from "path";
 import { processManager } from "@/lib/processManager";
 import { readConfig, getDevRoots } from "@/lib/config";
@@ -46,6 +47,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await params;
 
   try {
