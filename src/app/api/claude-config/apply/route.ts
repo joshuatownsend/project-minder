@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { applyUnit } from "@/lib/template/apply";
 import {
   ApplyRequest,
@@ -10,6 +11,8 @@ const VALID_KINDS: readonly UnitKind[] = ["agent", "skill", "command", "hook", "
 const VALID_CONFLICTS: readonly ConflictPolicy[] = ["skip", "overwrite", "merge", "rename"];
 
 export async function POST(request: NextRequest) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: unknown;
   try {
     body = await request.json();

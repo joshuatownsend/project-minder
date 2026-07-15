@@ -546,7 +546,7 @@ export async function getUsage(
   project?: string,
   source?: string
 ): Promise<UsageResult> {
-  if (await demoMode()) return demoUsage(period, project, Date.now());
+  if (await demoMode()) return demoUsage(period, project, Date.now(), source);
   if (!dbModeRequested()) return runFileUsage(period, project, source);
 
   const db = await getReadyDb();

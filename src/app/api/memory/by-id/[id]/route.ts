@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { promises as fs } from "fs";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
@@ -72,6 +73,8 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { id } = await params;
   const absPath = decodeMemoryId(id);
   if (!absPath) return errorResponse("INVALID_ID", 400, "Could not decode id.");

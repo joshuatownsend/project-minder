@@ -48,6 +48,17 @@ describe("demo fixtures", () => {
     expect(demoSessionDetail("does-not-exist", NOW)).toBeTruthy();
   });
 
+  it("demoUsage returns a zeroed report for a non-claude source filter", () => {
+    // Demo fixtures are Claude-only; ?source=codex must not return the full
+    // Claude portfolio.
+    const full = demoUsage("all", undefined, NOW) as { report: { totalCost: number } };
+    const codex = demoUsage("all", undefined, NOW, "codex") as { report: { totalCost: number } };
+    const claude = demoUsage("all", undefined, NOW, "claude") as { report: { totalCost: number } };
+    expect(full.report.totalCost).toBeGreaterThan(0);
+    expect(codex.report.totalCost).toBe(0);
+    expect(claude.report.totalCost).toBe(full.report.totalCost); // "claude" == unfiltered
+  });
+
   it("demoQuota is configured so the burn HUD renders", () => {
     const q = demoQuota(NOW) as { configured?: boolean };
     expect(q.configured).toBe(true);

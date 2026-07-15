@@ -464,8 +464,15 @@ function buildReport(
 export function demoUsage(
   period: AggregatorPeriod,
   project: string | undefined,
-  nowMs: number
+  nowMs: number,
+  source?: string
 ): UsageResult {
+  // Demo fixtures are Claude-only; a non-claude source filter (?source=codex)
+  // has no data, so return a zeroed report rather than the full Claude
+  // portfolio (buildReport guards every division, so [] is safe).
+  if (source && source !== "claude") {
+    return { report: buildReport([], period, nowMs), meta: { backend: "file", maxMtimeMs: nowMs } };
+  }
   const bare = project ? project.replace(/^dev-/, "") : undefined;
   const included =
     bare && WEIGHT_OF.has(bare) ? [bare] : WEIGHTS.map((w) => w.slug);
