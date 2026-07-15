@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { promises as fs } from "fs";
 import path from "path";
 import { getCachedScan } from "@/lib/cache";
@@ -24,6 +25,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await params;
   const body = (await req.json()) as { worktreePath: string; file: "todos" | "manual-steps" | "insights" };
   const scan = getCachedScan();

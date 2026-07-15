@@ -519,6 +519,14 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     [queryClient, sessionId],
   );
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  // Demo sessions (synthetic ids) exist only as the main detail payload; the
+  // deep-analysis tabs fetch secondary endpoints that resolve the id against the
+  // real JSONL/DB and 404. Hide them for demo sessions — the core tabs (timeline
+  // / tools / files / skills / subagents) come from the guarded detail payload.
+  // Key on the RETURNED payload id, not the URL: a demo detail opened by slug —
+  // or the unknown-id fallback that serves the first fixture — has a synthetic
+  // `data.sessionId` even when the route param doesn't start with "demo-".
+  const isDemoSession = (data?.sessionId ?? sessionId).startsWith("demo-");
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
@@ -581,19 +589,25 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
       : []),
-    ...(data.subagentCount > 0
+    ...(data.subagentCount > 0 && !isDemoSession
       ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
       : []),
-    ...(data.subagents.length > 0
+    ...(data.subagents.length > 0 && !isDemoSession
       ? ([
           { key: "concurrency", label: "Concurrency" },
           { key: "delegation",  label: "Delegation"  },
           { key: "network",     label: "Network"     },
         ] as { key: TabKey; label: string }[])
       : []),
-    { key: "handoff",   label: "Handoff"   },
-    { key: "diagnosis", label: "Diagnosis" },
-    { key: "feedback",  label: "Feedback"  },
+    // Handoff / Diagnosis / Feedback fetch id-keyed endpoints that 404 for demo
+    // sessions — omit them there.
+    ...(!isDemoSession
+      ? ([
+          { key: "handoff",   label: "Handoff"   },
+          { key: "diagnosis", label: "Diagnosis" },
+          { key: "feedback",  label: "Feedback"  },
+        ] as { key: TabKey; label: string }[])
+      : []),
   ];
 
   const statCells = [
@@ -926,20 +940,26 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "tools" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                <ChartBlock title="Edit Acceptance">
-                  <EditAcceptanceCard
-                    sessionId={data.sessionId}
-                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
-                  />
-                </ChartBlock>
-                <ChartBlock title="Tool Latency">
-                  <ToolLatencyCard
-                    sessionId={data.sessionId}
-                    since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
-                  />
-                </ChartBlock>
-              </div>
+              {/* The telemetry cards query the OTEL SQLite tables by session id;
+                  demo sessions aren't in the index (and a first-run demo has no
+                  index at all), so they'd render 500-backed error cards. Skip
+                  them for demo — the tool-usage bar chart comes from the payload. */}
+              {!isDemoSession && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                  <ChartBlock title="Edit Acceptance">
+                    <EditAcceptanceCard
+                      sessionId={data.sessionId}
+                      since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                    />
+                  </ChartBlock>
+                  <ChartBlock title="Tool Latency">
+                    <ToolLatencyCard
+                      sessionId={data.sessionId}
+                      since={data.startTime ? new Date(new Date(data.startTime).getTime() - 5 * 60 * 1000).toISOString() : undefined}
+                    />
+                  </ChartBlock>
+                </div>
+              )}
               <BarChart data={data.toolUsage} color="var(--accent)" maxItems={20} />
             </div>
           )}

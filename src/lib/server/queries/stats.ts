@@ -4,6 +4,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
 import { getClaudeUsage, getSessionsList } from "@/lib/data";
+import { demoMode } from "@/lib/demo/demoMode";
 import {
   getStatsCache,
   crossCheckStats,
@@ -31,6 +32,7 @@ const globalForStats = globalThis as unknown as {
     backend: "db" | "file";
     cachedAt: number;
     maxMtime: number;
+    demo: boolean;
   };
 };
 
@@ -50,8 +52,12 @@ export async function getStatsInputs(): Promise<StatsInputs> {
     setCachedScan(result);
   }
 
+  // Salt by demo state: toggling the demoMode flag switches project sets, so a
+  // slot built in the other mode would show mixed real/synthetic usage for the
+  // 10-min TTL.
+  const demo = await demoMode();
   let cache = globalForStats.__claudeUsageCache;
-  if (!cache || Date.now() - cache.cachedAt > CLAUDE_USAGE_TTL) {
+  if (!cache || cache.demo !== demo || Date.now() - cache.cachedAt > CLAUDE_USAGE_TTL) {
     const projectPaths = result.projects.map((p) => p.path);
     const claudeUsage = await getClaudeUsage(projectPaths);
     cache = {
@@ -59,6 +65,7 @@ export async function getStatsInputs(): Promise<StatsInputs> {
       backend: claudeUsage.meta.backend,
       cachedAt: Date.now(),
       maxMtime: claudeUsage.meta.maxMtimeMs,
+      demo,
     };
     globalForStats.__claudeUsageCache = cache;
   }

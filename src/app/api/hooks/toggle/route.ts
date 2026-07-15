@@ -1,4 +1,5 @@
 import path from "path";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { NextRequest, NextResponse } from "next/server";
 import {
   disableHook,
@@ -33,6 +34,8 @@ export async function GET(): Promise<NextResponse> {
  *   500 unexpected
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

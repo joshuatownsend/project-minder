@@ -2,6 +2,7 @@ import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { getSessionsList, type SessionsListResult } from "@/lib/data";
 import { readConfig } from "@/lib/config";
+import { demoMode } from "@/lib/demo/demoMode";
 import type { SessionSummary } from "@/lib/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
@@ -24,6 +25,10 @@ export interface SessionsCacheSlot {
   // session set, captured at refresh time. Feeds the route's ETag so it only
   // rotates when session content actually changes, not on every TTL boundary.
   maxSessionMs: number;
+  // Demo state the slot was built under. A single global slot would otherwise
+  // serve real sessions after the `demoMode` flag is toggled on (or synthetic
+  // after off) until the TTL lapses.
+  demo: boolean;
 }
 
 // globalThis singleton — survives Next.js module reloads and is shared by the
@@ -46,13 +51,15 @@ export function deriveMaxSessionMs(sessions: SessionSummary[]): number {
 
 /** Warm (if stale) and return the shared sessions cache slot. */
 export async function getSessionsCacheSlot(): Promise<SessionsCacheSlot> {
+  const demo = await demoMode();
   let cache = globalForSessions.__sessionsCache;
-  if (!cache || Date.now() - cache.cachedAt > CACHE_TTL) {
+  if (!cache || cache.demo !== demo || Date.now() - cache.cachedAt > CACHE_TTL) {
     const result = await getSessionsList();
     cache = {
       result,
       cachedAt: Date.now(),
       maxSessionMs: deriveMaxSessionMs(result.sessions),
+      demo,
     };
     globalForSessions.__sessionsCache = cache;
   }
@@ -94,7 +101,11 @@ export function filterSessions(
 /** Resolve the enabled adapter set from config (route + prefetch share this). */
 export async function getEnabledAdapters(): Promise<Set<string>> {
   const config = await readConfig();
-  return new Set(config.enabledAdapters ?? ["claude"]);
+  const set = new Set(config.enabledAdapters ?? ["claude"]);
+  // Demo sessions are all source:"claude"; keep the adapter filter from dropping
+  // them when the user has disabled the Claude adapter in Settings.
+  if (await demoMode()) set.add("claude");
+  return set;
 }
 
 /**

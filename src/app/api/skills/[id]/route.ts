@@ -5,6 +5,8 @@ import { getSkillUsage } from "@/lib/data";
 import { buildSkillAliasMap } from "@/lib/indexer/canonicalize";
 import { parseUsagePeriod } from "@/lib/usage/period";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
+import { demoMode } from "@/lib/demo/demoMode";
+import { demoSkillDetail } from "@/lib/demo/catalogs";
 
 export async function GET(
   request: NextRequest,
@@ -12,6 +14,12 @@ export async function GET(
 ) {
   const { id } = await params;
   const period = parseUsagePeriod(request.nextUrl.searchParams.get("period"));
+
+  if (await demoMode()) {
+    const detail = demoSkillDetail(id, Date.now());
+    if (!detail) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ entry: detail.entry, bodyFull: detail.bodyFull, usage: detail.usage, period });
+  }
 
   const catalog = await loadCatalog({ includeProjects: true });
   const entry = catalog.skills.find((s) => s.id === id);

@@ -31,6 +31,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "rscHydration",
   "serverActions",
   "liveEvents",
+  "demoMode",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -293,6 +294,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     // so the Settings toggle reflects the on-by-default state. Toggling OFF falls
     // back to the timer-based polling path, which remains intact.
     defaultOn: true,
+  },
+  {
+    key: "demoMode",
+    label: "Demo mode (synthetic data)",
+    description:
+      "Replaces every read surface (projects, sessions, usage, board, insights, agents, skills, activity strips) with deterministic synthetic fixtures, so the dashboard looks alive without a real ~/.claude history or C:\\dev project tree — for first-run, screenshots, and demos. OFF by default. Can also be forced on with the MINDER_DEMO=1 env var.",
+    group: "active",
+    appliesAt: "scan",
+    wired: true,
+    defaultOn: false,
   },
 ];
 

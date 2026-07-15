@@ -11,6 +11,7 @@ import { classifyTurn } from "@/lib/usage/classifier";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { recordGradeSnapshot, loadGradeTrend, type GradeTrend } from "@/lib/data/gradeSnapshots";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { demoMode } from "@/lib/demo/demoMode";
 
 // On-demand per-project efficiency report. Cached on globalThis with a
 // 5-min TTL keyed by slug; cache also bypassed when the JSONL maxMtime
@@ -110,8 +111,14 @@ export async function GET(
   // self-comparison) and skipping the new day's snapshot. A single instant
   // keeps the same-day exclusion invariant intact.
   const now = new Date();
-  await recordGradeSnapshot({ slug, grade: waste.grade, counts: waste.counts }, now);
-  const trend = await loadGradeTrend(slug, waste.grade, now);
+  // Demo mode is read-only: this GET otherwise upserts a synthetic slug into the
+  // real project_grade_snapshots table. Skip the snapshot write (and the DB
+  // trend read) for demo projects; the report still renders with a null trend.
+  let trend: GradeTrend | null = null;
+  if (!(await demoMode())) {
+    await recordGradeSnapshot({ slug, grade: waste.grade, counts: waste.counts }, now);
+    trend = await loadGradeTrend(slug, waste.grade, now);
+  }
 
   const data: EfficiencyResponse = {
     slug,

@@ -6,6 +6,7 @@ import { gitStatusCache } from "@/lib/gitStatusCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
+import { demoMode } from "@/lib/demo/demoMode";
 
 export async function GET(
   _request: NextRequest,
@@ -23,6 +24,13 @@ export async function GET(
 
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  // Demo project: fake C:\dev path — return the synthetic ProjectData as-is
+  // (live git/github checks would overwrite its dirty count with unknown/0 and
+  // poison the cached scan). The activity strips are served by their own guards.
+  if (await demoMode()) {
+    return NextResponse.json(project);
   }
 
   // Enrich with live git dirty status (too slow for bulk scan)

@@ -6,6 +6,7 @@ import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
+import { demoMode } from "@/lib/demo/demoMode";
 import type { MinderConfig } from "@/lib/types";
 
 let scanInProgress: Promise<void> | null = null;
@@ -13,11 +14,15 @@ let scanInProgress: Promise<void> | null = null;
 export async function GET() {
   const config = await readConfig();
   const flags = config.featureFlags;
+  // Demo projects have fake C:\dev paths — never run real git/grade/github
+  // checks against them (they'd return unknown/0 and overwrite the synthetic
+  // dirty counts in the cached ProjectData). The demo activity strips are
+  // served by the /api/git-status, /api/github-activity route guards instead.
+  const isDemo = await demoMode();
   const cached = getCachedScan();
 
   if (cached) {
-    // Enrich with any cached dirty status and kick off background checks
-    enrichAndEnqueue(cached.projects, flags);
+    if (!isDemo) enrichAndEnqueue(cached.projects, flags);
     return NextResponse.json(cached);
   }
 
@@ -36,7 +41,7 @@ export async function GET() {
 
   const result = getCachedScan();
   if (result) {
-    enrichAndEnqueue(result.projects, flags);
+    if (!isDemo) enrichAndEnqueue(result.projects, flags);
     return NextResponse.json(result);
   }
 

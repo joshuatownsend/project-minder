@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import path from "path";
 import { NextResponse, type NextRequest } from "next/server";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
@@ -100,6 +101,8 @@ async function attachConflict(
 }
 
 export async function POST(request: NextRequest) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: PromoteRequest;
   try {
     body = (await request.json()) as PromoteRequest;

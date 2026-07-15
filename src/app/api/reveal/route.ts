@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -23,6 +24,8 @@ function isPathAllowed(targetPath: string, allowedRoots: string[]): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: { path?: string };
   try {
     body = await request.json();

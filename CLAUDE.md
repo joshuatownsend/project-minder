@@ -10,6 +10,11 @@ Project: **Project Minder** — local-only dashboard that auto-scans `C:\dev\*` 
   filesystem remains the source of truth; the DB is a derived, rebuildable index.
   User prefs live in `.minder.json`. Set `MINDER_USE_DB=0` to disable the DB and fall
   back to direct JSONL parsing.
+- **Demo mode**: set `MINDER_DEMO=1` (or the default-off `demoMode` feature flag) to serve
+  deterministic synthetic fixtures for every read surface (projects/sessions/usage/board/
+  insights/agents/skills/activity) — for first-run, screenshots, and demos. Fixtures live in
+  `src/lib/demo/`; guards sit above the DB/file branch at `scanAllProjects`, the `data/index.ts`
+  façade, the catalog loaders, and the activity-strip routes.
 - **Dev port: 4100** — Turbopack is the default bundler in Next.js 16
 
 ## Commands

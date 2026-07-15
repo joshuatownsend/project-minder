@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import path from "path";
 import { readConfig } from "@/lib/config";
 import { bootstrapNewProject } from "@/lib/template/bootstrap";
@@ -34,6 +35,8 @@ export interface NewProjectResponse {
 }
 
 export async function POST(req: NextRequest) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: unknown;
   try {
     body = await req.json();

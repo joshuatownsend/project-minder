@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import {
   ApplyTarget,
   ApplyTemplateRequest,
@@ -9,6 +10,8 @@ import { applyTemplate } from "@/lib/template/applyTemplate";
 const VALID_CONFLICTS: readonly ConflictPolicy[] = ["skip", "overwrite", "merge", "rename"];
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
   let body: unknown;
   try {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import {
   TemplateUnitInventory,
   TemplateUnitRef,
@@ -28,6 +29,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: unknown;
   try {
     body = await request.json();

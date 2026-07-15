@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { promises as fs } from "fs";
 import path from "path";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
@@ -82,6 +83,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await params;
 
   const project = await resolveProject(slug);

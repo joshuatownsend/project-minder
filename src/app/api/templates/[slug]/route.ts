@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { readConfig } from "@/lib/config";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
@@ -27,6 +28,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: stri
 }
 
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
   const config = await readConfig();
   await deleteTemplate(config, slug);
@@ -37,6 +40,8 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ slug: s
  *  template into a snapshot. Future fields (rename, edit description, edit
  *  unit selection) can extend the action union. */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
   let body: unknown;
   try {

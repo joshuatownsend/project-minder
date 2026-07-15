@@ -4,6 +4,8 @@ import { getFlag } from "@/lib/featureFlags";
 import { getUserConfig } from "@/lib/userConfigCache";
 import { mcpHealthCache, serverIdentity } from "@/lib/mcpHealthCache";
 import { mcpConfigWatcher } from "@/lib/mcpConfigWatcher";
+import { demoMode } from "@/lib/demo/demoMode";
+import { demoMcpHealth } from "@/lib/demo/activity";
 import type { McpHealth } from "@/lib/types";
 
 /**
@@ -17,6 +19,10 @@ import type { McpHealth } from "@/lib/types";
  * while probes are in flight; the client polls faster while `pending > 0`.
  */
 export async function GET() {
+  if (await demoMode()) {
+    const servers = demoMcpHealth(Date.now());
+    return NextResponse.json({ enabled: true, servers, pending: 0, total: Object.keys(servers).length });
+  }
   const config = await readConfig();
   if (!getFlag(config.featureFlags, "mcpHealth")) {
     return NextResponse.json({ enabled: false, servers: {}, pending: 0, total: 0 });

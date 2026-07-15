@@ -1,4 +1,5 @@
 import path from "path";
+import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { NextResponse, type NextRequest } from "next/server";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
@@ -110,6 +111,8 @@ const MOVERS: Record<
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const __demoBlocked = await demoWriteBlock();
+  if (__demoBlocked) return __demoBlocked;
   let body: ActionRequest;
   try {
     body = (await request.json()) as ActionRequest;
