@@ -83,11 +83,43 @@ describe("validateCreateTask", () => {
     if ("error" in r) expect(r.field).toBe("requires_approval");
   });
 
-  it("threads a metadata object through (workflow launcher needs projectPath as cwd)", () => {
+  it("threads the whitelisted metadata through (workflow launcher needs projectPath as cwd)", () => {
     const meta = { projectPath: "C:\\dev\\minder", source: "workflow-launcher", launcherId: "review-diff" };
     const r = validateCreateTask({ title: "t", metadata: meta });
     expect("error" in r).toBe(false);
     if (!("error" in r)) expect(r.metadata).toEqual(meta);
+  });
+
+  it("strips non-whitelisted metadata keys (public route can't smuggle TODO/board provenance)", () => {
+    const r = validateCreateTask({
+      title: "t",
+      metadata: {
+        projectPath: "C:\\dev\\minder",
+        worktreePath: "C:\\dev\\minder--wt",
+        source: "workflow-launcher",
+        launcherId: "x",
+        // dangerous internal-provenance keys — must be dropped:
+        sourceFile: "TODO.md",
+        lineNumber: 3,
+        sourceType: "board-issue",
+        boardIssueId: "i-1",
+      },
+    });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) {
+      expect(r.metadata).toEqual({
+        projectPath: "C:\\dev\\minder",
+        worktreePath: "C:\\dev\\minder--wt",
+        source: "workflow-launcher",
+        launcherId: "x",
+      });
+    }
+  });
+
+  it("drops metadata entirely when only non-whitelisted keys are present", () => {
+    const r = validateCreateTask({ title: "t", metadata: { sourceFile: "TODO.md", lineNumber: 1 } });
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.metadata).toBeUndefined();
   });
 
   it("omits metadata when absent", () => {

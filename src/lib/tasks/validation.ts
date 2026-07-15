@@ -17,6 +17,17 @@ import { validateCron } from "./cron";
 
 type ValidationResult = { ok: true } | { ok: false; error: string; field?: string };
 
+/**
+ * Metadata keys a caller may set through the public `POST /api/tasks` route.
+ * Restricted to spawn-cwd + launcher provenance. Trusted internal provenance
+ * that drives file mutations on task completion — `sourceFile`/`lineNumber`
+ * (toggles TODO.md) and `sourceType: "board-issue"`/`boardIssueId` (updates
+ * BOARD.md) — is set by internal callers (`todoDelegation`/`boardDelegation`)
+ * that bypass this validator, so it must never be accepted from a public
+ * request. Everything outside this allowlist is dropped in validateCreateTask.
+ */
+const PUBLIC_METADATA_KEYS = ["projectPath", "worktreePath", "source", "launcherId"] as const;
+
 function isTaskStatus(v: unknown): v is TaskStatus {
   return typeof v === "string" && (TASK_STATUSES as readonly string[]).includes(v);
 }
@@ -100,10 +111,18 @@ export function validateCreateTask(body: unknown): CreateTaskInput | { error: st
     }
   }
 
-  const metadata =
-    typeof b.metadata === "object" && b.metadata !== null && !Array.isArray(b.metadata)
-      ? b.metadata
-      : undefined;
+  // Whitelist the metadata to the public allowlist (see PUBLIC_METADATA_KEYS):
+  // drop any other key so a public request can't smuggle internal provenance
+  // (e.g. sourceFile/sourceType) and trigger TODO.md/BOARD.md mutations.
+  let metadata: Record<string, unknown> | undefined;
+  if (typeof b.metadata === "object" && b.metadata !== null && !Array.isArray(b.metadata)) {
+    const src = b.metadata as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of PUBLIC_METADATA_KEYS) {
+      if (src[key] !== undefined) out[key] = src[key];
+    }
+    metadata = Object.keys(out).length > 0 ? out : undefined;
+  }
 
   return {
     title: (b.title as string).trim(),

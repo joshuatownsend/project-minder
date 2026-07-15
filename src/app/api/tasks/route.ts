@@ -6,7 +6,7 @@ import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { readConfig, getDevRoots } from "@/lib/config";
-import { stat } from "node:fs/promises";
+import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,19 @@ function isWithin(root: string, child: string): boolean {
   const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
   const rel = path.relative(norm(root), norm(child));
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * Resolve symlinks so containment compares real targets — a symlink *under* a
+ * dev root can point *outside* it. Falls back to a plain resolve when the path
+ * doesn't exist yet (a worktreePath the runner will create — nothing to follow).
+ */
+async function resolveReal(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    return path.resolve(p);
+  }
 }
 
 /**
@@ -41,7 +54,10 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
   };
 
   const roots = getDevRoots(await readConfig());
-  const withinRoots = (p: string) => roots.length === 0 || roots.some((r) => isWithin(r, p));
+  // Resolve the roots through symlinks once so containment compares real targets.
+  const realRoots = await Promise.all(roots.map(resolveReal));
+  const withinRoots = (realP: string) =>
+    realRoots.length === 0 || realRoots.some((r) => isWithin(r, realP));
 
   if (typeof projectPath === "string" && projectPath !== "") {
     let isDir = false;
@@ -51,11 +67,13 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
       return "metadata.projectPath does not exist";
     }
     if (!isDir) return "metadata.projectPath is not a directory";
-    if (!withinRoots(projectPath)) return "metadata.projectPath must be within a configured dev root";
+    if (!withinRoots(await resolveReal(projectPath)))
+      return "metadata.projectPath must be within a configured dev root";
   }
 
   if (typeof worktreePath === "string" && worktreePath !== "") {
-    if (!withinRoots(worktreePath)) return "metadata.worktreePath must be within a configured dev root";
+    if (!withinRoots(await resolveReal(worktreePath)))
+      return "metadata.worktreePath must be within a configured dev root";
   }
 
   return null;
