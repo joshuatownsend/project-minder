@@ -209,6 +209,9 @@ function buildReport(
     0
   );
   const weightFrac = TOTAL_WEIGHT > 0 ? includedWeight / TOTAL_WEIGHT : 0;
+  // Empty included set (e.g. a non-claude ?source= filter) → true zeros, not
+  // the Math.max(1,…) display floors that keep a real portfolio off zero.
+  const atLeast1 = (n: number): number => (includedWeight === 0 ? 0 : Math.max(1, n));
 
   const days = periodDays(period);
   const chartDays = Math.min(days, 30);
@@ -220,8 +223,8 @@ function buildReport(
   const totalCost = round2(totalCostRaw);
 
   const totalTokens = Math.round(totalCost * TOKENS_PER_DOLLAR);
-  const totalTurns = Math.max(1, Math.round(totalCost * TURNS_PER_DOLLAR));
-  const totalSessions = Math.max(1, Math.round(totalTurns / 14));
+  const totalTurns = atLeast1(Math.round(totalCost * TURNS_PER_DOLLAR));
+  const totalSessions = atLeast1(Math.round(totalTurns / 14));
 
   // Daily series (oldest → newest), anchored to nowMs.
   const daily: DailyBucket[] = [];
@@ -232,7 +235,7 @@ function buildReport(
       cost,
       inputTokens: Math.round(cost * TOKENS_PER_DOLLAR * TOK.input),
       outputTokens: Math.round(cost * TOKENS_PER_DOLLAR * TOK.output),
-      turns: Math.max(1, Math.round(cost * TURNS_PER_DOLLAR)),
+      turns: atLeast1(Math.round(cost * TURNS_PER_DOLLAR)),
     });
   }
 
@@ -254,14 +257,14 @@ function buildReport(
     };
     if (m.scr !== undefined) {
       mc.selfCorrectionRate = m.scr;
-      mc.sessionsAsPrimary = Math.max(1, Math.round(totalSessions * m.frac));
+      mc.sessionsAsPrimary = atLeast1(Math.round(totalSessions * m.frac));
     }
     return mc;
   }).sort((a, b) => b.cost - a.cost);
 
   const byCategory: CategoryBreakdown[] = CATS.map((c) => ({
     category: c.category,
-    turns: Math.max(1, Math.round(totalTurns * c.frac)),
+    turns: atLeast1(Math.round(totalTurns * c.frac)),
     tokens: Math.round(totalTokens * c.frac),
     cost: round2(totalCost * c.frac),
     oneShotRate: c.osr,
@@ -276,7 +279,7 @@ function buildReport(
         projectDirName: `C--dev-${slug}`,
         tokens: Math.round(totalTokens * frac),
         cost: round2(totalCost * frac),
-        turns: Math.max(1, Math.round(totalTurns * frac)),
+        turns: atLeast1(Math.round(totalTurns * frac)),
       };
     })
     .sort((a, b) => b.cost - a.cost);
@@ -286,7 +289,7 @@ function buildReport(
       const frac =
         includedWeight > 0 ? (WEIGHT_OF.get(slug) ?? 0) / includedWeight : 0;
       const pCost = round2(totalCost * frac);
-      const pTurns = Math.max(1, Math.round(totalTurns * frac));
+      const pTurns = atLeast1(Math.round(totalTurns * frac));
       const mcpServers = PROJECT_MCP[slug] ?? [];
       const detail: ProjectDetail = {
         projectSlug: `dev-${slug}`,
@@ -296,13 +299,13 @@ function buildReport(
         categoryBreakdown: CATS.slice(0, 6).map((c) => ({
           category: c.category,
           cost: round2(pCost * c.frac),
-          turns: Math.max(1, Math.round(pTurns * c.frac)),
+          turns: atLeast1(Math.round(pTurns * c.frac)),
         })),
         topTools: TOOLS.slice(0, 5).map(
-          ([name, f]) => [name, Math.max(1, Math.round(pTurns * f))] as [string, number]
+          ([name, f]) => [name, atLeast1(Math.round(pTurns * f))] as [string, number]
         ),
         mcpServers,
-        mcpCalls: mcpServers.length > 0 ? Math.max(1, Math.round(pTurns * 0.15)) : 0,
+        mcpCalls: mcpServers.length > 0 ? atLeast1(Math.round(pTurns * 0.15)) : 0,
       };
       return detail;
     })
@@ -310,12 +313,12 @@ function buildReport(
 
   const toolTotal = Math.round(totalTurns * 2.6);
   const topTools: [string, number][] = TOOLS.map(
-    ([name, f]) => [name, Math.max(1, Math.round(toolTotal * f))] as [string, number]
+    ([name, f]) => [name, atLeast1(Math.round(toolTotal * f))] as [string, number]
   )
     .sort((a, b) => b[1] - a[1])
     .slice(0, 15);
 
-  const tt = Math.max(1, Math.round(totalTurns * 0.1));
+  const tt = atLeast1(Math.round(totalTurns * 0.1));
   const toolTransitions: ToolTransition[] = [
     { from: "Read", to: "Edit", count: Math.round(tt * 1.6) },
     { from: "Edit", to: "Bash", count: Math.round(tt * 1.2) },
@@ -335,10 +338,10 @@ function buildReport(
   const shTotal = Math.round(totalTurns * 0.9);
   const shellStats: ShellStats[] = SHELLS.map(([binary, f]) => ({
     binary,
-    count: Math.max(1, Math.round(shTotal * f)),
+    count: atLeast1(Math.round(shTotal * f)),
   })).sort((a, b) => b.count - a.count);
 
-  const mc = Math.max(1, Math.round(totalTurns * 0.2));
+  const mc = atLeast1(Math.round(totalTurns * 0.2));
   const mkServer = (server: string, tools: Record<string, number>): McpServerStats => ({
     server,
     tools,
@@ -364,7 +367,7 @@ function buildReport(
 
   // Activity aggregates: full-history in the real report (period-independent),
   // so scale only by the included project share, never by period.
-  const activityTurns = Math.max(1, Math.round(4200 * weightFrac));
+  const activityTurns = atLeast1(Math.round(4200 * weightFrac));
   const bucket = (turns: number): ActivityBucket => ({
     turns,
     cost: round2(turns * COST_PER_TURN),
@@ -398,7 +401,7 @@ function buildReport(
     });
   }
 
-  const verified = Math.max(1, Math.round(totalTurns * 0.12));
+  const verified = atLeast1(Math.round(totalTurns * 0.12));
   const oneShotTasks = Math.round(verified * 0.68);
 
   const bySource: SourceBreakdown[] = [
@@ -447,7 +450,7 @@ function buildReport(
       currentDays: 6,
       longestDays: 19,
       lastActiveDate: localDate(nowMs),
-      totalActiveDays: Math.max(1, Math.round(72 * weightFrac)),
+      totalActiveDays: atLeast1(Math.round(72 * weightFrac)),
     },
     contributionCalendar,
     bySource,

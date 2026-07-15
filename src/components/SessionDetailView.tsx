@@ -523,7 +523,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   // deep-analysis tabs fetch secondary endpoints that resolve the id against the
   // real JSONL/DB and 404. Hide them for demo sessions — the core tabs (timeline
   // / tools / files / skills / subagents) come from the guarded detail payload.
-  const isDemoSession = sessionId.startsWith("demo-");
+  // Key on the RETURNED payload id, not the URL: a demo detail opened by slug —
+  // or the unknown-id fallback that serves the first fixture — has a synthetic
+  // `data.sessionId` even when the route param doesn't start with "demo-".
+  const isDemoSession = (data?.sessionId ?? sessionId).startsWith("demo-");
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);

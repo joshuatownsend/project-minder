@@ -48,14 +48,18 @@ describe("demo fixtures", () => {
     expect(demoSessionDetail("does-not-exist", NOW)).toBeTruthy();
   });
 
-  it("demoUsage returns a zeroed report for a non-claude source filter", () => {
-    // Demo fixtures are Claude-only; ?source=codex must not return the full
-    // Claude portfolio.
-    const full = demoUsage("all", undefined, NOW) as { report: { totalCost: number } };
-    const codex = demoUsage("all", undefined, NOW, "codex") as { report: { totalCost: number } };
-    const claude = demoUsage("all", undefined, NOW, "claude") as { report: { totalCost: number } };
+  it("demoUsage returns a truly zeroed report for a non-claude source filter", () => {
+    // Demo fixtures are Claude-only; ?source=codex must return zeros — not the
+    // full Claude portfolio, and not the Math.max(1,…) display floors (which
+    // would show ghost "1 turn / 1 session" activity).
+    type R = { report: { totalCost: number; totalTurns: number; totalSessions: number } };
+    const full = demoUsage("all", undefined, NOW) as R;
+    const codex = demoUsage("all", undefined, NOW, "codex") as R;
+    const claude = demoUsage("all", undefined, NOW, "claude") as R;
     expect(full.report.totalCost).toBeGreaterThan(0);
     expect(codex.report.totalCost).toBe(0);
+    expect(codex.report.totalTurns).toBe(0); // no floor
+    expect(codex.report.totalSessions).toBe(0); // no floor
     expect(claude.report.totalCost).toBe(full.report.totalCost); // "claude" == unfiltered
   });
 
