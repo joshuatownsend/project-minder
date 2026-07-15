@@ -56,6 +56,21 @@ describe("demoProjects", () => {
     }
   });
 
+  it("orders projects freshest-activity first (matches the real scanner)", () => {
+    const ps = demoProjects(NOW);
+    for (let i = 1; i < ps.length; i++) {
+      expect((ps[i - 1].lastActivity ?? "") >= (ps[i].lastActivity ?? "")).toBe(true);
+    }
+  });
+
+  it("surfaces a coherent :3000 port conflict (both projects advertise it)", () => {
+    const r = demoScanResult(NOW);
+    const conflict = r.portConflicts.find((c) => c.port === 3000);
+    expect(conflict).toBeDefined();
+    const byPort3000 = demoProjects(NOW).filter((p) => p.devPort === 3000).map((p) => p.slug);
+    for (const slug of conflict!.projects) expect(byPort3000).toContain(slug);
+  });
+
   it("demoScanResult wraps the projects with a valid ScanResult shape", () => {
     const r = demoScanResult(NOW);
     expect(r.projects.length).toBe(demoProjects(NOW).length);

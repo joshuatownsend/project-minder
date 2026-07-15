@@ -358,7 +358,9 @@ const SEEDS: Seed[] = [
     frameworkVersion: "10.4.0",
     dependencies: ["@nestjs/core", "typeorm", "bullmq", "ioredis"],
     externalServices: ["Railway", "Redis"],
-    devPort: 3600,
+    // Deliberately collides with aurora-commerce on :3000 so demo mode shows a
+    // realistic port conflict (see DEMO_PORT_CONFLICTS).
+    devPort: 3000,
     branch: "main",
     uncommittedCount: 0,
     lastCommitMessage: "chore: bump bullmq to 5.x",
@@ -471,13 +473,19 @@ function buildProject(seed: Seed, nowMs: number): ProjectData {
   };
 }
 
-/** All demo projects, freshest-activity first. */
+/** All demo projects, freshest-activity first — matching the real scanner,
+ *  which sorts by `lastActivity` descending. ISO timestamps sort lexically. */
 export function demoProjects(nowMs: number): ProjectData[] {
-  return SEEDS.map((s) => buildProject(s, nowMs));
+  return SEEDS.map((s) => buildProject(s, nowMs)).sort((a, b) =>
+    (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),
+  );
 }
 
-/** A demo port conflict so the port-conflict indicator has something to show. */
-const DEMO_PORT_CONFLICTS: PortConflict[] = [];
+/** aurora-commerce and ledger-api both advertise :3000, so the port-conflict
+ *  indicator lights up in demo mode (their `devPort` fixtures agree). */
+const DEMO_PORT_CONFLICTS: PortConflict[] = [
+  { port: 3000, projects: ["aurora-commerce", "ledger-api"], type: "dev" },
+];
 
 /** The full `scanAllProjects()` result for demo mode. */
 export function demoScanResult(nowMs: number): ScanResult {
