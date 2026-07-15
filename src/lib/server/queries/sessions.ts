@@ -101,7 +101,11 @@ export function filterSessions(
 /** Resolve the enabled adapter set from config (route + prefetch share this). */
 export async function getEnabledAdapters(): Promise<Set<string>> {
   const config = await readConfig();
-  return new Set(config.enabledAdapters ?? ["claude"]);
+  const set = new Set(config.enabledAdapters ?? ["claude"]);
+  // Demo sessions are all source:"claude"; keep the adapter filter from dropping
+  // them when the user has disabled the Claude adapter in Settings.
+  if (await demoMode()) set.add("claude");
+  return set;
 }
 
 /**
