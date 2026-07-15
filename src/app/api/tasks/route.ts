@@ -6,6 +6,7 @@ import type { TaskListFilter } from "@/lib/tasks/types";
 import { initDispatcher } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { readConfig, getDevRoots } from "@/lib/config";
+import { scanAllProjects } from "@/lib/scanner";
 import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
 
@@ -16,6 +17,11 @@ function isWithin(root: string, child: string): boolean {
   const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
   const rel = path.relative(norm(root), norm(child));
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/** Case-insensitive path equality on Windows (both args already resolved). */
+function samePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 /**
@@ -35,16 +41,15 @@ async function resolveReal(p: string): Promise<string> {
  * A task's cwd is derived from metadata by the spawner: `taskCwd` uses
  * `metadata.projectPath ?? metadata.worktreePath` for classic/stream tasks. This
  * commit newly threads `metadata` through this public route, so both keys are a
- * potential cwd-injection sink and are guarded here:
- *   - A stale/missing path silently falls back to the *server's* own directory,
- *     so an autonomous `claude -p` would run against project-minder itself.
- *   - An arbitrary existing server directory would let any dashboard-reachable
- *     caller spawn an agent outside the configured project set.
- * Both `projectPath` and `worktreePath`, when present, must live under one of the
- * configured dev roots (where every scanned project and its worktrees reside).
- * `projectPath` must additionally already exist as a directory; `worktreePath`
- * need not (the worktree runner creates it), but the containment boundary still
- * applies so it can't point the cwd outside the roots.
+ * potential cwd-injection sink:
+ *   - `projectPath` must be one of the actual scanned projects (the set the
+ *     launcher/picker exposes), resolved through symlinks — not merely an
+ *     existing directory, and not any arbitrary sub-folder under a dev root.
+ *   - `worktreePath` (rarely set on this public path; the worktree runner
+ *     creates it, so it may not exist yet) must at least live under a configured
+ *     dev root so it can't point the cwd outside the roots.
+ * A stale/absent/foreign path would otherwise let the spawn fall back to the
+ * server's own cwd or run an autonomous `claude -p` in an unintended directory.
  */
 async function projectPathError(metadata: unknown): Promise<string | null> {
   if (!metadata || typeof metadata !== "object") return null;
@@ -52,12 +57,6 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
     projectPath?: unknown;
     worktreePath?: unknown;
   };
-
-  const roots = getDevRoots(await readConfig());
-  // Resolve the roots through symlinks once so containment compares real targets.
-  const realRoots = await Promise.all(roots.map(resolveReal));
-  const withinRoots = (realP: string) =>
-    realRoots.length === 0 || realRoots.some((r) => isWithin(r, realP));
 
   if (typeof projectPath === "string" && projectPath !== "") {
     let isDir = false;
@@ -67,13 +66,23 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
       return "metadata.projectPath does not exist";
     }
     if (!isDir) return "metadata.projectPath is not a directory";
-    if (!withinRoots(await resolveReal(projectPath)))
-      return "metadata.projectPath must be within a configured dev root";
+
+    // Must match a scanned project (the exact set the picker exposes), compared
+    // on realpath'd absolute paths so symlinks/case can't slip a foreign dir in.
+    const real = await resolveReal(projectPath);
+    const { projects } = await scanAllProjects();
+    const known = await Promise.all(projects.map((p) => resolveReal(p.path)));
+    if (!known.some((k) => samePath(k, real))) {
+      return "metadata.projectPath must be a scanned project";
+    }
   }
 
   if (typeof worktreePath === "string" && worktreePath !== "") {
-    if (!withinRoots(await resolveReal(worktreePath)))
+    const realRoots = await Promise.all(getDevRoots(await readConfig()).map(resolveReal));
+    const real = await resolveReal(worktreePath);
+    if (realRoots.length > 0 && !realRoots.some((r) => isWithin(r, real))) {
       return "metadata.worktreePath must be within a configured dev root";
+    }
   }
 
   return null;
