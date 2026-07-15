@@ -3,6 +3,8 @@ import path from "path";
 import { MinderConfig, ProjectData, PortConflict, ScanResult } from "../types";
 import { readConfig, getDevRoots } from "../config";
 import { getFlag } from "../featureFlags";
+import { demoModeEnv } from "../demo/demoMode";
+import { demoScanResult } from "../demo/projects";
 import { scanPackageJson } from "./packageJson";
 import { scanEnvFiles } from "./envFile";
 import { scanDockerCompose } from "./dockerCompose";
@@ -305,6 +307,13 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 
 export async function scanAllProjects(): Promise<ScanResult> {
   const config = await readConfig();
+  // Demo mode short-circuits the real filesystem walk with synthetic fixtures
+  // (projects + board + insights + manual-steps + ops all ride on ProjectData,
+  // so this one guard lights up every scan-cache-backed surface). Checked here,
+  // reusing the already-loaded config, so no extra read.
+  if (demoModeEnv() || getFlag(config.featureFlags, "demoMode", false)) {
+    return demoScanResult(Date.now());
+  }
   const flags = config.featureFlags;
   const devRoots = getDevRoots(config);
   const BATCH_SIZE = Math.max(1, Math.round(config.scanBatchSize ?? 10));
