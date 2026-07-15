@@ -131,6 +131,9 @@ export function LauncherChips({ projectPath, projectName, label }: LauncherChips
           return;
         }
 
+        // Let an already-mounted /tasks page refresh in place (it only fetches
+        // on mount, and "View in Tasks" is a no-op push when already there).
+        window.dispatchEvent(new CustomEvent("project-minder:tasks-changed"));
         showToast(`Launched · ${target.label}`, name ? `in ${name}` : undefined, {
           label: "View in Tasks",
           onClick: () => router.push("/tasks"),

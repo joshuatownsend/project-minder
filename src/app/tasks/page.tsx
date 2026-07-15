@@ -46,6 +46,14 @@ export default function TasksPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Refresh in place when a task is created elsewhere in the SPA (e.g. a
+  // workflow-launcher chip fired from the global row while already on /tasks).
+  useEffect(() => {
+    const onChanged = () => { void load(); };
+    window.addEventListener("project-minder:tasks-changed", onChanged);
+    return () => window.removeEventListener("project-minder:tasks-changed", onChanged);
+  }, [load]);
+
   if (loading) {
     return (
       <div className="shell-content wide">
