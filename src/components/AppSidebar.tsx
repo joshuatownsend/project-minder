@@ -391,7 +391,7 @@ function NavRow({
         <span className="label">
           {item.label}
           {item.comingSoon && (
-            <span style={{ marginLeft: 6, fontSize: 9, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <span style={{ marginLeft: 6, fontSize: 9, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: 0.5 }}>
               soon
             </span>
           )}

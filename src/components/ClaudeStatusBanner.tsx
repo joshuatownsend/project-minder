@@ -128,7 +128,7 @@ export function ClaudeStatusBanner() {
         )}
       </div>
       {isStale && (
-        <span style={{ color: "var(--text-4)", fontSize: 11, whiteSpace: "nowrap" }}>
+        <span style={{ color: "var(--text-3)", fontSize: 11, whiteSpace: "nowrap" }}>
           Last checked {ageLabel(snapshot.fetchedAt)}
         </span>
       )}

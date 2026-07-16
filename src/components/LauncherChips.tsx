@@ -64,14 +64,14 @@ const chipStyle: React.CSSProperties = {
   padding: "4px 10px",
   fontSize: "0.72rem",
   fontFamily: "var(--font-body)",
-  color: "var(--text-secondary)",
+  color: "var(--text-primary)",
   background: "var(--bg-surface)",
   border: "1px solid var(--border-subtle)",
   borderRadius: "999px",
   cursor: "pointer",
   lineHeight: 1.4,
   whiteSpace: "nowrap",
-  transition: "color 0.1s, border-color 0.1s, opacity 0.1s",
+  transition: "background-color 0.1s, border-color 0.1s, opacity 0.1s",
 };
 
 export function LauncherChips({ projectPath, projectName, label }: LauncherChipsProps) {
@@ -207,11 +207,11 @@ export function LauncherChips({ projectPath, projectName, label }: LauncherChips
         style={{ ...chipStyle, opacity: pending !== null && !busy ? 0.5 : 1, cursor: pending !== null ? "wait" : "pointer" }}
         onMouseEnter={(e) => {
           if (pending !== null) return;
-          e.currentTarget.style.color = "var(--text-primary)";
+          e.currentTarget.style.background = "var(--bg-elevated)";
           e.currentTarget.style.borderColor = "var(--border-default)";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.color = "var(--text-secondary)";
+          e.currentTarget.style.background = "var(--bg-surface)";
           e.currentTarget.style.borderColor = "var(--border-subtle)";
         }}
       >
@@ -238,7 +238,7 @@ export function LauncherChips({ projectPath, projectName, label }: LauncherChips
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
-            color: "var(--text-muted)",
+            color: "var(--text-secondary)",
             whiteSpace: "nowrap",
           }}
         >

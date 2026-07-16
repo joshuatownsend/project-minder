@@ -328,7 +328,7 @@ export default function HomePage() {
                 {" · "}<span className="live" /> {liveProject} working now
               </>
             )}
-            <span style={{ color: "var(--text-4)" }}> · {periodSubtext}</span>
+            <span style={{ color: "var(--text-3)" }}> · {periodSubtext}</span>
           </>
         }
         right={
@@ -431,7 +431,7 @@ export default function HomePage() {
                 {dbHealth?.lastError?.message && (
                   <>
                     <br />
-                    <span style={{ color: "var(--text-4)" }}>
+                    <span style={{ color: "var(--text-3)" }}>
                       Last error:{" "}
                       <span className="mono" title={dbHealth.lastError.message}>
                         {dbHealth.lastError.code ?? "ERR"}
@@ -601,7 +601,7 @@ export default function HomePage() {
                     <IndicatorDot active={(p.insights?.total ?? 0) > 0} kind="info" title={`${p.insights?.total ?? 0} insights`} />
                   </div>
                   {p.lastActivity && (
-                    <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 8 }}>{relativeTime(p.lastActivity)}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 8 }}>{relativeTime(p.lastActivity)}</div>
                   )}
                 </div>
               </Link>
