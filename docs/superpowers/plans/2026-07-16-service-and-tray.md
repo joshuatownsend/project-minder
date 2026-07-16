@@ -275,7 +275,7 @@ needed for a personal tool.
 
 | Task | Model | Depends on | Status | PR |
 |------|-------|-----------|--------|----|
-| A1 bootstrap via instrumentation.ts | Sonnet | — | ☐ not started | |
+| A1 bootstrap via instrumentation.ts | Sonnet | — | ☑ done | #281 |
 | A2 shutdown + /api/health + logging | Opus | A1 | ☐ not started | |
 | A3 per-OS autostart wrappers | Sonnet | A2 | ☐ not started | |
 | A4 docs + polish | Haiku | A3 | ☐ not started | |
