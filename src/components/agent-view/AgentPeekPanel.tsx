@@ -174,14 +174,14 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
             <section>
               <SectionLabel>
                 Hook events
-                <span style={{ color: "var(--text-4,#555)", fontWeight: 400, marginLeft: 6 }}>
+                <span style={{ color: "var(--text-3,#8a8c8f)", fontWeight: 400, marginLeft: 6 }}>
                   (last 5 min)
                 </span>
               </SectionLabel>
               {!data ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>Loading…</div>
+                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
               ) : data.hookEvents.length === 0 ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>
+                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>
                   No hook events. Enable Live Activity in Settings to see them.
                 </div>
               ) : (
@@ -191,7 +191,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
                       display: "flex", gap: 8, alignItems: "baseline",
                       fontSize: "0.65rem", fontFamily: "var(--font-mono,monospace)",
                     }}>
-                      <span style={{ color: "var(--text-4,#555)", flexShrink: 0 }}>
+                      <span style={{ color: "var(--text-3,#8a8c8f)", flexShrink: 0 }}>
                         {formatEventTime(ev.receivedAt)}
                       </span>
                       <span style={{ color: "var(--amber-text,#fbbf24)", flexShrink: 0 }}>
@@ -220,9 +220,9 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
             <section>
               <SectionLabel>Insights this session</SectionLabel>
               {!data ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)" }}>Loading…</div>
+                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
               ) : data.insightsThisSession.length === 0 ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)", lineHeight: 1.5 }}>
+                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)", lineHeight: 1.5 }}>
                   No insights captured yet. Use{" "}
                   <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>
                     ★ Insight
@@ -238,7 +238,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
                       borderRadius: 4,
                       padding: "8px 10px",
                     }}>
-                      <div style={{ fontSize: "0.55rem", color: "var(--text-4,#555)", marginBottom: 4 }}>
+                      <div style={{ fontSize: "0.55rem", color: "var(--text-3,#8a8c8f)", marginBottom: 4 }}>
                         {formatInsightDate(insight.date)}
                       </div>
                       <div style={{
@@ -270,7 +270,7 @@ function Chip({ label, value }: { label: string; value: string }) {
       border: "1px solid var(--line-soft,#222)",
       borderRadius: 4, padding: "2px 7px", fontSize: "0.6rem",
     }}>
-      <span style={{ color: "var(--text-4,#555)" }}>{label}</span>
+      <span style={{ color: "var(--text-3,#8a8c8f)" }}>{label}</span>
       <span style={{ color: "var(--text-1,#fff)", fontFamily: "var(--font-mono,monospace)" }}>{value}</span>
     </div>
   );

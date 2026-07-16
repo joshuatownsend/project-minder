@@ -154,7 +154,7 @@ export function AgentViewBoard() {
                       borderRadius: 6,
                       height: 60,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      color: "var(--text-4,#555)",
+                      color: "var(--text-3,#8a8c8f)",
                       fontSize: "0.6rem",
                     }}>
                       empty
@@ -183,7 +183,7 @@ function EmptyState({ connectionState }: { connectionState: ConnectionState }) {
       <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-2,#ccc)" }}>
         No active sessions
       </div>
-      <div style={{ fontSize: "0.7rem", color: "var(--text-4,#555)", textAlign: "center", maxWidth: 380 }}>
+      <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)", textAlign: "center", maxWidth: 380 }}>
         {isConnecting ? "Connecting to live session stream…" : (
           <>
             Start a Claude Code session in any project to see it here. Background sessions launched with{" "}

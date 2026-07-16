@@ -87,7 +87,7 @@ export function AgentCard({ session, onPeek, sessionBudgetUsd }: AgentCardProps)
         {session.worktreeLabel && (
           <span style={{
             fontSize: "0.6rem",
-            color: "var(--text-4,#555)",
+            color: "var(--text-3,#8a8c8f)",
             background: "var(--card-bg-2,#1a1a1a)",
             border: "1px solid var(--line-soft,#222)",
             borderRadius: 3,
@@ -101,7 +101,7 @@ export function AgentCard({ session, onPeek, sessionBudgetUsd }: AgentCardProps)
         {session.model && (
           <span style={{
             fontSize: "0.55rem",
-            color: "var(--text-4,#555)",
+            color: "var(--text-3,#8a8c8f)",
             fontFamily: "var(--font-mono,monospace)",
             flexShrink: 0,
           }}>
@@ -126,7 +126,7 @@ export function AgentCard({ session, onPeek, sessionBudgetUsd }: AgentCardProps)
 
       {/* Footer: age + chips */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-        <span style={{ fontSize: "0.6rem", color: "var(--text-4,#555)" }}>
+        <span style={{ fontSize: "0.6rem", color: "var(--text-3,#8a8c8f)" }}>
           {formatDurationSeconds(session.secondsSinceChange)} ago
         </span>
         <div style={{ flex: 1 }} />
