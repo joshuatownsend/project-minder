@@ -71,7 +71,7 @@ const chipStyle: React.CSSProperties = {
   cursor: "pointer",
   lineHeight: 1.4,
   whiteSpace: "nowrap",
-  transition: "color 0.1s, border-color 0.1s, opacity 0.1s",
+  transition: "background-color 0.1s, border-color 0.1s, opacity 0.1s",
 };
 
 export function LauncherChips({ projectPath, projectName, label }: LauncherChipsProps) {
