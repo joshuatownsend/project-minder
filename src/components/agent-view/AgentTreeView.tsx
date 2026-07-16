@@ -36,7 +36,7 @@ export function AgentTreeView({ sessionId }: AgentTreeViewProps) {
 
   if (loading) {
     return (
-      <div style={{ color: "var(--text-4,#555)", fontSize: "0.7rem", padding: "12px 0" }}>
+      <div style={{ color: "var(--text-3,#8a8c8f)", fontSize: "0.7rem", padding: "12px 0" }}>
         Loading sub-agent tree…
       </div>
     );
@@ -44,7 +44,7 @@ export function AgentTreeView({ sessionId }: AgentTreeViewProps) {
 
   if (error || !graph || graph.nodes.length === 0) {
     return (
-      <div style={{ color: "var(--text-4,#555)", fontSize: "0.7rem", padding: "12px 0" }}>
+      <div style={{ color: "var(--text-3,#8a8c8f)", fontSize: "0.7rem", padding: "12px 0" }}>
         {error ? "Failed to load tree." : "No sub-agent activity recorded for this session."}
       </div>
     );
@@ -119,7 +119,7 @@ function TreeNode({
           <span style={{ color: "var(--text-2,#ccc)" }}>{agentLabel}</span>
         )}
         {node.agentName && node.toolName !== node.agentName && (
-          <span style={{ color: "var(--text-4,#555)" }}>
+          <span style={{ color: "var(--text-3,#8a8c8f)" }}>
             ({node.toolName})
           </span>
         )}
@@ -133,14 +133,14 @@ function TreeNode({
             title={descOpen ? "Hide description" : "Show description"}
             style={{
               background: "none", border: "none",
-              color: "var(--text-4,#555)", cursor: "pointer",
+              color: "var(--text-3,#8a8c8f)", cursor: "pointer",
               fontSize: "0.6rem", padding: "0 2px",
             }}
           >
             ⓘ
           </button>
         )}
-        <span style={{ color: "var(--text-4,#555)", marginLeft: "auto" }}>
+        <span style={{ color: "var(--text-3,#8a8c8f)", marginLeft: "auto" }}>
           depth {node.depth}
         </span>
       </div>
