@@ -1,5 +1,9 @@
 # TODO
 
+## Service Mode + Tray App
+
+- [ ] **Execute the Service Mode + Tray App plan** — turn Minder into a persistent login-scoped service (Phase A: `instrumentation.ts` bootstrap, graceful shutdown, `/api/health`, per-OS autostart wrappers) and then a Tauri v2 tray app that owns the server as a supervised sidecar (Phase C1: tray menu, autostart, native manual-steps notifications, packaging CI). Full task breakdown with per-task model assignments (Haiku/Sonnet/Opus), dependencies, and a living status table lives in `docs/superpowers/plans/2026-07-16-service-and-tray.md` — that table is the cross-session source of truth; check tasks off there, not here. Phase B (daemon/UI split) was evaluated and deferred indefinitely.
+
 ## Housekeeping
 
 - [ ] **Capture a real worktree-overlay shot as `worktrees.png`** — *Mechanism shipped 2026-06-29; only the capture run + site swap remain.* `capture-screenshots.mjs` step 15 now self-discovers the first project with an active worktree overlay via `/api/projects` (option (a) — captures the feature in the wild) and shoots the Overview-tab **Worktrees** panel; when no worktree is active it skips without writing a file (so the site never references a missing PNG). **Remaining (needs a live worktree):** with an active `*--claude-worktrees-*` worktree present, run `pnpm capture:docs` to produce `site/screenshots/worktrees.png`, then point the `site/index.html` image at it (it currently honestly shows `todos-tab.png` at line ~105). The current capture run produces `todos-tab.png`, which honestly shows the TODOs tab. (Deferred alt — option (b): have the script `git worktree add` a throwaway demo worktree, capture, then tear it down — only worth doing if a reproducible, worktree-free capture is ever needed e.g. in CI.)
