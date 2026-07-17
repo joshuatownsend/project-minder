@@ -471,20 +471,40 @@ if (existsSync(schemaSrcPath)) {
 // the watcher falls back to sweep-only mode — but that's a silent
 // functionality downgrade (no live file-watching, periodic full
 // sweeps only) that's easy to miss since nothing errors loudly.
-step("Copying chokidar (worker's file-watching dependency, externalized from the esbuild bundle)");
-if (resolvesInsideDist("chokidar")) {
-  step("chokidar already resolves inside dist, skipping");
+// Copied via the same walkDependencyClosure as the Next backfill above —
+// NOT a single-directory copy — because pnpm's isolated store keeps
+// chokidar's own `dependencies` (readdirp, in this lockfile) as siblings
+// of the real package dir, which a lone copy would leave behind and the
+// packaged worker would MODULE_NOT_FOUND at watch time (PR #285 review).
+step("Copying chokidar + its dependency closure (worker's file-watching, externalized from the esbuild bundle)");
+const chokidarClosure = walkDependencyClosure(["chokidar"], { optional: true });
+let chokidarCopied = 0;
+for (const [name, srcDir] of chokidarClosure) {
+  if (resolvesInsideDist(name)) continue;
+  step(`Backfilling worker file-watching dependency: ${name}`);
+  copyDereferenced(srcDir, path.join(outDir, "node_modules", name));
+  chokidarCopied += 1;
+}
+if (chokidarClosure.size === 0) {
+  console.warn(
+    `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules — ` +
+      `MINDER_INDEXER_WORKER=1 will fall back to sweep-only mode (no live file-watching) ` +
+      `against this package.`
+  );
 } else {
-  try {
-    const chokidarDir = resolvePackageDir("chokidar", root);
-    copyDereferenced(chokidarDir, path.join(outDir, "node_modules", "chokidar"));
-  } catch (err) {
-    console.warn(
-      `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules ` +
-        `(${String(err.message).split("\n")[0]}) — MINDER_INDEXER_WORKER=1 will fall back to ` +
-        `sweep-only mode (no live file-watching) against this package.`
+  const unresolvedWatch = [...chokidarClosure.keys()].filter((name) => !resolvesInsideDist(name));
+  if (unresolvedWatch.length > 0) {
+    fail(
+      `chokidar's dependency closure does not fully resolve inside ` +
+        `${path.relative(root, outDir)} after backfill: ${unresolvedWatch.join(", ")}. ` +
+        `The packaged worker's file-watching would MODULE_NOT_FOUND at runtime.`
     );
   }
+  step(
+    chokidarCopied > 0
+      ? `Backfilled ${chokidarCopied} file-watching package(s) (chokidar closure)`
+      : "chokidar closure already resolves inside dist, skipping"
+  );
 }
 
 // --- 4. Verify (don't assume) the better-sqlite3 native binary copied ---
