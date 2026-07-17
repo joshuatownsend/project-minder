@@ -79,10 +79,58 @@ export function shouldBootstrap(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.NODE_ENV === "production";
 }
 
+/**
+ * Pure gate for {@link installServiceLifecycle} — exported for unit testing.
+ *
+ * Process-lifecycle plumbing (OS signal handlers + the stdin control channel)
+ * must be **decoupled from the collectors opt-out**: a supervisor/tray may
+ * launch the sidecar with `MINDER_BOOTSTRAP=0` (collectors off) yet still needs
+ * graceful stop to work — otherwise Quit/Restart burns the full 6s grace window
+ * and force-kills instead of a clean shutdown. So we install the plumbing
+ * whenever collectors WOULD run (`shouldBootstrap`) OR a supervisor requested
+ * the stdin control channel (`MINDER_CONTROL_STDIN=1`) — the latter regardless
+ * of the bootstrap flag. Plain `pnpm dev` (neither) is unaffected.
+ */
+export function shouldInstallServiceLifecycle(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return shouldBootstrap(env) || env.MINDER_CONTROL_STDIN === "1";
+}
+
 /** Test-only reset hook — mirrors `claudeStatus/cache.ts`'s `_resetForTesting`. */
 export function _resetBootstrapForTesting(): void {
   delete g.__minderBootstrapped;
   delete g.__minderBootstrapStatus;
+}
+
+/**
+ * Install process-lifecycle plumbing — OS signal handlers and the opt-in stdin
+ * control channel — that must run REGARDLESS of the `MINDER_BOOTSTRAP`
+ * collectors opt-out. Called from `instrumentation-node`'s `startIngest` BEFORE
+ * `runBootstrap`, so a sidecar launched with `MINDER_BOOTSTRAP=0` still stops
+ * cleanly instead of being force-killed after the tray's 6s grace window.
+ *
+ * Gated by {@link shouldInstallServiceLifecycle} (service mode OR a supervisor
+ * present) and skipped under vitest (so the runner keeps its own SIGINT/stdin).
+ * Both installs are idempotent. Demo-mode safe: the tray never spawns a demo
+ * server and the control channel is env-opt-in, so installing this ahead of the
+ * demo gate is harmless (a demo SIGINT just runs zero disposers and exits 0).
+ */
+export async function installServiceLifecycle(): Promise<void> {
+  if (process.env.VITEST) return;
+  if (!shouldInstallServiceLifecycle()) return;
+
+  const { installSignalHandlers } = await import("@/lib/lifecycle");
+  installSignalHandlers();
+
+  try {
+    // Self-gates on MINDER_CONTROL_STDIN=1 (inert otherwise), so calling it
+    // unconditionally here is safe.
+    const { initControlChannel } = await import("@/lib/controlChannel");
+    initControlChannel();
+  } catch (err) {
+    bwarn("controlChannel: failed to init", err);
+  }
 }
 
 /**
@@ -120,24 +168,13 @@ export async function runBootstrap(): Promise<void> {
   if (!process.env.VITEST) initServiceLog();
 
   await registerServiceDisposers();
-  const { installSignalHandlers, isShuttingDown } = await import("@/lib/lifecycle");
-  // Real signal handlers are only meaningful in a running server; skip them
-  // under vitest so the test runner's own SIGINT handling stays intact.
-  if (!process.env.VITEST) installSignalHandlers();
-
-  // stdin control channel (C1): the tray app can't deliver a graceful signal to
-  // a console Node child on Windows, so it writes `shutdown\n` (or closes the
-  // pipe) to ask for a clean stop that runs the same disposers as SIGINT.
-  // Opt-in via MINDER_CONTROL_STDIN=1 (the tray sets it for spawned children);
-  // inert otherwise. Skipped under vitest so the runner keeps its own stdin.
-  if (!process.env.VITEST) {
-    try {
-      const { initControlChannel } = await import("@/lib/controlChannel");
-      initControlChannel();
-    } catch (err) {
-      bwarn("controlChannel: failed to init", err);
-    }
-  }
+  // NOTE: OS signal handlers and the stdin control channel are NOT installed
+  // here — they're installed by installServiceLifecycle() (called from
+  // instrumentation-node's startIngest BEFORE the MINDER_BOOTSTRAP gate), so
+  // graceful stop works even when a supervisor launches the sidecar with
+  // MINDER_BOOTSTRAP=0. Both installs are idempotent, so this ordering can't
+  // double-register. We still need isShuttingDown() to gate the boot steps.
+  const { isShuttingDown } = await import("@/lib/lifecycle");
 
   blog("starting service-mode boot sequence…");
 

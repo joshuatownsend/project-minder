@@ -58,6 +58,7 @@ vi.mock("@/lib/claudeStatus/cache", () => ({
 
 import {
   shouldBootstrap,
+  shouldInstallServiceLifecycle,
   runBootstrap,
   _resetBootstrapForTesting,
 } from "@/lib/bootstrap";
@@ -103,6 +104,51 @@ describe("shouldBootstrap (pure gating)", () => {
     // check runs before the "1" check, so an off-override always wins.
     expect(
       shouldBootstrap({
+        NODE_ENV: "production",
+        MINDER_BOOTSTRAP: "0",
+      } as NodeJS.ProcessEnv)
+    ).toBe(false);
+  });
+});
+
+describe("shouldInstallServiceLifecycle (lifecycle plumbing gate)", () => {
+  it("installs when collectors would run (production)", () => {
+    expect(
+      shouldInstallServiceLifecycle({ NODE_ENV: "production" } as NodeJS.ProcessEnv)
+    ).toBe(true);
+  });
+
+  it("STILL installs with MINDER_BOOTSTRAP=0 when a supervisor requested the control channel", () => {
+    // The regression this fixes: a tray-spawned sidecar with collectors opted
+    // out must still get the stdin control channel + signal handlers, so Quit
+    // triggers a clean shutdown instead of the 6s force-kill.
+    expect(
+      shouldInstallServiceLifecycle({
+        NODE_ENV: "production",
+        MINDER_BOOTSTRAP: "0",
+        MINDER_CONTROL_STDIN: "1",
+      } as NodeJS.ProcessEnv)
+    ).toBe(true);
+  });
+
+  it("installs in dev when a supervisor is present (MINDER_CONTROL_STDIN=1)", () => {
+    expect(
+      shouldInstallServiceLifecycle({
+        NODE_ENV: "development",
+        MINDER_CONTROL_STDIN: "1",
+      } as NodeJS.ProcessEnv)
+    ).toBe(true);
+  });
+
+  it("does NOT install for plain dev (no collectors, no supervisor)", () => {
+    expect(
+      shouldInstallServiceLifecycle({ NODE_ENV: "development" } as NodeJS.ProcessEnv)
+    ).toBe(false);
+  });
+
+  it("does NOT install with MINDER_BOOTSTRAP=0 and no supervisor", () => {
+    expect(
+      shouldInstallServiceLifecycle({
         NODE_ENV: "production",
         MINDER_BOOTSTRAP: "0",
       } as NodeJS.ProcessEnv)
