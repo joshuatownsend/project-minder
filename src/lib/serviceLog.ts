@@ -35,10 +35,20 @@ export const MAX_FILES = 3;
 
 interface ServiceLogState {
   active: boolean;
+  /**
+   * Running byte size of the live log file, maintained in memory so the
+   * write path doesn't statSync on every line (an extra blocking syscall
+   * per log call, ~10 of which sit directly in the boot sequence).
+   * Seeded from one statSync in {@link initServiceLog}; incremented per
+   * append; reset on rotation. If something external truncates/deletes the
+   * file mid-run the counter is stale by at most one rotation cycle —
+   * acceptable for a best-effort log ring.
+   */
+  bytes: number;
 }
 
 const g = globalThis as unknown as { __minderServiceLog?: ServiceLogState };
-if (!g.__minderServiceLog) g.__minderServiceLog = { active: false };
+if (!g.__minderServiceLog) g.__minderServiceLog = { active: false, bytes: 0 };
 const state = g.__minderServiceLog;
 
 /** Turn on file logging (called by the bootstrap when it runs). Idempotent. */
@@ -47,6 +57,11 @@ export function initServiceLog(): void {
     fs.mkdirSync(LOG_DIR, { recursive: true });
   } catch {
     /* dir creation best-effort — serviceLog() still tees to console */
+  }
+  try {
+    state.bytes = fs.statSync(LOG_FILE).size;
+  } catch {
+    state.bytes = 0; // no existing file
   }
   state.active = true;
 }
@@ -58,6 +73,7 @@ export function isServiceLogActive(): boolean {
 /** Test-only reset hook — mirrors `bootstrap.ts`'s `_resetBootstrapForTesting`. */
 export function _resetServiceLogForTesting(): void {
   state.active = false;
+  state.bytes = 0;
 }
 
 export type LogLevel = "info" | "warn" | "error";
@@ -140,14 +156,12 @@ export function serviceLog(entry: LogEntry): void {
 
   try {
     const incoming = Buffer.byteLength(line) + 1; // + newline
-    let size = 0;
-    try {
-      size = fs.statSync(LOG_FILE).size;
-    } catch {
-      size = 0; // missing file → no rotation, fresh write below
+    if (shouldRotate(state.bytes, incoming)) {
+      rotateLogs();
+      state.bytes = 0;
     }
-    if (shouldRotate(size, incoming)) rotateLogs();
     fs.appendFileSync(LOG_FILE, line + "\n");
+    state.bytes += incoming;
   } catch {
     /* file logging is best-effort; the console tee already fired */
   }

@@ -3,7 +3,6 @@ import {
   onShutdown,
   shutdown,
   registeredDisposerCount,
-  disposerNames,
   isShuttingDown,
   _resetLifecycleForTesting,
 } from "@/lib/lifecycle";
@@ -24,13 +23,15 @@ afterEach(() => {
 });
 
 describe("onShutdown registration", () => {
-  it("is idempotent by name — re-registering replaces without duplicating", () => {
+  it("is idempotent by name — re-registering replaces without duplicating", async () => {
     const first = vi.fn();
     const second = vi.fn();
     onShutdown("dup", first);
     onShutdown("dup", second);
     expect(registeredDisposerCount()).toBe(1);
-    expect(disposerNames()).toEqual(["dup"]);
+    await shutdown("test");
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
   });
 
   it("preserves LIFO position when a name is re-registered", async () => {

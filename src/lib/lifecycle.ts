@@ -76,10 +76,6 @@ export function registeredDisposerCount(): number {
   return state.disposers.size;
 }
 
-export function disposerNames(): string[] {
-  return [...state.disposers.keys()];
-}
-
 export function isShuttingDown(): boolean {
   return state.shuttingDown;
 }

@@ -122,9 +122,11 @@ describe("serviceLog activation gating", () => {
   });
 
   it("rotates before appending when the file is at the cap", () => {
-    initServiceLog();
+    // Mock BEFORE init — the live size is seeded once by initServiceLog()
+    // and tracked in memory afterward (no per-write statSync).
     existsSync.mockReturnValue(true);
     statSync.mockReturnValue({ size: MAX_BYTES } as unknown as ReturnType<typeof fs.statSync>);
+    initServiceLog();
 
     serviceLog({ msg: "big" });
 
@@ -135,8 +137,8 @@ describe("serviceLog activation gating", () => {
   });
 
   it("does NOT rotate a small file", () => {
-    initServiceLog();
     statSync.mockReturnValue({ size: 100 } as unknown as ReturnType<typeof fs.statSync>);
+    initServiceLog();
     serviceLog({ msg: "small" });
     expect(renameSync).not.toHaveBeenCalled();
     expect(appendFileSync).toHaveBeenCalledTimes(1);

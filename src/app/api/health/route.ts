@@ -9,6 +9,7 @@ import { gitStatusCache } from "@/lib/gitStatusCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { isDispatcherRunning } from "@/lib/tasks/dispatcher";
+import { resolveServerRoot } from "@/lib/serverRoot";
 
 /**
  * GET /api/health — liveness + readiness probe.
@@ -45,17 +46,15 @@ export const dynamic = "force-dynamic";
 
 // App version, resolved lazily from package.json and cached for the process.
 // Read at runtime (not a static import of the root JSON) so the file stays
-// out of this route's module graph; the `turbopackIgnore` on the path keeps
-// the fs read out of Node File Tracing so it doesn't over-trace the whole
-// project into the standalone bundle. Prefers MINDER_SERVER_ROOT (set by the
-// C0 standalone wrapper) then process.cwd() — both hold package.json in
-// dev/start and in the packaged sidecar. Never throws.
+// out of this route's module graph; resolveServerRoot() carries the
+// turbopackIgnore annotation that keeps the read out of Node File Tracing,
+// and points at package.json in dev/start and in the packaged sidecar alike.
+// Never throws.
 let cachedVersion: string | null = null;
 function appVersion(): string {
   if (cachedVersion !== null) return cachedVersion;
-  const root = process.env.MINDER_SERVER_ROOT || process.cwd();
   try {
-    const raw = readFileSync(path.join(/* turbopackIgnore: true */ root, "package.json"), "utf8");
+    const raw = readFileSync(path.join(resolveServerRoot(), "package.json"), "utf8");
     const v = (JSON.parse(raw) as { version?: unknown }).version;
     cachedVersion = typeof v === "string" ? v : "unknown";
   } catch {
@@ -64,27 +63,26 @@ function appVersion(): string {
   return cachedVersion;
 }
 
+// All five accessors are O(1) in-memory reads (Map.size / boolean flags)
+// that structurally cannot throw — no defensive wrapping needed.
 function collectWatchers(): Record<string, number | boolean> {
-  const safe = <T>(fn: () => T, fallback: T): T => {
-    try {
-      return fn();
-    } catch {
-      return fallback;
-    }
-  };
   return {
-    gitStatus: safe(() => gitStatusCache.total, 0),
-    githubActivity: safe(() => githubActivityCache.total, 0),
-    manualSteps: safe(() => manualStepsWatcher.watchedCount, 0),
-    dispatcher: safe(() => isDispatcherRunning(), false),
-    disposers: safe(() => registeredDisposerCount(), 0),
+    gitStatus: gitStatusCache.total,
+    githubActivity: githubActivityCache.total,
+    manualSteps: manualStepsWatcher.watchedCount,
+    dispatcher: isDispatcherRunning(),
+    disposers: registeredDisposerCount(),
   };
 }
 
 export async function GET(): Promise<NextResponse> {
-  const initStatus = await probeInitStatus();
+  // Independent lookups — run concurrently; this route is polled every ~15s
+  // by the Settings page (and by the tray app in C1) and must stay fast.
+  const [initStatus, demo] = await Promise.all([
+    probeInitStatus(),
+    demoMode().catch(() => false),
+  ]);
   const ok = initStatus.state === "success";
-  const demo = await demoMode().catch(() => false);
 
   return NextResponse.json(
     {
