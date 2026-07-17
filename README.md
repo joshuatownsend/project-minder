@@ -237,6 +237,22 @@ Set in `.env.local` (gitignored) for persistent per-machine overrides:
 | `MINDER_INDEXER_WORKER` | off | `=1` hosts the watcher in a `worker_thread` for crash isolation. |
 | `GEMINI_HOME` | `~/.gemini` | Override the Gemini CLI data directory. |
 
+### Service Mode (Background Operation)
+
+Run Project Minder as a headless background service that starts automatically at user logon, without requiring a terminal or browser:
+
+```bash
+pnpm build && pnpm package:standalone
+pnpm service:install
+pnpm service:start
+```
+
+Service mode is useful for keeping Minder running continuously on shared machines or servers. The service registers for autostart, collects project metadata and session data in the background, and hosts the dashboard API at `http://localhost:4100`.
+
+Supported commands: `service:install`, `service:uninstall`, `service:start`, `service:stop`, `service:status` (platform: Windows / macOS / Linux).
+
+See [Service Mode](docs/help/service-mode.md) help for platform details, port collision handling, environment variables, health check endpoints, logging, and troubleshooting.
+
 ---
 
 ## How It Works

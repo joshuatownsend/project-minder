@@ -33,6 +33,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "config-history": "Config History",
   setup: "Setup Guide",
   settings: "Settings",
+  "service-mode": "Service Mode",
   templates: "Templates",
   plans: "Plans Browser",
   hooks: "Hooks Browser",

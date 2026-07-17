@@ -285,7 +285,7 @@ needed for a personal tool.
 | A1 bootstrap via instrumentation.ts | Sonnet | — | ☑ done | #281 |
 | A2 shutdown + /api/health + logging | Opus | A1 | ☑ done | #290 |
 | A3 per-OS autostart wrappers | Sonnet | A2 | ☑ done | #291 |
-| A4 docs + polish | Haiku | A3 | ☐ not started | |
+| A4 docs + polish | Haiku | A3 | ☑ done | #293 |
 | C0 standalone build | Sonnet | — (parallel-safe) | ☑ done | #285 |
 | C1 Tauri tray + sidecar | Opus | A2, C0 | ☐ not started | |
 | C2 autostart toggle | Sonnet | C1 | ☐ not started | |
