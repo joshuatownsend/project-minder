@@ -64,9 +64,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
+const require_ = createRequire(import.meta.url);
 
 const standaloneDir = path.join(root, ".next", "standalone");
 const staticDir = path.join(root, ".next", "static");
@@ -167,6 +169,181 @@ if (existsSync(publicDir)) {
   copyDereferenced(publicDir, path.join(outDir, "public"));
 } else {
   console.warn(`[package-standalone] WARNING: public/ not found, skipping`);
+}
+
+// --- 2b. Backfill Next's own nested runtime dependencies ---
+//
+// https://github.com/joshuatownsend/project-minder/issues/287 — `next
+// build`'s own `.next/standalone` tracer output flattens each
+// `serverExternalPackages` entry (next itself, better-sqlite3, ...) to
+// a single top-level `node_modules/<pkg>` directory, discarding pnpm's
+// per-package isolated node_modules structure along the way — so any
+// *nested* runtime dependency that package resolves via a pnpm sibling
+// symlink (rather than a static import Next's tracer can see) goes
+// missing. Observed in practice: `next` needs @next/env, @swc/helpers,
+// baseline-browser-mapping, caniuse-lite, postcss, styled-jsx (and
+// their own transitive deps); `better-sqlite3` needs `bindings`. Both
+// fail at boot/first-use with MODULE_NOT_FOUND on any machine that
+// doesn't also happen to have this project's pnpm store on disk —
+// defeating the entire point of a "movable" standalone package.
+//
+// Rather than hardcode that gap list (one Next/dependency upgrade away
+// from being wrong), this discovers whatever packages Next's tracer
+// already placed at the top level of dist's node_modules — today
+// next, better-sqlite3, react, react-dom, web-push, but this adapts
+// automatically if that set changes — and walks the REAL runtime
+// dependency closure from each one's own package.json `dependencies`
+// field, recursing into each dependency's own `dependencies`.
+//
+// Each dependency is resolved starting from the directory of the
+// package that DECLARES it (not a single global root): pnpm's
+// isolated store means a transitive dependency like `bindings` is
+// only a sibling of the package that actually depends on it
+// (node_modules/.pnpm/better-sqlite3@.../node_modules/{better-sqlite3,
+// bindings}), not of the repo root. Resolving from a fixed root
+// instead risks Node's ordinary upward directory search falling
+// through past the intended package entirely and picking up an
+// unrelated, potentially version-mismatched copy from an ancestor
+// directory (confirmed empirically in this worktree: resolving
+// "bindings" from the repo root falls through to a stray top-level
+// copy in the parent checkout one directory up, while resolving it
+// from better-sqlite3's own resolved directory correctly finds the
+// worktree's real, pnpm-isolated copy).
+//
+// `sharp` (next's only optionalDependency besides the
+// platform-specific SWC compiler binaries, which are build-time-only
+// and correctly absent from standalone output) is walked too, but on
+// a best-effort basis: warn, don't fail, if it's absent — only
+// image-optimization routes that actually decode images at request
+// time would be affected.
+step("Verifying externalized packages' nested runtime dependencies resolve inside dist");
+
+function readJson(p) {
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+function resolvePackageDir(name, fromDir) {
+  const pkgJsonPath = require_.resolve(path.join(name, "package.json"), {
+    paths: [fromDir],
+  });
+  return path.dirname(pkgJsonPath);
+}
+
+// Top-level entries already in dist's node_modules right now (before
+// any backfill) — the packages Next's tracer chose to externalize.
+// Scoped packages (@scope/name) live one directory deeper.
+function listTopLevelPackages(nodeModulesDir) {
+  const names = [];
+  for (const entry of readdirSync(nodeModulesDir)) {
+    if (entry.startsWith(".")) continue; // .bin, .package-lock.json, etc.
+    if (entry.startsWith("@")) {
+      for (const scoped of readdirSync(path.join(nodeModulesDir, entry))) {
+        names.push(`${entry}/${scoped}`);
+      }
+    } else {
+      names.push(entry);
+    }
+  }
+  return names;
+}
+
+// BFS over `dependencies` fields (not peerDependencies/devDependencies).
+// Each root name is resolved from `root` (the repo's own node_modules —
+// correct for these, since they're all direct/optional dependencies of
+// the repo's package.json and so are symlinked at the top level);
+// everything discovered from there on is resolved from the directory
+// of whichever package declared it, cascading down the real dependency
+// graph the same way Node's own resolution would at runtime.
+function walkDependencyClosure(rootNames, { optional = false } = {}) {
+  const closure = new Map(); // name -> real package dir
+  const queue = rootNames.map((name) => ({ name, fromDir: root }));
+  while (queue.length > 0) {
+    const { name, fromDir } = queue.shift();
+    if (closure.has(name)) continue;
+    let pkgDir;
+    try {
+      pkgDir = resolvePackageDir(name, fromDir);
+    } catch (err) {
+      console.warn(
+        `[package-standalone] WARNING: could not resolve ${optional ? "optional" : "required"} ` +
+          `dependency "${name}" from the repo's node_modules (${String(err.message).split("\n")[0]}) — skipping.`
+      );
+      continue;
+    }
+    closure.set(name, pkgDir);
+    const pkgJson = readJson(path.join(pkgDir, "package.json"));
+    for (const dep of Object.keys(pkgJson.dependencies ?? {})) {
+      if (!closure.has(dep)) queue.push({ name: dep, fromDir: pkgDir });
+    }
+  }
+  return closure;
+}
+
+// Does `name` already have a package.json somewhere Node's resolution
+// would find it from inside dist — nested under any already-packaged
+// top-level dependency's own node_modules, or at outDir's top level
+// (Node's resolution algorithm checks every ancestor node_modules, and
+// outDir/node_modules is always one of them no matter how deep inside
+// outDir/node_modules the requiring file lives)?
+//
+// Deliberately a plain existsSync check, not require_.resolve: Node
+// caches negative module-resolution lookups internally
+// (Module._pathCache), so re-querying the same (request, paths) pair
+// after a file appears mid-process — exactly what happens here, since
+// this same function is called once before backfilling (to decide
+// whether to skip a package) and once after (the tripwire) — can keep
+// returning the pre-copy "not found" answer even though the file now
+// exists. A real `node server.js` invocation is a fresh process with
+// an empty cache and would resolve it correctly; existsSync sidesteps
+// the footgun entirely rather than relying on that distinction.
+function resolvesInsideDist(name) {
+  if (existsSync(path.join(outDir, "node_modules", name, "package.json"))) return true;
+  for (const topLevel of listTopLevelPackages(path.join(outDir, "node_modules"))) {
+    if (existsSync(path.join(outDir, "node_modules", topLevel, "node_modules", name, "package.json"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const initialTopLevelPackages = listTopLevelPackages(path.join(outDir, "node_modules"));
+const requiredClosure = walkDependencyClosure(initialTopLevelPackages);
+const optionalClosure = walkDependencyClosure(["sharp"], { optional: true });
+
+let backfilledCount = 0;
+for (const [name, srcDir] of [...requiredClosure, ...optionalClosure]) {
+  if (resolvesInsideDist(name)) continue;
+  step(`Backfilling missing nested dependency: ${name}`);
+  copyDereferenced(srcDir, path.join(outDir, "node_modules", name));
+  backfilledCount += 1;
+}
+
+if (backfilledCount > 0) {
+  step(
+    `Backfilled ${backfilledCount} package(s) Next's tracer omitted from ` +
+      `.next/standalone (see issue #287)`
+  );
+} else {
+  step("All externalized packages' nested runtime dependencies already resolve inside dist");
+}
+
+// Tripwire: fail the packaging run rather than silently ship a bundle
+// that will MODULE_NOT_FOUND at boot (or first use) on a machine
+// without this repo's node_modules. Catches both a backfill that
+// still didn't land (it always should, having just been copied from a
+// location we resolved successfully) and a required dependency that
+// failed to resolve from the repo itself in the first place (never
+// entered `requiredClosure`, so no backfill was attempted) — e.g. a
+// future Next/dependency upgrade renaming or dropping a package in a
+// way this script doesn't yet know how to find.
+const unresolved = [...requiredClosure.keys()].filter((name) => !resolvesInsideDist(name));
+if (unresolved.length > 0) {
+  fail(
+    `The following required Next runtime dependencies do not resolve inside ` +
+      `${path.relative(root, outDir)} after backfill: ${unresolved.join(", ")}. ` +
+      `This package would fail to boot with MODULE_NOT_FOUND on a machine without ` +
+      `this repo's node_modules. See issue #287 for background.`
+  );
 }
 
 // --- 3. Ingest worker bundle ---
