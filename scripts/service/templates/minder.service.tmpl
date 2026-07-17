@@ -1,0 +1,15 @@
+[Unit]
+Description=Project Minder dashboard (Service Mode, Phase A)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{EXEC_START}}
+WorkingDirectory={{WORKING_DIR}}
+Environment=PORT={{PORT}}
+Environment=HOSTNAME={{HOSTNAME}}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
