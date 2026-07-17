@@ -61,7 +61,7 @@ Service mode respects these environment variables:
 | `MINDER_USE_DB` | `0` | Optional: set to disable the SQLite index and fall back to direct JSONL parsing. Default is on (uses the index). |
 | `MINDER_DEMO` | `1` | Optional: enable demo mode with synthetic fixtures. Default is off. |
 
-**Note:** `MINDER_PORT` and `PORT` overrides are not currently implemented. The service runs on a hardcoded port 4100.
+**Note:** there is no `MINDER_PORT` override. The service templates pin `PORT=4100` at install time, and the repo's `dev`/`start` scripts hardcode `-p 4100`. The standalone `server.js` itself honors `PORT`/`HOSTNAME` environment variables when run by hand, but the installed service always uses 4100.
 
 ## Standalone Server Package
 
@@ -118,7 +118,7 @@ GET /api/health
 - `version` — application version from `package.json`
 - `uptimeSec` — seconds since the server started
 - `demoMode` — whether demo-mode synthetic data is active
-- `db` — database initialization state (`success`, `in-progress`, `failed`, `skipped` if `MINDER_USE_DB=0`)
+- `db` — database initialization state (`idle`, `in-flight`, `success`, `transient-failed`, or `permanent-failed`)
 - `bootstrap` — boot-time scan status: whether it ran and which subsystems it started
 - `watchers` — counts of active background watchers (git dirty status, GitHub activity, manual steps, task dispatcher, shutdown disposers)
 
@@ -127,8 +127,7 @@ GET /api/health
 In service mode, structured logs are written to a rotating file at `~/.minder/logs/minder.log` (in addition to console output). Each log line is JSON-formatted with fields: timestamp, level, subsystem, message, and any additional context.
 
 - **Rotation:** When the log file reaches 5 MB, it rotates (up to 3 backups: `minder.log.1`, `.log.2`, `.log.3`).
-- **Cleanup:** Logs older than 7 days are automatically pruned.
-- **Levels:** `info`, `warn`, `error`, `debug` (debug only appears in dev mode).
+- **Levels:** `info`, `warn`, `error`.
 - **Subsystems:** `bootstrap`, `lifecycle`, `git`, `github`, `mcp`, `scan`, etc.
 
 ## Graceful Shutdown
