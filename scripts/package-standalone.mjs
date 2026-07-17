@@ -813,6 +813,32 @@ if (existsSync(packagedSqliteNode)) {
   sqliteNodeHandling = "NOT auto-copied — copied explicitly by this script (see BUILD_INFO.json)";
 }
 
+// Prove the COPIED binary's ABI matches this packaging process (PR #285
+// review, Codex P2): BUILD_INFO.json records process.versions.modules of
+// whatever Node runs this script — but if the repo's node_modules was
+// built under a DIFFERENT Node major (switched 20↔22 without a rebuild,
+// stale CI cache), the copied .node file's real ABI diverges from that
+// record, the generated startup check stays silent, and the first
+// DB-backed route crashes at require() time. Actually dlopen-ing the
+// packaged file is the only authoritative check: if it loads under this
+// process, its ABI IS this process's ABI, so the value written below is
+// truthful by construction. (dlopen rather than require("better-sqlite3")
+// so we test the exact copied artifact, not whatever module resolution
+// might find; better_sqlite3.node has no load-time side effects beyond
+// registering its exports.)
+try {
+  process.dlopen({ exports: {} }, realpathSync(packagedSqliteNode));
+  step("Verified packaged better_sqlite3.node loads under this Node (ABI matches BUILD_INFO)");
+} catch (err) {
+  fail(
+    `Packaged better_sqlite3.node failed to load under the packaging Node ` +
+      `(${process.version}, ABI ${process.versions.modules}): ` +
+      `${String(err && err.message).split("\n")[0]}. The repo's node_modules was likely ` +
+      `built under a different Node major — run "pnpm rebuild better-sqlite3" (or a full ` +
+      `"pnpm install") with the same Node you package with, then re-run packaging.`
+  );
+}
+
 // --- 5. Record + verify the Node version this bundle was built with ---
 //
 // This doesn't (and can't) guarantee the *runtime* host's Node major
