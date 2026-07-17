@@ -7,6 +7,8 @@ import {
   quoteArg,
   escapeSystemdPercent,
   isAlreadyMissingFailure,
+  findFirstStepFailure,
+  describeStepFailure,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
   detectPlatformKind,
@@ -150,6 +152,50 @@ describe("isAlreadyMissingFailure (F10 review fix: gate uninstall artifact clean
 
   it("returns false for an unrecognized platform", () => {
     expect(isAlreadyMissingFailure("plan9", { ok: false, stdout: "", stderr: "whatever" })).toBe(false);
+  });
+});
+
+describe("findFirstStepFailure (F11 review fix: propagate service:start failures)", () => {
+  it("returns null when every step succeeded", () => {
+    expect(findFirstStepFailure([{ ok: true }, { ok: true }])).toBeNull();
+  });
+
+  it("returns null for an empty or missing results array", () => {
+    expect(findFirstStepFailure([])).toBeNull();
+    expect(findFirstStepFailure(undefined)).toBeNull();
+    expect(findFirstStepFailure(null)).toBeNull();
+  });
+
+  it("returns the first failed step, even when a later step also fails", () => {
+    const first = { ok: false, exe: "launchctl", args: ["start", "com.minder.dashboard"], stderr: "first error" };
+    const second = { ok: false, exe: "launchctl", args: ["start", "com.minder.dashboard"], stderr: "second error" };
+    expect(findFirstStepFailure([{ ok: true }, first, second])).toBe(first);
+  });
+
+  it("does not mistake a step lacking an explicit ok:true for a failure", () => {
+    // Only ok === false counts as a failure — a step object missing the
+    // field entirely is not treated as failed.
+    expect(findFirstStepFailure([{ exe: "x", args: [] }])).toBeNull();
+  });
+});
+
+describe("describeStepFailure (F11 review fix)", () => {
+  it("prefers stderr when present", () => {
+    expect(describeStepFailure({ stderr: "  boom  ", error: "wrapped", stdout: "out" })).toBe("boom");
+  });
+
+  it("falls back to the wrapped error message when stderr is empty", () => {
+    expect(describeStepFailure({ stderr: "", error: "wrapped message", stdout: "out" })).toBe("wrapped message");
+  });
+
+  it("falls back to stdout when both stderr and error are empty", () => {
+    expect(describeStepFailure({ stderr: "", error: "", stdout: "  some stdout  " })).toBe("some stdout");
+  });
+
+  it("falls back to a generic message when nothing is present", () => {
+    expect(describeStepFailure({ stderr: "", error: "", stdout: "" })).toBe("unknown error");
+    expect(describeStepFailure(null)).toBe("unknown error");
+    expect(describeStepFailure(undefined)).toBe("unknown error");
   });
 });
 

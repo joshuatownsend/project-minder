@@ -69,6 +69,8 @@ import {
   commandLineMatchesServer,
   escapeSystemdPercent,
   isAlreadyMissingFailure,
+  findFirstStepFailure,
+  describeStepFailure,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -251,6 +253,20 @@ async function runInstall(platformKind) {
   step(`Enabled + started systemd --user unit "${unitName}". Verify: systemctl --user status ${unitName}`);
 }
 
+// F11 review fix: inspect a step-list result before reporting success.
+// `runSteps` records `{ok:false}` on failure but doesn't throw, so any
+// caller that didn't explicitly check `results` (service:start's macOS/Linux
+// branches, before this fix) reported success even when `launchctl start`/
+// `systemctl --user start` failed (agent/unit not installed, supervisor
+// rejection). Every failure here is real — start has no "already fine"
+// outcome the way uninstall's "already deregistered" is — so this always
+// fails loudly (raw error + a hint) rather than trying to classify anything.
+function requireStepsOk(results, hint) {
+  const failure = findFirstStepFailure(results);
+  if (!failure) return;
+  fail(`${failure.exe} ${failure.args.join(" ")} failed: ${describeStepFailure(failure)}. ${hint}`);
+}
+
 // F10 review fix: inspect the deregistration step's own result before
 // touching any generated artifact. `runSteps` records `{ok:false}` on
 // failure but doesn't throw, so without this check a REAL failure
@@ -262,14 +278,14 @@ async function runInstall(platformKind) {
 // with the raw error and leaves the artifacts alone so a re-run can retry
 // the actual deregistration.
 function requireDeregistered(platformKind, results, { subject, retryHint }) {
-  const failure = results.find((r) => !r.ok);
+  const failure = findFirstStepFailure(results);
   if (!failure) return; // fully succeeded
   if (isAlreadyMissingFailure(platformKind, failure)) {
     step(`${subject} was already not registered — proceeding with cleanup.`);
     return;
   }
   fail(
-    `Failed to deregister ${subject}: ${failure.error ?? failure.stderr ?? failure.stdout ?? "unknown error"}. ` +
+    `Failed to deregister ${subject}: ${describeStepFailure(failure)}. ` +
       `NOT removing its generated files — it may still be registered and pointing at them. ${retryHint}`
   );
 }
@@ -342,16 +358,19 @@ async function runStatus(platformKind) {
 }
 
 async function runStart(platformKind) {
+  const installHint = "Is it installed? Run: pnpm service:install";
   if (platformKind === "windows") {
     const results = await runSteps(planActions("windows", "start", { taskName: WINDOWS_TASK_NAME }));
-    if (results.some((r) => !r.ok)) fail(`Failed to run scheduled task "${WINDOWS_TASK_NAME}". Is it installed? (pnpm service:install)`);
+    requireStepsOk(results, installHint);
     return;
   }
   if (platformKind === "macos") {
-    await runSteps(planActions("macos", "start", { label: LAUNCHD_LABEL }));
+    const results = await runSteps(planActions("macos", "start", { label: LAUNCHD_LABEL }));
+    requireStepsOk(results, installHint);
     return;
   }
-  await runSteps(planActions("linux", "start", { unitName: SYSTEMD_UNIT_NAME }));
+  const results = await runSteps(planActions("linux", "start", { unitName: SYSTEMD_UNIT_NAME }));
+  requireStepsOk(results, installHint);
 }
 
 // Queries a Windows PID's full command line via PowerShell's Get-CimInstance

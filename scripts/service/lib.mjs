@@ -129,6 +129,37 @@ export function isAlreadyMissingFailure(platformKind, result) {
 }
 
 /**
+ * Returns the first failed step in a `runSteps()`-shaped results array, or
+ * `null` if every step succeeded (or the array is empty/absent). Pure and
+ * side-effect-free (never calls `process.exit`) — extracted so
+ * scripts/service.mjs's exit-calling wrappers (`requireStepsOk`,
+ * `requireDeregistered`) stay thin, and so this bit of result-inspection
+ * logic is unit-testable without mocking `process.exit` (F11 review fix:
+ * `service:start` on macOS/Linux ran `launchctl start`/`systemctl --user
+ * start` and ignored a failed result entirely, reporting success even when
+ * the agent/unit wasn't installed or the supervisor rejected it).
+ *
+ * @typedef {{ exe?: string, args?: string[], ok?: boolean, stdout?: string, stderr?: string, error?: string }} StepResult
+ * @param {StepResult[] | null | undefined} results
+ */
+export function findFirstStepFailure(results) {
+  return (results ?? []).find((r) => r && r.ok === false) ?? null;
+}
+
+/**
+ * Formats a failed step's raw error text for a human-readable message:
+ * prefers `stderr` (what the CLI itself printed), then the wrapped
+ * `error.message`, then `stdout`, then a generic fallback — never throws,
+ * never returns an empty string.
+ *
+ * @param {StepResult | null | undefined} failure
+ */
+export function describeStepFailure(failure) {
+  if (!failure) return "unknown error";
+  return failure.stderr?.trim() || failure.error || failure.stdout?.trim() || "unknown error";
+}
+
+/**
  * Resolves the `next` CLI's own JS entry point (not the node_modules/.bin
  * shell shim) via `createRequire` rooted at the target repo's package.json
  * — this walks the SAME resolution pnpm/node would use from that repo,
