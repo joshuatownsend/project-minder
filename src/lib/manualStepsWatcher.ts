@@ -304,6 +304,12 @@ export class ManualStepsWatcher {
     return results;
   }
 
+  /** Number of files currently under `fs.watch` (0 before init / after
+   *  destroy). Read by `GET /api/health` for the watchers snapshot. */
+  get watchedCount(): number {
+    return this.watched.size;
+  }
+
   destroy() {
     for (const [, entry] of this.watched) {
       entry.watcher?.close();

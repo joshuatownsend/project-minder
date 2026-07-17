@@ -41,6 +41,14 @@ export async function startIngest(): Promise<void> {
   // this runs independently of the indexer mode below.
   await startDispatcher();
 
+  // Register the graceful-shutdown disposer for whichever ingest mode starts
+  // below. The ingest pipeline (worker OR in-process watcher) is started here,
+  // AFTER runBootstrap(), so it isn't covered by the disposers the bootstrap
+  // registers — without this, shutdown could close SQLite while ingest is
+  // mid-write. Registered after runBootstrap()'s `sqlite` disposer, so LIFO
+  // disposal stops ingest BEFORE the DB handle closes.
+  await registerIngestDisposer();
+
   if (process.env.MINDER_INDEXER_WORKER === "1") {
     try {
       const { startWorker, stopWorker, onWorkerMessage } = await import("@/lib/db/workerHost");
@@ -128,6 +136,36 @@ async function startDispatcher(): Promise<void> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(`[dispatcher] failed to start at boot: ${(err as Error).message}`);
+  }
+}
+
+async function registerIngestDisposer(): Promise<void> {
+  try {
+    // Only wire this in service mode, where runBootstrap() actually installed
+    // the signal handlers and registered the other disposers. If bootstrap
+    // didn't run (plain `next dev`), nothing will ever fire a disposer, so
+    // there's no point populating the registry.
+    const { getBootstrapStatus } = await import("@/lib/bootstrap");
+    if (!getBootstrapStatus().ran) return;
+
+    const { onShutdown } = await import("@/lib/lifecycle");
+    onShutdown("ingest", async () => {
+      // Stop whichever ingest mode is live before SQLite closes. Both stops are
+      // idempotent no-ops when their mode isn't active, so calling both covers
+      // worker mode, in-process mode, and the worker→in-process fallback.
+      // stopWorker() posts `stop` and waits for a clean between-transaction
+      // exit (up to a grace period) before terminating — the whole point is to
+      // not hard-kill a worker mid-better-sqlite3-write.
+      const [{ stopWorker }, { stopIngestWatcher }] = await Promise.all([
+        import("@/lib/db/workerHost"),
+        import("@/lib/db/ingestWatcher"),
+      ]);
+      await stopWorker();
+      await stopIngestWatcher();
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[ingest] failed to register shutdown disposer: ${(err as Error).message}`);
   }
 }
 

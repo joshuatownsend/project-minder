@@ -27,6 +27,7 @@ vi.mock("@/lib/tasksDb/migrations", () => ({
 vi.mock("@/lib/tasksDb/connection", () => ({
   getTasksDb: vi.fn(async () => memDb),
   prepTasksCached: (_db: DatabaseT.Database, sql: string) => _db.prepare(sql),
+  isTasksDbShutdownClosed: () => false,
 }));
 
 const SCHEMA_PATH = path.join(__dirname, "..", "src", "lib", "tasksDb", "schema.sql");

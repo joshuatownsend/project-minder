@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import { renameWithRetry } from "../atomicWrite";
+import { resolveServerRoot } from "../serverRoot";
 import { pruneNotificationLog } from "./maintenance";
 
 // Migration runner for the local SQLite index.
@@ -510,13 +511,11 @@ function resolveSchemaPath(): string {
   // entire repo (src/, tests/, docs/, site/, etc.). See
   // https://nextjs.org/docs/messages/nft-unexpected-file-traced-in-nft-list
   //
-  // MINDER_SERVER_ROOT wins over cwd when set (PR #285 review, Codex
-  // P2 follow-up — same fix as workerHost.ts's resolveDefaultWorkerEntry):
-  // the packaged server.js wrapper sets it to its own directory, so this
-  // anchors correctly even when the standalone server is launched by
-  // absolute path from some other cwd. Unset in dev/test, where cwd is
-  // already the project root.
-  let dir = process.env.MINDER_SERVER_ROOT || /* turbopackIgnore: true */ process.cwd();
+  // Anchored to the server root (MINDER_SERVER_ROOT when the standalone
+  // wrapper set it, else cwd) — see resolveServerRoot() for the full
+  // rationale (PR #285 review, Codex P2 follow-up; same anchoring as
+  // workerHost.ts's resolveDefaultWorkerEntry).
+  let dir = resolveServerRoot();
   for (let i = 0; i < 5; i++) {
     const candidate = path.join(/* turbopackIgnore: true */ dir, "src", "lib", "db", "schema.sql");
     if (existsSync(candidate)) return candidate;

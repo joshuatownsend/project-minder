@@ -2,8 +2,8 @@ import "server-only";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus } from "./store";
-import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, type SpawnFn } from "./spawner";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus, requeueRunningTask, failTask, listRunningTasks } from "./store";
+import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, getLiveDispatchSnapshot, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
@@ -16,6 +16,9 @@ const MAX_CONCURRENT = 3;
 
 interface DispatcherHandle {
   dispose: () => void;
+  /** Like {@link dispose} but returns a promise that settles once any in-flight
+   *  tick has finished — so a shutdown disposer can await a truthful teardown. */
+  stop: () => Promise<void>;
   getStats: () => DispatcherStats;
 }
 
@@ -37,6 +40,104 @@ export function isDispatcherRunning(): boolean {
 }
 
 /**
+ * Stop the dispatcher singleton if running (A2 graceful shutdown): sets a
+ * `stopped` flag synchronously (so a tick already mid-flight claims/spawns no
+ * further work — see the guards in `tick()`), clears the tick interval +
+ * pending initial-tick timeout, drops the global handle, and returns a promise
+ * that resolves once any in-flight tick has settled. Idempotent — resolves
+ * immediately when the dispatcher isn't running. Already-spawned task
+ * processes are not force-killed here; they detach and are reconciled/swept on
+ * the next boot.
+ */
+export function stopDispatcher(): Promise<void> {
+  const handle = g.__minderDispatcher;
+  if (!handle) return Promise.resolve();
+  return handle.stop();
+}
+
+/**
+ * Boot-time reconcile of tasks left `status='running'` by a previous server
+ * instance (F12). Their supervising process — and the `child.on('close')`
+ * handler that would have called completeTask/failTask — died with that
+ * instance, so nothing will ever record their completion in place.
+ *
+ * For each such row: if a dispatched child is STILL verifiably alive (its PID
+ * file, keyed filename=PID / content=task-id, points at a live process) we
+ * leave the row alone — we won't disturb work that's demonstrably still running
+ * and can't distinguish it from a task that will finish. Otherwise the child is
+ * gone, so we `failTask()` it with an "interrupted" reason: a terminal state
+ * that unblocks downstream consumers honestly (swarm-coordinator dependents,
+ * which treat a failed blocker as satisfied, proceed; ordinary dependents on a
+ * failed prerequisite stay blocked, exactly as they would for any real
+ * failure), and — unlike requeue — does NOT silently re-run a task whose side
+ * effects may have partially landed. Swarm status is refreshed for affected
+ * swarms so a stuck swarm can complete.
+ *
+ * Runs at boot AND periodically from the tick loop (F15) — a child that was
+ * still alive at boot and is therefore preserved would otherwise be stranded
+ * `running` forever once it exits, because the new server has no
+ * `child.on('close')` for that old process. `supervisedTaskIds` is the set of
+ * ids THIS instance is actively supervising (the dispatcher's in-flight map);
+ * those are skipped so the periodic pass can't race a task's own in-flight
+ * completion (the spawner deletes the PID marker *before* awaiting
+ * `completeTask`, so a supervised row can briefly be `running` with no live
+ * marker). At boot the set is empty — every `running` row is a prior instance's.
+ *
+ * Idempotent (failTask guards on `status='running'`) and fully defensive — one
+ * bad row never aborts the rest, and the whole pass never throws. Logs one line
+ * per resolved row.
+ */
+export async function reconcileInterruptedTasks(
+  supervisedTaskIds: ReadonlySet<number> = new Set(),
+): Promise<void> {
+  try {
+    const running = await listRunningTasks();
+    const candidates = running.filter((t) => !supervisedTaskIds.has(t.id));
+    if (candidates.length === 0) return;
+
+    const { taskIds: liveTaskIds, hasUnmappedLive } = getLiveDispatchSnapshot();
+    const affectedSwarms = new Set<number>();
+
+    for (const t of candidates) {
+      if (liveTaskIds.has(t.id)) {
+        console.log(`[dispatcher] reconcile: task ${t.id} still has a live child — leaving 'running'`);
+        continue;
+      }
+      if (hasUnmappedLive) {
+        // Live legacy/corrupt PID markers exist that we can't map to a task —
+        // one of them may be THIS row's process, so we can't prove it's dead.
+        // Defer: leave it 'running'. A later boot resolves it once those
+        // processes exit and sweepStalePids unlinks their markers.
+        console.log(`[dispatcher] reconcile: task ${t.id} deferred — unmapped live PID markers present (legacy/corrupt), liveness unprovable`);
+        continue;
+      }
+      const updated = await failTask(t.id, {
+        // No exit/outcome evidence survives a restart (the spawner records
+        // output only through completeTask; there are no output/exit-code
+        // files), so a dead-marker row can only be failed, not recovered.
+        error_message:
+          "Process exited unmonitored after a server restart (task was 'running' with no live child and no recorded completion).",
+      }).catch((err) => {
+        console.error(`[dispatcher] reconcile: failTask ${t.id} failed:`, err);
+        return null;
+      });
+      if (updated) {
+        console.log(`[dispatcher] reconcile: task ${t.id} was interrupted → marked failed`);
+        if (t.swarm_id != null) affectedSwarms.add(t.swarm_id);
+      }
+    }
+
+    for (const swarmId of affectedSwarms) {
+      await updateSwarmStatus(swarmId).catch((err) =>
+        console.error(`[dispatcher] reconcile: updateSwarmStatus ${swarmId} failed:`, err)
+      );
+    }
+  } catch (err) {
+    console.error("[dispatcher] reconcileInterruptedTasks failed:", err);
+  }
+}
+
+/**
  * Initialize the dispatcher singleton if not already running.
  * Safe to call multiple times — no-ops if already initialized.
  */
@@ -45,10 +146,23 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
 
   try { fs.mkdirSync(path.dirname(HEARTBEAT_PATH), { recursive: true }); } catch { /* non-fatal */ }
 
+  // Resolve rows stranded 'running' by a previous instance before we start
+  // ticking. Fire-and-forget + self-guarded: it only touches 'running' rows,
+  // so it can't race the tick's 'pending' claims.
+  void reconcileInterruptedTasks();
+
   const startedAt = new Date().toISOString();
   let tickCount = 0;
   let lastTickAt: string | null = null;
   let tickInProgress = false;
+  // Set synchronously by stop()/dispose(). A tick that's mid-flight when
+  // shutdown arrives checks this at each claim/spawn point and bails, so it
+  // can't claim or spawn new task work while the shutdown disposers proceed
+  // toward closing tasks.db.
+  let stopped = false;
+  // The most recent tick's promise, so stop() can await an in-flight tick's
+  // completion (bounded by the shutdown deadline the lifecycle registry caps).
+  let currentTick: Promise<void> | null = null;
   const inFlight = new Map<number, Promise<void>>();
 
   async function handleDecision(taskId: number, event: DecisionEvent): Promise<void> {
@@ -63,6 +177,7 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
 
   async function tick() {
     if (tickInProgress) return;
+    if (stopped) return;
     tickInProgress = true;
     try {
       lastTickAt = new Date().toISOString();
@@ -81,6 +196,19 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       writeHeartbeat(lastTickAt, inFlight.size, paused);
       if (paused) return;
 
+      // F15: periodic reconcile — resolve rows a previous instance left
+      // 'running', including a boot-preserved alive child that has since
+      // exited (its marker PID now dead). Runs every tick (~30 s): sweepStalePids()
+      // above already unlinked dead markers so the liveness snapshot is fresh,
+      // and it's a single empty SELECT in steady state (the PID-dir scan only
+      // happens when there ARE running rows). Passing the in-flight ids skips
+      // tasks THIS instance supervises, so it can't race their own completion.
+      // Skipped once shutdown has begun (stopped) — no reconcile writes during
+      // teardown.
+      if (!stopped) {
+        await reconcileInterruptedTasks(new Set(inFlight.keys()));
+      }
+
       try {
         await materializeSchedules();
       } catch (err) {
@@ -93,7 +221,13 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         console.error("[dispatcher] promoteApprovalTasks error:", err);
       }
 
+      // Don't claim/spawn any new work once shutdown has begun. Checked here
+      // (a tick can reach this point after several awaits during which stop()
+      // may have flipped) and again below right after each claim.
+      if (stopped) return;
+
       while (inFlight.size < MAX_CONCURRENT) {
+        if (stopped) break; // no new claims after stop
         let task: Task | null = null;
         try {
           task = await claimPendingTask();
@@ -102,6 +236,19 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           break;
         }
         if (!task) break;
+        // stop() may have flipped during the claim await. claimPendingTask()
+        // already flipped this row to 'running', and crash recovery only sweeps
+        // PID files (not never-spawned rows) — so requeue it back to 'pending'
+        // rather than abandon it stranded 'running'. Guarded so a store failure
+        // can't throw into the tick; the tasks.db disposer runs after this, so
+        // the write lands before the DB closes.
+        if (stopped) {
+          const claimedId = task.id;
+          await requeueRunningTask(claimedId).catch((err) =>
+            console.error(`[dispatcher] requeue on shutdown failed for task ${claimedId}:`, err)
+          );
+          break;
+        }
 
         if (task.dry_run) {
           console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
@@ -112,6 +259,12 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         const swarmId = task.swarm_id;
 
         async function afterComplete(completedTask?: Task): Promise<void> {
+          // A2: once shutdown has begun, skip all completion bookkeeping. The
+          // child was detached and keeps running; its row is reclaimed by the
+          // next boot's stale-PID sweep / reconcile (same contract as a crash).
+          // This is the dispatcher-owned half; the spawner's own completeTask/
+          // failTask are made safe by the tasks.db shutdown-close guard.
+          if (stopped) return;
           if (completedTask) {
             // TODO-sourced tasks tick their TODO.md line (guarded by
             // sourceFile==="TODO.md"); board-sourced tasks flip their issue to
@@ -151,6 +304,9 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           // tasks, which are the default for promoteBoardIssueToTask + delegateTodo.
           promise = runClassicTask(task, spawnFn)
             .then(async () => {
+              // A2: don't even re-read the row post-shutdown — afterComplete
+              // would no-op anyway, and getTask would hit the closed DB.
+              if (stopped) return;
               const completedTask = await getTask(task!.id).catch(() => null);
               await afterComplete(completedTask ?? undefined);
             })
@@ -165,14 +321,33 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
     }
   }
 
-  const interval = setInterval(() => { tick().catch(console.error); }, TICK_INTERVAL_MS);
-  const initialTimeout = setTimeout(() => { tick().catch(console.error); }, 2_000);
+  // Only publish `currentTick` when a tick actually ENTERS. If a prior tick
+  // overran the interval (still in flight) or we're shutting down, skip —
+  // otherwise the overlapping invocation's no-op early-return promise would
+  // clobber `currentTick`, and stop() would await that already-resolved
+  // promise instead of the real in-flight tick.
+  function scheduleTick(): void {
+    if (tickInProgress || stopped) return;
+    currentTick = tick().catch(console.error);
+  }
+  const interval = setInterval(scheduleTick, TICK_INTERVAL_MS);
+  const initialTimeout = setTimeout(scheduleTick, 2_000);
+
+  function teardown(): void {
+    stopped = true; // synchronous: an in-flight tick sees this at its next guard
+    clearInterval(interval);
+    clearTimeout(initialTimeout);
+    g.__minderDispatcher = undefined;
+  }
 
   g.__minderDispatcher = {
     dispose() {
-      clearInterval(interval);
-      clearTimeout(initialTimeout);
-      g.__minderDispatcher = undefined;
+      teardown();
+    },
+    stop() {
+      teardown();
+      // Await the in-flight tick (if any) so callers see a truthful teardown.
+      return currentTick ?? Promise.resolve();
     },
     getStats() {
       return { running: inFlight.size, tickCount, lastTickAt, startedAt };

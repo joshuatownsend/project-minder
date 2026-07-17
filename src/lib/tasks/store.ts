@@ -3,7 +3,7 @@ import path from "path";
 import type DatabaseT from "better-sqlite3";
 import { WORKTREE_SEP } from "../scanner/worktreeCheck";
 import { initTasksDb } from "../tasksDb/migrations";
-import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
+import { getTasksDb, prepTasksCached, isTasksDbShutdownClosed } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
 import type {
   Task,
@@ -197,6 +197,45 @@ export async function claimPendingTask(): Promise<Task | null> {
 }
 
 /**
+ * All tasks currently in `status='running'`. At dispatcher boot these are rows
+ * left over from a previous server instance (their supervising process — and
+ * the `child.on('close')` handler that would have recorded completion — is
+ * gone), which the boot reconcile resolves. Read-only; safe to call anytime.
+ */
+export async function listRunningTasks(): Promise<Task[]> {
+  const db = await ensureReady();
+  return prepTasksCached(
+    db,
+    "SELECT * FROM ops_tasks WHERE status = 'running'"
+  ).all() as Task[];
+}
+
+/**
+ * Requeue a task that was claimed (`status='running'`) but whose spawn was
+ * abandoned before it started — specifically, the dispatcher stopping mid-tick
+ * during shutdown (A2). Flips it back to `pending` and clears the claim fields
+ * (`started_at`, `session_id`) so the next boot's dispatcher picks it up,
+ * instead of leaving it stranded `running` forever (crash recovery only sweeps
+ * PID files for *spawned* processes — a claimed-but-never-spawned row has no
+ * PID to sweep). Guarded on `status='running'` so it can't resurrect a task
+ * that completed in the meantime. Returns the requeued task, or null when no
+ * matching running row exists.
+ */
+export async function requeueRunningTask(id: number): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'pending',
+         started_at = NULL,
+         session_id = NULL
+     WHERE id = ? AND status = 'running'
+     RETURNING *`
+  ).get(id) as Task | undefined;
+  return row ?? null;
+}
+
+/**
  * Promote tasks with requires_approval=1 from pending → awaiting_approval.
  * Called on each dispatcher tick before claiming runnable tasks.
  * Returns the number of tasks promoted.
@@ -352,6 +391,7 @@ export async function rerunTask(id: number): Promise<Task | null> {
 
 /** Write session_id mid-run (before completeTask is called). Fire-and-forget safe. */
 export async function setSessionId(id: number, sessionId: string): Promise<void> {
+  if (isTasksDbShutdownClosed()) return; // A2: no writes after the DB is closed for shutdown
   const db = await ensureReady();
   prepTasksCached(db, "UPDATE ops_tasks SET session_id = ? WHERE id = ? AND status = 'running'").run(sessionId, id);
 }
@@ -364,6 +404,10 @@ export interface CompleteTaskInput {
 
 /** Mark a running task as done with captured output. */
 export async function completeTask(id: number, result: CompleteTaskInput): Promise<Task | null> {
+  // A2: a task whose child exits after the DB was closed for shutdown must not
+  // re-open it — no-op cleanly; the next boot's reconcile settles the row from
+  // PID/exit evidence (same contract as a crash).
+  if (isTasksDbShutdownClosed()) return null;
   const db = await ensureReady();
   const row = prepTasksCached(
     db,
@@ -392,6 +436,7 @@ export interface FailTaskInput {
 
 /** Mark a running task as failed. Increments consecutive_failures. */
 export async function failTask(id: number, info: FailTaskInput): Promise<Task | null> {
+  if (isTasksDbShutdownClosed()) return null; // A2: no writes after shutdown close
   const db = await ensureReady();
   const row = prepTasksCached(
     db,

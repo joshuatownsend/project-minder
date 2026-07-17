@@ -179,6 +179,27 @@ export function closeDb(): void {
 }
 
 /**
+ * Graceful-shutdown close (A2): checkpoint the WAL into the main database
+ * file, then close the handle. Called from the lifecycle disposer registry so
+ * a supervised stop doesn't leave a `-wal`/`-shm` pair behind for the next
+ * boot to recover. Respects the better-sqlite3-absent / DB-not-open path — if
+ * no connection is open there is nothing to flush, so it's a no-op. Never
+ * throws (a failed checkpoint must not block the rest of shutdown).
+ */
+export function checkpointAndCloseDb(): void {
+  const db = state.db;
+  if (!db) return; // driver missing, or no connection open — nothing to flush
+  try {
+    // TRUNCATE resets the WAL to zero length after checkpointing, leaving the
+    // cleanest on-disk state for the next open.
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* best-effort — fall through to close regardless */
+  }
+  closeDb();
+}
+
+/**
  * Cached `db.prepare(sql)`. Memoizes the resulting `Statement` per
  * literal SQL string against the singleton db handle so a hot read
  * path doesn't re-parse the same query on every request.

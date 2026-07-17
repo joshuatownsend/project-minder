@@ -32,10 +32,20 @@ function ensurePidDir() {
   fs.mkdirSync(PID_DIR, { recursive: true });
 }
 
-function writePidFile(pid: number) {
+/**
+ * Self-describing marker body: filename stays the PID (so sweepStalePids /
+ * listTrackedPids remain filename-keyed), and the CONTENT is `task:<id>`. The
+ * `task:` prefix disambiguates the new format from a LEGACY pre-upgrade marker,
+ * whose body was a bare copy of the PID — a bare number can't be told apart
+ * from a task id (they could even collide), so the boot reconcile must be able
+ * to recognise and skip legacy markers rather than mis-key their task.
+ */
+const TASK_MARKER_PREFIX = "task:";
+
+function writePidFile(pid: number, taskId: number) {
   try {
     ensurePidDir();
-    fs.writeFileSync(path.join(PID_DIR, String(pid)), String(pid), "utf8");
+    fs.writeFileSync(path.join(PID_DIR, String(pid)), `${TASK_MARKER_PREFIX}${taskId}`, "utf8");
   } catch {
     // Non-fatal — PID files are best-effort for emergency stop
   }
@@ -71,6 +81,68 @@ export function sweepStalePids(): void {
   } catch {
     // PID dir unreadable — ignore
   }
+}
+
+export interface LiveDispatchSnapshot {
+  /** Task ids with a LIVE child, from NEW-format (`task:<id>`) markers. */
+  taskIds: Set<number>;
+  /**
+   * True if any LIVE process has a marker we can't map to a task id — a LEGACY
+   * pre-upgrade marker (body was a bare PID copy) or a corrupt/unreadable body.
+   * While true, the boot reconcile must NOT fail a `running` row it can't match
+   * to a live NEW marker: one of these unmapped live processes might be it, and
+   * we can't prove otherwise. Those rows are deferred to a later boot (once the
+   * legacy processes exit and `sweepStalePids` unlinks their markers).
+   */
+  hasUnmappedLive: boolean;
+}
+
+/**
+ * Snapshot of LIVE dispatched children, derived from PID_DIR (filename = PID).
+ * A file whose PID is dead is skipped (and left for `sweepStalePids` to
+ * unlink). For each live PID the marker body is classified:
+ *   - `task:<id>`            → NEW format → contributes the task id.
+ *   - bare number == PID     → LEGACY (pre-upgrade) → task id unknown.
+ *   - anything else          → corrupt/unknown → task id unknown.
+ * Legacy and corrupt both set `hasUnmappedLive` (attribute nothing). Fully
+ * defensive — an unreadable dir/file never throws.
+ */
+export function getLiveDispatchSnapshot(): LiveDispatchSnapshot {
+  const taskIds = new Set<number>();
+  let hasUnmappedLive = false;
+  try {
+    for (const f of fs.readdirSync(PID_DIR)) {
+      const pid = parseInt(f, 10);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      try {
+        process.kill(pid, 0); // throws ESRCH if the process is gone
+      } catch {
+        continue; // dead PID — not live; sweepStalePids will unlink it
+      }
+      // Live process — classify its marker.
+      let body: string;
+      try {
+        body = fs.readFileSync(path.join(PID_DIR, f), "utf8").trim();
+      } catch {
+        hasUnmappedLive = true; // live but unreadable — can't map to a task
+        continue;
+      }
+      if (body.startsWith(TASK_MARKER_PREFIX)) {
+        const id = parseInt(body.slice(TASK_MARKER_PREFIX.length), 10);
+        if (Number.isFinite(id) && id > 0) {
+          taskIds.add(id);
+        } else {
+          hasUnmappedLive = true; // malformed `task:` body
+        }
+      } else {
+        // Bare PID copy (legacy) or any other content — task id unknowable.
+        hasUnmappedLive = true;
+      }
+    }
+  } catch {
+    /* PID dir unreadable — no evidence either way */
+  }
+  return { taskIds, hasUnmappedLive };
 }
 
 /** List PIDs currently tracked in PID_DIR. Used by emergency stop (Wave 9.2). */
@@ -169,7 +241,7 @@ export async function runClassicTask(
       cwd: taskCwd(task),
     });
     const pid = child.pid;
-    if (pid) writePidFile(pid);
+    if (pid) writePidFile(pid, task.id);
 
     let stdout = "";
     let stderr = "";
@@ -271,7 +343,7 @@ export async function runStreamTask(
       cwd: taskCwd(task),
     });
     const pid = child.pid;
-    if (pid) writePidFile(pid);
+    if (pid) writePidFile(pid, task.id);
     streamChildren.set(task.id, child);
 
     let lineBuffer = "";
