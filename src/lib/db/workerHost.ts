@@ -24,7 +24,6 @@ import { Worker } from "node:worker_threads";
 //   under a `cd` to a subdirectory; the dev script anchors to the
 //   project root.)
 
-const WORKER_REL_PATH = path.join("workers", "ingestWorker.mjs");
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_START_TIMEOUT_MS = 60_000;
 // How long stopWorker waits for a post-ready worker to exit on its own
@@ -197,7 +196,12 @@ export interface StartWorkerOptions {
 export async function startWorker(options: StartWorkerOptions = {}): Promise<WorkerHostStatus> {
   await stopWorker();
 
-  const entry = options.workerEntry ?? path.join(process.cwd(), WORKER_REL_PATH);
+  // Inlined as literal path segments (rather than the WORKER_REL_PATH
+  // const) so Turbopack's file tracer can statically resolve this join
+  // as "scoped to a subfolder" instead of falling back to a whole-
+  // project sweep of every route's output trace — see the identical
+  // note in db/migrations.ts resolveSchemaPath().
+  const entry = options.workerEntry ?? path.join(process.cwd(), "workers", "ingestWorker.mjs");
   const state = freshState(options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS, entry);
   g.__minderWorker = state;
 

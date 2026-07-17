@@ -1,4 +1,8 @@
 import type { NextConfig } from "next";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   // Turbopack/webpack rewrite barrel imports for these packages so each route
@@ -22,6 +26,28 @@ const nextConfig: NextConfig = {
   devIndicators: {
     position: "bottom-right",
   },
+  // Emit a self-contained `.next/standalone/` server (a pruned copy of
+  // node_modules containing only traced production dependencies, plus
+  // server.js) so the app can be copied to another machine/directory and
+  // run with just `node server.js` — no repo checkout or `pnpm install`
+  // needed there. This is the sidecar payload for the planned Tauri tray
+  // app (docs/superpowers/plans/2026-07-16-service-and-tray.md, task C0):
+  // the tray shells out to this directory instead of managing a dev
+  // server. `next dev` / `next start` from the repo are unaffected —
+  // standalone output is only produced by `next build` and only consumed
+  // by `scripts/package-standalone.mjs`.
+  output: "standalone",
+  // Pin the file-tracing root to this project directory. Without this,
+  // Next walks up from `next.config.ts` looking for the outermost
+  // ancestor with a lockfile/package.json to infer a "workspace root" —
+  // when this repo is checked out as a git worktree under
+  // `.claude/worktrees/<id>/` (which nests inside the main checkout,
+  // and both have their own `pnpm-lock.yaml`), that walk lands on the
+  // main repo root instead of the worktree, and the standalone output
+  // gets nested at `.next/standalone/.claude/worktrees/<id>/server.js`
+  // instead of `.next/standalone/server.js`. Pinning here makes the
+  // output path deterministic regardless of where the checkout lives.
+  outputFileTracingRoot: projectRoot,
 };
 
 export default nextConfig;
