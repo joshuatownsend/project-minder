@@ -501,9 +501,24 @@ function resolveSchemaPath(): string {
   // looking for src/lib/db/schema.sql so tests run from any cwd find it.
   const sibling = path.join(__dirname, "schema.sql");
   if (existsSync(sibling)) return sibling;
-  let dir = process.cwd();
+  // turbopackIgnore: this cwd-walk is a dev/test-only fallback (the
+  // __dirname lookup above is what production and the standalone build
+  // use). Without the ignore comment, Turbopack's file tracer can't
+  // prove the loop is bounded and falls back to including every file
+  // reachable from the project root in every route's output trace —
+  // ballooning `.next/standalone` from a pruned few dozen MB to the
+  // entire repo (src/, tests/, docs/, site/, etc.). See
+  // https://nextjs.org/docs/messages/nft-unexpected-file-traced-in-nft-list
+  //
+  // MINDER_SERVER_ROOT wins over cwd when set (PR #285 review, Codex
+  // P2 follow-up — same fix as workerHost.ts's resolveDefaultWorkerEntry):
+  // the packaged server.js wrapper sets it to its own directory, so this
+  // anchors correctly even when the standalone server is launched by
+  // absolute path from some other cwd. Unset in dev/test, where cwd is
+  // already the project root.
+  let dir = process.env.MINDER_SERVER_ROOT || /* turbopackIgnore: true */ process.cwd();
   for (let i = 0; i < 5; i++) {
-    const candidate = path.join(dir, "src", "lib", "db", "schema.sql");
+    const candidate = path.join(/* turbopackIgnore: true */ dir, "src", "lib", "db", "schema.sql");
     if (existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
     if (parent === dir) break;

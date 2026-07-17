@@ -187,9 +187,13 @@ const MIGRATIONS: Migration[] = [
 function resolveTasksSchemaPath(): string {
   const sibling = path.join(__dirname, "schema.sql");
   if (existsSync(sibling)) return sibling;
-  let dir = process.cwd();
+  // turbopackIgnore: dev/test-only fallback — see the identical comment
+  // in src/lib/db/migrations.ts resolveSchemaPath(). Without this,
+  // Turbopack's tracer can't bound the loop and sweeps the whole
+  // project into every route's output trace.
+  let dir = /* turbopackIgnore: true */ process.cwd();
   for (let i = 0; i < 5; i++) {
-    const candidate = path.join(dir, "src", "lib", "tasksDb", "schema.sql");
+    const candidate = path.join(/* turbopackIgnore: true */ dir, "src", "lib", "tasksDb", "schema.sql");
     if (existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
     if (parent === dir) break;
