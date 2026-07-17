@@ -37,6 +37,10 @@ supervising session may be short-lived and the supervising model (Fable) is expe
   - **Sonnet** — well-scoped code with an existing in-repo pattern to mirror.
   - **Opus** — new architecture, process-lifecycle code, Rust, CI/packaging matrices.
 - **One branch + one PR per task** (e.g. `svc-a1-bootstrap`). Squash-merge. Never push to main.
+- **Codex + Copilot review bots run on every PR.** After CI is green, wait for the bot
+  reviews and run `/pr-resolve` on the PR — merge only once all findings are fixed or
+  explicitly dismissed with a reason. For complex new code, consider a `/simplify` pass
+  before opening the PR. (Added 2026-07-17 after #281 merged ahead of its bot findings.)
 - **Every task must pass the repo gates before its PR:** `pnpm typecheck` and `pnpm test`
   (report exact pass counts; baseline at plan time: **3,351 tests**). UI-touching tasks also
   need `pnpm build`.
@@ -50,7 +54,10 @@ supervising session may be short-lived and the supervising model (Fable) is expe
 
 - Version 1.2.0, `pnpm@10.30.3`, Next.js 16 (Turbopack), port **4100**
   (`dev`/`start` scripts pass `-p 4100`; `predev`/`prebuild` run `build:worker`).
-- **No `src/instrumentation.ts` exists yet.**
+- **Instrumentation entry point (corrected during A1):** a ROOT-level `instrumentation.ts` →
+  `instrumentation-node.ts` pair already existed (dispatcher + DB-ingest startup) and a new
+  `src/instrumentation.ts` silently loses to it. A1 wired `runBootstrap()` into
+  `instrumentation-node.ts`'s `startIngest()` instead — later tasks extend that path.
 - **OTel ingest is push-based HTTP** inside the Next server: `src/app/api/otel/v1/logs/route.ts`,
   `.../metrics/route.ts`. There is no separate collector process. Serving these while headless
   is the core durability win of Phase A.
