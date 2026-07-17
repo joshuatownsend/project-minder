@@ -214,19 +214,22 @@ describe("evaluateRequest", () => {
   });
 });
 
-describe("buildAllowedHosts (port-aware allowlist)", () => {
-  it("includes both the canonical :4100 trio and the bound-port trio", () => {
+describe("buildAllowedHosts (bound-port allowlist)", () => {
+  it("is exactly the loopback trio for the bound port — nothing else", () => {
     const hosts = buildAllowedHosts(4199);
-    for (const h of ["localhost:4199", "127.0.0.1:4199", "[::1]:4199"]) {
-      expect(hosts.has(h)).toBe(true);
-    }
-    // The canonical :4100 entries are always trusted too (dev/default).
-    for (const h of ["localhost:4100", "127.0.0.1:4100", "[::1]:4100"]) {
-      expect(hosts.has(h)).toBe(true);
-    }
+    expect(hosts.size).toBe(3);
+    expect([...hosts].sort()).toEqual(["127.0.0.1:4199", "[::1]:4199", "localhost:4199"]);
   });
 
-  it("dedups to exactly the three loopback entries when the bound port is 4100", () => {
+  it("does NOT carve out the canonical :4100 when bound elsewhere", () => {
+    // Trusting :4100 on a 4199 server would let any local page on :4100 drive
+    // the 4199 APIs cross-origin — the allowlist is strictly the bound port.
+    const hosts = buildAllowedHosts(4199);
+    expect(hosts.has("localhost:4100")).toBe(false);
+    expect(hosts.has("127.0.0.1:4100")).toBe(false);
+  });
+
+  it("is the three :4100 loopback entries when bound to the default port", () => {
     const hosts = buildAllowedHosts(4100);
     expect(hosts.size).toBe(3);
     expect([...hosts].sort()).toEqual(["127.0.0.1:4100", "[::1]:4100", "localhost:4100"]);
@@ -238,7 +241,7 @@ describe("buildAllowedHosts (port-aware allowlist)", () => {
   });
 });
 
-describe("evaluateRequest with a port-aware allowlist (custom bound port)", () => {
+describe("evaluateRequest with a bound-port allowlist (custom bound port)", () => {
   const boundTo4199 = buildAllowedHosts(4199);
 
   it("allows a Host on the bound custom port (e.g. tray's MINDER_TRAY_PORT)", () => {
@@ -260,6 +263,31 @@ describe("evaluateRequest with a port-aware allowlist (custom bound port)", () =
       boundTo4199,
     );
     expect(result.allow).toBe(true);
+  });
+
+  it("blocks a :4100 Host when bound to 4199 (no canonical carve-out — regression)", () => {
+    const result = evaluateRequest(
+      { method: "GET", host: "localhost:4100", origin: null, pathname: "/api/sql" },
+      boundTo4199,
+    );
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("host not allowed");
+  });
+
+  it("blocks a cross-origin :4100 page fetching the 4199 API (CSRF — regression)", () => {
+    // A page served by another local process on :4100 must NOT be able to drive
+    // the 4199 dashboard's state-changing endpoints.
+    const result = evaluateRequest(
+      {
+        method: "POST",
+        host: "localhost:4199",
+        origin: "http://localhost:4100",
+        pathname: "/api/config",
+      },
+      boundTo4199,
+    );
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("cross-origin request blocked");
   });
 
   it("still blocks a Host on some other, unbound port", () => {

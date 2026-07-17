@@ -67,14 +67,17 @@ import { NextRequest, NextResponse } from "next/server";
 // Origin check and drive state-changing endpoints (CSRF); requiring the port
 // closes that.
 //
-// The set is **port-aware**: it always trusts the canonical `:4100` (dev
-// default, and what `pnpm dev`/`pnpm start` bind) AND the port the server
-// actually bound this run — `process.env.PORT`, which the standalone/sidecar
-// entry sets (e.g. the tray's `MINDER_TRAY_PORT`). Without the bound-port
-// entries, a browser opened at `http://localhost:<custom-port>` — which cannot
-// spoof Host/Origin — would have every `/api/*` call 403'd, breaking the
-// dashboard on any non-4100 port. Still loopback-only: no new rebind surface,
-// just the correct port. (issue #283)
+// The set is **derived strictly from the bound port** — the port the server
+// actually bound this run (`process.env.PORT`, which the standalone/sidecar
+// entry sets, e.g. the tray's `MINDER_TRAY_PORT`), defaulting to 4100 (what
+// `pnpm dev`/`pnpm start` bind). Without the bound-port entries a browser
+// opened at `http://localhost:<custom-port>` — which cannot spoof Host/Origin —
+// would have every `/api/*` call 403'd, breaking the dashboard on any non-4100
+// port. Only the bound port is trusted: NOT the canonical :4100 as well, because
+// trusting :4100 on a server bound to (say) 4199 would let ANY other local
+// process serving a page on :4100 fetch the 4199 APIs cross-origin. Default
+// 4100 → identical to the pre-C1 behavior. Still loopback-only: no rebind
+// surface, just the correct port. (issue #283)
 //
 // The MCP server's own allowlist (src/lib/mcp/server.ts) is separate — /api/mcp
 // is skipped here and has its own transport-level DNS-rebind protection.
@@ -85,19 +88,12 @@ function resolveBoundPort(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 /**
- * Build the loopback host allowlist for a given bound port. Always includes the
- * canonical `:4100` trio plus the bound port's trio (deduplicated by the Set
- * when the bound port is 4100). Exported for unit testing the derived entries.
+ * Build the loopback host allowlist for a given bound port — exactly the
+ * `localhost`/`127.0.0.1`/`[::1]` trio on that port, and nothing else. Exported
+ * for unit testing the derived entries.
  */
 export function buildAllowedHosts(port: number): Set<string> {
-  return new Set([
-    "localhost:4100",
-    "127.0.0.1:4100",
-    "[::1]:4100",
-    `localhost:${port}`,
-    `127.0.0.1:${port}`,
-    `[::1]:${port}`,
-  ]);
+  return new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
 }
 
 const ALLOWED_HOSTS = buildAllowedHosts(resolveBoundPort());

@@ -369,7 +369,25 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
         "no payload directory: set MINDER_SERVER_DIST (dev) or bundle minder-server as a resource"
             .to_string()
     })?;
-    let server_js = dir.join("server.js");
+
+    // Canonicalize the payload dir to an ABSOLUTE path up front. MINDER_SERVER_DIST
+    // may be relative to the tray's cwd, but we spawn the child with
+    // current_dir(dir); a still-relative `server.js` argument would then resolve
+    // against the child's own cwd (dir/server.js interpreted as dir/dir/server.js)
+    // and the sidecar would crash-loop with "cannot find module". Resolving both
+    // the dir and the server.js path to absolute up front removes any cwd
+    // dependence, and canonicalize also fails loudly here if the dir doesn't
+    // exist. The `\\?\` prefix it emits on Windows is then stripped — Node
+    // mis-resolves verbatim paths (it rewrites `\\?\C:\…\server.js` to
+    // `C:\?\C:\…\server.js` and fails), verified in the tray E2E.
+    let canonical_dir = strip_windows_verbatim(std::fs::canonicalize(dir).map_err(|e| {
+        format!(
+            "payload dir {} does not resolve ({e}) — set MINDER_SERVER_DIST to a valid \
+             dist/minder-server (dev) or bundle it as a resource",
+            dir.display()
+        )
+    })?);
+    let server_js = canonical_dir.join("server.js");
     if !server_js.exists() {
         return Err(format!(
             "server.js not found at {} — run `pnpm build && pnpm package:standalone`",
@@ -379,7 +397,7 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
 
     let mut cmd = StdCommand::new(&cfg.node_path);
     cmd.arg(&server_js)
-        .current_dir(dir)
+        .current_dir(&canonical_dir)
         .env("PORT", cfg.port.to_string())
         .env("HOSTNAME", HOST)
         // The tray always drives shutdown over stdin (Windows can't signal a
@@ -409,6 +427,22 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
 
     cmd.spawn()
         .map_err(|e| format!("failed to launch `{}`: {e}", cfg.node_path))
+}
+
+/// Strip the Windows `\\?\` extended-length (verbatim) prefix that
+/// `fs::canonicalize` emits, leaving a plain drive-absolute path. Node
+/// mis-resolves verbatim paths (rewrites `\\?\C:\…` to `C:\?\C:\…`), so the
+/// sidecar's `server.js` argument and cwd must be the plain form. Only the
+/// simple `\\?\C:\…` form is stripped; a `\\?\UNC\…` verbatim UNC path is left
+/// intact (stripping it would corrupt the UNC form). No-op on non-Windows.
+fn strip_windows_verbatim(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        if !rest.starts_with("UNC\\") {
+            return PathBuf::from(rest);
+        }
+    }
+    p
 }
 
 /// Drain the child's stdout/stderr on background threads so its pipe buffers
@@ -619,5 +653,33 @@ mod crash_decision_tests {
             decide_after_crash(true, ServerStatus::Down),
             CrashAction::ObserveForeign
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod verbatim_path_tests {
+    use super::strip_windows_verbatim;
+    use std::path::PathBuf;
+
+    #[test]
+    fn strips_simple_verbatim_drive_prefix() {
+        // Node mis-resolves `\\?\C:\…`; the plain drive form is what it accepts.
+        let p = PathBuf::from(r"\\?\C:\dev\minder\dist\minder-server");
+        assert_eq!(
+            strip_windows_verbatim(p),
+            PathBuf::from(r"C:\dev\minder\dist\minder-server")
+        );
+    }
+
+    #[test]
+    fn leaves_verbatim_unc_intact() {
+        let p = PathBuf::from(r"\\?\UNC\server\share\x");
+        assert_eq!(strip_windows_verbatim(p.clone()), p);
+    }
+
+    #[test]
+    fn leaves_a_plain_path_unchanged() {
+        let p = PathBuf::from(r"C:\dev\minder");
+        assert_eq!(strip_windows_verbatim(p.clone()), p);
     }
 }
