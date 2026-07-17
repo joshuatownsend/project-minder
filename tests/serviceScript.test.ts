@@ -9,6 +9,7 @@ import {
   isAlreadyMissingFailure,
   findFirstStepFailure,
   describeStepFailure,
+  isTaskkillAlreadyGone,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
   detectPlatformKind,
@@ -135,19 +136,34 @@ describe("isAlreadyMissingFailure (F10 review fix: gate uninstall artifact clean
     expect(isAlreadyMissingFailure("linux", result)).toBe(false);
   });
 
-  // Documented known limitation of the pattern-matching approach: dbus's own
-  // "No such file or directory" (its socket connection failure text)
-  // collides with the unit-missing phrasing this classifier looks for, so a
-  // genuine dbus connectivity problem can be misclassified as "already
-  // missing" — the classifier is a best-effort heuristic, not an
-  // authoritative parse of these CLIs' output.
-  it("linux: KNOWN LIMITATION — a dbus connectivity error's 'No such file or directory' text is indistinguishable from a missing unit", () => {
+  // F12 review fix: this used to be a documented KNOWN LIMITATION (dbus's
+  // own "No such file or directory" socket-connection text collided with
+  // the bare "no such file or directory" pattern this classifier used to
+  // have for Linux, misclassifying a genuine bus-connectivity problem as
+  // "already missing" and letting artifact cleanup proceed while the
+  // unit's real state was actually UNKNOWN). The explicit bus/dbus negative
+  // guard now closes this — flipped into a correctness test.
+  it("linux: a dbus connectivity failure is ALWAYS a real failure, never already-missing", () => {
     const result = {
       ok: false,
       stdout: "",
       stderr: "Failed to connect to bus: No such file or directory\n",
     };
-    expect(isAlreadyMissingFailure("linux", result)).toBe(true);
+    expect(isAlreadyMissingFailure("linux", result)).toBe(false);
+  });
+
+  it("linux: the bus-connection guard applies even if the text also happens to mention a unit", () => {
+    const result = {
+      ok: false,
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory (unit minder.service not loaded)\n",
+    };
+    expect(isAlreadyMissingFailure("linux", result)).toBe(false);
+  });
+
+  it("linux: a bare 'no such file or directory' with no unit context is a REAL failure (not the old bare pattern)", () => {
+    const result = { ok: false, stdout: "", stderr: "some/path: No such file or directory\n" };
+    expect(isAlreadyMissingFailure("linux", result)).toBe(false);
   });
 
   it("returns false for an unrecognized platform", () => {
@@ -196,6 +212,35 @@ describe("describeStepFailure (F11 review fix)", () => {
     expect(describeStepFailure({ stderr: "", error: "", stdout: "" })).toBe("unknown error");
     expect(describeStepFailure(null)).toBe("unknown error");
     expect(describeStepFailure(undefined)).toBe("unknown error");
+  });
+});
+
+describe("isTaskkillAlreadyGone (F13 review fix: propagate service:stop failures)", () => {
+  it("returns false for a successful result", () => {
+    expect(isTaskkillAlreadyGone({ ok: true, stdout: "SUCCESS", stderr: "" })).toBe(false);
+  });
+
+  it("returns false for null/undefined", () => {
+    expect(isTaskkillAlreadyGone(null)).toBe(false);
+    expect(isTaskkillAlreadyGone(undefined)).toBe(false);
+  });
+
+  it("classifies taskkill's own 'not found' phrasing as the PID having already exited (benign race)", () => {
+    const result = { ok: false, stdout: "", stderr: 'ERROR: The process "12345" not found.\n' };
+    expect(isTaskkillAlreadyGone(result)).toBe(true);
+  });
+
+  it("classifies a real taskkill failure (e.g. access denied) as a REAL failure", () => {
+    const result = {
+      ok: false,
+      stdout: "",
+      stderr: "ERROR: The process with PID 12345 could not be terminated.\nReason: Access is denied.\n",
+    };
+    expect(isTaskkillAlreadyGone(result)).toBe(false);
+  });
+
+  it("returns false when there is no error text at all", () => {
+    expect(isTaskkillAlreadyGone({ ok: false, stdout: "", stderr: "" })).toBe(false);
   });
 });
 

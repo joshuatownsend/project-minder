@@ -108,6 +108,20 @@ export function isAlreadyMissingFailure(platformKind, result) {
   const text = `${result.stderr ?? ""} ${result.stdout ?? ""} ${result.error ?? ""}`.toLowerCase();
   if (!text.trim()) return false;
 
+  // F12 review fix: a systemd BUS/DBUS CONNECTION failure ("Failed to
+  // connect to bus: No such file or directory") is NOT proof the unit is
+  // missing — it means systemctl couldn't even ASK systemd, so the unit's
+  // real state is genuinely UNKNOWN. This is exactly the case this module's
+  // own tests previously documented as a known misclassification (dbus's
+  // socket-missing text collided with the generic "no such file or
+  // directory" pattern this used to have for Linux) — this negative guard,
+  // checked before any positive pattern below, closes it: any bus/dbus
+  // connection failure is ALWAYS a real failure regardless of what else
+  // the text contains.
+  if (/connect(ing)?\s+to\s+(the\s+)?(bus|dbus)\b/.test(text) || /\bdbus\b[^a-z]{0,20}(connection|socket)/.test(text)) {
+    return false;
+  }
+
   const ALREADY_MISSING_PATTERNS = {
     // Observed live in this session: `schtasks /query` (and, per Microsoft's
     // own docs, `/delete`) on a nonexistent task name prints exactly
@@ -119,10 +133,16 @@ export function isAlreadyMissingFailure(platformKind, result) {
     // "No such file or directory" (reading the path) or "Could not find"/
     // "Not Found" (resolving the label/service).
     macos: [/no such file or directory/, /could not find/, /not found/],
-    // systemctl on a unit name it doesn't know about reports variations of
-    // "not loaded", "could not be found", or "No such file or directory"
-    // depending on the systemd version and which sub-step failed.
-    linux: [/no such file or directory/, /could not be found/, /not loaded/, /not found/],
+    // Tightened to require "unit"/"unit file" context (F12 review fix) —
+    // the previous bare "no such file or directory"/"not found" patterns
+    // were broad enough to ALSO match a dbus connection failure (now closed
+    // off by the negative guard above regardless, but the positive patterns
+    // themselves should still be specific to systemd's own unit-missing
+    // phrasing rather than generic OS error text). Matches systemctl's
+    // documented phrasing for a genuinely unknown unit: "Unit <name> not
+    // loaded.", "Unit <name> could not be found.", "Failed to disable unit:
+    // Unit file <name> does not exist."
+    linux: [/\bunit\b(?:\s+file)?\s+\S+\s+(could not be found|not loaded|does not exist)\b/],
   };
 
   return (ALREADY_MISSING_PATTERNS[platformKind] ?? []).some((pattern) => pattern.test(text));
@@ -157,6 +177,25 @@ export function findFirstStepFailure(results) {
 export function describeStepFailure(failure) {
   if (!failure) return "unknown error";
   return failure.stderr?.trim() || failure.error || failure.stdout?.trim() || "unknown error";
+}
+
+/**
+ * True if a failed Windows `taskkill` step's error text indicates the
+ * target PID had already exited by the time taskkill ran — a benign race
+ * between `service:stop`'s own LISTENING-port check and the kill itself
+ * (F13 review fix), not a real failure. `taskkill`'s own phrasing for this
+ * is "ERROR: The process ... not found." — deliberately a SEPARATE pattern
+ * from `isAlreadyMissingFailure`'s Windows patterns (which are specific to
+ * `schtasks`' unrelated "cannot find the file specified" text); the two
+ * CLIs report a missing target completely differently.
+ *
+ * @param {StepResult | null | undefined} result
+ */
+export function isTaskkillAlreadyGone(result) {
+  if (!result || result.ok) return false;
+  const text = `${result.stderr ?? ""} ${result.stdout ?? ""} ${result.error ?? ""}`.toLowerCase();
+  if (!text.trim()) return false;
+  return /not found/.test(text);
 }
 
 /**

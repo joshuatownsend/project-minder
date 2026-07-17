@@ -71,6 +71,7 @@ import {
   isAlreadyMissingFailure,
   findFirstStepFailure,
   describeStepFailure,
+  isTaskkillAlreadyGone,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -267,6 +268,26 @@ function requireStepsOk(results, hint) {
   fail(`${failure.exe} ${failure.args.join(" ")} failed: ${describeStepFailure(failure)}. ${hint}`);
 }
 
+// F13 review fix: gates macOS/Linux `service:stop` on the actual stop
+// step's result — previously ignored entirely, so a rejected
+// `launchctl stop`/`systemctl --user stop` (agent/unit not installed, a
+// genuine supervisor error) still reported success. Reuses the SAME
+// already-missing classification `service:uninstall` uses
+// (isAlreadyMissingFailure) rather than inventing a separate one: "the
+// agent/unit isn't installed" or "it's already stopped" report the
+// identical not-found-style text from launchctl/systemctl, and that's a
+// fine, expected outcome for a stop command (nothing to stop) — anything
+// else is a real failure.
+function requireStopOk(platformKind, results, subject) {
+  const failure = findFirstStepFailure(results);
+  if (!failure) return;
+  if (isAlreadyMissingFailure(platformKind, failure)) {
+    step(`${subject} was not running (or not installed) — nothing to stop.`);
+    return;
+  }
+  fail(`Failed to stop ${subject}: ${describeStepFailure(failure)}.`);
+}
+
 // F10 review fix: inspect the deregistration step's own result before
 // touching any generated artifact. `runSteps` records `{ok:false}` on
 // failure but doesn't throw, so without this check a REAL failure
@@ -418,6 +439,14 @@ async function runStop(platformKind) {
     const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
     const identity = buildServerIdentityMarkers({ root, launch, vbsPath });
 
+    // F13 review fix: taskkill's own result was previously discarded — a
+    // real failure (e.g. denied permissions) silently reported success.
+    // "The PID had already exited by the time taskkill ran" (a benign race
+    // against the earlier LISTENING check) is the one outcome that's fine;
+    // anything else is real and fails the whole command at the end (after
+    // attempting every verified PID, so one bad PID doesn't stop us from
+    // trying the rest).
+    let anyRealKillFailure = false;
     for (const pid of pids) {
       const commandLine = await queryWindowsProcessCommandLine(pid);
       if (!commandLineMatchesServer(commandLine, identity)) {
@@ -430,7 +459,18 @@ async function runStop(platformKind) {
         continue;
       }
       step(`Port 4100 is held by PID ${pid} (verified as this installation) — hard-stopping (taskkill /F /T).`);
-      await runSteps([{ exe: "taskkill", args: ["/F", "/T", "/PID", pid] }]);
+      const killResults = await runSteps([{ exe: "taskkill", args: ["/F", "/T", "/PID", pid] }]);
+      const failure = findFirstStepFailure(killResults);
+      if (!failure) continue;
+      if (isTaskkillAlreadyGone(failure)) {
+        step(`PID ${pid} had already exited by the time taskkill ran — nothing to do.`);
+        continue;
+      }
+      step(`Failed to stop PID ${pid}: ${describeStepFailure(failure)}`);
+      anyRealKillFailure = true;
+    }
+    if (anyRealKillFailure) {
+      fail("One or more verified Minder processes could not be stopped — see errors above.");
     }
     return;
   }
@@ -438,13 +478,15 @@ async function runStop(platformKind) {
     // Safe by construction: launchctl targets a specific label, never a
     // port — it can only affect the job THIS install registered.
     step(`Stopping via launchctl label "${LAUNCHD_LABEL}" (scoped by label, not by port — safe).`);
-    await runSteps(planActions("macos", "stop", { label: LAUNCHD_LABEL }));
+    const results = await runSteps(planActions("macos", "stop", { label: LAUNCHD_LABEL }));
+    requireStopOk("macos", results, `LaunchAgent "${LAUNCHD_LABEL}"`);
     return;
   }
   // Safe by construction: systemctl --user targets a specific unit name,
   // never a port — it can only affect the unit THIS install registered.
   step(`Stopping via systemctl --user unit "${SYSTEMD_UNIT_NAME}" (scoped by unit name, not by port — safe).`);
-  await runSteps(planActions("linux", "stop", { unitName: SYSTEMD_UNIT_NAME }));
+  const results = await runSteps(planActions("linux", "stop", { unitName: SYSTEMD_UNIT_NAME }));
+  requireStopOk("linux", results, `systemd --user unit "${SYSTEMD_UNIT_NAME}"`);
 }
 
 // --- CLI entry -------------------------------------------------------------
