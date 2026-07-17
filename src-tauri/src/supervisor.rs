@@ -26,13 +26,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{TrayConfig, HOST};
-use crate::health;
+use crate::health::{self, ServerStatus};
 
 /// How long to wait for a graceful stdin-driven shutdown before force-killing
 /// the process tree. Comfortably above the server's 5s disposer budget.
@@ -63,9 +64,13 @@ enum Command {
 /// Handle the tray holds to talk to the supervision thread.
 pub struct Supervisor {
     tx: Mutex<Sender<Command>>,
-    mode: Mode,
-    /// Best-effort human-readable note on the startup decision, surfaced in the
-    /// tray menu (e.g. "attached to existing service").
+    /// Runtime attach state — shared with the supervision thread so it can flip
+    /// this to `true` if it switches to attach mode AFTER startup (e.g. a Phase
+    /// A service binds the port while we're spawning; see the crash re-probe in
+    /// [`run_supervisor`]). Read by the tray for the Status line / tooltip.
+    attached: Arc<AtomicBool>,
+    /// Best-effort human-readable note on the (possibly updated) attach
+    /// decision, surfaced in the tray menu (e.g. "attached to existing service").
     attach_note: Arc<Mutex<Option<String>>>,
 }
 
@@ -75,22 +80,25 @@ impl Supervisor {
     pub fn start(cfg: TrayConfig, payload_dir: Option<PathBuf>) -> Arc<Supervisor> {
         let attach_note = Arc::new(Mutex::new(None));
         let mode = decide_mode(&cfg, &attach_note);
+        let attached = Arc::new(AtomicBool::new(mode == Mode::Attach));
 
         let (tx, rx) = channel::<Command>();
+        let attached_thread = attached.clone();
+        let note_thread = attach_note.clone();
         thread::Builder::new()
             .name("minder-supervisor".into())
-            .spawn(move || run_supervisor(cfg, payload_dir, mode, rx))
+            .spawn(move || run_supervisor(cfg, payload_dir, mode, rx, attached_thread, note_thread))
             .expect("failed to spawn supervisor thread");
 
         Arc::new(Supervisor {
             tx: Mutex::new(tx),
-            mode,
+            attached,
             attach_note,
         })
     }
 
     pub fn is_attached(&self) -> bool {
-        self.mode == Mode::Attach
+        self.attached.load(Ordering::SeqCst)
     }
 
     pub fn attach_note(&self) -> Option<String> {
@@ -173,27 +181,15 @@ fn run_supervisor(
     payload_dir: Option<PathBuf>,
     mode: Mode,
     rx: Receiver<Command>,
+    attached: Arc<AtomicBool>,
+    attach_note: Arc<Mutex<Option<String>>>,
 ) {
     log(&format!(
         "supervisor started in {mode:?} mode on :{}",
         cfg.port
     ));
     if mode == Mode::Attach {
-        // Observe only: wait for a shutdown command and never touch the server.
-        loop {
-            match rx.recv() {
-                Ok(Command::Shutdown(ack)) => {
-                    log("attach mode: quit requested — leaving the existing server untouched");
-                    let _ = ack.send(());
-                    return;
-                }
-                Ok(Command::Restart(ack)) => {
-                    log("attach mode: restart requested — ignored (not our process)");
-                    let _ = ack.send(());
-                }
-                Err(_) => return,
-            }
-        }
+        return observe_until_shutdown(&rx);
     }
 
     let mut backoff = BASE_BACKOFF;
@@ -235,20 +231,107 @@ fn run_supervisor(
                 continue;
             }
             ExitReason::Crash => {
-                let uptime = started.elapsed();
-                if uptime >= HEALTHY_UPTIME_RESET {
-                    backoff = BASE_BACKOFF;
+                // Re-evaluate spawn-vs-attach before respawning. Something (most
+                // likely the Phase A logon service) may have bound the port
+                // between our startup check and now — our sidecar would then exit
+                // with EADDRINUSE, and a blind backoff-respawn would hammer a
+                // failing sidecar forever against a port a healthy Minder already
+                // owns. Re-probing on EVERY crash (one cached-agent GET) makes
+                // the invariant unconditional: the tray never keeps respawning
+                // while another server holds the port.
+                let bound = health::port_is_bound(cfg.port);
+                let status = if bound {
+                    health::probe(cfg.port)
+                } else {
+                    ServerStatus::Down
+                };
+                match decide_after_crash(bound, status) {
+                    CrashAction::AttachExisting => {
+                        attached.store(true, Ordering::SeqCst);
+                        set_note(
+                            &attach_note,
+                            "attached to existing service (detected after spawn conflict)",
+                        );
+                        log(&format!(
+                            "port {} is now serving a healthy Minder ({status:?}) after our \
+                             sidecar exited — switching to attach mode, no further restarts",
+                            cfg.port
+                        ));
+                        return observe_until_shutdown(&rx);
+                    }
+                    CrashAction::ObserveForeign => {
+                        attached.store(true, Ordering::SeqCst);
+                        set_note(
+                            &attach_note,
+                            "port in use (foreign) — observing after spawn conflict",
+                        );
+                        log(&format!(
+                            "port {} is bound by a non-Minder process after our sidecar exited \
+                             — observing, not respawning (would just conflict)",
+                            cfg.port
+                        ));
+                        return observe_until_shutdown(&rx);
+                    }
+                    CrashAction::Respawn => {
+                        let uptime = started.elapsed();
+                        if uptime >= HEALTHY_UPTIME_RESET {
+                            backoff = BASE_BACKOFF;
+                        }
+                        log(&format!(
+                            "minder-server pid={pid} exited after {uptime:?}; restarting in \
+                             {backoff:?}"
+                        ));
+                        if wait_backoff(&rx, backoff) {
+                            return;
+                        }
+                        backoff = next_backoff(backoff);
+                        continue;
+                    }
                 }
-                log(&format!(
-                    "minder-server pid={pid} exited after {uptime:?}; restarting in {backoff:?}"
-                ));
-                if wait_backoff(&rx, backoff) {
-                    return;
-                }
-                backoff = next_backoff(backoff);
-                continue;
             }
         }
+    }
+}
+
+/// Observe-only loop: wait for a shutdown command and never touch the server.
+/// Used for a startup attach and after a post-crash attach switch alike.
+fn observe_until_shutdown(rx: &Receiver<Command>) {
+    loop {
+        match rx.recv() {
+            Ok(Command::Shutdown(ack)) => {
+                log("observe mode: quit requested — leaving the existing server untouched");
+                let _ = ack.send(());
+                return;
+            }
+            Ok(Command::Restart(ack)) => {
+                log("observe mode: restart requested — ignored (not our process)");
+                let _ = ack.send(());
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// What to do after the supervised sidecar exits, based on a fresh probe of the
+/// port. Pure so the mode-transition logic is unit-testable without a live
+/// server (the full spawn-conflict race is hard to reproduce deterministically).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrashAction {
+    /// Port is free — normal backoff restart.
+    Respawn,
+    /// A healthy/degraded Minder now holds the port — attach and observe.
+    AttachExisting,
+    /// A non-Minder process holds the port — observe without respawn-hammering.
+    ObserveForeign,
+}
+
+fn decide_after_crash(port_bound: bool, status: ServerStatus) -> CrashAction {
+    if !port_bound {
+        CrashAction::Respawn
+    } else if status.is_minder() {
+        CrashAction::AttachExisting
+    } else {
+        CrashAction::ObserveForeign
     }
 }
 
@@ -476,6 +559,48 @@ mod contract_tests {
             CONTROL_CHANNEL_TS.contains(r#"CONTROL_SHUTDOWN_COMMAND = "shutdown""#),
             "controlChannel.ts must define CONTROL_SHUTDOWN_COMMAND = \"shutdown\" to match \
              the bytes graceful_stop() writes to the child's stdin"
+        );
+    }
+}
+
+#[cfg(test)]
+mod crash_decision_tests {
+    use super::{decide_after_crash, CrashAction};
+    use crate::health::ServerStatus;
+
+    #[test]
+    fn free_port_respawns() {
+        // Port not bound after the crash → the sidecar just crashed; restart.
+        assert_eq!(
+            decide_after_crash(false, ServerStatus::Down),
+            CrashAction::Respawn
+        );
+    }
+
+    #[test]
+    fn healthy_minder_holding_port_attaches() {
+        // Phase A service bound the port and answers healthy → attach, stop
+        // respawning (this is the EADDRINUSE race the review flagged).
+        assert_eq!(
+            decide_after_crash(true, ServerStatus::Up),
+            CrashAction::AttachExisting
+        );
+    }
+
+    #[test]
+    fn degraded_minder_holding_port_attaches() {
+        assert_eq!(
+            decide_after_crash(true, ServerStatus::Degraded),
+            CrashAction::AttachExisting
+        );
+    }
+
+    #[test]
+    fn foreign_process_holding_port_observes() {
+        // Bound but the probe can't confirm Minder → observe, don't respawn-hammer.
+        assert_eq!(
+            decide_after_crash(true, ServerStatus::Down),
+            CrashAction::ObserveForeign
         );
     }
 }
