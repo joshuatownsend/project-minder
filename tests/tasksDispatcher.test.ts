@@ -257,6 +257,42 @@ describe("dispatcher singleton", () => {
     expect(runClassicTask).not.toHaveBeenCalled(); // and not spawned
   });
 
+  it("skips dispatcher completion bookkeeping when a spawned task finishes after shutdown (F10)", async () => {
+    const { runClassicTask } = await import("../src/lib/tasks/spawner");
+    const task = {
+      id: 77, title: "long-runner", description: "", status: "running", priority: 3, quadrant: "do",
+      assigned_skill: null, model: null, execution_mode: "classic", scheduled_for: null,
+      requires_approval: 0, risk_level: "low", dry_run: 0, schedule_id: null, swarm_id: null,
+      approved_at: null, session_id: null, started_at: null, completed_at: null,
+      duration_ms: null, cost_usd: null, output_summary: null, error_message: null,
+      metadata: null, consecutive_failures: 0, created_at: new Date().toISOString(),
+    };
+    vi.mocked(claimPendingTask).mockResolvedValueOnce(task as never).mockResolvedValue(null);
+
+    // Gate the spawn so the child "exits" only AFTER we shut down.
+    let releaseSpawn!: () => void;
+    const spawnGate = new Promise((resolve) => {
+      releaseSpawn = () => resolve({ taskId: 77, status: "done", durationMs: 1 });
+    });
+    vi.mocked(runClassicTask).mockReturnValueOnce(spawnGate as never);
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100); // tick claims + spawns (gated), then finishes
+    expect(runClassicTask).toHaveBeenCalledTimes(1);
+
+    // Shut down while the spawn is still in flight.
+    await stopDispatcher();
+
+    // Child exits post-shutdown → completion continuation must no-op: no row
+    // re-read, no board/TODO sync, no throw.
+    releaseSpawn();
+    await drainMicrotasks();
+
+    expect(getTask).not.toHaveBeenCalled();
+    expect(onTaskCompleteSyncBoard).not.toHaveBeenCalled();
+    expect(onTaskCompleteToggleTodo).not.toHaveBeenCalled();
+  });
+
   it("skips dry_run tasks without spawning", async () => {
     const { runClassicTask } = await import("../src/lib/tasks/spawner");
     const dryRunTask = {

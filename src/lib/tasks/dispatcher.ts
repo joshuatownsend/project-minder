@@ -159,6 +159,12 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         const swarmId = task.swarm_id;
 
         async function afterComplete(completedTask?: Task): Promise<void> {
+          // A2: once shutdown has begun, skip all completion bookkeeping. The
+          // child was detached and keeps running; its row is reclaimed by the
+          // next boot's stale-PID sweep / reconcile (same contract as a crash).
+          // This is the dispatcher-owned half; the spawner's own completeTask/
+          // failTask are made safe by the tasks.db shutdown-close guard.
+          if (stopped) return;
           if (completedTask) {
             // TODO-sourced tasks tick their TODO.md line (guarded by
             // sourceFile==="TODO.md"); board-sourced tasks flip their issue to
@@ -198,6 +204,9 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           // tasks, which are the default for promoteBoardIssueToTask + delegateTodo.
           promise = runClassicTask(task, spawnFn)
             .then(async () => {
+              // A2: don't even re-read the row post-shutdown — afterComplete
+              // would no-op anyway, and getTask would hit the closed DB.
+              if (stopped) return;
               const completedTask = await getTask(task!.id).catch(() => null);
               await afterComplete(completedTask ?? undefined);
             })

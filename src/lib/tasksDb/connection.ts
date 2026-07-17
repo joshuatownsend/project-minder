@@ -34,6 +34,15 @@ interface ConnectionState {
   lastError: Error | null;
   inFlight: Promise<DatabaseT.Database | null> | null;
   preparedCache: Map<string, DatabaseT.Statement> | null;
+  /**
+   * Latched by `checkpointAndCloseTasksDb()` during graceful shutdown (A2).
+   * Once set, `getTasksDb()` refuses to re-open — a late write (e.g. a spawned
+   * task's `completeTask` firing after its child exits post-shutdown) must NOT
+   * silently resurrect the DB handle we just closed and checkpointed. Those
+   * rows are instead reclaimed by the next boot's stale-PID sweep / reconcile,
+   * the same contract as a crash. Process-lifetime sticky (we're exiting).
+   */
+  shutdownClosed: boolean;
 }
 
 const g = globalThis as unknown as {
@@ -46,6 +55,7 @@ if (!g.__minderTasksDb) {
     lastError: loadError,
     inFlight: null,
     preparedCache: null,
+    shutdownClosed: false,
   };
 }
 
@@ -57,6 +67,10 @@ async function ensureTasksDbDir(): Promise<void> {
 
 export async function getTasksDb(): Promise<DatabaseT.Database | null> {
   if (!Database) return null;
+  // Closed for shutdown — never re-open (see `shutdownClosed`). Returning null
+  // makes every store write funnelling through `ensureReady()` fail safely (or
+  // no-op where guarded) instead of resurrecting the handle mid-process-exit.
+  if (state.shutdownClosed) return null;
   if (state.db) return state.db;
   if (state.inFlight) return state.inFlight;
 
@@ -121,6 +135,10 @@ export function closeTasksDb(): void {
  * only writer) has stopped.
  */
 export function checkpointAndCloseTasksDb(): void {
+  // Latch FIRST (synchronous), before any await could interleave a getTasksDb()
+  // race: from here on no code path may re-open the DB, even the no-open path
+  // below where there's nothing to flush.
+  state.shutdownClosed = true;
   const db = state.db;
   if (!db) return; // driver missing, or no connection open — nothing to flush
   try {
@@ -129,6 +147,20 @@ export function checkpointAndCloseTasksDb(): void {
     /* best-effort — fall through to close regardless */
   }
   closeTasksDb();
+}
+
+/** True once `checkpointAndCloseTasksDb()` has latched the connection closed for
+ *  shutdown. Read by store completion-path writers to no-op cleanly. */
+export function isTasksDbShutdownClosed(): boolean {
+  return state.shutdownClosed;
+}
+
+/** @internal Test-only: clear the shutdown latch (and close any handle) so a
+ *  test that exercised `checkpointAndCloseTasksDb()` doesn't leak the sticky
+ *  flag into later cases in the same file. */
+export function _resetTasksDbShutdownForTesting(): void {
+  closeTasksDb();
+  state.shutdownClosed = false;
 }
 
 export function prepTasksCached(

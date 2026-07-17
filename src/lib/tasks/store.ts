@@ -3,7 +3,7 @@ import path from "path";
 import type DatabaseT from "better-sqlite3";
 import { WORKTREE_SEP } from "../scanner/worktreeCheck";
 import { initTasksDb } from "../tasksDb/migrations";
-import { getTasksDb, prepTasksCached } from "../tasksDb/connection";
+import { getTasksDb, prepTasksCached, isTasksDbShutdownClosed } from "../tasksDb/connection";
 import { computeNextRun } from "./cron";
 import type {
   Task,
@@ -377,6 +377,7 @@ export async function rerunTask(id: number): Promise<Task | null> {
 
 /** Write session_id mid-run (before completeTask is called). Fire-and-forget safe. */
 export async function setSessionId(id: number, sessionId: string): Promise<void> {
+  if (isTasksDbShutdownClosed()) return; // A2: no writes after the DB is closed for shutdown
   const db = await ensureReady();
   prepTasksCached(db, "UPDATE ops_tasks SET session_id = ? WHERE id = ? AND status = 'running'").run(sessionId, id);
 }
@@ -389,6 +390,10 @@ export interface CompleteTaskInput {
 
 /** Mark a running task as done with captured output. */
 export async function completeTask(id: number, result: CompleteTaskInput): Promise<Task | null> {
+  // A2: a task whose child exits after the DB was closed for shutdown must not
+  // re-open it — no-op cleanly; the next boot's reconcile settles the row from
+  // PID/exit evidence (same contract as a crash).
+  if (isTasksDbShutdownClosed()) return null;
   const db = await ensureReady();
   const row = prepTasksCached(
     db,
@@ -417,6 +422,7 @@ export interface FailTaskInput {
 
 /** Mark a running task as failed. Increments consecutive_failures. */
 export async function failTask(id: number, info: FailTaskInput): Promise<Task | null> {
+  if (isTasksDbShutdownClosed()) return null; // A2: no writes after shutdown close
   const db = await ensureReady();
   const row = prepTasksCached(
     db,
