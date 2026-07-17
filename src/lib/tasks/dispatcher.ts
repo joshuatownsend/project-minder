@@ -16,6 +16,9 @@ const MAX_CONCURRENT = 3;
 
 interface DispatcherHandle {
   dispose: () => void;
+  /** Like {@link dispose} but returns a promise that settles once any in-flight
+   *  tick has finished — so a shutdown disposer can await a truthful teardown. */
+  stop: () => Promise<void>;
   getStats: () => DispatcherStats;
 }
 
@@ -37,14 +40,19 @@ export function isDispatcherRunning(): boolean {
 }
 
 /**
- * Stop the dispatcher singleton if running (A2 graceful shutdown): clears its
- * tick interval + pending initial-tick timeout and drops the global handle.
- * Idempotent — a no-op when the dispatcher isn't running. In-flight task
- * spawns are not force-killed here; they detach and are reconciled/swept on
+ * Stop the dispatcher singleton if running (A2 graceful shutdown): sets a
+ * `stopped` flag synchronously (so a tick already mid-flight claims/spawns no
+ * further work — see the guards in `tick()`), clears the tick interval +
+ * pending initial-tick timeout, drops the global handle, and returns a promise
+ * that resolves once any in-flight tick has settled. Idempotent — resolves
+ * immediately when the dispatcher isn't running. Already-spawned task
+ * processes are not force-killed here; they detach and are reconciled/swept on
  * the next boot.
  */
-export function stopDispatcher(): void {
-  g.__minderDispatcher?.dispose();
+export function stopDispatcher(): Promise<void> {
+  const handle = g.__minderDispatcher;
+  if (!handle) return Promise.resolve();
+  return handle.stop();
 }
 
 /**
@@ -60,6 +68,14 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   let tickCount = 0;
   let lastTickAt: string | null = null;
   let tickInProgress = false;
+  // Set synchronously by stop()/dispose(). A tick that's mid-flight when
+  // shutdown arrives checks this at each claim/spawn point and bails, so it
+  // can't claim or spawn new task work while the shutdown disposers proceed
+  // toward closing tasks.db.
+  let stopped = false;
+  // The most recent tick's promise, so stop() can await an in-flight tick's
+  // completion (bounded by the shutdown deadline the lifecycle registry caps).
+  let currentTick: Promise<void> | null = null;
   const inFlight = new Map<number, Promise<void>>();
 
   async function handleDecision(taskId: number, event: DecisionEvent): Promise<void> {
@@ -74,6 +90,7 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
 
   async function tick() {
     if (tickInProgress) return;
+    if (stopped) return;
     tickInProgress = true;
     try {
       lastTickAt = new Date().toISOString();
@@ -104,7 +121,13 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         console.error("[dispatcher] promoteApprovalTasks error:", err);
       }
 
+      // Don't claim/spawn any new work once shutdown has begun. Checked here
+      // (a tick can reach this point after several awaits during which stop()
+      // may have flipped) and again below right after each claim.
+      if (stopped) return;
+
       while (inFlight.size < MAX_CONCURRENT) {
+        if (stopped) break; // no new claims after stop
         let task: Task | null = null;
         try {
           task = await claimPendingTask();
@@ -113,6 +136,10 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           break;
         }
         if (!task) break;
+        // stop() may have flipped during the claim await — don't spawn; the
+        // just-claimed row is left `running` for the next boot's stale-PID
+        // sweep / reconcile to reclaim (same contract as an abandoned spawn).
+        if (stopped) break;
 
         if (task.dry_run) {
           console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
@@ -176,14 +203,24 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
     }
   }
 
-  const interval = setInterval(() => { tick().catch(console.error); }, TICK_INTERVAL_MS);
-  const initialTimeout = setTimeout(() => { tick().catch(console.error); }, 2_000);
+  const interval = setInterval(() => { currentTick = tick().catch(console.error); }, TICK_INTERVAL_MS);
+  const initialTimeout = setTimeout(() => { currentTick = tick().catch(console.error); }, 2_000);
+
+  function teardown(): void {
+    stopped = true; // synchronous: an in-flight tick sees this at its next guard
+    clearInterval(interval);
+    clearTimeout(initialTimeout);
+    g.__minderDispatcher = undefined;
+  }
 
   g.__minderDispatcher = {
     dispose() {
-      clearInterval(interval);
-      clearTimeout(initialTimeout);
-      g.__minderDispatcher = undefined;
+      teardown();
+    },
+    stop() {
+      teardown();
+      // Await the in-flight tick (if any) so callers see a truthful teardown.
+      return currentTick ?? Promise.resolve();
     },
     getStats() {
       return { running: inFlight.size, tickCount, lastTickAt, startedAt };

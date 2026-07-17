@@ -35,7 +35,7 @@ vi.mock("../src/lib/tasks/spawner", () => ({
   runClassicTask: vi.fn().mockResolvedValue({ taskId: 1, status: "done", durationMs: 100 }),
 }));
 
-import { initDispatcher, isDispatcherRunning, getDispatcherStats } from "../src/lib/tasks/dispatcher";
+import { initDispatcher, isDispatcherRunning, getDispatcherStats, stopDispatcher } from "../src/lib/tasks/dispatcher";
 import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask } from "../src/lib/tasks/store";
 import { onTaskCompleteSyncBoard } from "../src/lib/tasks/boardDelegation";
 import { onTaskCompleteToggleTodo } from "../src/lib/tasks/todoDelegation";
@@ -156,6 +156,36 @@ describe("dispatcher singleton", () => {
     expect(getTask).toHaveBeenCalledWith(7);
     expect(onTaskCompleteSyncBoard).toHaveBeenCalledWith(completedTask);
     expect(onTaskCompleteToggleTodo).toHaveBeenCalledWith(completedTask);
+  });
+
+  it("stops claiming mid-tick when shut down, and stop() resolves only after the in-flight tick settles (F5)", async () => {
+    const { runClassicTask } = await import("../src/lib/tasks/spawner");
+    // Gate materializeSchedules so we can flip stopDispatcher() while a tick is
+    // in flight — before it reaches the claim loop.
+    let releaseMaterialize!: () => void;
+    const gate = new Promise<number>((resolve) => {
+      releaseMaterialize = () => resolve(0);
+    });
+    vi.mocked(materializeSchedules).mockReturnValueOnce(gate as never);
+    // If a claim were ever attempted it would return a task — proving the guard
+    // by its ABSENCE of a call.
+    vi.mocked(claimPendingTask).mockResolvedValue({ id: 99 } as never);
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100); // first tick starts, now awaiting the gate
+    expect(claimPendingTask).not.toHaveBeenCalled();
+
+    // Shut down mid-tick — sets `stopped` synchronously and drops the handle.
+    const settle = stopDispatcher();
+    expect(isDispatcherRunning()).toBe(false);
+
+    // Release the gate; the tick resumes, sees `stopped`, and returns before
+    // the claim loop. Awaiting settle proves stop() waits for the tick.
+    releaseMaterialize();
+    await settle;
+
+    expect(claimPendingTask).not.toHaveBeenCalled(); // no new claims after stop
+    expect(runClassicTask).not.toHaveBeenCalled(); // and nothing spawned
   });
 
   it("skips dry_run tasks without spawning", async () => {

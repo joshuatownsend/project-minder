@@ -134,9 +134,9 @@ export async function runBootstrap(): Promise<void> {
 
 /**
  * Register the graceful-shutdown disposers (A2). Registration ORDER matters:
- * the registry disposes LIFO, so registering the SQLite close FIRST makes it
- * dispose LAST — after every watcher/timer/child that might still write
- * through the DB has been torn down. Each disposer lazily grabs its already-
+ * the registry disposes LIFO, so registering the two SQLite closes FIRST makes
+ * them dispose LAST — after every watcher/timer/child that might still write
+ * through a DB has been torn down. Each disposer lazily grabs its already-
  * loaded singleton; `onShutdown` is idempotent by name, so a dev/HMR re-run
  * replaces rather than duplicates.
  */
@@ -144,14 +144,24 @@ async function registerServiceDisposers(): Promise<void> {
   try {
     const { onShutdown } = await import("@/lib/lifecycle");
 
-    // Registered first → disposed last.
+    // Registered first → disposed last. The two DBs close after every producer
+    // has stopped: the index DB (ingest/scan writers) and the separate
+    // tasks.db (the dispatcher). tasks.db is registered just after the index
+    // DB and just BEFORE the dispatcher, so LIFO disposes it AFTER the
+    // dispatcher stops (no writer left) but alongside the index-DB close.
     onShutdown("sqlite", async () => {
       const { checkpointAndCloseDb } = await import("@/lib/db/connection");
       checkpointAndCloseDb();
     });
+    onShutdown("tasksDb", async () => {
+      const { checkpointAndCloseTasksDb } = await import("@/lib/tasksDb/connection");
+      checkpointAndCloseTasksDb();
+    });
     onShutdown("dispatcher", async () => {
       const { isDispatcherRunning, stopDispatcher } = await import("@/lib/tasks/dispatcher");
-      if (isDispatcherRunning()) stopDispatcher();
+      // await: stopDispatcher() resolves once any in-flight tick has settled,
+      // so tasks.db (disposed right after this) closes with no writer active.
+      if (isDispatcherRunning()) await stopDispatcher();
     });
     onShutdown("gitStatusCache", async () => {
       const { gitStatusCache } = await import("@/lib/gitStatusCache");

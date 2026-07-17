@@ -110,6 +110,27 @@ export function closeTasksDb(): void {
   }
 }
 
+/**
+ * Graceful-shutdown close (A2), mirroring `checkpointAndCloseDb()` in
+ * `db/connection.ts`: checkpoint the WAL into the main `tasks.db` file, then
+ * close the handle, so a supervised stop doesn't leave a `-wal`/`-shm` pair for
+ * the next boot to recover. Respects the better-sqlite3-absent / DB-not-open
+ * path — no open connection means nothing to flush, a clean no-op. Never
+ * throws (a failed checkpoint must not block the rest of shutdown). Registered
+ * as the `tasksDb` shutdown disposer, ordered to run after the dispatcher (its
+ * only writer) has stopped.
+ */
+export function checkpointAndCloseTasksDb(): void {
+  const db = state.db;
+  if (!db) return; // driver missing, or no connection open — nothing to flush
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* best-effort — fall through to close regardless */
+  }
+  closeTasksDb();
+}
+
 export function prepTasksCached(
   db: DatabaseT.Database,
   sql: string
