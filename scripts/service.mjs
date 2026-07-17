@@ -68,6 +68,7 @@ import {
   buildServerIdentityMarkers,
   commandLineMatchesServer,
   escapeSystemdPercent,
+  isAlreadyMissingFailure,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -250,6 +251,29 @@ async function runInstall(platformKind) {
   step(`Enabled + started systemd --user unit "${unitName}". Verify: systemctl --user status ${unitName}`);
 }
 
+// F10 review fix: inspect the deregistration step's own result before
+// touching any generated artifact. `runSteps` records `{ok:false}` on
+// failure but doesn't throw, so without this check a REAL failure
+// (permissions, a Task Scheduler/launchd/systemd error) still fell through
+// to deleting the vbs/plist/unit file and reported success — leaving a
+// task/agent/unit STILL REGISTERED but pointing at files that no longer
+// exist. "Already missing" (uninstall-of-something-not-installed) is the
+// one failure mode that's fine to proceed past; anything else aborts
+// with the raw error and leaves the artifacts alone so a re-run can retry
+// the actual deregistration.
+function requireDeregistered(platformKind, results, { subject, retryHint }) {
+  const failure = results.find((r) => !r.ok);
+  if (!failure) return; // fully succeeded
+  if (isAlreadyMissingFailure(platformKind, failure)) {
+    step(`${subject} was already not registered — proceeding with cleanup.`);
+    return;
+  }
+  fail(
+    `Failed to deregister ${subject}: ${failure.error ?? failure.stderr ?? failure.stdout ?? "unknown error"}. ` +
+      `NOT removing its generated files — it may still be registered and pointing at them. ${retryHint}`
+  );
+}
+
 async function runUninstall(platformKind) {
   if (platformKind === "windows") {
     // Deliberately does NOT auto-stop first. runStop("windows") hard-kills
@@ -262,7 +286,11 @@ async function runUninstall(platformKind) {
     // running server stopped, run `pnpm service:stop` yourself first (after
     // confirming port 4100 is actually this service) — uninstall only
     // removes the registration + generated files.
-    await runSteps(planActions("windows", "uninstall", { taskName: WINDOWS_TASK_NAME }));
+    const results = await runSteps(planActions("windows", "uninstall", { taskName: WINDOWS_TASK_NAME }));
+    requireDeregistered("windows", results, {
+      subject: `scheduled task "${WINDOWS_TASK_NAME}"`,
+      retryHint: `Investigate (try: schtasks /query /tn ${WINDOWS_TASK_NAME}) and re-run uninstall.`,
+    });
     rmSync(windowsServiceDir, { recursive: true, force: true });
     step(`Removed scheduled task "${WINDOWS_TASK_NAME}" and ${windowsServiceDir}.`);
     step(
@@ -274,7 +302,11 @@ async function runUninstall(platformKind) {
 
   if (platformKind === "macos") {
     const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
-    await runSteps(planActions("macos", "uninstall", { plistPath, label: LAUNCHD_LABEL }));
+    const results = await runSteps(planActions("macos", "uninstall", { plistPath, label: LAUNCHD_LABEL }));
+    requireDeregistered("macos", results, {
+      subject: `LaunchAgent "${LAUNCHD_LABEL}"`,
+      retryHint: `Investigate (try: launchctl list ${LAUNCHD_LABEL}) and re-run uninstall.`,
+    });
     rmSync(plistPath, { force: true });
     step(`Unloaded LaunchAgent "${LAUNCHD_LABEL}" and removed ${plistPath}.`);
     return;
@@ -287,7 +319,11 @@ async function runUninstall(platformKind) {
   // systemd's unit cache pointing at a file that's already deleted by the
   // time anything next notices. planActions("linux","uninstall") only
   // returns the disable step for exactly this reason.
-  await runSteps(planActions("linux", "uninstall", { unitName: SYSTEMD_UNIT_NAME }));
+  const results = await runSteps(planActions("linux", "uninstall", { unitName: SYSTEMD_UNIT_NAME }));
+  requireDeregistered("linux", results, {
+    subject: `systemd --user unit "${SYSTEMD_UNIT_NAME}"`,
+    retryHint: `Investigate (try: systemctl --user status ${SYSTEMD_UNIT_NAME}) and re-run uninstall.`,
+  });
   rmSync(unitPath, { force: true });
   await runSteps([{ exe: "systemctl", args: ["--user", "daemon-reload"] }]);
   step(`Disabled systemd --user unit "${SYSTEMD_UNIT_NAME}" and removed ${unitPath}.`);

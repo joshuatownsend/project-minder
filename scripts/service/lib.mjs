@@ -77,6 +77,58 @@ export function escapeSystemdPercent(value) {
 }
 
 /**
+ * Classifies a FAILED deregistration step (`schtasks /delete`, `launchctl
+ * unload`, `systemctl disable`) as either "already missing" — the
+ * task/agent/unit simply wasn't registered, a fine and expected outcome for
+ * `service:uninstall` — or a REAL failure (permissions, a genuine OS/CLI
+ * error) that must block further artifact cleanup (F10 review fix).
+ *
+ * Before this, `runUninstall` ran the deregistration step, ignored whether
+ * it succeeded, and deleted the generated artifacts (vbs/xml on Windows,
+ * the plist on macOS, the unit file on Linux) unconditionally — so a real
+ * failure (e.g. denied permissions on the Scheduled Tasks store) still
+ * reported "uninstalled" and left a REGISTERED task/agent/unit pointing at
+ * files that no longer exist.
+ *
+ * This is pattern-matching against each CLI's own (undocumented, not a
+ * stable contract) error text — not a proper structured API — so it is
+ * deliberately conservative: an unrecognized error string is treated as a
+ * REAL failure (fails safe: abort + keep the artifacts + surface the raw
+ * error) rather than risk mis-classifying a genuine failure as "already
+ * missing" and deleting artifacts a still-registered entry depends on.
+ *
+ * @param {string} platformKind — "windows" | "macos" | "linux" expected, but
+ *   deliberately typed as a plain string: an unrecognized value has no
+ *   registered patterns and simply returns false (never throws), which is
+ *   itself part of the fail-safe contract this function provides.
+ * @param {{ ok?: boolean, stdout?: string, stderr?: string, error?: string } | null | undefined} result
+ */
+export function isAlreadyMissingFailure(platformKind, result) {
+  if (!result || result.ok) return false;
+  const text = `${result.stderr ?? ""} ${result.stdout ?? ""} ${result.error ?? ""}`.toLowerCase();
+  if (!text.trim()) return false;
+
+  const ALREADY_MISSING_PATTERNS = {
+    // Observed live in this session: `schtasks /query` (and, per Microsoft's
+    // own docs, `/delete`) on a nonexistent task name prints exactly
+    // "ERROR: The system cannot find the file specified." regardless of
+    // locale-independent exit code 1.
+    windows: [/cannot find the file specified/, /the system could not find/],
+    // launchctl reads the plist FILE at the given path to determine what to
+    // unload — if that file is already gone, common reported text includes
+    // "No such file or directory" (reading the path) or "Could not find"/
+    // "Not Found" (resolving the label/service).
+    macos: [/no such file or directory/, /could not find/, /not found/],
+    // systemctl on a unit name it doesn't know about reports variations of
+    // "not loaded", "could not be found", or "No such file or directory"
+    // depending on the systemd version and which sub-step failed.
+    linux: [/no such file or directory/, /could not be found/, /not loaded/, /not found/],
+  };
+
+  return (ALREADY_MISSING_PATTERNS[platformKind] ?? []).some((pattern) => pattern.test(text));
+}
+
+/**
  * Resolves the `next` CLI's own JS entry point (not the node_modules/.bin
  * shell shim) via `createRequire` rooted at the target repo's package.json
  * — this walks the SAME resolution pnpm/node would use from that repo,

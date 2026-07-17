@@ -6,6 +6,7 @@ import {
   escapeVbsString,
   quoteArg,
   escapeSystemdPercent,
+  isAlreadyMissingFailure,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
   detectPlatformKind,
@@ -75,6 +76,80 @@ describe("escapeSystemdPercent (F9 review fix)", () => {
 
   it("is a no-op with no percent signs", () => {
     expect(escapeSystemdPercent("/home/josh/project")).toBe("/home/josh/project");
+  });
+});
+
+describe("isAlreadyMissingFailure (F10 review fix: gate uninstall artifact cleanup)", () => {
+  it("returns false for a successful result (nothing to classify)", () => {
+    expect(isAlreadyMissingFailure("windows", { ok: true, stdout: "SUCCESS", stderr: "" })).toBe(false);
+  });
+
+  it("returns false for null/undefined results", () => {
+    expect(isAlreadyMissingFailure("windows", null)).toBe(false);
+    expect(isAlreadyMissingFailure("windows", undefined)).toBe(false);
+  });
+
+  it("returns false when there is no error text at all", () => {
+    expect(isAlreadyMissingFailure("windows", { ok: false, stdout: "", stderr: "" })).toBe(false);
+  });
+
+  // Windows: exact text observed live in this session for a nonexistent
+  // scheduled task (schtasks /query, and per Microsoft's docs also /delete).
+  it("windows: classifies schtasks' 'cannot find the file specified' as already-missing", () => {
+    const result = { ok: false, stdout: "", stderr: "ERROR: The system cannot find the file specified.\r\n" };
+    expect(isAlreadyMissingFailure("windows", result)).toBe(true);
+  });
+
+  it("windows: classifies a permissions/access error as a REAL failure", () => {
+    const result = { ok: false, stdout: "", stderr: "ERROR: Access is denied.\r\n" };
+    expect(isAlreadyMissingFailure("windows", result)).toBe(false);
+  });
+
+  it("macos: classifies launchctl's 'No such file or directory' as already-missing", () => {
+    const result = { ok: false, stdout: "", stderr: "launchctl unload -w: No such file or directory\n" };
+    expect(isAlreadyMissingFailure("macos", result)).toBe(true);
+  });
+
+  it("macos: classifies a permissions error as a REAL failure", () => {
+    const result = { ok: false, stdout: "", stderr: "launchctl unload -w: Operation not permitted\n" };
+    expect(isAlreadyMissingFailure("macos", result)).toBe(false);
+  });
+
+  it("linux: classifies systemctl's 'not loaded' / 'could not be found' as already-missing", () => {
+    expect(
+      isAlreadyMissingFailure("linux", { ok: false, stdout: "", stderr: "Unit minder.service not loaded.\n" })
+    ).toBe(true);
+    expect(
+      isAlreadyMissingFailure("linux", {
+        ok: false,
+        stdout: "",
+        stderr: "Failed to disable unit: Unit file minder.service could not be found.\n",
+      })
+    ).toBe(true);
+  });
+
+  it("linux: classifies a permissions error as a REAL failure", () => {
+    const result = { ok: false, stdout: "", stderr: "Failed to disable unit: Access denied\n" };
+    expect(isAlreadyMissingFailure("linux", result)).toBe(false);
+  });
+
+  // Documented known limitation of the pattern-matching approach: dbus's own
+  // "No such file or directory" (its socket connection failure text)
+  // collides with the unit-missing phrasing this classifier looks for, so a
+  // genuine dbus connectivity problem can be misclassified as "already
+  // missing" — the classifier is a best-effort heuristic, not an
+  // authoritative parse of these CLIs' output.
+  it("linux: KNOWN LIMITATION — a dbus connectivity error's 'No such file or directory' text is indistinguishable from a missing unit", () => {
+    const result = {
+      ok: false,
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory\n",
+    };
+    expect(isAlreadyMissingFailure("linux", result)).toBe(true);
+  });
+
+  it("returns false for an unrecognized platform", () => {
+    expect(isAlreadyMissingFailure("plan9", { ok: false, stdout: "", stderr: "whatever" })).toBe(false);
   });
 });
 
