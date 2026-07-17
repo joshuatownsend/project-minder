@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+{{PROGRAM_ARGUMENTS}}
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{WORKING_DIR}}</string>
+  <!--
+    PATH is captured from the INSTALLING shell (F15 review fix) and frozen
+    here at install time. launchd's own default PATH for a LaunchAgent is
+    minimal and does NOT include /opt/homebrew/bin, a user's npm/pnpm
+    global bin, or anything a login shell's rc file (.zshrc/.bashrc) adds —
+    but the served app shells out to `git`/`gh` (gitStatusCache,
+    githubActivityCache) and spawns `claude` binaries (the task
+    dispatcher), all of which would silently fail to resolve without this.
+    CAVEAT: because this is frozen at install time, a PATH change made
+    AFTER installing (e.g. installing Homebrew, nvm switching the active
+    node) will NOT be picked up until you re-run `pnpm service:install`.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>{{PORT}}</string>
+    <key>HOSTNAME</key>
+    <string>{{HOSTNAME}}</string>
+    <key>PATH</key>
+    <string>{{PATH_VALUE}}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    KeepAlive uses the conditional dict form, NOT a bare <true/> (A3 review
+    fix, F3): a bare `KeepAlive=true` makes launchd restart the job even
+    after a deliberate `launchctl stop`/`pnpm service:stop`, since launchd
+    treats any exit — including a clean one — as something to relaunch.
+    SuccessfulExit=false means "restart only when the LAST exit was NOT
+    successful" — i.e. still restart on a crash (non-zero exit), but leave
+    a graceful stop alone. This matches this app's own shutdown path
+    (src/lib/lifecycle.ts's shutdown() calls process.exit(0) after
+    disposers finish on SIGTERM), so `launchctl stop` results in an actual
+    stop instead of an immediate respawn. Reviewed-only: no live macOS
+    verification has been run against this template yet.
+  -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/minder-service.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/minder-service.err.log</string>
+</dict>
+</plist>

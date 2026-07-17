@@ -1,3 +1,30 @@
+## 2026-07-17 08:00 | service-mode | Register Minder's autostart service (task A3, one time per machine)
+
+- [ ] Build the server, then register the logon autostart task
+  `pnpm build && pnpm package:standalone` (recommended — self-contained `dist/minder-server`)
+  then `pnpm service:install`
+  Windows may show a UAC/consent prompt for Task Scheduler — accept it. This registers a
+  **Scheduled Task with a logon trigger** (not a Windows Service — services default to
+  LocalSystem, which can't see `~/.claude`, `C:\dev`, or `~/.minder`). Verify with
+  `pnpm service:status` or `schtasks /query /tn MinderDashboard`.
+- [ ] Know the two related commands and their limits
+  `pnpm service:uninstall` removes the registration only — it does **not** stop an already-running
+  server. If one is running and you want it stopped too, run `pnpm service:stop` yourself first.
+  `pnpm service:stop` on Windows is a hard-stop (kills whatever is listening on port 4100) — Task
+  Scheduler loses track of the process almost immediately after logon, so there is no graceful-signal
+  path yet. Confirm nothing else you care about is bound to port 4100 before running it. A2's boot
+  reconcile + SQLite WAL recovery make an unclean stop safe for Minder's own data.
+- [ ] macOS (`com.minder.dashboard.plist`) and Linux (`minder.service`, systemd `--user`) templates
+  ship in this PR but are reviewed-only — no CI/hands-on verification on those platforms yet.
+- [ ] macOS/Linux only: PATH is captured from the installing shell and frozen into the plist/unit
+  at install time (launchd/systemd `--user` services don't inherit your login shell's PATH, so
+  without this `git`/`gh`/`claude` would silently fail to resolve). If you later install Homebrew,
+  switch your active Node via nvm, or otherwise change PATH, re-run `pnpm service:install` to pick
+  up the new value — the service won't see PATH changes on its own. Not applicable on Windows (the
+  Scheduled Task already tracks the live registry PATH on every run).
+
+---
+
 ## 2026-05-09 | wave12.1 | GitHub repo hardening — ruleset + permission changes
 
 - [ ] **Enable "Require signed commits" on the `main` branch ruleset**
