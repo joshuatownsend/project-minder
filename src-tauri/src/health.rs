@@ -14,7 +14,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::config::{HOST, PROBE_HOST_HEADER};
+use crate::config::HOST;
 
 /// One process-wide `ureq::Agent`, built once and reused across every ~15s poll
 /// (and the startup attach probe). `ureq::Agent` is a cheap `Arc`-backed handle
@@ -61,12 +61,13 @@ pub fn port_is_bound(port: u16) -> bool {
 pub fn probe(port: u16) -> ServerStatus {
     let url = format!("http://{HOST}:{port}/api/health");
 
-    // Present the server's canonical allowed Host (see PROBE_HOST_HEADER) so the
-    // probe passes the DNS-rebind allowlist on any bound port, not just 4100.
+    // The probe presents its real Host (`127.0.0.1:<port>`, from the URL) — the
+    // server's allowlist is port-aware (src/proxy.ts derives it from the bound
+    // PORT), so a loopback host on the bound port is accepted on any port.
     // Both the 2xx and the 503-"degraded" arms carry the same body shape, so
     // normalize to (code, body) and classify once; only a transport failure
     // (connection refused / timeout / DNS) is an outright Down.
-    let (code, body) = match agent().get(&url).set("Host", PROBE_HOST_HEADER).call() {
+    let (code, body) = match agent().get(&url).call() {
         Ok(resp) => (200u16, resp.into_string().unwrap_or_default()),
         Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
         Err(_) => return ServerStatus::Down,

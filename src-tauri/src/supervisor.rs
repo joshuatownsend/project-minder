@@ -46,6 +46,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// unrelated failure — reset the backoff instead of compounding it.
 const HEALTHY_UPTIME_RESET: Duration = Duration::from_secs(30);
 
+/// Windows `CREATE_NO_WINDOW` process-creation flag. The tray is
+/// `windows_subsystem = "windows"` (no console of its own), so a spawned
+/// `node.exe` — or a `taskkill` — created with default flags would allocate and
+/// flash a visible console window on every spawn/restart/stop. This suppresses
+/// it. (0x08000000; see the Win32 process-creation-flags docs.)
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// How the supervisor relates to the server for this run — decided once at
 /// startup and never changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,6 +400,12 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // No flashed/allocated console for the sidecar (see CREATE_NO_WINDOW).
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     cmd.spawn()
         .map_err(|e| format!("failed to launch `{}`: {e}", cfg.node_path))
@@ -451,8 +465,11 @@ fn graceful_stop(child: &mut Child, stdin: Option<ChildStdin>, pid: u32) {
 fn kill_tree(pid: u32) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let _ = StdCommand::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
+            // No flashed console window for the taskkill helper either.
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();

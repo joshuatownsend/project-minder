@@ -18,18 +18,6 @@ pub const DEFAULT_PORT: u16 = 4100;
 /// dashboard and must not be reachable off-box.
 pub const HOST: &str = "127.0.0.1";
 
-/// The `Host` header the server's DNS-rebind allowlist accepts
-/// (`src/proxy.ts` `ALLOWED_HOSTS`, hardcoded to `:4100`). The server 403s any
-/// `/api/*` request whose `Host` isn't on that list — so a health probe to a
-/// non-4100 `MINDER_TRAY_PORT` would be rejected. The tray's probe is a trusted
-/// loopback self-probe (no browser, no DNS-rebind vector), so it presents this
-/// canonical served host regardless of the bound port.
-///
-/// Making the server allowlist port-aware is tracked in GitHub issue #283
-/// (the pre-existing CSRF/host allowlist pinned to :4100); this Rust workaround
-/// stays until that lands, at which point update this together with `proxy.ts`.
-pub const PROBE_HOST_HEADER: &str = "localhost:4100";
-
 #[derive(Clone, Debug)]
 pub struct TrayConfig {
     /// Port the sidecar binds / the tray probes and opens.

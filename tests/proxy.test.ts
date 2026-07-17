@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { evaluateRequest } from "@/proxy";
+import { evaluateRequest, buildAllowedHosts } from "@/proxy";
 
 const ALLOWED_HOST = "localhost:4100";
 const ALLOWED_HOST_IP = "127.0.0.1:4100";
@@ -211,5 +211,63 @@ describe("evaluateRequest", () => {
     });
     expect(result.allow).toBe(false);
     expect(result.reason).toBe("cross-origin request blocked");
+  });
+});
+
+describe("buildAllowedHosts (port-aware allowlist)", () => {
+  it("includes both the canonical :4100 trio and the bound-port trio", () => {
+    const hosts = buildAllowedHosts(4199);
+    for (const h of ["localhost:4199", "127.0.0.1:4199", "[::1]:4199"]) {
+      expect(hosts.has(h)).toBe(true);
+    }
+    // The canonical :4100 entries are always trusted too (dev/default).
+    for (const h of ["localhost:4100", "127.0.0.1:4100", "[::1]:4100"]) {
+      expect(hosts.has(h)).toBe(true);
+    }
+  });
+
+  it("dedups to exactly the three loopback entries when the bound port is 4100", () => {
+    const hosts = buildAllowedHosts(4100);
+    expect(hosts.size).toBe(3);
+    expect([...hosts].sort()).toEqual(["127.0.0.1:4100", "[::1]:4100", "localhost:4100"]);
+  });
+
+  it("does not trust an arbitrary unbound port", () => {
+    const hosts = buildAllowedHosts(4199);
+    expect(hosts.has("localhost:5000")).toBe(false);
+  });
+});
+
+describe("evaluateRequest with a port-aware allowlist (custom bound port)", () => {
+  const boundTo4199 = buildAllowedHosts(4199);
+
+  it("allows a Host on the bound custom port (e.g. tray's MINDER_TRAY_PORT)", () => {
+    const result = evaluateRequest(
+      { method: "GET", host: "127.0.0.1:4199", origin: null, pathname: "/api/health" },
+      boundTo4199,
+    );
+    expect(result.allow).toBe(true);
+  });
+
+  it("allows a same-origin browser request on the bound custom port", () => {
+    const result = evaluateRequest(
+      {
+        method: "POST",
+        host: "localhost:4199",
+        origin: "http://localhost:4199",
+        pathname: "/api/config",
+      },
+      boundTo4199,
+    );
+    expect(result.allow).toBe(true);
+  });
+
+  it("still blocks a Host on some other, unbound port", () => {
+    const result = evaluateRequest(
+      { method: "GET", host: "localhost:5000", origin: null, pathname: "/api/sql" },
+      boundTo4199,
+    );
+    expect(result.allow).toBe(false);
+    expect(result.reason).toBe("host not allowed");
   });
 });

@@ -59,23 +59,48 @@ import { NextRequest, NextResponse } from "next/server";
 // for no added protection.
 // ---------------------------------------------------------------------------
 
-// Hosts/origins this dashboard is actually served on. Every entry carries the
-// :4100 dev port on purpose. The port is what makes the Origin check
-// trustworthy: 4100 is non-default, so a browser never elides it, and a legit
-// same-origin request always presents `localhost:4100` (not bare `localhost`).
-// Allowing a port-less `localhost` would let a page served from
-// http://localhost/ (port 80 — a *different* origin) pass the Origin check and
-// drive state-changing endpoints (CSRF); requiring the port closes that.
+// Hosts/origins this dashboard is actually served on — all loopback, each
+// carrying an explicit port. The port is what makes the Origin check
+// trustworthy: a legit same-origin request always presents `localhost:<port>`
+// (not bare `localhost`). Allowing a port-less `localhost` would let a page
+// served from http://localhost/ (port 80 — a *different* origin) pass the
+// Origin check and drive state-changing endpoints (CSRF); requiring the port
+// closes that.
 //
-// This is a superset of ALLOWED_HOSTS/ALLOWED_ORIGINS in src/lib/mcp/server.ts
-// (it adds the IPv6 loopback [::1]:4100); the shared invariant is that only the
-// :4100 entries are trusted. If the dev port ever changes from 4100, update
-// this set, the MCP server's lists, and docs/help/mcp-server.md together.
-const ALLOWED_HOSTS = new Set([
-  "localhost:4100",
-  "127.0.0.1:4100",
-  "[::1]:4100",
-]);
+// The set is **port-aware**: it always trusts the canonical `:4100` (dev
+// default, and what `pnpm dev`/`pnpm start` bind) AND the port the server
+// actually bound this run — `process.env.PORT`, which the standalone/sidecar
+// entry sets (e.g. the tray's `MINDER_TRAY_PORT`). Without the bound-port
+// entries, a browser opened at `http://localhost:<custom-port>` — which cannot
+// spoof Host/Origin — would have every `/api/*` call 403'd, breaking the
+// dashboard on any non-4100 port. Still loopback-only: no new rebind surface,
+// just the correct port. (issue #283)
+//
+// The MCP server's own allowlist (src/lib/mcp/server.ts) is separate — /api/mcp
+// is skipped here and has its own transport-level DNS-rebind protection.
+function resolveBoundPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PORT;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 4100;
+}
+
+/**
+ * Build the loopback host allowlist for a given bound port. Always includes the
+ * canonical `:4100` trio plus the bound port's trio (deduplicated by the Set
+ * when the bound port is 4100). Exported for unit testing the derived entries.
+ */
+export function buildAllowedHosts(port: number): Set<string> {
+  return new Set([
+    "localhost:4100",
+    "127.0.0.1:4100",
+    "[::1]:4100",
+    `localhost:${port}`,
+    `127.0.0.1:${port}`,
+    `[::1]:${port}`,
+  ]);
+}
+
+const ALLOWED_HOSTS = buildAllowedHosts(resolveBoundPort());
 
 export interface EvaluateInput {
   method: string;
@@ -93,14 +118,21 @@ export interface EvaluateResult {
  * Pure decision function extracted out of the Next.js proxy so it can
  * be unit-tested directly (no NextRequest/NextResponse construction needed).
  * See the file-header comment above for the two-layer rationale.
+ *
+ * `allowedHosts` defaults to the process-wide, port-aware set; it's a parameter
+ * so tests can exercise the derived-port allowlist without mutating
+ * `process.env.PORT`.
  */
-export function evaluateRequest({
-  // `method` is part of EvaluateInput (and still passed by callers/tests) but
-  // the allowlist now applies to every method, so it isn't read here.
-  host,
-  origin,
-  pathname,
-}: EvaluateInput): EvaluateResult {
+export function evaluateRequest(
+  {
+    // `method` is part of EvaluateInput (and still passed by callers/tests) but
+    // the allowlist now applies to every method, so it isn't read here.
+    host,
+    origin,
+    pathname,
+  }: EvaluateInput,
+  allowedHosts: Set<string> = ALLOWED_HOSTS,
+): EvaluateResult {
   // Only the API surface is guarded — everything else (pages, static
   // assets) is unaffected, and `config.matcher` below scopes the proxy
   // invocation to /api/* anyway; this check is a defensive second gate.
@@ -116,7 +148,7 @@ export function evaluateRequest({
 
   // Layer 1 — Host allowlist, ALL methods (including GET/HEAD). Defeats DNS
   // rebinding against read endpoints too (e.g. /api/sql).
-  if (!host || !ALLOWED_HOSTS.has(host.toLowerCase())) {
+  if (!host || !allowedHosts.has(host.toLowerCase())) {
     return { allow: false, reason: "host not allowed" };
   }
 
@@ -143,7 +175,7 @@ export function evaluateRequest({
     return { allow: false, reason: "cross-origin request blocked" };
   }
 
-  if (!ALLOWED_HOSTS.has(originHost.toLowerCase())) {
+  if (!allowedHosts.has(originHost.toLowerCase())) {
     return { allow: false, reason: "cross-origin request blocked" };
   }
 
