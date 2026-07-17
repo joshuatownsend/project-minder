@@ -160,4 +160,27 @@ describe("serviceLog activation gating", () => {
     });
     expect(() => serviceLog({ msg: "resilient" })).not.toThrow();
   });
+
+  it("survives a circular field with a fallback line instead of throwing", () => {
+    initServiceLog();
+    statSync.mockReturnValue({ size: 10 } as unknown as ReturnType<typeof fs.statSync>);
+
+    // A circular structure makes JSON.stringify throw; the logger must degrade
+    // to a minimal serializable line rather than take the process down.
+    const circular: Record<string, unknown> = { name: "loop" };
+    circular.self = circular;
+
+    expect(() =>
+      serviceLog({ level: "error", subsystem: "test", msg: "circular", data: circular }),
+    ).not.toThrow();
+
+    // Both the console tee and the file append still fire, with the fallback shape.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(appendFileSync).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(String(appendFileSync.mock.calls[0][1]).trimEnd());
+    expect(parsed.serialization).toBe("failed");
+    expect(parsed.msg).toBe("circular");
+    expect(parsed.subsystem).toBe("test");
+    expect(parsed.ts).toEqual(expect.any(String));
+  });
 });

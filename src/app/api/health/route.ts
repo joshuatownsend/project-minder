@@ -24,7 +24,7 @@ import { resolveServerRoot } from "@/lib/serverRoot";
  * {
  *   ok: boolean,              // legacy field: true ONLY when db.state === "success"
  *   status: "ok" | "degraded",// process is up; "degraded" mirrors !ok
- *   version: string,          // package.json version (baked at boot)
+ *   version: string,          // package.json version (read once on first request, then cached)
  *   uptimeSec: number,        // process.uptime(), rounded
  *   demoMode: boolean,
  *   db: InitStatus,           // probeInitStatus() — never initDb() directly

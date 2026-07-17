@@ -140,8 +140,23 @@ export function rotateLogs(
  * file when {@link initServiceLog} has been called. Never throws.
  */
 export function serviceLog(entry: LogEntry): void {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
   const level = entry.level ?? "info";
+  const ts = new Date().toISOString();
+  // `JSON.stringify` throws on circular structures (and BigInt values). Since
+  // a logger must never throw, fall back to a minimal serializable line rather
+  // than let a caller's malformed field take the process down.
+  let line: string;
+  try {
+    line = JSON.stringify({ ts, ...entry });
+  } catch {
+    line = JSON.stringify({
+      ts,
+      level,
+      subsystem: entry.subsystem,
+      msg: String(entry.msg),
+      serialization: "failed",
+    });
+  }
 
   // Console tee — happens in every mode so dev/CI still see the lines.
   if (level === "error" || level === "warn") {

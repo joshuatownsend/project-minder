@@ -48,6 +48,14 @@ interface LifecycleState {
   disposers: Map<string, DisposerFn>;
   shuttingDown: boolean;
   handlersInstalled: boolean;
+  /**
+   * The single in-flight shutdown run, memoized so every caller — a second
+   * signal, a `beforeExit`, a manual call — awaits the SAME completion instead
+   * of racing. Without this a second SIGINT's `shutdown()` would resolve
+   * immediately and its handler could `process.exit(0)` before the first run's
+   * disposers finished.
+   */
+  shutdownPromise: Promise<void> | null;
 }
 
 const g = globalThis as unknown as { __minderLifecycle?: LifecycleState };
@@ -56,6 +64,7 @@ if (!g.__minderLifecycle) {
     disposers: new Map(),
     shuttingDown: false,
     handlersInstalled: false,
+    shutdownPromise: null,
   };
 }
 const state = g.__minderLifecycle;
@@ -85,6 +94,7 @@ export function _resetLifecycleForTesting(): void {
   state.disposers.clear();
   state.shuttingDown = false;
   state.handlersInstalled = false;
+  state.shutdownPromise = null;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -99,13 +109,23 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * Run every registered disposer (LIFO) under a shared overall deadline,
  * logging one structured line per disposer (name, ok/fail, ms). Idempotent:
  * a second call (e.g. a double Ctrl+C, or a signal arriving mid-shutdown)
- * returns immediately. Never throws.
+ * returns the SAME in-flight promise, so every caller resolves only once the
+ * disposers have actually finished — a second signal handler can't
+ * `process.exit()` out from under the first run. Never throws.
  */
-export async function shutdown(
+export function shutdown(
   reason: string,
   opts?: { timeoutMs?: number },
 ): Promise<void> {
-  if (state.shuttingDown) return;
+  if (state.shutdownPromise) return state.shutdownPromise;
+  state.shutdownPromise = runShutdown(reason, opts);
+  return state.shutdownPromise;
+}
+
+async function runShutdown(
+  reason: string,
+  opts?: { timeoutMs?: number },
+): Promise<void> {
   state.shuttingDown = true;
 
   const overallMs = opts?.timeoutMs ?? SHUTDOWN_TIMEOUT_MS;

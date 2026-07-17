@@ -133,4 +133,28 @@ describe("shutdown idempotency", () => {
     expect(d).toHaveBeenCalledTimes(1);
     expect(isShuttingDown()).toBe(true);
   });
+
+  it("two concurrent shutdown() calls share one run — disposers fire once and both callers await completion", async () => {
+    // Simulates a double SIGINT/SIGTERM: the second signal's shutdown() must
+    // return the SAME in-flight promise so its handler can't process.exit()
+    // before the first run's disposers finish.
+    let disposed = false;
+    const slow = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      disposed = true;
+    });
+    onShutdown("slow", slow);
+
+    const first = shutdown("SIGINT");
+    const second = shutdown("SIGTERM");
+
+    // Both callers must observe the disposer as complete when they resolve —
+    // the second must not resolve early.
+    await Promise.all([
+      first.then(() => expect(disposed).toBe(true)),
+      second.then(() => expect(disposed).toBe(true)),
+    ]);
+
+    expect(slow).toHaveBeenCalledTimes(1);
+  });
 });
