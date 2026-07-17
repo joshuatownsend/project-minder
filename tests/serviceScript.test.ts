@@ -11,6 +11,8 @@ import {
   planActions,
   parseNetstatListeningPids,
   resolveWindowsUserId,
+  buildServerIdentityMarkers,
+  commandLineMatchesServer,
   WINDOWS_TASK_NAME,
   LAUNCHD_LABEL,
   SYSTEMD_UNIT_NAME,
@@ -243,5 +245,80 @@ describe("resolveWindowsUserId", () => {
 
   it("accepts an explicit username override", () => {
     expect(resolveWindowsUserId({ env: {}, username: "override" })).toBe("override");
+  });
+});
+
+describe("buildServerIdentityMarkers + commandLineMatchesServer (service:stop identity check)", () => {
+  const root = "C:\\repo";
+  const vbsPath = "C:\\Users\\josh\\.minder\\service\\run-hidden.vbs";
+
+  it("standalone: matches a command line containing the server.js path", () => {
+    const launch = {
+      mode: "standalone",
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\dist\\minder-server\\server.js"],
+      cwd: "C:\\repo\\dist\\minder-server",
+    };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\dist\\minder-server\\server.js"`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+  });
+
+  it("fallback: matches a command line containing the repo root (next's own bin re-exec)", () => {
+    const launch = {
+      mode: "fallback",
+      exe: "C:\\repo\\node_modules\\.bin\\next.cmd",
+      args: ["start", "-p", "4100"],
+      cwd: root,
+    };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `node.exe C:\\repo\\node_modules\\next\\dist\\bin\\next start -p 4100`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+  });
+
+  it("matches case-insensitively and across separator styles (forward vs. back slash)", () => {
+    const launch = {
+      mode: "standalone",
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\dist\\minder-server\\server.js"],
+      cwd: "C:\\repo\\dist\\minder-server",
+    };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `"c:/program files/nodejs/node.exe" "C:/REPO/dist/minder-server/SERVER.JS"`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+  });
+
+  it("refuses an unrelated process's command line (the exact footgun this guards against)", () => {
+    const launch = {
+      mode: "standalone",
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\dist\\minder-server\\server.js"],
+      cwd: "C:\\repo\\dist\\minder-server",
+    };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    // An unrelated dev server (e.g. `pnpm dev` in a totally different checkout)
+    // that happens to also be bound to port 4100.
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\dev\\some-other-project\\node_modules\\.bin\\next" dev -p 4100`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+  });
+
+  it("refuses when the command line could not be determined (empty/undefined/null)", () => {
+    const markers = buildServerIdentityMarkers({ root, launch: null, vbsPath });
+    expect(commandLineMatchesServer("", markers)).toBe(false);
+    expect(commandLineMatchesServer(undefined, markers)).toBe(false);
+    expect(commandLineMatchesServer(null, markers)).toBe(false);
+  });
+
+  it("falls back to the repo root and vbs path as markers when launch is null (build removed after install)", () => {
+    const markers = buildServerIdentityMarkers({ root, launch: null, vbsPath });
+    expect(markers).toContain(root);
+    expect(markers).toContain(vbsPath);
+    expect(commandLineMatchesServer(`wscript.exe "${vbsPath}"`, markers)).toBe(true);
+  });
+
+  it("de-duplicates markers", () => {
+    const launch = { mode: "fallback", exe: "x", args: [], cwd: root };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    expect(markers.filter((m) => m === root)).toHaveLength(1);
   });
 });

@@ -241,3 +241,65 @@ export function resolveWindowsUserId(opts = {}) {
   const domain = env.USERDOMAIN;
   return domain ? `${domain}\\${user}` : user;
 }
+
+/**
+ * Process-identity verification for `service:stop` (Windows).
+ *
+ * "Something is LISTENING on port 4100" is NOT proof it's THIS Minder
+ * installation — a `pnpm dev`, another Minder checkout, or literally any
+ * other process can hold that port. An earlier version of this script
+ * hard-killed whatever it found there and took down an unrelated live dev
+ * server during this task's own verification pass. These two functions are
+ * the fix: build the set of path fragments that would legitimately appear
+ * in the command line of a process THIS installation started, then check a
+ * candidate PID's actual command line against them before anything gets
+ * `taskkill`ed.
+ *
+ * Markers, in order of how a real command line can contain them:
+ *   - the standalone server: launch.args includes the absolute
+ *     `dist/minder-server/server.js` path (the node.exe command line IS
+ *     `node.exe "<that path>"` — see windows-run-hidden.vbs.tmpl).
+ *   - the from-source fallback: `next start` re-execs into next's own
+ *     bin script, whose absolute path lives under the repo root
+ *     (`node_modules/next/dist/bin/next`) — so the repo root itself is a
+ *     reliable substring even though `next.cmd`'s own path isn't literally
+ *     what ends up in the LISTENING process's command line.
+ *   - the generated run-hidden.vbs path, in case wscript.exe itself is
+ *     still the process found (unlikely — it exits immediately after
+ *     firing WshShell.Run — but harmless to include).
+ *
+ * @param {{ root?: string, launch?: { cwd?: string, args?: string[] } | null, vbsPath?: string }} [opts]
+ * @returns {string[]}
+ */
+export function buildServerIdentityMarkers(opts = {}) {
+  const { root, launch, vbsPath } = opts;
+  const markers = new Set();
+  if (root) markers.add(root);
+  if (launch) {
+    if (launch.cwd) markers.add(launch.cwd);
+    for (const arg of launch.args ?? []) {
+      if (typeof arg === "string" && arg.length > 3) markers.add(arg);
+    }
+  }
+  if (vbsPath) markers.add(vbsPath);
+  return Array.from(markers);
+}
+
+/**
+ * True if `commandLine` (as reported by the OS for a candidate PID)
+ * contains any of `markers` — normalized (backslash/forward-slash, case)
+ * substring match, since a queried command line and our internally-resolved
+ * paths can differ in separator style/case despite naming the same file.
+ *
+ * @param {string | null | undefined} commandLine
+ * @param {string[]} markers
+ */
+export function commandLineMatchesServer(commandLine, markers) {
+  if (!commandLine) return false;
+  const normalized = String(commandLine).replace(/\\/g, "/").toLowerCase();
+  return (markers ?? []).some((marker) => {
+    if (!marker) return false;
+    const needle = String(marker).replace(/\\/g, "/").toLowerCase();
+    return needle.length > 0 && normalized.includes(needle);
+  });
+}

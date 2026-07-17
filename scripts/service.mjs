@@ -26,6 +26,22 @@
 // managed dev servers. This is safe because A2's boot-time reconcile +
 // SQLite WAL checkpoint-on-open recovery already handle an unclean previous
 // exit; the C1 tray app will add a real control channel for a graceful stop.
+//
+// IDENTITY CHECK, NOT JUST PORT CHECK: "something is listening on 4100" is
+// not proof it's THIS installation — an unrelated `pnpm dev` (or literally
+// anything else) can hold that port too. An earlier version of this file
+// hard-killed whatever it found there unconditionally, and it took down a
+// live, unrelated dev server during this task's own verification pass.
+// Before killing a candidate PID we now query its actual command line
+// (queryWindowsProcessCommandLine, via PowerShell Get-CimInstance) and
+// only proceed if it matches this installation's server entry point
+// (buildServerIdentityMarkers / commandLineMatchesServer, in
+// scripts/service/lib.mjs). If it doesn't match, we refuse to kill it and
+// print what was found plus how to stop it manually.
+//
+// macOS/Linux don't need this: launchctl/systemctl target a specific
+// label/unit name, not a port scan, so they can only ever affect the
+// process THIS install registered — see runStop()'s macos/linux branches.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -49,6 +65,8 @@ import {
   planActions,
   parseNetstatListeningPids,
   resolveWindowsUserId,
+  buildServerIdentityMarkers,
+  commandLineMatchesServer,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -278,10 +296,35 @@ async function runStart(platformKind) {
   await runSteps(planActions("linux", "start", { unitName: SYSTEMD_UNIT_NAME }));
 }
 
+// Queries a Windows PID's full command line via PowerShell's Get-CimInstance
+// (no shell string — execFile passes each element of the array as its own
+// argument to powershell.exe directly). Returns "" if the PID has already
+// exited or the query otherwise fails, rather than throwing — a stop should
+// degrade to "couldn't verify, so don't kill it" rather than crash.
+async function queryWindowsProcessCommandLine(pid) {
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+      ],
+      { windowsHide: true }
+    );
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
 async function runStop(platformKind) {
   if (platformKind === "windows") {
     // See the file-level comment: schtasks has nothing left to signal by
-    // now, so find whatever is LISTENING on 4100 and hard-kill it.
+    // now, so find whatever is LISTENING on 4100 — but LISTENING alone
+    // isn't proof it's ours. Verify each candidate PID's command line
+    // against this installation's own server entry point before killing it.
     let stdout = "";
     try {
       ({ stdout } = await execFileAsync("netstat", ["-ano"], { windowsHide: true }));
@@ -293,16 +336,37 @@ async function runStop(platformKind) {
       step("Nothing is listening on port 4100 — server is not running.");
       return;
     }
+
+    const launch = resolveServerLaunch({ root });
+    const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+
     for (const pid of pids) {
-      step(`Port 4100 is held by PID ${pid} — hard-stopping (taskkill /F /T).`);
+      const commandLine = await queryWindowsProcessCommandLine(pid);
+      if (!commandLineMatchesServer(commandLine, markers)) {
+        step(
+          `Port 4100 is held by PID ${pid}, but its command line doesn't match this Minder ` +
+            `installation — NOT killing it.`
+        );
+        step(`  Command line: ${commandLine || "(could not be determined — process may have already exited)"}`);
+        step(`  If you're certain this IS Minder, stop it manually: taskkill /F /T /PID ${pid}`);
+        continue;
+      }
+      step(`Port 4100 is held by PID ${pid} (verified as this installation) — hard-stopping (taskkill /F /T).`);
       await runSteps([{ exe: "taskkill", args: ["/F", "/T", "/PID", pid] }]);
     }
     return;
   }
   if (platformKind === "macos") {
+    // Safe by construction: launchctl targets a specific label, never a
+    // port — it can only affect the job THIS install registered.
+    step(`Stopping via launchctl label "${LAUNCHD_LABEL}" (scoped by label, not by port — safe).`);
     await runSteps(planActions("macos", "stop", { label: LAUNCHD_LABEL }));
     return;
   }
+  // Safe by construction: systemctl --user targets a specific unit name,
+  // never a port — it can only affect the unit THIS install registered.
+  step(`Stopping via systemctl --user unit "${SYSTEMD_UNIT_NAME}" (scoped by unit name, not by port — safe).`);
   await runSteps(planActions("linux", "stop", { unitName: SYSTEMD_UNIT_NAME }));
 }
 
