@@ -300,80 +300,173 @@ function listTopLevelPackages(nodeModulesDir) {
   return names;
 }
 
-// BFS over `dependencies` fields (not peerDependencies/devDependencies).
+// BFS over `dependencies` fields (not peerDependencies/devDependencies),
+// preserving VERSION identity along every edge rather than collapsing to
+// one dir per name. pnpm already resolved the correct version for each
+// requester (an isolated per-package node_modules), so the dir we resolve
+// each dependency from — starting at its declaring parent's own dir — IS
+// that requester's correct version. Recording (parent -> dep@version)
+// edges instead of a name->dir map is what lets the placement pass below
+// honour two packages that legitimately need different majors of the same
+// dependency (e.g. the app's zod 3 vs. claude-code-lint's zod 4).
+//
 // Each root name is resolved from `root` (the repo's own node_modules —
 // correct for these, since they're all direct/optional dependencies of
-// the repo's package.json and so are symlinked at the top level);
-// everything discovered from there on is resolved from the directory
-// of whichever package declared it, cascading down the real dependency
-// graph the same way Node's own resolution would at runtime.
+// the repo's package.json and so are symlinked at the top level) with
+// `parentName === null`: roots ARE the top level. Everything discovered
+// from there on is resolved from the directory of whichever package
+// declared it, cascading down the real dependency graph the same way
+// Node's own resolution would at runtime.
+//
+// `visited` is keyed by resolved dir, not name — it only guards against
+// re-walking a package's own dependencies (and symlink cycles). A given
+// (name, version) has exactly one dir, so distinct versions are distinct
+// dirs and both get walked; and edges are recorded BEFORE the visited
+// check, so every requester of a shared package still produces its edge.
 function walkDependencyClosure(rootNames, { optional = false } = {}) {
-  const closure = new Map(); // name -> real package dir
-  const queue = rootNames.map((name) => ({ name, fromDir: root }));
+  const edges = []; // { name, dir, version, parentName }
+  const visited = new Set(); // resolved dirs whose deps are already queued
+  const queue = rootNames.map((name) => ({ name, fromDir: root, parentName: null }));
   while (queue.length > 0) {
-    const { name, fromDir } = queue.shift();
-    if (closure.has(name)) continue;
+    const { name, fromDir, parentName } = queue.shift();
     let pkgDir;
     try {
       pkgDir = resolvePackageDir(name, fromDir);
     } catch (err) {
       console.warn(
         `[package-standalone] WARNING: could not resolve ${optional ? "optional" : "required"} ` +
-          `dependency "${name}" from the repo's node_modules (${String(err.message).split("\n")[0]}) — skipping.`
+          `dependency "${name}"${parentName ? ` (declared by ${parentName})` : " from the repo's node_modules"} ` +
+          `(${String(err.message).split("\n")[0]}) — skipping.`
       );
       continue;
     }
-    closure.set(name, pkgDir);
     const pkgJson = readJson(path.join(pkgDir, "package.json"));
+    const version = pkgJson.version ?? "0.0.0-unknown";
+    edges.push({ name, dir: pkgDir, version, parentName });
+    if (visited.has(pkgDir)) continue;
+    visited.add(pkgDir);
     for (const dep of Object.keys(pkgJson.dependencies ?? {})) {
-      if (!closure.has(dep)) queue.push({ name: dep, fromDir: pkgDir });
+      queue.push({ name: dep, fromDir: pkgDir, parentName: name });
     }
   }
-  return closure;
+  return edges;
 }
 
-// Does `name` already have a package.json somewhere Node's resolution
-// would find it from inside dist — nested under any already-packaged
-// top-level dependency's own node_modules, or at outDir's top level
-// (Node's resolution algorithm checks every ancestor node_modules, and
-// outDir/node_modules is always one of them no matter how deep inside
-// outDir/node_modules the requiring file lives)?
+// Read a package.json's `version`, or null if unreadable.
 //
-// Deliberately a plain existsSync check, not require_.resolve: Node
-// caches negative module-resolution lookups internally
-// (Module._pathCache), so re-querying the same (request, paths) pair
-// after a file appears mid-process — exactly what happens here, since
-// this same function is called once before backfilling (to decide
-// whether to skip a package) and once after (the tripwire) — can keep
-// returning the pre-copy "not found" answer even though the file now
-// exists. A real `node server.js` invocation is a fresh process with
-// an empty cache and would resolve it correctly; existsSync sidesteps
-// the footgun entirely rather than relying on that distinction.
-function resolvesInsideDist(name) {
-  if (existsSync(path.join(outDir, "node_modules", name, "package.json"))) return true;
-  for (const topLevel of listTopLevelPackages(path.join(outDir, "node_modules"))) {
-    if (existsSync(path.join(outDir, "node_modules", topLevel, "node_modules", name, "package.json"))) {
-      return true;
+// existsSync + read, deliberately NOT require_.resolve: Node caches
+// negative module-resolution lookups internally (Module._pathCache), so
+// re-querying a (request, paths) pair after a file appears mid-process —
+// exactly what happens here, since these checks run before and after
+// copying files in — can keep returning the pre-copy "not found" answer
+// even though the file now exists. A real `node server.js` invocation is
+// a fresh process with an empty cache and resolves correctly; existsSync
+// sidesteps the footgun rather than relying on that distinction.
+function readPkgVersion(pkgJsonPath) {
+  try {
+    return readJson(pkgJsonPath).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Version occupying dist's TOP-LEVEL node_modules/<name> slot right now,
+// or null if empty. A non-null answer is the app's own copy (placed by
+// Next's tracer or a prior placement pass) and is authoritative for the
+// top level — never overwritten.
+function topLevelPkgVersion(name) {
+  const p = path.join(outDir, "node_modules", name, "package.json");
+  return existsSync(p) ? readPkgVersion(p) : null;
+}
+
+// Simulate Node's resolution for a (parent -> dep) edge inside dist:
+// check the parent's own nested node_modules first (Node checks the
+// nearest node_modules before walking up), then the top level. Returns
+// the version Node would load, or null if it resolves to neither. Mirrors
+// exactly the two levels the placement pass writes to.
+function distResolvedVersion(parentName, depName) {
+  if (parentName) {
+    const nested = path.join(outDir, "node_modules", parentName, "node_modules", depName, "package.json");
+    if (existsSync(nested)) return readPkgVersion(nested);
+  }
+  const top = path.join(outDir, "node_modules", depName, "package.json");
+  return existsSync(top) ? readPkgVersion(top) : null;
+}
+
+// Place a set of dependency-closure edges into dist so every requester
+// resolves the exact version it declared:
+//   Pass 1 fills each EMPTY top-level slot with one version (the one the
+//     most edges want; ties broken by first-encountered, which Map
+//     insertion order preserves). An occupied slot is never touched —
+//     that's the app's own version, placed by Next's tracer.
+//   Pass 2 copies any requester whose declared version differs from the
+//     top-level occupant into `<parent>/node_modules/<dep>`, where Node
+//     finds it before walking up to the (different) top-level copy — so
+//     nesting wins for that requester without disturbing anyone else.
+// Returns the number of package copies made.
+function placeClosureEdges(edges) {
+  const versionsByName = new Map(); // name -> Map<version, { dir, count }>
+  for (const e of edges) {
+    let byVersion = versionsByName.get(e.name);
+    if (!byVersion) versionsByName.set(e.name, (byVersion = new Map()));
+    const seen = byVersion.get(e.version);
+    if (seen) seen.count += 1;
+    else byVersion.set(e.version, { dir: e.dir, count: 1 });
+  }
+
+  let copied = 0;
+
+  for (const [name, byVersion] of versionsByName) {
+    if (topLevelPkgVersion(name) !== null) continue; // app's copy stays
+    let best = null;
+    for (const [version, info] of byVersion) {
+      if (!best || info.count > best.info.count) best = { version, info };
+    }
+    step(`Backfilling top-level dependency: ${name}@${best.version}`);
+    copyDereferenced(best.info.dir, path.join(outDir, "node_modules", name));
+    copied += 1;
+  }
+
+  for (const e of edges) {
+    if (!e.parentName) continue; // root edges are served by the top level
+    const occupant = topLevelPkgVersion(e.name);
+    if (occupant === e.version) continue; // top level already serves this edge
+    const destDir = path.join(outDir, "node_modules", e.parentName, "node_modules", e.name);
+    const destPkgJson = path.join(destDir, "package.json");
+    if (existsSync(destPkgJson) && readPkgVersion(destPkgJson) === e.version) continue; // already nested
+    step(`Nesting ${e.name}@${e.version} under ${e.parentName} (top level has ${occupant ?? "no copy"})`);
+    copyDereferenced(e.dir, destDir);
+    copied += 1;
+  }
+
+  return copied;
+}
+
+// Version-aware tripwire: every edge must resolve, inside dist, to the
+// exact version it resolved to in the repo. Returns human-readable
+// descriptions of the edges that don't (empty === all good).
+function unresolvedEdges(edges) {
+  const failures = [];
+  for (const e of edges) {
+    const got = distResolvedVersion(e.parentName, e.name);
+    if (got !== e.version) {
+      failures.push(
+        `${e.parentName ? `${e.parentName} -> ` : ""}${e.name}@${e.version} (dist resolves ${got ?? "MISSING"})`
+      );
     }
   }
-  return false;
+  return failures;
 }
 
 const initialTopLevelPackages = listTopLevelPackages(path.join(outDir, "node_modules"));
-const requiredClosure = walkDependencyClosure(initialTopLevelPackages);
-const optionalClosure = walkDependencyClosure(["sharp"], { optional: true });
+const requiredEdges = walkDependencyClosure(initialTopLevelPackages);
+const optionalEdges = walkDependencyClosure(["sharp"], { optional: true });
 
-let backfilledCount = 0;
-for (const [name, srcDir] of [...requiredClosure, ...optionalClosure]) {
-  if (resolvesInsideDist(name)) continue;
-  step(`Backfilling missing nested dependency: ${name}`);
-  copyDereferenced(srcDir, path.join(outDir, "node_modules", name));
-  backfilledCount += 1;
-}
+const backfilledCount = placeClosureEdges([...requiredEdges, ...optionalEdges]);
 
 if (backfilledCount > 0) {
   step(
-    `Backfilled ${backfilledCount} package(s) Next's tracer omitted from ` +
+    `Backfilled ${backfilledCount} package copy/copies Next's tracer omitted from ` +
       `.next/standalone (see issue #287)`
   );
 } else {
@@ -381,21 +474,31 @@ if (backfilledCount > 0) {
 }
 
 // Tripwire: fail the packaging run rather than silently ship a bundle
-// that will MODULE_NOT_FOUND at boot (or first use) on a machine
-// without this repo's node_modules. Catches both a backfill that
-// still didn't land (it always should, having just been copied from a
-// location we resolved successfully) and a required dependency that
-// failed to resolve from the repo itself in the first place (never
-// entered `requiredClosure`, so no backfill was attempted) — e.g. a
-// future Next/dependency upgrade renaming or dropping a package in a
-// way this script doesn't yet know how to find.
-const unresolved = [...requiredClosure.keys()].filter((name) => !resolvesInsideDist(name));
-if (unresolved.length > 0) {
+// that will MODULE_NOT_FOUND — or, worse, resolve the WRONG major — at
+// boot (or first use) on a machine without this repo's node_modules.
+// Catches a required dependency that failed to resolve from the repo
+// itself (never produced an edge, so no backfill was attempted) as well
+// as any edge whose version the packaged layout doesn't actually serve —
+// e.g. a future Next/dependency upgrade renaming or dropping a package,
+// or a version conflict the placement pass couldn't satisfy. Required
+// edges are hard failures; `sharp` is optional (only image-optimization
+// routes that decode at request time need it), so its unresolved edges
+// warn instead.
+const requiredFailures = unresolvedEdges(requiredEdges);
+if (requiredFailures.length > 0) {
   fail(
-    `The following required Next runtime dependencies do not resolve inside ` +
-      `${path.relative(root, outDir)} after backfill: ${unresolved.join(", ")}. ` +
-      `This package would fail to boot with MODULE_NOT_FOUND on a machine without ` +
-      `this repo's node_modules. See issue #287 for background.`
+    `These required Next runtime dependency edges do not resolve to their expected ` +
+      `version inside ${path.relative(root, outDir)} after backfill:\n  ` +
+      requiredFailures.join("\n  ") +
+      `\nThis package would fail (or load the wrong version) on a machine without this ` +
+      `repo's node_modules. See issue #287 for background.`
+  );
+}
+const optionalFailures = unresolvedEdges(optionalEdges);
+if (optionalFailures.length > 0) {
+  console.warn(
+    `[package-standalone] WARNING: optional dependency edges unresolved inside dist ` +
+      `(image optimization may be degraded): ${optionalFailures.join(", ")}`
   );
 }
 
@@ -477,22 +580,16 @@ if (existsSync(schemaSrcPath)) {
 // of the real package dir, which a lone copy would leave behind and the
 // packaged worker would MODULE_NOT_FOUND at watch time (PR #285 review).
 step("Copying chokidar + its dependency closure (worker's file-watching, externalized from the esbuild bundle)");
-const chokidarClosure = walkDependencyClosure(["chokidar"], { optional: true });
-let chokidarCopied = 0;
-for (const [name, srcDir] of chokidarClosure) {
-  if (resolvesInsideDist(name)) continue;
-  step(`Backfilling worker file-watching dependency: ${name}`);
-  copyDereferenced(srcDir, path.join(outDir, "node_modules", name));
-  chokidarCopied += 1;
-}
-if (chokidarClosure.size === 0) {
+const chokidarEdges = walkDependencyClosure(["chokidar"], { optional: true });
+const chokidarCopied = placeClosureEdges(chokidarEdges);
+if (chokidarEdges.length === 0) {
   console.warn(
     `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules — ` +
       `MINDER_INDEXER_WORKER=1 will fall back to sweep-only mode (no live file-watching) ` +
       `against this package.`
   );
 } else {
-  const unresolvedWatch = [...chokidarClosure.keys()].filter((name) => !resolvesInsideDist(name));
+  const unresolvedWatch = unresolvedEdges(chokidarEdges);
   if (unresolvedWatch.length > 0) {
     fail(
       `chokidar's dependency closure does not fully resolve inside ` +
@@ -502,7 +599,7 @@ if (chokidarClosure.size === 0) {
   }
   step(
     chokidarCopied > 0
-      ? `Backfilled ${chokidarCopied} file-watching package(s) (chokidar closure)`
+      ? `Backfilled ${chokidarCopied} file-watching package copy/copies (chokidar closure)`
       : "chokidar closure already resolves inside dist, skipping"
   );
 }
