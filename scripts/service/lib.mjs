@@ -185,10 +185,14 @@ export function planActions(platformKind, action, ctx = {}) {
             { exe: "systemctl", args: ["--user", "enable", "--now", ctx.unitName] },
           ];
         case "uninstall":
-          return [
-            { exe: "systemctl", args: ["--user", "disable", "--now", ctx.unitName] },
-            { exe: "systemctl", args: ["--user", "daemon-reload"] },
-          ];
+          // Deliberately does NOT include daemon-reload here (F4 review
+          // fix): scripts/service.mjs's runUninstall() removes the unit
+          // FILE after this "disable --now" step runs but BEFORE it issues
+          // its own separate daemon-reload — reversing that order (reload
+          // while the file still exists, delete it after) leaves systemd's
+          // unit cache pointing at a file that's already gone until the
+          // next unrelated reload happens to fix it.
+          return [{ exe: "systemctl", args: ["--user", "disable", "--now", ctx.unitName] }];
         case "status":
           return [{ exe: "systemctl", args: ["--user", "status", ctx.unitName, "--no-pager"] }];
         case "start":
@@ -278,18 +282,37 @@ export function buildServerIdentityMarkers(opts = {}) {
   if (launch) {
     if (launch.cwd) markers.add(launch.cwd);
     for (const arg of launch.args ?? []) {
-      if (typeof arg === "string" && arg.length > 3) markers.add(arg);
+      // F1 review fix: only PATH-LIKE args become markers. Fallback mode's
+      // args are bare CLI tokens (`start`, `-p`, `4100`) — NOT paths — and
+      // commandLineMatchesServer() treats a match against ANY single marker
+      // as sufficient, so a bare "4100" would match almost any process
+      // listening on port 4100 and defeat the entire identity check. The
+      // repo root + cwd markers (above) already cover the fallback case:
+      // `next start` re-execs into next's own bin script, whose absolute
+      // path lives under the repo root.
+      if (isPathLikeArg(arg)) markers.add(arg);
     }
   }
   if (vbsPath) markers.add(vbsPath);
   return Array.from(markers);
 }
 
+/** True only for args that contain a path separator — excludes bare flags, subcommands, and bare numbers (port numbers) from ever becoming identity markers. */
+function isPathLikeArg(arg) {
+  return typeof arg === "string" && (arg.includes("/") || arg.includes("\\"));
+}
+
 /**
  * True if `commandLine` (as reported by the OS for a candidate PID)
- * contains any of `markers` — normalized (backslash/forward-slash, case)
- * substring match, since a queried command line and our internally-resolved
- * paths can differ in separator style/case despite naming the same file.
+ * contains any of `markers` at a genuine path/token boundary — normalized
+ * (backslash/forward-slash, case) match, since a queried command line and
+ * our internally-resolved paths can differ in separator style/case despite
+ * naming the same file.
+ *
+ * A boundary is required on the trailing edge (F2 review fix): a bare
+ * substring match would let a marker like `C:\repo` match an unrelated
+ * `C:\repo2\...` — the match only counts if the character immediately
+ * after the marker is a separator, quote, whitespace, or end-of-string.
  *
  * @param {string | null | undefined} commandLine
  * @param {string[]} markers
@@ -300,6 +323,20 @@ export function commandLineMatchesServer(commandLine, markers) {
   return (markers ?? []).some((marker) => {
     if (!marker) return false;
     const needle = String(marker).replace(/\\/g, "/").toLowerCase();
-    return needle.length > 0 && normalized.includes(needle);
+    return needle.length > 0 && hasBoundaryMatch(normalized, needle);
   });
+}
+
+/** Characters that legitimately terminate a path/token match in a command line. */
+const BOUNDARY_CHARS = new Set(["/", '"', "'", " ", "\t"]);
+
+/** Every occurrence of `needle` in `haystack` (both already normalized) is checked — not just the first — since an earlier, boundary-failing occurrence must not shadow a later, genuine one. */
+function hasBoundaryMatch(haystack, needle) {
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    const nextChar = haystack[idx + needle.length];
+    if (nextChar === undefined || BOUNDARY_CHARS.has(nextChar)) return true;
+    idx = haystack.indexOf(needle, idx + 1);
+  }
+  return false;
 }

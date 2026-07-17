@@ -266,8 +266,15 @@ async function runUninstall(platformKind) {
   }
 
   const unitPath = path.join(os.homedir(), ".config", "systemd", "user", SYSTEMD_UNIT_NAME);
+  // F4 review fix: disable --now first (stops + unlinks the .wants symlink,
+  // doesn't need the unit file gone to do that), THEN remove the unit file,
+  // THEN daemon-reload — reloading before the file is removed leaves
+  // systemd's unit cache pointing at a file that's already deleted by the
+  // time anything next notices. planActions("linux","uninstall") only
+  // returns the disable step for exactly this reason.
   await runSteps(planActions("linux", "uninstall", { unitName: SYSTEMD_UNIT_NAME }));
   rmSync(unitPath, { force: true });
+  await runSteps([{ exe: "systemctl", args: ["--user", "daemon-reload"] }]);
   step(`Disabled systemd --user unit "${SYSTEMD_UNIT_NAME}" and removed ${unitPath}.`);
 }
 

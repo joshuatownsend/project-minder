@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   renderTemplate,
   escapeXml,
@@ -64,6 +65,14 @@ describe("quoteArg", () => {
 describe("resolveServerLaunch", () => {
   const root = "C:/repo";
 
+  // F5 review fix: the implementation builds these paths with `path.join`,
+  // which resolves against the HOST platform's own separator (backslash on
+  // Windows, forward slash on Linux CI) regardless of the `platform` option
+  // passed in (that option only controls the isWindows/.cmd/needsCmdWrapper
+  // decision, not which path module is used). Expected values here are
+  // built with the SAME `path.join` calls the implementation uses instead
+  // of hardcoded separator literals, so this assertion is construction-
+  // symmetric and can't diverge between Windows and Linux CI.
   it("prefers the standalone package when dist/minder-server/server.js exists", () => {
     const launch = resolveServerLaunch({
       root,
@@ -74,8 +83,8 @@ describe("resolveServerLaunch", () => {
     expect(launch).toEqual({
       mode: "standalone",
       exe: "C:/nodejs/node.exe",
-      args: ["C:\\repo\\dist\\minder-server\\server.js"],
-      cwd: "C:\\repo\\dist\\minder-server",
+      args: [path.join(root, "dist", "minder-server", "server.js")],
+      cwd: path.join(root, "dist", "minder-server"),
       needsCmdWrapper: false,
     });
   });
@@ -191,9 +200,12 @@ describe("planActions", () => {
       { exe: "systemctl", args: ["--user", "daemon-reload"] },
       { exe: "systemctl", args: ["--user", "enable", "--now", SYSTEMD_UNIT_NAME] },
     ]);
+    // F4 review fix: daemon-reload is NOT part of this plan — it's issued
+    // separately by scripts/service.mjs's runUninstall() AFTER the unit
+    // file is removed (reloading while the file still exists and removing
+    // it afterward leaves systemd's cache pointing at a deleted unit).
     expect(planActions("linux", "uninstall", linuxCtx)).toEqual([
       { exe: "systemctl", args: ["--user", "disable", "--now", SYSTEMD_UNIT_NAME] },
-      { exe: "systemctl", args: ["--user", "daemon-reload"] },
     ]);
     expect(planActions("linux", "status", linuxCtx)).toEqual([
       { exe: "systemctl", args: ["--user", "status", SYSTEMD_UNIT_NAME, "--no-pager"] },
@@ -320,5 +332,58 @@ describe("buildServerIdentityMarkers + commandLineMatchesServer (service:stop id
     const launch = { mode: "fallback", exe: "x", args: [], cwd: root };
     const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
     expect(markers.filter((m) => m === root)).toHaveLength(1);
+  });
+
+  // F1 review fix: fallback mode's bare CLI args ("start", "-p", "4100")
+  // must never become markers — commandLineMatchesServer accepts a match
+  // against ANY single marker, so a bare "4100" would match almost any
+  // process listening on port 4100 and defeat the whole identity check.
+  it("never turns bare flags/subcommands/port numbers into markers", () => {
+    const launch = {
+      mode: "fallback",
+      exe: "C:\\repo\\node_modules\\.bin\\next.cmd",
+      args: ["start", "-p", "4100"],
+      cwd: root,
+    };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    expect(markers).not.toContain("start");
+    expect(markers).not.toContain("-p");
+    expect(markers).not.toContain("4100");
+  });
+
+  it("refuses a command line that only coincidentally contains the port number, with no path marker present", () => {
+    // An unrelated process that happens to mention 4100 somewhere in its
+    // command line (e.g. a proxy configured to forward that port) but has
+    // nothing to do with this Minder installation.
+    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `"C:\\Program Files\\some-proxy\\proxy.exe" --listen 4100 --target 9000`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+  });
+
+  // F2 review fix: a directory marker must not match as a prefix of a
+  // longer, unrelated path segment — "C:\repo" must not match inside
+  // "C:\repo2\...". A match only counts when the character right after the
+  // marker is a path separator, quote, whitespace, or end-of-string.
+  it("does not treat a directory marker as a prefix match against a longer sibling path", () => {
+    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `node.exe C:\\repo2\\node_modules\\next\\dist\\bin\\next start -p 4100`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+  });
+
+  it("still matches the same marker with a genuine path-separator boundary", () => {
+    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
+    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const commandLine = `node.exe C:\\repo\\node_modules\\next\\dist\\bin\\next start -p 4100`;
+    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+  });
+
+  it("matches when the marker is the entire haystack (end-of-string boundary)", () => {
+    expect(commandLineMatchesServer("C:\\repo", ["C:\\repo"])).toBe(true);
+  });
+
+  it("matches when the marker is immediately followed by a closing quote", () => {
+    expect(commandLineMatchesServer(`"C:\\repo"`, ["C:\\repo"])).toBe(true);
   });
 });

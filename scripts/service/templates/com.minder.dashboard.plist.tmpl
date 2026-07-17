@@ -19,8 +19,24 @@
   </dict>
   <key>RunAtLoad</key>
   <true/>
+  <!--
+    KeepAlive uses the conditional dict form, NOT a bare <true/> (A3 review
+    fix, F3): a bare `KeepAlive=true` makes launchd restart the job even
+    after a deliberate `launchctl stop`/`pnpm service:stop`, since launchd
+    treats any exit — including a clean one — as something to relaunch.
+    SuccessfulExit=false means "restart only when the LAST exit was NOT
+    successful" — i.e. still restart on a crash (non-zero exit), but leave
+    a graceful stop alone. This matches this app's own shutdown path
+    (src/lib/lifecycle.ts's shutdown() calls process.exit(0) after
+    disposers finish on SIGTERM), so `launchctl stop` results in an actual
+    stop instead of an immediate respawn. Reviewed-only: no live macOS
+    verification has been run against this template yet.
+  -->
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>StandardOutPath</key>
   <string>{{LOG_DIR}}/minder-service.out.log</string>
   <key>StandardErrorPath</key>
