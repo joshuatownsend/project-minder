@@ -73,6 +73,10 @@ docs/perf/report.json
 # git worktrees
 .worktrees/
 
+# tauri tray app — rust build artifacts (rebuilt by `cargo`/`tauri build`)
+src-tauri/target/
+src-tauri/gen/
+
 # worker bundle (built fresh by predev/prebuild via scripts/build-worker.mjs)
 workers/dist/
 

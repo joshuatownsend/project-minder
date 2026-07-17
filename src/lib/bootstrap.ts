@@ -125,6 +125,20 @@ export async function runBootstrap(): Promise<void> {
   // under vitest so the test runner's own SIGINT handling stays intact.
   if (!process.env.VITEST) installSignalHandlers();
 
+  // stdin control channel (C1): the tray app can't deliver a graceful signal to
+  // a console Node child on Windows, so it writes `shutdown\n` (or closes the
+  // pipe) to ask for a clean stop that runs the same disposers as SIGINT.
+  // Opt-in via MINDER_CONTROL_STDIN=1 (the tray sets it for spawned children);
+  // inert otherwise. Skipped under vitest so the runner keeps its own stdin.
+  if (!process.env.VITEST) {
+    try {
+      const { initControlChannel } = await import("@/lib/controlChannel");
+      initControlChannel();
+    } catch (err) {
+      bwarn("controlChannel: failed to init", err);
+    }
+  }
+
   blog("starting service-mode boot sequence…");
 
   // Gate each subsequent boot step on isShuttingDown(): if a signal arrived
