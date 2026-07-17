@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
-import { getUserConfig } from "@/lib/userConfigCache";
 import { mcpHealthCache, serverIdentity } from "@/lib/mcpHealthCache";
+import { enqueueMcpHealth } from "@/lib/mcpHealthEnqueue";
 import { mcpConfigWatcher } from "@/lib/mcpConfigWatcher";
 import { demoMode } from "@/lib/demo/demoMode";
 import { demoMcpHealth } from "@/lib/demo/activity";
@@ -35,21 +35,15 @@ export async function GET() {
 
   // Opt-in (default off): real stdio `initialize` handshake vs launchability.
   // Toggling clears the cache so stdio servers re-probe with the new mode.
-  mcpHealthCache.setStdioHandshake(getFlag(config.featureFlags, "mcpHealthStdioProbe", false));
-
+  // Pulls the full user-scope MCP surface — the same merged reader the rest of
+  // the app uses (managed policy + ~/.claude/settings.json + ~/.claude.json +
+  // Claude Desktop + plugins), not just the ~/.claude.json slice, so no
+  // configured server is silently missing from the strip. Shared with
+  // boot-time bootstrap (`src/lib/mcpHealthEnqueue.ts`) so both call sites
+  // apply the stdio-probe mode identically.
+  const configured = await enqueueMcpHealth(config.featureFlags);
   const configuredIds = new Set<string>();
-  try {
-    // The full user-scope MCP surface — the same merged reader the rest of the
-    // app uses (managed policy + ~/.claude/settings.json + ~/.claude.json +
-    // Claude Desktop + plugins), not just the ~/.claude.json slice, so no
-    // configured server is silently missing from the strip.
-    const { mcpServers } = await getUserConfig();
-    const configured = mcpServers.servers;
-    for (const s of configured) configuredIds.add(serverIdentity(s));
-    if (configured.length > 0) mcpHealthCache.enqueue(configured);
-  } catch {
-    // Defensive: a missing/broken config source must never blank the strip.
-  }
+  for (const s of configured) configuredIds.add(serverIdentity(s));
 
   // Filter cached health to the CURRENTLY-configured servers (by identity, so
   // two same-name servers from different sources are both kept). The cache
