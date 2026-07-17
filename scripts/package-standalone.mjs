@@ -196,6 +196,35 @@ if (existsSync(workersDir)) {
   console.warn(`[package-standalone] WARNING: workers/ not found, skipping`);
 }
 
+// --- 3b. schema.sql for the worker's schema lookup ---
+//
+// `resolveSchemaPath()` (src/lib/db/migrations.ts) first tries a path
+// sibling to the compiled migrations module (found automatically for
+// the in-process/main-thread path, since Next's file tracer can see
+// that statically-shaped readFileSync call and copies schema.sql next
+// to it), then falls back to walking up from `process.cwd()` looking
+// for `src/lib/db/schema.sql`. The worker bundle (workers/dist/
+// ingestWorker.mjs, built by esbuild, not traced by Next) has its
+// __dirname pinned to workers/dist/ — schema.sql is never there — so
+// it always falls through to the cwd-walk fallback. On a machine that
+// only has dist/minder-server/ (no repo checkout), that fallback finds
+// nothing unless we plant schema.sql at the first path it checks:
+// <cwd>/src/lib/db/schema.sql. The tray app / a human runs `node
+// server.js` with this package's own directory as cwd, so copying
+// schema.sql to outDir/src/lib/db/schema.sql lands exactly there.
+step("Copying src/lib/db/schema.sql (worker's schema.sql lookup fallback)");
+const schemaSrcPath = path.join(root, "src", "lib", "db", "schema.sql");
+if (existsSync(schemaSrcPath)) {
+  const schemaDestPath = path.join(outDir, "src", "lib", "db", "schema.sql");
+  mkdirSync(path.dirname(schemaDestPath), { recursive: true });
+  copyFileSync(schemaSrcPath, schemaDestPath);
+} else {
+  console.warn(
+    `[package-standalone] WARNING: ${path.relative(root, schemaSrcPath)} not found — ` +
+      `MINDER_INDEXER_WORKER=1 will fail with "schema.sql not found" against this package.`
+  );
+}
+
 // --- 4. Verify (don't assume) the better-sqlite3 native binary copied ---
 const sqliteNodeRel = path.join(
   "node_modules",
@@ -250,9 +279,17 @@ function satisfiesEngines(version, range) {
   // `engines` on install).
   const [major, minor, patch] = version.replace(/^v/, "").split(".").map(Number);
   const clauses = range.split("||").map((c) => c.trim());
-  return clauses.some((clause) => {
+  // Array#some coerces its callback's return value to boolean, so a
+  // clause returning `null` (unrecognized shape) is just treated as
+  // falsy — there's no way to tell "every clause was unrecognized"
+  // apart from "every clause failed to match" using .some() alone.
+  // Track recognition separately so an all-unrecognized range can
+  // still produce the intended null (warn-and-proceed) result.
+  let recognized = false;
+  const matched = clauses.some((clause) => {
     const caret = clause.match(/^\^(\d+)\.(\d+)\.(\d+)$/);
     if (caret) {
+      recognized = true;
       const [, cMajor, cMinor, cPatch] = caret.map(Number);
       if (major !== cMajor) return false;
       if (minor > cMinor) return true;
@@ -261,13 +298,15 @@ function satisfiesEngines(version, range) {
     }
     const gte = clause.match(/^>=(\d+)\.(\d+)\.(\d+)$/);
     if (gte) {
+      recognized = true;
       const [, gMajor, gMinor, gPatch] = gte.map(Number);
       if (major !== gMajor) return major > gMajor;
       if (minor !== gMinor) return minor > gMinor;
       return patch >= gPatch;
     }
-    return null; // unrecognized clause shape
+    return false; // unrecognized clause shape — doesn't count as a match
   });
+  return recognized ? matched : null;
 }
 
 const buildNodeVersion = process.version;
@@ -303,11 +342,12 @@ const buildInfo = {
     "The bundled better-sqlite3 .node prebuilt's ABI (builtWithNodeModuleVersion, " +
     "i.e. NODE_MODULE_VERSION) must match the Node major that RUNS server.js, not " +
     "just the one that satisfies expectedNodeEngines at build/package time. Repo CI " +
-    "uses Node 20 and 22, which share NODE_MODULE_VERSION 127/... — verify with " +
-    "`node -p process.versions.modules` on both the build machine and the runtime " +
-    "host before deploying across a Node major boundary. A mismatch surfaces as " +
-    "\"was compiled against a different Node.js version\" the first time an OTel " +
-    "or DB-backed route touches better-sqlite3.",
+    "uses Node 20 and 22, which do NOT share a NODE_MODULE_VERSION (Node 20 = ABI " +
+    "115, Node 22 = ABI 127) — verify with `node -p process.versions.modules` on " +
+    "both the build machine and the runtime host before deploying across a Node " +
+    "major boundary. A mismatch surfaces as \"was compiled against a different " +
+    "Node.js version\" the first time an OTel or DB-backed route touches " +
+    "better-sqlite3.",
 };
 writeFileSync(
   path.join(outDir, "BUILD_INFO.json"),
@@ -359,7 +399,8 @@ try {
     );
   }
 } catch (err) {
-  console.warn("[minder-server] could not read BUILD_INFO.json for the startup ABI check:", err.message);
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn("[minder-server] could not read BUILD_INFO.json for the startup ABI check:", message);
 }
 
 require("./server.next.js");
