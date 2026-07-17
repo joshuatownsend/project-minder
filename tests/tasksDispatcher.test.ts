@@ -20,6 +20,8 @@ vi.mock("../src/lib/tasks/store", () => ({
   getTask: vi.fn().mockResolvedValue(null),
   updateSwarmStatus: vi.fn().mockResolvedValue(undefined),
   requeueRunningTask: vi.fn().mockResolvedValue(null),
+  failTask: vi.fn().mockResolvedValue({ id: 0, status: "failed" }),
+  listRunningTasks: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock the completion hooks so we can assert the dispatcher fires them.
@@ -34,13 +36,14 @@ vi.mock("../src/lib/tasks/boardDelegation", () => ({
 vi.mock("../src/lib/tasks/spawner", () => ({
   sweepStalePids: vi.fn(),
   runClassicTask: vi.fn().mockResolvedValue({ taskId: 1, status: "done", durationMs: 100 }),
+  getLiveDispatchedTaskIds: vi.fn(() => new Set<number>()),
 }));
 
-import { initDispatcher, isDispatcherRunning, getDispatcherStats, stopDispatcher } from "../src/lib/tasks/dispatcher";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask, requeueRunningTask } from "../src/lib/tasks/store";
+import { initDispatcher, isDispatcherRunning, getDispatcherStats, stopDispatcher, reconcileInterruptedTasks } from "../src/lib/tasks/dispatcher";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask, requeueRunningTask, failTask, listRunningTasks, updateSwarmStatus } from "../src/lib/tasks/store";
 import { onTaskCompleteSyncBoard } from "../src/lib/tasks/boardDelegation";
 import { onTaskCompleteToggleTodo } from "../src/lib/tasks/todoDelegation";
-import { sweepStalePids } from "../src/lib/tasks/spawner";
+import { sweepStalePids, getLiveDispatchedTaskIds } from "../src/lib/tasks/spawner";
 
 /** Drain the microtask queue enough times for the classic-completion promise
  *  chain (runClassicTask → getTask → afterComplete → hooks) to settle. */
@@ -310,5 +313,64 @@ describe("dispatcher singleton", () => {
     await vi.advanceTimersByTimeAsync(2_100);
 
     expect(runClassicTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listRunningTasks).mockResolvedValue([]);
+    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>());
+    vi.mocked(failTask).mockResolvedValue({ id: 0, status: "failed" } as never);
+  });
+
+  function runningRow(id: number, swarmId: number | null = null) {
+    return {
+      id, title: `t${id}`, description: "", status: "running", priority: 3, quadrant: "do",
+      assigned_skill: null, model: null, execution_mode: "classic", scheduled_for: null,
+      requires_approval: 0, risk_level: "low", dry_run: 0, schedule_id: null, swarm_id: swarmId,
+      approved_at: null, session_id: null, started_at: null, completed_at: null,
+      duration_ms: null, cost_usd: null, output_summary: null, error_message: null,
+      metadata: null, consecutive_failures: 0, created_at: new Date().toISOString(),
+    };
+  }
+
+  it("fails a 'running' row whose child is gone, and leaves an alive one untouched", async () => {
+    const gone = runningRow(10);
+    const alive = runningRow(11);
+    vi.mocked(listRunningTasks).mockResolvedValue([gone, alive] as never);
+    // Only task 11 still has a live dispatched child.
+    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>([11]));
+
+    await reconcileInterruptedTasks();
+
+    expect(failTask).toHaveBeenCalledTimes(1);
+    expect(failTask).toHaveBeenCalledWith(10, expect.objectContaining({
+      error_message: expect.stringContaining("Interrupted by server restart"),
+    }));
+    // The alive row is left as-is.
+    expect(failTask).not.toHaveBeenCalledWith(11, expect.anything());
+  });
+
+  it("refreshes swarm status for an interrupted swarm member", async () => {
+    vi.mocked(listRunningTasks).mockResolvedValue([runningRow(20, 99)] as never);
+    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>());
+
+    await reconcileInterruptedTasks();
+
+    expect(failTask).toHaveBeenCalledWith(20, expect.anything());
+    expect(updateSwarmStatus).toHaveBeenCalledWith(99);
+  });
+
+  it("no-ops when there are no running rows", async () => {
+    vi.mocked(listRunningTasks).mockResolvedValue([]);
+    await reconcileInterruptedTasks();
+    expect(getLiveDispatchedTaskIds).not.toHaveBeenCalled();
+    expect(failTask).not.toHaveBeenCalled();
+  });
+
+  it("never throws even if the store read fails", async () => {
+    vi.mocked(listRunningTasks).mockRejectedValue(new Error("db down"));
+    await expect(reconcileInterruptedTasks()).resolves.toBeUndefined();
   });
 });

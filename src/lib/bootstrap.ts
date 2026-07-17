@@ -155,7 +155,7 @@ async function registerServiceDisposers(): Promise<void> {
     });
     onShutdown("tasksDb", async () => {
       const { checkpointAndCloseTasksDb } = await import("@/lib/tasksDb/connection");
-      checkpointAndCloseTasksDb();
+      await checkpointAndCloseTasksDb();
     });
     onShutdown("dispatcher", async () => {
       const { isDispatcherRunning, stopDispatcher } = await import("@/lib/tasks/dispatcher");

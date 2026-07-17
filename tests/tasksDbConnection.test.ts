@@ -24,22 +24,20 @@ afterEach(() => {
 // closed. That's exactly the better-sqlite3-absent / DB-not-open degrade path
 // the shutdown disposer must tolerate: it has to be a clean, throw-free no-op.
 describe("checkpointAndCloseTasksDb (graceful-shutdown close, degrade path)", () => {
-  it("is a safe no-op when no connection is open", () => {
+  it("is a safe no-op when no connection is open", async () => {
     expect(getTasksDbSync()).toBeNull();
     expect(isTasksDbAvailable()).toBe(false);
 
-    expect(() => checkpointAndCloseTasksDb()).not.toThrow();
+    await expect(checkpointAndCloseTasksDb()).resolves.toBeUndefined();
 
     // Still nothing open afterwards — no handle was conjured.
     expect(getTasksDbSync()).toBeNull();
     expect(isTasksDbAvailable()).toBe(false);
   });
 
-  it("stays a no-op across repeated calls (idempotent)", () => {
-    expect(() => {
-      checkpointAndCloseTasksDb();
-      checkpointAndCloseTasksDb();
-    }).not.toThrow();
+  it("stays a no-op across repeated calls (idempotent)", async () => {
+    await checkpointAndCloseTasksDb();
+    await checkpointAndCloseTasksDb();
     expect(isTasksDbAvailable()).toBe(false);
   });
 });
@@ -51,7 +49,7 @@ describe("getTasksDb after shutdown close (F10)", () => {
   it("latches closed and refuses to re-open the DB", async () => {
     expect(isTasksDbShutdownClosed()).toBe(false);
 
-    checkpointAndCloseTasksDb(); // latch closed (no open handle → close is a no-op)
+    await checkpointAndCloseTasksDb(); // latch closed (no open handle → close is a no-op)
     expect(isTasksDbShutdownClosed()).toBe(true);
 
     // The key guarantee: no re-open. Would previously have constructed a fresh
@@ -61,8 +59,8 @@ describe("getTasksDb after shutdown close (F10)", () => {
     expect(isTasksDbAvailable()).toBe(false);
   });
 
-  it("_resetTasksDbShutdownForTesting clears the latch", () => {
-    checkpointAndCloseTasksDb();
+  it("_resetTasksDbShutdownForTesting clears the latch", async () => {
+    await checkpointAndCloseTasksDb();
     expect(isTasksDbShutdownClosed()).toBe(true);
     _resetTasksDbShutdownForTesting();
     expect(isTasksDbShutdownClosed()).toBe(false);

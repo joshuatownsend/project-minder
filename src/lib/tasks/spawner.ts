@@ -32,10 +32,15 @@ function ensurePidDir() {
   fs.mkdirSync(PID_DIR, { recursive: true });
 }
 
-function writePidFile(pid: number) {
+function writePidFile(pid: number, taskId: number) {
   try {
     ensurePidDir();
-    fs.writeFileSync(path.join(PID_DIR, String(pid)), String(pid), "utf8");
+    // Filename is the PID (so sweepStalePids / listTrackedPids stay filename-keyed);
+    // CONTENT is the task id, giving a task→PID mapping the boot reconcile
+    // (getLiveDispatchedTaskIds) uses to tell which 'running' rows still have a
+    // live child. The content was previously the (redundant) PID and is read
+    // nowhere else.
+    fs.writeFileSync(path.join(PID_DIR, String(pid)), String(taskId), "utf8");
   } catch {
     // Non-fatal — PID files are best-effort for emergency stop
   }
@@ -71,6 +76,38 @@ export function sweepStalePids(): void {
   } catch {
     // PID dir unreadable — ignore
   }
+}
+
+/**
+ * Task ids that still have a LIVE dispatched child, derived from PID_DIR:
+ * filename = PID, content = task id. A file whose PID is dead is skipped (and
+ * left for `sweepStalePids` to unlink). Used by the dispatcher's boot-time
+ * reconcile to decide which 'running' rows to leave (child still alive) vs.
+ * resolve (child gone). Fully defensive — an unreadable dir/file yields fewer
+ * entries, never throws.
+ */
+export function getLiveDispatchedTaskIds(): Set<number> {
+  const live = new Set<number>();
+  try {
+    for (const f of fs.readdirSync(PID_DIR)) {
+      const pid = parseInt(f, 10);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      try {
+        process.kill(pid, 0); // throws ESRCH if the process is gone
+      } catch {
+        continue; // dead PID — not live; sweepStalePids will unlink it
+      }
+      try {
+        const taskId = parseInt(fs.readFileSync(path.join(PID_DIR, f), "utf8").trim(), 10);
+        if (Number.isFinite(taskId) && taskId > 0) live.add(taskId);
+      } catch {
+        /* unreadable content — can't map to a task, skip */
+      }
+    }
+  } catch {
+    /* PID dir unreadable — treat as no live children */
+  }
+  return live;
 }
 
 /** List PIDs currently tracked in PID_DIR. Used by emergency stop (Wave 9.2). */
@@ -169,7 +206,7 @@ export async function runClassicTask(
       cwd: taskCwd(task),
     });
     const pid = child.pid;
-    if (pid) writePidFile(pid);
+    if (pid) writePidFile(pid, task.id);
 
     let stdout = "";
     let stderr = "";
@@ -271,7 +308,7 @@ export async function runStreamTask(
       cwd: taskCwd(task),
     });
     const pid = child.pid;
-    if (pid) writePidFile(pid);
+    if (pid) writePidFile(pid, task.id);
     streamChildren.set(task.id, child);
 
     let lineBuffer = "";

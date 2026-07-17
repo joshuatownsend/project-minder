@@ -197,6 +197,20 @@ export async function claimPendingTask(): Promise<Task | null> {
 }
 
 /**
+ * All tasks currently in `status='running'`. At dispatcher boot these are rows
+ * left over from a previous server instance (their supervising process — and
+ * the `child.on('close')` handler that would have recorded completion — is
+ * gone), which the boot reconcile resolves. Read-only; safe to call anytime.
+ */
+export async function listRunningTasks(): Promise<Task[]> {
+  const db = await ensureReady();
+  return prepTasksCached(
+    db,
+    "SELECT * FROM ops_tasks WHERE status = 'running'"
+  ).all() as Task[];
+}
+
+/**
  * Requeue a task that was claimed (`status='running'`) but whose spawn was
  * abandoned before it started — specifically, the dispatcher stopping mid-tick
  * during shutdown (A2). Flips it back to `pending` and clears the claim fields

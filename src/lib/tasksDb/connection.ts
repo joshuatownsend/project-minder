@@ -78,6 +78,11 @@ export async function getTasksDb(): Promise<DatabaseT.Database | null> {
     try {
       await ensureTasksDbDir();
       if (state.db) return state.db;
+      // F11: shutdown may have latched the connection closed WHILE we awaited
+      // ensureTasksDbDir() — the initial guard above ran before the flag flipped.
+      // Re-check here so a mid-flight open can't hand back a fresh handle the
+      // close disposer already believed it had prevented.
+      if (state.shutdownClosed) return null;
       const db = new Database!(TASKS_DB_PATH);
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
@@ -134,11 +139,22 @@ export function closeTasksDb(): void {
  * as the `tasksDb` shutdown disposer, ordered to run after the dispatcher (its
  * only writer) has stopped.
  */
-export function checkpointAndCloseTasksDb(): void {
+export async function checkpointAndCloseTasksDb(): Promise<void> {
   // Latch FIRST (synchronous), before any await could interleave a getTasksDb()
   // race: from here on no code path may re-open the DB, even the no-open path
   // below where there's nothing to flush.
   state.shutdownClosed = true;
+  // F11: an open already in flight when we latch would, after its own await,
+  // otherwise construct a fresh handle. It now re-checks `shutdownClosed` and
+  // bails to null — but await it here anyway so that, whichever side won the
+  // race, we then close whatever handle actually landed in `state.db`.
+  if (state.inFlight) {
+    try {
+      await state.inFlight;
+    } catch {
+      /* the open failed — nothing to close */
+    }
+  }
   const db = state.db;
   if (!db) return; // driver missing, or no connection open — nothing to flush
   try {

@@ -2,8 +2,8 @@ import "server-only";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus, requeueRunningTask } from "./store";
-import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, type SpawnFn } from "./spawner";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus, requeueRunningTask, failTask, listRunningTasks } from "./store";
+import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, getLiveDispatchedTaskIds, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
@@ -56,6 +56,64 @@ export function stopDispatcher(): Promise<void> {
 }
 
 /**
+ * Boot-time reconcile of tasks left `status='running'` by a previous server
+ * instance (F12). Their supervising process — and the `child.on('close')`
+ * handler that would have called completeTask/failTask — died with that
+ * instance, so nothing will ever record their completion in place.
+ *
+ * For each such row: if a dispatched child is STILL verifiably alive (its PID
+ * file, keyed filename=PID / content=task-id, points at a live process) we
+ * leave the row alone — we won't disturb work that's demonstrably still running
+ * and can't distinguish it from a task that will finish. Otherwise the child is
+ * gone, so we `failTask()` it with an "interrupted" reason: a terminal state
+ * that unblocks downstream consumers honestly (swarm-coordinator dependents,
+ * which treat a failed blocker as satisfied, proceed; ordinary dependents on a
+ * failed prerequisite stay blocked, exactly as they would for any real
+ * failure), and — unlike requeue — does NOT silently re-run a task whose side
+ * effects may have partially landed. Swarm status is refreshed for affected
+ * swarms so a stuck swarm can complete.
+ *
+ * Idempotent (failTask guards on `status='running'`) and fully defensive — one
+ * bad row never aborts the rest, and the whole pass never throws. Logs one line
+ * per resolved row.
+ */
+export async function reconcileInterruptedTasks(): Promise<void> {
+  try {
+    const running = await listRunningTasks();
+    if (running.length === 0) return;
+
+    const live = getLiveDispatchedTaskIds();
+    const affectedSwarms = new Set<number>();
+
+    for (const t of running) {
+      if (live.has(t.id)) {
+        console.log(`[dispatcher] reconcile: task ${t.id} still has a live child — leaving 'running'`);
+        continue;
+      }
+      const updated = await failTask(t.id, {
+        error_message:
+          "Interrupted by server restart (task was 'running' when the previous server instance stopped).",
+      }).catch((err) => {
+        console.error(`[dispatcher] reconcile: failTask ${t.id} failed:`, err);
+        return null;
+      });
+      if (updated) {
+        console.log(`[dispatcher] reconcile: task ${t.id} was interrupted → marked failed`);
+        if (t.swarm_id != null) affectedSwarms.add(t.swarm_id);
+      }
+    }
+
+    for (const swarmId of affectedSwarms) {
+      await updateSwarmStatus(swarmId).catch((err) =>
+        console.error(`[dispatcher] reconcile: updateSwarmStatus ${swarmId} failed:`, err)
+      );
+    }
+  } catch (err) {
+    console.error("[dispatcher] reconcileInterruptedTasks failed:", err);
+  }
+}
+
+/**
  * Initialize the dispatcher singleton if not already running.
  * Safe to call multiple times — no-ops if already initialized.
  */
@@ -63,6 +121,11 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   if (g.__minderDispatcher) return;
 
   try { fs.mkdirSync(path.dirname(HEARTBEAT_PATH), { recursive: true }); } catch { /* non-fatal */ }
+
+  // Resolve rows stranded 'running' by a previous instance before we start
+  // ticking. Fire-and-forget + self-guarded: it only touches 'running' rows,
+  // so it can't race the tick's 'pending' claims.
+  void reconcileInterruptedTasks();
 
   const startedAt = new Date().toISOString();
   let tickCount = 0;
