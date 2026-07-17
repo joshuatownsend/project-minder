@@ -279,7 +279,7 @@ needed for a personal tool.
 | A2 shutdown + /api/health + logging | Opus | A1 | ☐ not started | |
 | A3 per-OS autostart wrappers | Sonnet | A2 | ☐ not started | |
 | A4 docs + polish | Haiku | A3 | ☐ not started | |
-| C0 standalone build | Sonnet | — (parallel-safe) | ☐ not started | |
+| C0 standalone build | Sonnet | — (parallel-safe) | ☑ done | #285 |
 | C1 Tauri tray + sidecar | Opus | A2, C0 | ☐ not started | |
 | C2 autostart toggle | Sonnet | C1 | ☐ not started | |
 | C3 native notifications | Sonnet | C1 | ☐ not started | |
