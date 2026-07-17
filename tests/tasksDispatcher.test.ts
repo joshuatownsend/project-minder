@@ -314,6 +314,35 @@ describe("dispatcher singleton", () => {
 
     expect(runClassicTask).not.toHaveBeenCalled();
   });
+
+  it("runs the interrupted-task reconcile on every tick (F15 cadence)", async () => {
+    vi.mocked(listRunningTasks).mockResolvedValue([]);
+
+    initDispatcher(); // boot reconcile fires once
+    await drainMicrotasks();
+    const afterBoot = vi.mocked(listRunningTasks).mock.calls.length;
+    expect(afterBoot).toBeGreaterThanOrEqual(1);
+
+    await vi.advanceTimersByTimeAsync(2_100); // first tick
+    const afterTick1 = vi.mocked(listRunningTasks).mock.calls.length;
+    expect(afterTick1).toBeGreaterThan(afterBoot);
+
+    await vi.advanceTimersByTimeAsync(30_000); // second tick
+    expect(vi.mocked(listRunningTasks).mock.calls.length).toBeGreaterThan(afterTick1);
+  });
+
+  it("stops reconciling once stopped (F15 — no reconcile during shutdown)", async () => {
+    vi.mocked(listRunningTasks).mockResolvedValue([]);
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100); // one tick reconcile
+    const before = vi.mocked(listRunningTasks).mock.calls.length;
+
+    cleanupDispatcher(); // dispose → stopped = true, timers cleared
+
+    await vi.advanceTimersByTimeAsync(90_000); // would be several ticks
+    expect(vi.mocked(listRunningTasks).mock.calls.length).toBe(before);
+  });
 });
 
 describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () => {
@@ -346,7 +375,7 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
 
     expect(failTask).toHaveBeenCalledTimes(1);
     expect(failTask).toHaveBeenCalledWith(10, expect.objectContaining({
-      error_message: expect.stringContaining("Interrupted by server restart"),
+      error_message: expect.stringContaining("exited unmonitored"),
     }));
     // The alive row is left as-is.
     expect(failTask).not.toHaveBeenCalledWith(11, expect.anything());
@@ -398,5 +427,35 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
     expect(failTask).toHaveBeenCalledTimes(1);
     expect(failTask).toHaveBeenCalledWith(41, expect.anything());
     expect(failTask).not.toHaveBeenCalledWith(40, expect.anything());
+  });
+
+  it("skips rows this instance is actively supervising (F15 race-avoidance)", async () => {
+    // 50 is in the supervised (inFlight) set — even with no live marker (its
+    // marker may have just been deleted before completeTask runs) it must NOT
+    // be failed. 51 is unsupervised and dead → failed.
+    vi.mocked(listRunningTasks).mockResolvedValue([runningRow(50), runningRow(51)] as never);
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>(), hasUnmappedLive: false });
+
+    await reconcileInterruptedTasks(new Set<number>([50]));
+
+    expect(failTask).toHaveBeenCalledTimes(1);
+    expect(failTask).toHaveBeenCalledWith(51, expect.anything());
+    expect(failTask).not.toHaveBeenCalledWith(50, expect.anything());
+  });
+
+  it("resolves a preserved-alive row only once its marker PID goes dead (F15)", async () => {
+    vi.mocked(listRunningTasks).mockResolvedValue([runningRow(60)] as never);
+
+    // First pass: child still alive → left running, not failed.
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>([60]), hasUnmappedLive: false });
+    await reconcileInterruptedTasks();
+    expect(failTask).not.toHaveBeenCalled();
+
+    // Later pass: marker PID now dead → resolved with the "exited unmonitored" reason.
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>(), hasUnmappedLive: false });
+    await reconcileInterruptedTasks();
+    expect(failTask).toHaveBeenCalledWith(60, expect.objectContaining({
+      error_message: expect.stringContaining("exited unmonitored"),
+    }));
   });
 });

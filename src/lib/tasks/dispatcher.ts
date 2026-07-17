@@ -73,19 +73,32 @@ export function stopDispatcher(): Promise<void> {
  * effects may have partially landed. Swarm status is refreshed for affected
  * swarms so a stuck swarm can complete.
  *
+ * Runs at boot AND periodically from the tick loop (F15) — a child that was
+ * still alive at boot and is therefore preserved would otherwise be stranded
+ * `running` forever once it exits, because the new server has no
+ * `child.on('close')` for that old process. `supervisedTaskIds` is the set of
+ * ids THIS instance is actively supervising (the dispatcher's in-flight map);
+ * those are skipped so the periodic pass can't race a task's own in-flight
+ * completion (the spawner deletes the PID marker *before* awaiting
+ * `completeTask`, so a supervised row can briefly be `running` with no live
+ * marker). At boot the set is empty — every `running` row is a prior instance's.
+ *
  * Idempotent (failTask guards on `status='running'`) and fully defensive — one
  * bad row never aborts the rest, and the whole pass never throws. Logs one line
  * per resolved row.
  */
-export async function reconcileInterruptedTasks(): Promise<void> {
+export async function reconcileInterruptedTasks(
+  supervisedTaskIds: ReadonlySet<number> = new Set(),
+): Promise<void> {
   try {
     const running = await listRunningTasks();
-    if (running.length === 0) return;
+    const candidates = running.filter((t) => !supervisedTaskIds.has(t.id));
+    if (candidates.length === 0) return;
 
     const { taskIds: liveTaskIds, hasUnmappedLive } = getLiveDispatchSnapshot();
     const affectedSwarms = new Set<number>();
 
-    for (const t of running) {
+    for (const t of candidates) {
       if (liveTaskIds.has(t.id)) {
         console.log(`[dispatcher] reconcile: task ${t.id} still has a live child — leaving 'running'`);
         continue;
@@ -99,8 +112,11 @@ export async function reconcileInterruptedTasks(): Promise<void> {
         continue;
       }
       const updated = await failTask(t.id, {
+        // No exit/outcome evidence survives a restart (the spawner records
+        // output only through completeTask; there are no output/exit-code
+        // files), so a dead-marker row can only be failed, not recovered.
         error_message:
-          "Interrupted by server restart (task was 'running' when the previous server instance stopped).",
+          "Process exited unmonitored after a server restart (task was 'running' with no live child and no recorded completion).",
       }).catch((err) => {
         console.error(`[dispatcher] reconcile: failTask ${t.id} failed:`, err);
         return null;
@@ -179,6 +195,19 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       const paused = !!cfg?.emergencyStop;
       writeHeartbeat(lastTickAt, inFlight.size, paused);
       if (paused) return;
+
+      // F15: periodic reconcile — resolve rows a previous instance left
+      // 'running', including a boot-preserved alive child that has since
+      // exited (its marker PID now dead). Runs every tick (~30 s): sweepStalePids()
+      // above already unlinked dead markers so the liveness snapshot is fresh,
+      // and it's a single empty SELECT in steady state (the PID-dir scan only
+      // happens when there ARE running rows). Passing the in-flight ids skips
+      // tasks THIS instance supervises, so it can't race their own completion.
+      // Skipped once shutdown has begun (stopped) — no reconcile writes during
+      // teardown.
+      if (!stopped) {
+        await reconcileInterruptedTasks(new Set(inFlight.keys()));
+      }
 
       try {
         await materializeSchedules();

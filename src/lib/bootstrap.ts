@@ -107,29 +107,51 @@ export async function runBootstrap(): Promise<void> {
 
   g.__minderBootstrapStatus = { ran: true, subsystems: [] };
 
-  // Turn on file logging for the rest of boot + the shutdown lifecycle. Guarded
-  // out of the vitest runner so unit tests never spray files into ~/.minder.
+  // --- Install shutdown handling FIRST, before any long boot work (F14). ---
+  // A supervisor/tray stopping the process mid-boot must still run the
+  // disposers registered so far (WAL checkpointed, watchers closed) instead of
+  // getting default-kill semantics. Disposers registered here are lazy and
+  // idempotent, so registering them before their subsystems have started is
+  // safe — disposing an unstarted watcher / a closed DB is a no-op.
+
+  // Turn on file logging first so the shutdown lines land in the file log too.
+  // Guarded out of the vitest runner so unit tests never spray files into
+  // ~/.minder.
   if (!process.env.VITEST) initServiceLog();
+
+  await registerServiceDisposers();
+  const { installSignalHandlers, isShuttingDown } = await import("@/lib/lifecycle");
+  // Real signal handlers are only meaningful in a running server; skip them
+  // under vitest so the test runner's own SIGINT handling stays intact.
+  if (!process.env.VITEST) installSignalHandlers();
 
   blog("starting service-mode boot sequence…");
 
+  // Gate each subsequent boot step on isShuttingDown(): if a signal arrived
+  // mid-boot, stop starting new subsystems (which would keep writing / open
+  // fs.watch handles after the disposers already ran).
   await bootDb();
+  if (isShuttingDown()) return abortBoot();
   const projects = await bootScan();
+  if (isShuttingDown()) return abortBoot();
   await bootProjectCaches(projects);
+  if (isShuttingDown()) return abortBoot();
   await bootManualStepsWatcher();
+  if (isShuttingDown()) return abortBoot();
   await bootMcpConfigWatcher();
+  if (isShuttingDown()) return abortBoot();
   await bootMcpHealthCache();
+  if (isShuttingDown()) return abortBoot();
   await bootClaudeStatus();
 
-  await registerServiceDisposers();
-  // Real signal handlers are only meaningful in a running server; skip them
-  // under vitest so the test runner's own SIGINT handling stays intact.
-  if (!process.env.VITEST) {
-    const { installSignalHandlers } = await import("@/lib/lifecycle");
-    installSignalHandlers();
-  }
-
   blog("boot sequence complete", { subsystems: getBootstrapStatus().subsystems });
+}
+
+/** Logged bail-out when a shutdown signal arrives mid-boot. */
+function abortBoot(): void {
+  blog("boot aborted: shutdown began mid-sequence — remaining subsystems skipped", {
+    subsystems: getBootstrapStatus().subsystems,
+  });
 }
 
 /**
