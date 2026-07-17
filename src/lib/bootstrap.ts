@@ -136,9 +136,21 @@ async function bootManualStepsWatcher(): Promise<void> {
 }
 
 async function bootMcpConfigWatcher(): Promise<void> {
-  // `ensureStarted()` is explicitly documented idempotent ("safe to call on
-  // every /api/mcp-health request") — safe to call unconditionally here too.
+  // `ensureStarted()` is itself idempotent ("safe to call on every
+  // /api/mcp-health request"), but the ROUTE it mirrors only ever reaches that
+  // call after its own `mcpHealth` flag gate — it returns early otherwise (see
+  // `src/app/api/mcp-health/route.ts`). Starting the watcher unconditionally
+  // here would start the user-config file watchers even with MCP health
+  // disabled, which the route never does. Gate on the same flag, the same way
+  // `bootMcpHealthCache` below does.
   try {
+    const { readConfig } = await import("@/lib/config");
+    const { getFlag } = await import("@/lib/featureFlags");
+    const config = await readConfig();
+    if (!getFlag(config.featureFlags, "mcpHealth")) {
+      console.log("[bootstrap] mcpConfigWatcher: skipped (mcpHealth flag off)");
+      return;
+    }
     const { mcpConfigWatcher } = await import("@/lib/mcpConfigWatcher");
     mcpConfigWatcher.ensureStarted();
     console.log("[bootstrap] mcpConfigWatcher: started");
@@ -156,15 +168,16 @@ async function bootMcpHealthCache(): Promise<void> {
       console.log("[bootstrap] mcpHealthCache: skipped (mcpHealth flag off)");
       return;
     }
-    // Mirrors GET /api/mcp-health's enqueue: pull the merged user-scope MCP
-    // server list and enqueue it. `enqueue()` dedupes against its own TTL
-    // cache and in-flight `seen` set, so this is safe to call unconditionally
-    // on every boot (and would no-op against an already-warm cache).
-    const { getUserConfig } = await import("@/lib/userConfigCache");
-    const { mcpHealthCache } = await import("@/lib/mcpHealthCache");
-    const { mcpServers } = await getUserConfig();
-    if (mcpServers.servers.length > 0) mcpHealthCache.enqueue(mcpServers.servers);
-    console.log(`[bootstrap] mcpHealthCache: enqueued ${mcpServers.servers.length} servers`);
+    // Mirrors GET /api/mcp-health's enqueue exactly (same shared helper), so
+    // boot-time probes run in whatever stdio-probe mode
+    // (`mcpHealthStdioProbe`) the route would apply — not always the
+    // launchability default — and don't get disposed/re-probed on the first
+    // route poll. `enqueue()` dedupes against its own TTL cache and in-flight
+    // `seen` set, so this is safe to call unconditionally on every boot (and
+    // would no-op against an already-warm cache).
+    const { enqueueMcpHealth } = await import("@/lib/mcpHealthEnqueue");
+    const configured = await enqueueMcpHealth(config.featureFlags);
+    console.log(`[bootstrap] mcpHealthCache: enqueued ${configured.length} servers`);
   } catch (err) {
     console.warn("[bootstrap] mcpHealthCache: failed to enqueue —", err);
   }
