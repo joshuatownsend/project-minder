@@ -198,6 +198,112 @@ export function isTaskkillAlreadyGone(result) {
   return /not found/.test(text);
 }
 
+/** The filename the JSON sidecar recording the installed launch is written under (Windows only, in `~/.minder/service/` alongside run-hidden.vbs/task.xml). */
+export const SERVICE_MANIFEST_FILENAME = "service-manifest.json";
+
+/**
+ * @typedef {{ mode: "standalone" | "fallback", exe: string, args: string[], cwd?: string }} InstalledLaunch
+ */
+
+/**
+ * Parses `service-manifest.json` (F14 review fix) — a small JSON sidecar
+ * `service:install` writes recording the EXACT launch it resolved at
+ * install time, so `service:stop` can verify process identity against what
+ * was actually installed instead of recomputing `resolveServerLaunch()`
+ * against the CURRENT filesystem (which can diverge: install while only
+ * `.next` exists, `pnpm package:standalone` later, or the reverse — the
+ * live run-hidden.vbs keeps launching the ORIGINAL mode either way, so
+ * re-resolving live would refuse to recognize — or worse, misidentify —
+ * the very service this tool installed).
+ *
+ * Returns `null` for anything that isn't valid JSON or doesn't have the
+ * expected shape — the caller falls back to `extractLaunchFromVbs`.
+ *
+ * @param {string | null | undefined} jsonText
+ * @returns {InstalledLaunch | null}
+ */
+export function parseServiceManifest(jsonText) {
+  if (typeof jsonText !== "string" || !jsonText.trim()) return null;
+  let data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const { mode, exe, args, cwd } = data;
+  if (mode !== "standalone" && mode !== "fallback") return null;
+  if (typeof exe !== "string" || !exe) return null;
+  if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) return null;
+  return { mode, exe, args, cwd: typeof cwd === "string" ? cwd : undefined };
+}
+
+/**
+ * Parses the INSTALLED `run-hidden.vbs` (F14 review fix, fallback path for
+ * installs made before the JSON sidecar existed, or if it's manually
+ * deleted) to recover the exact launch it was generated for — rather than
+ * trusting a freshly recomputed `resolveServerLaunch()` against whatever
+ * the filesystem looks like NOW. The template (windows-run-hidden.vbs.tmpl)
+ * has a fixed, known shape:
+ *   WshShell.CurrentDirectory = "<cwd>"
+ *   WshShell.Run "<command line>", 0, False
+ * where `<command line>` is `escapeVbsString(quoteArg(exe) + " " +
+ * quoteArg(arg1) + " " + ...)` — i.e. every original double-quote is
+ * DOUBLED (VBScript's own quoting rule). Decoding reverses that (`""` ->
+ * `"`), then every `"...".` run is one token: `[exe, ...args]`.
+ *
+ * The launch `mode` isn't stored in the vbs text itself, so it's inferred
+ * from the recovered args: standalone's args always end in an absolute
+ * `server.js` path; fallback's always include a bare `start` token (see
+ * resolveServerLaunch). An unrecognized shape (a hand-edited or
+ * differently-versioned vbs) returns `null` rather than guessing.
+ *
+ * @param {string | null | undefined} vbsContent
+ * @returns {InstalledLaunch | null}
+ */
+export function extractLaunchFromVbs(vbsContent) {
+  if (typeof vbsContent !== "string" || !vbsContent.trim()) return null;
+
+  const cwdMatch = vbsContent.match(/WshShell\.CurrentDirectory\s*=\s*"([^"]*)"/);
+  const runMatch = vbsContent.match(/WshShell\.Run\s+"([\s\S]*?)",\s*0,\s*False/);
+  if (!runMatch) return null;
+
+  const decoded = runMatch[1].replace(/""/g, '"');
+  const tokens = [];
+  const tokenPattern = /"([^"]*)"/g;
+  let m;
+  while ((m = tokenPattern.exec(decoded)) !== null) {
+    tokens.push(m[1]);
+  }
+  if (tokens.length === 0) return null;
+
+  const [exe, ...args] = tokens;
+  const mode = args.some((a) => /server\.js$/i.test(a)) ? "standalone" : args.includes("start") ? "fallback" : null;
+  if (!mode) return null; // unrecognized shape — caller falls back further
+
+  return { mode, exe, args, cwd: cwdMatch ? cwdMatch[1] : undefined };
+}
+
+/**
+ * Resolves the launch identity to use for `service:stop` — preferring what
+ * was ACTUALLY INSTALLED over a freshly recomputed `resolveServerLaunch()`
+ * (F14 review fix). Order: the JSON manifest, then the vbs (older
+ * installs), then `{ launch: null, source: null }` so the caller falls
+ * back to recomputing from the current filesystem (with a printed note,
+ * since that fallback can diverge from what's actually installed).
+ *
+ * @param {{ manifestJson?: string | null, vbsContent?: string | null }} [sources]
+ * @returns {{ launch: InstalledLaunch | null, source: "manifest" | "vbs" | null }}
+ */
+export function resolveInstalledLaunch(sources = {}) {
+  const { manifestJson, vbsContent } = sources;
+  const fromManifest = parseServiceManifest(manifestJson);
+  if (fromManifest) return { launch: fromManifest, source: "manifest" };
+  const fromVbs = extractLaunchFromVbs(vbsContent);
+  if (fromVbs) return { launch: fromVbs, source: "vbs" };
+  return { launch: null, source: null };
+}
+
 /**
  * Resolves the `next` CLI's own JS entry point (not the node_modules/.bin
  * shell shim) via `createRequire` rooted at the target repo's package.json

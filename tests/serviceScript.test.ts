@@ -10,6 +10,10 @@ import {
   findFirstStepFailure,
   describeStepFailure,
   isTaskkillAlreadyGone,
+  extractLaunchFromVbs,
+  parseServiceManifest,
+  resolveInstalledLaunch,
+  SERVICE_MANIFEST_FILENAME,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
   detectPlatformKind,
@@ -241,6 +245,174 @@ describe("isTaskkillAlreadyGone (F13 review fix: propagate service:stop failures
 
   it("returns false when there is no error text at all", () => {
     expect(isTaskkillAlreadyGone({ ok: false, stdout: "", stderr: "" })).toBe(false);
+  });
+});
+
+describe("extractLaunchFromVbs (F14 review fix: stop identity from installed artifacts)", () => {
+  const VBS_TEMPLATE =
+    'WshShell.CurrentDirectory = "{{WORKING_DIR}}"\n' +
+    'WshEnv("PORT") = "{{PORT}}"\n' +
+    'WshEnv("HOSTNAME") = "{{HOSTNAME}}"\n' +
+    'WshShell.Run "{{COMMAND_LINE}}", 0, False\n';
+
+  // Mirrors exactly what buildWindowsArtifacts (scripts/service.mjs) does —
+  // real escaping via the same quoteArg/escapeVbsString primitives, not a
+  // hand-rolled approximation — so these tests exercise the real round trip.
+  function renderVbs(launch: { exe: string; args: string[]; cwd: string }) {
+    const inner = `${quoteArg(launch.exe)} ${launch.args.map(quoteArg).join(" ")}`;
+    return renderTemplate(VBS_TEMPLATE, {
+      WORKING_DIR: launch.cwd,
+      PORT: "4100",
+      HOSTNAME: "127.0.0.1",
+      COMMAND_LINE: escapeVbsString(inner),
+    });
+  }
+
+  it("parses a standalone-form vbs and infers mode: standalone", () => {
+    const launch = {
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\dist\\minder-server\\server.js"],
+      cwd: "C:\\repo\\dist\\minder-server",
+    };
+    expect(extractLaunchFromVbs(renderVbs(launch))).toEqual({ mode: "standalone", ...launch });
+  });
+
+  it("parses a fallback-form vbs (node + next bin + start token) and infers mode: fallback", () => {
+    const launch = {
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\node_modules\\next\\dist\\bin\\next", "start", "-p", "4100", "--hostname", "127.0.0.1"],
+      cwd: "C:\\repo",
+    };
+    expect(extractLaunchFromVbs(renderVbs(launch))).toEqual({ mode: "fallback", ...launch });
+  });
+
+  // The core F14 requirement: a parsed fallback identity must still feed
+  // the F6 two-part next-start signature correctly — the next bin path
+  // alone must NOT be sufficient, `next dev` must still be refused.
+  it("the parsed fallback identity still feeds the two-part next-start signature — 'next dev' is still refused", () => {
+    const launch = {
+      exe: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\repo\\node_modules\\next\\dist\\bin\\next", "start", "-p", "4100", "--hostname", "127.0.0.1"],
+      cwd: "C:\\repo",
+    };
+    const parsed = extractLaunchFromVbs(renderVbs(launch));
+    const identity = buildServerIdentityMarkers({ launch: parsed, vbsPath: "C:/x/run-hidden.vbs" });
+    const startCmd = `"${launch.exe}" "${launch.args[0]}" start -p 4100 --hostname 127.0.0.1`;
+    const devCmd = `"${launch.exe}" "${launch.args[0]}" dev -p 4100 --hostname 127.0.0.1`;
+    expect(commandLineMatchesServer(startCmd, identity)).toBe(true);
+    expect(commandLineMatchesServer(devCmd, identity)).toBe(false);
+  });
+
+  it("returns null for malformed/empty content", () => {
+    expect(extractLaunchFromVbs("")).toBeNull();
+    expect(extractLaunchFromVbs(null)).toBeNull();
+    expect(extractLaunchFromVbs(undefined)).toBeNull();
+    expect(extractLaunchFromVbs("this is not a vbs file at all")).toBeNull();
+  });
+
+  it("returns null when the Run line doesn't contain a recognizable server.js/start-token shape", () => {
+    const vbs =
+      'WshShell.CurrentDirectory = "C:\\repo"\n' + 'WshShell.Run """C:\\some\\other.exe"" ""restart""", 0, False\n';
+    expect(extractLaunchFromVbs(vbs)).toBeNull();
+  });
+
+  it("returns null when there's no WshShell.Run line at all", () => {
+    expect(extractLaunchFromVbs('WshShell.CurrentDirectory = "C:\\repo"\n')).toBeNull();
+  });
+});
+
+describe("parseServiceManifest (F14 review fix)", () => {
+  const validManifest = {
+    version: 1,
+    installedAt: "2026-01-01T00:00:00.000Z",
+    mode: "standalone",
+    exe: "C:\\Program Files\\nodejs\\node.exe",
+    args: ["C:\\repo\\dist\\minder-server\\server.js"],
+    cwd: "C:\\repo\\dist\\minder-server",
+  };
+
+  it("parses a well-formed manifest into { mode, exe, args, cwd }", () => {
+    expect(parseServiceManifest(JSON.stringify(validManifest))).toEqual({
+      mode: "standalone",
+      exe: validManifest.exe,
+      args: validManifest.args,
+      cwd: validManifest.cwd,
+    });
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(parseServiceManifest("{not json")).toBeNull();
+  });
+
+  it("returns null for empty/null/undefined input", () => {
+    expect(parseServiceManifest("")).toBeNull();
+    expect(parseServiceManifest(null)).toBeNull();
+    expect(parseServiceManifest(undefined)).toBeNull();
+  });
+
+  it("returns null when mode is missing or not one of the two valid values", () => {
+    expect(parseServiceManifest(JSON.stringify({ ...validManifest, mode: "bogus" }))).toBeNull();
+    const { mode, ...withoutMode } = validManifest;
+    expect(parseServiceManifest(JSON.stringify(withoutMode))).toBeNull();
+  });
+
+  it("returns null when args is missing or not a string array", () => {
+    expect(parseServiceManifest(JSON.stringify({ ...validManifest, args: "not-an-array" }))).toBeNull();
+    expect(parseServiceManifest(JSON.stringify({ ...validManifest, args: [1, 2, 3] }))).toBeNull();
+  });
+
+  it("returns null when exe is missing or empty", () => {
+    expect(parseServiceManifest(JSON.stringify({ ...validManifest, exe: "" }))).toBeNull();
+    const { exe, ...withoutExe } = validManifest;
+    expect(parseServiceManifest(JSON.stringify(withoutExe))).toBeNull();
+  });
+});
+
+describe("resolveInstalledLaunch (F14 review fix: prefer manifest, then vbs, then null)", () => {
+  const manifestJson = JSON.stringify({
+    version: 1,
+    installedAt: "2026-01-01T00:00:00.000Z",
+    mode: "standalone",
+    exe: "C:\\Program Files\\nodejs\\node.exe",
+    args: ["C:\\repo\\dist\\minder-server\\server.js"],
+    cwd: "C:\\repo\\dist\\minder-server",
+  });
+
+  const vbsLaunch = {
+    exe: "C:\\Program Files\\nodejs\\node.exe",
+    args: ["C:\\repo\\node_modules\\next\\dist\\bin\\next", "start", "-p", "4100", "--hostname", "127.0.0.1"],
+    cwd: "C:\\repo",
+  };
+  const vbsContent = renderTemplate('WshShell.CurrentDirectory = "{{WORKING_DIR}}"\nWshShell.Run "{{COMMAND_LINE}}", 0, False\n', {
+    WORKING_DIR: vbsLaunch.cwd,
+    COMMAND_LINE: escapeVbsString(`${quoteArg(vbsLaunch.exe)} ${vbsLaunch.args.map(quoteArg).join(" ")}`),
+  });
+
+  it("prefers the manifest when both are present", () => {
+    const { launch, source } = resolveInstalledLaunch({ manifestJson, vbsContent });
+    expect(source).toBe("manifest");
+    expect(launch?.mode).toBe("standalone");
+  });
+
+  it("falls back to the vbs when the manifest is absent or unparseable", () => {
+    const fromMissing = resolveInstalledLaunch({ manifestJson: null, vbsContent });
+    expect(fromMissing.source).toBe("vbs");
+    expect(fromMissing.launch?.mode).toBe("fallback");
+
+    const fromBadJson = resolveInstalledLaunch({ manifestJson: "{bad json", vbsContent });
+    expect(fromBadJson.source).toBe("vbs");
+    expect(fromBadJson.launch?.mode).toBe("fallback");
+  });
+
+  it("returns { launch: null, source: null } when neither source is present or parseable", () => {
+    expect(resolveInstalledLaunch({ manifestJson: null, vbsContent: null })).toEqual({ launch: null, source: null });
+    expect(resolveInstalledLaunch({})).toEqual({ launch: null, source: null });
+  });
+});
+
+describe("SERVICE_MANIFEST_FILENAME", () => {
+  it("is a stable filename", () => {
+    expect(SERVICE_MANIFEST_FILENAME).toBe("service-manifest.json");
   });
 });
 

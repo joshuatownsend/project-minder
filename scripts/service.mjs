@@ -72,6 +72,8 @@ import {
   findFirstStepFailure,
   describeStepFailure,
   isTaskkillAlreadyGone,
+  SERVICE_MANIFEST_FILENAME,
+  resolveInstalledLaunch,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -226,6 +228,32 @@ async function runInstall(platformKind) {
     writeFileSync(xmlPath, "﻿" + xmlContent, "utf16le");
     step(`Wrote ${vbsPath}`);
     step(`Wrote ${xmlPath}`);
+
+    // F14 review fix: record the EXACT launch resolved just now, so a
+    // later `service:stop` can verify process identity against what was
+    // actually installed rather than recomputing resolveServerLaunch()
+    // against whatever the filesystem happens to look like at stop time —
+    // which can diverge (installed while only .next existed, then
+    // `pnpm package:standalone` ran later, or the reverse) even though
+    // run-hidden.vbs keeps launching the ORIGINAL mode either way.
+    // Cleaned up automatically by uninstall's `rmSync(windowsServiceDir,
+    // { recursive: true })` — it lives in the same directory as the vbs/xml.
+    const manifestPath = path.join(windowsServiceDir, SERVICE_MANIFEST_FILENAME);
+    const manifestContent = JSON.stringify(
+      {
+        version: 1,
+        installedAt: new Date().toISOString(),
+        mode: launch.mode,
+        exe: launch.exe,
+        args: launch.args,
+        cwd: launch.cwd,
+      },
+      null,
+      2
+    );
+    writeFileSync(manifestPath, manifestContent, "utf8");
+    step(`Wrote ${manifestPath}`);
+
     const results = await runSteps(planActions("windows", "install", { taskName, xmlPath }));
     if (results.some((r) => !r.ok)) fail(`Failed to register scheduled task "${taskName}".`);
     step(`Installed scheduled task "${taskName}" (logon trigger). Verify: schtasks /query /tn ${taskName}`);
@@ -435,8 +463,37 @@ async function runStop(platformKind) {
       return;
     }
 
-    const launch = resolveServerLaunch({ root });
+    // F14 review fix: derive the stop identity from what was ACTUALLY
+    // INSTALLED (the JSON manifest, or the vbs itself for older installs)
+    // rather than recomputing resolveServerLaunch() against the CURRENT
+    // filesystem — which can diverge from what run-hidden.vbs actually
+    // launches (installed in fallback mode, `pnpm package:standalone` run
+    // later, or the reverse) and would then refuse to recognize — or
+    // worse, misidentify — the very service this tool installed. Only
+    // when neither installed source exists/parses do we fall back to a
+    // freshly recomputed launch, with a printed note that it may not
+    // match what's actually installed.
     const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
+    const manifestPath = path.join(windowsServiceDir, SERVICE_MANIFEST_FILENAME);
+    const manifestJson = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
+    const vbsContent = existsSync(vbsPath) ? readFileSync(vbsPath, "utf8") : null;
+    const { launch: installedLaunch, source } = resolveInstalledLaunch({ manifestJson, vbsContent });
+
+    let launch = installedLaunch;
+    if (launch) {
+      step(
+        `Using the INSTALLED launch identity (from ${
+          source === "manifest" ? SERVICE_MANIFEST_FILENAME : "run-hidden.vbs"
+        }) to verify process identity.`
+      );
+    } else {
+      step(
+        "No installed service-manifest.json or run-hidden.vbs found (or neither parsed) — falling back to a " +
+          "freshly recomputed identity from the current filesystem. This may not match what's actually " +
+          "installed if the build changed since install."
+      );
+      launch = resolveServerLaunch({ root });
+    }
     const identity = buildServerIdentityMarkers({ root, launch, vbsPath });
 
     // F13 review fix: taskkill's own result was previously discarded — a
