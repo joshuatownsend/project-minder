@@ -104,12 +104,9 @@ function buildWindowsArtifacts(launch) {
   const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
   const xmlPath = path.join(windowsServiceDir, "task.xml");
 
-  const inner = `${quoteArg(launch.exe)} ${launch.args.map(quoteArg).join(" ")}`;
-  // cmd.exe's own quoting rule when /c's argument starts with a quoted
-  // token: wrap the WHOLE thing in one more pair of quotes, or cmd strips
-  // the inner quotes as if they were the outer ones and mis-parses a path
-  // containing spaces. Harmless (just redundant) when no wrapper is needed.
-  const commandLine = launch.needsCmdWrapper ? `cmd.exe /c "${inner}"` : inner;
+  // Both launch modes are now `execPath <js entry point> [args]` (F7 review
+  // fix) — no shell, no `.cmd` shim, no cmd.exe /c wrapper needed either way.
+  const commandLine = `${quoteArg(launch.exe)} ${launch.args.map(quoteArg).join(" ")}`;
 
   const vbsContent = renderTemplate(readTemplate("windows-run-hidden.vbs.tmpl"), {
     WORKING_DIR: launch.cwd,
@@ -346,11 +343,11 @@ async function runStop(platformKind) {
 
     const launch = resolveServerLaunch({ root });
     const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const identity = buildServerIdentityMarkers({ root, launch, vbsPath });
 
     for (const pid of pids) {
       const commandLine = await queryWindowsProcessCommandLine(pid);
-      if (!commandLineMatchesServer(commandLine, markers)) {
+      if (!commandLineMatchesServer(commandLine, identity)) {
         step(
           `Port 4100 is held by PID ${pid}, but its command line doesn't match this Minder ` +
             `installation — NOT killing it.`

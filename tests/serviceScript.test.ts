@@ -64,19 +64,18 @@ describe("quoteArg", () => {
 
 describe("resolveServerLaunch", () => {
   const root = "C:/repo";
+  const fakeNextBinPath = "C:/repo/node_modules/next/dist/bin/next";
+  const resolveNextBin = () => fakeNextBinPath;
 
   // F5 review fix: the implementation builds these paths with `path.join`,
   // which resolves against the HOST platform's own separator (backslash on
-  // Windows, forward slash on Linux CI) regardless of the `platform` option
-  // passed in (that option only controls the isWindows/.cmd/needsCmdWrapper
-  // decision, not which path module is used). Expected values here are
-  // built with the SAME `path.join` calls the implementation uses instead
-  // of hardcoded separator literals, so this assertion is construction-
+  // Windows, forward slash on Linux CI). Expected values here are built
+  // with the SAME `path.join` calls the implementation uses instead of
+  // hardcoded separator literals, so this assertion is construction-
   // symmetric and can't diverge between Windows and Linux CI.
   it("prefers the standalone package when dist/minder-server/server.js exists", () => {
     const launch = resolveServerLaunch({
       root,
-      platform: "win32",
       execPath: "C:/nodejs/node.exe",
       existsSync: (p: string) => p.replace(/\\/g, "/").includes("dist/minder-server/server.js"),
     });
@@ -85,39 +84,48 @@ describe("resolveServerLaunch", () => {
       exe: "C:/nodejs/node.exe",
       args: [path.join(root, "dist", "minder-server", "server.js")],
       cwd: path.join(root, "dist", "minder-server"),
-      needsCmdWrapper: false,
     });
   });
 
-  it("falls back to next start when only .next/BUILD_ID exists, needing a cmd wrapper on Windows", () => {
+  // F7 review fix: the fallback launch is now `execPath <resolved next bin
+  // JS file> start -p 4100` — the same shape as the standalone mode, no
+  // shell/`.cmd` shim/PATH lookup involved — so a login-scoped service
+  // environment with no PATH entry for a version-managed node (nvm/asdf on
+  // macOS/Linux) still works, since the only node involved is the one
+  // resolved via `process.execPath` at install time.
+  it("falls back to execPath + the resolved next bin JS file when only .next/BUILD_ID exists", () => {
     const launch = resolveServerLaunch({
       root,
-      platform: "win32",
+      execPath: "C:/nodejs/node.exe",
       existsSync: (p: string) => p.replace(/\\/g, "/").includes(".next/BUILD_ID"),
+      resolveNextBin,
     });
-    expect(launch?.mode).toBe("fallback");
-    expect(launch?.args).toEqual(["start", "-p", "4100"]);
-    expect(launch?.needsCmdWrapper).toBe(true);
-    expect(launch?.exe.replace(/\\/g, "/")).toMatch(/node_modules\/\.bin\/next\.cmd$/);
+    expect(launch).toEqual({
+      mode: "fallback",
+      exe: "C:/nodejs/node.exe",
+      args: [fakeNextBinPath, "start", "-p", "4100"],
+      cwd: root,
+    });
   });
 
-  it("does not need a cmd wrapper for the fallback on non-Windows", () => {
+  it("degrades to null if resolving the next bin throws, even though .next/BUILD_ID exists", () => {
     const launch = resolveServerLaunch({
       root,
-      platform: "linux",
       existsSync: (p: string) => p.replace(/\\/g, "/").includes(".next/BUILD_ID"),
+      resolveNextBin: () => {
+        throw new Error("MODULE_NOT_FOUND");
+      },
     });
-    expect(launch?.needsCmdWrapper).toBe(false);
-    expect(launch?.exe.replace(/\\/g, "/")).toMatch(/node_modules\/\.bin\/next$/);
+    expect(launch).toBeNull();
   });
 
   it("returns null when neither build artifact exists", () => {
-    const launch = resolveServerLaunch({ root, platform: "win32", existsSync: () => false });
+    const launch = resolveServerLaunch({ root, existsSync: () => false, resolveNextBin });
     expect(launch).toBeNull();
   });
 
   it("prefers standalone over fallback when both exist", () => {
-    const launch = resolveServerLaunch({ root, platform: "win32", existsSync: () => true });
+    const launch = resolveServerLaunch({ root, existsSync: () => true, resolveNextBin });
     expect(launch?.mode).toBe("standalone");
   });
 });
@@ -261,129 +269,143 @@ describe("resolveWindowsUserId", () => {
 });
 
 describe("buildServerIdentityMarkers + commandLineMatchesServer (service:stop identity check)", () => {
-  const root = "C:\\repo";
   const vbsPath = "C:\\Users\\josh\\.minder\\service\\run-hidden.vbs";
+  const nextBinPath = "C:\\repo\\node_modules\\next\\dist\\bin\\next";
 
-  it("standalone: matches a command line containing the server.js path", () => {
-    const launch = {
-      mode: "standalone",
-      exe: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\repo\\dist\\minder-server\\server.js"],
-      cwd: "C:\\repo\\dist\\minder-server",
-    };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+  const standaloneLaunch = {
+    mode: "standalone",
+    exe: "C:\\Program Files\\nodejs\\node.exe",
+    args: ["C:\\repo\\dist\\minder-server\\server.js"],
+    cwd: "C:\\repo\\dist\\minder-server",
+  };
+  // F7 shape: fallback now launches as execPath + the resolved next bin JS
+  // file (no more node_modules/.bin/next(.cmd) shell shim).
+  const fallbackLaunch = {
+    mode: "fallback",
+    exe: "C:\\Program Files\\nodejs\\node.exe",
+    args: [nextBinPath, "start", "-p", "4100"],
+    cwd: "C:\\repo",
+  };
+
+  it("standalone: matches a command line containing the server.js path (sufficient alone)", () => {
+    const identity = buildServerIdentityMarkers({ launch: standaloneLaunch, vbsPath });
     const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\dist\\minder-server\\server.js"`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(true);
   });
 
-  it("fallback: matches a command line containing the repo root (next's own bin re-exec)", () => {
-    const launch = {
-      mode: "fallback",
-      exe: "C:\\repo\\node_modules\\.bin\\next.cmd",
-      args: ["start", "-p", "4100"],
-      cwd: root,
-    };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    const commandLine = `node.exe C:\\repo\\node_modules\\next\\dist\\bin\\next start -p 4100`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+  it("fallback: matches a next START command line (next bin path + standalone start token)", () => {
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${nextBinPath}" start -p 4100`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(true);
+  });
+
+  // F6 review fix (the core requirement): `next dev` from the SAME repo,
+  // using the SAME next bin path, must be refused — the whole point of the
+  // signature redesign is that the next bin path alone is not entry-point
+  // grade (it's shared between `next dev` and `next start`).
+  it("F6: refuses `next dev` from the same repo even though it shares the same next bin path", () => {
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${nextBinPath}" dev -p 4100`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
+  });
+
+  it("F6: refuses an ordinary `pnpm dev`/next dev command line with no next bin path match at all", () => {
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\dev\\some-other-project\\node_modules\\next\\dist\\bin\\next" dev -p 4100`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
   });
 
   it("matches case-insensitively and across separator styles (forward vs. back slash)", () => {
-    const launch = {
-      mode: "standalone",
-      exe: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\repo\\dist\\minder-server\\server.js"],
-      cwd: "C:\\repo\\dist\\minder-server",
-    };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    const commandLine = `"c:/program files/nodejs/node.exe" "C:/REPO/dist/minder-server/SERVER.JS"`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+    const identity = buildServerIdentityMarkers({ launch: standaloneLaunch, vbsPath });
+    const commandLine = `"c:/program files/nodejs/node.exe" "C:/repo/dist/minder-server/SERVER.JS"`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(true);
   });
 
   it("refuses an unrelated process's command line (the exact footgun this guards against)", () => {
-    const launch = {
-      mode: "standalone",
-      exe: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\repo\\dist\\minder-server\\server.js"],
-      cwd: "C:\\repo\\dist\\minder-server",
-    };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const identity = buildServerIdentityMarkers({ launch: standaloneLaunch, vbsPath });
     // An unrelated dev server (e.g. `pnpm dev` in a totally different checkout)
     // that happens to also be bound to port 4100.
-    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\dev\\some-other-project\\node_modules\\.bin\\next" dev -p 4100`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\dev\\some-other-project\\node_modules\\next\\dist\\bin\\next" dev -p 4100`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
   });
 
   it("refuses when the command line could not be determined (empty/undefined/null)", () => {
-    const markers = buildServerIdentityMarkers({ root, launch: null, vbsPath });
-    expect(commandLineMatchesServer("", markers)).toBe(false);
-    expect(commandLineMatchesServer(undefined, markers)).toBe(false);
-    expect(commandLineMatchesServer(null, markers)).toBe(false);
+    const identity = buildServerIdentityMarkers({ launch: null, vbsPath });
+    expect(commandLineMatchesServer("", identity)).toBe(false);
+    expect(commandLineMatchesServer(undefined, identity)).toBe(false);
+    expect(commandLineMatchesServer(null, identity)).toBe(false);
   });
 
-  it("falls back to the repo root and vbs path as markers when launch is null (build removed after install)", () => {
-    const markers = buildServerIdentityMarkers({ root, launch: null, vbsPath });
-    expect(markers).toContain(root);
-    expect(markers).toContain(vbsPath);
-    expect(commandLineMatchesServer(`wscript.exe "${vbsPath}"`, markers)).toBe(true);
-  });
-
-  it("de-duplicates markers", () => {
-    const launch = { mode: "fallback", exe: "x", args: [], cwd: root };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    expect(markers.filter((m) => m === root)).toHaveLength(1);
+  it("falls back to just the vbs path as a sufficient marker when launch is null (build removed after install)", () => {
+    const identity = buildServerIdentityMarkers({ launch: null, vbsPath });
+    expect(identity.sufficient).toEqual([vbsPath]);
+    expect(identity.nextStartSignature).toBeNull();
+    expect(commandLineMatchesServer(`wscript.exe "${vbsPath}"`, identity)).toBe(true);
   });
 
   // F1 review fix: fallback mode's bare CLI args ("start", "-p", "4100")
-  // must never become markers — commandLineMatchesServer accepts a match
-  // against ANY single marker, so a bare "4100" would match almost any
-  // process listening on port 4100 and defeat the whole identity check.
+  // must never become sufficient markers on their own.
   it("never turns bare flags/subcommands/port numbers into markers", () => {
-    const launch = {
-      mode: "fallback",
-      exe: "C:\\repo\\node_modules\\.bin\\next.cmd",
-      args: ["start", "-p", "4100"],
-      cwd: root,
-    };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    expect(markers).not.toContain("start");
-    expect(markers).not.toContain("-p");
-    expect(markers).not.toContain("4100");
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    expect(identity.sufficient).not.toContain("start");
+    expect(identity.sufficient).not.toContain("-p");
+    expect(identity.sufficient).not.toContain("4100");
   });
 
   it("refuses a command line that only coincidentally contains the port number, with no path marker present", () => {
     // An unrelated process that happens to mention 4100 somewhere in its
     // command line (e.g. a proxy configured to forward that port) but has
     // nothing to do with this Minder installation.
-    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
     const commandLine = `"C:\\Program Files\\some-proxy\\proxy.exe" --listen 4100 --target 9000`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
   });
 
-  // F2 review fix: a directory marker must not match as a prefix of a
-  // longer, unrelated path segment — "C:\repo" must not match inside
-  // "C:\repo2\...". A match only counts when the character right after the
-  // marker is a path separator, quote, whitespace, or end-of-string.
-  it("does not treat a directory marker as a prefix match against a longer sibling path", () => {
-    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    const commandLine = `node.exe C:\\repo2\\node_modules\\next\\dist\\bin\\next start -p 4100`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(false);
+  // F1 + F6 review fix: the repo root/cwd are NEVER markers at all anymore
+  // (neither sufficient alone, nor part of the signature) — only
+  // entry-point-grade paths (server.js, the next bin file, run-hidden.vbs)
+  // are. A bare `pnpm dev` from this exact repo must be refused even though
+  // its cwd matches the fallback launch's cwd.
+  it("F6: the repo root/cwd alone is never a sufficient identity — an ordinary `next dev` from this checkout is refused", () => {
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${nextBinPath}" dev -p 4100`; // cwd would be C:\repo, same as fallbackLaunch.cwd
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
+  });
+
+  // F2 review fix: an entry-point marker must not match as a prefix of a
+  // longer, unrelated sibling path — a match only counts when the character
+  // right after the marker is a path separator, quote, whitespace, or
+  // end-of-string.
+  it("does not treat an entry-point marker as a prefix match against a longer sibling path", () => {
+    const identity = buildServerIdentityMarkers({ launch: standaloneLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\dist\\minder-server2\\server.js"`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
   });
 
   it("still matches the same marker with a genuine path-separator boundary", () => {
-    const launch = { mode: "fallback", exe: "C:\\repo\\node_modules\\.bin\\next.cmd", args: ["start", "-p", "4100"], cwd: root };
-    const markers = buildServerIdentityMarkers({ root, launch, vbsPath });
-    const commandLine = `node.exe C:\\repo\\node_modules\\next\\dist\\bin\\next start -p 4100`;
-    expect(commandLineMatchesServer(commandLine, markers)).toBe(true);
+    const identity = buildServerIdentityMarkers({ launch: standaloneLaunch, vbsPath });
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\dist\\minder-server\\server.js"`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(true);
   });
 
   it("matches when the marker is the entire haystack (end-of-string boundary)", () => {
-    expect(commandLineMatchesServer("C:\\repo", ["C:\\repo"])).toBe(true);
+    expect(commandLineMatchesServer("C:\\repo\\dist\\minder-server\\server.js", { sufficient: ["C:\\repo\\dist\\minder-server\\server.js"], nextStartSignature: null })).toBe(true);
   });
 
   it("matches when the marker is immediately followed by a closing quote", () => {
-    expect(commandLineMatchesServer(`"C:\\repo"`, ["C:\\repo"])).toBe(true);
+    expect(
+      commandLineMatchesServer(`"C:\\repo\\dist\\minder-server\\server.js"`, {
+        sufficient: ["C:\\repo\\dist\\minder-server\\server.js"],
+        nextStartSignature: null,
+      })
+    ).toBe(true);
+  });
+
+  it("does not treat a 'start' substring inside a longer word/path segment as a standalone token", () => {
+    const identity = buildServerIdentityMarkers({ launch: fallbackLaunch, vbsPath });
+    // "restart" and a path segment literally containing "start" as part of
+    // a longer name must not satisfy the standalone-token requirement.
+    const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${nextBinPath}" restart -p 4100 --dir C:\\repo\\startup-scripts`;
+    expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
   });
 });

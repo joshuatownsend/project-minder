@@ -10,6 +10,7 @@
 // writes + subprocess execution.
 
 import { existsSync as fsExistsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 export const WINDOWS_TASK_NAME = "MinderDashboard";
@@ -52,28 +53,62 @@ export function quoteArg(arg) {
 }
 
 /**
+ * Resolves the `next` CLI's own JS entry point (not the node_modules/.bin
+ * shell shim) via `createRequire` rooted at the target repo's package.json
+ * — this walks the SAME resolution pnpm/node would use from that repo,
+ * rather than hardcoding a `node_modules/next/dist/bin/next` path that
+ * could be wrong under a different pnpm layout or next version.
+ *
+ * F7 review fix: the fallback launch used to be the `node_modules/.bin/next`
+ * (or `.cmd` on Windows) shell shim, spawned via a shell wrapper. That shim
+ * starts with `#!/usr/bin/env node` — on macOS/Linux, a login-scoped service
+ * environment (launchd/systemd --user) frequently has NO `PATH` entry for a
+ * version-managed `node` (nvm/asdf shims live in a shell-rc-sourced PATH that
+ * a service manager never sources), so the shim fails immediately. Resolving
+ * this repo's own `next` bin JS file and launching it directly as
+ * `execPath <resolved bin> start -p 4100` — the exact same shape as the
+ * standalone mode's `execPath <server.js>` — sidesteps PATH entirely: the
+ * only Node binary involved is the one `service:install` already resolved
+ * via `process.execPath` at install time. This also means the fallback mode
+ * no longer needs a `.cmd` shell wrapper on Windows (see the former
+ * `needsCmdWrapper` field, removed).
+ */
+function defaultResolveNextBin(root) {
+  const requireFromRoot = createRequire(path.join(root, "package.json"));
+  return requireFromRoot.resolve("next/dist/bin/next");
+}
+
+/**
  * Decides how to launch the server, preferring the standalone package (C0,
  * `dist/minder-server/server.js`) over a from-source `next start` fallback
  * (which needs a completed `pnpm build` — `.next/BUILD_ID` is the marker).
  * Returns null when neither build exists — the caller must refuse to
  * install and tell the user how to build.
  *
+ * Both modes launch as `execPath <js entry point> [args]` — no shell, no
+ * PATH lookup, no `.cmd`/shebang shim — which is also what makes the
+ * fallback launch identifiable by `buildServerIdentityMarkers` /
+ * `commandLineMatchesServer` below (the resolved next bin path is a marker
+ * candidate the same way the standalone server.js path is).
+ *
  * All OS/fs dependencies are injectable so this is unit-testable without
- * touching the real filesystem or `process.execPath`.
+ * touching the real filesystem, `process.execPath`, or the real `next`
+ * package.
  *
  * @param {{
  *   root: string,
  *   execPath?: string,
  *   platform?: string,
  *   existsSync?: (path: string) => boolean,
+ *   resolveNextBin?: (root: string) => string,
  * }} opts
  */
 export function resolveServerLaunch(opts) {
   const {
     root,
     execPath = process.execPath,
-    platform = process.platform,
     existsSync = fsExistsSync,
+    resolveNextBin = defaultResolveNextBin,
   } = opts;
   const standaloneServer = path.join(root, "dist", "minder-server", "server.js");
   if (existsSync(standaloneServer)) {
@@ -83,23 +118,26 @@ export function resolveServerLaunch(opts) {
       exe: execPath,
       args: [standaloneServer],
       cwd,
-      needsCmdWrapper: false,
     };
   }
 
   const buildId = path.join(root, ".next", "BUILD_ID");
   if (existsSync(buildId)) {
-    const isWindows = platform === "win32";
-    const nextBin = path.join(root, "node_modules", ".bin", isWindows ? "next.cmd" : "next");
+    let nextBinPath;
+    try {
+      nextBinPath = resolveNextBin(root);
+    } catch {
+      // next itself must have run to produce .next/BUILD_ID, so this
+      // shouldn't happen in practice — but degrade to "no usable build"
+      // rather than throw, so the caller's NO_BUILD_MESSAGE guidance kicks
+      // in instead of an uncaught exception.
+      return null;
+    }
     return {
       mode: "fallback",
-      exe: nextBin,
-      args: ["start", "-p", "4100"],
+      exe: execPath,
+      args: [nextBinPath, "start", "-p", "4100"],
       cwd: root,
-      // .cmd shims can't be spawned directly by CreateProcess-style APIs
-      // (Task Scheduler, WshShell.Run) — they need a shell interpreter.
-      // Mirrors src/lib/platform.ts's spawnDevServer for the same reason.
-      needsCmdWrapper: isWindows,
     };
   }
 
@@ -252,49 +290,61 @@ export function resolveWindowsUserId(opts = {}) {
  * "Something is LISTENING on port 4100" is NOT proof it's THIS Minder
  * installation — a `pnpm dev`, another Minder checkout, or literally any
  * other process can hold that port. An earlier version of this script
- * hard-killed whatever it found there and took down an unrelated live dev
- * server during this task's own verification pass. These two functions are
- * the fix: build the set of path fragments that would legitimately appear
- * in the command line of a process THIS installation started, then check a
- * candidate PID's actual command line against them before anything gets
- * `taskkill`ed.
+ * hard-killed whatever it found there unconditionally and took down an
+ * unrelated live dev server during this task's own verification pass.
+ * These two functions are the fix: build an identity descriptor for the
+ * process THIS installation would have started, then check a candidate
+ * PID's actual command line against it before anything gets `taskkill`ed.
  *
- * Markers, in order of how a real command line can contain them:
- *   - the standalone server: launch.args includes the absolute
- *     `dist/minder-server/server.js` path (the node.exe command line IS
- *     `node.exe "<that path>"` — see windows-run-hidden.vbs.tmpl).
- *   - the from-source fallback: `next start` re-execs into next's own
- *     bin script, whose absolute path lives under the repo root
- *     (`node_modules/next/dist/bin/next`) — so the repo root itself is a
- *     reliable substring even though `next.cmd`'s own path isn't literally
- *     what ends up in the LISTENING process's command line.
+ * @typedef {{ sufficient: string[], nextStartSignature: { nextBinPath: string } | null }} ServerIdentity
+ *
+ * `sufficient` markers (F6 review fix — ENTRY-POINT grade only, never a bare
+ * directory): matching ANY ONE of these alone is proof enough —
+ *   - the standalone server's absolute `dist/minder-server/server.js` path
+ *     (the node.exe command line IS `node.exe "<that path>"`).
  *   - the generated run-hidden.vbs path, in case wscript.exe itself is
  *     still the process found (unlikely — it exits immediately after
  *     firing WshShell.Run — but harmless to include).
  *
- * @param {{ root?: string, launch?: { cwd?: string, args?: string[] } | null, vbsPath?: string }} [opts]
- * @returns {string[]}
+ * `nextStartSignature` (fallback mode only) requires BOTH halves to match,
+ * not either alone: the resolved absolute `next/dist/bin/next` path AND a
+ * standalone `start` argument token elsewhere in the same command line.
+ * The bin path alone is NOT sufficient (unlike the standalone server.js
+ * path above) because `next dev` and `next start` re-exec the EXACT SAME
+ * bin script, differing only in that one subcommand argument — treating the
+ * bin path as sufficient on its own would match an ordinary `pnpm dev` run
+ * from this same checkout, which is exactly the original incident this
+ * whole identity check exists to prevent (one step removed). The repo root
+ * itself is deliberately NEVER used as a marker for the same reason, one
+ * level up: it's even less specific than the bin path.
+ *
+ * @param {{ root?: string, launch?: { mode?: string, args?: string[] } | null, vbsPath?: string }} [opts]
+ * @returns {ServerIdentity}
  */
 export function buildServerIdentityMarkers(opts = {}) {
-  const { root, launch, vbsPath } = opts;
-  const markers = new Set();
-  if (root) markers.add(root);
+  const { launch, vbsPath } = opts;
+  const sufficient = new Set();
+  let nextStartSignature = null;
+
   if (launch) {
-    if (launch.cwd) markers.add(launch.cwd);
     for (const arg of launch.args ?? []) {
-      // F1 review fix: only PATH-LIKE args become markers. Fallback mode's
-      // args are bare CLI tokens (`start`, `-p`, `4100`) — NOT paths — and
-      // commandLineMatchesServer() treats a match against ANY single marker
-      // as sufficient, so a bare "4100" would match almost any process
-      // listening on port 4100 and defeat the entire identity check. The
-      // repo root + cwd markers (above) already cover the fallback case:
-      // `next start` re-execs into next's own bin script, whose absolute
-      // path lives under the repo root.
-      if (isPathLikeArg(arg)) markers.add(arg);
+      if (!isPathLikeArg(arg)) continue; // F1: never a bare flag/subcommand/port number
+      if (launch.mode === "fallback") {
+        // The next bin path is the entry point for BOTH `next dev` and
+        // `next start` — recorded as a signature requiring an accompanying
+        // start token, never added to `sufficient` directly (F6).
+        nextStartSignature = { nextBinPath: arg };
+      } else {
+        // Standalone mode's server.js is THIS installation's own unique
+        // entry point — not shared with any dev-mode invocation — so it's
+        // safe to treat as sufficient on its own.
+        sufficient.add(arg);
+      }
     }
   }
-  if (vbsPath) markers.add(vbsPath);
-  return Array.from(markers);
+  if (vbsPath) sufficient.add(vbsPath);
+
+  return { sufficient: Array.from(sufficient), nextStartSignature };
 }
 
 /** True only for args that contain a path separator — excludes bare flags, subcommands, and bare numbers (port numbers) from ever becoming identity markers. */
@@ -303,28 +353,45 @@ function isPathLikeArg(arg) {
 }
 
 /**
- * True if `commandLine` (as reported by the OS for a candidate PID)
- * contains any of `markers` at a genuine path/token boundary — normalized
- * (backslash/forward-slash, case) match, since a queried command line and
- * our internally-resolved paths can differ in separator style/case despite
- * naming the same file.
+ * True if `commandLine` (as reported by the OS for a candidate PID) matches
+ * `identity` — either a boundary-delimited hit against any `sufficient`
+ * marker, or (fallback mode) a hit against `nextStartSignature.nextBinPath`
+ * COMBINED with a standalone `start` token appearing anywhere else in the
+ * same command line (F6: neither half is enough by itself — `next dev`
+ * from the same repo must be refused).
  *
- * A boundary is required on the trailing edge (F2 review fix): a bare
- * substring match would let a marker like `C:\repo` match an unrelated
- * `C:\repo2\...` — the match only counts if the character immediately
- * after the marker is a separator, quote, whitespace, or end-of-string.
+ * Boundary matching (F2 review fix): a bare substring match would let a
+ * marker like `C:\repo\dist\minder-server` match an unrelated
+ * `C:\repo\dist\minder-server2\...` — a match only counts if the character
+ * immediately after the marker is a separator, quote, whitespace, or
+ * end-of-string.
  *
  * @param {string | null | undefined} commandLine
- * @param {string[]} markers
+ * @param {ServerIdentity} identity
  */
-export function commandLineMatchesServer(commandLine, markers) {
+export function commandLineMatchesServer(commandLine, identity) {
   if (!commandLine) return false;
   const normalized = String(commandLine).replace(/\\/g, "/").toLowerCase();
-  return (markers ?? []).some((marker) => {
-    if (!marker) return false;
-    const needle = String(marker).replace(/\\/g, "/").toLowerCase();
-    return needle.length > 0 && hasBoundaryMatch(normalized, needle);
-  });
+
+  const sufficient = identity?.sufficient ?? [];
+  for (const marker of sufficient) {
+    if (marker && hasBoundaryMatch(normalized, normalizeForMatch(marker))) return true;
+  }
+
+  const nextBinPath = identity?.nextStartSignature?.nextBinPath;
+  if (
+    nextBinPath &&
+    hasBoundaryMatch(normalized, normalizeForMatch(nextBinPath)) &&
+    hasStandaloneStartToken(normalized)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeForMatch(value) {
+  return String(value).replace(/\\/g, "/").toLowerCase();
 }
 
 /** Characters that legitimately terminate a path/token match in a command line. */
@@ -332,6 +399,7 @@ const BOUNDARY_CHARS = new Set(["/", '"', "'", " ", "\t"]);
 
 /** Every occurrence of `needle` in `haystack` (both already normalized) is checked — not just the first — since an earlier, boundary-failing occurrence must not shadow a later, genuine one. */
 function hasBoundaryMatch(haystack, needle) {
+  if (!needle) return false;
   let idx = haystack.indexOf(needle);
   while (idx !== -1) {
     const nextChar = haystack[idx + needle.length];
@@ -339,4 +407,26 @@ function hasBoundaryMatch(haystack, needle) {
     idx = haystack.indexOf(needle, idx + 1);
   }
   return false;
+}
+
+/**
+ * True if `normalized` (already lowercased/slash-normalized) contains a
+ * standalone `start` ARGUMENT token — split only on whitespace/quotes (not
+ * `/`), so a whole path segment like `.../start/next` stays one token and
+ * can't be confused with the bare word "start". This is deliberately NOT
+ * anchored to sit immediately next to the next-bin-path reference: `next
+ * start` and `next dev` both place the subcommand right after the bin path
+ * in every command line this script itself constructs, but requiring strict
+ * adjacency would be brittle against quoting/argv-joining differences in
+ * how various OS APIs report a process's command line. Documented limit:
+ * this only reduces risk, it doesn't eliminate it — a process that (a)
+ * happens to invoke THIS install's own resolved next bin file AND (b)
+ * separately has a bare "start" token anywhere in its command line would
+ * still match. Combining both conditions makes that a genuine coincidence
+ * rather than a generic footgun like the bare-substring or bare-flag issues
+ * this whole identity check exists to close.
+ */
+function hasStandaloneStartToken(normalized) {
+  const tokens = normalized.split(/["'\s]+/).filter(Boolean);
+  return tokens.includes("start");
 }
