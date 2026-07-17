@@ -28,7 +28,7 @@ fn main() {
         // a second launch is a no-op — the running instance already owns the
         // tray and the sidecar.
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
-            println!("[minder-tray] second instance launched — ignoring (already running)");
+            supervisor::log("second instance launched — ignoring (already running)");
         }))
         .setup(move |app| {
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)

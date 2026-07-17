@@ -4,6 +4,7 @@ import {
   attachControlChannel,
   shouldEnableControlChannel,
   CONTROL_SHUTDOWN_COMMAND,
+  MAX_LINE_BYTES,
   _resetControlChannelForTesting,
 } from "@/lib/controlChannel";
 
@@ -115,6 +116,22 @@ describe("attachControlChannel parsing", () => {
     stream.write(Buffer.from("shutdown\n", "utf8"));
 
     expect(onShutdownRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps an unterminated line and still parses a later command", () => {
+    const stream = new PassThrough();
+    const onShutdownRequest = vi.fn();
+    attachControlChannel(stream, { onShutdownRequest });
+
+    // A hostile/malformed stream sends a huge run with no newline — must not
+    // trigger and must not grow the buffer unbounded (it gets discarded).
+    stream.write("x".repeat(MAX_LINE_BYTES * 4));
+    expect(onShutdownRequest).not.toHaveBeenCalled();
+
+    // A well-formed command after the junk still works (buffer was reset).
+    stream.write("shutdown\n");
+    expect(onShutdownRequest).toHaveBeenCalledTimes(1);
+    expect(onShutdownRequest).toHaveBeenCalledWith("control-stdin:shutdown");
   });
 
   it("requests shutdown on stream end (EOF / pipe close)", async () => {

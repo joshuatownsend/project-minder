@@ -1,13 +1,13 @@
 //! Health probing against the server's `GET /api/health` contract.
 //!
-//! The route (src/app/api/health/route.ts) returns HTTP 200 with `ok:true`
-//! only when the DB state machine reached `success`; every other state returns
-//! HTTP 503 with `ok:false` and the full body. Both carry
-//! `{ status, version, db: { state }, ... }`. We map that onto three tray
+//! The route (src/app/api/health/route.ts) already computes the verdict: it
+//! returns `ok` (true only when the DB state machine reached `success`) and
+//! `status` ("ok"/"degraded"), with HTTP 200 when healthy and 503 otherwise —
+//! all carrying the full body. We trust those server-computed fields rather
+//! than re-deriving health from `db.state` ourselves, and map onto three tray
 //! states:
-//!   - Up: HTTP 200 and `db.state === "success"`.
-//!   - Degraded: a Minder-shaped response that isn't fully healthy (HTTP 503,
-//!     or 200 with a non-success db state).
+//!   - Up: HTTP 200 and the server's own `ok` is true.
+//!   - Degraded: a Minder-shaped response that isn't healthy (503, or `ok:false`).
 //!   - Down: no response at all, or a response that isn't Minder's.
 
 use std::net::{TcpStream, ToSocketAddrs};
@@ -53,20 +53,21 @@ pub fn probe(port: u16) -> ServerStatus {
 
     // Present the server's canonical allowed Host (see PROBE_HOST_HEADER) so the
     // probe passes the DNS-rebind allowlist on any bound port, not just 4100.
-    match agent.get(&url).set("Host", PROBE_HOST_HEADER).call() {
-        Ok(resp) => classify_body(200, resp.into_string().unwrap_or_default()),
-        // 4xx/5xx come back as Status(code, resp) — 503 is Minder's own
-        // "degraded" contract, so we still read and classify the body.
-        Err(ureq::Error::Status(code, resp)) => {
-            classify_body(code, resp.into_string().unwrap_or_default())
-        }
-        // Connection refused / timeout / DNS — nothing is answering.
-        Err(_) => ServerStatus::Down,
-    }
+    // Both the 2xx and the 503-"degraded" arms carry the same body shape, so
+    // normalize to (code, body) and classify once; only a transport failure
+    // (connection refused / timeout / DNS) is an outright Down.
+    let (code, body) = match agent.get(&url).set("Host", PROBE_HOST_HEADER).call() {
+        Ok(resp) => (200u16, resp.into_string().unwrap_or_default()),
+        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
+        Err(_) => return ServerStatus::Down,
+    };
+    classify_body(code, body)
 }
 
 /// Pure classification of an HTTP status + body string. Extracted so the
-/// mapping is unit-testable without a live server.
+/// mapping is unit-testable without a live server. Trusts the server's own
+/// `ok` verdict — the health route already folds `db.state` (and anything else)
+/// into that boolean, so we don't second-guess it here.
 pub fn classify_body(http_status: u16, body: String) -> ServerStatus {
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -74,25 +75,19 @@ pub fn classify_body(http_status: u16, body: String) -> ServerStatus {
         Err(_) => return ServerStatus::Down,
     };
 
-    // A Minder health body always carries a `status` string and a `db` object.
-    let looks_like_minder =
-        json.get("status").and_then(|v| v.as_str()).is_some() && json.get("db").is_some();
-    if !looks_like_minder {
-        return ServerStatus::Down;
-    }
+    // A Minder health body always carries a boolean `ok` and a string `status`.
+    // Anything missing those isn't Minder → treat as Down (a foreign process on
+    // the port).
+    let has_status = json.get("status").and_then(|v| v.as_str()).is_some();
+    let ok = match json.get("ok").and_then(|v| v.as_bool()) {
+        Some(ok) if has_status => ok,
+        _ => return ServerStatus::Down,
+    };
 
-    let ok = json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-    let db_success = json
-        .get("db")
-        .and_then(|db| db.get("state"))
-        .and_then(|s| s.as_str())
-        == Some("success");
-
-    if http_status == 200 && ok && db_success {
+    if http_status == 200 && ok {
         ServerStatus::Up
     } else {
-        // Minder answered but isn't fully healthy (503, or 200 with the DB not
-        // yet at `success`).
+        // Minder answered but isn't healthy: 503, or a defensive `ok:false`.
         ServerStatus::Degraded
     }
 }
@@ -102,7 +97,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn healthy_body_is_up() {
+    fn healthy_200_ok_is_up() {
         let body = r#"{"ok":true,"status":"ok","version":"1.2.0","db":{"state":"success"}}"#;
         assert_eq!(classify_body(200, body.to_string()), ServerStatus::Up);
     }
@@ -115,13 +110,22 @@ mod tests {
     }
 
     #[test]
-    fn ok_200_but_db_not_success_is_degraded() {
+    fn trusts_server_ok_not_db_state() {
+        // Contradictory synthetic body (ok:true but db idle) the real server
+        // would never send — proves we key off `ok`, not `db.state`.
         let body = r#"{"ok":true,"status":"ok","version":"1.2.0","db":{"state":"idle"}}"#;
+        assert_eq!(classify_body(200, body.to_string()), ServerStatus::Up);
+    }
+
+    #[test]
+    fn ok_false_is_degraded_even_on_200() {
+        let body = r#"{"ok":false,"status":"degraded","version":"1.2.0","db":{"state":"idle"}}"#;
         assert_eq!(classify_body(200, body.to_string()), ServerStatus::Degraded);
     }
 
     #[test]
     fn foreign_json_is_down() {
+        // No `ok`/`status` fields → not Minder.
         let body = r#"{"hello":"world"}"#;
         assert_eq!(classify_body(200, body.to_string()), ServerStatus::Down);
     }

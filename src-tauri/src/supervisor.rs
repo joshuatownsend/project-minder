@@ -26,8 +26,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command as StdCommand, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TryRecvError};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -68,9 +67,6 @@ pub struct Supervisor {
     /// Best-effort human-readable note on the startup decision, surfaced in the
     /// tray menu (e.g. "attached to existing service").
     attach_note: Arc<Mutex<Option<String>>>,
-    // Kept alive for the lifetime of the supervisor so the thread isn't detached
-    // into oblivion on drop; the thread also exits on Shutdown.
-    _running: Arc<AtomicBool>,
 }
 
 impl Supervisor {
@@ -81,22 +77,15 @@ impl Supervisor {
         let mode = decide_mode(&cfg, &attach_note);
 
         let (tx, rx) = channel::<Command>();
-        let running = Arc::new(AtomicBool::new(true));
-        let running_thread = running.clone();
-
         thread::Builder::new()
             .name("minder-supervisor".into())
-            .spawn(move || {
-                run_supervisor(cfg, payload_dir, mode, rx);
-                running_thread.store(false, Ordering::SeqCst);
-            })
+            .spawn(move || run_supervisor(cfg, payload_dir, mode, rx))
             .expect("failed to spawn supervisor thread");
 
         Arc::new(Supervisor {
             tx: Mutex::new(tx),
             mode,
             attach_note,
-            _running: running,
         })
     }
 
@@ -263,21 +252,24 @@ fn run_supervisor(
     }
 }
 
-/// Poll the child and the command channel until one of them ends the loop.
+/// Wait on the command channel and the child concurrently until one ends the
+/// loop. A single blocking `recv_timeout` handles commands immediately when
+/// they arrive and, on each 200ms timeout tick, checks whether the child exited
+/// on its own — same crash-detection latency as a poll loop, one blocking
+/// primitive instead of a busy-poll (mirrors `wait_backoff`).
 fn supervise(child: &mut Child, rx: &Receiver<Command>) -> ExitReason {
     loop {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Command::Shutdown(ack)) => return ExitReason::Shutdown(ack),
+            Ok(Command::Restart(ack)) => return ExitReason::Restart(ack),
+            Err(RecvTimeoutError::Disconnected) => return ExitReason::ChannelClosed,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
         match child.try_wait() {
             Ok(Some(_status)) => return ExitReason::Crash,
             Ok(None) => {}
             Err(_) => return ExitReason::Crash,
         }
-        match rx.try_recv() {
-            Ok(Command::Shutdown(ack)) => return ExitReason::Shutdown(ack),
-            Ok(Command::Restart(ack)) => return ExitReason::Restart(ack),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => return ExitReason::ChannelClosed,
-        }
-        thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -410,6 +402,65 @@ fn wait_backoff(rx: &Receiver<Command>, backoff: Duration) -> bool {
     }
 }
 
-fn log(msg: &str) {
+/// Structured-ish stdout log line for the tray (visible in a dev console; a
+/// no-op sink on the release `windows_subsystem = "windows"` build). Shared so
+/// every corner of the app uses the one `[minder-tray]` prefix.
+pub(crate) fn log(msg: &str) {
     println!("[minder-tray] {msg}");
+}
+
+/// Compile/test-time tethers to the TypeScript side of the shutdown handshake.
+/// `include_str!` paths resolve relative to THIS source file and only compile
+/// in-repo (never in the packaged binary), so they cost nothing at runtime and
+/// don't affect packaging — but a drift on either side of the process boundary
+/// that would silently break graceful shutdown fails `cargo test`.
+#[cfg(test)]
+mod contract_tests {
+    use super::GRACEFUL_STOP_TIMEOUT;
+
+    const LIFECYCLE_TS: &str = include_str!("../../src/lib/lifecycle.ts");
+    const CONTROL_CHANNEL_TS: &str = include_str!("../../src/lib/controlChannel.ts");
+
+    /// Loosely extract the integer literal (underscores allowed, e.g. `5_000`)
+    /// assigned to `name` in TS source.
+    fn ts_const_number(src: &str, name: &str) -> Option<u64> {
+        let after = &src[src.find(name)? + name.len()..];
+        let after_eq = &after[after.find('=')? + 1..];
+        let digits: String = after_eq
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit() || *c == '_')
+            .filter(|c| *c != '_')
+            .collect();
+        digits.parse().ok()
+    }
+
+    // Tether 12a: the Rust force-kill grace window must exceed the TS disposer
+    // budget, or raising SHUTDOWN_TIMEOUT_MS would let the tray taskkill a
+    // server mid-shutdown. Bumping the TS budget past 6s without bumping
+    // GRACEFUL_STOP_TIMEOUT fails here.
+    #[test]
+    fn graceful_stop_window_exceeds_ts_disposer_budget() {
+        let budget_ms = ts_const_number(LIFECYCLE_TS, "SHUTDOWN_TIMEOUT_MS")
+            .expect("lifecycle.ts must define SHUTDOWN_TIMEOUT_MS = <number>");
+        assert!(
+            (GRACEFUL_STOP_TIMEOUT.as_millis() as u64) > budget_ms,
+            "GRACEFUL_STOP_TIMEOUT ({}ms) must exceed the TS disposer budget \
+             SHUTDOWN_TIMEOUT_MS ({budget_ms}ms) so a clean shutdown isn't force-killed \
+             mid-disposer",
+            GRACEFUL_STOP_TIMEOUT.as_millis()
+        );
+    }
+
+    // Tether 12b: the byte string the supervisor writes (`shutdown\n`) must match
+    // the command the TS control channel recognizes. A rename on either side
+    // fails here.
+    #[test]
+    fn shutdown_command_string_matches_ts() {
+        assert!(
+            CONTROL_CHANNEL_TS.contains(r#"CONTROL_SHUTDOWN_COMMAND = "shutdown""#),
+            "controlChannel.ts must define CONTROL_SHUTDOWN_COMMAND = \"shutdown\" to match \
+             the bytes graceful_stop() writes to the child's stdin"
+        );
+    }
 }

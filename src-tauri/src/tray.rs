@@ -9,7 +9,7 @@ use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    App, Runtime,
+    App, Manager, Runtime,
 };
 
 use crate::config::TrayConfig;
@@ -76,7 +76,7 @@ pub fn init<R: Runtime>(
         .build(app)?;
 
     // Health-poll loop: refresh the Status line + tray tooltip every 15s.
-    spawn_poll_loop(cfg.port, attached, supervisor.clone(), status_item, tray);
+    spawn_poll_loop(cfg.port, supervisor.clone(), status_item, tray);
 
     Ok(())
 }
@@ -88,7 +88,7 @@ fn handle_menu_event<R: Runtime>(
     dashboard_url: &str,
 ) {
     match id {
-        "open_dashboard" => open_url(dashboard_url),
+        "open_dashboard" => open_with_os(dashboard_url),
         "restart" => {
             if supervisor.is_attached() {
                 return; // menu item is disabled, but guard anyway
@@ -98,7 +98,7 @@ fn handle_menu_event<R: Runtime>(
             let sup = supervisor.clone();
             thread::spawn(move || sup.restart());
         }
-        "view_logs" => open_logs_dir(),
+        "view_logs" => open_logs_dir(app),
         "quit" => {
             // Block until the sidecar is cleanly stopped, THEN exit — so Quit
             // never leaves an orphan node process behind.
@@ -111,28 +111,31 @@ fn handle_menu_event<R: Runtime>(
 
 fn spawn_poll_loop<R: Runtime>(
     port: u16,
-    attached: bool,
     supervisor: Arc<Supervisor>,
     status_item: MenuItem<R>,
     tray: tauri::tray::TrayIcon<R>,
 ) {
-    thread::spawn(move || loop {
-        let status = health::probe(port);
-        let (line, tip) = describe(status, port, attached, &supervisor);
-        let _ = status_item.set_text(line);
-        let _ = tray.set_tooltip(Some(&tip));
-        thread::sleep(POLL_INTERVAL);
+    thread::spawn(move || {
+        // Cache the last rendered (line, tooltip) so steady-state polls are a
+        // no-op instead of re-issuing identical set_text/set_tooltip calls.
+        let mut last: Option<(String, String)> = None;
+        loop {
+            let status = health::probe(port);
+            let next = describe(status, port, &supervisor);
+            if last.as_ref() != Some(&next) {
+                let _ = status_item.set_text(&next.0);
+                let _ = tray.set_tooltip(Some(&next.1));
+                last = Some(next);
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
     });
 }
 
-/// Human-readable Status line + tray tooltip for a probe result.
-fn describe(
-    status: ServerStatus,
-    port: u16,
-    attached: bool,
-    supervisor: &Arc<Supervisor>,
-) -> (String, String) {
-    let suffix = if attached {
+/// Human-readable Status line + tray tooltip for a probe result. Reads attach
+/// state straight off the supervisor (no threaded-through flag).
+fn describe(status: ServerStatus, port: u16, supervisor: &Arc<Supervisor>) -> (String, String) {
+    let suffix = if supervisor.is_attached() {
         match supervisor.attach_note() {
             Some(note) => format!(" — {note}"),
             None => " — attached".to_string(),
@@ -140,14 +143,14 @@ fn describe(
     } else {
         String::new()
     };
-    let (word, tip_word) = match status {
-        ServerStatus::Up => ("running", "running"),
-        ServerStatus::Degraded => ("degraded", "degraded"),
-        ServerStatus::Down => ("not responding", "not responding"),
+    let word = match status {
+        ServerStatus::Up => "running",
+        ServerStatus::Degraded => "degraded",
+        ServerStatus::Down => "not responding",
     };
     (
         format!("Status: {word} (:{port}){suffix}"),
-        format!("Project Minder — {tip_word} (:{port}){suffix}"),
+        format!("Project Minder — {word} (:{port}){suffix}"),
     )
 }
 
@@ -157,57 +160,41 @@ fn tray_icon() -> Image<'static> {
         .expect("bundled tray icon (icons/32x32.png) must be a valid PNG")
 }
 
-/// Open a URL in the user's default browser. No webview is embedded (v1 uses
-/// the real browser, per the plan).
-fn open_url(url: &str) {
+/// Open a URL or a filesystem path with the OS default handler — the browser
+/// for a URL, the file manager for a directory. One shared per-OS dispatch:
+/// Windows `cmd /C start "" <target>` handles both, so a single branch suffices.
+/// No webview is embedded (v1 uses the real browser, per the plan).
+fn open_with_os(target: &str) {
     #[cfg(windows)]
     {
-        // `cmd /C start "" <url>` — the empty "" is the window title arg `start`
-        // consumes, so the URL isn't mistaken for it.
-        let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+        // The empty "" is the window-title arg `start` consumes, so `target`
+        // isn't mistaken for it.
+        let _ = Command::new("cmd")
+            .args(["/C", "start", "", target])
+            .spawn();
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = Command::new("open").arg(url).spawn();
+        let _ = Command::new("open").arg(target).spawn();
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = Command::new("xdg-open").arg(url).spawn();
+        let _ = Command::new("xdg-open").arg(target).spawn();
     }
 }
 
 /// Open `~/.minder/logs/` in the OS file manager (creating it if absent so the
-/// file manager doesn't error on a missing path).
-fn open_logs_dir() {
-    let dir = logs_dir();
+/// file manager doesn't error on a missing path). Resolves home via Tauri's
+/// path API rather than a hand-rolled env lookup.
+fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let home = match app.path().home_dir() {
+        Ok(h) => h,
+        Err(e) => {
+            crate::supervisor::log(&format!("could not resolve home dir for logs: {e}"));
+            return;
+        }
+    };
+    let dir = home.join(".minder").join("logs");
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.to_string_lossy().to_string();
-    #[cfg(windows)]
-    {
-        let _ = Command::new("explorer").arg(&path).spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg(&path).spawn();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = Command::new("xdg-open").arg(&path).spawn();
-    }
-}
-
-fn logs_dir() -> std::path::PathBuf {
-    home_dir().join(".minder").join("logs")
-}
-
-/// Home directory without pulling in an extra crate: `USERPROFILE` on Windows,
-/// `HOME` elsewhere.
-fn home_dir() -> std::path::PathBuf {
-    #[cfg(windows)]
-    let key = "USERPROFILE";
-    #[cfg(not(windows))]
-    let key = "HOME";
-    std::env::var_os(key)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+    open_with_os(&dir.to_string_lossy());
 }

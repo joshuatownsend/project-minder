@@ -35,6 +35,14 @@ import { serviceLog } from "./serviceLog";
 /** The one line the supervisor writes to request a clean shutdown. */
 export const CONTROL_SHUTDOWN_COMMAND = "shutdown";
 
+/**
+ * Upper bound on an un-terminated (no-newline) line before it's discarded. The
+ * only commands we accept are short (`shutdown`), so anything this long without
+ * a newline is a malformed/hostile stream — drop it rather than let the buffer
+ * grow without bound.
+ */
+export const MAX_LINE_BYTES = 256;
+
 interface ControlChannelState {
   installed: boolean;
 }
@@ -92,6 +100,12 @@ export function attachControlChannel(stream: Readable, handlers: ControlChannelH
       if (line === CONTROL_SHUTDOWN_COMMAND) {
         handlers.onShutdownRequest("control-stdin:shutdown");
       }
+    }
+    // Guard against an unbounded partial line: once what remains (no newline
+    // yet) exceeds MAX_LINE_BYTES it can't be one of our short commands, so
+    // discard it instead of letting a malformed stream grow the buffer forever.
+    if (buffer.length > MAX_LINE_BYTES) {
+      buffer = "";
     }
   });
 
