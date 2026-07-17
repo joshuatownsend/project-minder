@@ -310,23 +310,25 @@ function listTopLevelPackages(nodeModulesDir) {
 // honour two packages that legitimately need different majors of the same
 // dependency (e.g. the app's zod 3 vs. claude-code-lint's zod 4).
 //
-// Each root name is resolved from `root` (the repo's own node_modules —
-// correct for these, since they're all direct/optional dependencies of
-// the repo's package.json and so are symlinked at the top level) with
-// `parentName === null`: roots ARE the top level. Everything discovered
-// from there on is resolved from the directory of whichever package
-// declared it, cascading down the real dependency graph the same way
-// Node's own resolution would at runtime.
+// Each root name is resolved from `seedDir` (default `root`, the repo's
+// own node_modules — correct for the top-level roots, since they're all
+// direct/optional dependencies of the repo's package.json and so are
+// symlinked at the top level; the .pnpm store-path walk below passes the
+// real store node_modules of the package it's expanding instead) with
+// `parentName === null`: roots ARE the base. Everything discovered from
+// there on is resolved from the directory of whichever package declared
+// it, cascading down the real dependency graph the same way Node's own
+// resolution would at runtime.
 //
 // `visited` is keyed by resolved dir, not name — it only guards against
 // re-walking a package's own dependencies (and symlink cycles). A given
 // (name, version) has exactly one dir, so distinct versions are distinct
 // dirs and both get walked; and edges are recorded BEFORE the visited
 // check, so every requester of a shared package still produces its edge.
-function walkDependencyClosure(rootNames, { optional = false } = {}) {
+function walkDependencyClosure(rootNames, { optional = false, seedDir = root } = {}) {
   const edges = []; // { name, dir, version, parentName }
   const visited = new Set(); // resolved dirs whose deps are already queued
-  const queue = rootNames.map((name) => ({ name, fromDir: root, parentName: null }));
+  const queue = rootNames.map((name) => ({ name, fromDir: seedDir, parentName: null }));
   while (queue.length > 0) {
     const { name, fromDir, parentName } = queue.shift();
     let pkgDir;
@@ -499,6 +501,182 @@ if (optionalFailures.length > 0) {
   console.warn(
     `[package-standalone] WARNING: optional dependency edges unresolved inside dist ` +
       `(image optimization may be degraded): ${optionalFailures.join(", ")}`
+  );
+}
+
+// --- 2c. Backfill .pnpm store-path packages' dependency subtrees ---
+//
+// The top-level closure walk above only reaches packages Next's tracer
+// emitted at dist's TOP-LEVEL node_modules. Some externalized packages are
+// kept at their pnpm store path instead — `node_modules/.pnpm/<key>/
+// node_modules/<pkg>` — and never surface as a top-level root. For a
+// package whose deps Next resolves via a static import it can follow, the
+// tracer preserves the sibling deps alongside it in that store path
+// (verified: better-sqlite3, web-push, sharp, next all keep theirs). But
+// `claude-code-lint` (a serverExternalPackage) is spawned as a CLI child
+// process — the app only `require.resolve`s its package.json and then execs
+// its `bin`, so its own `require("zod")`/`require("chalk")`/... happen at
+// runtime in a shape Next's static tracer can't see. The tracer copies ONLY
+// the package dir into `.pnpm/claude-code-lint@.../node_modules/`, dropping
+// EVERY dependency sibling — so the spawned CLI would resolve `zod` by
+// escaping upward out of the bundle (finding the app's zod 3, the WRONG
+// major) or MODULE_NOT_FOUND on a machine with only dist/.
+//
+// pnpm makes such a subtree resolve through symlinks + realpath: each store
+// package's node_modules holds symlinks to the EXACT versions of its own
+// deps. We copy dereferenced (real dirs, for portability), which can't rely
+// on realpath, so we instead re-materialise the subtree in the npm layout
+// Node's plain walk-up resolves: hoist each dependency to the subtree root
+// when that slot is free, and nest it directly under the requiring package
+// only when the root already holds a different version. This is what makes
+// a subtree with several majors of one package correct — claude-code-lint
+// pulls chalk 4 and 5, ora 5 and 9, cli-cursor 3 and 5, ... Every version
+// comes from the repo's real dirs, preserving pnpm's exact resolution.
+step("Verifying .pnpm store-path packages' dependency subtrees resolve inside dist");
+
+// Version present at <nmDir>/<name>/package.json, or null.
+function pkgVersionAt(nmDir, name) {
+  const p = path.join(nmDir, name, "package.json");
+  return existsSync(p) ? readPkgVersion(p) : null;
+}
+
+const distNmDir = path.join(outDir, "node_modules");
+const pnpmStoreDir = path.join(distNmDir, ".pnpm");
+// The `.pnpm/node_modules` hoist dir and dist's top level both sit on
+// Node's real walk-up path from any store-path package, so a dep already
+// present there resolves — order matches the walk (hoist dir is nearer).
+const storeFallbacks = [path.join(pnpmStoreDir, "node_modules"), distNmDir].filter((d) =>
+  existsSync(d)
+);
+let storeBackfilled = 0;
+const storeTripwireFailures = [];
+const storeBackfillReport = []; // `<key> :: <dep>@<version> @ <relative dest>`
+
+// Place `pkgName`'s runtime dependencies (and, recursively, theirs) into a
+// store subtree rooted at `rootNm`. `resolveNms` is the ordered list of
+// node_modules dirs visible to `pkgName` — its own first, each ancestor up
+// to `rootNm`, then the shared `fallbacks` (hoist dir + dist top level).
+// `recursed` guards against re-descending a package (and dependency cycles);
+// `failures` collects any edge that still mis-resolves after placement.
+function placeStoreSubtree(pkgName, pkgRepoDir, resolveNms, rootNm, storeKey, fallbacks, recursed, failures) {
+  let pkgJson;
+  try {
+    pkgJson = readJson(path.join(pkgRepoDir, "package.json"));
+  } catch {
+    return;
+  }
+  for (const depName of Object.keys(pkgJson.dependencies ?? {})) {
+    let depRepoDir;
+    try {
+      depRepoDir = resolvePackageDir(depName, pkgRepoDir);
+    } catch (err) {
+      console.warn(
+        `[package-standalone] WARNING: could not resolve "${depName}" declared by ${pkgName} ` +
+          `for the .pnpm/${storeKey} store subtree (${String(err.message).split("\n")[0]}) — skipping.`
+      );
+      continue;
+    }
+    const depVersion = readJson(path.join(depRepoDir, "package.json")).version ?? "0.0.0-unknown";
+
+    // Where, if anywhere, does depName already resolve for this requirer?
+    let found = null;
+    for (const nm of resolveNms) {
+      const v = pkgVersionAt(nm, depName);
+      if (v !== null) { found = v; break; }
+    }
+
+    let destNm; // node_modules dir to place into, or null if already correct
+    if (found === depVersion) destNm = null;
+    else if (found === null) destNm = rootNm;      // unseen up-chain → hoist to subtree root
+    else destNm = resolveNms[0];                    // seen at another version → nest under requirer
+
+    if (destNm) {
+      const destDir = path.join(destNm, depName);
+      const destPkgJson = path.join(destDir, "package.json");
+      if (!(existsSync(destPkgJson) && readPkgVersion(destPkgJson) === depVersion)) {
+        const rel = path.relative(distNmDir, destDir).split(path.sep).join("/");
+        step(`Store backfill: ${depName}@${depVersion} -> ${rel}`);
+        copyDereferenced(depRepoDir, destDir);
+        storeBackfilled += 1;
+        storeBackfillReport.push(`${storeKey} :: ${depName}@${depVersion} @ ${rel}`);
+      }
+    }
+
+    // Independent tripwire: confirm the edge now resolves to its version.
+    let got = null;
+    for (const nm of resolveNms) {
+      const v = pkgVersionAt(nm, depName);
+      if (v !== null) { got = v; break; }
+    }
+    if (got !== depVersion) {
+      failures.push(`.pnpm/${storeKey}: ${pkgName} -> ${depName}@${depVersion} (dist resolves ${got ?? "MISSING"})`);
+    }
+
+    // Recurse into the dependency's own subtree once — only when we placed
+    // it (reused copies were already descended when first placed; fallback
+    // copies belong to the top-level backfill's closure, not this subtree).
+    if (destNm) {
+      const depDir = path.join(destNm, depName);
+      if (!recursed.has(depDir)) {
+        recursed.add(depDir);
+        const depSelfNm = path.join(depDir, "node_modules");
+        const depResolveNms =
+          destNm === rootNm
+            ? [depSelfNm, rootNm, ...fallbacks]     // hoisted: dep sits at the subtree root
+            : [depSelfNm, ...resolveNms];           // nested: dep sits inside the requirer
+        placeStoreSubtree(depName, depRepoDir, depResolveNms, rootNm, storeKey, fallbacks, recursed, failures);
+      }
+    }
+  }
+}
+
+if (existsSync(pnpmStoreDir)) {
+  for (const storeKey of readdirSync(pnpmStoreDir)) {
+    if (storeKey.startsWith(".")) continue; // .bin etc.
+    if (storeKey === "node_modules") continue; // the hoist dir, not a store entry
+    const storeNmDir = path.join(pnpmStoreDir, storeKey, "node_modules");
+    const repoStoreNmDir = path.join(root, "node_modules", ".pnpm", storeKey, "node_modules");
+    // Can't resolve real dep versions without the repo's matching store path.
+    if (!existsSync(storeNmDir) || !existsSync(repoStoreNmDir)) continue;
+
+    const recursed = new Set();
+    // The package(s) the tracer emitted into this store path are the roots.
+    for (const rootPkg of listTopLevelPackages(storeNmDir)) {
+      let rootRepoDir;
+      try {
+        rootRepoDir = resolvePackageDir(rootPkg, repoStoreNmDir);
+      } catch {
+        continue;
+      }
+      const rootSelfNm = path.join(storeNmDir, rootPkg, "node_modules");
+      placeStoreSubtree(
+        rootPkg,
+        rootRepoDir,
+        [rootSelfNm, storeNmDir, ...storeFallbacks],
+        storeNmDir,
+        storeKey,
+        storeFallbacks,
+        recursed,
+        storeTripwireFailures,
+      );
+    }
+  }
+}
+
+if (storeBackfilled > 0) {
+  step(
+    `Backfilled ${storeBackfilled} .pnpm store-path dependency copy/copies the tracer emitted ` +
+      `a package without`
+  );
+} else {
+  step("All .pnpm store-path packages' dependency subtrees already resolve inside dist");
+}
+if (storeTripwireFailures.length > 0) {
+  fail(
+    `These .pnpm store-path dependency edges do not resolve to their expected version inside ` +
+      `${path.relative(root, outDir)} after backfill:\n  ` +
+      storeTripwireFailures.join("\n  ") +
+      `\nThe corresponding packaged tool would MODULE_NOT_FOUND (or load the wrong version) at runtime.`
   );
 }
 
