@@ -49,16 +49,8 @@ vi.mock("@/lib/manualStepsWatcher", () => ({
 vi.mock("@/lib/mcpConfigWatcher", () => ({
   mcpConfigWatcher: { ensureStarted: vi.fn() },
 }));
-vi.mock("@/lib/mcpHealthCache", () => ({
-  mcpHealthCache: { enqueue: vi.fn() },
-}));
-vi.mock("@/lib/userConfigCache", () => ({
-  getUserConfig: vi.fn().mockResolvedValue({
-    plugins: { plugins: [] },
-    hooks: { entries: [] },
-    mcpServers: { servers: [] },
-    settingsKeys: [],
-  }),
+vi.mock("@/lib/mcpHealthEnqueue", () => ({
+  enqueueMcpHealth: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@/lib/claudeStatus/cache", () => ({
   getCurrentStatus: vi.fn().mockResolvedValue({ source: "live" }),
@@ -73,11 +65,13 @@ import { demoMode } from "@/lib/demo/demoMode";
 import { probeInitStatus } from "@/lib/data";
 import { scanAllProjects } from "@/lib/scanner";
 import { setCachedScan } from "@/lib/cache";
+import { readConfig } from "@/lib/config";
 import { enqueueProjectCaches } from "@/lib/projectCacheEnqueue";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { mcpConfigWatcher } from "@/lib/mcpConfigWatcher";
-import { mcpHealthCache } from "@/lib/mcpHealthCache";
+import { enqueueMcpHealth } from "@/lib/mcpHealthEnqueue";
 import { getCurrentStatus } from "@/lib/claudeStatus/cache";
+import type { ProjectData } from "@/lib/types";
 
 describe("shouldBootstrap (pure gating)", () => {
   it("defaults ON when NODE_ENV=production", () => {
@@ -147,7 +141,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     expect(scanAllProjects).not.toHaveBeenCalled();
     expect(manualStepsWatcher.init).not.toHaveBeenCalled();
     expect(mcpConfigWatcher.ensureStarted).not.toHaveBeenCalled();
-    expect(mcpHealthCache.enqueue).not.toHaveBeenCalled();
+    expect(enqueueMcpHealth).not.toHaveBeenCalled();
     expect(getCurrentStatus).not.toHaveBeenCalled();
   });
 
@@ -165,10 +159,62 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     expect(getCurrentStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("skips the mcpConfigWatcher and mcpHealthCache when the mcpHealth flag is off (F1/F2 follow-up)", async () => {
+    // Codex P2 finding on A1: bootstrap started `mcpConfigWatcher` unconditionally,
+    // while GET /api/mcp-health (the route it mirrors) returns before starting it
+    // when the `mcpHealth` flag is off. Both boot steps must gate on the same flag.
+    // `readConfig` is called 4 times per runBootstrap() (scan, mcpConfigWatcher,
+    // mcpHealthCache, claudeStatus) — queue the override for each via
+    // `mockResolvedValueOnce` (rather than a persistent `mockResolvedValue`) so
+    // it drains after this test and can't leak into later tests.
+    vi.stubEnv("NODE_ENV", "production");
+    const cfg = {
+      statuses: {},
+      hidden: [],
+      portOverrides: {},
+      devRoot: "C:\\dev",
+      pinnedSlugs: [],
+      featureFlags: { mcpHealth: false },
+    };
+    vi.mocked(readConfig)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg);
+
+    await runBootstrap();
+
+    expect(mcpConfigWatcher.ensureStarted).not.toHaveBeenCalled();
+    expect(enqueueMcpHealth).not.toHaveBeenCalled();
+  });
+
+  it("starts the mcpConfigWatcher and enqueues mcpHealthCache when the mcpHealth flag is explicitly on", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cfg = {
+      statuses: {},
+      hidden: [],
+      portOverrides: {},
+      devRoot: "C:\\dev",
+      pinnedSlugs: [],
+      featureFlags: { mcpHealth: true },
+    };
+    vi.mocked(readConfig)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg)
+      .mockResolvedValueOnce(cfg);
+
+    await runBootstrap();
+
+    expect(mcpConfigWatcher.ensureStarted).toHaveBeenCalledTimes(1);
+    expect(enqueueMcpHealth).toHaveBeenCalledTimes(1);
+    expect(enqueueMcpHealth).toHaveBeenCalledWith({ mcpHealth: true });
+  });
+
   it("enqueues project caches when the scan returns projects", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.mocked(scanAllProjects).mockResolvedValueOnce({
-      projects: [{ slug: "demo-app", path: "C:\\dev\\demo-app" }] as never,
+      projects: [{ slug: "demo-app", path: "C:\\dev\\demo-app" }] as unknown as ProjectData[],
       portConflicts: [],
       hiddenCount: 0,
       scannedAt: "2026-01-01T00:00:00.000Z",
