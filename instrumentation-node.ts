@@ -23,6 +23,15 @@ import "server-only";
 // `MINDER_INDEXER=0` and `MINDER_USE_DB=0`.
 
 export async function startIngest(): Promise<void> {
+  // Boot-time bootstrap (service-mode A1): warms the project-scan cache, the
+  // git-status/efficiency-grade/GitHub-activity background caches, the
+  // manual-steps watcher, and the MCP config/health watchers — the same work
+  // `/api/projects` + `/api/manual-steps/changes` + `/api/mcp-health` would
+  // otherwise only do lazily on first dashboard load. Self-gated inside
+  // `runBootstrap()` (prod-only by default, `MINDER_BOOTSTRAP=1/0` override,
+  // always skipped in demo mode) — safe to call unconditionally here.
+  await bootstrapMinder();
+
   // Start the task/swarm dispatcher at server boot rather than lazily on a GET
   // request. Two reasons: (1) it resumes any pending tasks after a restart
   // without waiting for a dashboard visit, and (2) it closes a CSRF vector —
@@ -99,6 +108,16 @@ export async function startIngest(): Promise<void> {
 
   if (process.env.MINDER_INDEXER !== "0") {
     await startInProcessWatcher();
+  }
+}
+
+async function bootstrapMinder(): Promise<void> {
+  try {
+    const { runBootstrap } = await import("@/lib/bootstrap");
+    await runBootstrap();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[bootstrap] failed to run: ${(err as Error).message}`);
   }
 }
 
