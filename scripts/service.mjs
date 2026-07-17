@@ -133,6 +133,22 @@ function buildWindowsArtifacts(launch) {
   return { vbsPath, vbsContent, xmlPath, xmlContent, taskName: WINDOWS_TASK_NAME };
 }
 
+// F15 review fix: launchd/systemd --user services run in a minimal,
+// non-login environment that does NOT inherit a login shell's PATH
+// (rc-file additions like Homebrew, a version manager's active toolchain,
+// or a user's npm/pnpm global bin) — but the served app shells out to
+// `git`/`gh` (gitStatusCache, githubActivityCache) and spawns `claude`
+// binaries (the task dispatcher), all of which silently fail to resolve
+// without it. Captured from THIS installing process's own PATH and frozen
+// into the generated plist/unit at install time — see the caveat comments
+// in the templates themselves for the "changes after install need a
+// reinstall" trade-off. (Windows doesn't need this: see the comment in
+// windows-run-hidden.vbs.tmpl — a LogonType=InteractiveToken Scheduled Task
+// already inherits the live registry PATH on every run.)
+function installTimePath() {
+  return process.env.PATH ?? "";
+}
+
 function buildMacArtifacts(launch) {
   // F9 review fix: EVERY substitution lands inside a plist <string>
   // element — a path containing an XML-significant character (`&`, `<`,
@@ -149,6 +165,7 @@ function buildMacArtifacts(launch) {
     PORT: escapeXml("4100"),
     HOSTNAME: escapeXml("127.0.0.1"),
     LOG_DIR: escapeXml(logDir),
+    PATH_VALUE: escapeXml(installTimePath()),
   });
   const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
   return { label: LAUNCHD_LABEL, plistPath, plistContent };
@@ -173,6 +190,7 @@ function buildLinuxArtifacts(launch) {
     WORKING_DIR: escapeSystemdPercent(launch.cwd),
     PORT: "4100",
     HOSTNAME: "127.0.0.1",
+    PATH_VALUE: escapeSystemdPercent(installTimePath()),
   });
   const unitPath = path.join(os.homedir(), ".config", "systemd", "user", SYSTEMD_UNIT_NAME);
   return { unitName: SYSTEMD_UNIT_NAME, unitPath, unitContent };
@@ -316,6 +334,24 @@ function requireStopOk(platformKind, results, subject) {
   fail(`Failed to stop ${subject}: ${describeStepFailure(failure)}.`);
 }
 
+// F16 review fix: service:status previously discarded runSteps' result
+// entirely, so a missing registration OR a genuinely unreachable supervisor
+// (permissions, dbus down, Task Scheduler error) both printed whatever
+// stdout/stderr came back and exited 0 — a success-looking report either
+// way. This distinguishes the two: "not installed" is a legitimate,
+// successful ANSWER to a status query (that's the point of asking — exit
+// 0), while a real failure to even ask the supervisor is not a status,
+// it's an error, and exits non-zero with the raw text.
+function reportStatus(platformKind, results, subject) {
+  const failure = findFirstStepFailure(results);
+  if (!failure) return;
+  if (isAlreadyMissingFailure(platformKind, failure)) {
+    step(`${subject} is not installed.`);
+    return;
+  }
+  fail(`Failed to query status of ${subject}: ${describeStepFailure(failure)}.`);
+}
+
 // F10 review fix: inspect the deregistration step's own result before
 // touching any generated artifact. `runSteps` records `{ok:false}` on
 // failure but doesn't throw, so without this check a REAL failure
@@ -396,14 +432,17 @@ async function runUninstall(platformKind) {
 
 async function runStatus(platformKind) {
   if (platformKind === "windows") {
-    await runSteps(planActions("windows", "status", { taskName: WINDOWS_TASK_NAME }));
+    const results = await runSteps(planActions("windows", "status", { taskName: WINDOWS_TASK_NAME }));
+    reportStatus("windows", results, `Scheduled task "${WINDOWS_TASK_NAME}"`);
     return;
   }
   if (platformKind === "macos") {
-    await runSteps(planActions("macos", "status", { label: LAUNCHD_LABEL }));
+    const results = await runSteps(planActions("macos", "status", { label: LAUNCHD_LABEL }));
+    reportStatus("macos", results, `LaunchAgent "${LAUNCHD_LABEL}"`);
     return;
   }
-  await runSteps(planActions("linux", "status", { unitName: SYSTEMD_UNIT_NAME }));
+  const results = await runSteps(planActions("linux", "status", { unitName: SYSTEMD_UNIT_NAME }));
+  reportStatus("linux", results, `systemd --user unit "${SYSTEMD_UNIT_NAME}"`);
 }
 
 async function runStart(platformKind) {

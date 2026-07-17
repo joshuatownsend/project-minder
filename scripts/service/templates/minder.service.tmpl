@@ -8,6 +8,16 @@ ExecStart={{EXEC_START}}
 WorkingDirectory={{WORKING_DIR}}
 Environment=PORT={{PORT}}
 Environment=HOSTNAME={{HOSTNAME}}
+# PATH is captured from the INSTALLING shell (F15 review fix) and frozen
+# here at install time. A systemd --user unit's own default PATH does NOT
+# inherit the login shell's PATH (rc-file additions like a user's npm/pnpm
+# global bin, or a version manager's active toolchain directory) — but the
+# served app shells out to `git`/`gh` (gitStatusCache, githubActivityCache)
+# and spawns `claude` binaries (the task dispatcher), which would silently
+# fail to resolve without this. CAVEAT: because this is frozen at install
+# time, a PATH change made AFTER installing will NOT be picked up until you
+# re-run `pnpm service:install`.
+Environment=PATH={{PATH_VALUE}}
 Restart=on-failure
 RestartSec=5
 

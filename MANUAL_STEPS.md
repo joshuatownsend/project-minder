@@ -16,6 +16,12 @@
   reconcile + SQLite WAL recovery make an unclean stop safe for Minder's own data.
 - [ ] macOS (`com.minder.dashboard.plist`) and Linux (`minder.service`, systemd `--user`) templates
   ship in this PR but are reviewed-only — no CI/hands-on verification on those platforms yet.
+- [ ] macOS/Linux only: PATH is captured from the installing shell and frozen into the plist/unit
+  at install time (launchd/systemd `--user` services don't inherit your login shell's PATH, so
+  without this `git`/`gh`/`claude` would silently fail to resolve). If you later install Homebrew,
+  switch your active Node via nvm, or otherwise change PATH, re-run `pnpm service:install` to pick
+  up the new value — the service won't see PATH changes on its own. Not applicable on Windows (the
+  Scheduled Task already tracks the live registry PATH on every run).
 
 ---
 

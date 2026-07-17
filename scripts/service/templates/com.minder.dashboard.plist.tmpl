@@ -10,12 +10,26 @@
   </array>
   <key>WorkingDirectory</key>
   <string>{{WORKING_DIR}}</string>
+  <!--
+    PATH is captured from the INSTALLING shell (F15 review fix) and frozen
+    here at install time. launchd's own default PATH for a LaunchAgent is
+    minimal and does NOT include /opt/homebrew/bin, a user's npm/pnpm
+    global bin, or anything a login shell's rc file (.zshrc/.bashrc) adds —
+    but the served app shells out to `git`/`gh` (gitStatusCache,
+    githubActivityCache) and spawns `claude` binaries (the task
+    dispatcher), all of which would silently fail to resolve without this.
+    CAVEAT: because this is frozen at install time, a PATH change made
+    AFTER installing (e.g. installing Homebrew, nvm switching the active
+    node) will NOT be picked up until you re-run `pnpm service:install`.
+  -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PORT</key>
     <string>{{PORT}}</string>
     <key>HOSTNAME</key>
     <string>{{HOSTNAME}}</string>
+    <key>PATH</key>
+    <string>{{PATH_VALUE}}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

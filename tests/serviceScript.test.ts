@@ -825,3 +825,53 @@ describe("buildLinuxArtifacts (F9 review fix: systemd quoting/percent-escaping)"
     expect(unitContent).not.toMatch(/100%-project/);
   });
 });
+
+describe("buildMacArtifacts / buildLinuxArtifacts (F15 review fix: install-time PATH capture)", () => {
+  const launch = {
+    mode: "standalone",
+    exe: "/usr/local/bin/node",
+    args: ["/Users/josh/dist/minder-server/server.js"],
+    cwd: "/Users/josh/dist/minder-server",
+  };
+
+  function withPath(value: string, fn: () => void) {
+    const original = process.env.PATH;
+    process.env.PATH = value;
+    try {
+      fn();
+    } finally {
+      process.env.PATH = original;
+    }
+  }
+
+  it("captures the installing process's PATH into the plist's EnvironmentVariables", () => {
+    withPath("/opt/homebrew/bin:/usr/local/bin:/usr/bin", () => {
+      const { plistContent } = buildMacArtifacts(launch);
+      expect(plistContent).toContain("<key>PATH</key>");
+      expect(plistContent).toContain("<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin</string>");
+    });
+  });
+
+  it("captures the installing process's PATH into the systemd unit's Environment= directive", () => {
+    withPath("/opt/homebrew/bin:/usr/local/bin:/usr/bin", () => {
+      const { unitContent } = buildLinuxArtifacts(launch);
+      expect(unitContent).toContain("Environment=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin");
+    });
+  });
+
+  it("percent-escapes a literal % in a captured PATH for the systemd unit", () => {
+    withPath("/home/josh/100%-tools/bin:/usr/bin", () => {
+      const { unitContent } = buildLinuxArtifacts(launch);
+      expect(unitContent).toContain("100%%-tools");
+      expect(unitContent).not.toMatch(/100%-tools/); // no un-doubled "%" survives
+    });
+  });
+
+  it("XML-escapes an XML-significant character in a captured PATH for the plist", () => {
+    withPath("/Users/josh/R&D/bin:/usr/bin", () => {
+      const { plistContent } = buildMacArtifacts(launch);
+      expect(plistContent).toContain("R&amp;D");
+      expect(plistContent).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+    });
+  });
+});

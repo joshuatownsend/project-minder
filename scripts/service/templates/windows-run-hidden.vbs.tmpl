@@ -8,6 +8,21 @@
 ' reads these from the environment; the "next start" fallback ignores them
 ' and uses its own -p flag instead, so setting them unconditionally is safe
 ' either way).
+'
+' PATH (F15 review fix — Windows side of it): deliberately NOT overridden
+' here, unlike the macOS plist/Linux systemd unit. A Scheduled Task
+' registered with LogonType=InteractiveToken (this task's Principal, see
+' windows-task.xml.tmpl) runs with the SAME environment block an ordinary
+' interactive logon gets, including PATH as stored in the user/machine
+' registry environment (HKCU/HKLM \Environment) — which is exactly where
+' installers (git, gh, nvm-windows, etc.) register themselves. This is a
+' documented Windows Task Scheduler behavior, unlike launchd/systemd user
+' services, which run in a minimal, non-login environment. Freezing an
+' install-time PATH copy here would actually be WORSE than the current
+' behavior: it would stop tracking PATH changes the live registry already
+' reflects on every future run. If a future finding shows this assumption
+' doesn't hold in practice, add a WshEnv("PATH") line mirroring the
+' plist/unit's install-time capture.
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "{{WORKING_DIR}}"
 Set WshEnv = WshShell.Environment("PROCESS")
