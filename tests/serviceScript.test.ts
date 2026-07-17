@@ -5,6 +5,7 @@ import {
   escapeXml,
   escapeVbsString,
   quoteArg,
+  escapeSystemdPercent,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
   detectPlatformKind,
@@ -18,6 +19,7 @@ import {
   LAUNCHD_LABEL,
   SYSTEMD_UNIT_NAME,
 } from "../scripts/service/lib.mjs";
+import { buildMacArtifacts, buildLinuxArtifacts } from "../scripts/service.mjs";
 
 describe("renderTemplate", () => {
   it("substitutes {{KEY}} tokens", () => {
@@ -62,6 +64,20 @@ describe("quoteArg", () => {
   });
 });
 
+describe("escapeSystemdPercent (F9 review fix)", () => {
+  it("doubles literal percent signs", () => {
+    expect(escapeSystemdPercent("100%-project")).toBe("100%%-project");
+  });
+
+  it("doubles every occurrence, not just the first", () => {
+    expect(escapeSystemdPercent("%h/100%/50%")).toBe("%%h/100%%/50%%");
+  });
+
+  it("is a no-op with no percent signs", () => {
+    expect(escapeSystemdPercent("/home/josh/project")).toBe("/home/josh/project");
+  });
+});
+
 describe("resolveServerLaunch", () => {
   const root = "C:/repo";
   const fakeNextBinPath = "C:/repo/node_modules/next/dist/bin/next";
@@ -93,6 +109,10 @@ describe("resolveServerLaunch", () => {
   // environment with no PATH entry for a version-managed node (nvm/asdf on
   // macOS/Linux) still works, since the only node involved is the one
   // resolved via `process.execPath` at install time.
+  // F8 review fix: `next start` defaults its hostname to 0.0.0.0 (verified
+  // against this repo's own installed Next version's --help output) — an
+  // explicit `--hostname 127.0.0.1` is required or the login-scoped service
+  // would expose this local-only dashboard on every network interface.
   it("falls back to execPath + the resolved next bin JS file when only .next/BUILD_ID exists", () => {
     const launch = resolveServerLaunch({
       root,
@@ -103,7 +123,7 @@ describe("resolveServerLaunch", () => {
     expect(launch).toEqual({
       mode: "fallback",
       exe: "C:/nodejs/node.exe",
-      args: [fakeNextBinPath, "start", "-p", "4100"],
+      args: [fakeNextBinPath, "start", "-p", "4100", "--hostname", "127.0.0.1"],
       cwd: root,
     });
   });
@@ -283,7 +303,7 @@ describe("buildServerIdentityMarkers + commandLineMatchesServer (service:stop id
   const fallbackLaunch = {
     mode: "fallback",
     exe: "C:\\Program Files\\nodejs\\node.exe",
-    args: [nextBinPath, "start", "-p", "4100"],
+    args: [nextBinPath, "start", "-p", "4100", "--hostname", "127.0.0.1"], // F8 shape
     cwd: "C:\\repo",
   };
 
@@ -407,5 +427,63 @@ describe("buildServerIdentityMarkers + commandLineMatchesServer (service:stop id
     // a longer name must not satisfy the standalone-token requirement.
     const commandLine = `"C:\\Program Files\\nodejs\\node.exe" "${nextBinPath}" restart -p 4100 --dir C:\\repo\\startup-scripts`;
     expect(commandLineMatchesServer(commandLine, identity)).toBe(false);
+  });
+});
+
+describe("buildMacArtifacts (F9 review fix: escape every plist substitution)", () => {
+  const standaloneLaunch = {
+    mode: "standalone",
+    exe: "/usr/local/bin/node",
+    // A path containing an XML-significant character — the F9 scenario
+    // (e.g. a "Projects/R&D" directory) — deliberately used for BOTH an
+    // argument (already covered by the pre-existing escapeXml call) and
+    // the working directory (previously substituted RAW).
+    args: ["/Users/josh/Projects/R&D/dist/minder-server/server.js"],
+    cwd: "/Users/josh/Projects/R&D/dist/minder-server",
+  };
+
+  it("escapes an XML-significant character in WorkingDirectory, not just ProgramArguments", () => {
+    const { plistContent } = buildMacArtifacts(standaloneLaunch);
+    expect(plistContent).toContain("R&amp;D");
+    // No raw, unescaped "&" should reach the XML — every "&" present must
+    // be the start of an entity reference (&amp; here).
+    expect(plistContent).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+  });
+
+  it("produces well-formed XML (parseable, no bare ampersands)", () => {
+    const { plistContent } = buildMacArtifacts(standaloneLaunch);
+    // A minimal well-formedness smoke check without pulling in an XML
+    // parser dependency: every "<string>...</string>" pair balances, and
+    // there is no unescaped "&".
+    const opens = (plistContent.match(/<string>/g) ?? []).length;
+    const closes = (plistContent.match(/<\/string>/g) ?? []).length;
+    expect(opens).toBe(closes);
+    expect(plistContent).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+  });
+});
+
+describe("buildLinuxArtifacts (F9 review fix: systemd quoting/percent-escaping)", () => {
+  it("quotes an ExecStart argument containing spaces", () => {
+    const launch = {
+      mode: "standalone",
+      exe: "/usr/bin/node",
+      args: ["/home/josh/My Projects/dist/minder-server/server.js"],
+      cwd: "/home/josh/My Projects/dist/minder-server",
+    };
+    const { unitContent } = buildLinuxArtifacts(launch);
+    expect(unitContent).toContain('"/home/josh/My Projects/dist/minder-server/server.js"');
+  });
+
+  it("doubles a literal percent sign in both ExecStart and WorkingDirectory (specifier-expansion escape)", () => {
+    const launch = {
+      mode: "standalone",
+      exe: "/usr/bin/node",
+      args: ["/home/josh/100%-project/dist/minder-server/server.js"],
+      cwd: "/home/josh/100%-project/dist/minder-server",
+    };
+    const { unitContent } = buildLinuxArtifacts(launch);
+    expect(unitContent).toContain("100%%-project");
+    // The single-percent form must not appear anywhere — every "%" must be doubled.
+    expect(unitContent).not.toMatch(/100%-project/);
   });
 });

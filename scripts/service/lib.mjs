@@ -53,6 +53,30 @@ export function quoteArg(arg) {
 }
 
 /**
+ * Escapes a value for embedding in a systemd unit file directive (F9 review
+ * fix): `%` starts a "specifier" expansion (`%h` = home dir, `%%` = a
+ * literal percent, etc.) in EVERY directive value across an entire unit
+ * file — not just `ExecStart=` — so a literal `%` in a path (e.g. a
+ * username or directory containing one) must be doubled or systemd will
+ * try to expand it as a specifier and likely fail to parse the unit.
+ *
+ * Deliberately NOT handled here: a literal backslash character inside a
+ * path. systemd's `ExecStart=` quoting is C-string-like — backslash starts
+ * an escape sequence (`\\`, `\"`, `\t`, ...) inside a quoted argument — so a
+ * literal backslash in a Linux filename (legal on that filesystem, but
+ * exceedingly rare in practice — no shell or tool set makes this easy to
+ * produce by accident) could be misinterpreted. Spaces ARE handled: every
+ * `ExecStart=` argument is wrapped in `quoteArg`'s double quotes regardless
+ * of whether it needs it, which systemd's own quoting rules accept.
+ * `WorkingDirectory=`/`Environment=` take single un-split path/value
+ * strings (not an argv vector), so they need percent-escaping but never
+ * quoting.
+ */
+export function escapeSystemdPercent(value) {
+  return String(value).replace(/%/g, "%%");
+}
+
+/**
  * Resolves the `next` CLI's own JS entry point (not the node_modules/.bin
  * shell shim) via `createRequire` rooted at the target repo's package.json
  * — this walks the SAME resolution pnpm/node would use from that repo,
@@ -136,7 +160,18 @@ export function resolveServerLaunch(opts) {
     return {
       mode: "fallback",
       exe: execPath,
-      args: [nextBinPath, "start", "-p", "4100"],
+      // F8 review fix: `next start` defaults `--hostname`/`-H` to `0.0.0.0`
+      // (verified against this repo's own installed Next version via
+      // `node node_modules/next/dist/bin/next start --help`) — without an
+      // explicit hostname, the login-scoped autostart service would expose
+      // this LOCAL-ONLY dashboard on every network interface, not just
+      // loopback. `-p`/`--port` DOES fall back to the PORT env var per
+      // that same --help output, but `-H`/`--hostname` has no documented
+      // env fallback, so it must be passed as an explicit arg here rather
+      // than relying on the HOSTNAME env var the templates already set
+      // (that env var is for the standalone server.js path, which reads
+      // process.env.HOSTNAME directly — "next start" does not).
+      args: [nextBinPath, "start", "-p", "4100", "--hostname", "127.0.0.1"],
       cwd: root,
     };
   }

@@ -67,6 +67,7 @@ import {
   resolveWindowsUserId,
   buildServerIdentityMarkers,
   commandLineMatchesServer,
+  escapeSystemdPercent,
 } from "./service/lib.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -127,26 +128,43 @@ function buildWindowsArtifacts(launch) {
 }
 
 function buildMacArtifacts(launch) {
+  // F9 review fix: EVERY substitution lands inside a plist <string>
+  // element — a path containing an XML-significant character (`&`, `<`,
+  // e.g. `~/Projects/R&D/...`) written in raw produces invalid XML that
+  // launchd will refuse to load. escapeXml() (already used for the Windows
+  // task XML) is applied to every value here, not just the arguments.
   const programArgumentsXml = [launch.exe, ...launch.args]
     .map((a) => `    <string>${escapeXml(a)}</string>`)
     .join("\n");
   const plistContent = renderTemplate(readTemplate("com.minder.dashboard.plist.tmpl"), {
-    LABEL: LAUNCHD_LABEL,
+    LABEL: escapeXml(LAUNCHD_LABEL),
     PROGRAM_ARGUMENTS: programArgumentsXml,
-    WORKING_DIR: launch.cwd,
-    PORT: "4100",
-    HOSTNAME: "127.0.0.1",
-    LOG_DIR: logDir,
+    WORKING_DIR: escapeXml(launch.cwd),
+    PORT: escapeXml("4100"),
+    HOSTNAME: escapeXml("127.0.0.1"),
+    LOG_DIR: escapeXml(logDir),
   });
   const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
   return { label: LAUNCHD_LABEL, plistPath, plistContent };
 }
 
 function buildLinuxArtifacts(launch) {
-  const execStart = [launch.exe, ...launch.args].map(quoteArg).join(" ");
+  // F9 review fix: `%` starts a specifier expansion (`%h`, `%%`, ...)
+  // anywhere in a systemd unit file, so every directive value is percent-
+  // escaped via escapeSystemdPercent() before substitution. ExecStart='s
+  // arguments are ALSO quoted (quoteArg) since that directive is word-split
+  // like a shell command line — WorkingDirectory=/Environment= take a
+  // single un-split value and need only the percent-escape, never quoting.
+  // Deliberately not handled: a literal backslash inside a path (systemd's
+  // ExecStart quoting is C-string-like and would treat it as an escape
+  // sequence start) — legal on Linux filesystems but exceedingly rare in
+  // practice; see escapeSystemdPercent's doc comment.
+  const execStart = [launch.exe, ...launch.args]
+    .map((a) => quoteArg(escapeSystemdPercent(a)))
+    .join(" ");
   const unitContent = renderTemplate(readTemplate("minder.service.tmpl"), {
     EXEC_START: execStart,
-    WORKING_DIR: launch.cwd,
+    WORKING_DIR: escapeSystemdPercent(launch.cwd),
     PORT: "4100",
     HOSTNAME: "127.0.0.1",
   });
