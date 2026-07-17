@@ -171,6 +171,59 @@ if (existsSync(publicDir)) {
   console.warn(`[package-standalone] WARNING: public/ not found, skipping`);
 }
 
+// --- 2a2. instrumentation.js (Next's own tracer omits this from standalone too) ---
+//
+// PR #285 review follow-up (Codex P2 investigation): `next build`
+// compiles `instrumentation.ts` to `.next/server/instrumentation.js`,
+// and the standalone `server.js` (via `next/dist/server/lib/start-
+// server`) loads it from `<outDir>/.next/server/instrumentation.js` at
+// boot to run our `register()` hook — but Next's own file tracer does
+// NOT copy this file (or its sibling `instrumentation/` manifest dir)
+// into `.next/standalone` on its own. This is a known Next.js
+// `output: "standalone"` gap, not specific to this repo.
+//
+// Without it, `register()` — and therefore `startIngest()`, and
+// therefore EVERYTHING in instrumentation-node.ts (the ingest worker,
+// the in-process chokidar fallback, bootstrapMinder, the task
+// dispatcher) — silently never runs against a packaged build. This
+// isn't just the worker-cwd-anchoring bug the review flagged; it's why
+// that bug was undetectable by "does the server boot and answer
+// health checks" alone, and it must be fixed for MINDER_INDEXER_WORKER
+// (or even the default indexer) to do anything at all in production.
+//
+// instrumentation.js is a thin Turbopack loader that itself requires
+// further hashed chunk files under .next/server/chunks/ — chunks that,
+// same root cause, were never traced either (nothing else in the
+// per-route trace graph references them). Rather than reverse-engineer
+// which specific hashed chunk names instrumentation.js happens to need
+// this build (a moving target), copy the ENTIRE chunks/ directory:
+// most of it is already present from the normal per-route trace, this
+// just fills the gap, and at ~54 MB total it's a modest addition to an
+// already-hundreds-of-MB self-contained package.
+const instrumentationSrc = path.join(root, ".next", "server", "instrumentation.js");
+if (!existsSync(instrumentationSrc)) {
+  fail(
+    `${path.relative(root, instrumentationSrc)} not found — was "pnpm build" run with ` +
+      `instrumentation.ts present? Without it, the ingest worker, the in-process watcher, ` +
+      `and boot-time bootstrap never run against this package.`
+  );
+}
+step("Copying .next/server/instrumentation.js (Next's tracer omits it from standalone)");
+copyDereferenced(instrumentationSrc, path.join(outDir, ".next", "server", "instrumentation.js"));
+const instrumentationMapSrc = `${instrumentationSrc}.map`;
+if (existsSync(instrumentationMapSrc)) {
+  copyDereferenced(instrumentationMapSrc, path.join(outDir, ".next", "server", "instrumentation.js.map"));
+}
+const instrumentationManifestDir = path.join(root, ".next", "server", "instrumentation");
+if (existsSync(instrumentationManifestDir)) {
+  copyDereferenced(instrumentationManifestDir, path.join(outDir, ".next", "server", "instrumentation"));
+}
+step("Copying .next/server/chunks/ in full (instrumentation.js's own chunk deps aren't traced either)");
+const serverChunksSrc = path.join(root, ".next", "server", "chunks");
+if (existsSync(serverChunksSrc)) {
+  copyDereferenced(serverChunksSrc, path.join(outDir, ".next", "server", "chunks"));
+}
+
 // --- 2b. Backfill Next's own nested runtime dependencies ---
 //
 // https://github.com/joshuatownsend/project-minder/issues/287 — `next
@@ -379,16 +432,17 @@ if (existsSync(workersDir)) {
 // sibling to the compiled migrations module (found automatically for
 // the in-process/main-thread path, since Next's file tracer can see
 // that statically-shaped readFileSync call and copies schema.sql next
-// to it), then falls back to walking up from `process.cwd()` looking
-// for `src/lib/db/schema.sql`. The worker bundle (workers/dist/
+// to it), then falls back to MINDER_SERVER_ROOT (set by the server.js
+// wrapper, below) or process.cwd() — walking up looking for
+// `src/lib/db/schema.sql`. The worker bundle (workers/dist/
 // ingestWorker.mjs, built by esbuild, not traced by Next) has its
 // __dirname pinned to workers/dist/ — schema.sql is never there — so
-// it always falls through to the cwd-walk fallback. On a machine that
-// only has dist/minder-server/ (no repo checkout), that fallback finds
-// nothing unless we plant schema.sql at the first path it checks:
-// <cwd>/src/lib/db/schema.sql. The tray app / a human runs `node
-// server.js` with this package's own directory as cwd, so copying
-// schema.sql to outDir/src/lib/db/schema.sql lands exactly there.
+// it always falls through to that anchor-walk. On a machine that only
+// has dist/minder-server/ (no repo checkout), it finds nothing unless
+// we plant schema.sql at the first path it checks: <anchor>/src/lib/
+// db/schema.sql. MINDER_SERVER_ROOT is outDir itself, so copying
+// schema.sql to outDir/src/lib/db/schema.sql lands exactly there
+// regardless of the caller's actual cwd.
 step("Copying src/lib/db/schema.sql (worker's schema.sql lookup fallback)");
 const schemaSrcPath = path.join(root, "src", "lib", "db", "schema.sql");
 if (existsSync(schemaSrcPath)) {
@@ -400,6 +454,37 @@ if (existsSync(schemaSrcPath)) {
     `[package-standalone] WARNING: ${path.relative(root, schemaSrcPath)} not found — ` +
       `MINDER_INDEXER_WORKER=1 will fail with "schema.sql not found" against this package.`
   );
+}
+
+// --- 3c. chokidar for the worker's file-watching ---
+//
+// build-worker.mjs's esbuild config externalizes `better-sqlite3` and
+// `chokidar` from the worker bundle (both ship native/platform-
+// specific bits) so the worker resolves them from node_modules at
+// runtime, same as the main thread. better-sqlite3 is already covered
+// by the closure-walk backfill above (it's one of Next's own
+// externalized top-level packages), but chokidar is used ONLY by this
+// esbuild-bundled worker — nothing in Next's traced route graph
+// imports it, so it's never a candidate for that backfill and Next's
+// tracer has no way to know it's needed. Without it, the worker
+// doesn't crash — chokidar's own dynamic import fails gracefully and
+// the watcher falls back to sweep-only mode — but that's a silent
+// functionality downgrade (no live file-watching, periodic full
+// sweeps only) that's easy to miss since nothing errors loudly.
+step("Copying chokidar (worker's file-watching dependency, externalized from the esbuild bundle)");
+if (resolvesInsideDist("chokidar")) {
+  step("chokidar already resolves inside dist, skipping");
+} else {
+  try {
+    const chokidarDir = resolvePackageDir("chokidar", root);
+    copyDereferenced(chokidarDir, path.join(outDir, "node_modules", "chokidar"));
+  } catch (err) {
+    console.warn(
+      `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules ` +
+        `(${String(err.message).split("\n")[0]}) — MINDER_INDEXER_WORKER=1 will fall back to ` +
+        `sweep-only mode (no live file-watching) against this package.`
+    );
+  }
 }
 
 // --- 4. Verify (don't assume) the better-sqlite3 native binary copied ---
@@ -553,12 +638,27 @@ cpSync(generatedServerPath, renamedServerPath);
 rmSync(generatedServerPath);
 
 const wrapper = `// Generated by scripts/package-standalone.mjs — do not edit by hand.
+const path = require("node:path");
+
+// Anchor MINDER_SERVER_ROOT to this package's own directory (__dirname
+// is CJS-native here — this file is never bundled, it's written fresh
+// by the packaging script). Without this, code that resolves paths
+// relative to process.cwd() (workerHost.ts's default ingest-worker
+// entry, migrations.ts's resolveSchemaPath cwd-walk fallback) breaks
+// the moment this package is launched by absolute path from some other
+// directory — found nothing (or, launched from a repo checkout,
+// silently loaded that repo's SOURCE files instead of this package's
+// own) (PR #285 review, Codex P2). Doesn't override an operator's own
+// explicit value.
+if (!process.env.MINDER_SERVER_ROOT) {
+  process.env.MINDER_SERVER_ROOT = __dirname;
+}
+
 // Startup ABI check: better-sqlite3's prebuilt .node binary is tied to the
 // NODE_MODULE_VERSION it was compiled against (see BUILD_INFO.json). Running
 // this package under a mismatched Node major fails opaquely deep inside the
 // first DB-backed request; this check fails loudly at boot instead.
 const fs = require("node:fs");
-const path = require("node:path");
 
 const buildInfoPath = path.join(__dirname, "BUILD_INFO.json");
 try {
@@ -583,7 +683,7 @@ try {
 require("./server.next.js");
 `;
 writeFileSync(generatedServerPath, wrapper);
-step("Wrote server.js startup-ABI-check wrapper (delegates to server.next.js)");
+step("Wrote server.js wrapper (sets MINDER_SERVER_ROOT, ABI check, delegates to server.next.js)");
 
 // --- Summary ---
 step(`Done. Package assembled at ${path.relative(root, outDir)}`);

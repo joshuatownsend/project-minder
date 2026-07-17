@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import path from "path";
 import { writeFileSync, mkdtempSync, rmSync } from "fs";
 import os from "os";
+import { resolveDefaultWorkerEntry } from "@/lib/db/workerHost";
 
 // Lifecycle test for workerHost.ts. Spawns the trivial ping/pong
 // worker, exercises spawn → ready → message → stop and the
@@ -72,6 +73,33 @@ afterEach(async () => {
     }
     tmpDir = null;
   }
+});
+
+describe("resolveDefaultWorkerEntry", () => {
+  // PR #285 review (Codex P2): the default worker entry must anchor to
+  // the packaged server's own directory (MINDER_SERVER_ROOT), not the
+  // caller's cwd — otherwise launching the standalone server by
+  // absolute path from a different directory silently finds nothing
+  // (or, run from a repo checkout, loads that repo's source worker
+  // instead of the packaged one). Pure function — no worker spawn, no
+  // filesystem, no module reset needed.
+  it("prefers MINDER_SERVER_ROOT over cwd when set", () => {
+    const entry = resolveDefaultWorkerEntry(
+      path.join("wrong", "cwd"),
+      path.join("packaged", "server", "root")
+    );
+    expect(entry).toBe(path.join("packaged", "server", "root", "workers", "ingestWorker.mjs"));
+  });
+
+  it("falls back to cwd when MINDER_SERVER_ROOT is undefined", () => {
+    const entry = resolveDefaultWorkerEntry(path.join("dev", "project-root"), undefined);
+    expect(entry).toBe(path.join("dev", "project-root", "workers", "ingestWorker.mjs"));
+  });
+
+  it("falls back to cwd when MINDER_SERVER_ROOT is an empty string", () => {
+    const entry = resolveDefaultWorkerEntry(path.join("dev", "project-root"), "");
+    expect(entry).toBe(path.join("dev", "project-root", "workers", "ingestWorker.mjs"));
+  });
 });
 
 describe("workerHost lifecycle", () => {

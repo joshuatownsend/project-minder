@@ -18,11 +18,19 @@ import { Worker } from "node:worker_threads";
 //   Next.js / Turbopack bundles everything under src/ and app/, but
 //   leaves arbitrary root directories alone. `workers/` is a plain
 //   project directory that Node loads directly via `new Worker()`.
-//   Resolving via `process.cwd()` works in both `next dev` (cwd is
-//   the project root) and `next start` (same), and avoids the
-//   `import.meta.url` portability mess. (We do NOT support running
-//   under a `cd` to a subdirectory; the dev script anchors to the
-//   project root.)
+//   Resolving via `process.cwd()` works in `next dev` and `next start`
+//   (cwd is the project root in both), and avoids the `import.meta.url`
+//   portability mess — but it breaks the moment the packaged
+//   standalone server (scripts/package-standalone.mjs) is launched by
+//   absolute path from a different cwd (PR #285 review, Codex P2):
+//   `MINDER_INDEXER_WORKER=1` then resolves against the CALLER's
+//   directory, finding nothing (or, launched from this repo's root,
+//   silently loading the repo's SOURCE worker instead of the packaged
+//   one). `MINDER_SERVER_ROOT` — set by the generated server.js
+//   wrapper to its own directory — anchors this correctly regardless
+//   of cwd; `process.cwd()` remains the fallback for dev/test, where
+//   the dev script already anchors cwd to the project root and no
+//   such wrapper exists to set the env var.
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_START_TIMEOUT_MS = 60_000;
@@ -82,6 +90,30 @@ interface WorkerHostState {
    */
   messageSubscribers: Set<MessageSubscriber>;
   readyTimeoutMs: number;
+}
+
+/**
+ * Resolves the default ingest-worker entry path. Pure function of its
+ * inputs so the resolution order is unit-testable without spawning a
+ * real worker thread or touching the actual filesystem/environment.
+ *
+ * `serverRoot` wins when set — the packaged server.js wrapper
+ * (scripts/package-standalone.mjs) sets `MINDER_SERVER_ROOT` to its
+ * own `__dirname` before requiring the real server, so this resolves
+ * correctly no matter what directory the server was launched from.
+ * `cwd` is the dev/test fallback (`next dev` / `next start` both run
+ * with cwd already at the project root).
+ *
+ * "workers" and "ingestWorker.mjs" are inlined as literal path
+ * segments (rather than a shared const) in each branch so Turbopack's
+ * file tracer can statically resolve each `path.join` call as "scoped
+ * to a subfolder" instead of falling back to a whole-project sweep of
+ * every route's output trace.
+ */
+export function resolveDefaultWorkerEntry(cwd: string, serverRoot: string | undefined): string {
+  return serverRoot
+    ? path.join(serverRoot, "workers", "ingestWorker.mjs")
+    : path.join(cwd, "workers", "ingestWorker.mjs");
 }
 
 const g = globalThis as unknown as { __minderWorker?: WorkerHostState };
@@ -196,12 +228,8 @@ export interface StartWorkerOptions {
 export async function startWorker(options: StartWorkerOptions = {}): Promise<WorkerHostStatus> {
   await stopWorker();
 
-  // Inlined as literal path segments (rather than the WORKER_REL_PATH
-  // const) so Turbopack's file tracer can statically resolve this join
-  // as "scoped to a subfolder" instead of falling back to a whole-
-  // project sweep of every route's output trace — see the identical
-  // note in db/migrations.ts resolveSchemaPath().
-  const entry = options.workerEntry ?? path.join(process.cwd(), "workers", "ingestWorker.mjs");
+  const entry =
+    options.workerEntry ?? resolveDefaultWorkerEntry(process.cwd(), process.env.MINDER_SERVER_ROOT);
   const state = freshState(options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS, entry);
   g.__minderWorker = state;
 
