@@ -106,6 +106,7 @@ export const helpSlugs = [
   'setup',
   'settings',
   'demo-mode',
+  'service-mode',
   'templates',
   'plans',
   'hooks',
