@@ -73,6 +73,20 @@ interface WatcherState {
    */
   initialReconcileInFlight: boolean;
   sweepTimer: NodeJS.Timeout | null;
+  /**
+   * Set synchronously by `stopIngestWatcher()` (A2 graceful shutdown). Once
+   * true, no new reconcile/sweep pass schedules or starts — checked at the top
+   * of `scheduleReconcile`, `runReconcile`, and the sweep `tick`, and gating
+   * the sweep re-arm — so a shutdown can't be chased by fresh index.db writes.
+   */
+  stopped: boolean;
+  /**
+   * In-flight ingest passes (initial reconcile, per-file reconciles, unlink
+   * reconciles, sweeps). `stopIngestWatcher()` awaits these so SQLite isn't
+   * closed mid-write; the wait is bounded by the shutdown deadline that the
+   * lifecycle registry caps the disposer at.
+   */
+  activeWork: Set<Promise<void>>;
   /** Stats surfaced by `getWatcherStatus()` for debug surfaces. */
   startedAt: number;
   initialReconcileMs: number | null;
@@ -194,6 +208,8 @@ export async function startIngestWatcher(
     needsAnotherPass: new Set(),
     initialReconcileInFlight: false,
     sweepTimer: null,
+    stopped: false,
+    activeWork: new Set(),
     startedAt: Date.now(),
     initialReconcileMs: null,
     eventsHandled: 0,
@@ -230,14 +246,15 @@ export async function startIngestWatcher(
     // delivers before the pass completes hit the per-file guard in
     // `runReconcile` (and the sweep-tick guard), which reschedules them
     // until the flag clears — deferred, not dropped, and never reconciling
-    // the same file concurrently with the full pass.
+    // the same file concurrently with the full pass. Tracked so a shutdown
+    // mid-reconcile drains it before closing SQLite.
     state.initialReconcileInFlight = true;
-    void runInitialReconcile();
+    void trackWork(state, runInitialReconcile());
   } else {
     // Inline mode (in-process watcher): reconcile-then-watch, no race
     // because chokidar hasn't started yet and `ignoreInitial: true` means
     // the `add` events for these files won't fire even after we attach.
-    await runInitialReconcile();
+    await trackWork(state, runInitialReconcile());
   }
 
   // Lazy import: `chokidar` ships with native binaries on some platforms
@@ -341,11 +358,22 @@ export async function startIngestWatcher(
 }
 
 /**
- * Close the current watcher and stop the sweep timer. Idempotent.
+ * Close the current watcher, stop the sweep timer, and DRAIN any in-flight
+ * reconcile/sweep before returning. Idempotent.
+ *
+ * The drain (A2 graceful shutdown, F7) matters because a `reconcileAllSessions`
+ * or per-file `reconcileSessionFile` in flight is still writing to index.db;
+ * returning before it settles would let the `sqlite` disposer close the DB
+ * mid-write. `stopped` is set FIRST (synchronously) so no new pass schedules
+ * or starts while we drain, then we await the tracked work. The await is
+ * bounded upstream: the lifecycle registry caps the `ingest` disposer at the
+ * shutdown deadline, so a multi-minute initial reconcile can't hang shutdown —
+ * `stopped` has at least halted further writes by then.
  */
 export async function stopIngestWatcher(): Promise<void> {
   const state = g.__minderIngestWatcher;
   if (!state) return;
+  state.stopped = true; // synchronous: reconcile/sweep checkpoints bail now
   for (const t of state.pendingTimers.values()) clearTimeout(t);
   state.pendingTimers.clear();
   state.inFlight.clear();
@@ -365,6 +393,10 @@ export async function stopIngestWatcher(): Promise<void> {
       /* swallow; we're tearing down */
     }
     state.watcher = null;
+  }
+  // Drain in-flight reconcile/sweep passes so SQLite isn't closed mid-write.
+  if (state.activeWork.size > 0) {
+    await Promise.allSettled([...state.activeWork]);
   }
   delete g.__minderIngestWatcher;
 }
@@ -403,7 +435,19 @@ function snapshot(state: WatcherState): WatcherStatus {
   };
 }
 
+/**
+ * Register an in-flight ingest pass so `stopIngestWatcher()` can await it on
+ * shutdown. Self-removes on settle. Returns the same promise for callers that
+ * want to await it (the inline initial reconcile).
+ */
+function trackWork(state: WatcherState, p: Promise<void>): Promise<void> {
+  state.activeWork.add(p);
+  void p.finally(() => state.activeWork.delete(p));
+  return p;
+}
+
 function scheduleReconcile(state: WatcherState, filePath: string): void {
+  if (state.stopped) return; // shutting down — don't queue new reconciles
   state.lastEventAt = Date.now();
   // If a reconcile is in flight for this file, mark "needs another pass"
   // and let the in-flight one's completion handler reschedule us.
@@ -413,18 +457,19 @@ function scheduleReconcile(state: WatcherState, filePath: string): void {
   }
   const existing = state.pendingTimers.get(filePath);
   if (existing) clearTimeout(existing);
-  const timer = setTimeout(() => runReconcile(state, filePath), state.debounceMs);
+  const timer = setTimeout(() => { void trackWork(state, runReconcile(state, filePath)); }, state.debounceMs);
   state.pendingTimers.set(filePath, timer);
 }
 
 async function runReconcile(state: WatcherState, filePath: string): Promise<void> {
   state.pendingTimers.delete(filePath);
+  if (state.stopped) return; // shutting down — don't start a new reconcile
   // Hold off while the deferred initial reconcile is still sweeping — a
   // per-file tail-append racing the full pass on the same session can
   // double-insert turn indices. Reschedule instead of dropping; the event
   // re-fires here until the flag clears.
   if (state.initialReconcileInFlight) {
-    const timer = setTimeout(() => runReconcile(state, filePath), Math.max(state.debounceMs, 1_000));
+    const timer = setTimeout(() => { void trackWork(state, runReconcile(state, filePath)); }, Math.max(state.debounceMs, 1_000));
     state.pendingTimers.set(filePath, timer);
     return;
   }
@@ -466,23 +511,27 @@ async function runReconcile(state: WatcherState, filePath: string): Promise<void
  * files and cleans up cascade-style. Rare event so the cost is fine.
  */
 function scheduleUnlink(state: WatcherState, filePath: string): void {
+  if (state.stopped) return; // shutting down — don't queue new reconciles
   state.lastEventAt = Date.now();
   const key = `__unlink__${filePath}`;
   const existing = state.pendingTimers.get(key);
   if (existing) clearTimeout(existing);
-  const timer = setTimeout(async () => {
+  const timer = setTimeout(() => {
     state.pendingTimers.delete(key);
-    try {
-      const db = getDbSync() ?? (await getDb());
-      if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
-      state.eventsHandled++;
-    } catch (err) {
-      state.errors++;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[ingest-watcher] post-unlink reconcile failed: ${(err as Error).message}`
-      );
-    }
+    if (state.stopped) return;
+    void trackWork(state, (async () => {
+      try {
+        const db = getDbSync() ?? (await getDb());
+        if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
+        state.eventsHandled++;
+      } catch (err) {
+        state.errors++;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ingest-watcher] post-unlink reconcile failed: ${(err as Error).message}`
+        );
+      }
+    })());
   }, state.debounceMs);
   state.pendingTimers.set(key, timer);
 }
@@ -513,6 +562,9 @@ function startSweep(state: WatcherState): void {
   // at a time. `stopIngestWatcher` clears whichever phase is pending.
   const tick = async (): Promise<void> => {
     try {
+      // Bail once shutting down — don't start a full reconcile that would
+      // write to index.db while the shutdown disposer is closing it.
+      if (state.stopped) return;
       // The deferred initial reconcile IS a full sweep; running a second
       // one concurrently would race it file-by-file. Skip this tick and
       // let the re-arm in `finally` pick up after it completes.
@@ -524,14 +576,15 @@ function startSweep(state: WatcherState): void {
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
-      // Re-arm only if we're still the active watcher (stopIngestWatcher
-      // detaches the singleton via `delete g.__minderIngestWatcher`).
-      if (g.__minderIngestWatcher === state) {
-        state.sweepTimer = setTimeout(tick, SWEEP_INTERVAL_MS);
+      // Re-arm only if we're still the active watcher AND not shutting down
+      // (stopIngestWatcher sets `stopped` and detaches the singleton via
+      // `delete g.__minderIngestWatcher`).
+      if (!state.stopped && g.__minderIngestWatcher === state) {
+        state.sweepTimer = setTimeout(() => { void trackWork(state, tick()); }, SWEEP_INTERVAL_MS);
         state.sweepTimer.unref?.();
       }
     }
   };
-  state.sweepTimer = setTimeout(tick, SWEEP_INTERVAL_MS);
+  state.sweepTimer = setTimeout(() => { void trackWork(state, tick()); }, SWEEP_INTERVAL_MS);
   state.sweepTimer.unref?.();
 }

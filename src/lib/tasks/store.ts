@@ -197,6 +197,31 @@ export async function claimPendingTask(): Promise<Task | null> {
 }
 
 /**
+ * Requeue a task that was claimed (`status='running'`) but whose spawn was
+ * abandoned before it started — specifically, the dispatcher stopping mid-tick
+ * during shutdown (A2). Flips it back to `pending` and clears the claim fields
+ * (`started_at`, `session_id`) so the next boot's dispatcher picks it up,
+ * instead of leaving it stranded `running` forever (crash recovery only sweeps
+ * PID files for *spawned* processes — a claimed-but-never-spawned row has no
+ * PID to sweep). Guarded on `status='running'` so it can't resurrect a task
+ * that completed in the meantime. Returns the requeued task, or null when no
+ * matching running row exists.
+ */
+export async function requeueRunningTask(id: number): Promise<Task | null> {
+  const db = await ensureReady();
+  const row = prepTasksCached(
+    db,
+    `UPDATE ops_tasks
+     SET status = 'pending',
+         started_at = NULL,
+         session_id = NULL
+     WHERE id = ? AND status = 'running'
+     RETURNING *`
+  ).get(id) as Task | undefined;
+  return row ?? null;
+}
+
+/**
  * Promote tasks with requires_approval=1 from pending → awaiting_approval.
  * Called on each dispatcher tick before claiming runnable tasks.
  * Returns the number of tasks promoted.

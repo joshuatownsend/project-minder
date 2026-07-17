@@ -19,6 +19,7 @@ vi.mock("../src/lib/tasks/store", () => ({
   recordDecision: vi.fn().mockResolvedValue(undefined),
   getTask: vi.fn().mockResolvedValue(null),
   updateSwarmStatus: vi.fn().mockResolvedValue(undefined),
+  requeueRunningTask: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock the completion hooks so we can assert the dispatcher fires them.
@@ -36,7 +37,7 @@ vi.mock("../src/lib/tasks/spawner", () => ({
 }));
 
 import { initDispatcher, isDispatcherRunning, getDispatcherStats, stopDispatcher } from "../src/lib/tasks/dispatcher";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask } from "../src/lib/tasks/store";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask, requeueRunningTask } from "../src/lib/tasks/store";
 import { onTaskCompleteSyncBoard } from "../src/lib/tasks/boardDelegation";
 import { onTaskCompleteToggleTodo } from "../src/lib/tasks/todoDelegation";
 import { sweepStalePids } from "../src/lib/tasks/spawner";
@@ -186,6 +187,74 @@ describe("dispatcher singleton", () => {
 
     expect(claimPendingTask).not.toHaveBeenCalled(); // no new claims after stop
     expect(runClassicTask).not.toHaveBeenCalled(); // and nothing spawned
+  });
+
+  it("stop() awaits the REAL in-flight tick even when a later interval overlaps it (F8)", async () => {
+    // Gate the first tick so it stays in flight across the next interval fire.
+    let releaseMaterialize!: () => void;
+    let materializeStarted = false;
+    const gate = new Promise<number>((resolve) => {
+      releaseMaterialize = () => resolve(0);
+    });
+    vi.mocked(materializeSchedules).mockImplementation(() => {
+      materializeStarted = true;
+      return gate as never;
+    });
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100); // tick #1 starts, parks on the gate
+    expect(materializeStarted).toBe(true);
+
+    // Fire the 30s interval while tick #1 is still parked — an OVERLAPPING tick.
+    // The wrapper must not overwrite currentTick with a no-op early-return
+    // promise (tick #2 bails on tickInProgress).
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const settle = stopDispatcher();
+    let settled = false;
+    void settle.then(() => {
+      settled = true;
+    });
+
+    // stop() must still be awaiting tick #1 — not the clobbering no-op promise.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // Let tick #1 finish; only now may stop() resolve.
+    releaseMaterialize();
+    await settle;
+    expect(settled).toBe(true);
+  });
+
+  it("requeues a task to pending when shutdown races the claim (F9)", async () => {
+    const { runClassicTask } = await import("../src/lib/tasks/spawner");
+    const claimedTask = {
+      id: 42, title: "raced", description: "", status: "running", priority: 3, quadrant: "do",
+      assigned_skill: null, model: null, execution_mode: "classic", scheduled_for: null,
+      requires_approval: 0, risk_level: "low", dry_run: 0, schedule_id: null, swarm_id: null,
+      approved_at: null, session_id: null, started_at: null, completed_at: null,
+      duration_ms: null, cost_usd: null, output_summary: null, error_message: null,
+      metadata: null, consecutive_failures: 0, created_at: new Date().toISOString(),
+    };
+    // Gate the claim so stop() can flip `stopped` after the row is claimed
+    // (claimPendingTask has already set it 'running') but before we spawn.
+    let releaseClaim!: (t: unknown) => void;
+    const claimGate = new Promise((resolve) => {
+      releaseClaim = resolve;
+    });
+    vi.mocked(claimPendingTask).mockReturnValueOnce(claimGate as never);
+
+    initDispatcher();
+    await vi.advanceTimersByTimeAsync(2_100); // tick reaches the claim await
+    expect(claimPendingTask).toHaveBeenCalledTimes(1);
+
+    const settle = stopDispatcher();
+    releaseClaim(claimedTask); // claim returns; post-claim guard sees `stopped`
+    await settle;
+
+    expect(requeueRunningTask).toHaveBeenCalledWith(42); // requeued, not stranded
+    expect(runClassicTask).not.toHaveBeenCalled(); // and not spawned
   });
 
   it("skips dry_run tasks without spawning", async () => {

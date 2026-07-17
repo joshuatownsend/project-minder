@@ -2,7 +2,7 @@ import "server-only";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus } from "./store";
+import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus, requeueRunningTask } from "./store";
 import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
@@ -136,10 +136,19 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           break;
         }
         if (!task) break;
-        // stop() may have flipped during the claim await — don't spawn; the
-        // just-claimed row is left `running` for the next boot's stale-PID
-        // sweep / reconcile to reclaim (same contract as an abandoned spawn).
-        if (stopped) break;
+        // stop() may have flipped during the claim await. claimPendingTask()
+        // already flipped this row to 'running', and crash recovery only sweeps
+        // PID files (not never-spawned rows) — so requeue it back to 'pending'
+        // rather than abandon it stranded 'running'. Guarded so a store failure
+        // can't throw into the tick; the tasks.db disposer runs after this, so
+        // the write lands before the DB closes.
+        if (stopped) {
+          const claimedId = task.id;
+          await requeueRunningTask(claimedId).catch((err) =>
+            console.error(`[dispatcher] requeue on shutdown failed for task ${claimedId}:`, err)
+          );
+          break;
+        }
 
         if (task.dry_run) {
           console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
@@ -203,8 +212,17 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
     }
   }
 
-  const interval = setInterval(() => { currentTick = tick().catch(console.error); }, TICK_INTERVAL_MS);
-  const initialTimeout = setTimeout(() => { currentTick = tick().catch(console.error); }, 2_000);
+  // Only publish `currentTick` when a tick actually ENTERS. If a prior tick
+  // overran the interval (still in flight) or we're shutting down, skip —
+  // otherwise the overlapping invocation's no-op early-return promise would
+  // clobber `currentTick`, and stop() would await that already-resolved
+  // promise instead of the real in-flight tick.
+  function scheduleTick(): void {
+    if (tickInProgress || stopped) return;
+    currentTick = tick().catch(console.error);
+  }
+  const interval = setInterval(scheduleTick, TICK_INTERVAL_MS);
+  const initialTimeout = setTimeout(scheduleTick, 2_000);
 
   function teardown(): void {
     stopped = true; // synchronous: an in-flight tick sees this at its next guard
