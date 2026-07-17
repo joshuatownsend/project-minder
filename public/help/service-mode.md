@@ -11,7 +11,10 @@ Build the standalone server, then install the autostart service:
 ```bash
 pnpm build && pnpm package:standalone
 pnpm service:install
+pnpm service:start
 ```
+
+(`service:install` only registers the logon task — without `service:start`, the server stays stopped until your next logon.)
 
 Verify the service is registered:
 
@@ -97,7 +100,10 @@ GET /api/health
   "demoMode": false,
   "db": {
     "state": "success",
-    "message": "index.db initialized"
+    "attempts": 1,
+    "quarantineRuns": 0,
+    "failedAt": null,
+    "lastError": null
   },
   "bootstrap": {
     "ran": true,
@@ -124,7 +130,7 @@ GET /api/health
 
 ## Service-Mode Logging
 
-In service mode, structured logs are written to a rotating file at `~/.minder/logs/minder.log` (in addition to console output). Each log line is JSON-formatted with fields: timestamp, level, subsystem, message, and any additional context.
+In service mode, structured logs are written to a rotating file at `~/.minder/logs/minder.log` (in addition to console output). Each log line is JSON-formatted with fields: `ts` (ISO timestamp), `level`, `subsystem`, `msg`, and any additional context.
 
 - **Rotation:** When the log file reaches 5 MB, it rotates (up to 3 backups: `minder.log.1`, `.log.2`, `.log.3`).
 - **Levels:** `info`, `warn`, `error`.
