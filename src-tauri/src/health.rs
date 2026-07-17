@@ -11,9 +11,22 @@
 //!   - Down: no response at all, or a response that isn't Minder's.
 
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::config::{HOST, PROBE_HOST_HEADER};
+
+/// One process-wide `ureq::Agent`, built once and reused across every ~15s poll
+/// (and the startup attach probe). `ureq::Agent` is a cheap `Arc`-backed handle
+/// that pools connections; rebuilding it per probe threw that away each time.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(4))
+            .build()
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServerStatus {
@@ -47,16 +60,13 @@ pub fn port_is_bound(port: u16) -> bool {
 /// transport error or unparseable body degrades to `Down`.
 pub fn probe(port: u16) -> ServerStatus {
     let url = format!("http://{HOST}:{port}/api/health");
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(4))
-        .build();
 
     // Present the server's canonical allowed Host (see PROBE_HOST_HEADER) so the
     // probe passes the DNS-rebind allowlist on any bound port, not just 4100.
     // Both the 2xx and the 503-"degraded" arms carry the same body shape, so
     // normalize to (code, body) and classify once; only a transport failure
     // (connection refused / timeout / DNS) is an outright Down.
-    let (code, body) = match agent.get(&url).set("Host", PROBE_HOST_HEADER).call() {
+    let (code, body) = match agent().get(&url).set("Host", PROBE_HOST_HEADER).call() {
         Ok(resp) => (200u16, resp.into_string().unwrap_or_default()),
         Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
         Err(_) => return ServerStatus::Down,

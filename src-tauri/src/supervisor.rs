@@ -286,8 +286,8 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
         ));
     }
 
-    StdCommand::new(&cfg.node_path)
-        .arg(&server_js)
+    let mut cmd = StdCommand::new(&cfg.node_path);
+    cmd.arg(&server_js)
         .current_dir(dir)
         .env("PORT", cfg.port.to_string())
         .env("HOSTNAME", HOST)
@@ -296,8 +296,21 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
         .env("MINDER_CONTROL_STDIN", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    // On Unix, put the child in its OWN process group (pgid = child pid) so
+    // kill_tree's negative-PID signal (`kill -KILL -<pid>`) reaches the child
+    // AND its descendants — without this the child stays in the tray's group,
+    // so the negative-PID kill would either no-op or, worse, target the tray's
+    // own group. Windows has no equivalent here; it uses `taskkill /F /T` on the
+    // PID (the same platform split noted in src/lib/processManager.ts).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    cmd.spawn()
         .map_err(|e| format!("failed to launch `{}`: {e}", cfg.node_path))
 }
 
@@ -363,8 +376,10 @@ fn kill_tree(pid: u32) {
     }
     #[cfg(not(windows))]
     {
-        // Negative PID targets the process group (best effort on non-Windows,
-        // which isn't the primary target).
+        // The child was spawned as its own process-group leader (see
+        // spawn_child's `process_group(0)`), so `pgid == pid` and the negative
+        // PID targets the child plus every descendant. Fall back to a
+        // direct-PID kill as secondary in case the group signal doesn't land.
         let _ = StdCommand::new("kill")
             .args(["-KILL", &format!("-{pid}")])
             .status();

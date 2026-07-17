@@ -1,6 +1,5 @@
 //! Tray icon, menu, and the health-poll loop that keeps the menu current.
 
-use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -11,6 +10,7 @@ use tauri::{
     tray::TrayIconBuilder,
     App, Manager, Runtime,
 };
+use tauri_plugin_opener::OpenerExt;
 
 use crate::config::TrayConfig;
 use crate::health::{self, ServerStatus};
@@ -88,7 +88,7 @@ fn handle_menu_event<R: Runtime>(
     dashboard_url: &str,
 ) {
     match id {
-        "open_dashboard" => open_with_os(dashboard_url),
+        "open_dashboard" => open_url(app, dashboard_url),
         "restart" => {
             if supervisor.is_attached() {
                 return; // menu item is disabled, but guard anyway
@@ -160,32 +160,19 @@ fn tray_icon() -> Image<'static> {
         .expect("bundled tray icon (icons/32x32.png) must be a valid PNG")
 }
 
-/// Open a URL or a filesystem path with the OS default handler — the browser
-/// for a URL, the file manager for a directory. One shared per-OS dispatch:
-/// Windows `cmd /C start "" <target>` handles both, so a single branch suffices.
-/// No webview is embedded (v1 uses the real browser, per the plan).
-fn open_with_os(target: &str) {
-    #[cfg(windows)]
-    {
-        // The empty "" is the window-title arg `start` consumes, so `target`
-        // isn't mistaken for it.
-        let _ = Command::new("cmd")
-            .args(["/C", "start", "", target])
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("open").arg(target).spawn();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = Command::new("xdg-open").arg(target).spawn();
+/// Open a URL in the user's default browser via the opener plugin — never
+/// routes the target through a shell/command parser (so a `&` or other
+/// metacharacter in the value can't break or inject). No webview is embedded
+/// (v1 uses the real browser, per the plan).
+fn open_url<R: Runtime>(app: &tauri::AppHandle<R>, url: &str) {
+    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+        crate::supervisor::log(&format!("failed to open URL {url}: {e}"));
     }
 }
 
 /// Open `~/.minder/logs/` in the OS file manager (creating it if absent so the
-/// file manager doesn't error on a missing path). Resolves home via Tauri's
-/// path API rather than a hand-rolled env lookup.
+/// file manager doesn't error on a missing path). Home is resolved via Tauri's
+/// path API and the path is opened via the opener plugin — no shell parsing.
 fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
     let home = match app.path().home_dir() {
         Ok(h) => h,
@@ -196,5 +183,7 @@ fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
     };
     let dir = home.join(".minder").join("logs");
     let _ = std::fs::create_dir_all(&dir);
-    open_with_os(&dir.to_string_lossy());
+    if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
+        crate::supervisor::log(&format!("failed to open logs dir {}: {e}", dir.display()));
+    }
 }

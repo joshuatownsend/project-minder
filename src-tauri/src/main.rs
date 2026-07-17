@@ -30,6 +30,9 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
             supervisor::log("second instance launched — ignoring (already running)");
         }))
+        // Opens the dashboard URL / the logs folder without shelling through a
+        // command parser (see tray::open_url / open_logs_dir).
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)
             // wins inside TrayConfig; otherwise the Tauri resource dir (prod).

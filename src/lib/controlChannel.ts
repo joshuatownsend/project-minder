@@ -117,22 +117,48 @@ export function attachControlChannel(stream: Readable, handlers: ControlChannelH
 }
 
 /**
- * Drive the shared graceful-shutdown path, then exit. Guards on
- * {@link isShuttingDown} so a `shutdown` line followed by an EOF (or a signal
- * racing the stdin trigger) doesn't double-run — and {@link shutdown} itself
- * memoizes its in-flight run, so this is belt-and-suspenders. Never throws.
+ * Drive the shared graceful-shutdown path, then exit — but ONLY for the trigger
+ * that actually initiates the shutdown.
+ *
+ * The supervisor writes the `shutdown` line and THEN closes the pipe, so the
+ * EOF trigger reliably races the line trigger: two calls arrive back-to-back.
+ * The first passes the {@link isShuttingDown} gate, runs {@link shutdown}
+ * (whose disposers take time), and exits once they finish. The second must
+ * observe `isShuttingDown()` and return WITHOUT exiting — otherwise its
+ * `process.exit(0)` would kill the process mid-disposer while the first call's
+ * `await shutdown()` is still in flight. `shutdown()` sets its shutting-down
+ * flag synchronously (before its first `await`), so whichever call reaches it
+ * first wins the initiator role deterministically. Never throws.
+ *
+ * Exported for unit testing the double-trigger race.
  */
-async function triggerShutdown(reason: string): Promise<void> {
+export async function triggerShutdown(reason: string): Promise<void> {
+  let lifecycle: typeof import("./lifecycle");
   try {
-    const { shutdown, isShuttingDown } = await import("./lifecycle");
-    if (isShuttingDown()) return;
+    lifecycle = await import("./lifecycle");
+  } catch (err) {
     serviceLog({
-      level: "info",
+      level: "error",
       subsystem: "control",
-      msg: "shutdown requested via stdin control channel",
+      msg: "control-channel: failed to load lifecycle module",
       reason,
+      error: err instanceof Error ? err.message : String(err),
     });
-    await shutdown(reason);
+    return;
+  }
+
+  // Duplicate trigger (the EOF that follows the shutdown line, or a signal
+  // racing us) — the initiator owns the exit, so return without exiting.
+  if (lifecycle.isShuttingDown()) return;
+
+  serviceLog({
+    level: "info",
+    subsystem: "control",
+    msg: "shutdown requested via stdin control channel",
+    reason,
+  });
+  try {
+    await lifecycle.shutdown(reason);
   } catch (err) {
     serviceLog({
       level: "error",
@@ -141,10 +167,10 @@ async function triggerShutdown(reason: string): Promise<void> {
       reason,
       error: err instanceof Error ? err.message : String(err),
     });
-  } finally {
-    // Match the OS signal handlers' contract: exit 0 once disposers have run.
-    process.exit(0);
   }
+  // We initiated this shutdown — exit 0 now that the disposers have run
+  // (matches the OS signal handlers' contract).
+  process.exit(0);
 }
 
 /**

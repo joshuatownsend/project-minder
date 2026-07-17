@@ -3,6 +3,7 @@ import { PassThrough } from "stream";
 import {
   attachControlChannel,
   shouldEnableControlChannel,
+  triggerShutdown,
   CONTROL_SHUTDOWN_COMMAND,
   MAX_LINE_BYTES,
   _resetControlChannelForTesting,
@@ -146,6 +147,40 @@ describe("attachControlChannel parsing", () => {
 
     expect(onShutdownRequest).toHaveBeenCalledTimes(1);
     expect(onShutdownRequest).toHaveBeenCalledWith("control-stdin:eof");
+  });
+});
+
+describe("triggerShutdown double-trigger exit race", () => {
+  it("only the initiating trigger exits — after disposers finish; the duplicate returns", async () => {
+    const lifecycle = await import("@/lib/lifecycle");
+    lifecycle._resetLifecycleForTesting();
+
+    const order: string[] = [];
+    lifecycle.onShutdown("slow", async () => {
+      // A disposer that takes real time — the duplicate trigger must NOT exit
+      // the process while this is still running.
+      await new Promise((r) => setTimeout(r, 25));
+      order.push("disposer-done");
+    });
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      order.push(`exit:${code}`);
+      // Don't actually terminate the test runner.
+      return undefined as never;
+    }) as never);
+
+    // The exact sequence the supervisor produces: write the shutdown line,
+    // then close the pipe (EOF) — two triggers, back to back.
+    const line = triggerShutdown("control-stdin:shutdown");
+    const eof = triggerShutdown("control-stdin:eof");
+    await Promise.all([line, eof]);
+
+    // The disposer completed BEFORE the single exit; the duplicate never exited.
+    expect(order).toEqual(["disposer-done", "exit:0"]);
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+
+    exitSpy.mockRestore();
+    lifecycle._resetLifecycleForTesting();
   });
 });
 
