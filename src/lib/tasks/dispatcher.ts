@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import { claimPendingTask, materializeSchedules, promoteApprovalTasks, completeTask, recordDecision, getTask, updateSwarmStatus, requeueRunningTask, failTask, listRunningTasks } from "./store";
-import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, getLiveDispatchedTaskIds, type SpawnFn } from "./spawner";
+import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, getLiveDispatchSnapshot, type SpawnFn } from "./spawner";
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
@@ -82,12 +82,20 @@ export async function reconcileInterruptedTasks(): Promise<void> {
     const running = await listRunningTasks();
     if (running.length === 0) return;
 
-    const live = getLiveDispatchedTaskIds();
+    const { taskIds: liveTaskIds, hasUnmappedLive } = getLiveDispatchSnapshot();
     const affectedSwarms = new Set<number>();
 
     for (const t of running) {
-      if (live.has(t.id)) {
+      if (liveTaskIds.has(t.id)) {
         console.log(`[dispatcher] reconcile: task ${t.id} still has a live child — leaving 'running'`);
+        continue;
+      }
+      if (hasUnmappedLive) {
+        // Live legacy/corrupt PID markers exist that we can't map to a task —
+        // one of them may be THIS row's process, so we can't prove it's dead.
+        // Defer: leave it 'running'. A later boot resolves it once those
+        // processes exit and sweepStalePids unlinks their markers.
+        console.log(`[dispatcher] reconcile: task ${t.id} deferred — unmapped live PID markers present (legacy/corrupt), liveness unprovable`);
         continue;
       }
       const updated = await failTask(t.id, {

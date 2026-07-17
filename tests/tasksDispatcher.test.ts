@@ -36,14 +36,14 @@ vi.mock("../src/lib/tasks/boardDelegation", () => ({
 vi.mock("../src/lib/tasks/spawner", () => ({
   sweepStalePids: vi.fn(),
   runClassicTask: vi.fn().mockResolvedValue({ taskId: 1, status: "done", durationMs: 100 }),
-  getLiveDispatchedTaskIds: vi.fn(() => new Set<number>()),
+  getLiveDispatchSnapshot: vi.fn(() => ({ taskIds: new Set<number>(), hasUnmappedLive: false })),
 }));
 
 import { initDispatcher, isDispatcherRunning, getDispatcherStats, stopDispatcher, reconcileInterruptedTasks } from "../src/lib/tasks/dispatcher";
 import { claimPendingTask, materializeSchedules, promoteApprovalTasks, getTask, requeueRunningTask, failTask, listRunningTasks, updateSwarmStatus } from "../src/lib/tasks/store";
 import { onTaskCompleteSyncBoard } from "../src/lib/tasks/boardDelegation";
 import { onTaskCompleteToggleTodo } from "../src/lib/tasks/todoDelegation";
-import { sweepStalePids, getLiveDispatchedTaskIds } from "../src/lib/tasks/spawner";
+import { sweepStalePids, getLiveDispatchSnapshot } from "../src/lib/tasks/spawner";
 
 /** Drain the microtask queue enough times for the classic-completion promise
  *  chain (runClassicTask → getTask → afterComplete → hooks) to settle. */
@@ -320,7 +320,7 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listRunningTasks).mockResolvedValue([]);
-    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>());
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>(), hasUnmappedLive: false });
     vi.mocked(failTask).mockResolvedValue({ id: 0, status: "failed" } as never);
   });
 
@@ -340,7 +340,7 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
     const alive = runningRow(11);
     vi.mocked(listRunningTasks).mockResolvedValue([gone, alive] as never);
     // Only task 11 still has a live dispatched child.
-    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>([11]));
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>([11]), hasUnmappedLive: false });
 
     await reconcileInterruptedTasks();
 
@@ -354,7 +354,7 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
 
   it("refreshes swarm status for an interrupted swarm member", async () => {
     vi.mocked(listRunningTasks).mockResolvedValue([runningRow(20, 99)] as never);
-    vi.mocked(getLiveDispatchedTaskIds).mockReturnValue(new Set<number>());
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>(), hasUnmappedLive: false });
 
     await reconcileInterruptedTasks();
 
@@ -365,12 +365,38 @@ describe("reconcileInterruptedTasks (F12 boot-time running-row reconcile)", () =
   it("no-ops when there are no running rows", async () => {
     vi.mocked(listRunningTasks).mockResolvedValue([]);
     await reconcileInterruptedTasks();
-    expect(getLiveDispatchedTaskIds).not.toHaveBeenCalled();
+    expect(getLiveDispatchSnapshot).not.toHaveBeenCalled();
     expect(failTask).not.toHaveBeenCalled();
   });
 
   it("never throws even if the store read fails", async () => {
     vi.mocked(listRunningTasks).mockRejectedValue(new Error("db down"));
     await expect(reconcileInterruptedTasks()).resolves.toBeUndefined();
+  });
+
+  it("defers (does NOT fail) unmatched rows while live legacy/corrupt markers exist (F13)", async () => {
+    // A running row we can't match to a live NEW-format marker, but a live
+    // legacy/unknown marker is present — its task id is unknowable, so it might
+    // be this row's process. Must not fail it.
+    vi.mocked(listRunningTasks).mockResolvedValue([runningRow(30), runningRow(31)] as never);
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>(), hasUnmappedLive: true });
+
+    await reconcileInterruptedTasks();
+
+    expect(failTask).not.toHaveBeenCalled();
+    expect(updateSwarmStatus).not.toHaveBeenCalled();
+  });
+
+  it("still fails an unmatched row when a matched live marker coexists but no unmapped markers (F13)", async () => {
+    // task 40 has a live NEW marker (left); task 41 has none and there are no
+    // unmapped live markers → provably dead → failed.
+    vi.mocked(listRunningTasks).mockResolvedValue([runningRow(40), runningRow(41)] as never);
+    vi.mocked(getLiveDispatchSnapshot).mockReturnValue({ taskIds: new Set<number>([40]), hasUnmappedLive: false });
+
+    await reconcileInterruptedTasks();
+
+    expect(failTask).toHaveBeenCalledTimes(1);
+    expect(failTask).toHaveBeenCalledWith(41, expect.anything());
+    expect(failTask).not.toHaveBeenCalledWith(40, expect.anything());
   });
 });
