@@ -37,6 +37,17 @@ export function isDispatcherRunning(): boolean {
 }
 
 /**
+ * Stop the dispatcher singleton if running (A2 graceful shutdown): clears its
+ * tick interval + pending initial-tick timeout and drops the global handle.
+ * Idempotent — a no-op when the dispatcher isn't running. In-flight task
+ * spawns are not force-killed here; they detach and are reconciled/swept on
+ * the next boot.
+ */
+export function stopDispatcher(): void {
+  g.__minderDispatcher?.dispose();
+}
+
+/**
  * Initialize the dispatcher singleton if not already running.
  * Safe to call multiple times — no-ops if already initialized.
  */

@@ -31,8 +31,44 @@
  */
 
 import type { MinderConfig } from "@/lib/types";
+import { serviceLog, initServiceLog } from "@/lib/serviceLog";
 
-const g = globalThis as unknown as { __minderBootstrapped?: boolean };
+/** Recorded so `GET /api/health` can report what the boot sequence started. */
+interface BootstrapStatus {
+  ran: boolean;
+  subsystems: string[];
+}
+
+const g = globalThis as unknown as {
+  __minderBootstrapped?: boolean;
+  __minderBootstrapStatus?: BootstrapStatus;
+};
+
+/** Structured bootstrap log line — tees to console and (in service mode) to
+ *  `~/.minder/logs/minder.log` via {@link serviceLog}. */
+function blog(msg: string, extra?: Record<string, unknown>): void {
+  serviceLog({ level: "info", subsystem: "bootstrap", msg, ...extra });
+}
+function bwarn(msg: string, err?: unknown): void {
+  serviceLog({
+    level: "warn",
+    subsystem: "bootstrap",
+    msg,
+    error: err instanceof Error ? err.message : err != null ? String(err) : undefined,
+  });
+}
+
+/** Note a subsystem that successfully started, for the /api/health snapshot. */
+function recordSubsystem(name: string): void {
+  g.__minderBootstrapStatus?.subsystems.push(name);
+}
+
+/** Snapshot of whether the boot sequence ran and which subsystems it started.
+ *  Read by `GET /api/health`; safe to call before bootstrap (reports
+ *  `{ ran: false, subsystems: [] }`). */
+export function getBootstrapStatus(): BootstrapStatus {
+  return g.__minderBootstrapStatus ?? { ran: false, subsystems: [] };
+}
 
 /** Pure gating decision — exported for unit testing. Takes an explicit env
  *  object (defaulting to `process.env`) so tests don't need to mutate the
@@ -46,6 +82,7 @@ export function shouldBootstrap(env: NodeJS.ProcessEnv = process.env): boolean {
 /** Test-only reset hook — mirrors `claudeStatus/cache.ts`'s `_resetForTesting`. */
 export function _resetBootstrapForTesting(): void {
   delete g.__minderBootstrapped;
+  delete g.__minderBootstrapStatus;
 }
 
 /**
@@ -62,11 +99,19 @@ export async function runBootstrap(): Promise<void> {
 
   const { demoMode } = await import("@/lib/demo/demoMode");
   if (await demoMode()) {
-    console.log("[bootstrap] skipped: demo mode is active");
+    // demoMode check runs before initServiceLog so a demo install never
+    // creates ~/.minder/logs — this line only tees to console.
+    blog("skipped: demo mode is active");
     return;
   }
 
-  console.log("[bootstrap] starting service-mode boot sequence…");
+  g.__minderBootstrapStatus = { ran: true, subsystems: [] };
+
+  // Turn on file logging for the rest of boot + the shutdown lifecycle. Guarded
+  // out of the vitest runner so unit tests never spray files into ~/.minder.
+  if (!process.env.VITEST) initServiceLog();
+
+  blog("starting service-mode boot sequence…");
 
   await bootDb();
   const projects = await bootScan();
@@ -76,18 +121,75 @@ export async function runBootstrap(): Promise<void> {
   await bootMcpHealthCache();
   await bootClaudeStatus();
 
-  console.log("[bootstrap] boot sequence complete");
+  await registerServiceDisposers();
+  // Real signal handlers are only meaningful in a running server; skip them
+  // under vitest so the test runner's own SIGINT handling stays intact.
+  if (!process.env.VITEST) {
+    const { installSignalHandlers } = await import("@/lib/lifecycle");
+    installSignalHandlers();
+  }
+
+  blog("boot sequence complete", { subsystems: getBootstrapStatus().subsystems });
+}
+
+/**
+ * Register the graceful-shutdown disposers (A2). Registration ORDER matters:
+ * the registry disposes LIFO, so registering the SQLite close FIRST makes it
+ * dispose LAST — after every watcher/timer/child that might still write
+ * through the DB has been torn down. Each disposer lazily grabs its already-
+ * loaded singleton; `onShutdown` is idempotent by name, so a dev/HMR re-run
+ * replaces rather than duplicates.
+ */
+async function registerServiceDisposers(): Promise<void> {
+  try {
+    const { onShutdown } = await import("@/lib/lifecycle");
+
+    // Registered first → disposed last.
+    onShutdown("sqlite", async () => {
+      const { checkpointAndCloseDb } = await import("@/lib/db/connection");
+      checkpointAndCloseDb();
+    });
+    onShutdown("dispatcher", async () => {
+      const { isDispatcherRunning, stopDispatcher } = await import("@/lib/tasks/dispatcher");
+      if (isDispatcherRunning()) stopDispatcher();
+    });
+    onShutdown("gitStatusCache", async () => {
+      const { gitStatusCache } = await import("@/lib/gitStatusCache");
+      gitStatusCache.dispose();
+    });
+    onShutdown("githubActivityCache", async () => {
+      const { githubActivityCache } = await import("@/lib/githubActivityCache");
+      githubActivityCache.dispose();
+    });
+    onShutdown("manualStepsWatcher", async () => {
+      const { manualStepsWatcher } = await import("@/lib/manualStepsWatcher");
+      manualStepsWatcher.destroy();
+    });
+    // Registered last → disposed first.
+    onShutdown("mcpConfigWatcher", async () => {
+      const { mcpConfigWatcher } = await import("@/lib/mcpConfigWatcher");
+      mcpConfigWatcher.dispose();
+    });
+
+    recordSubsystem("lifecycle");
+    blog("lifecycle: registered shutdown disposers");
+  } catch (err) {
+    bwarn("lifecycle: failed to register disposers", err);
+  }
 }
 
 async function bootDb(): Promise<void> {
   try {
     const { probeInitStatus } = await import("@/lib/data");
     const status = await probeInitStatus();
-    console.log(
-      `[bootstrap] db: state=${status.state} attempts=${status.attempts} quarantineRuns=${status.quarantineRuns}`
-    );
+    blog("db: probed", {
+      state: status.state,
+      attempts: status.attempts,
+      quarantineRuns: status.quarantineRuns,
+    });
+    recordSubsystem("db");
   } catch (err) {
-    console.warn("[bootstrap] db: probe failed —", err);
+    bwarn("db: probe failed", err);
   }
 }
 
@@ -104,10 +206,11 @@ async function bootScan(): Promise<ScannedProjects> {
     const { setCachedScan } = await import("@/lib/cache");
     const result = await scanAllProjects();
     setCachedScan(result);
-    console.log(`[bootstrap] scan: cached ${result.projects.length} projects`);
+    blog("scan: cached projects", { count: result.projects.length });
+    recordSubsystem("scan");
     return { projects: result.projects, flags: config.featureFlags };
   } catch (err) {
-    console.warn("[bootstrap] scan: failed —", err);
+    bwarn("scan: failed", err);
     return { projects: [], flags: config.featureFlags };
   }
 }
@@ -117,11 +220,12 @@ async function bootProjectCaches({ projects, flags }: ScannedProjects): Promise<
   try {
     const { enqueueProjectCaches } = await import("@/lib/projectCacheEnqueue");
     enqueueProjectCaches(projects, flags);
-    console.log(
-      `[bootstrap] caches: enqueued git-status/efficiency-grade/github-activity for ${projects.length} projects`
-    );
+    blog("caches: enqueued git-status/efficiency-grade/github-activity", {
+      count: projects.length,
+    });
+    recordSubsystem("projectCaches");
   } catch (err) {
-    console.warn("[bootstrap] caches: enqueue failed —", err);
+    bwarn("caches: enqueue failed", err);
   }
 }
 
@@ -129,9 +233,10 @@ async function bootManualStepsWatcher(): Promise<void> {
   try {
     const { manualStepsWatcher } = await import("@/lib/manualStepsWatcher");
     await manualStepsWatcher.init();
-    console.log("[bootstrap] manualStepsWatcher: started");
+    blog("manualStepsWatcher: started");
+    recordSubsystem("manualStepsWatcher");
   } catch (err) {
-    console.warn("[bootstrap] manualStepsWatcher: failed to start —", err);
+    bwarn("manualStepsWatcher: failed to start", err);
   }
 }
 
@@ -148,14 +253,15 @@ async function bootMcpConfigWatcher(): Promise<void> {
     const { getFlag } = await import("@/lib/featureFlags");
     const config = await readConfig();
     if (!getFlag(config.featureFlags, "mcpHealth")) {
-      console.log("[bootstrap] mcpConfigWatcher: skipped (mcpHealth flag off)");
+      blog("mcpConfigWatcher: skipped (mcpHealth flag off)");
       return;
     }
     const { mcpConfigWatcher } = await import("@/lib/mcpConfigWatcher");
     mcpConfigWatcher.ensureStarted();
-    console.log("[bootstrap] mcpConfigWatcher: started");
+    blog("mcpConfigWatcher: started");
+    recordSubsystem("mcpConfigWatcher");
   } catch (err) {
-    console.warn("[bootstrap] mcpConfigWatcher: failed to start —", err);
+    bwarn("mcpConfigWatcher: failed to start", err);
   }
 }
 
@@ -165,7 +271,7 @@ async function bootMcpHealthCache(): Promise<void> {
     const { getFlag } = await import("@/lib/featureFlags");
     const config = await readConfig();
     if (!getFlag(config.featureFlags, "mcpHealth")) {
-      console.log("[bootstrap] mcpHealthCache: skipped (mcpHealth flag off)");
+      blog("mcpHealthCache: skipped (mcpHealth flag off)");
       return;
     }
     // Mirrors GET /api/mcp-health's enqueue exactly (same shared helper), so
@@ -177,9 +283,10 @@ async function bootMcpHealthCache(): Promise<void> {
     // would no-op against an already-warm cache).
     const { enqueueMcpHealth } = await import("@/lib/mcpHealthEnqueue");
     const configured = await enqueueMcpHealth(config.featureFlags);
-    console.log(`[bootstrap] mcpHealthCache: enqueued ${configured.length} servers`);
+    blog("mcpHealthCache: enqueued servers", { count: configured.length });
+    recordSubsystem("mcpHealthCache");
   } catch (err) {
-    console.warn("[bootstrap] mcpHealthCache: failed to enqueue —", err);
+    bwarn("mcpHealthCache: failed to enqueue", err);
   }
 }
 
@@ -189,7 +296,7 @@ async function bootClaudeStatus(): Promise<void> {
     const { getFlag } = await import("@/lib/featureFlags");
     const config = await readConfig();
     if (!getFlag(config.featureFlags, "claudeStatusAlerts")) {
-      console.log("[bootstrap] claudeStatus: skipped (claudeStatusAlerts flag off)");
+      blog("claudeStatus: skipped (claudeStatusAlerts flag off)");
       return;
     }
     // `getCurrentStatus()` is the same call GET /api/claude-status makes:
@@ -201,13 +308,14 @@ async function bootClaudeStatus(): Promise<void> {
     const { getCurrentStatus } = await import("@/lib/claudeStatus/cache");
     void getCurrentStatus()
       .then((snapshot) => {
-        console.log(`[bootstrap] claudeStatus: primed (source=${snapshot.source})`);
+        blog("claudeStatus: primed", { source: snapshot.source });
       })
       .catch((err) => {
-        console.warn("[bootstrap] claudeStatus: prime failed —", err);
+        bwarn("claudeStatus: prime failed", err);
       });
+    recordSubsystem("claudeStatus");
   } catch (err) {
-    console.warn("[bootstrap] claudeStatus: failed to start —", err);
+    bwarn("claudeStatus: failed to start", err);
   }
 }
 
