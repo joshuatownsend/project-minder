@@ -15,6 +15,13 @@ vi.mock("@/lib/scanner/git", () => ({
   }),
 }));
 
+// Keep parseWslUncPath real (pure/sync) but stub checkWslRoot so the WSL
+// sentinel test can simulate a stopped distro without spawning wsl.exe.
+vi.mock("@/lib/wsl", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/wsl")>();
+  return { ...actual, checkWslRoot: vi.fn(actual.checkWslRoot) };
+});
+
 beforeEach(() => {
   deferredResults.length = 0;
   vi.resetModules();
@@ -42,6 +49,39 @@ describe("gitStatusCache.set() — persists the unknown flag (B5 / PR #251)", ()
     // A genuine clean check leaves unknown falsy — distinguishable from a failure.
     gitStatusCache.set("clean-repo", false, 0);
     expect(gitStatusCache.get("clean-repo")?.unknown).toBeFalsy();
+  });
+});
+
+describe("gitStatusCache stopped-WSL sentinel (never-wake)", () => {
+  it("caches wslBlocked without spawning git, and invalidateWslSentinels purges it", async () => {
+    const wsl = await import("@/lib/wsl");
+    vi.mocked(wsl.checkWslRoot).mockResolvedValueOnce({
+      ok: false,
+      distro: "Ubuntu-26.04",
+      reason: "wsl-stopped",
+    });
+    const { gitStatusCache } = await import("@/lib/gitStatusCache");
+    gitStatusCache.dispose();
+
+    gitStatusCache.enqueue([
+      {
+        slug: "wsl-proj",
+        path: "\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\printing-press\\library\\bamcli",
+      },
+    ]);
+    await flushAsync();
+    await flushAsync();
+
+    const s = gitStatusCache.get("wsl-proj");
+    expect(s?.unknown).toBe(true);
+    expect(s?.wslBlocked).toBe(true);
+    // The guard fired before the git spawn — no subprocess was started.
+    expect(deferredResults.length).toBe(0);
+
+    // A user-initiated rescan purges the sentinel so the project is
+    // re-probed immediately once the distro is Running again.
+    gitStatusCache.invalidateWslSentinels();
+    expect(gitStatusCache.get("wsl-proj")).toBeNull();
   });
 });
 
