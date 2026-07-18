@@ -30,9 +30,10 @@ import { parseSummary } from "./parser";
 import { diffIncidents } from "./changes";
 import { emptySnapshot } from "./types";
 import type { ClaudeStatusChange, ClaudeStatusSnapshot } from "./types";
+import { resolveStateDir } from "../serverRoot";
 
 const SUMMARY_URL = "https://status.claude.com/api/v2/summary.json";
-const CACHE_DIR = path.join(process.cwd(), ".cache");
+const CACHE_DIR = path.join(resolveStateDir(), ".cache");
 const CACHE_FILE = path.join(CACHE_DIR, "claude-status.json");
 
 const FRESH_TTL_MS = 30_000;            // memory considered fresh under 30s

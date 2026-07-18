@@ -39,7 +39,15 @@ fn main() {
             let resource_dir = app.path().resource_dir().ok();
             let payload_dir = cfg.payload_dir(resource_dir.as_ref());
 
-            let supervisor: Arc<Supervisor> = Supervisor::start(cfg.clone(), payload_dir);
+            // Writable-state dir for the sidecar's `.minder.json` (+ caches):
+            // `~/.minder` via Tauri's path resolver, where logs + index.db
+            // already live. The packaged server chdirs into its own (read-only /
+            // versioned) bundle, so without this its state would land there —
+            // the tray passes MINDER_STATE_DIR to point it at a stable location.
+            let state_dir = app.path().home_dir().ok().map(|h| h.join(".minder"));
+
+            let supervisor: Arc<Supervisor> =
+                Supervisor::start(cfg.clone(), payload_dir, state_dir);
 
             tray::init(app, &cfg, supervisor)?;
             Ok(())

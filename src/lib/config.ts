@@ -3,8 +3,13 @@ import path from "path";
 import { MinderConfig, ProjectStatus } from "./types";
 import { getDefaultDevRoot } from "./platform";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
+import { resolveStateDir } from "./serverRoot";
 
-const CONFIG_PATH = path.join(process.cwd(), ".minder.json");
+// User prefs are WRITABLE state — resolve under the state dir (which the tray
+// points at ~/.minder for packaged sidecars), NOT process.cwd(): a packaged
+// server chdirs into its own read-only/versioned bundle, so cwd there would
+// bury (or fail to write) `.minder.json`. Repo runs keep the repo-root path.
+const CONFIG_PATH = path.join(resolveStateDir(), ".minder.json");
 
 export const DEFAULT_DEV_ROOT = getDefaultDevRoot();
 

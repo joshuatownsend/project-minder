@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { resolveStateDir } from "./serverRoot";
 
 export interface CachedFileStats {
   filePath: string;
@@ -20,7 +21,7 @@ interface DiskCache {
   entries: Record<string, CachedFileStats>; // keyed by filePath
 }
 
-const CACHE_DIR = path.join(process.cwd(), ".cache");
+const CACHE_DIR = path.join(resolveStateDir(), ".cache");
 const CACHE_FILE = path.join(CACHE_DIR, "claude-stats.json");
 
 export async function readDiskCache(): Promise<Map<string, CachedFileStats>> {

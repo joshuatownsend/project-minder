@@ -85,7 +85,11 @@ pub struct Supervisor {
 impl Supervisor {
     /// Decide the mode synchronously (so the tray can build its menu with the
     /// right enabled/disabled state), then spawn the supervision thread.
-    pub fn start(cfg: TrayConfig, payload_dir: Option<PathBuf>) -> Arc<Supervisor> {
+    pub fn start(
+        cfg: TrayConfig,
+        payload_dir: Option<PathBuf>,
+        state_dir: Option<PathBuf>,
+    ) -> Arc<Supervisor> {
         let attach_note = Arc::new(Mutex::new(None));
         let mode = decide_mode(&cfg, &attach_note);
         let attached = Arc::new(AtomicBool::new(mode == Mode::Attach));
@@ -95,7 +99,17 @@ impl Supervisor {
         let note_thread = attach_note.clone();
         thread::Builder::new()
             .name("minder-supervisor".into())
-            .spawn(move || run_supervisor(cfg, payload_dir, mode, rx, attached_thread, note_thread))
+            .spawn(move || {
+                run_supervisor(
+                    cfg,
+                    payload_dir,
+                    state_dir,
+                    mode,
+                    rx,
+                    attached_thread,
+                    note_thread,
+                )
+            })
             .expect("failed to spawn supervisor thread");
 
         Arc::new(Supervisor {
@@ -187,6 +201,7 @@ enum ExitReason {
 fn run_supervisor(
     cfg: TrayConfig,
     payload_dir: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
     mode: Mode,
     rx: Receiver<Command>,
     attached: Arc<AtomicBool>,
@@ -203,7 +218,7 @@ fn run_supervisor(
     let mut backoff = BASE_BACKOFF;
     loop {
         let started = Instant::now();
-        let mut child = match spawn_child(&cfg, payload_dir.as_ref()) {
+        let mut child = match spawn_child(&cfg, payload_dir.as_ref(), state_dir.as_ref()) {
             Ok(c) => c,
             Err(e) => {
                 log(&format!("spawn failed: {e}; retrying in {backoff:?}"));
@@ -364,7 +379,11 @@ fn supervise(child: &mut Child, rx: &Receiver<Command>) -> ExitReason {
     }
 }
 
-fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child, String> {
+fn spawn_child(
+    cfg: &TrayConfig,
+    payload_dir: Option<&PathBuf>,
+    state_dir: Option<&PathBuf>,
+) -> Result<Child, String> {
     let dir = payload_dir.ok_or_else(|| {
         "no payload directory: set MINDER_SERVER_DIST (dev) or bundle minder-server as a resource"
             .to_string()
@@ -406,6 +425,30 @@ fn spawn_child(cfg: &TrayConfig, payload_dir: Option<&PathBuf>) -> Result<Child,
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Point the sidecar's writable state (`.minder.json` + caches) at a stable,
+    // user-writable dir that survives upgrades — NOT the bundle the server
+    // chdirs into. Forward an explicit MINDER_STATE_DIR (operator override) if
+    // one is already in our env; otherwise default it to ~/.minder. Create the
+    // dir first: writeFileAtomic on the TS side does not mkdir its parent.
+    match std::env::var("MINDER_STATE_DIR") {
+        Ok(existing) if !existing.trim().is_empty() => {
+            log(&format!(
+                "sidecar state dir: inherited MINDER_STATE_DIR={existing}"
+            ));
+        }
+        _ => match state_dir {
+            Some(sd) => {
+                let _ = std::fs::create_dir_all(sd);
+                cmd.env("MINDER_STATE_DIR", sd);
+                log(&format!("sidecar state dir: {}", sd.display()));
+            }
+            None => log(
+                "warning: no state dir resolved (home_dir unavailable) — sidecar \
+                 state would fall back to its cwd",
+            ),
+        },
+    }
 
     // On Unix, put the child in its OWN process group (pgid = child pid) so
     // kill_tree's negative-PID signal (`kill -KILL -<pid>`) reaches the child
