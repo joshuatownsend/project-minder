@@ -61,7 +61,7 @@ let platformSpy: { restore: () => void } | null = null;
 
 function setPlatform(platform: NodeJS.Platform) {
   const original = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", { value: platform });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
   platformSpy = { restore: () => Object.defineProperty(process, "platform", original) };
 }
 
@@ -126,6 +126,9 @@ describe("parseWslUncPath", () => {
     ["\\\\wsl$\\Ubuntu\\home", "Ubuntu"],
     ["//wsl.localhost/Ubuntu-26.04/home/josh/dev", "Ubuntu-26.04"],
     ["\\\\WSL.LOCALHOST\\Debian", "Debian"],
+    // Registered distro names can contain spaces — under-matching here would
+    // let the scanner treat the root as non-WSL and wake the VM.
+    ["\\\\wsl.localhost\\My Custom Distro\\home\\josh\\dev", "My Custom Distro"],
   ])("extracts the distro from %s", (p, distro) => {
     expect(parseWslUncPath(p)).toEqual({ distro });
   });

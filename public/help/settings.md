@@ -25,6 +25,7 @@ The directories Project Minder scans for projects. Each immediate subdirectory o
 - **Multiple roots** — add as many as you like; every root is scanned on each cycle. Reorder with the arrows: the **first entry is the primary root**, which determines the default dev-server base path and the header label.
 - **Remove** — the trash icon removes a root (at least one must remain). Projects under a removed root disappear from the dashboard on the next scan; nothing on disk is touched.
 - **Save & Rescan** — persists the list to `.minder.json` (`devRoots`) and immediately triggers a full rescan, so new roots appear without waiting out the 5-minute scan cache.
+- **Detect WSL** — enumerates WSL distros and offers each running distro's `~/dev` directories as one-click scan-root additions. See the WSL Integration help page for details (never-wake semantics, git over UNC).
 
 The same editor also lives on the **Config** page (`/config`, Settings tab) alongside scan-behavior tuning like batch size.
 

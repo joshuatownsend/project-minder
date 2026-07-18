@@ -2,6 +2,19 @@ import { promises as fs } from "fs";
 import path from "path";
 import { MinderConfig, ProjectData, PortConflict, ScanResult, SkippedRoot } from "../types";
 import { checkWslRoot } from "../wsl";
+import { normalizePathKey } from "../platform";
+
+// Last successful per-root scan results, keyed by normalized root path.
+// Lives on globalThis (mirroring the scan cache) so dev-server HMR reloads
+// don't lose the carry-forward state a skipped WSL root depends on.
+const gScanner = globalThis as unknown as {
+  __minderLastGoodRootScans?: Map<string, ProjectData[]>;
+};
+
+function getLastGoodRootScans(): Map<string, ProjectData[]> {
+  gScanner.__minderLastGoodRootScans ??= new Map();
+  return gScanner.__minderLastGoodRootScans;
+}
 import { readConfig, getDevRoots } from "../config";
 import { getFlag } from "../featureFlags";
 import { demoModeEnv } from "../demo/demoMode";
@@ -335,12 +348,29 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const seenSlugs = new Set<string>();
   const skippedRoots: SkippedRoot[] = [];
 
+  // Skipping a root must not DROP its projects: the fresh result overwrites the
+  // scan cache, so without a carry-forward a stopped WSL distro would erase its
+  // projects from the dashboard (and break their detail routes) until the next
+  // successful scan. Remember each root's last successful scan and reuse it.
+  const lastGood = getLastGoodRootScans();
+
+  const carryForwardRoot = (devRoot: string): void => {
+    const carried = lastGood.get(normalizePathKey(devRoot));
+    if (!carried) return; // never scanned successfully (e.g. stopped since boot)
+    for (const project of carried) {
+      if (seenSlugs.has(project.slug)) continue;
+      seenSlugs.add(project.slug);
+      allProjects.push(project);
+    }
+  };
+
   for (const devRoot of devRoots) {
     // WSL roots must be state-checked BEFORE any fs call: reading a
     // \\wsl.localhost\ path belonging to a stopped distro auto-starts its VM.
     const wslCheck = await checkWslRoot(devRoot);
     if (wslCheck && !wslCheck.ok) {
       skippedRoots.push({ root: devRoot, reason: wslCheck.reason, distro: wslCheck.distro });
+      carryForwardRoot(devRoot);
       continue;
     }
 
@@ -351,6 +381,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
     } catch {
       // Root doesn't exist or isn't readable — skip it
       skippedRoots.push({ root: devRoot, reason: "unreadable", distro: wslCheck?.distro });
+      carryForwardRoot(devRoot);
       continue;
     }
 
@@ -388,6 +419,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
       await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
     }
 
+    lastGood.set(normalizePathKey(devRoot), rootProjects);
     allProjects.push(...rootProjects);
   }
 

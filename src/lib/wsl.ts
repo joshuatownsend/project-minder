@@ -42,10 +42,12 @@ export type WslRootCheck =
 
 /**
  * Matches both UNC hosts WSL exposes (`\\wsl.localhost\...`, legacy `\\wsl$\...`),
- * tolerating forward slashes since users may paste either form.
- * Distro names: word chars, dots, dashes (e.g. "Ubuntu-26.04").
+ * tolerating forward slashes since users may paste either form. The distro
+ * segment is everything up to the next separator — registered distro names can
+ * contain spaces (parseWslDistroList supports them), and under-matching here
+ * would make the scanner treat the root as non-WSL and touch it, waking the VM.
  */
-const WSL_UNC_RE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([\w.-]+)(?:[\\/]|$)/i;
+const WSL_UNC_RE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([^\\/]+?)\s*(?:[\\/]|$)/i;
 
 /** Parse a UNC path into its WSL distro name, or null for non-WSL paths. */
 export function parseWslUncPath(p: string): { distro: string } | null {

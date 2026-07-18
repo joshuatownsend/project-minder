@@ -4,13 +4,15 @@ Project Minder can scan projects that live inside a WSL (Windows Subsystem for L
 
 ## Adding a WSL scan root
 
-Add the distro's dev directory as a scan root (Settings → Scan Roots), e.g.:
+The easy path: **Settings → Scan Roots → Detect WSL**. Minder enumerates your distros and, for running ones, finds `~/dev` directories you can add as scan roots with one click (then **Save & Rescan**). Stopped distros are listed with a hint — start the distro (open a WSL terminal) and detect again; Minder never starts one itself.
+
+You can also type the path manually, e.g.:
 
 ```
 \\wsl.localhost\Ubuntu-26.04\home\<user>\dev
 ```
 
-The legacy `\\wsl$\<distro>\...` form works too. Each immediate subdirectory becomes a dashboard project, exactly like a native root.
+The legacy `\\wsl$\<distro>\...` form works too. Each immediate subdirectory becomes a dashboard project, exactly like a native root (note: like every scan root, only directories containing a `.git` are picked up as projects).
 
 ## Discovery API
 

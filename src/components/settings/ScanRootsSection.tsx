@@ -6,6 +6,19 @@ import { useToast } from "@/components/ToastProvider";
 import { ScanRootsEditor } from "@/components/ScanRootsEditor";
 import { S } from "./styles";
 
+interface WslDistroSuggestion {
+  name: string;
+  state: string;
+  isDefault: boolean;
+  suggestedRoots: string[];
+  claudeHomes: string[];
+}
+
+interface WslDiscovery {
+  available: boolean;
+  distros: WslDistroSuggestion[];
+}
+
 export function ScanRootsSection({
   config,
   onConfigChange,
@@ -16,6 +29,21 @@ export function ScanRootsSection({
   const { showToast } = useToast();
   const [roots, setRoots] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [wsl, setWsl] = useState<WslDiscovery | null>(null);
+
+  async function detectWsl() {
+    setDetecting(true);
+    try {
+      const res = await fetch("/api/wsl");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setWsl(await res.json());
+    } catch (e) {
+      showToast("WSL detection failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      setDetecting(false);
+    }
+  }
 
   const savedRoots = config
     ? (config.devRoots && config.devRoots.length > 0 ? config.devRoots : [config.devRoot])
@@ -86,7 +114,63 @@ export function ScanRootsSection({
                   Discard
                 </button>
               )}
+              <button
+                style={{ ...S.btn, background: "transparent", opacity: detecting ? 0.5 : 1 }}
+                onClick={detectWsl}
+                disabled={detecting}
+              >
+                {detecting ? "Detecting…" : "Detect WSL"}
+              </button>
             </div>
+
+            {wsl !== null && (
+              <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
+                {!wsl.available && (
+                  <p style={S.muted}>WSL is not available on this machine.</p>
+                )}
+                {wsl.available && wsl.distros.length === 0 && (
+                  <p style={S.muted}>No WSL distros found.</p>
+                )}
+                {wsl.distros.map((d) => (
+                  <div key={d.name} style={{ marginBottom: "10px" }}>
+                    <div style={{ ...S.label, fontFamily: "var(--font-mono)", fontSize: "0.78rem" }}>
+                      {d.name}
+                      <span style={{ ...S.badge, marginLeft: "8px" }}>{d.state}</span>
+                    </div>
+                    {d.state !== "Running" && (
+                      <p style={{ ...S.muted, marginTop: "2px" }}>
+                        Start the distro (open a WSL terminal) and detect again to find its dev directories —
+                        Minder never starts a stopped distro itself.
+                      </p>
+                    )}
+                    {d.state === "Running" && d.suggestedRoots.length === 0 && (
+                      <p style={{ ...S.muted, marginTop: "2px" }}>No <code>~/dev</code> directory found in this distro.</p>
+                    )}
+                    {d.suggestedRoots.map((root) => {
+                      const already = roots.includes(root);
+                      return (
+                        <div key={root} style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
+                          <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.72rem", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {root}
+                          </code>
+                          <button
+                            style={{ ...S.btn, padding: "2px 10px", fontSize: "0.7rem", opacity: already ? 0.5 : 1, cursor: already ? "default" : "pointer", flexShrink: 0 }}
+                            disabled={already}
+                            onClick={() => setRoots((prev) => (prev.includes(root) ? prev : [...prev, root]))}
+                          >
+                            {already ? "Added" : "Add as scan root"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+                <p style={{ ...S.muted, marginTop: "4px" }}>
+                  Added roots take effect after <strong>Save &amp; Rescan</strong>. See the WSL Integration help
+                  page for git-over-UNC notes.
+                </p>
+              </div>
+            )}
           </>
         )}
       </div>
