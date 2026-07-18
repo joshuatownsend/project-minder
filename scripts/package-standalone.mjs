@@ -68,7 +68,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { isForbiddenName, MAX_PAYLOAD_REL_PATH } from "./payload-hygiene-rules.mjs";
+import { isForbiddenName } from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
