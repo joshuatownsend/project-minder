@@ -57,6 +57,7 @@ import {
   cpSync,
   copyFileSync,
   statSync,
+  lstatSync,
   readdirSync,
   realpathSync,
   writeFileSync,
@@ -65,6 +66,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { isForbiddenName } from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -113,14 +115,45 @@ function step(message) {
 // (which follows links) and `readdirSync` (which Windows/Node resolve
 // transparently through reparse points) sidesteps the bug entirely.
 function copyDereferenced(src, dest, ancestry = new Set()) {
-  const real = realpathSync(src);
+  // Never let a forbidden entry (.git, .env*, .claude, .mcp.json, sibling
+  // repos — see payload-hygiene-rules.mjs) materialize in the payload, at any
+  // depth. Next's tracer has over-traced repo-root files into
+  // `.next/standalone` before (issue #284), which shipped a real `.git` and
+  // `.env.local` into dist; pruning here — at the only boundary everything
+  // must cross — is the cure, and CI's verify-payload-hygiene.mjs gate stays
+  // as the independent backstop.
+  if (isForbiddenName(path.basename(src))) {
+    step(`  pruned forbidden entry: ${path.relative(root, src)}`);
+    return;
+  }
+  let real;
+  let stat;
+  try {
+    real = realpathSync(src);
+    stat = statSync(src); // follows symlinks/junctions
+  } catch (err) {
+    // Next's standalone output preserves pnpm's `.pnpm/node_modules` hoist-dir
+    // symlinks even when it didn't trace (and therefore didn't copy) their
+    // targets, so on Linux/macOS the walk meets genuinely dangling links
+    // (e.g. `.pnpm/node_modules/semver`). A link that dangles at build time
+    // can't have resolved at runtime either — and every package the server
+    // actually needs is staged by the dependency-closure backfill below — so
+    // skip it rather than abort. Anything else missing is a real error.
+    if (
+      err.code === "ENOENT" &&
+      lstatSync(src, { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      step(`  skipped dangling symlink: ${path.relative(root, src)}`);
+      return;
+    }
+    throw err;
+  }
   if (ancestry.has(real)) {
     // A symlink cycle (pnpm store self-reference) — skip re-descending
     // rather than recursing forever. Not expected in practice, but
     // cheap to guard against in a build script.
     return;
   }
-  const stat = statSync(src); // follows symlinks/junctions
   if (stat.isDirectory()) {
     ancestry.add(real);
     mkdirSync(dest, { recursive: true });

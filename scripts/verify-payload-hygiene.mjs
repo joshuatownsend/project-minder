@@ -9,8 +9,11 @@
 // build BEFORE `tauri build` bundles the payload if any forbidden entry is
 // found anywhere under the packaged dir.
 //
-// It is a GUARD, not a fix of the packager (the walk logic itself is tracked in
-// #284) — it never mutates the payload, only inspects it.
+// The packager itself now prunes these entries at copy time (same rules,
+// imported from payload-hygiene-rules.mjs). This gate stays as the independent
+// backstop: it never mutates the payload, only inspects the finished result, so
+// a regression in the pruning still fails the build. The over-tracing that
+// pulls repo-root files into `.next/standalone` remains tracked in #284.
 //
 // Usage:  node scripts/verify-payload-hygiene.mjs [payloadDir]
 //   payloadDir defaults to dist/minder-server (relative to repo root).
@@ -19,6 +22,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isForbiddenName, FORBIDDEN_SUMMARY } from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -27,28 +31,6 @@ const arg = process.argv[2];
 const payloadDir = arg
   ? path.resolve(arg)
   : path.join(root, "dist", "minder-server");
-
-// Forbidden basenames (exact, case-insensitive) at ANY depth in the payload.
-const FORBIDDEN_EXACT = new Set([
-  ".git",
-  ".claude",
-  ".mcp.json",
-  "agentlytics-repo",
-]);
-
-// Forbidden basename patterns: any name starting with `.env` — true `.env*`
-// prefix semantics, matching the `.env*` guarantee the workflow/CHANGELOG make.
-// Covers `.env`, `.env.local`, `.env.production`, direnv's `.envrc`, `.env.bak`,
-// etc. No legitimate standalone-payload file starts with `.env` (Next's
-// standalone output and node_modules contain none), so the broad prefix has no
-// known false positives — if a real payload file ever legitimately starts with
-// `.env`, surface it rather than silently special-casing.
-function isForbiddenName(name) {
-  const lower = name.toLowerCase();
-  if (FORBIDDEN_EXACT.has(lower)) return true;
-  if (lower.startsWith(".env")) return true;
-  return false;
-}
 
 function fail(message) {
   console.error(`[payload-hygiene] ERROR: ${message}`);
@@ -123,6 +105,6 @@ if (offenders.length > 0) {
 }
 
 console.log(
-  `[payload-hygiene] OK: no forbidden entries (.git, .env*, .claude, .mcp.json, ` +
-    `agentlytics-repo) under ${path.relative(root, payloadDir) || payloadDir}`
+  `[payload-hygiene] OK: no forbidden entries (${FORBIDDEN_SUMMARY}) under ` +
+    `${path.relative(root, payloadDir) || payloadDir}`
 );
