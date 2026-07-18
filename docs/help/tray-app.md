@@ -40,6 +40,7 @@ To run the tray app from source during development:
    This downloads Node 22.12.0 and places it at `dist/node/` — the tray uses this bundled runtime instead of your PATH node.
 
 2. **Build the server payload:**
+   **Important:** The payload's `better-sqlite3` native binary is ABI-tied to your Node version. Ensure you're using Node 22.x (matching the bundled 22.12.0 runtime) by running `node --version` first. If your active Node differs, either switch to Node 22 before building, or set `MINDER_NODE_PATH` to point `pnpm tray:dev` to the same Node major you used for the build.
    ```bash
    pnpm build && pnpm package:standalone
    ```
@@ -116,7 +117,7 @@ The tray app respects these optional environment variables (most have sensible d
 | `MINDER_TRAY_ATTACH` | unset | Set to `1` to force attach mode at startup (observe an existing server, never spawn). Used for dev iteration. |
 | `MINDER_NODE_PATH` | bundled or `node` | Explicit path to the `node` binary. If unset, the tray uses the bundled Node runtime (preferred in packaged installs) or falls back to `node` on PATH (dev). An explicit override takes precedence over the bundled runtime. |
 | `MINDER_SERVER_DIST` | bundled `minder-server/` | Path to the `dist/minder-server/` directory (dev override). Takes precedence over the bundled payload. Used when you rebuild the server during development. |
-| `MINDER_STATE_DIR` | `~/.minder/` | Forwarded to the spawned sidecar (server) to relocate its writable state (.minder.json, caches, index.db) away from the read-only bundled payload. The tray's own notification state (cursor, mute flag) always stores in `~/.minder/tray-notify.json`, independent of this variable. |
+| `MINDER_STATE_DIR` | `~/.minder/` | Forwarded to the spawned sidecar (server) to relocate its config (.minder.json) and cache state away from the read-only bundled payload. **Database files `index.db` and `tasks.db` always stay in `~/.minder`** regardless of this variable (they hard-code `~/.minder` from `os.homedir()`). The tray's own notification state (cursor, mute flag) also stays in `~/.minder/tray-notify.json`, independent of this variable. |
 
 **Windows:** On Windows, set these in your user environment variables (System Properties → Environment Variables) or in a `.cmd` batch file that launches the app.
 
