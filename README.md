@@ -20,8 +20,8 @@ Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatowns
 
 The fastest way to get started. The installer bundles the dashboard server and an embedded Node runtime — nothing else to install.
 
-1. Download the installer for your platform from [GitHub Releases](https://github.com/joshuatownsend/project-minder/releases): Windows (NSIS `.exe`), macOS (`.dmg` for Apple Silicon or Intel), or Linux (`.AppImage` / `.deb`).
-2. Run the installer. On Windows, unsigned installers trigger a SmartScreen warning — click "More info" → "Run anyway".
+1. Download the installer for your platform from [GitHub Releases](https://github.com/joshuatownsend/project-minder/releases): Windows (NSIS `.exe`), macOS Apple Silicon (`.dmg`), macOS Intel (`.app.tar.gz` — extract, then drag the app to Applications), or Linux (`.AppImage` / `.deb`).
+2. Run the installer. The builds are unsigned: on Windows, SmartScreen warns — click "More info" → "Run anyway"; on macOS, right-click the app → Open on first launch.
 3. Launch the app. A tray icon appears; click **Open Dashboard** to open the web UI at `http://localhost:4100`.
 4. Optional: click **Start at login** in the tray menu to enable autostart.
 
