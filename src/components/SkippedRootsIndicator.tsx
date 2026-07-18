@@ -28,19 +28,33 @@ export function SkippedRootsIndicator() {
   useEffect(() => {
     const dismissedAt = sessionStorage.getItem(DISMISS_KEY);
     if (dismissedAt) setDismissed(true);
+  }, []);
 
+  // The topbar mounts once per app load, but roots start (or stop) being
+  // skipped on any later scan — e.g. the user shuts WSL down and clicks
+  // Save & Rescan. Poll at the scan-cache cadence so the indicator tracks the
+  // latest scan instead of freezing on the mount-time value. Paused while
+  // dismissed (the indicator is hidden for the session anyway).
+  useEffect(() => {
+    if (dismissed) return;
+    let cancelled = false;
     async function fetchSkipped() {
       try {
         const res = await fetch("/api/projects");
         if (!res.ok) return;
         const data = await res.json();
-        setSkipped(data.skippedRoots ?? []);
+        if (!cancelled) setSkipped(data.skippedRoots ?? []);
       } catch {
         // ignore
       }
     }
     fetchSkipped();
-  }, []);
+    const id = setInterval(fetchSkipped, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [dismissed]);
 
   // Close on outside click
   useEffect(() => {

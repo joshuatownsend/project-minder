@@ -9,9 +9,13 @@ import { invalidateUserConfigCache } from "@/lib/userConfigCache";
 import { invalidateLiveStatusCache } from "@/lib/liveStatus";
 import { invalidateClaudeAgentsCache } from "@/lib/claudeAgentsCli";
 import { runMcpSecurityScan } from "@/lib/scanner/mcp-security";
+import { clearWslCache } from "@/lib/wsl";
 
 export async function POST() {
   invalidateCache();
+  // Manual rescan is user-initiated: drop the cached WSL distro snapshot so a
+  // just-started distro's root is scanned now, not skipped for the 30s TTL.
+  clearWslCache();
   invalidateCatalogCache();
   invalidateAgentsRouteCache();
   invalidateSkillsRouteCache();
