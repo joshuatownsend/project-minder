@@ -33,6 +33,14 @@ fn main() {
         // Opens the dashboard URL / the logs folder without shelling through a
         // command parser (see tray::open_url / open_logs_dir).
         .plugin(tauri_plugin_opener::init())
+        // OS-level "launch at login" registration for the tray's "Start at
+        // login" checkbox (tray::init). `LaunchAgent` (vs. `AppleScript`) is
+        // the macOS-recommended mechanism; it's a no-op on Windows/Linux. No
+        // extra CLI args need to be passed to the relaunched process.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(move |app| {
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)
             // wins inside TrayConfig; otherwise the Tauri resource dir (prod).
