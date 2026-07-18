@@ -103,8 +103,17 @@ interface WslCache {
 // globalThis so dev-server HMR reloads of this module share one cache.
 const g = globalThis as typeof globalThis & { __minderWslCache?: WslCache };
 
-/** Short TTL: distro state changes when the user starts/stops WSL; a scan
- *  cycle hitting several WSL roots should still spawn wsl.exe only once. */
+/**
+ * Asymmetric TTLs. A cached "everything relevant is Running" answer is what
+ * lets a background caller touch a distro the user just shut down — so
+ * positive state is only trusted for a few seconds (long enough to dedupe the
+ * wsl.exe spawns within one scan/watch cycle), while negative/unavailable
+ * state (where the failure mode is merely "skipped one extra cycle") keeps
+ * the longer TTL. Note the guarantee is inherently best-effort: a distro can
+ * stop between a fresh check and the caller's fs access (TOCTOU) — the TTLs
+ * bound the accidental-wake window, they can't eliminate it.
+ */
+const WSL_CACHE_TTL_RUNNING_MS = 5_000;
 const WSL_CACHE_TTL_MS = 30_000;
 
 /**
@@ -114,8 +123,13 @@ const WSL_CACHE_TTL_MS = 30_000;
 export async function listWslDistros(): Promise<WslDistro[] | null> {
   if (process.platform !== "win32") return null;
   const cached = g.__minderWslCache;
-  if (cached && Date.now() - cached.fetchedAt < WSL_CACHE_TTL_MS) {
-    return cached.distros;
+  if (cached) {
+    // Any Running distro in the snapshot makes it a "positive" answer that
+    // could green-light a UNC access — trust it only for the short TTL.
+    const ttl = cached.distros?.some((d) => d.state === "Running")
+      ? WSL_CACHE_TTL_RUNNING_MS
+      : WSL_CACHE_TTL_MS;
+    if (Date.now() - cached.fetchedAt < ttl) return cached.distros;
   }
   let distros: WslDistro[] | null;
   try {

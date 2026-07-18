@@ -370,8 +370,14 @@ export async function scanAllProjects(): Promise<ScanResult> {
     if (!carried) return; // never scanned successfully (e.g. stopped since boot)
     for (const project of carried.projects) {
       if (seenSlugs.has(project.slug)) continue;
+      // Honor hides made while the root is skipped — the fresh-scan path
+      // filters by directory name before scanning, so carry-forward must too.
+      if (hiddenSet.has(path.basename(project.path).toLowerCase())) continue;
       seenSlugs.add(project.slug);
-      allProjects.push(project);
+      // Push a CLONE: the status/port-override pass below mutates projects in
+      // place, and mutating the stored copy would bake overrides in — a
+      // cleared override could then never revert while the root stays skipped.
+      allProjects.push(structuredClone(project));
       // Seed the walk side-channel so runCatalogLint never falls back to a
       // fresh walkProject* over this (unreachable) path — the stored walk if
       // we have one, an empty walk otherwise (stale/absent lint findings for
@@ -443,7 +449,13 @@ export async function scanAllProjects(): Promise<ScanResult> {
       const walk = catalogWalkByPath.get(p.path);
       if (walk) rootWalks.set(p.path, walk);
     }
-    lastGood.set(normalizePathKey(devRoot), { projects: rootProjects, walks: rootWalks });
+    // Store CLONES: the status/port-override pass below mutates the returned
+    // projects in place, and the stored copy must stay pristine (pre-override)
+    // so a later carry-forward re-applies whatever overrides exist THEN.
+    lastGood.set(normalizePathKey(devRoot), {
+      projects: structuredClone(rootProjects),
+      walks: rootWalks,
+    });
     allProjects.push(...rootProjects);
   }
 
