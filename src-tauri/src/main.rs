@@ -45,9 +45,14 @@ fn main() {
         // Native OS toast notifications for the manual-steps poller (C3).
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            let mut cfg = cfg;
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)
             // wins inside TrayConfig; otherwise the Tauri resource dir (prod).
             let resource_dir = app.path().resource_dir().ok();
+            // Resolve the `node` executable now that the resource dir is known:
+            // an explicit MINDER_NODE_PATH override, else the Node runtime the
+            // C4 packaging workflow bundled at <resource_dir>/node/, else PATH.
+            cfg.node_path = cfg.node_command(resource_dir.as_ref());
             let payload_dir = cfg.payload_dir(resource_dir.as_ref());
 
             // Writable-state dir for the sidecar's `.minder.json` (+ caches):

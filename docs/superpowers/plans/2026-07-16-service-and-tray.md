@@ -290,7 +290,7 @@ needed for a personal tool.
 | C1 Tauri tray + sidecar | Opus | A2, C0 | ☑ done | #294 |
 | C2 autostart toggle | Sonnet | C1 | ☑ done | #298 |
 | C3 native notifications | Sonnet | C1 | ☑ done | #300 |
-| C4 packaging CI | Opus | C1 | ☐ not started | |
+| C4 packaging CI | Opus | C1 | ☑ done | #301 |
 | C5 signing + updater (optional) | Sonnet | C4 | ☐ blocked on user decision | |
 | C6 tray docs | Haiku | C2, C3 | ☐ not started | |
 
