@@ -1,0 +1,206 @@
+# Release installers for the Project Minder tray app (plan task C4).
+#
+# Builds the native tray desktop installers for all three platforms and attaches
+# them to the GitHub Release for the tag. Each job:
+#   1. pnpm install (frozen) + pnpm build
+#   2. pnpm package:standalone            -> dist/minder-server (the Node sidecar payload)
+#   3. payload hygiene gate               -> fails if .git/.env*/.claude/.mcp.json/agentlytics-repo leaked (issue #284)
+#   4. fetch a PINNED Node runtime        -> dist/node (SHA-256 verified from nodejs.org)
+#   5. pnpm tauri build --bundles <os>    -> bundles dist/minder-server + dist/node as Tauri resources
+#
+# Both dist/minder-server and dist/node are declared as Tauri `resources` in
+# src-tauri/tauri.conf.json, so they land under the app's resource dir at
+# runtime; src-tauri/src/config.rs resolves the bundled Node
+# (<resource_dir>/node/node.exe | node/bin/node) and the payload
+# (<resource_dir>/minder-server) from there.
+#
+# Node pin: the bundled runtime AND the packaging Node are both 22.12.0. This is
+# load-bearing: package:standalone bundles better-sqlite3's prebuilt .node binary,
+# which is ABI-tied (NODE_MODULE_VERSION) to the Node major that RUNS the server.
+# Node 22 ships a better-sqlite3@12 prebuilt on every target OS (the same reason
+# ci.yml builds Windows on 22.12.0). Change NODE_VERSION here AND in
+# scripts/fetch-node-runtime.mjs together.
+#
+# Bundles per OS: NSIS .exe (Windows), .dmg (macOS), .AppImage + .deb (Linux).
+#
+# Signing: UNSIGNED for now — C5 (signing + updater) is a separate, opt-in task.
+# No signing env vars are set and no updater is configured in tauri.conf.json, so
+# tauri build emits plain unsigned installers.
+#
+# Artifact sizes: EXPECT ~100 MB+ per installer. The bundled Node runtime
+# (~80 MB) plus the standalone Next server payload (hundreds of MB uncompressed,
+# incl. .next/server/chunks + the dereferenced node_modules) dominate — this is
+# expected and acceptable for a self-contained "no Node install required" tray app.
+#
+# Triggers: a `v*` tag push attaches installers to that tag's Release (which
+# release.yml creates with generated notes); `workflow_dispatch` is a dry run
+# that only uploads the installers to the workflow run (no Release touched).
+
+name: Release Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: build installers and upload to the run only (no Release).'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # attach installers to the GitHub Release
+
+concurrency:
+  group: release-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22.12.0'
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows (NSIS .exe)
+            bundles: nsis
+          - os: macos-latest
+            name: macOS (.dmg)
+            bundles: dmg
+          - os: ubuntu-latest
+            name: Linux (.AppImage + .deb)
+            bundles: deb,appimage
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Linux-only: Tauri v2 build/runtime system dependencies (webkit2gtk 4.1
+      # on ubuntu-latest = 24.04). patchelf is required by the AppImage tooling.
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # pnpm before setup-node so the binary is on PATH for the pnpm cache key
+      # (version comes from the packageManager field in package.json).
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The packaged sidecar bundles better-sqlite3's prebuilt native driver;
+      # fail loudly here if it didn't load under the pinned Node, rather than
+      # deep inside package:standalone's dlopen ABI check (same guard as ci.yml).
+      - name: Assert better-sqlite3 native driver loaded
+        run: node -e "const D=require('better-sqlite3'); const db=new D(':memory:'); db.prepare('select 1 as x').get(); db.close(); console.log('better-sqlite3 native driver OK')"
+
+      - name: Build Next app
+        run: pnpm build
+
+      - name: Package standalone server payload
+        run: pnpm package:standalone
+
+      # Guard (issue #284): fail before bundling if the payload over-traced any
+      # forbidden entry into dist/minder-server.
+      - name: Payload hygiene gate
+        run: node scripts/verify-payload-hygiene.mjs
+
+      # Download + SHA-256-verify the pinned Node runtime for this OS/arch into
+      # dist/node (the Tauri `node` resource).
+      - name: Fetch pinned Node runtime
+        run: node scripts/fetch-node-runtime.mjs
+
+      # Build the tray app + bundle the installers. UNSIGNED (see header). No
+      # beforeBuildCommand runs (frontendDist is a static ./frontend), so this
+      # does not rebuild the Next app or spawn the server.
+      - name: Build Tauri installers
+        run: pnpm tauri build --bundles ${{ matrix.bundles }}
+
+      # Collect the produced installers into one dir for uniform upload. Only the
+      # patterns relevant to this OS match; nullglob drops the rest.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p installers
+          shopt -s nullglob
+          for f in \
+            src-tauri/target/release/bundle/nsis/*.exe \
+            src-tauri/target/release/bundle/dmg/*.dmg \
+            src-tauri/target/release/bundle/deb/*.deb \
+            src-tauri/target/release/bundle/appimage/*.AppImage; do
+            echo "collecting $f"
+            cp "$f" installers/
+          done
+          echo "--- installers ---"
+          ls -la installers
+          if [ -z "$(ls -A installers)" ]; then
+            echo "::error::no installers were produced for ${{ matrix.os }}"
+            exit 1
+          fi
+
+      # Always keep the installers on the workflow run (this is the whole output
+      # of a workflow_dispatch dry run).
+      - name: Upload installers to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: minder-installers-${{ matrix.os }}
+          path: installers/*
+          if-no-files-found: error
+
+      # Tag builds only: attach installers to the tag's GitHub Release. release.yml
+      # (the existing "Release" workflow) owns creating the Release + generated
+      # notes for the same `v*` tag; this waits for it, then uploads. If it never
+      # appears (e.g. this workflow was somehow triggered without release.yml), it
+      # creates the Release as a fallback so installers are never orphaned.
+      - name: Attach installers to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          echo "waiting for Release $TAG to exist (created by release.yml)…"
+          for i in $(seq 1 60); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG found."
+              break
+            fi
+            echo "  not yet ($i/60) — sleeping 10s"
+            sleep 10
+          done
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG still missing — creating it as a fallback."
+            gh release create "$TAG" --generate-notes --title "Project Minder $TAG"
+          fi
+          gh release upload "$TAG" installers/* --clobber
+          echo "uploaded installers to Release $TAG"

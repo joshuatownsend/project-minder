@@ -23,7 +23,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist/minder-server": "minder-server"
+      "../dist/minder-server": "minder-server",
+      "../dist/node": "node"
     }
   }
 }
