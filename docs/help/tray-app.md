@@ -99,7 +99,12 @@ The tray app decides at startup how to manage the server:
 
 **When:** Automatically triggered if port 4100 is already bound at startup, or if `MINDER_TRAY_ATTACH=1` is set.
 
-**Recommendation:** If you previously installed the Phase A scheduled-task/service, run `pnpm service:uninstall` **before** launching the tray app, to avoid double supervision. If the tray was already running and attached to that service, relaunch it afterward — otherwise it stays observing the now-stopped server. See [Service Mode](service-mode.md) for details.
+**Recommendation:** If you previously installed the Phase A scheduled-task/service:
+1. **On Windows:** If the service is currently running, run `pnpm service:stop` first (uninstall only removes the registration without stopping the running process).
+2. Run `pnpm service:uninstall` to remove the service registration.
+3. Launch the tray app.
+
+If the tray was already running and attached to that service, relaunch it afterward — otherwise it stays observing the now-stopped server. See [Service Mode](service-mode.md) for details.
 
 ## Environment Variables
 
@@ -122,9 +127,10 @@ The tray app respects these optional environment variables (most have sensible d
 ### Tray icon doesn't appear
 
 1. **Check the app is running:** Look for a `minder` or `Project Minder` process in your task manager / Activity Monitor / `ps`.
-2. **Check for errors:** Open `~/.minder/logs/minder.log` and look for startup errors.
-3. **Restart the tray:** Kill the process and relaunch the installer or the app from your applications menu.
-4. **Port conflict:** If port 4100 is held by another process, the server may fail to start. See [Port Held by Another App](#port-held-by-another-app).
+2. **Check for early startup errors:** Launch the tray app from a terminal (Windows Command Prompt, macOS Terminal, or Linux shell) to see `[minder-tray]` stdout/stderr output directly. Early failures (missing bundled payload, bad Node path, server.js crash before bootstrap) don't reach `~/.minder/logs/minder.log` — they only appear in the tray's console output.
+3. **Check the server log:** If the tray appears but the server isn't running, open `~/.minder/logs/minder.log` for errors (the log file is created after the server bootstrap starts).
+4. **Restart the tray:** Kill the process and relaunch the installer or the app from your applications menu.
+5. **Port conflict:** If port 4100 is held by another process, the server may fail to start. See [Port Held by Another App](#port-held-by-another-app).
 
 ### Status says "degraded" or "not responding" (or stays on "starting…" for too long)
 
