@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { runGit, detectMainBranch } from "./scanner/git";
+import { checkWslRoot, parseWslUncPath } from "./wsl";
 import { parseGitHubRemote } from "./githubRemote";
 import { emitMinderEvent } from "./events/bus";
 import type {
@@ -175,6 +176,18 @@ function toPrSummary(pr: GithubPrApi): GithubPrSummary {
 async function fetchActivity(
   item: QueueItem
 ): Promise<Omit<GithubActivity, "checkedAt">> {
+  // Never-wake preflight (mirrors gitStatusCache): carried-forward projects
+  // under a stopped WSL distro reach this queue with \\wsl.localhost paths,
+  // and spawning git/gh with cwd there would auto-start the VM. Cache an
+  // unavailable sentinel instead until the distro runs (5-min TTL). Sync-parse
+  // first so non-WSL paths skip the distro-list lookup entirely.
+  if (parseWslUncPath(item.path)) {
+    const wslCheck = await checkWslRoot(item.path);
+    if (wslCheck && !wslCheck.ok) {
+      return { available: false, reason: "wsl-unavailable" };
+    }
+  }
+
   // Resolve owner/repo from the supplied remote, else ask git once.
   let remote = item.remoteUrl;
   if (!remote) {

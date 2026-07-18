@@ -10,9 +10,16 @@ vi.mock("@/lib/scanner/git", () => ({
   runGit: vi.fn(),
   detectMainBranch: vi.fn(),
 }));
+// Keep parseWslUncPath real (pure/sync) but stub checkWslRoot — the real one
+// would route through the mocked child_process.execFile above.
+vi.mock("@/lib/wsl", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/wsl")>();
+  return { ...actual, checkWslRoot: vi.fn(actual.checkWslRoot) };
+});
 
 import { execFile } from "child_process";
 import { runGit, detectMainBranch } from "@/lib/scanner/git";
+import { checkWslRoot } from "@/lib/wsl";
 import { githubActivityCache } from "@/lib/githubActivityCache";
 
 const mockExecFile = vi.mocked(execFile);
@@ -226,6 +233,30 @@ describe("githubActivityCache defensive failure classification", () => {
     const a = githubActivityCache.get("bare");
     expect(a?.reason).toBe("no-remote");
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it("stopped-WSL project → wsl-unavailable, no git/gh spawn (never-wake)", async () => {
+    setGh({ pr: [], run: [], repo: {} });
+    vi.mocked(checkWslRoot).mockResolvedValueOnce({
+      ok: false,
+      distro: "Ubuntu-26.04",
+      reason: "wsl-stopped",
+    });
+    githubActivityCache.enqueue([
+      {
+        slug: "wsl-proj",
+        path: "\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\printing-press\\library\\bamcli",
+        remoteUrl: "https://github.com/o/r",
+      },
+    ]);
+    await flush();
+
+    const a = githubActivityCache.get("wsl-proj");
+    expect(a?.available).toBe(false);
+    expect(a?.reason).toBe("wsl-unavailable");
+    // The guard must fire before ANY subprocess: no gh, no git remote lookup.
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockRunGit).not.toHaveBeenCalled();
   });
 
   it("falls back to git remote when no remoteUrl supplied", async () => {
