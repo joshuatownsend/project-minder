@@ -288,7 +288,7 @@ needed for a personal tool.
 | A4 docs + polish | Haiku | A3 | ☑ done | #293 |
 | C0 standalone build | Sonnet | — (parallel-safe) | ☑ done | #285 |
 | C1 Tauri tray + sidecar | Opus | A2, C0 | ☑ done | #294 |
-| C2 autostart toggle | Sonnet | C1 | ☐ not started | |
+| C2 autostart toggle | Sonnet | C1 | ☑ done | #298 |
 | C3 native notifications | Sonnet | C1 | ☐ not started | |
 | C4 packaging CI | Opus | C1 | ☐ not started | |
 | C5 signing + updater (optional) | Sonnet | C4 | ☐ blocked on user decision | |
