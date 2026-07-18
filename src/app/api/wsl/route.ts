@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { discoverWslSuggestions } from "@/lib/wsl";
+import { clearWslCache, discoverWslSuggestions } from "@/lib/wsl";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { demoModeEnv } from "@/lib/demo/demoMode";
@@ -19,6 +19,9 @@ export async function GET() {
   if (demoModeEnv() || getFlag(config.featureFlags, "demoMode", false)) {
     return NextResponse.json({ available: false, distros: [] });
   }
+  // Detect WSL is user-initiated: drop the cached distro snapshot so a distro
+  // the user just started shows Running now, not after the 30s negative TTL.
+  clearWslCache();
   const discovery = await discoverWslSuggestions();
   return NextResponse.json(discovery);
 }

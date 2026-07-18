@@ -144,7 +144,13 @@ export async function listWslDistros(): Promise<WslDistro[] | null> {
   return distros;
 }
 
-/** Test hook: drop the cached distro list. */
+/**
+ * Drop the cached distro list so the next check re-runs `wsl.exe -l -v`.
+ * Called on USER-INITIATED paths (Detect WSL, manual rescan): a user who just
+ * started a distro shouldn't wait out the 30s negative TTL to see it Running.
+ * Safe w.r.t. never-wake — a fresh listing is still a state query only.
+ * Also used as a test hook.
+ */
 export function clearWslCache(): void {
   g.__minderWslCache = undefined;
 }
