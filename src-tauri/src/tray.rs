@@ -144,15 +144,32 @@ fn handle_menu_event<R: Runtime>(
 /// plugin handles persistence) match that, and to leave the checkbox
 /// reflecting reality if it can't.
 fn sync_autostart<R: Runtime>(app: &tauri::AppHandle<R>, item: &CheckMenuItem<R>) {
+    let manager = app.autolaunch();
+
     let want_enabled = match item.is_checked() {
         Ok(checked) => checked,
         Err(e) => {
+            // We don't know which direction the user clicked, so there's
+            // nothing to sync — but Tauri already flipped the checkbox before
+            // this event fired, and it may now disagree with the OS
+            // registration (the actual source of truth). Re-anchor it to a
+            // fresh read instead of leaving an arbitrary post-toggle value on
+            // screen.
             crate::supervisor::log(&format!("could not read autostart checkbox state: {e}"));
+            match recovered_checked_state(manager.is_enabled()) {
+                Some(actual) => {
+                    let _ = item.set_checked(actual);
+                }
+                None => {
+                    crate::supervisor::log(
+                        "could not re-read autostart status either — leaving checkbox as-is",
+                    );
+                }
+            }
             return;
         }
     };
 
-    let manager = app.autolaunch();
     let sync_result = if want_enabled {
         manager.enable()
     } else {
@@ -184,6 +201,15 @@ fn revert_target(want_enabled: bool, sync_ok: bool) -> Option<bool> {
     } else {
         Some(!want_enabled)
     }
+}
+
+/// Pure decision helper for [`sync_autostart`]'s `is_checked()`-failure path:
+/// given a fresh, direct read of the OS "launch at login" registration (the
+/// source of truth), returns the state to force the checkbox to. `None` means
+/// the re-read itself failed too, in which case the checkbox is left exactly
+/// as Tauri last set it rather than guessed at.
+fn recovered_checked_state<E>(fresh_read: Result<bool, E>) -> Option<bool> {
+    fresh_read.ok()
 }
 
 fn spawn_poll_loop<R: Runtime>(
@@ -267,7 +293,7 @@ fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg(test)]
 mod tests {
-    use super::revert_target;
+    use super::{recovered_checked_state, revert_target};
 
     #[test]
     fn revert_target_no_op_when_sync_succeeds() {
@@ -279,5 +305,16 @@ mod tests {
     fn revert_target_flips_back_when_sync_fails() {
         assert_eq!(revert_target(true, false), Some(false));
         assert_eq!(revert_target(false, false), Some(true));
+    }
+
+    #[test]
+    fn recovered_checked_state_forwards_a_successful_fresh_read() {
+        assert_eq!(recovered_checked_state::<()>(Ok(true)), Some(true));
+        assert_eq!(recovered_checked_state::<()>(Ok(false)), Some(false));
+    }
+
+    #[test]
+    fn recovered_checked_state_is_none_when_the_fresh_read_also_fails() {
+        assert_eq!(recovered_checked_state::<()>(Err(())), None);
     }
 }
