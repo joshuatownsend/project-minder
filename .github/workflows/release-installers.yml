@@ -180,8 +180,23 @@ jobs:
           fi
           node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');console.log('stamped tauri.conf.json version =',c.version);" "$VERSION"
 
+      # Two attempts: macOS DMG bundling (bundle_dmg.sh -> hdiutil/Finder) is
+      # notoriously flaky on GitHub's Intel runners — it can hang for minutes
+      # and fail with no output while the identical arm64 job succeeds. A
+      # retry re-uses the cargo cache, so the second attempt only re-bundles.
+      # Deterministic failures still fail the job (one wasted re-bundle).
       - name: Build Tauri installers
-        run: pnpm tauri build --bundles ${{ matrix.bundles }}
+        shell: bash
+        run: |
+          set -u
+          for attempt in 1 2; do
+            if pnpm tauri build --bundles ${{ matrix.bundles }}; then
+              exit 0
+            fi
+            echo "::warning::tauri build attempt $attempt failed"
+          done
+          echo "::error::tauri build failed after 2 attempts"
+          exit 1
 
       # Collect the produced installers into one dir for uniform upload. Only the
       # patterns relevant to this OS match; nullglob drops the rest.

@@ -22,7 +22,11 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isForbiddenName, FORBIDDEN_SUMMARY } from "./payload-hygiene-rules.mjs";
+import {
+  isForbiddenName,
+  FORBIDDEN_SUMMARY,
+  MAX_PAYLOAD_REL_PATH,
+} from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -54,6 +58,7 @@ if (!existsSync(payloadDir)) {
 // package-standalone.mjs fully dereferences the payload, so real forbidden
 // content is materialized in place and caught by name regardless.
 const offenders = [];
+const tooLong = []; // payload-relative paths exceeding MAX_PAYLOAD_REL_PATH
 
 function walk(dir) {
   let entries;
@@ -74,6 +79,10 @@ function walk(dir) {
       // Don't descend into a forbidden dir — its presence is already a failure
       // and it may be huge (a nested `.git`).
       continue;
+    }
+    const rel = path.relative(payloadDir, full);
+    if (rel.length > MAX_PAYLOAD_REL_PATH) {
+      tooLong.push(rel);
     }
     // Recurse into real subdirectories only. isDirectory() is already false for
     // symlinks/junctions on the Node the packaging job runs (see the walk
@@ -104,7 +113,25 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
+if (tooLong.length > 0) {
+  console.error(
+    `[payload-hygiene] ERROR: ${tooLong.length} path(s) exceed the ` +
+      `${MAX_PAYLOAD_REL_PATH}-char payload path budget (Windows MAX_PATH minus ` +
+      `the CI checkout prefix makensis reads through — see payload-hygiene-rules.mjs):`
+  );
+  for (const p of tooLong.sort((a, b) => b.length - a.length).slice(0, 10)) {
+    console.error(`  - (${p.length}) ${p}`);
+  }
+  console.error(
+    "makensis is not long-path-aware and would abort mid-bundle on Windows. " +
+      "Extend package-standalone.mjs's store-key shortening (or flatten the " +
+      "offending subtree) rather than raising the budget."
+  );
+  process.exit(1);
+}
+
 console.log(
-  `[payload-hygiene] OK: no forbidden entries (${FORBIDDEN_SUMMARY}) under ` +
+  `[payload-hygiene] OK: no forbidden entries (${FORBIDDEN_SUMMARY}) and all ` +
+    `paths within the ${MAX_PAYLOAD_REL_PATH}-char budget under ` +
     `${path.relative(root, payloadDir) || payloadDir}`
 );

@@ -19,6 +19,17 @@ export const FORBIDDEN_EXACT = new Set([
 // Human-readable summary for log lines, kept next to the rules it describes.
 export const FORBIDDEN_SUMMARY = ".git, .env*, .claude, .mcp.json, agentlytics-repo";
 
+// Maximum allowed path length INSIDE the payload, relative to the payload root.
+// Budget: Windows MAX_PATH is 260, makensis (Tauri's NSIS bundler) is not
+// long-path-aware, and the GitHub runner prefix it reads the payload through —
+// `D:\a\project-minder\project-minder\src-tauri\..\dist\minder-server\` — is
+// 66 chars. 260 - 66 = 194; 180 leaves margin for a slightly longer checkout
+// prefix. package-standalone.mjs keeps paths under this by shortening
+// peer-suffixed .pnpm store keys; the gate fails the build if anything exceeds
+// it, so the overflow surfaces at package time with the offending path — not
+// as makensis' cryptic "Error in script on line N".
+export const MAX_PAYLOAD_REL_PATH = 180;
+
 // Forbidden basename patterns: any name starting with `.env` — true `.env*`
 // prefix semantics, matching the `.env*` guarantee the workflow/CHANGELOG make.
 // Covers `.env`, `.env.local`, `.env.production`, direnv's `.envrc`, `.env.bak`,
