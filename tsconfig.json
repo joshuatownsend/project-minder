@@ -38,6 +38,7 @@
   "exclude": [
     "node_modules",
     "agentlytics-repo",
-    "dist"
+    "dist",
+    "src-tauri/target"
   ]
 }
