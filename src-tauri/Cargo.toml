@@ -30,6 +30,10 @@ ureq = "2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
+# OS-registered "launch at login" (Windows registry Run key / macOS
+# LaunchAgent / Linux autostart .desktop entry) — the tray's "Start at login"
+# checkbox reads/writes through this, desktop-only like single-instance above.
+tauri-plugin-autostart = "2"
 
 [profile.release]
 # Smaller, faster-to-ship tray binary.

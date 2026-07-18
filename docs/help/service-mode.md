@@ -29,6 +29,12 @@ Supported commands:
 - `pnpm service:stop` — stop a running service
 - `pnpm service:status` — show the current service status
 
+## Desktop Users: Prefer the Tray App
+
+If you're on a desktop machine, the Project Minder tray app's built-in "Start at login" checkbox is the recommended way to launch Minder automatically — it registers with the OS directly (no scheduled task, service, or install script to run) and the setting is remembered across restarts.
+
+If you previously installed the Phase A scheduled-task/service described above, run `pnpm service:uninstall` **before** launching the tray app, to avoid double supervision (two processes trying to run the same dashboard). If the tray was already launched and attached to that older service, relaunch the tray after uninstalling — otherwise it's left observing the now-stopped server instead of spawning its own. Leaving both installed is not dangerous — the tray simply attaches to the existing server instead of spawning a second one — but doing it in this order keeps things simple.
+
 ## Operating System Details
 
 ### Windows
