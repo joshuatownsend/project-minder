@@ -32,9 +32,11 @@
 # incl. .next/server/chunks + the dereferenced node_modules) dominate — this is
 # expected and acceptable for a self-contained "no Node install required" tray app.
 #
-# Triggers: a `v*` tag push attaches installers to that tag's Release (which
-# release.yml creates with generated notes); `workflow_dispatch` is a dry run
-# that only uploads the installers to the workflow run (no Release touched).
+# Triggers: a `v*` tag PUSH attaches installers to that tag's Release (which
+# release.yml creates with generated notes); `workflow_dispatch` is ALWAYS a dry
+# run that only uploads installers to the workflow run — it never touches a
+# Release, even when dispatched against a tag ref (the upload step is gated on
+# github.event_name == 'push', not just the ref).
 
 name: Release Installers
 
@@ -179,8 +181,11 @@ jobs:
       # notes for the same `v*` tag; this waits for it, then uploads. If it never
       # appears (e.g. this workflow was somehow triggered without release.yml), it
       # creates the Release as a fallback so installers are never orphaned.
+      # Tag PUSH only — never a manual dispatch, even one targeting a tag ref
+      # (github.ref would be refs/tags/v… there too). Gating on event_name keeps
+      # manual runs artifact-only; this is the sole Release-mutating step.
       - name: Attach installers to the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
