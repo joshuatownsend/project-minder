@@ -253,6 +253,21 @@ Supported commands: `service:install`, `service:uninstall`, `service:start`, `se
 
 See [Service Mode](docs/help/service-mode.md) help for platform details, port collision handling, environment variables, health check endpoints, logging, and troubleshooting.
 
+### Desktop Tray App
+
+On desktop machines, run Project Minder as a native tray application with a graphical menu, autostart checkbox, and built-in notifications for new manual steps:
+
+1. Download the installer for your platform from [GitHub Releases](https://github.com/joshuatownsend/project-minder/releases) — look for version tags starting with `v`.
+2. Run the installer (Windows: expect a SmartScreen warning for unsigned installers — click "More info" → "Run anyway").
+3. Launch the app; the tray icon appears immediately. Click "Open Dashboard" to access the web UI.
+4. Optional: click "Start at login" in the tray menu to enable autostart.
+
+**Available installers:** Windows (NSIS `.exe`), macOS (`.dmg` for Apple Silicon or Intel), Linux (`.AppImage` or `.deb` on ubuntu-22.04 baseline).
+
+The tray app packages the dashboard server with an embedded Node runtime, so no dependencies need to be installed. The app manages the server process, displays status in the menu, and sends OS notifications when new manual steps are logged during Claude Code sessions.
+
+For local development or detailed troubleshooting, see [Tray App](docs/help/tray-app.md) help.
+
 ---
 
 ## How It Works
