@@ -57,14 +57,18 @@ import {
   cpSync,
   copyFileSync,
   statSync,
+  lstatSync,
   readdirSync,
   realpathSync,
+  renameSync,
   writeFileSync,
   readFileSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { isForbiddenName } from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -113,14 +117,45 @@ function step(message) {
 // (which follows links) and `readdirSync` (which Windows/Node resolve
 // transparently through reparse points) sidesteps the bug entirely.
 function copyDereferenced(src, dest, ancestry = new Set()) {
-  const real = realpathSync(src);
+  // Never let a forbidden entry (.git, .env*, .claude, .mcp.json, sibling
+  // repos — see payload-hygiene-rules.mjs) materialize in the payload, at any
+  // depth. Next's tracer has over-traced repo-root files into
+  // `.next/standalone` before (issue #284), which shipped a real `.git` and
+  // `.env.local` into dist; pruning here — at the only boundary everything
+  // must cross — is the cure, and CI's verify-payload-hygiene.mjs gate stays
+  // as the independent backstop.
+  if (isForbiddenName(path.basename(src))) {
+    step(`  pruned forbidden entry: ${path.relative(root, src)}`);
+    return;
+  }
+  let real;
+  let stat;
+  try {
+    real = realpathSync(src);
+    stat = statSync(src); // follows symlinks/junctions
+  } catch (err) {
+    // Next's standalone output preserves pnpm's `.pnpm/node_modules` hoist-dir
+    // symlinks even when it didn't trace (and therefore didn't copy) their
+    // targets, so on Linux/macOS the walk meets genuinely dangling links
+    // (e.g. `.pnpm/node_modules/semver`). A link that dangles at build time
+    // can't have resolved at runtime either — and every package the server
+    // actually needs is staged by the dependency-closure backfill below — so
+    // skip it rather than abort. Anything else missing is a real error.
+    if (
+      err.code === "ENOENT" &&
+      lstatSync(src, { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      step(`  skipped dangling symlink: ${path.relative(root, src)}`);
+      return;
+    }
+    throw err;
+  }
   if (ancestry.has(real)) {
     // A symlink cycle (pnpm store self-reference) — skip re-descending
     // rather than recursing forever. Not expected in practice, but
     // cheap to guard against in a build script.
     return;
   }
-  const stat = statSync(src); // follows symlinks/junctions
   if (stat.isDirectory()) {
     ancestry.add(real);
     mkdirSync(dest, { recursive: true });
@@ -299,6 +334,83 @@ function listTopLevelPackages(nodeModulesDir) {
   }
   return names;
 }
+
+// --- Repair tracer "husks" (package dirs emitted as package.json-only) ---
+//
+// For an externalized package whose code it didn't trace, Next's tracer can
+// emit just the package directory with its package.json and NOTHING else — a
+// husk. A husk poisons every occupancy check below (a readable version looks
+// like "the app's copy, keep it") and can never satisfy a runtime require:
+// the packaged server crashed at boot on
+// `@swc/helpers/cjs/_interop_require_default.cjs` exactly this way, and the
+// `claude-code-lint` store path shipped without its `bin/` (issue #288's
+// silent lint degradation). Repair each husk in place from the repo's real
+// copy of the SAME version before any placement logic runs. Strictly better
+// than the status quo in every case — a required husk becomes a working
+// package, an unreachable one becomes small dead weight — with no
+// reachability guessing. A husk with no matching repo copy (e.g. another
+// platform's optional binary package) is left as-is with a warning: it
+// behaves exactly as it did before this pass existed.
+function isHuskDir(pkgDir) {
+  try {
+    const entries = readdirSync(pkgDir);
+    return entries.length === 1 && entries[0] === "package.json";
+  } catch {
+    return false;
+  }
+}
+
+step("Repairing tracer husks (package.json-only package dirs)");
+let husksRepaired = 0;
+function repairHusksIn(nmDir, repoNmDir) {
+  if (!existsSync(nmDir)) return;
+  for (const name of listTopLevelPackages(nmDir)) {
+    const pkgDir = path.join(nmDir, name);
+    // Nested node_modules (bundled deps) can carry husks too.
+    repairHusksIn(path.join(pkgDir, "node_modules"), null);
+    if (!isHuskDir(pkgDir)) continue;
+    const wantVersion = readPkgVersion(path.join(pkgDir, "package.json"));
+    // Prefer the repo analog of this exact slot (right version by
+    // construction for store paths), then plain resolution from the root.
+    let repoDir = null;
+    const candidates = [];
+    if (repoNmDir) candidates.push(path.join(repoNmDir, name));
+    try {
+      candidates.push(resolvePackageDir(name, root));
+    } catch {
+      // not resolvable from the repo root — the slot candidate may still hit
+    }
+    for (const candidate of candidates) {
+      if (readPkgVersion(path.join(candidate, "package.json")) === wantVersion) {
+        repoDir = candidate;
+        break;
+      }
+    }
+    if (!repoDir) {
+      console.warn(
+        `[package-standalone] WARNING: tracer husk ${path.relative(outDir, pkgDir)} ` +
+          `(${name}@${wantVersion ?? "?"}) has no matching repo copy to repair from — leaving as-is.`
+      );
+      continue;
+    }
+    copyDereferenced(repoDir, pkgDir);
+    husksRepaired += 1;
+  }
+}
+repairHusksIn(path.join(outDir, "node_modules"), path.join(root, "node_modules"));
+{
+  const distPnpm = path.join(outDir, "node_modules", ".pnpm");
+  if (existsSync(distPnpm)) {
+    for (const key of readdirSync(distPnpm)) {
+      if (key === "node_modules" || key.startsWith(".")) continue;
+      repairHusksIn(
+        path.join(distPnpm, key, "node_modules"),
+        path.join(root, "node_modules", ".pnpm", key, "node_modules")
+      );
+    }
+  }
+}
+step(`  repaired ${husksRepaired} tracer husk(s)`);
 
 // BFS over `dependencies` fields (not peerDependencies/devDependencies),
 // preserving VERSION identity along every edge rather than collapsing to
@@ -527,11 +639,15 @@ if (optionalFailures.length > 0) {
 // deps. We copy dereferenced (real dirs, for portability), which can't rely
 // on realpath, so we instead re-materialise the subtree in the npm layout
 // Node's plain walk-up resolves: hoist each dependency to the subtree root
-// when that slot is free, and nest it directly under the requiring package
-// only when the root already holds a different version. This is what makes
-// a subtree with several majors of one package correct — claude-code-lint
-// pulls chalk 4 and 5, ora 5 and 9, cli-cursor 3 and 5, ... Every version
-// comes from the repo's real dirs, preserving pnpm's exact resolution.
+// when that slot is free, and on a version conflict nest it at the
+// SHALLOWEST node_modules dir that still sits below every shadowing copy on
+// the requirer's walk (see the destNm comment below — nesting at the
+// requirer itself re-created pnpm's full chain and blew Windows' MAX_PATH).
+// This is what makes a subtree with several majors of one package correct —
+// claude-code-lint pulls chalk 4 and 5, ora 5 and 9, cli-cursor 3 and 5, ...
+// Every version comes from the repo's real dirs, preserving pnpm's exact
+// resolution, and every recorded edge is re-verified against the FINAL tree
+// with Node's real walk-up semantics after all subtrees are placed.
 step("Verifying .pnpm store-path packages' dependency subtrees resolve inside dist");
 
 // Version present at <nmDir>/<name>/package.json, or null.
@@ -551,6 +667,10 @@ const storeFallbacks = [path.join(pnpmStoreDir, "node_modules"), distNmDir].filt
 let storeBackfilled = 0;
 const storeTripwireFailures = [];
 const storeBackfillReport = []; // `<key> :: <dep>@<version> @ <relative dest>`
+// Every dependency edge seen during subtree placement, re-verified against the
+// FINAL tree after all subtrees are done (a later shallow placement could in
+// principle shadow an edge that verified fine when it was processed).
+const storeEdgeChecks = []; // { fromDir, depName, depVersion, storeKey }
 
 // Place `pkgName`'s runtime dependencies (and, recursively, theirs) into a
 // store subtree rooted at `rootNm`. `resolveNms` is the ordered list of
@@ -588,7 +708,22 @@ function placeStoreSubtree(pkgName, pkgRepoDir, resolveNms, rootNm, storeKey, fa
     let destNm; // node_modules dir to place into, or null if already correct
     if (found === depVersion) destNm = null;
     else if (found === null) destNm = rootNm;      // unseen up-chain → hoist to subtree root
-    else destNm = resolveNms[0];                    // seen at another version → nest under requirer
+    else {
+      // Seen at another version up-chain: nest below the shadowing copy, but
+      // as SHALLOW as the walk allows. Nesting at the requirer's own
+      // node_modules (the old rule) re-created pnpm's full conflict chain
+      // (ora → cli-cursor → restore-cursor → signal-exit, each one level
+      // deeper) and pushed payload paths past Windows' MAX_PATH — makensis,
+      // which is not long-path-aware, aborted the NSIS bundle. Any slot
+      // strictly below the first copy of depName resolves identically for
+      // this requirer; the subtree root caps the search so a conflicting
+      // version never lands in the shared fallbacks (that would leak it into
+      // every other subtree). The final edge re-verification below catches
+      // any cross-edge shadowing this shallower placement could introduce.
+      const shadowIdx = resolveNms.findIndex((nm) => pkgVersionAt(nm, depName) !== null);
+      const rootIdx = resolveNms.indexOf(rootNm);
+      destNm = resolveNms[Math.max(0, Math.min(shadowIdx - 1, rootIdx))];
+    }
 
     if (destNm) {
       const destDir = path.join(destNm, depName);
@@ -611,6 +746,13 @@ function placeStoreSubtree(pkgName, pkgRepoDir, resolveNms, rootNm, storeKey, fa
     if (got !== depVersion) {
       failures.push(`.pnpm/${storeKey}: ${pkgName} -> ${depName}@${depVersion} (dist resolves ${got ?? "MISSING"})`);
     }
+    // Recorded for the whole-tree re-verification after ALL subtrees are done.
+    storeEdgeChecks.push({
+      fromDir: path.dirname(resolveNms[0]),
+      depName,
+      depVersion,
+      storeKey,
+    });
 
     // Recurse into the dependency's own subtree once — only when we placed
     // it (reused copies were already descended when first placed; fallback
@@ -620,13 +762,33 @@ function placeStoreSubtree(pkgName, pkgRepoDir, resolveNms, rootNm, storeKey, fa
       if (!recursed.has(depDir)) {
         recursed.add(depDir);
         const depSelfNm = path.join(depDir, "node_modules");
-        const depResolveNms =
-          destNm === rootNm
-            ? [depSelfNm, rootNm, ...fallbacks]     // hoisted: dep sits at the subtree root
-            : [depSelfNm, ...resolveNms];           // nested: dep sits inside the requirer
+        // The dep's visible dirs are its own node_modules plus everything
+        // from its physical placement slot upward — destNm is always a
+        // member of resolveNms (requirer's own nm, an intermediate ancestor,
+        // or rootNm), so slicing from it handles all three placements.
+        const depResolveNms = [depSelfNm, ...resolveNms.slice(resolveNms.indexOf(destNm))];
         placeStoreSubtree(depName, depRepoDir, depResolveNms, rootNm, storeKey, fallbacks, recursed, failures);
       }
     }
+  }
+}
+
+// Node-accurate module resolution INSIDE dist: from `fromDir`, check each
+// ancestor directory's `node_modules` up to and including dist's top level
+// (this naturally covers the requirer's own node_modules, every intermediate
+// store slot, the `.pnpm/node_modules` hoist dir, and dist's top level — the
+// exact walk the packaged server performs at runtime).
+function resolveVersionInDist(fromDir, depName) {
+  let dir = fromDir;
+  for (;;) {
+    if (path.basename(dir) !== "node_modules") {
+      const v = pkgVersionAt(path.join(dir, "node_modules"), depName);
+      if (v !== null) return v;
+    }
+    if (dir === outDir) return null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null; // filesystem root — outside dist, give up
+    dir = parent;
   }
 }
 
@@ -670,6 +832,24 @@ if (storeBackfilled > 0) {
   );
 } else {
   step("All .pnpm store-path packages' dependency subtrees already resolve inside dist");
+}
+
+// Whole-tree re-verification: the per-edge tripwire above ran at placement
+// time, but a LATER subtree's shallow placement can shadow an edge that
+// verified fine when it was processed. Re-check every recorded edge against
+// the finished tree with Node's real walk-up semantics. Must run before the
+// store-key shortening pass below (edges reference original store paths).
+if (storeEdgeChecks.length > 0) {
+  step(`Re-verifying ${storeEdgeChecks.length} store-subtree dependency edges against the final tree`);
+  for (const { fromDir, depName, depVersion, storeKey } of storeEdgeChecks) {
+    const got = resolveVersionInDist(fromDir, depName);
+    if (got !== depVersion) {
+      storeTripwireFailures.push(
+        `.pnpm/${storeKey} (final tree): ${path.relative(outDir, fromDir).split(path.sep).join("/")} -> ` +
+          `${depName}@${depVersion} (dist resolves ${got ?? "MISSING"})`
+      );
+    }
+  }
 }
 if (storeTripwireFailures.length > 0) {
   fail(
@@ -1005,6 +1185,37 @@ require("./server.next.js");
 `;
 writeFileSync(generatedServerPath, wrapper);
 step("Wrote server.js wrapper (sets MINDER_SERVER_ROOT, ABI check, delegates to server.next.js)");
+
+// --- Shorten over-long .pnpm store keys (Windows MAX_PATH budget) ---
+//
+// Peer-suffixed store keys like `claude-code-lint@0.5.0_@types+node@22.20.0`
+// plus a package's own bundled node_modules chain can push a payload path past
+// Windows' 260-char MAX_PATH once a CI checkout prefix is added — makensis
+// (Tauri's NSIS bundler) is not long-path-aware and aborts on the first such
+// file. The whole payload is fully DEREFERENCED by this point (no symlinks
+// survive copyDereferenced), so a store-key directory name is opaque to Node's
+// walk-up resolution — nothing references it by name. Renaming long keys to
+// `<name>@<8-char content hash>` is therefore free, and keeps the package name
+// visible for debugging. Runs LAST so none of the closure-backfill logic above
+// (which does address store dirs by their real key) sees a renamed dir. The
+// hygiene gate enforces the resulting path budget (MAX_PAYLOAD_REL_PATH).
+step("Shortening over-long .pnpm store keys");
+const distPnpmDir = path.join(outDir, "node_modules", ".pnpm");
+if (existsSync(distPnpmDir)) {
+  let shortened = 0;
+  for (const key of readdirSync(distPnpmDir)) {
+    if (key === "node_modules") continue; // the hoist dir, not a store key
+    const namePart = key.startsWith("@")
+      ? key.slice(0, key.indexOf("@", 1))
+      : key.slice(0, key.indexOf("@"));
+    if (!namePart) continue; // not a <name>@<version> shaped key — leave it
+    const shortKey = `${namePart}@${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
+    if (shortKey.length >= key.length) continue; // already short — keep the readable name
+    renameSync(path.join(distPnpmDir, key), path.join(distPnpmDir, shortKey));
+    shortened++;
+  }
+  step(`  shortened ${shortened} store key(s)`);
+}
 
 // --- Summary ---
 step(`Done. Package assembled at ${path.relative(root, outDir)}`);
