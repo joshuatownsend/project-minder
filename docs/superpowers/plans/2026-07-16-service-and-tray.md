@@ -291,7 +291,7 @@ needed for a personal tool.
 | C2 autostart toggle | Sonnet | C1 | ☑ done | #298 |
 | C3 native notifications | Sonnet | C1 | ☑ done | #300 |
 | C4 packaging CI | Opus | C1 | ☑ done | #301 |
-| C5 signing + updater (optional) | Sonnet | C4 | ☐ blocked on user decision | |
+| C5 signing + updater (optional) | Sonnet | C4 | ☐ deferred 2026-07-18 — staying unsigned; revisit if the project gets real users (tracked in TODO.md) | |
 | C6 tray docs | Haiku | C2, C3 | ☑ done | #302 |
 
 **Suggested session grouping:** Session 1: A1 + C0 (independent, parallelizable). Session 2:
