@@ -158,6 +158,28 @@ jobs:
       # Build the tray app + bundle the installers. UNSIGNED (see header). No
       # beforeBuildCommand runs (frontendDist is a static ./frontend), so this
       # does not rebuild the Next app or spawn the server.
+      # Stamp the real app version into tauri.conf.json before bundling, so
+      # installers don't ship the placeholder 0.1.0. package.json is the single
+      # source of truth (release.yml's chore(release) bumps it and the tag
+      # matches). On a tag push, assert package.json == tag (minus the leading
+      # `v`) and fail loudly on mismatch — catches a mistagged release. Dispatch
+      # dry runs stamp package.json as-is. Rewriting the workspace file (vs a
+      # `--config` inline-JSON merge) keeps the build step shell-agnostic — no
+      # cross-shell JSON quoting between pwsh (Windows) and bash.
+      - name: Stamp app version from package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::package.json version ($VERSION) != tag $GITHUB_REF_NAME (expected $TAG_VERSION). Fix the version bump or the tag before releasing."
+              exit 1
+            fi
+          fi
+          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');console.log('stamped tauri.conf.json version =',c.version);" "$VERSION"
+
       - name: Build Tauri installers
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
 
@@ -193,13 +215,15 @@ jobs:
           if-no-files-found: error
 
       # Tag builds only: attach installers to the tag's GitHub Release. release.yml
-      # (the existing "Release" workflow) owns creating the Release + generated
-      # notes for the same `v*` tag; this waits for it, then uploads. If it never
-      # appears (e.g. this workflow was somehow triggered without release.yml), it
-      # creates the Release as a fallback so installers are never orphaned.
-      # Tag PUSH only — never a manual dispatch, even one targeting a tag ref
-      # (github.ref would be refs/tags/v… there too). Gating on event_name keeps
-      # manual runs artifact-only; this is the sole Release-mutating step.
+      # (the existing "Release" workflow) is the SOLE creator of the Release — it
+      # runs install/lint/typecheck/test/build first, then creates the Release
+      # with generated notes for the same `v*` tag. This step NEVER creates the
+      # Release (single-writer by design: a matrix-job create would bypass that
+      # validation and could race/collide with release.yml); it only waits for
+      # the Release to appear and then uploads. Tag PUSH only — never a manual
+      # dispatch, even one targeting a tag ref (github.ref would be refs/tags/v…
+      # there too); gating on event_name keeps manual runs artifact-only. This is
+      # the sole Release-mutating step.
       - name: Attach installers to the GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -208,7 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          echo "waiting for Release $TAG to exist (created by release.yml)…"
+          echo "waiting for Release $TAG (created by release.yml, the sole Release creator)…"
           # `gh release view` inside the `if` condition can't trip `set -e`
           # (conditionals are exempt), so a transient probe failure just
           # retries the loop rather than killing the job.
@@ -220,23 +244,12 @@ jobs:
             echo "  not yet ($i/60) — sleeping 10s"
             sleep 10
           done
-          # Fallback if release.yml never created the Release. Every OS matrix
-          # job runs this step independently and may reach `gh release create`
-          # for the same tag at once — only one wins the create, the rest get a
-          # non-zero "already exists". That's fine and expected: tolerate the
-          # create failure (|| true), then re-check. We only hard-fail if the
-          # Release STILL doesn't exist afterwards (a real auth/network fault,
-          # not a lost race), so a genuine failure is never swallowed.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG still missing — attempting to create it (racing peer jobs is OK)."
-            gh release create "$TAG" --generate-notes --title "Project Minder $TAG" \
-              || echo "create returned non-zero (a peer matrix job likely won the race) — re-checking."
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              echo "::error::Release $TAG could not be created and does not exist (auth/network?)."
-              exit 1
-            fi
+            echo "::error::Release $TAG does not exist after ~10 min. release.yml is the sole creator of the Release (it validates then creates it); this step never creates one, to preserve single-writer + validation. Ensure release.yml succeeded for $TAG — recent runs:"
+            gh run list --workflow=release.yml --branch "$TAG" --limit 5 || true
+            exit 1
           fi
-          # Idempotent regardless of who created the Release; concurrent jobs
-          # upload distinct per-OS installer files (--clobber replaces on retry).
+          # Idempotent: concurrent matrix jobs upload distinct per-OS installer
+          # files; --clobber also covers a same-file re-run.
           gh release upload "$TAG" installers/* --clobber
           echo "uploaded installers to Release $TAG"
