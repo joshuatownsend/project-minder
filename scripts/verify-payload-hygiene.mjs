@@ -16,7 +16,7 @@
 //   payloadDir defaults to dist/minder-server (relative to repo root).
 // Exit 0 = clean; exit 1 = forbidden entries found (or dir missing).
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,9 +56,16 @@ if (!existsSync(payloadDir)) {
   );
 }
 
-// Recursively walk, collecting every forbidden path. We do NOT follow symlinks
-// (lstat, not stat) — a symlink named `.git` is just as forbidden, and we never
-// want to descend out of the payload via one.
+// Recursively walk, collecting every forbidden path. We do NOT follow links out
+// of the payload: `readdirSync(withFileTypes)` returns Dirents whose type comes
+// from the entry itself (lstat-like, never dereferenced), so a directory
+// symlink OR a Windows junction reports `isSymbolicLink() === true` and
+// `isDirectory() === false` — the recursion guard below skips both. A link
+// named `.git` is still caught by name (the name check runs before the type
+// check), so nothing forbidden slips through; we just never descend THROUGH a
+// link (no escaping the payload, no cycles). This is defense-in-depth anyway:
+// package-standalone.mjs fully dereferences the payload, so real forbidden
+// content is materialized in place and caught by name regardless.
 const offenders = [];
 
 function walk(dir) {
@@ -81,9 +88,12 @@ function walk(dir) {
       // and it may be huge (a nested `.git`).
       continue;
     }
-    // Only recurse into real directories (not symlinks, to avoid escaping the
-    // payload). isDirectory() on a Dirent reflects the entry type from readdir.
-    if (entry.isDirectory()) {
+    // Recurse into real subdirectories only. isDirectory() is already false for
+    // symlinks/junctions on the Node the packaging job runs (see the walk
+    // comment above); the explicit isSymbolicLink() skip makes that intent
+    // load-bearing and defends any Node build that surfaces a link as a plain
+    // directory.
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
       walk(full);
     }
   }

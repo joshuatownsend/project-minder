@@ -42,12 +42,10 @@ on:
   push:
     tags:
       - 'v*'
+  # A manual run is ALWAYS a dry run: it has no tag, so the release-upload step
+  # (gated on refs/tags/v*) is skipped and installers only land on the workflow
+  # run as artifacts. No inputs — there is nothing to toggle.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Dry run: build installers and upload to the run only (no Release).'
-        type: boolean
-        default: true
 
 permissions:
   contents: write # attach installers to the GitHub Release

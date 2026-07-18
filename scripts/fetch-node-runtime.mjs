@@ -11,9 +11,11 @@
 // prebuilt for Node 22's ABI 127 on every target OS, and the repo's Windows CI
 // already builds on 22.12.0 for exactly this reason).
 //
-// Integrity: the archive's SHA-256 is verified against the signed
-// SHASUMS256.txt published alongside it on nodejs.org before anything is
-// extracted. A mismatch aborts the build.
+// Integrity: the archive's SHA-256 is checked against the SHASUMS256.txt that
+// nodejs.org publishes alongside it (both fetched over HTTPS) before anything
+// is extracted; a mismatch aborts the build. This is an integrity check against
+// the published checksum, NOT a cryptographic signature check — we do not
+// verify the GPG signature of SHASUMS256.txt.
 //
 // Resulting layout (matches src-tauri/src/config.rs `bundled_node_candidates`):
 //   Windows:      dist/node/node.exe
