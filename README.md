@@ -13,6 +13,54 @@
 ---
 Check out [https://joshuatownsend.github.io/project-minder/](https://joshuatownsend.github.io/project-minder/) for more info and interface screenshots!
 ---
+
+## Install
+
+### Option 1 — Desktop app (recommended)
+
+The fastest way to get started. The installer bundles the dashboard server and an embedded Node runtime — nothing else to install.
+
+1. Download the installer for your platform from [GitHub Releases](https://github.com/joshuatownsend/project-minder/releases): Windows (NSIS `.exe`), macOS Apple Silicon (`.dmg`), macOS Intel (`.app.tar.gz` — extract, then drag the app to Applications), or Linux (`.AppImage` / `.deb`).
+2. Run the installer. The builds are unsigned: on Windows, SmartScreen warns — click "More info" → "Run anyway"; on macOS, right-click the app → Open on first launch.
+3. Launch the app. A tray icon appears; click **Open Dashboard** to open the web UI at `http://localhost:4100`.
+4. Optional: click **Start at login** in the tray menu to enable autostart.
+
+By default Project Minder scans `C:\dev` on Windows and `~/dev` on macOS/Linux. To scan different directories, change the scan roots from the dashboard's **Config** page, or edit `~/.minder/.minder.json`. See [Tray App help](docs/help/tray-app.md) for the menu reference, notifications, and troubleshooting.
+
+### Option 2 — Run from source
+
+**Prerequisites:** Node.js ≥ 20.19 and [pnpm](https://pnpm.io) (run `corepack enable` to use the version pinned in `package.json`) — runs on macOS, Linux, and Windows
+
+```bash
+git clone https://github.com/joshuatownsend/project-minder.git
+cd project-minder
+pnpm install
+pnpm setup-hooks   # installs the pre-commit hook (lint + typecheck + test)
+```
+
+Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `pnpm dev` (create it if it doesn't exist):
+
+```json
+{
+  "devRoots": ["/home/you/dev"]
+}
+```
+
+On Windows use `C:\\dev` (or whatever your dev root is).
+
+Then start the dev server:
+
+```bash
+pnpm dev
+# Open http://localhost:4100
+```
+
+### Option 3 — Headless service mode
+
+Run the dashboard as a background service that starts at logon — no tray icon, no terminal. See [Service Mode](#service-mode-background-operation) below.
+
+---
+
 ## Features
 
 ### Navigation & Power-User UX
@@ -173,39 +221,9 @@ Full tool/resource reference: `docs/help/mcp-server.md`.
 
 ---
 
-## Quick Start
-
-**Prerequisites:** Node.js ≥ 20.19 and [pnpm](https://pnpm.io) (run `corepack enable` to use the version pinned in `package.json`) — runs on macOS, Linux, and Windows
-
-```bash
-git clone https://github.com/joshuatownsend/project-minder.git
-cd project-minder
-pnpm install
-pnpm setup-hooks   # installs the pre-commit hook (lint + typecheck + test)
-```
-
-Configure your scan root(s) in `.minder.json` in the Project Minder repo root — the same directory where you run `pnpm dev` (create it if it doesn't exist):
-
-```json
-{
-  "devRoots": ["/home/you/dev"]
-}
-```
-
-On Windows use `C:\\dev` (or whatever your dev root is).
-
-Then start the dev server:
-
-```bash
-pnpm dev
-# Open http://localhost:4100
-```
-
----
-
 ## Configuration
 
-All settings live in `.minder.json` at the repo root. The in-app **Config page** (`/config`) provides a full UI for most of these.
+All settings live in `.minder.json`. Where it is depends on how you run Minder: at the repo root when running from source (`pnpm dev`/`pnpm start`), and at `~/.minder/.minder.json` for the installed desktop tray app (the tray points `MINDER_STATE_DIR` there). Service mode installed via `pnpm service:*` does not set `MINDER_STATE_DIR`, so the file resolves from the server's working directory — `dist/minder-server/.minder.json` for a standalone-package install, the repo root for the from-source fallback; set `MINDER_STATE_DIR` in the service environment to relocate it. The in-app **Config page** (`/config`) provides a full UI for most of these.
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -255,18 +273,11 @@ See [Service Mode](docs/help/service-mode.md) help for platform details, port co
 
 ### Desktop Tray App
 
-On desktop machines, run Project Minder as a native tray application with a graphical menu, autostart checkbox, and built-in notifications for new manual steps:
+On desktop machines, run Project Minder as a native tray application with a graphical menu, autostart checkbox, and built-in notifications for new manual steps. Installation is covered in [Install → Option 1](#option-1--desktop-app-recommended) above.
 
-1. Download the installer for your platform from [GitHub Releases](https://github.com/joshuatownsend/project-minder/releases) — look for version tags starting with `v`.
-2. Run the installer (Windows: expect a SmartScreen warning for unsigned installers — click "More info" → "Run anyway").
-3. Launch the app; the tray icon appears immediately. Click "Open Dashboard" to access the web UI.
-4. Optional: click "Start at login" in the tray menu to enable autostart.
+The tray app manages the server process, displays server status in the menu, and sends OS notifications when new manual steps are logged during Claude Code sessions.
 
-**Available installers:** Windows (NSIS `.exe`), macOS (`.dmg` for Apple Silicon or Intel), Linux (`.AppImage` or `.deb` on ubuntu-22.04 baseline).
-
-The tray app packages the dashboard server with an embedded Node runtime, so no dependencies need to be installed. The app manages the server process, displays status in the menu, and sends OS notifications when new manual steps are logged during Claude Code sessions.
-
-For local development or detailed troubleshooting, see [Tray App](docs/help/tray-app.md) help.
+For the menu reference, running the tray from source, and troubleshooting, see [Tray App](docs/help/tray-app.md) help.
 
 ---
 
