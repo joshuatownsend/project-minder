@@ -1,9 +1,12 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import { normalizePathKey, isWindows } from "../platform";
 import { encodePath, type ConversationEntry } from "./claudeConversations";
 import { inferSessionStatus } from "./sessionStatus";
+import { readConfig } from "../config";
+import { getReadableClaudeHomes } from "../claudeHome";
+import { mapForeignPath, mapLocalPath } from "../pathMapping";
+import type { PathMapping } from "../types";
 import type { SessionStatus } from "../types";
 
 interface ClaudeSessionResult {
@@ -21,55 +24,73 @@ interface HistoryEntry {
   sessionId?: string;
 }
 
-// Cache parsed history to avoid reading the file 61 times
-let cachedHistory: Map<string, HistoryEntry[]> | null = null;
-// Cache worktree dir listing to avoid 61× readdir on every scan batch
-let cachedWorktreeDirs: string[] | null = null;
+/** Per-Claude-home snapshot: parsed history + projects-dir listing. */
+interface HomeView {
+  home: string;
+  historyMap: Map<string, HistoryEntry[]>;
+  projectDirs: string[];
+}
+
+interface ViewsCache {
+  views: HomeView[];
+  mappings: PathMapping[];
+}
+
+// Cache parsed history/views to avoid re-reading the files 61 times per scan.
+// Module-level (not globalThis) on purpose: tests reset it via vi.resetModules().
+let cachedViews: ViewsCache | null = null;
 let cacheTime = 0;
 const HISTORY_CACHE_TTL = 60_000; // 1 minute
 
-async function getHistoryByProject(): Promise<Map<string, HistoryEntry[]>> {
-  if (cachedHistory && Date.now() - cacheTime < HISTORY_CACHE_TTL) {
-    return cachedHistory;
-  }
-
-  const historyPath = path.join(os.homedir(), ".claude", "history.jsonl");
+async function buildHomeView(home: string, mappings: PathMapping[]): Promise<HomeView> {
   const map = new Map<string, HistoryEntry[]>();
-
   try {
-    const content = await fs.readFile(historyPath, "utf-8");
-    const lines = content.split("\n").filter(Boolean);
-
-    for (const line of lines) {
+    const content = await fs.readFile(path.join(home, "history.jsonl"), "utf-8");
+    for (const line of content.split("\n").filter(Boolean)) {
       try {
         const entry = JSON.parse(line) as HistoryEntry;
-        if (entry.project) {
-          // Lowercased key: Windows drive-letter/segment casing recorded in
-          // history.jsonl can differ from the scanner's casing (B1) — a
-          // plain normalizePath() would miss the lookup and silently blank
-          // sessionCount/lastPrompt/lastSessionDate for the project.
-          const key = normalizePathKey(entry.project);
-          const list = map.get(key) || [];
-          list.push(entry);
-          map.set(key, list);
-        }
+        if (!entry.project) continue;
+        // Two normalizations before the lookup key:
+        //  - mapForeignPath: a WSL home records Linux paths (/home/josh/dev/x);
+        //    mapping them onto this machine's view (\\wsl.localhost\...) lets
+        //    them match the scanner's projectPath. Unmapped paths pass through.
+        //  - normalizePathKey: lowercased on Windows — drive-letter/segment
+        //    casing in history.jsonl can differ from the scanner's casing (B1).
+        const key = normalizePathKey(mapForeignPath(entry.project, mappings));
+        const list = map.get(key) || [];
+        list.push(entry);
+        map.set(key, list);
       } catch {
         // Skip invalid lines
       }
     }
   } catch {
-    // No history file
+    // No history file in this home
   }
 
-  cachedHistory = map;
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  let projectDirs: string[] = [];
   try {
-    cachedWorktreeDirs = await fs.readdir(projectsDir);
+    projectDirs = await fs.readdir(path.join(home, "projects"));
   } catch {
-    cachedWorktreeDirs = [];
+    // No projects dir in this home
   }
+
+  return { home, historyMap: map, projectDirs };
+}
+
+async function getHomeViews(): Promise<ViewsCache> {
+  if (cachedViews && Date.now() - cacheTime < HISTORY_CACHE_TTL) {
+    return cachedViews;
+  }
+  const config = await readConfig();
+  const mappings = config.pathMappings ?? [];
+  // getReadableClaudeHomes applies the never-wake rule: a home inside a
+  // stopped WSL distro is left out for this cycle rather than auto-started.
+  const homes = await getReadableClaudeHomes(config);
+  const views = await Promise.all(homes.map((h) => buildHomeView(h, mappings)));
+  cachedViews = { views, mappings };
   cacheTime = Date.now();
-  return map;
+  return cachedViews;
 }
 
 // Read the tail of a JSONL file and infer session status from it.
@@ -98,54 +119,73 @@ export async function scanClaudeSessions(
   const result: ClaudeSessionResult = { sessionCount: 0 };
   const normalizedPath = normalizePathKey(projectPath);
 
-  const historyMap = await getHistoryByProject();
-  const projectEntries = historyMap.get(normalizedPath) || [];
+  const { views, mappings } = await getHomeViews();
 
-  // Count worktree sessions: sibling dirs named <parent-encoded>--<type>-worktrees-*
-  // in ~/.claude/projects/. The dir listing is cached alongside historyMap (same TTL)
-  // to avoid 61× readdir per scan batch.
-  const parentEncoded = encodePath(projectPath);
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  const allDirs = cachedWorktreeDirs ?? [];
-  // Case-fold the startsWith comparison only on Windows — the on-disk dir name
-  // is encoded from whatever cwd casing was active during that Claude Code
-  // session, which can differ from the freshly-encoded parentEncoded (B1). On
-  // POSIX, encoded dir names differing only by case are different projects, so
-  // fold nothing there (PR #251 review).
+  // Encoded-dir candidates for this project's session dirs: the local path as
+  // recorded by a same-machine Claude, plus the foreign form (e.g. the Linux
+  // path a WSL-side Claude recorded) when a mapping rewrites it.
+  const foreignPath = mapLocalPath(projectPath, mappings);
+  const encodedCandidates = [...new Set([encodePath(projectPath), encodePath(foreignPath)])];
+
+  // Case-fold comparisons only on Windows — the on-disk dir name is encoded
+  // from whatever cwd casing was active during that Claude Code session (B1).
+  // On POSIX, encoded dir names differing only by case are different projects
+  // (PR #251 review).
   const fold = (s: string): string => (isWindows ? s.toLowerCase() : s);
-  const parentEncodedFolded = fold(parentEncoded);
+
+  const allEntries: { entry: HistoryEntry; home: string }[] = [];
   let worktreeSessionCount = 0;
-  for (const d of allDirs) {
-    const suffix = d.slice(parentEncoded.length);
-    if (fold(d).startsWith(parentEncodedFolded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
+
+  for (const view of views) {
+    for (const entry of view.historyMap.get(normalizedPath) || []) {
+      allEntries.push({ entry, home: view.home });
+    }
+
+    // Count worktree sessions: sibling dirs named <parent-encoded>--<type>-worktrees-*
+    // in this home's projects dir. A dir is counted once even if it matches
+    // more than one encoded candidate.
+    const matched = new Set<string>();
+    for (const candidate of encodedCandidates) {
+      const candidateFolded = fold(candidate);
+      for (const d of view.projectDirs) {
+        if (matched.has(d)) continue;
+        const suffix = d.slice(candidate.length);
+        if (fold(d).startsWith(candidateFolded + "--") && /^--(?:[a-z]+-)?worktrees-/.test(suffix)) {
+          matched.add(d);
+        }
+      }
+    }
+    for (const d of matched) {
       try {
-        const entries = await fs.readdir(path.join(projectsDir, d));
+        const entries = await fs.readdir(path.join(view.home, "projects", d));
         worktreeSessionCount += entries.filter((e) => e.endsWith(".jsonl")).length;
       } catch { /* dir removed between cache and now */ }
     }
   }
 
-  result.sessionCount = projectEntries.length + worktreeSessionCount;
+  result.sessionCount = allEntries.length + worktreeSessionCount;
 
-  if (projectEntries.length > 0) {
-    projectEntries.sort((a, b) => {
-      const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+  if (allEntries.length > 0) {
+    allEntries.sort((a, b) => {
+      const ta = a.entry.timestamp ? new Date(a.entry.timestamp).getTime() : 0;
+      const tb = b.entry.timestamp ? new Date(b.entry.timestamp).getTime() : 0;
       return tb - ta;
     });
 
-    const latest = projectEntries[0];
-    result.lastSessionDate = latest.timestamp;
-    result.lastPromptPreview = latest.display
-      ? latest.display.slice(0, 120)
+    const latest = allEntries[0];
+    result.lastSessionDate = latest.entry.timestamp;
+    result.lastPromptPreview = latest.entry.display
+      ? latest.entry.display.slice(0, 120)
       : undefined;
 
-    // Infer live status from the most-recent session JSONL.
-    if (latest.sessionId) {
-      result.mostRecentSessionId = latest.sessionId;
-      const encoded = encodePath(projectPath);
+    // Infer live status from the most-recent session JSONL. The session dir is
+    // encoded from the path AS RECORDED in the home that owns the entry (a WSL
+    // home encodes the Linux path), so encode entry.project — not projectPath.
+    if (latest.entry.sessionId) {
+      result.mostRecentSessionId = latest.entry.sessionId;
+      const encoded = encodePath(latest.entry.project ?? projectPath);
       const jsonlPath = path.join(
-        os.homedir(), ".claude", "projects", encoded, `${latest.sessionId}.jsonl`
+        latest.home, "projects", encoded, `${latest.entry.sessionId}.jsonl`
       );
       result.mostRecentSessionStatus = await inferStatusFromJSONL(jsonlPath);
     }

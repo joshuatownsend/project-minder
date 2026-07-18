@@ -52,6 +52,33 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
+  // Extra Claude home dirs (multi-home session correlation). Empty array is
+  // valid — it clears the extras (the primary ~/.claude is implicit).
+  if (Array.isArray(body.claudeHomes)) {
+    if (body.claudeHomes.some((h: unknown) => typeof h !== "string")) {
+      return NextResponse.json({ error: "claudeHomes elements must be strings" }, { status: 400 });
+    }
+    const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
+    patches.push((c) => { c.claudeHomes = homes; });
+  }
+
+  // Cross-environment path prefix mappings ({from, to} pairs, both non-empty).
+  if (Array.isArray(body.pathMappings)) {
+    for (const m of body.pathMappings as unknown[]) {
+      const pair = m as { from?: unknown; to?: unknown };
+      if (
+        typeof pair !== "object" || pair === null ||
+        typeof pair.from !== "string" || !pair.from.trim() ||
+        typeof pair.to !== "string" || !pair.to.trim()
+      ) {
+        return NextResponse.json({ error: "pathMappings entries must be { from, to } non-empty strings" }, { status: 400 });
+      }
+    }
+    const mappings = (body.pathMappings as { from: string; to: string }[])
+      .map((m) => ({ from: m.from.trim(), to: m.to.trim() }));
+    patches.push((c) => { c.pathMappings = mappings; });
+  }
+
   if (typeof body.scanBatchSize === "number") {
     const size = Math.round(body.scanBatchSize);
     if (size < 1 || size > 50) {

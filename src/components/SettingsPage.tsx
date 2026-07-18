@@ -17,6 +17,7 @@ import { CostSection } from "@/components/settings/CostSection";
 import { AdaptersSection } from "@/components/settings/AdaptersSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ScanRootsSection } from "@/components/settings/ScanRootsSection";
+import { ClaudeHomesSection } from "@/components/settings/ClaudeHomesSection";
 import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
@@ -45,6 +46,7 @@ const DB_STATUS_COLOR: Record<InitStatus["state"], string> = {
 type SectionKey =
   | "features"
   | "scan-roots"
+  | "claude-homes"
   | "appearance"
   | "cost"
   | "notifications"
@@ -65,6 +67,7 @@ interface SectionDef {
 const SECTIONS: SectionDef[] = [
   { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
   { key: "scan-roots",    label: "Scan Roots",     comingSoon: false, description: "Directories scanned for projects — add extra drives or WSL locations." },
+  { key: "claude-homes",  label: "Claude Homes",   comingSoon: false, description: "Extra .claude session sources (WSL) + cross-environment path mappings." },
   { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
   { key: "cost",          label: "Cost",           comingSoon: false, description: "Currency, pricing rules, schedule mode for burndown." },
   { key: "notifications", label: "Notifications",  comingSoon: false, description: "Push and Telegram event toggles." },
@@ -276,6 +279,9 @@ export function SettingsPage() {
         )}
         {active === "scan-roots" && (
           <ScanRootsSection config={config} onConfigChange={patchConfig} />
+        )}
+        {active === "claude-homes" && (
+          <ClaudeHomesSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "notifications" && (
           <NotificationsSection config={config} onConfigChange={patchConfig} />
