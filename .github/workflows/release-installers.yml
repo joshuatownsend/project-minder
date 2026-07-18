@@ -180,17 +180,21 @@ jobs:
           fi
           node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');console.log('stamped tauri.conf.json version =',c.version);" "$VERSION"
 
-      # macOS: XProtect's behavior service scans freshly-written files and
-      # holds locks that make hdiutil fail with "Resource busy" during DMG
-      # creation — a persistent GitHub-runner issue that bites hardest with
-      # large payloads (this bundle carries ~50k node_modules files; both
-      # Intel attempts failed after ~12 silent minutes while the faster arm64
-      # runner escaped the scan window). Stopping XProtect before bundling is
-      # the widely-used workaround (actions/runner-images#7522).
-      - name: Workaround macOS hdiutil resource-busy (stop XProtect)
+      # macOS: two background services hold locks on the freshly-written /
+      # freshly-mounted DMG contents and break bundling on the slower Intel
+      # runners (the arm64 runner finishes before the scans pile up):
+      #   - XProtect's behavior service scans new files ("Resource busy" on
+      #     hdiutil create — actions/runner-images#7522);
+      #   - Spotlight (mds) indexes the mounted interstitial volume (~50k
+      #     node_modules files), so `hdiutil detach` dies with "timeout for
+      #     DiskArbitration expired / drive not detached" (create-dmg#72 —
+      #     the exact failure the --verbose retry surfaced).
+      # Stop XProtect and disable Spotlight indexing before bundling.
+      - name: Workaround macOS hdiutil locks (stop XProtect, disable Spotlight)
         if: startsWith(matrix.os, 'macos')
         run: |
           sudo pkill -9 XProtect || true
+          sudo mdutil -a -i off || true
           sleep 3
 
       # Two attempts: macOS DMG bundling (bundle_dmg.sh -> hdiutil) can still
