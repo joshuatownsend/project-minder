@@ -87,7 +87,19 @@ describe("shutdown ordering + isolation", () => {
   });
 });
 
+// Fake timers here so the budget/timeout behavior is driven deterministically
+// instead of racing a real ~60ms wall-clock deadline (issue #292: this block
+// flaked on slow CI legs). We advance the clock explicitly past the budget and
+// assert what the mechanism proves — a hung disposer times out, budget-exhausted
+// disposers are skipped, ordering is preserved — with zero real-clock sensitivity.
 describe("shutdown timeout + budget", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("times out a hung disposer and skips the remaining budget-exhausted ones", async () => {
     const late = vi.fn(); // registered first → disposed LAST
     // A disposer that never resolves — must not hang the whole shutdown.
@@ -96,16 +108,15 @@ describe("shutdown timeout + budget", () => {
     onShutdown("late", late);
     onShutdown("hang", hang); // disposed FIRST, consumes the whole budget
 
-    const start = Date.now();
-    await shutdown("signal", { timeoutMs: 60 });
-    const elapsed = Date.now() - start;
+    const p = shutdown("signal", { timeoutMs: 60 });
+    // Advance past the 60ms budget: the hung disposer's withTimeout rejects, and
+    // by then the overall deadline is spent so the earlier-registered disposer
+    // is skipped rather than run.
+    await vi.advanceTimersByTimeAsync(60);
+    await p; // resolves (bounded) — proves it isn't left hanging forever
 
     expect(hang).toHaveBeenCalledTimes(1);
-    // Budget spent on the hung disposer → the earlier-registered one is skipped.
     expect(late).not.toHaveBeenCalled();
-    // Bounded by the overall deadline, not left to hang forever.
-    expect(elapsed).toBeGreaterThanOrEqual(50);
-    expect(elapsed).toBeLessThan(1000);
   });
 
   it("still runs fast disposers registered after a (later-disposed) slow one", async () => {
@@ -115,7 +126,11 @@ describe("shutdown timeout + budget", () => {
     onShutdown("slow", slow);
     onShutdown("fast", fast);
 
-    await shutdown("signal", { timeoutMs: 60 });
+    const p = shutdown("signal", { timeoutMs: 60 });
+    // The fast disposer resolves immediately (microtask); advancing the clock
+    // then times out the hung one so shutdown() completes.
+    await vi.advanceTimersByTimeAsync(60);
+    await p;
 
     expect(fast).toHaveBeenCalledTimes(1);
     expect(slow).toHaveBeenCalledTimes(1);
