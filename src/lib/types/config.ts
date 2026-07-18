@@ -85,12 +85,28 @@ export interface PricingRule {
   cacheCreateUsdPerMillion?: number;
 }
 
+/** One cross-environment path prefix rewrite. See MinderConfig.pathMappings. */
+export interface PathMapping {
+  /** Prefix as recorded by the foreign environment (e.g. "/home/josh"). */
+  from: string;
+  /** How this machine reaches the same directory (e.g. "\\wsl.localhost\Ubuntu-26.04\home\josh"). */
+  to: string;
+}
+
 export interface MinderConfig {
   statuses: Record<string, ProjectStatus>;
   hidden: string[]; // directory names to skip during scan
   portOverrides: Record<string, number>; // slug -> custom dev port
   devRoot: string; // root directory to scan for projects (kept for backward compat; use getDevRoots())
   devRoots?: string[]; // multiple scan roots; if set, takes precedence over devRoot
+  /** Additional Claude home dirs beyond ~/.claude (e.g. a WSL distro's
+   *  \\wsl.localhost\<distro>\home\<user>\.claude). Use getClaudeHomes(). */
+  claudeHomes?: string[];
+  /** Cross-environment path prefix mappings: how a path recorded inside another
+   *  environment (`from`, e.g. "/home/josh") is reached from this machine
+   *  (`to`, e.g. "\\wsl.localhost\Ubuntu-26.04\home\josh"). Lets sessions
+   *  recorded in a WSL distro correlate with their UNC-scanned projects. */
+  pathMappings?: PathMapping[];
   scanBatchSize?: number; // projects scanned in parallel per root (default 10)
   defaultSort?: "activity" | "name" | "claude"; // dashboard default sort
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
