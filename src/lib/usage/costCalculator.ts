@@ -3,6 +3,7 @@ import path from "path";
 import type { ModelPricing, UsageTurn } from "@/lib/usage/types";
 import type { PricingRule } from "@/lib/types";
 import { matchPricingRule, applyPricingOverlay } from "@/lib/usage/pricingRules";
+import { resolveStateDir } from "@/lib/serverRoot";
 
 // ── Hardcoded fallback pricing (per token) ──────────────────────────────────
 
@@ -57,7 +58,7 @@ export function getPricingRules(): PricingRule[] {
 
 // ── Cache paths ──────────────────────────────────────────────────────────────
 
-const CACHE_DIR = path.join(process.cwd(), ".cache");
+const CACHE_DIR = path.join(resolveStateDir(), ".cache");
 const PRICING_CACHE_FILE = path.join(CACHE_DIR, "litellm-pricing.json");
 const LITELLM_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";

@@ -23,6 +23,15 @@ import "server-only";
 // `MINDER_INDEXER=0` and `MINDER_USE_DB=0`.
 
 export async function startIngest(): Promise<void> {
+  // Install process-lifecycle plumbing (OS signal handlers + the stdin control
+  // channel) FIRST, BEFORE the MINDER_BOOTSTRAP collectors gate below. Graceful
+  // stop must not be coupled to the collectors opt-out: a tray/supervisor can
+  // launch this sidecar with MINDER_BOOTSTRAP=0, and it still has to shut down
+  // cleanly on `shutdown\n` / SIGTERM instead of being force-killed after the
+  // 6s grace window. Self-gated (service mode OR MINDER_CONTROL_STDIN=1) and
+  // idempotent.
+  await installLifecycle();
+
   // Boot-time bootstrap (service-mode A1): warms the project-scan cache, the
   // git-status/efficiency-grade/GitHub-activity background caches, the
   // manual-steps watcher, and the MCP config/health watchers — the same work
@@ -116,6 +125,16 @@ export async function startIngest(): Promise<void> {
 
   if (process.env.MINDER_INDEXER !== "0") {
     await startInProcessWatcher();
+  }
+}
+
+async function installLifecycle(): Promise<void> {
+  try {
+    const { installServiceLifecycle } = await import("@/lib/bootstrap");
+    await installServiceLifecycle();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[lifecycle] failed to install: ${(err as Error).message}`);
   }
 }
 
