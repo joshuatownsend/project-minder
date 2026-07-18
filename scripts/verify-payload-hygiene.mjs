@@ -36,12 +36,17 @@ const FORBIDDEN_EXACT = new Set([
   "agentlytics-repo",
 ]);
 
-// Forbidden basename patterns: any dotenv file (.env, .env.local, .env.*).
+// Forbidden basename patterns: any name starting with `.env` — true `.env*`
+// prefix semantics, matching the `.env*` guarantee the workflow/CHANGELOG make.
+// Covers `.env`, `.env.local`, `.env.production`, direnv's `.envrc`, `.env.bak`,
+// etc. No legitimate standalone-payload file starts with `.env` (Next's
+// standalone output and node_modules contain none), so the broad prefix has no
+// known false positives — if a real payload file ever legitimately starts with
+// `.env`, surface it rather than silently special-casing.
 function isForbiddenName(name) {
   const lower = name.toLowerCase();
   if (FORBIDDEN_EXACT.has(lower)) return true;
-  // `.env`, `.env.local`, `.env.production`, … but NOT e.g. `.environmentrc`
-  if (lower === ".env" || lower.startsWith(".env.")) return true;
+  if (lower.startsWith(".env")) return true;
   return false;
 }
 
