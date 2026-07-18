@@ -21,7 +21,10 @@
 # ci.yml builds Windows on 22.12.0). Change NODE_VERSION here AND in
 # scripts/fetch-node-runtime.mjs together.
 #
-# Bundles per OS: NSIS .exe (Windows), .dmg (macOS), .AppImage + .deb (Linux).
+# Bundles per OS: NSIS .exe (Windows x64), .dmg (macOS — arm64 on macos-latest
+# AND Intel x86_64 on macos-26-intel), .AppImage + .deb (Linux x64, built on
+# ubuntu-22.04 for the oldest supported glibc baseline). Tauri names DMGs by
+# arch, so the two macOS installers upload to the Release without colliding.
 #
 # Signing: UNSIGNED for now — C5 (signing + updater) is a separate, opt-in task.
 # No signing env vars are set and no updater is configured in tauri.conf.json, so
@@ -71,20 +74,32 @@ jobs:
           - os: windows-latest
             name: Windows (NSIS .exe)
             bundles: nsis
+          # macos-latest is the arm64 (Apple Silicon) runner; the Intel runner
+          # is a separate label. Both build a .dmg; Tauri names DMGs by arch
+          # (…_aarch64.dmg vs …_x64.dmg) so the two never collide on the Release.
           - os: macos-latest
-            name: macOS (.dmg)
+            name: macOS arm64 (.dmg)
             bundles: dmg
-          - os: ubuntu-latest
+          - os: macos-26-intel
+            name: macOS x86_64 (.dmg)
+            bundles: dmg
+          # Pin Linux to the OLDEST supported base (22.04), not ubuntu-latest
+          # (24.04): AppImage/glibc-linked binaries bake in the build host's
+          # glibc baseline, and Tauri's AppImage guidance is to build on the
+          # oldest distro you intend to support so newer hosts still run it.
+          - os: ubuntu-22.04
             name: Linux (.AppImage + .deb)
             bundles: deb,appimage
 
     steps:
       - uses: actions/checkout@v7
 
-      # Linux-only: Tauri v2 build/runtime system dependencies (webkit2gtk 4.1
-      # on ubuntu-latest = 24.04). patchelf is required by the AppImage tooling.
+      # Linux-only: Tauri v2 build/runtime system dependencies. This is the
+      # Tauri v2 prerequisites list (Debian) — libwebkit2gtk-4.1-dev IS packaged
+      # on Ubuntu 22.04 — plus patchelf and libfuse2, which the AppImage tooling
+      # needs (patchelf to rewrite the ELF, libfuse2 for the AppImage runtime).
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -97,7 +112,8 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libfuse2
 
       # pnpm before setup-node so the binary is on PATH for the pnpm cache key
       # (version comes from the packageManager field in package.json).
