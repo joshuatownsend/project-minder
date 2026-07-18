@@ -7,6 +7,7 @@ import { githubActivityCache } from "@/lib/githubActivityCache";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { demoMode } from "@/lib/demo/demoMode";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 
 export async function GET(
   _request: NextRequest,
@@ -33,8 +34,18 @@ export async function GET(
     return NextResponse.json(project);
   }
 
+  // Never-wake preflight: a carried-forward project under a stopped WSL
+  // distro must not be probed with git — the spawn's cwd on \\wsl.localhost
+  // would auto-start the VM. Keep the carried (last-good) counts and mark
+  // them unknown instead. Sync-parse first so non-WSL paths skip the lookup.
+  const wslBlocked = parseWslUncPath(project.path)
+    ? await checkWslRoot(project.path).then((c) => c !== null && !c.ok)
+    : false;
+
   // Enrich with live git dirty status (too slow for bulk scan)
-  if (project.git) {
+  if (project.git && wslBlocked) {
+    project.git.unknown = true;
+  } else if (project.git) {
     const dirty = await scanGitDirtyStatus(project.path);
     project.git.isDirty = dirty.isDirty;
     project.git.uncommittedCount = dirty.uncommittedCount;
