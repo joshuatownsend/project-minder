@@ -1,3 +1,22 @@
+## 2026-07-18 16:00 | wsl-integration | Bring the Ubuntu-26.04 WSL projects + sessions into the dashboard
+
+- [ ] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)
+  The live service on :4100 runs the old build; the Settings sections and WSL scanning
+  only exist after it picks up the new code (`pnpm build` + service restart, or tray restart).
+- [ ] Add the WSL scan root: Settings → Scan Roots → Detect WSL → Add `\\wsl.localhost\Ubuntu-26.04\home\josh\dev` → Save & Rescan
+  The distro must be Running during detection (open a WSL terminal first) — Minder never starts it.
+- [ ] Add the WSL Claude home: Settings → Claude Homes → Detect WSL → "Add home + mapping" for `\\wsl.localhost\Ubuntu-26.04\home\josh\.claude` → Save & Rescan
+  This also auto-adds the `/home/josh` ↔ `\\wsl.localhost\Ubuntu-26.04\home\josh` path mapping that correlates WSL sessions with the UNC projects.
+- [ ] `git init` (or clone properly) the WSL projects you want on the dashboard
+  `bamcli` and `micetrocli` in `~/dev` have no `.git` today, and the scanner only picks up
+  git repos — from a WSL terminal: `cd ~/dev/bamcli && git init` (same for micetrocli).
+- [ ] Optional: allow git-over-UNC for WSL repos (branch/dirty status on their cards)
+  `git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu-26.04/home/josh/dev/*'`
+  Run from Windows (Git 2.55 supports the `/*` glob). Without it, WSL projects show no git
+  metadata (Git's dubious-ownership protection) — everything else works.
+
+---
+
 ## 2026-07-17 08:00 | service-mode | Register Minder's autostart service (task A3, one time per machine)
 
 - [ ] Build the server, then register the logon autostart task
