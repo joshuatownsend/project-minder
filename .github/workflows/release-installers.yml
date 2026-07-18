@@ -21,10 +21,10 @@
 # ci.yml builds Windows on 22.12.0). Change NODE_VERSION here AND in
 # scripts/fetch-node-runtime.mjs together.
 #
-# Bundles per OS: NSIS .exe (Windows x64), .dmg (macOS — arm64 on macos-latest
-# AND Intel x86_64 on macos-26-intel), .AppImage + .deb (Linux x64, built on
-# ubuntu-22.04 for the oldest supported glibc baseline). Tauri names DMGs by
-# arch, so the two macOS installers upload to the Release without colliding.
+# Bundles per OS: NSIS .exe (Windows x64), .dmg (macOS arm64 on macos-latest),
+# .app.tar.gz (macOS Intel x86_64 on macos-26-intel — DMG creation fails
+# deterministically there, see the matrix comment), .AppImage + .deb (Linux
+# x64, built on ubuntu-22.04 for the oldest supported glibc baseline).
 #
 # Signing: UNSIGNED for now — C5 (signing + updater) is a separate, opt-in task.
 # No signing env vars are set and no updater is configured in tauri.conf.json, so
@@ -75,14 +75,20 @@ jobs:
             name: Windows (NSIS .exe)
             bundles: nsis
           # macos-latest is the arm64 (Apple Silicon) runner; the Intel runner
-          # is a separate label. Both build a .dmg; Tauri names DMGs by arch
-          # (…_aarch64.dmg vs …_x64.dmg) so the two never collide on the Release.
+          # is a separate label. arm64 builds a .dmg. Intel builds the bare
+          # .app instead (collected as a .tar.gz below): DMG bundling fails
+          # DETERMINISTICALLY on the Intel runner — bundle_dmg.sh creates and
+          # mounts the image fine, then `hdiutil detach` dies with "timeout
+          # for DiskArbitration expired / drive not detached" (create-dmg#72)
+          # on every attempt, with XProtect stopped AND Spotlight indexing
+          # disabled, across 3 dry-run rounds — while the identical arm64 job
+          # passes. The .app tar.gz needs no hdiutil at all.
           - os: macos-latest
             name: macOS arm64 (.dmg)
             bundles: dmg
           - os: macos-26-intel
-            name: macOS x86_64 (.dmg)
-            bundles: dmg
+            name: macOS x86_64 (.app.tar.gz)
+            bundles: app
           # Pin Linux to the OLDEST supported base (22.04), not ubuntu-latest
           # (24.04): AppImage/glibc-linked binaries bake in the build host's
           # glibc baseline, and Tauri's AppImage guidance is to build on the
@@ -232,6 +238,19 @@ jobs:
             echo "collecting $f"
             cp "$f" installers/
           done
+          # Intel macOS ships the bare .app as a tar.gz (see the matrix
+          # comment: hdiutil detach times out deterministically there, so no
+          # DMG can be produced). Named like Tauri names DMGs —
+          # <Product>_<version>_x64 — so Release assets stay consistent.
+          if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.bundles }}" == "app" ]]; then
+            VERSION="$(node -p "require('./package.json').version")"
+            for app in src-tauri/target/release/bundle/macos/*.app; do
+              [ -d "$app" ] || continue
+              out="installers/$(basename "${app%.app}")_${VERSION}_x64.app.tar.gz"
+              echo "collecting $app -> $out"
+              tar -czf "$out" -C "$(dirname "$app")" "$(basename "$app")"
+            done
+          fi
           echo "--- installers ---"
           ls -la installers
           if [ -z "$(ls -A installers)" ]; then

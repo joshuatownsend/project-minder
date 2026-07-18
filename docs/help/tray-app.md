@@ -12,7 +12,8 @@ Download the installer for your platform from [GitHub Releases](https://github.c
 
 **Available installers:**
 - **Windows:** `Project Minder*.exe` (NSIS installer, unsigned — expect a SmartScreen warning on first run)
-- **macOS:** `Project Minder*.dmg` (two variants: arm64 for Apple Silicon, x86_64 for Intel)
+- **macOS (Apple Silicon):** `Project Minder*_aarch64.dmg` — open and drag to Applications
+- **macOS (Intel):** `Project Minder*_x64.app.tar.gz` — extract, then drag the `.app` to Applications (no DMG for Intel: creating one fails deterministically on the Intel build runners). The app is unsigned, so on first launch right-click the app → Open → Open.
 - **Linux:** `minder*.AppImage` or `minder*.deb` (built on ubuntu-22.04 for broad glibc compatibility)
 
 **First-run steps:**
