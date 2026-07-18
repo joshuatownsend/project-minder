@@ -188,6 +188,9 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           echo "waiting for Release $TAG to exist (created by release.yml)…"
+          # `gh release view` inside the `if` condition can't trip `set -e`
+          # (conditionals are exempt), so a transient probe failure just
+          # retries the loop rather than killing the job.
           for i in $(seq 1 60); do
             if gh release view "$TAG" >/dev/null 2>&1; then
               echo "Release $TAG found."
@@ -196,9 +199,23 @@ jobs:
             echo "  not yet ($i/60) — sleeping 10s"
             sleep 10
           done
+          # Fallback if release.yml never created the Release. Every OS matrix
+          # job runs this step independently and may reach `gh release create`
+          # for the same tag at once — only one wins the create, the rest get a
+          # non-zero "already exists". That's fine and expected: tolerate the
+          # create failure (|| true), then re-check. We only hard-fail if the
+          # Release STILL doesn't exist afterwards (a real auth/network fault,
+          # not a lost race), so a genuine failure is never swallowed.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG still missing — creating it as a fallback."
-            gh release create "$TAG" --generate-notes --title "Project Minder $TAG"
+            echo "Release $TAG still missing — attempting to create it (racing peer jobs is OK)."
+            gh release create "$TAG" --generate-notes --title "Project Minder $TAG" \
+              || echo "create returned non-zero (a peer matrix job likely won the race) — re-checking."
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
+              echo "::error::Release $TAG could not be created and does not exist (auth/network?)."
+              exit 1
+            fi
           fi
+          # Idempotent regardless of who created the Release; concurrent jobs
+          # upload distinct per-OS installer files (--clobber replaces on retry).
           gh release upload "$TAG" installers/* --clobber
           echo "uploaded installers to Release $TAG"
