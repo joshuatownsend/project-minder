@@ -41,18 +41,42 @@ export type WslRootCheck =
   | { ok: false; distro: string; reason: "wsl-stopped" | "wsl-distro-not-found" | "wsl-unavailable" };
 
 /**
+ * Thrown by choke points (e.g. `canonicalProjectDir`) when an operation
+ * targets a path under a WSL distro that isn't running. Routes catch it and
+ * map to 503 so the UI shows an actionable message instead of a generic 500.
+ */
+export class WslUnavailableError extends Error {
+  readonly distro: string;
+  readonly reason: string;
+  constructor(check: Extract<WslRootCheck, { ok: false }>) {
+    super(
+      `WSL distro '${check.distro}' is not running (${check.reason}) — ` +
+        `Minder never wakes a stopped distro. Start it and retry.`
+    );
+    this.name = "WslUnavailableError";
+    this.distro = check.distro;
+    this.reason = check.reason;
+  }
+}
+
+/**
  * Matches both UNC hosts WSL exposes (`\\wsl.localhost\...`, legacy `\\wsl$\...`),
  * tolerating forward slashes since users may paste either form. The distro
  * segment is everything up to the next separator — registered distro names can
  * contain spaces (parseWslDistroList supports them), and under-matching here
  * would make the scanner treat the root as non-WSL and touch it, waking the VM.
+ * Deliberately unambiguous (greedy segment, no overlapping `\s*`) so it stays
+ * linear on adversarial many-space inputs (CodeQL js/polynomial-redos);
+ * trailing whitespace in the captured name is trimmed in code instead.
  */
-const WSL_UNC_RE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([^\\/]+?)\s*(?:[\\/]|$)/i;
+const WSL_UNC_RE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([^\\/]+)(?:[\\/]|$)/i;
 
 /** Parse a UNC path into its WSL distro name, or null for non-WSL paths. */
 export function parseWslUncPath(p: string): { distro: string } | null {
   const m = WSL_UNC_RE.exec(p.trim());
-  return m ? { distro: m[1] } : null;
+  if (!m) return null;
+  const distro = m[1].trim();
+  return distro ? { distro } : null;
 }
 
 /**

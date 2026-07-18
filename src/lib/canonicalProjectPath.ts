@@ -2,6 +2,7 @@ import path from "path";
 import { WORKTREE_SEP } from "./scanner/worktreeCheck";
 import { isInside } from "./template/pathSafety";
 import { getDevRoots, readConfig } from "./config";
+import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "./wsl";
 
 export interface CanonicalResolution {
   /** Canonical main-tree project directory. */
@@ -72,5 +73,14 @@ export function resolveCanonicalProjectPath(
  */
 export async function canonicalProjectDir(cwd: string): Promise<string> {
   const devRoots = getDevRoots(await readConfig());
-  return resolveCanonicalProjectPath(cwd, devRoots).canonicalPath;
+  const canonical = resolveCanonicalProjectPath(cwd, devRoots).canonicalPath;
+  // Never-wake preflight for every planning writer (board / manual-steps /
+  // todo / board-delegation funnel through here before any fs call): writing
+  // to a stopped WSL distro's \\wsl.localhost path would auto-start its VM.
+  // Throw a typed error the routes map to 503 instead.
+  if (parseWslUncPath(canonical)) {
+    const check = await checkWslRoot(canonical);
+    if (check && !check.ok) throw new WslUnavailableError(check);
+  }
+  return canonical;
 }
