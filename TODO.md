@@ -2,7 +2,7 @@
 
 ## Service Mode + Tray App
 
-- [ ] **Execute the Service Mode + Tray App plan** — turn Minder into a persistent login-scoped service (Phase A: `instrumentation.ts` bootstrap, graceful shutdown, `/api/health`, per-OS autostart wrappers) and then a Tauri v2 tray app that owns the server as a supervised sidecar (Phase C1: tray menu, autostart, native manual-steps notifications, packaging CI). Full task breakdown with per-task model assignments (Haiku/Sonnet/Opus), dependencies, and a living status table lives in `docs/superpowers/plans/2026-07-16-service-and-tray.md` — that table is the cross-session source of truth; check tasks off there, not here. Phase B (daemon/UI split) was evaluated and deferred indefinitely.
+- [ ] **C5 — installer signing + auto-updater (deferred until the project has real users)** — Decided 2026-07-18: v1.3.0 ships unsigned (Windows SmartScreen "More info → Run anyway"; macOS right-click → Open). Revisit if Minder picks up outside users: Windows Authenticode cert, Apple Developer ID (~$99/yr) + notarization, and Tauri's updater plugin. Spec lives in `docs/superpowers/plans/2026-07-16-service-and-tray.md` (task C5); everything else in that plan shipped in v1.3.0.
 
 ## Housekeeping
 
