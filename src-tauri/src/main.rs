@@ -10,6 +10,7 @@
 
 mod config;
 mod health;
+mod notify;
 mod supervisor;
 mod tray;
 
@@ -41,6 +42,8 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Native OS toast notifications for the manual-steps poller (C3).
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)
             // wins inside TrayConfig; otherwise the Tauri resource dir (prod).
@@ -55,9 +58,9 @@ fn main() {
             let state_dir = app.path().home_dir().ok().map(|h| h.join(".minder"));
 
             let supervisor: Arc<Supervisor> =
-                Supervisor::start(cfg.clone(), payload_dir, state_dir);
+                Supervisor::start(cfg.clone(), payload_dir, state_dir.clone());
 
-            tray::init(app, &cfg, supervisor)?;
+            tray::init(app, &cfg, supervisor, state_dir)?;
             Ok(())
         })
         .build(tauri::generate_context!())

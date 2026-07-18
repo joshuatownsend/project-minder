@@ -19,7 +19,9 @@ use crate::config::HOST;
 /// One process-wide `ureq::Agent`, built once and reused across every ~15s poll
 /// (and the startup attach probe). `ureq::Agent` is a cheap `Arc`-backed handle
 /// that pools connections; rebuilding it per probe threw that away each time.
-fn agent() -> &'static ureq::Agent {
+/// `pub(crate)` so the manual-steps notification poller (`notify.rs`) can share
+/// it instead of building a second agent for the same loopback host.
+pub(crate) fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::AgentBuilder::new()
