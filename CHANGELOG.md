@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **WSL scan roots with never-wake-the-VM semantics.** Scan roots may now point into a WSL distro via `\\wsl.localhost\<distro>\...` (or legacy `\\wsl$\...`) UNC paths. Because merely reading such a path auto-starts a stopped distro's VM, the scanner now state-checks the distro (new `src/lib/wsl.ts`: `wsl.exe -l -v` spawned via `execFile` with a fixed argv, UTF-16LE output decoded, result cached 30s) **before** any filesystem call and skips the root for that cycle when the distro isn't running — the dashboard keeps last-scanned data and picks the root back up on the first cycle after the distro starts. Skipped roots (stopped distro, unknown distro, WSL unavailable, or plain unreadable path — the latter previously vanished silently) are reported in a new optional `ScanResult.skippedRoots` and surfaced by a new top-bar `SkippedRootsIndicator` (same interaction pattern as the port-conflict indicator, session-dismissable). New `GET /api/wsl` enumerates distros and — for running ones only — probes `/home/<user>` for `dev` scan-root candidates and `.claude` homes (`docker-desktop*` utility distros excluded), feeding the upcoming one-click "Detect WSL" Settings action. Git metadata over UNC is blocked by Git's own dubious-ownership protection; the new `docs/help/wsl.md` documents the `safe.directory` opt-in (projects degrade gracefully to no-git-info meanwhile). Verified live against a real `Ubuntu-26.04` distro in both Running and Stopped states.
+
 ## [1.3.0] - 2026-07-18
 
 ### Added

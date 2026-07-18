@@ -137,6 +137,7 @@ export const helpSlugs = [
   'commands',
   'projects',
   'swarms',
+  'wsl',
 ] as const
 
 export type HelpSlug = (typeof helpSlugs)[number]

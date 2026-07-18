@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { MinderConfig, ProjectData, PortConflict, ScanResult } from "../types";
+import { MinderConfig, ProjectData, PortConflict, ScanResult, SkippedRoot } from "../types";
+import { checkWslRoot } from "../wsl";
 import { readConfig, getDevRoots } from "../config";
 import { getFlag } from "../featureFlags";
 import { demoModeEnv } from "../demo/demoMode";
@@ -332,14 +333,24 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const catalogWalkByPath = new Map<string, ProjectCatalogWalk>();
   // Track slugs seen so far to handle collisions across roots (first root wins)
   const seenSlugs = new Set<string>();
+  const skippedRoots: SkippedRoot[] = [];
 
   for (const devRoot of devRoots) {
+    // WSL roots must be state-checked BEFORE any fs call: reading a
+    // \\wsl.localhost\ path belonging to a stopped distro auto-starts its VM.
+    const wslCheck = await checkWslRoot(devRoot);
+    if (wslCheck && !wslCheck.ok) {
+      skippedRoots.push({ root: devRoot, reason: wslCheck.reason, distro: wslCheck.distro });
+      continue;
+    }
+
     let entries: string[];
     try {
       const dirents = await fs.readdir(devRoot, { withFileTypes: true });
       entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
       // Root doesn't exist or isn't readable — skip it
+      skippedRoots.push({ root: devRoot, reason: "unreadable", distro: wslCheck?.distro });
       continue;
     }
 
@@ -406,5 +417,6 @@ export async function scanAllProjects(): Promise<ScanResult> {
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),
     catalogLintFindings,
+    ...(skippedRoots.length > 0 ? { skippedRoots } : {}),
   };
 }

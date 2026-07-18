@@ -200,6 +200,14 @@ export interface PortConflict {
   type: "dev" | "db" | "docker";
 }
 
+/** A configured scan root that this scan cycle did not read, and why. */
+export interface SkippedRoot {
+  root: string;
+  reason: "wsl-stopped" | "wsl-distro-not-found" | "wsl-unavailable" | "unreadable";
+  /** WSL distro name when the root is a \\wsl.localhost\ / \\wsl$\ path. */
+  distro?: string;
+}
+
 export interface ScanResult {
   projects: ProjectData[];
   portConflicts: PortConflict[];
@@ -207,4 +215,6 @@ export interface ScanResult {
   scannedAt: string;
   /** Findings from the one-shot global catalog lint (user + plugin-scope entries). */
   catalogLintFindings: LintFinding[];
+  /** Roots skipped this cycle (stopped WSL distro, unreadable path, …). Absent = none. */
+  skippedRoots?: SkippedRoot[];
 }
