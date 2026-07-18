@@ -257,6 +257,24 @@ describe("githubActivityCache defensive failure classification", () => {
     // The guard must fire before ANY subprocess: no gh, no git remote lookup.
     expect(mockExecFile).not.toHaveBeenCalled();
     expect(mockRunGit).not.toHaveBeenCalled();
+
+    // The sentinel describes a transient VM state — a user-initiated rescan
+    // purges it so a just-started distro is re-probed immediately, without
+    // touching other cached entries.
+    githubActivityCache.invalidateWslSentinels();
+    expect(githubActivityCache.get("wsl-proj")).toBeNull();
+  });
+
+  it("invalidateWslSentinels leaves non-WSL unavailable entries alone", async () => {
+    setGh({ pr: { __error: { code: "ENOENT" } } });
+    githubActivityCache.enqueue([
+      { slug: "x", path: "C:\\dev\\x", remoteUrl: "https://github.com/o/r" },
+    ]);
+    await flush();
+    expect(githubActivityCache.get("x")?.reason).toBe("gh-not-installed");
+
+    githubActivityCache.invalidateWslSentinels();
+    expect(githubActivityCache.get("x")?.reason).toBe("gh-not-installed");
   });
 
   it("falls back to git remote when no remoteUrl supplied", async () => {

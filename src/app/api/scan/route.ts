@@ -10,12 +10,19 @@ import { invalidateLiveStatusCache } from "@/lib/liveStatus";
 import { invalidateClaudeAgentsCache } from "@/lib/claudeAgentsCli";
 import { runMcpSecurityScan } from "@/lib/scanner/mcp-security";
 import { clearWslCache } from "@/lib/wsl";
+import { gitStatusCache } from "@/lib/gitStatusCache";
+import { githubActivityCache } from "@/lib/githubActivityCache";
 
 export async function POST() {
   invalidateCache();
   // Manual rescan is user-initiated: drop the cached WSL distro snapshot so a
-  // just-started distro's root is scanned now, not skipped for the 30s TTL.
+  // just-started distro's root is scanned now, not skipped for the 30s TTL —
+  // and purge the caches' stopped-WSL sentinels so dirty status and GitHub
+  // activity for those projects are re-probed on the very next enqueue
+  // instead of after their 5-minute TTL.
   clearWslCache();
+  gitStatusCache.invalidateWslSentinels();
+  githubActivityCache.invalidateWslSentinels();
   invalidateCatalogCache();
   invalidateAgentsRouteCache();
   invalidateSkillsRouteCache();
