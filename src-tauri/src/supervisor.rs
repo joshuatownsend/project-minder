@@ -433,6 +433,9 @@ fn spawn_child(
     // dir first: writeFileAtomic on the TS side does not mkdir its parent.
     match std::env::var("MINDER_STATE_DIR") {
         Ok(existing) if !existing.trim().is_empty() => {
+            // Same guarantee as the resolved-default branch below: the sidecar's
+            // atomic writes need the directory to exist before first use.
+            let _ = std::fs::create_dir_all(existing.trim());
             log(&format!(
                 "sidecar state dir: inherited MINDER_STATE_DIR={existing}"
             ));
