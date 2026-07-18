@@ -110,7 +110,18 @@ impl NotifyController {
             .unwrap_or_else(|_| now_cursor())
     }
 
+    /// Advance the persisted cursor. Defense in depth: validates `new_cursor`
+    /// itself (not just what's loaded from disk) before accepting it, so a
+    /// malformed `changedAt` from the server — however unlikely — can't poison
+    /// the file. An invalid value is dropped silently (logged); the cursor
+    /// stays put and the next poll just retries the same window.
     fn advance_cursor(&self, new_cursor: String) {
+        if !is_valid_cursor(&new_cursor) {
+            crate::supervisor::log(&format!(
+                "notify: refusing to advance cursor to malformed value {new_cursor:?} — leaving cursor unchanged"
+            ));
+            return;
+        }
         if let Ok(mut s) = self.state.lock() {
             s.last_cursor = new_cursor;
         }
@@ -241,6 +252,36 @@ fn latest_changed_at(changes: &[ManualStepChange]) -> Option<&str> {
     changes.iter().map(|c| c.changed_at.as_str()).max()
 }
 
+/// Structural validation of a cursor string: exactly the fixed-width shape we
+/// ever write or accept — `YYYY-MM-DDTHH:MM:SS.mmmZ`, 24 bytes, digits and
+/// separators in the right positions. Not full calendar validation (no
+/// range-checking of month/day/hour values) — that's unnecessary here. This
+/// exists purely to keep a corrupt/empty/truncated value out of the cursor:
+/// the server's `new Date(since).getTime()` (`manualStepsWatcher.ts`) turns
+/// anything else into `NaN`, which fails every `changedAt > since` comparison
+/// and silently filters out EVERY event forever — a state file `lastCursor`
+/// like `""` would otherwise wedge notifications until someone manually
+/// deletes the file.
+fn is_valid_cursor(s: &str) -> bool {
+    let b = s.as_bytes();
+    let digit_range = |r: std::ops::Range<usize>| r.into_iter().all(|i| b[i].is_ascii_digit());
+    b.len() == 24
+        && digit_range(0..4)
+        && b[4] == b'-'
+        && digit_range(5..7)
+        && b[7] == b'-'
+        && digit_range(8..10)
+        && b[10] == b'T'
+        && digit_range(11..13)
+        && b[13] == b':'
+        && digit_range(14..16)
+        && b[16] == b':'
+        && digit_range(17..19)
+        && b[19] == b'.'
+        && digit_range(20..23)
+        && b[23] == b'Z'
+}
+
 /// Notification (title, body) copy for one change event. Pure so the exact
 /// wording is unit-tested without a live notification backend.
 fn toast_text(change: &ManualStepChange) -> (String, String) {
@@ -275,36 +316,37 @@ pub fn sync_mute<R: Runtime>(item: &CheckMenuItem<R>, controller: &NotifyControl
     }
 }
 
-/// Current time as an RFC3339 UTC string with second precision, e.g.
-/// `"2026-07-18T04:51:07Z"` — what the server's `new Date(since)` (in
-/// `route.ts`) expects. Used ONLY to seed a fresh cursor (first run, or a
-/// missing/corrupt state file) — a deliberate "never replay the backlog"
-/// choice. Regular poll-to-poll cursor advances are bound to server data
-/// instead (`latest_changed_at`), never to this local clock, so a change
-/// appended in the race window between the server's response and our next
-/// read is never permanently skipped. Falls back to the Unix epoch string if
-/// the system clock is somehow before 1970 (never in practice; keeps this
-/// infallible).
+/// Current time as an RFC3339 UTC string with millisecond precision, e.g.
+/// `"2026-07-18T04:51:07.123Z"` — the same fixed-width, 24-byte shape as the
+/// server's own `Date.toISOString()` output (`changedAt`), so a seeded cursor
+/// and a server-derived one are never distinguishable-but-differently-shaped
+/// (which would otherwise make [`is_valid_cursor`] reject our own seed value).
+/// Used ONLY to seed a fresh cursor (first run, or a missing/corrupt state
+/// file) — a deliberate "never replay the backlog" choice. Regular
+/// poll-to-poll cursor advances are bound to server data instead
+/// (`latest_changed_at`), never to this local clock, so a change appended in
+/// the race window between the server's response and our next read is never
+/// permanently skipped. Falls back to the Unix epoch if the system clock is
+/// somehow before 1970 (never in practice; keeps this infallible).
 fn now_cursor() -> String {
-    let secs = SystemTime::now()
+    let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    rfc3339_from_unix(secs)
+        .unwrap_or(Duration::ZERO);
+    rfc3339_from_unix(dur.as_secs() as i64, dur.subsec_millis())
 }
 
-/// Convert a Unix timestamp (seconds since epoch, UTC) to an RFC3339 string.
-/// Pure and dependency-free — Howard Hinnant's well-known `civil_from_days`
-/// algorithm — so this one conversion doesn't need a date/time crate pulled in
-/// just for cursor timestamps.
-fn rfc3339_from_unix(secs: i64) -> String {
+/// Convert a Unix timestamp (seconds since epoch, UTC) plus a millisecond
+/// remainder into an RFC3339 string. Pure and dependency-free — Howard
+/// Hinnant's well-known `civil_from_days` algorithm — so this one conversion
+/// doesn't need a date/time crate pulled in just for cursor timestamps.
+fn rfc3339_from_unix(secs: i64, millis: u32) -> String {
     let days = secs.div_euclid(86_400);
     let secs_of_day = secs.rem_euclid(86_400);
     let (y, m, d) = civil_from_days(days);
     let hh = secs_of_day / 3600;
     let mm = (secs_of_day % 3600) / 60;
     let ss = secs_of_day % 60;
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{millis:03}Z")
 }
 
 /// Days-since-epoch (1970-01-01) -> (year, month, day). See
@@ -324,13 +366,19 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// Parse a persisted state file's contents. Returns `None` for anything that
-/// isn't a well-formed `{ "lastCursor": string, "muted": bool }` object, so the
-/// caller can fall back to a fresh "now" cursor rather than guessing at partial
-/// data.
+/// isn't a well-formed `{ "lastCursor": string, "muted": bool }` object WITH a
+/// structurally valid cursor (`is_valid_cursor`) — an empty, truncated, or
+/// otherwise malformed `lastCursor` is treated exactly like corrupt JSON, so
+/// the caller falls back to a fresh "now" cursor rather than persisting a
+/// value the server's `new Date(since)` would silently turn into `NaN` (which
+/// would filter out every event, forever, until the file is deleted by hand).
 fn parse_state_json(body: &str) -> Option<NotifyState> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let last_cursor = value.get("lastCursor")?.as_str()?.to_string();
     let muted = value.get("muted")?.as_bool()?;
+    if !is_valid_cursor(&last_cursor) {
+        return None;
+    }
     Some(NotifyState { last_cursor, muted })
 }
 
@@ -498,25 +546,77 @@ mod tests {
 
     #[test]
     fn unix_epoch_formats_correctly() {
-        assert_eq!(rfc3339_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_from_unix(0, 0), "1970-01-01T00:00:00.000Z");
     }
 
     #[test]
     fn a_known_mid_2023_timestamp_formats_correctly() {
         // new Date(1700000000000).toISOString() === "2023-11-14T22:13:20.000Z"
-        assert_eq!(rfc3339_from_unix(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(
+            rfc3339_from_unix(1_700_000_000, 0),
+            "2023-11-14T22:13:20.000Z"
+        );
     }
 
     #[test]
     fn a_leap_day_formats_correctly() {
         // new Date(1582934400000).toISOString() === "2020-02-29T00:00:00.000Z"
-        assert_eq!(rfc3339_from_unix(1_582_934_400), "2020-02-29T00:00:00Z");
+        assert_eq!(
+            rfc3339_from_unix(1_582_934_400, 0),
+            "2020-02-29T00:00:00.000Z"
+        );
     }
 
     #[test]
     fn end_of_year_rolls_over_correctly() {
         // new Date(1735689599000).toISOString() === "2024-12-31T23:59:59.000Z"
-        assert_eq!(rfc3339_from_unix(1_735_689_599), "2024-12-31T23:59:59Z");
+        assert_eq!(
+            rfc3339_from_unix(1_735_689_599, 0),
+            "2024-12-31T23:59:59.000Z"
+        );
+    }
+
+    #[test]
+    fn milliseconds_are_included_and_zero_padded() {
+        // new Date(1700000000007).toISOString() === "2023-11-14T22:13:20.007Z"
+        assert_eq!(
+            rfc3339_from_unix(1_700_000_000, 7),
+            "2023-11-14T22:13:20.007Z"
+        );
+    }
+
+    // --- is_valid_cursor ---
+
+    #[test]
+    fn is_valid_cursor_accepts_a_well_formed_string() {
+        assert!(is_valid_cursor("2026-07-18T04:51:07.123Z"));
+    }
+
+    #[test]
+    fn is_valid_cursor_rejects_empty_string() {
+        assert!(!is_valid_cursor(""));
+    }
+
+    #[test]
+    fn is_valid_cursor_rejects_garbage() {
+        assert!(!is_valid_cursor("not-a-date-at-all-nope!"));
+    }
+
+    #[test]
+    fn is_valid_cursor_rejects_wrong_length() {
+        assert!(!is_valid_cursor("2026-07-18T04:51:07Z")); // no milliseconds (20 bytes)
+        assert!(!is_valid_cursor("2026-07-18T04:51:07.1234Z")); // too long (25 bytes)
+    }
+
+    #[test]
+    fn is_valid_cursor_rejects_missing_trailing_z() {
+        assert!(!is_valid_cursor("2026-07-18T04:51:07.123X"));
+        assert!(!is_valid_cursor("2026-07-18T04:51:07.123 "));
+    }
+
+    #[test]
+    fn is_valid_cursor_rejects_non_digit_in_a_digit_position() {
+        assert!(!is_valid_cursor("2026-07-18T04:51:0X.123Z"));
     }
 
     // --- state persistence ---
@@ -524,7 +624,7 @@ mod tests {
     #[test]
     fn parse_state_json_round_trips_serialize_state() {
         let state = NotifyState {
-            last_cursor: "2026-07-18T04:00:00Z".to_string(),
+            last_cursor: "2026-07-18T04:00:00.000Z".to_string(),
             muted: true,
         };
         let json = serialize_state(&state);
@@ -534,13 +634,25 @@ mod tests {
     #[test]
     fn parse_state_json_rejects_missing_fields() {
         assert_eq!(parse_state_json(r#"{"muted":true}"#), None);
-        assert_eq!(parse_state_json(r#"{"lastCursor":"x"}"#), None);
+        assert_eq!(
+            parse_state_json(r#"{"lastCursor":"2026-07-18T04:00:00.000Z"}"#),
+            None
+        );
     }
 
     #[test]
     fn parse_state_json_rejects_corrupt_json() {
         assert_eq!(parse_state_json("{not json"), None);
         assert_eq!(parse_state_json(""), None);
+    }
+
+    #[test]
+    fn parse_state_json_rejects_an_invalid_cursor_even_with_well_formed_json() {
+        assert_eq!(parse_state_json(r#"{"lastCursor":"","muted":false}"#), None);
+        assert_eq!(
+            parse_state_json(r#"{"lastCursor":"garbage","muted":false}"#),
+            None
+        );
     }
 
     #[test]
@@ -552,8 +664,8 @@ mod tests {
         let _ = fs::remove_file(&path); // ensure it doesn't exist
         let state = load_state(&path);
         assert!(!state.muted);
-        // A fresh cursor should parse as a plausible RFC3339 string, not be empty.
-        assert!(state.last_cursor.ends_with('Z'));
+        // A fresh cursor should be a well-formed, non-empty cursor.
+        assert!(is_valid_cursor(&state.last_cursor));
     }
 
     #[test]
@@ -565,7 +677,26 @@ mod tests {
         fs::write(&path, "{ not valid json").unwrap();
         let state = load_state(&path);
         assert!(!state.muted);
-        assert!(state.last_cursor.ends_with('Z'));
+        assert!(is_valid_cursor(&state.last_cursor));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_state_reseeds_when_the_persisted_cursor_is_invalid() {
+        let path = std::env::temp_dir().join(format!(
+            "minder-tray-notify-test-invalid-cursor-{}.json",
+            std::process::id()
+        ));
+        // Well-formed JSON, well-typed fields — but an empty lastCursor, which
+        // is exactly the Codex-flagged case: valid JSON that would otherwise
+        // sail through as the live cursor and wedge notifications forever.
+        fs::write(&path, r#"{"lastCursor":"","muted":true}"#).unwrap();
+        let state = load_state(&path);
+        // Reseeded fresh: never the empty value that was on disk, and the mute
+        // flag resets too (treated exactly like corrupt state, per the fix).
+        assert_ne!(state.last_cursor, "");
+        assert!(is_valid_cursor(&state.last_cursor));
+        assert!(!state.muted);
         let _ = fs::remove_file(&path);
     }
 
@@ -576,13 +707,28 @@ mod tests {
             std::process::id()
         ));
         let state = NotifyState {
-            last_cursor: "2026-07-18T05:00:00Z".to_string(),
+            last_cursor: "2026-07-18T05:00:00.000Z".to_string(),
             muted: true,
         };
         save_state(&path, &state).unwrap();
         let loaded = load_state(&path);
         assert_eq!(loaded, state);
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn advance_cursor_rejects_an_invalid_value_and_leaves_the_cursor_unchanged() {
+        let controller = NotifyController::new(None);
+        let original = controller.cursor();
+        controller.advance_cursor("garbage".to_string());
+        assert_eq!(controller.cursor(), original);
+    }
+
+    #[test]
+    fn advance_cursor_accepts_a_valid_value() {
+        let controller = NotifyController::new(None);
+        controller.advance_cursor("2026-07-18T04:00:00.000Z".to_string());
+        assert_eq!(controller.cursor(), "2026-07-18T04:00:00.000Z");
     }
 
     #[test]
