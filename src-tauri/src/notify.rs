@@ -48,7 +48,6 @@ pub struct ManualStepChange {
     pub slug: String,
     pub project_name: String,
     pub title: String,
-    #[allow(dead_code)] // not surfaced in the toast copy today; kept for future use/diagnostics
     pub changed_at: String,
 }
 
@@ -164,7 +163,6 @@ fn poll_once<R: Runtime>(
     };
 
     let changes = parse_changes(&body);
-    let next_cursor = now_cursor();
 
     if should_toast(controller.is_muted(), changes.is_empty()) {
         for change in &changes {
@@ -172,10 +170,19 @@ fn poll_once<R: Runtime>(
         }
     }
 
-    // Advance regardless of mute state (and even if empty) so a later unmute
-    // doesn't dump a backlog, and so a transient empty poll doesn't stall
-    // forward progress.
-    controller.advance_cursor(next_cursor);
+    // Bind the cursor to server-reported data, never the local clock: the
+    // server filters strictly on `changedAt > since` (`ManualStepsWatcher.
+    // getChanges`), so advancing to a locally-sampled "now" opens a race — a
+    // change appended after the server built this response but before we read
+    // the clock would have `changedAt <= our new cursor` and would never be
+    // returned by a later poll either. Clock skew between the tray host and
+    // the server only widens that hole. Advancing to the latest `changedAt`
+    // we actually SAW is always safe, and an empty batch leaves the cursor
+    // untouched entirely — the server's strict `>` means a stationary cursor
+    // can never cause a re-toast, only a delay until real data arrives.
+    if let Some(latest) = latest_changed_at(&changes) {
+        controller.advance_cursor(latest.to_string());
+    }
 }
 
 /// Build the `GET /api/manual-steps/changes` URL. Pure and unit-testable
@@ -223,6 +230,17 @@ fn should_toast(muted: bool, changes_is_empty: bool) -> bool {
     !muted && !changes_is_empty
 }
 
+/// The cursor value to advance to after a poll: the lexicographically
+/// greatest `changed_at` among the returned changes, or `None` for an empty
+/// batch (the caller must then leave the cursor untouched — see `poll_once`).
+/// `changed_at` is always a fixed-width UTC RFC3339 string straight from the
+/// server's `Date.toISOString()`, so plain string comparison IS chronological
+/// comparison — no parsing back to a numeric time is needed, which also means
+/// no reformat drift between what the server sent and what we persist.
+fn latest_changed_at(changes: &[ManualStepChange]) -> Option<&str> {
+    changes.iter().map(|c| c.changed_at.as_str()).max()
+}
+
 /// Notification (title, body) copy for one change event. Pure so the exact
 /// wording is unit-tested without a live notification backend.
 fn toast_text(change: &ManualStepChange) -> (String, String) {
@@ -259,8 +277,14 @@ pub fn sync_mute<R: Runtime>(item: &CheckMenuItem<R>, controller: &NotifyControl
 
 /// Current time as an RFC3339 UTC string with second precision, e.g.
 /// `"2026-07-18T04:51:07Z"` — what the server's `new Date(since)` (in
-/// `route.ts`) expects. Falls back to the Unix epoch string if the system
-/// clock is somehow before 1970 (never in practice; keeps this infallible).
+/// `route.ts`) expects. Used ONLY to seed a fresh cursor (first run, or a
+/// missing/corrupt state file) — a deliberate "never replay the backlog"
+/// choice. Regular poll-to-poll cursor advances are bound to server data
+/// instead (`latest_changed_at`), never to this local clock, so a change
+/// appended in the race window between the server's response and our next
+/// read is never permanently skipped. Falls back to the Unix epoch string if
+/// the system clock is somehow before 1970 (never in practice; keeps this
+/// infallible).
 fn now_cursor() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -407,6 +431,45 @@ mod tests {
     #[test]
     fn should_toast_is_true_for_unmuted_nonempty() {
         assert!(should_toast(false, false));
+    }
+
+    fn change_with_changed_at(changed_at: &str) -> ManualStepChange {
+        ManualStepChange {
+            slug: "x".to_string(),
+            project_name: "x".to_string(),
+            title: "x".to_string(),
+            changed_at: changed_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn latest_changed_at_is_none_for_an_empty_batch() {
+        assert_eq!(latest_changed_at(&[]), None);
+    }
+
+    #[test]
+    fn latest_changed_at_picks_the_max_of_the_batch() {
+        let changes = [
+            change_with_changed_at("2026-07-18T04:00:00.000Z"),
+            change_with_changed_at("2026-07-18T04:05:00.000Z"),
+        ];
+        assert_eq!(
+            latest_changed_at(&changes),
+            Some("2026-07-18T04:05:00.000Z")
+        );
+    }
+
+    #[test]
+    fn latest_changed_at_picks_the_max_even_when_the_batch_is_out_of_order() {
+        let changes = [
+            change_with_changed_at("2026-07-18T04:10:00.000Z"),
+            change_with_changed_at("2026-07-18T04:00:00.000Z"),
+            change_with_changed_at("2026-07-18T04:05:00.000Z"),
+        ];
+        assert_eq!(
+            latest_changed_at(&changes),
+            Some("2026-07-18T04:10:00.000Z")
+        );
     }
 
     #[test]
