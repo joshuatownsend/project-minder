@@ -223,7 +223,7 @@ Full tool/resource reference: `docs/help/mcp-server.md`.
 
 ## Configuration
 
-All settings live in `.minder.json` — at the repo root when running from source, or at `~/.minder/.minder.json` for the installed desktop app and service mode. The in-app **Config page** (`/config`) provides a full UI for most of these.
+All settings live in `.minder.json`. Where it is depends on how you run Minder: at the repo root when running from source (`pnpm dev`/`pnpm start`), and at `~/.minder/.minder.json` for the installed desktop tray app (the tray points `MINDER_STATE_DIR` there). Service mode installed via `pnpm service:*` does not set `MINDER_STATE_DIR`, so the file resolves from the server's working directory — `dist/minder-server/.minder.json` for a standalone-package install, the repo root for the from-source fallback; set `MINDER_STATE_DIR` in the service environment to relocate it. The in-app **Config page** (`/config`) provides a full UI for most of these.
 
 | Key | Type | Description |
 |-----|------|-------------|
