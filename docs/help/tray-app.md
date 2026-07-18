@@ -27,7 +27,7 @@ By default the tray app starts manually each session. To enable automatic startu
 1. Click the tray icon and select **Start at login**.
 2. The checkbox is retained across restarts.
 
-(The setting is stored in the OS autostart registry/agent/systemd config — Project Minder does not persist this itself.)
+(The setting is stored in the OS autostart mechanism — Windows registry Run key, macOS LaunchAgent, or Linux XDG autostart .desktop entry — Project Minder does not persist this itself.)
 
 ### Local Development
 
@@ -60,8 +60,8 @@ Click the tray icon to open the menu. The menu resets its status display every 1
 | Menu Item | Behavior | Notes |
 |-----------|----------|-------|
 | **Open Dashboard** | Opens your default browser to `http://localhost:4100` | Launches the web UI. Click this to navigate to any page (the first suggested destination). |
-| **Status** | Display-only line showing current server state | Updates every 15s: "Status: ok", "Status: starting…", "Status: unhealthy", etc. |
-| **Start at login** | Checkbox that registers/unregisters OS autostart | Checked state syncs with the OS (Windows Task Scheduler, macOS LaunchAgent, Linux systemd). Reboot is not required. |
+| **Status** | Display-only line showing current server state | Updates every 15s: "Status: starting…" initially, then "Status: running (:4100)", "Status: degraded (:4100)", or "Status: not responding (:4100)"; suffix notes added when attached to an existing server. |
+| **Start at login** | Checkbox that registers/unregisters OS autostart | Checked state syncs with the OS (Windows registry Run key, macOS LaunchAgent, Linux XDG autostart .desktop entry). Reboot is not required. (This is distinct from Phase A service mode, which uses Windows Task Scheduler / macOS LaunchAgent / Linux systemd.) |
 | **Mute notifications** | Checkbox that suppresses new-manual-steps toasts | When checked, `MANUAL_STEPS.md` changes no longer trigger OS notifications. The mute flag persists to disk. |
 | **Restart server** | Graceful server restart | **Disabled when in attach mode** (see [Modes](#modes) below). Blocks ~6s on graceful shutdown. Useful when the server becomes unresponsive. |
 | **View logs** | Opens `~/.minder/logs/` directory in your file manager | Reveals the rotating `minder.log` file for troubleshooting. |
@@ -182,9 +182,7 @@ If you're on a desktop, the tray app's checkbox and menu are simpler than servic
 ## Performance & System Impact
 
 The tray app is lightweight:
-- **Memory:** ~50–100 MB at rest (the bundled Node runtime and dependencies).
 - **Polling overhead:** 15-second health checks and ~30-second notification polls. Network-only, no subprocess spawning.
-- **Startup:** Server starts within ~2–3 seconds (faster than `pnpm dev`, which rebuilds the entire Next.js app).
 - **CPU:** Idle when not polling. No background re-scanning (the server's internal watcher handles that).
 
 The bundled Node runtime (~80 MB uncompressed) and standalone server payload dominate the ~100+ MB installer size. This is expected for a "no dependencies required" desktop app.
