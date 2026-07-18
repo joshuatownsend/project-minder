@@ -292,7 +292,7 @@ needed for a personal tool.
 | C3 native notifications | Sonnet | C1 | ☑ done | #300 |
 | C4 packaging CI | Opus | C1 | ☑ done | #301 |
 | C5 signing + updater (optional) | Sonnet | C4 | ☐ blocked on user decision | |
-| C6 tray docs | Haiku | C2, C3 | ☐ not started | |
+| C6 tray docs | Haiku | C2, C3 | ☑ done | #302 |
 
 **Suggested session grouping:** Session 1: A1 + C0 (independent, parallelizable). Session 2:
 A2. Session 3: A3 + A4. Session 4: C1 (largest single task). Session 5: C2 + C3. Session 6:

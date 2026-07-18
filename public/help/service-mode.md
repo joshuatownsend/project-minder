@@ -24,7 +24,7 @@ pnpm service:status
 
 Supported commands:
 - `pnpm service:install` — register the service for autostart at user logon
-- `pnpm service:uninstall` — remove the service registration. On Windows this never touches a running server (stop it separately if needed); on Linux (`systemctl --user disable --now`) and macOS (agent unload) uninstalling also stops the supervised server.
+- `pnpm service:uninstall` — remove the service registration. On Windows, run `pnpm service:stop` first if the service is currently running (uninstall only removes the registration without stopping the running process); on Linux (`systemctl --user disable --now`) and macOS (agent unload) uninstalling also stops the supervised server.
 - `pnpm service:start` — start the service now
 - `pnpm service:stop` — stop a running service
 - `pnpm service:status` — show the current service status

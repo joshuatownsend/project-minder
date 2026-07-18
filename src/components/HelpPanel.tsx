@@ -34,6 +34,7 @@ const slugTitles: Record<HelpSlug, string> = {
   setup: "Setup Guide",
   settings: "Settings",
   "service-mode": "Service Mode",
+  "tray-app": "Tray App",
   templates: "Templates",
   plans: "Plans Browser",
   hooks: "Hooks Browser",

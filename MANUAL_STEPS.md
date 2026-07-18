@@ -169,3 +169,19 @@ then Install again to pick up the fix.
   screenshot. The tool should return TSX with no markdown fences.
 
 ---
+
+## 2026-07-18 09:30 | tray-app | Tray app first-install + deferred acceptance checks (C2–C4)
+
+- [x] One-time local dev setup: fetch the bundled Node runtime
+  `node scripts/fetch-node-runtime.mjs` (creates `dist/node/`, checksum-verified Node 22.12.0 — required by `pnpm tray:dev` since C4 declares it a Tauri resource)
+  Done on this machine 2026-07-18; repeat once per fresh clone.
+- [ ] Windows login test for the autostart toggle (C2 acceptance)
+  Enable "Start at login" in the tray menu, sign out and back in, confirm the tray relaunches and the checkbox is still checked. Toggle off afterward if undesired.
+- [ ] Exercise the installer workflow and verify the Windows installer end-to-end (C4 acceptance)
+  Trigger `release-installers.yml` via a `v*` tag (or a `workflow_dispatch` dry-run first — artifacts land on the run, Releases untouched). Then: install the NSIS `.exe` → tray icon appears → server up → dashboard opens → Quit leaves no orphan `node.exe` (`tasklist | findstr node`). Expect a SmartScreen warning (unsigned).
+- [ ] First macOS/Linux installer run: check the bundled node exec bit (C4 known risk)
+  The bundler may drop the execute mode on `node/bin/node`; if the sidecar fails to spawn on macOS/Linux, this is the first suspect.
+- [ ] Optional: verify a manual-steps toast end-to-end (C3 acceptance)
+  Append an entry to any project's `MANUAL_STEPS.md` → expect an OS toast within ~90s (watcher ≤60s + tray poll ≤30s).
+
+---
