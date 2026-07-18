@@ -74,6 +74,15 @@ interface WatcherState {
   initialReconcileInFlight: boolean;
   sweepTimer: NodeJS.Timeout | null;
   /**
+   * True when the caller pinned an explicit projectsDir (tests, worker
+   * wiring). When false, reconcile passes omit projectsDir so
+   * `reconcileAllSessions` resolves ALL readable Claude homes (primary +
+   * config.claudeHomes) each pass — the 30s sweep is what keeps extra
+   * (e.g. WSL) homes ingested, since chokidar only watches the primary
+   * tree (native fs events don't propagate over \\wsl.localhost).
+   */
+  explicitProjectsDir: boolean;
+  /**
    * Set synchronously by `stopIngestWatcher()` (A2 graceful shutdown). Once
    * true, no new reconcile/sweep pass schedules or starts — checked at the top
    * of `scheduleReconcile`, `runReconcile`, and the sweep `tick`, and gating
@@ -208,6 +217,7 @@ export async function startIngestWatcher(
     needsAnotherPass: new Set(),
     initialReconcileInFlight: false,
     sweepTimer: null,
+    explicitProjectsDir: options.projectsDir != null,
     stopped: false,
     activeWork: new Set(),
     startedAt: Date.now(),
@@ -223,7 +233,12 @@ export async function startIngestWatcher(
     let error: string | undefined;
     try {
       const db = await getDb();
-      if (db) await reconcileAllSessions(db, { projectsDir });
+      if (db) {
+        await reconcileAllSessions(
+          db,
+          state.explicitProjectsDir ? { projectsDir } : {}
+        );
+      }
     } catch (err) {
       error = (err as Error).message;
       // eslint-disable-next-line no-console
@@ -570,7 +585,12 @@ function startSweep(state: WatcherState): void {
       // let the re-arm in `finally` pick up after it completes.
       if (state.initialReconcileInFlight) return;
       const db = getDbSync() ?? (await getDb());
-      if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
+      if (db) {
+        await reconcileAllSessions(
+          db,
+          state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}
+        );
+      }
     } catch (err) {
       state.errors++;
       // eslint-disable-next-line no-console
