@@ -3,6 +3,7 @@ import { walkUserSkills, walkPluginSkills, walkProjectSkills } from "./walkSkill
 import { loadProvenanceContext } from "./provenance";
 import { getCachedScan } from "@/lib/cache";
 import { readConfig } from "@/lib/config";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 import type { AgentEntry, CatalogResult, SkillEntry } from "./types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -92,6 +93,17 @@ export async function loadCatalog(
       const batch = projects.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async (project) => {
+          // Never-wake preflight: carried-forward projects under a stopped
+          // WSL distro sit in the scan cache like any other project, and
+          // walking their agents/skills dirs over \\wsl.localhost would
+          // auto-start the VM. Contribute nothing for the cycle instead
+          // (checkWslRoot's own cache makes the per-project call cheap).
+          if (parseWslUncPath(project.path)) {
+            const wslCheck = await checkWslRoot(project.path);
+            if (wslCheck && !wslCheck.ok) {
+              return { pAgents: [], pSkills: [] };
+            }
+          }
           const [pAgents, pSkills] = await Promise.all([
             walkProjectAgents(project.path, project.slug, ctx),
             walkProjectSkills(project.path, project.slug, ctx),
