@@ -1,4 +1,5 @@
 import { scanGitDirtyStatus } from "./scanner/git";
+import { checkWslRoot, parseWslUncPath } from "./wsl";
 import { emitMinderEvent } from "./events/bus";
 
 interface DirtyStatus {
@@ -56,6 +57,19 @@ class GitStatusCache {
       const results = await Promise.all(
         batch.map(async (item) => {
           try {
+            // Never-wake preflight: carried-forward projects under a stopped
+            // WSL distro reach this queue with \\wsl.localhost paths, and
+            // spawning git against one would auto-start the VM. Report
+            // status-unknown instead (B5 semantics) until the distro runs.
+            // Sync-parse first so non-WSL paths reach scanGitDirtyStatus
+            // without an extra microtask (the dispose-race tests rely on the
+            // git call starting synchronously within the batch mapper).
+            if (parseWslUncPath(item.path)) {
+              const wslCheck = await checkWslRoot(item.path);
+              if (wslCheck && !wslCheck.ok) {
+                return { slug: item.slug, status: { isDirty: false, uncommittedCount: 0, unknown: true } };
+              }
+            }
             const status = await scanGitDirtyStatus(item.path);
             return { slug: item.slug, status };
           } catch {

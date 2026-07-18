@@ -7,12 +7,19 @@ import { normalizePathKey } from "../platform";
 
 // Last successful per-root scan results, keyed by normalized root path.
 // Lives on globalThis (mirroring the scan cache) so dev-server HMR reloads
-// don't lose the carry-forward state a skipped WSL root depends on.
+// don't lose the carry-forward state a skipped WSL root depends on. Catalog
+// walks are carried too: without them, runCatalogLint would re-walk each
+// carried project path — an fs touch that defeats the never-wake guard.
+interface LastGoodRootScan {
+  projects: ProjectData[];
+  walks: Map<string, ProjectCatalogWalk>;
+}
+
 const gScanner = globalThis as unknown as {
-  __minderLastGoodRootScans?: Map<string, ProjectData[]>;
+  __minderLastGoodRootScans?: Map<string, LastGoodRootScan>;
 };
 
-function getLastGoodRootScans(): Map<string, ProjectData[]> {
+function getLastGoodRootScans(): Map<string, LastGoodRootScan> {
   gScanner.__minderLastGoodRootScans ??= new Map();
   return gScanner.__minderLastGoodRootScans;
 }
@@ -361,10 +368,18 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const carryForwardRoot = (devRoot: string): void => {
     const carried = lastGood.get(normalizePathKey(devRoot));
     if (!carried) return; // never scanned successfully (e.g. stopped since boot)
-    for (const project of carried) {
+    for (const project of carried.projects) {
       if (seenSlugs.has(project.slug)) continue;
       seenSlugs.add(project.slug);
       allProjects.push(project);
+      // Seed the walk side-channel so runCatalogLint never falls back to a
+      // fresh walkProject* over this (unreachable) path — the stored walk if
+      // we have one, an empty walk otherwise (stale/absent lint findings for
+      // a skipped root beat waking its VM).
+      catalogWalkByPath.set(
+        project.path,
+        carried.walks.get(project.path) ?? { skills: [], agents: [], commands: [] }
+      );
     }
   };
 
@@ -423,7 +438,12 @@ export async function scanAllProjects(): Promise<ScanResult> {
       await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
     }
 
-    lastGood.set(normalizePathKey(devRoot), rootProjects);
+    const rootWalks = new Map<string, ProjectCatalogWalk>();
+    for (const p of rootProjects) {
+      const walk = catalogWalkByPath.get(p.path);
+      if (walk) rootWalks.set(p.path, walk);
+    }
+    lastGood.set(normalizePathKey(devRoot), { projects: rootProjects, walks: rootWalks });
     allProjects.push(...rootProjects);
   }
 
