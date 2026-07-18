@@ -1,5 +1,6 @@
 //! Tray icon, menu, and the health-poll loop that keeps the menu current.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::config::TrayConfig;
 use crate::health::{self, ServerStatus};
+use crate::notify::{self, NotifyController};
 use crate::supervisor::Supervisor;
 
 /// How often to re-probe `/api/health` and refresh the tray.
@@ -29,8 +31,13 @@ pub fn init<R: Runtime>(
     app: &App<R>,
     cfg: &TrayConfig,
     supervisor: Arc<Supervisor>,
+    state_dir: Option<PathBuf>,
 ) -> tauri::Result<()> {
     let attached = supervisor.is_attached();
+
+    // Manual-steps notification poller (C3) — loads any persisted cursor/mute
+    // flag up front so the "Mute notifications" checkbox below starts correct.
+    let notify_controller = NotifyController::new(state_dir.as_deref());
 
     // Initial checked state comes straight from the OS registration (the
     // plugin is the source of truth — Minder doesn't persist this itself).
@@ -47,6 +54,9 @@ pub fn init<R: Runtime>(
         .build(app)?;
     let autostart_item = CheckMenuItemBuilder::with_id("autostart", "Start at login")
         .checked(autostart_enabled)
+        .build(app)?;
+    let mute_item = CheckMenuItemBuilder::with_id("mute_notifications", "Mute notifications")
+        .checked(notify_controller.is_muted())
         .build(app)?;
     let restart_item = MenuItemBuilder::with_id(
         "restart",
@@ -67,6 +77,7 @@ pub fn init<R: Runtime>(
             &status_item,
             &PredefinedMenuItem::separator(app)?,
             &autostart_item,
+            &mute_item,
             &PredefinedMenuItem::separator(app)?,
             &restart_item,
             &logs_item,
@@ -84,6 +95,8 @@ pub fn init<R: Runtime>(
     let menu_sup = supervisor.clone();
     let menu_url = cfg.dashboard_url();
     let menu_autostart_item = autostart_item.clone();
+    let menu_mute_item = mute_item.clone();
+    let menu_notify_controller = notify_controller.clone();
     let tray = TrayIconBuilder::with_id("minder-tray")
         .icon(tray_icon())
         .tooltip("Project Minder")
@@ -96,12 +109,18 @@ pub fn init<R: Runtime>(
                 &menu_sup,
                 &menu_url,
                 &menu_autostart_item,
+                &menu_mute_item,
+                &menu_notify_controller,
             );
         })
         .build(app)?;
 
     // Health-poll loop: refresh the Status line + tray tooltip every 15s.
     spawn_poll_loop(cfg.port, supervisor.clone(), status_item, tray);
+
+    // Manual-steps notification poll loop (C3): ~30s poll against the
+    // watcher's change feed, toasting anything new unless muted.
+    notify::spawn_poll_loop(app.handle().clone(), cfg.dashboard_url(), notify_controller);
 
     Ok(())
 }
@@ -112,10 +131,13 @@ fn handle_menu_event<R: Runtime>(
     supervisor: &Arc<Supervisor>,
     dashboard_url: &str,
     autostart_item: &CheckMenuItem<R>,
+    mute_item: &CheckMenuItem<R>,
+    notify_controller: &Arc<NotifyController>,
 ) {
     match id {
         "open_dashboard" => open_url(app, dashboard_url),
         "autostart" => sync_autostart(app, autostart_item),
+        "mute_notifications" => notify::sync_mute(mute_item, notify_controller),
         "restart" => {
             if supervisor.is_attached() {
                 return; // menu item is disabled, but guard anyway
