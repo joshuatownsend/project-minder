@@ -23,6 +23,7 @@ export const helpMapping: Record<string, string> = {
   '/config': 'config',
   '/setup': 'setup',
   '/settings': 'settings',
+  '/settings/scan-roots': 'settings',
   '/settings/cost': 'cost',
   '/settings/notifications': 'notifications',
   '/settings/integrations': 'telegram',
