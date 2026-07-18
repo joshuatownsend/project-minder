@@ -161,11 +161,19 @@ describe("scanAllProjects — skipped WSL roots", () => {
     // (the fresh result overwrites the scan cache, so dropping it here would
     // erase the project from the dashboard).
     wslState({ ok: false, distro: "Ubuntu-26.04", reason: "wsl-stopped" });
+    const callsBefore = [mockReaddir, mockStat].map((m) => m.mock.calls.length);
     const second = await scanAllProjects();
     expect(second.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
     expect(second.skippedRoots).toEqual([
       { root: WSL_ROOT, reason: "wsl-stopped", distro: "Ubuntu-26.04" },
     ]);
+    // The never-wake invariant covers the WHOLE cycle, not just the root
+    // readdir: no fs call at all (catalog-lint walks included) may touch the
+    // stopped distro's UNC tree while it's skipped.
+    const touchedWsl = [mockReaddir, mockStat]
+      .flatMap((m, i) => m.mock.calls.slice(callsBefore[i]) as unknown[][])
+      .some((c) => String(c[0]).toLowerCase().includes("wsl.localhost"));
+    expect(touchedWsl).toBe(false);
 
     // Cycle 3: distro back — fresh scan again, no skip reported.
     wslState({ ok: true, distro: "Ubuntu-26.04" });

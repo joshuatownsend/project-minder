@@ -4,6 +4,7 @@ import { watch, FSWatcher } from "fs";
 import { parseManualStepsMd } from "./scanner/manualStepsMd";
 import { invalidateCache } from "./cache";
 import { readConfig, getDevRoots } from "./config";
+import { checkWslRoot } from "./wsl";
 import { ManualStepsInfo, ManualStepEntry } from "./types";
 const DEBOUNCE_MS = 500;
 const POLL_INTERVAL = 60_000; // 60s - check for new MANUAL_STEPS.md files
@@ -107,6 +108,12 @@ export class ManualStepsWatcher {
     const devRoots = getDevRoots(config);
 
     for (const devRoot of devRoots) {
+      // Same never-wake preflight as the project scanner: this poll runs every
+      // 60s independently of scanAllProjects, and a bare readdir on a stopped
+      // WSL distro's \\wsl.localhost root would auto-start its VM.
+      const wslCheck = await checkWslRoot(devRoot);
+      if (wslCheck && !wslCheck.ok) continue;
+
       try {
         const dirents = await fs.readdir(devRoot, { withFileTypes: true });
         const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
