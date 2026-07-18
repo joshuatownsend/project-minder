@@ -90,6 +90,7 @@ export function ScanRootsEditor({
               disabled={i === 0}
               style={{ background: "none", border: "none", padding: "1px", cursor: i === 0 ? "default" : "pointer", color: "var(--text-muted)", opacity: i === 0 ? 0.3 : 1 }}
               title="Move up"
+              aria-label={`Move ${root} up`}
             >
               <ChevronUp style={{ width: "10px", height: "10px" }} />
             </button>
@@ -98,6 +99,7 @@ export function ScanRootsEditor({
               disabled={i === roots.length - 1}
               style={{ background: "none", border: "none", padding: "1px", cursor: i === roots.length - 1 ? "default" : "pointer", color: "var(--text-muted)", opacity: i === roots.length - 1 ? 0.3 : 1 }}
               title="Move down"
+              aria-label={`Move ${root} down`}
             >
               <ChevronDown style={{ width: "10px", height: "10px" }} />
             </button>
@@ -148,6 +150,7 @@ export function ScanRootsEditor({
               flexShrink: 0,
             }}
             title={roots.length <= 1 ? "Cannot remove the last root" : "Remove root"}
+            aria-label={roots.length <= 1 ? `Cannot remove the last root (${root})` : `Remove root ${root}`}
           >
             <Trash2 style={{ width: "11px", height: "11px" }} />
           </button>

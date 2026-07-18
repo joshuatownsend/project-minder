@@ -42,7 +42,10 @@ export function ScanRootsSection({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         showToast("Scan roots saved", "Rescanning projects now");
       } catch {
-        showToast("Scan roots saved", "Rescan will pick up new roots on next load");
+        showToast(
+          "Scan roots saved, but rescan failed",
+          "New roots apply when the scan cache expires (up to 5 min) — or rescan from the dashboard"
+        );
       }
     } catch {
       // onConfigChange already toasted the error; keep the draft for retry.
