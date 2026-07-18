@@ -111,7 +111,7 @@ The tray app respects these optional environment variables (most have sensible d
 | `MINDER_TRAY_ATTACH` | unset | Set to `1` to force attach mode at startup (observe an existing server, never spawn). Used for dev iteration. |
 | `MINDER_NODE_PATH` | bundled or `node` | Explicit path to the `node` binary. If unset, the tray uses the bundled Node runtime (preferred in packaged installs) or falls back to `node` on PATH (dev). An explicit override takes precedence over the bundled runtime. |
 | `MINDER_SERVER_DIST` | bundled `minder-server/` | Path to the `dist/minder-server/` directory (dev override). Takes precedence over the bundled payload. Used when you rebuild the server during development. |
-| `MINDER_STATE_DIR` | `~/.minder/` | Directory where the tray stores its state (notification cursor, mute flag). Should exist; the app creates it if absent. |
+| `MINDER_STATE_DIR` | `~/.minder/` | Forwarded to the spawned sidecar (server) to relocate its writable state (.minder.json, caches, index.db) away from the read-only bundled payload. The tray's own notification state (cursor, mute flag) always stores in `~/.minder/tray-notify.json`, independent of this variable. |
 
 **Windows:** On Windows, set these in your user environment variables (System Properties → Environment Variables) or in a `.cmd` batch file that launches the app.
 
@@ -126,7 +126,7 @@ The tray app respects these optional environment variables (most have sensible d
 3. **Restart the tray:** Kill the process and relaunch the installer or the app from your applications menu.
 4. **Port conflict:** If port 4100 is held by another process, the server may fail to start. See [Port Held by Another App](#port-held-by-another-app).
 
-### Status says "unhealthy" or "starting…" for too long
+### Status says "degraded" or "not responding" (or stays on "starting…" for too long)
 
 1. **Check the server log:** `~/.minder/logs/minder.log` will show any startup errors or crashes.
 2. **Check for port conflicts:** Run `netstat -ano | findstr :4100` (Windows), `lsof -i :4100` (macOS/Linux).
@@ -172,7 +172,7 @@ Project Minder offers two ways to run continuously:
 | **Platform** | Desktop (Windows / macOS / Linux) | Any (server / shared machine / desktop) |
 | **Autostart** | Click "Start at login" checkbox in tray menu | Run `pnpm service:install` (scheduled task / LaunchAgent / systemd) |
 | **Status visibility** | Tray icon with menu showing status and controls | No UI (runs headless) — check via `service:status` command |
-| **Restart** | Click "Restart server" in tray menu | `pnpm service:restart` command |
+| **Restart** | Click "Restart server" in tray menu | `pnpm service:stop && pnpm service:start` |
 | **Notification support** | Yes (new manual steps) | No built-in notifications |
 | **Resource overhead** | Minimal (tray icon + small polling loop) | Minimal (no UI) |
 | **Recommended for** | Desktop users who want visual feedback and easy control | Servers / headless machines / shared systems |
