@@ -7,6 +7,7 @@ The Settings page (`/settings`) controls Project Minder's own behavior — what 
 | Section | Wave | What it controls |
 |---------|------|------------------|
 | **Features** | 1 | Subsystem on/off toggles. Decide which scanners and watchers run. |
+| **Scan Roots** | 1 | Directories scanned for projects — add extra drives or WSL locations. |
 | **Appearance** | 12 | View mode default, theme, keyboard shortcuts. |
 | **Cost** | 8 | Currency display, custom pricing rules, schedule mode for quota burndown. |
 | **Notifications** | 7 | Web push and Telegram per-event toggles. |
@@ -16,6 +17,16 @@ The Settings page (`/settings`) controls Project Minder's own behavior — what 
 | **Auto-title** | 7 | LLM endpoint for session title generation. |
 
 Sections marked with a wave label other than 1 currently render a placeholder. The IA is final on day one — controls fill in as the corresponding wave lands.
+
+## Scan Roots section
+
+The directories Project Minder scans for projects. Each immediate subdirectory of a root becomes a dashboard project. Defaults to `C:\dev` on Windows and `~/dev` elsewhere.
+
+- **Multiple roots** — add as many as you like; every root is scanned on each cycle. Reorder with the arrows: the **first entry is the primary root**, which determines the default dev-server base path and the header label.
+- **Remove** — the trash icon removes a root (at least one must remain). Projects under a removed root disappear from the dashboard on the next scan; nothing on disk is touched.
+- **Save & Rescan** — persists the list to `.minder.json` (`devRoots`) and immediately triggers a full rescan, so new roots appear without waiting out the 5-minute scan cache.
+
+The same editor also lives on the **Config** page (`/config`, Settings tab) alongside scan-behavior tuning like batch size.
 
 ## Features section
 

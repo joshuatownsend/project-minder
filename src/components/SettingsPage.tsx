@@ -16,6 +16,7 @@ import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
 import { CostSection } from "@/components/settings/CostSection";
 import { AdaptersSection } from "@/components/settings/AdaptersSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { ScanRootsSection } from "@/components/settings/ScanRootsSection";
 import { Toggle } from "@/components/settings/Toggle";
 
 // Hoisted so each Settings render doesn't re-filter the static metadata.
@@ -43,6 +44,7 @@ const DB_STATUS_COLOR: Record<InitStatus["state"], string> = {
 
 type SectionKey =
   | "features"
+  | "scan-roots"
   | "appearance"
   | "cost"
   | "notifications"
@@ -62,6 +64,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
+  { key: "scan-roots",    label: "Scan Roots",     comingSoon: false, description: "Directories scanned for projects — add extra drives or WSL locations." },
   { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
   { key: "cost",          label: "Cost",           comingSoon: false, description: "Currency, pricing rules, schedule mode for burndown." },
   { key: "notifications", label: "Notifications",  comingSoon: false, description: "Push and Telegram event toggles." },
@@ -270,6 +273,9 @@ export function SettingsPage() {
       <main style={{ flex: 1, minWidth: 0 }}>
         {active === "features" && (
           <FeaturesSection config={config} saving={saving} onToggle={toggleFlag} />
+        )}
+        {active === "scan-roots" && (
+          <ScanRootsSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "notifications" && (
           <NotificationsSection config={config} onConfigChange={patchConfig} />

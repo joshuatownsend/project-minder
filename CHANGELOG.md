@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Scan Roots section on the Settings page (`/settings`).** The scan-roots editor (add/remove/reorder the directories Project Minder scans for projects; the first entry is the primary root) was previously reachable only via the Config browser's Settings tab (`/config?type=settings`) — effectively undiscoverable from the sidebar, whose "Settings" item goes to `/settings`. The editor now also lives at Settings → Scan Roots, extracted into a shared `ScanRootsEditor` component used by both surfaces. Saving from the new section persists `devRoots` via `PATCH /api/config` and then **immediately triggers a rescan** (`POST /api/scan`), so newly added roots appear on the dashboard without waiting out the 5-minute scan cache (the Config-page save keeps its existing next-load semantics).
+
 ## [1.3.0] - 2026-07-18
 
 ### Added
