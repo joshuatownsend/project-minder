@@ -33,7 +33,7 @@ Supported commands:
 
 If you're on a desktop machine, the Project Minder tray app's built-in "Start at login" checkbox is the recommended way to launch Minder automatically — it registers with the OS directly (no scheduled task, service, or install script to run) and the setting is remembered across restarts.
 
-If you previously installed the Phase A scheduled-task/service described above, run `pnpm service:uninstall` after switching to the tray app to avoid double supervision (two processes trying to run the same dashboard). Leaving both installed is not dangerous — the tray app detects and attaches to an already-running server instead of spawning a second one — but uninstalling the older path keeps things simple.
+If you previously installed the Phase A scheduled-task/service described above, run `pnpm service:uninstall` **before** launching the tray app, to avoid double supervision (two processes trying to run the same dashboard). If the tray was already launched and attached to that older service, relaunch the tray after uninstalling — otherwise it's left observing the now-stopped server instead of spawning its own. Leaving both installed is not dangerous — the tray simply attaches to the existing server instead of spawning a second one — but doing it in this order keeps things simple.
 
 ## Operating System Details
 
