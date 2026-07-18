@@ -3,15 +3,17 @@
 - [ ] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)
   The live service on :4100 runs the old build; the Settings sections and WSL scanning
   only exist after it picks up the new code (`pnpm build` + service restart, or tray restart).
-- [ ] Add the WSL scan root: Settings → Scan Roots → Detect WSL → Add `\\wsl.localhost\Ubuntu-26.04\home\josh\dev` → Save & Rescan
-  The distro must be Running during detection (open a WSL terminal first) — Minder never starts it.
+- [ ] Add the WSL scan root: Settings → Scan Roots → add `\\wsl.localhost\Ubuntu-26.04\home\josh\printing-press\library` → Save & Rescan
+  Your real repos (`bamcli`, `micetrocli`, both with `.git`) live in `~/printing-press/library`,
+  not `~/dev` (those are older git-less copies the scanner ignores), so type the path into the
+  editor manually — the Detect WSL button only suggests `~/dev`-shaped roots. The distro must be
+  Running during the first scan — Minder never starts it.
 - [ ] Add the WSL Claude home: Settings → Claude Homes → Detect WSL → "Add home + mapping" for `\\wsl.localhost\Ubuntu-26.04\home\josh\.claude` → Save & Rescan
-  This also auto-adds the `/home/josh` ↔ `\\wsl.localhost\Ubuntu-26.04\home\josh` path mapping that correlates WSL sessions with the UNC projects.
-- [ ] `git init` (or clone properly) the WSL projects you want on the dashboard
-  `bamcli` and `micetrocli` in `~/dev` have no `.git` today, and the scanner only picks up
-  git repos — from a WSL terminal: `cd ~/dev/bamcli && git init` (same for micetrocli).
+  This also auto-adds the `/home/josh` ↔ `\\wsl.localhost\Ubuntu-26.04\home\josh` path mapping.
+  That single mapping correlates the `-home-josh-printing-press-library-*` session dirs with the
+  UNC projects automatically — no per-project mapping needed.
 - [ ] Optional: allow git-over-UNC for WSL repos (branch/dirty status on their cards)
-  `git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu-26.04/home/josh/dev/*'`
+  `git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu-26.04/home/josh/printing-press/library/*'`
   Run from Windows (Git 2.55 supports the `/*` glob). Without it, WSL projects show no git
   metadata (Git's dubious-ownership protection) — everything else works.
 
