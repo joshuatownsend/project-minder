@@ -180,17 +180,32 @@ jobs:
           fi
           node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');console.log('stamped tauri.conf.json version =',c.version);" "$VERSION"
 
-      # Two attempts: macOS DMG bundling (bundle_dmg.sh -> hdiutil/Finder) is
-      # notoriously flaky on GitHub's Intel runners — it can hang for minutes
-      # and fail with no output while the identical arm64 job succeeds. A
-      # retry re-uses the cargo cache, so the second attempt only re-bundles.
-      # Deterministic failures still fail the job (one wasted re-bundle).
+      # macOS: XProtect's behavior service scans freshly-written files and
+      # holds locks that make hdiutil fail with "Resource busy" during DMG
+      # creation — a persistent GitHub-runner issue that bites hardest with
+      # large payloads (this bundle carries ~50k node_modules files; both
+      # Intel attempts failed after ~12 silent minutes while the faster arm64
+      # runner escaped the scan window). Stopping XProtect before bundling is
+      # the widely-used workaround (actions/runner-images#7522).
+      - name: Workaround macOS hdiutil resource-busy (stop XProtect)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          sudo pkill -9 XProtect || true
+          sleep 3
+
+      # Two attempts: macOS DMG bundling (bundle_dmg.sh -> hdiutil) can still
+      # be flaky on GitHub's macOS runners even with XProtect stopped. A retry
+      # re-uses the cargo cache, so the second attempt only re-bundles — and
+      # runs --verbose so a persistent failure finally surfaces bundle_dmg's
+      # own output (tauri suppresses it otherwise).
       - name: Build Tauri installers
         shell: bash
         run: |
           set -u
           for attempt in 1 2; do
-            if pnpm tauri build --bundles ${{ matrix.bundles }}; then
+            EXTRA=""
+            [ "$attempt" = "2" ] && EXTRA="--verbose"
+            if pnpm tauri build --bundles ${{ matrix.bundles }} $EXTRA; then
               exit 0
             fi
             echo "::warning::tauri build attempt $attempt failed"
