@@ -537,7 +537,17 @@ function scheduleUnlink(state: WatcherState, filePath: string): void {
     void trackWork(state, (async () => {
       try {
         const db = getDbSync() ?? (await getDb());
-        if (db) await reconcileAllSessions(db, { projectsDir: state.projectsDir });
+        // Same contract as the initial/sweep reconciles: only pin projectsDir
+        // when the caller explicitly supplied one. Pinning unconditionally
+        // made the unlink-triggered prune treat ONLY the primary home's files
+        // as live — one deleted local JSONL could purge every ingested
+        // extra-home (WSL) session.
+        if (db) {
+          await reconcileAllSessions(
+            db,
+            state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}
+          );
+        }
         state.eventsHandled++;
       } catch (err) {
         state.errors++;

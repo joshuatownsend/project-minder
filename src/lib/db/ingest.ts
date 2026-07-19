@@ -2799,6 +2799,11 @@ export async function reconcileAllSessions(
         .map((e) => path.join(dirPath, e.name));
       sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
+      // A dir that LISTED in the home enumeration but fails its own readdir
+      // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
+      // "all its sessions vanished" — shield its rows from the prune pass
+      // exactly like a home that was skipped up front.
+      unavailableDirs.push(dirPath);
       continue;
     }
     // Newer Claude Code writes subagent transcripts to
