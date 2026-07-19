@@ -13,6 +13,9 @@ import {
   extractLaunchFromVbs,
   parseServiceManifest,
   resolveInstalledLaunch,
+  resolveServicePort,
+  resolveInstalledPort,
+  DEFAULT_SERVICE_PORT,
   SERVICE_MANIFEST_FILENAME,
   resolveServerLaunch,
   NO_BUILD_MESSAGE,
@@ -873,5 +876,73 @@ describe("buildMacArtifacts / buildLinuxArtifacts (F15 review fix: install-time 
       expect(plistContent).toContain("R&amp;D");
       expect(plistContent).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
     });
+  });
+});
+
+describe("resolveServicePort (install-time)", () => {
+  it("defaults to 4100 when neither MINDER_PORT nor PORT is set", () => {
+    expect(resolveServicePort({})).toBe(DEFAULT_SERVICE_PORT);
+  });
+
+  it("prefers MINDER_PORT over PORT so the service port is independent of the shell's PORT", () => {
+    expect(resolveServicePort({ MINDER_PORT: "4199", PORT: "3000" })).toBe(4199);
+  });
+
+  it("falls back to PORT when MINDER_PORT is absent", () => {
+    expect(resolveServicePort({ PORT: "3000" })).toBe(3000);
+  });
+
+  it.each([["garbage"], ["0"], ["-5"], ["65536"], [""]])(
+    "rejects the invalid port %s and uses the default",
+    (raw) => {
+      expect(resolveServicePort({ MINDER_PORT: raw })).toBe(DEFAULT_SERVICE_PORT);
+    }
+  );
+});
+
+describe("resolveInstalledPort (stop-time)", () => {
+  const vbsWithPort = (p: string) => `WshEnv("PORT") = "${p}"\nWshShell.Run "x", 0, False`;
+
+  it("prefers the manifest's recorded port", () => {
+    const manifestJson = JSON.stringify({ mode: "standalone", exe: "node", args: [], port: 4199 });
+    expect(resolveInstalledPort({ manifestJson, vbsContent: vbsWithPort("3000") })).toEqual({
+      port: 4199,
+      source: "manifest",
+    });
+  });
+
+  it("falls back to the vbs for installs predating the manifest port field", () => {
+    const manifestJson = JSON.stringify({ mode: "standalone", exe: "node", args: [] });
+    expect(resolveInstalledPort({ manifestJson, vbsContent: vbsWithPort("4199") })).toEqual({
+      port: 4199,
+      source: "vbs",
+    });
+  });
+
+  it("falls back to the default when neither source is present", () => {
+    expect(resolveInstalledPort({})).toEqual({ port: DEFAULT_SERVICE_PORT, source: "default" });
+  });
+
+  it("tolerates a corrupt manifest by falling through to the vbs", () => {
+    expect(resolveInstalledPort({ manifestJson: "{not json", vbsContent: vbsWithPort("4199") })).toEqual({
+      port: 4199,
+      source: "vbs",
+    });
+  });
+
+  it("ignores an out-of-range manifest port rather than scanning an impossible port", () => {
+    const manifestJson = JSON.stringify({ port: 99999 });
+    expect(resolveInstalledPort({ manifestJson })).toEqual({
+      port: DEFAULT_SERVICE_PORT,
+      source: "default",
+    });
+  });
+
+  // The regression this whole path exists to prevent: installing on a custom
+  // port and then stopping from a shell with no MINDER_PORT set must still
+  // find the running service.
+  it("recovers a custom install port with no environment help at all", () => {
+    const manifestJson = JSON.stringify({ mode: "standalone", exe: "node", args: [], port: 4199 });
+    expect(resolveInstalledPort({ manifestJson }).port).toBe(4199);
   });
 });

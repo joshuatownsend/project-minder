@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildAllowedHosts, resolveBoundPort } from "./lib/boundPort";
 
 // ---------------------------------------------------------------------------
 // Origin/Host protection for the local API surface (finding S1).
@@ -81,20 +82,12 @@ import { NextRequest, NextResponse } from "next/server";
 //
 // The MCP server's own allowlist (src/lib/mcp/server.ts) is separate — /api/mcp
 // is skipped here and has its own transport-level DNS-rebind protection.
-function resolveBoundPort(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.PORT;
-  const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 4100;
-}
-
-/**
- * Build the loopback host allowlist for a given bound port — exactly the
- * `localhost`/`127.0.0.1`/`[::1]` trio on that port, and nothing else. Exported
- * for unit testing the derived entries.
- */
-export function buildAllowedHosts(port: number): Set<string> {
-  return new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
-}
+// `resolveBoundPort` / `buildAllowedHosts` now live in `src/lib/boundPort.ts`,
+// shared with the MCP server's transport allowlist (src/lib/mcp/server.ts) so
+// the two loopback allowlists cannot drift apart — they did once, with MCP
+// pinned to a literal 4100 while this file honored PORT. Re-exported here
+// because existing tests import `buildAllowedHosts` from this module.
+export { buildAllowedHosts };
 
 const ALLOWED_HOSTS = buildAllowedHosts(resolveBoundPort());
 

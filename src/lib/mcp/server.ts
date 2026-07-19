@@ -15,13 +15,21 @@ import { registerOtelTools } from "./tools/otel";
 import { registerDevServerTools } from "./tools/devServers";
 import { registerClaudeStatusTools } from "./tools/claudeStatus";
 import { registerResources } from "./resources";
+import {
+  buildAllowedHosts,
+  buildAllowedOrigins,
+  resolveBoundPort,
+} from "../boundPort";
 
-// Bind the transport's DNS-rebinding protection to the dev-server's port.
-// The Next.js dev script hard-codes 4100 and the start script does too; if
-// either ever changes, update this constant and the docs/help/mcp-server.md
-// example URL in lockstep.
-const ALLOWED_HOSTS = ["localhost:4100", "127.0.0.1:4100"];
-const ALLOWED_ORIGINS = ["http://localhost:4100", "http://127.0.0.1:4100"];
+// Bind the transport's DNS-rebinding protection to the port this server
+// ACTUALLY bound this run, not a literal — the tray spawns the packaged server
+// with `PORT=<MINDER_TRAY_PORT>`, so a user who moves off 4100 (because it was
+// taken) previously got a working dashboard whose every MCP request 403'd here.
+// Derived from the same module as the dashboard proxy's allowlist
+// (src/lib/boundPort.ts) so the two cannot drift apart again.
+const BOUND_PORT = resolveBoundPort();
+const ALLOWED_HOSTS = [...buildAllowedHosts(BOUND_PORT)];
+const ALLOWED_ORIGINS = buildAllowedOrigins(BOUND_PORT);
 
 // Build a fully-registered McpServer instance. Tools and resources are
 // stateless functions over Project Minder's lib layer, so the same server
