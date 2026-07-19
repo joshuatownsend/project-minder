@@ -166,6 +166,15 @@ class EfficiencyGradeCache {
     return this.cache.size;
   }
 
+  /** Drop cached grades only (queue and in-flight work untouched). Called by
+   *  PATCH /api/config when claudeHomes/pathMappings change — the grades were
+   *  computed from a turn set that depended on the old value, and the next
+   *  dashboard enqueue recomputes them because the fresh-cache skip no longer
+   *  finds an entry. */
+  invalidateGrades() {
+    this.cache.clear();
+  }
+
   dispose() {
     this.generation++;
     this.queue.length = 0;

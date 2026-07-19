@@ -90,16 +90,33 @@ async function getHomeViews(): Promise<ViewsCache> {
   const config = await readConfig();
   const mappings = config.pathMappings ?? [];
   const configKey = JSON.stringify([config.claudeHomes ?? [], mappings]);
+  // Re-run the readable-home check on EVERY call, cache hit or not — it rides
+  // the wsl.ts distro-list cache (5s/30s TTL), so this is cheap, and it is
+  // what keeps the 60s view cache inside the never-wake guarantee: a distro
+  // that stopped mid-TTL must not have its cached view served (callers touch
+  // view.home for worktree counts / status inference), and a distro that just
+  // started must be picked up now, not when the TTL lapses.
+  const homes = await getReadableClaudeHomes(config);
+  const homeKeys = homes.map((h) => normalizePathKey(h));
   if (
     cachedViews &&
     cacheConfigKey === configKey &&
     Date.now() - cacheTime < HISTORY_CACHE_TTL
   ) {
-    return cachedViews;
+    const cachedKeys = new Set(cachedViews.views.map((v) => normalizePathKey(v.home)));
+    const newlyReadable = homeKeys.some((k) => !cachedKeys.has(k));
+    if (!newlyReadable) {
+      // Serve the cache filtered to the currently-readable homes; a view
+      // whose distro stopped mid-TTL is dropped for the cycle (the cached
+      // entry itself is kept so a quick restart doesn't force a re-parse).
+      const allowed = new Set(homeKeys);
+      return {
+        views: cachedViews.views.filter((v) => allowed.has(normalizePathKey(v.home))),
+        mappings: cachedViews.mappings,
+      };
+    }
+    // A home became readable since the snapshot — rebuild to include it.
   }
-  // getReadableClaudeHomes applies the never-wake rule: a home inside a
-  // stopped WSL distro is left out for this cycle rather than auto-started.
-  const homes = await getReadableClaudeHomes(config);
   const views = await Promise.all(homes.map((h) => buildHomeView(h, mappings)));
   cachedViews = { views, mappings };
   cacheTime = Date.now();

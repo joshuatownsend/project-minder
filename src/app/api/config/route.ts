@@ -8,6 +8,7 @@ import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
+import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -33,6 +34,9 @@ type Patch = (config: MinderConfig) => void;
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
+  // Set when claudeHomes/pathMappings are being patched: grades are computed
+  // from turn sets that depend on both, so cached grades must drop with them.
+  let multiHomeChanged = false;
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -60,6 +64,7 @@ export async function PATCH(request: NextRequest) {
     }
     const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
     patches.push((c) => { c.claudeHomes = homes; });
+    multiHomeChanged = true;
   }
 
   // Cross-environment path prefix mappings ({from, to} pairs, both non-empty).
@@ -77,6 +82,7 @@ export async function PATCH(request: NextRequest) {
     const mappings = (body.pathMappings as { from: string; to: string }[])
       .map((m) => ({ from: m.from.trim(), to: m.to.trim() }));
     patches.push((c) => { c.pathMappings = mappings; });
+    multiHomeChanged = true;
   }
 
   if (typeof body.scanBatchSize === "number") {
@@ -416,6 +422,10 @@ export async function PATCH(request: NextRequest) {
   });
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
+  // Grades depend on the multi-home turn set; drop them so the next dashboard
+  // enqueue recomputes with the new homes/mappings instead of serving the old
+  // grade for the rest of the 5-minute TTL.
+  if (multiHomeChanged) efficiencyGradeCache.invalidateGrades();
   return NextResponse.json({ ok: true, config });
 }
 
