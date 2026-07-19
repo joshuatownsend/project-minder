@@ -130,8 +130,13 @@ export async function loadSkillsResponse(
 
   if (projectSlug) {
     const scan = getCachedScan();
-    const projectPath = scan?.projects?.find((p) => p.slug === projectSlug)?.path;
-    const usageSlug = projectPath ? pathToUsageSlug(projectPath) : projectSlug;
+    const project = scan?.projects?.find((p) => p.slug === projectSlug);
+    // Prefer the scanner's usageSlug: for a UNC-scanned WSL project it is
+    // derived from the MAPPED (Linux-recorded) path, which is how the usage
+    // aggregates key WSL-recorded invocations. Recomputing from the raw UNC
+    // path here would miss them.
+    const usageSlug =
+      project?.usageSlug ?? (project?.path ? pathToUsageSlug(project.path) : projectSlug);
 
     result = result.filter(
       (r) =>
