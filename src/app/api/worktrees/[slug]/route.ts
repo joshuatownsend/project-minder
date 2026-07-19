@@ -6,8 +6,21 @@ import { getCachedScan } from "@/lib/cache";
 import { checkWorktreeStatus, checkAllWorktreeStatuses } from "@/lib/worktreeChecker";
 import { worktreeSlug } from "@/lib/worktreeUtils";
 import { processManager, findFreePort } from "@/lib/processManager";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 
 const execFileAsync = promisify(execFile);
+
+/** Never-wake preflight: git probes / process spawns against a stopped WSL
+ *  distro's \\wsl.localhost paths would auto-start its VM. Returns the check
+ *  only when the path is WSL and NOT reachable; null means "go ahead". */
+async function wslBlocked(...paths: string[]) {
+  for (const p of paths) {
+    if (!parseWslUncPath(p)) continue;
+    const check = await checkWslRoot(p);
+    if (check && !check.ok) return check;
+  }
+  return null;
+}
 
 export async function GET(
   _req: NextRequest,
@@ -19,6 +32,10 @@ export async function GET(
   const project = scan.projects.find((p) => p.slug === slug);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   if (!project.worktrees || project.worktrees.length === 0) return NextResponse.json([]);
+
+  // Stopped-WSL project (carried forward): no statuses this cycle rather
+  // than a git probe that would wake the VM.
+  if (await wslBlocked(project.path)) return NextResponse.json([]);
 
   const statuses = await checkAllWorktreeStatuses(project.path, project.worktrees);
   return NextResponse.json(statuses);
@@ -43,6 +60,18 @@ export async function POST(
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   const wt = project.worktrees?.find((w) => w.worktreePath === body.worktreePath);
   if (!wt) return NextResponse.json({ error: "Worktree not found" }, { status: 404 });
+
+  // Both actions touch the filesystem (git probes, dev-server spawn) at the
+  // project AND worktree paths — refuse outright while the distro is stopped.
+  const blocked = await wslBlocked(project.path, body.worktreePath);
+  if (blocked) {
+    return NextResponse.json(
+      {
+        error: `WSL distro '${blocked.distro}' is not running (${blocked.reason}) — Minder never wakes a stopped distro. Start it and retry.`,
+      },
+      { status: 503 }
+    );
+  }
 
   const wtSlug = worktreeSlug(slug, wt.branch);
 

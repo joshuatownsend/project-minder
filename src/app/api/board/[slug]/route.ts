@@ -15,6 +15,15 @@ import {
   BoardWriteError,
 } from "@/lib/boardWriter";
 import { promoteBoardIssueToTask } from "@/lib/tasks/boardDelegation";
+import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "@/lib/wsl";
+
+/** Never-wake preflight for the fresh-read lane: reading BOARD.md under a
+ *  stopped WSL distro would auto-start its VM. Null means "go ahead". */
+async function wslReadBlocked(projectPath: string) {
+  if (!parseWslUncPath(projectPath)) return null;
+  const check = await checkWslRoot(projectPath);
+  return check && !check.ok ? check : null;
+}
 
 const EMPTY = { epics: [], inbox: [], total: 0 };
 
@@ -38,6 +47,14 @@ export async function GET(
   const projectPath = await findProjectPathBySlug(slug);
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  const blocked = await wslReadBlocked(projectPath);
+  if (blocked) {
+    return NextResponse.json(
+      { error: new WslUnavailableError(blocked).message },
+      { status: 503 },
+    );
   }
 
   // Fresh read (not the cache) so a board mutated since the last scan reflects
@@ -167,6 +184,9 @@ export async function POST(
     invalidateCache();
     return NextResponse.json(updated ?? EMPTY);
   } catch (err) {
+    if (err instanceof WslUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 });
+    }
     if (err instanceof BoardWriteError) {
       // NOT_FOUND/BAD_TARGET → the target row/epic doesn't exist (404);
       // EMPTY_TITLE → malformed request (400).

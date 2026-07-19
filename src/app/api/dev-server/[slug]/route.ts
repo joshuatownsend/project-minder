@@ -3,6 +3,7 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import path from "path";
 import { processManager } from "@/lib/processManager";
 import { readConfig, getDevRoots } from "@/lib/config";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,19 @@ export const runtime = "nodejs";
 // spawning. Runtime-check against `unknown`, not the (unenforced) TS type.
 function isValidPort(port: unknown): port is number {
   return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+/** Never-wake preflight: starting a dev server reads the project dir and
+ *  spawns with it as cwd — on a stopped WSL distro's \\wsl.localhost path
+ *  that would auto-start the VM. Returns an error message, or null to
+ *  proceed (non-WSL paths always proceed). */
+async function wslStartBlocked(projectPath: string): Promise<string | null> {
+  if (!parseWslUncPath(projectPath)) return null;
+  const check = await checkWslRoot(projectPath);
+  if (check && !check.ok) {
+    return `WSL distro '${check.distro}' is not running (${check.reason}) — Minder never wakes a stopped distro. Start it and retry.`;
+  }
+  return null;
 }
 
 /** Verify projectPath is a subdirectory of one of the configured devRoots. */
@@ -82,6 +96,10 @@ export async function POST(
         if (pathErr) {
           return NextResponse.json({ error: pathErr }, { status: 403 });
         }
+        const wslErr = await wslStartBlocked(projectPath);
+        if (wslErr) {
+          return NextResponse.json({ error: wslErr }, { status: 503 });
+        }
         const info = await processManager.start(slug, projectPath, validatedPort);
         return NextResponse.json(info);
       }
@@ -99,6 +117,10 @@ export async function POST(
         const pathErr2 = await validateProjectPath(projectPath);
         if (pathErr2) {
           return NextResponse.json({ error: pathErr2 }, { status: 403 });
+        }
+        const wslErr2 = await wslStartBlocked(projectPath);
+        if (wslErr2) {
+          return NextResponse.json({ error: wslErr2 }, { status: 503 });
         }
         const info = await processManager.restart(slug, projectPath, validatedPort);
         return NextResponse.json(info);

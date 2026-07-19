@@ -10,6 +10,7 @@ export type GithubActivityReason =
   | "unauthenticated"       // gh exited with an auth error
   | "not-a-github-repo"     // remote isn't github.com (decided before spawning gh)
   | "no-remote"             // no origin remote at all
+  | "wsl-unavailable"       // project lives under a stopped WSL distro (never-wake)
   | "error";                // any other gh/parse failure
 
 export type GithubCiStatus = "passing" | "failing" | "pending" | "unknown";

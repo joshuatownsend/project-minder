@@ -3,6 +3,7 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { applySetup, ApplyAction } from "@/lib/setupApply";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 async function findProjectPath(slug: string): Promise<string | null> {
   let result = getCachedScan();
@@ -42,6 +43,10 @@ export async function POST(
   }
 
   try {
+    // Never-wake preflight: setup writes into the project directory.
+    const wslResp = await wslGuardResponse(projectPath);
+    if (wslResp) return wslResp;
+
     const result = await applySetup(projectPath, action as ApplyAction);
     return NextResponse.json(result);
   } catch (err) {

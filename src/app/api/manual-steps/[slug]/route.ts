@@ -4,6 +4,7 @@ import { scanManualStepsMd, scanManualStepsArchive } from "@/lib/scanner/manualS
 import { toggleManualStep, ProjectNotFoundError } from "@/lib/server/mutations/manualSteps";
 import { demoMode } from "@/lib/demo/demoMode";
 import { demoProjects } from "@/lib/demo/projects";
+import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "@/lib/wsl";
 
 const EMPTY_STEPS = { entries: [], totalSteps: 0, pendingSteps: 0, completedSteps: 0 };
 
@@ -25,6 +26,18 @@ export async function GET(
   const projectPath = await findProjectPathBySlug(slug);
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  // Never-wake preflight for the fresh-read lane: reading MANUAL_STEPS.md
+  // under a stopped WSL distro would auto-start its VM.
+  if (parseWslUncPath(projectPath)) {
+    const check = await checkWslRoot(projectPath);
+    if (check && !check.ok) {
+      return NextResponse.json(
+        { error: new WslUnavailableError(check).message },
+        { status: 503 }
+      );
+    }
   }
 
   // ?archived=1 reads the companion MANUAL_STEPS.archive.md instead of the active list.
@@ -54,6 +67,9 @@ export async function POST(
   } catch (err) {
     if (err instanceof ProjectNotFoundError) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+    if (err instanceof WslUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 });
     }
     return NextResponse.json({ error: "Failed to toggle step" }, { status: 500 });
   }

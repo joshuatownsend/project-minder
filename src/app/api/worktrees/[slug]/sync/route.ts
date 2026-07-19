@@ -8,6 +8,7 @@ import { scanManualStepsMd } from "@/lib/scanner/manualStepsMd";
 import { scanInsightsMd, parseInsightsMd, appendInsights } from "@/lib/scanner/insightsMd";
 import { appendTodosToFile } from "@/lib/todoWriter";
 import { diffTodos, diffManualSteps, diffInsights } from "@/lib/worktreeSync";
+import { firstBlockedWslPath, WslUnavailableError } from "@/lib/wsl";
 import { ManualStepEntry } from "@/lib/types";
 
 function entryToMarkdown(entry: ManualStepEntry): string {
@@ -36,6 +37,16 @@ export async function POST(
 
   const wt = project.worktrees?.find((w) => w.worktreePath === body.worktreePath);
   if (!wt) return NextResponse.json({ error: "Worktree not found" }, { status: 404 });
+
+  // Never-wake preflight: sync reads both the parent and worktree planning
+  // files — on a stopped WSL distro either read would auto-start its VM.
+  const blocked = await firstBlockedWslPath(project.path, wt.worktreePath);
+  if (blocked) {
+    return NextResponse.json(
+      { error: new WslUnavailableError(blocked).message },
+      { status: 503 }
+    );
+  }
 
   if (body.file === "todos") {
     const [parentInfo, worktreeInfo] = await Promise.all([

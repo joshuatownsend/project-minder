@@ -8,6 +8,7 @@ import {
   walkProjectCommands,
 } from "@/lib/indexer/walkCommands";
 import { loadProvenanceContext } from "@/lib/indexer/provenance";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 import type { CommandEntry } from "@/lib/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
@@ -75,7 +76,16 @@ export async function loadCommandsResponse(
   const [userCommands, pluginCommandSets, ...projectCommandSets] = await Promise.all([
     walkUserCommands(ctx),
     walkPluginCommands(ctx.installedPlugins, ctx),
-    ...scan.projects.map((p) => walkProjectCommands(p.path, p.slug, ctx)),
+    ...scan.projects.map(async (p) => {
+      // Never-wake preflight (mirrors the catalog agents/skills walk):
+      // carried-forward projects under a stopped WSL distro contribute no
+      // commands this cycle rather than a walk that would wake the VM.
+      if (parseWslUncPath(p.path)) {
+        const check = await checkWslRoot(p.path);
+        if (check && !check.ok) return [] as CommandEntry[];
+      }
+      return walkProjectCommands(p.path, p.slug, ctx);
+    }),
   ]);
 
   let entries: CommandEntry[] = [...userCommands, ...pluginCommandSets, ...projectCommandSets.flat()];

@@ -1,4 +1,5 @@
 import { scanGitDirtyStatus } from "./scanner/git";
+import { checkWslRoot, parseWslUncPath } from "./wsl";
 import { emitMinderEvent } from "./events/bus";
 
 interface DirtyStatus {
@@ -9,6 +10,11 @@ interface DirtyStatus {
    *  not a confirmed-clean repo. Optional so existing callers/tests that
    *  don't check it are unaffected. */
   unknown?: boolean;
+  /** The never-wake sentinel: git was deliberately not run because the
+   *  project sits under a stopped WSL distro. Kept on a short TTL and purged
+   *  by manual rescan so a restarted distro isn't stuck "unknown" for the
+   *  full 5-minute TTL. */
+  wslBlocked?: boolean;
 }
 
 interface QueueItem {
@@ -17,8 +23,16 @@ interface QueueItem {
 }
 
 const CACHE_TTL = 5 * 60_000; // 5 minutes
+// Stopped-WSL sentinels expire fast (matches the wsl.ts negative-state TTL):
+// they describe a transient VM state, not a git result, and must not pin
+// "status unavailable" for 5 minutes after the user starts the distro.
+const WSL_SENTINEL_TTL = 30_000;
 const BATCH_SIZE = 3;
 const BATCH_DELAY = 500; // ms between batches
+
+function ttlFor(entry: DirtyStatus): number {
+  return entry.wslBlocked ? WSL_SENTINEL_TTL : CACHE_TTL;
+}
 
 class GitStatusCache {
   private cache = new Map<string, DirtyStatus>();
@@ -35,7 +49,7 @@ class GitStatusCache {
     for (const p of projects) {
       // Skip if already cached and fresh, or already in queue
       const cached = this.cache.get(p.slug);
-      if (cached && Date.now() - cached.checkedAt < CACHE_TTL) continue;
+      if (cached && Date.now() - cached.checkedAt < ttlFor(cached)) continue;
       if (this.seen.has(p.slug)) continue;
 
       this.seen.add(p.slug);
@@ -56,6 +70,19 @@ class GitStatusCache {
       const results = await Promise.all(
         batch.map(async (item) => {
           try {
+            // Never-wake preflight: carried-forward projects under a stopped
+            // WSL distro reach this queue with \\wsl.localhost paths, and
+            // spawning git against one would auto-start the VM. Report
+            // status-unknown instead (B5 semantics) until the distro runs.
+            // Sync-parse first so non-WSL paths reach scanGitDirtyStatus
+            // without an extra microtask (the dispose-race tests rely on the
+            // git call starting synchronously within the batch mapper).
+            if (parseWslUncPath(item.path)) {
+              const wslCheck = await checkWslRoot(item.path);
+              if (wslCheck && !wslCheck.ok) {
+                return { slug: item.slug, status: { isDirty: false, uncommittedCount: 0, unknown: true, wslBlocked: true } };
+              }
+            }
             const status = await scanGitDirtyStatus(item.path);
             return { slug: item.slug, status };
           } catch {
@@ -90,18 +117,27 @@ class GitStatusCache {
   get(slug: string): DirtyStatus | null {
     const entry = this.cache.get(slug);
     if (!entry) return null;
-    if (Date.now() - entry.checkedAt > CACHE_TTL) return null;
+    if (Date.now() - entry.checkedAt > ttlFor(entry)) return null;
     return entry;
   }
 
   getAll(): Record<string, DirtyStatus> {
     const result: Record<string, DirtyStatus> = {};
     for (const [slug, entry] of this.cache) {
-      if (Date.now() - entry.checkedAt < CACHE_TTL) {
+      if (Date.now() - entry.checkedAt < ttlFor(entry)) {
         result[slug] = entry;
       }
     }
     return result;
+  }
+
+  /** Drop only the stopped-WSL sentinels so a user-initiated rescan re-probes
+   *  those projects immediately (the distro may have just been started).
+   *  Real git results keep their normal TTL. */
+  invalidateWslSentinels() {
+    for (const [slug, entry] of this.cache) {
+      if (entry.wslBlocked) this.cache.delete(slug);
+    }
   }
 
   /** Update cache from an on-demand check (detail page / MCP refresh tool).

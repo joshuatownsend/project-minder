@@ -3,6 +3,7 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { delegateTodo } from "@/lib/tasks/todoDelegation";
 import { scanTodoMd } from "@/lib/scanner/todoMd";
 import { findProjectPathBySlug } from "@/lib/projectPath";
+import { firstBlockedWslPath, WslUnavailableError } from "@/lib/wsl";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,16 @@ export async function POST(request: Request, { params }: Params): Promise<NextRe
     const projectPath = await findProjectPathBySlug(slug);
     if (!projectPath) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    // Never-wake preflight: reading TODO.md (and the delegated task's later
+    // spawn) under a stopped WSL distro would auto-start its VM.
+    const blocked = await firstBlockedWslPath(projectPath);
+    if (blocked) {
+      return NextResponse.json(
+        { error: new WslUnavailableError(blocked).message },
+        { status: 503 }
+      );
     }
 
     const todos = await scanTodoMd(projectPath);

@@ -1,6 +1,27 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { MinderConfig, ProjectData, PortConflict, ScanResult } from "../types";
+import { MinderConfig, ProjectData, PortConflict, ScanResult, SkippedRoot } from "../types";
+import { checkWslRoot } from "../wsl";
+import { normalizePathKey } from "../platform";
+
+// Last successful per-root scan results, keyed by normalized root path.
+// Lives on globalThis (mirroring the scan cache) so dev-server HMR reloads
+// don't lose the carry-forward state a skipped WSL root depends on. Catalog
+// walks are carried too: without them, runCatalogLint would re-walk each
+// carried project path — an fs touch that defeats the never-wake guard.
+interface LastGoodRootScan {
+  projects: ProjectData[];
+  walks: Map<string, ProjectCatalogWalk>;
+}
+
+const gScanner = globalThis as unknown as {
+  __minderLastGoodRootScans?: Map<string, LastGoodRootScan>;
+};
+
+function getLastGoodRootScans(): Map<string, LastGoodRootScan> {
+  gScanner.__minderLastGoodRootScans ??= new Map();
+  return gScanner.__minderLastGoodRootScans;
+}
 import { readConfig, getDevRoots } from "../config";
 import { getFlag } from "../featureFlags";
 import { demoModeEnv } from "../demo/demoMode";
@@ -332,14 +353,56 @@ export async function scanAllProjects(): Promise<ScanResult> {
   const catalogWalkByPath = new Map<string, ProjectCatalogWalk>();
   // Track slugs seen so far to handle collisions across roots (first root wins)
   const seenSlugs = new Set<string>();
+  const skippedRoots: SkippedRoot[] = [];
+
+  // Skipping a root must not DROP its projects: the fresh result overwrites the
+  // scan cache, so without a carry-forward a stopped WSL distro would erase its
+  // projects from the dashboard (and break their detail routes) until the next
+  // successful scan. Remember each root's last successful scan and reuse it.
+  const lastGood = getLastGoodRootScans();
+
+  const carryForwardRoot = (devRoot: string): void => {
+    const carried = lastGood.get(normalizePathKey(devRoot));
+    if (!carried) return; // never scanned successfully (e.g. stopped since boot)
+    for (const project of carried.projects) {
+      if (seenSlugs.has(project.slug)) continue;
+      // Honor hides made while the root is skipped — the fresh-scan path
+      // filters by directory name before scanning, so carry-forward must too.
+      if (hiddenSet.has(path.basename(project.path).toLowerCase())) continue;
+      seenSlugs.add(project.slug);
+      // Push a CLONE: the status/port-override pass below mutates projects in
+      // place, and mutating the stored copy would bake overrides in — a
+      // cleared override could then never revert while the root stays skipped.
+      allProjects.push(structuredClone(project));
+      // Seed the walk side-channel so runCatalogLint never falls back to a
+      // fresh walkProject* over this (unreachable) path — the stored walk if
+      // we have one, an empty walk otherwise (stale/absent lint findings for
+      // a skipped root beat waking its VM).
+      catalogWalkByPath.set(
+        project.path,
+        carried.walks.get(project.path) ?? { skills: [], agents: [], commands: [] }
+      );
+    }
+  };
 
   for (const devRoot of devRoots) {
+    // WSL roots must be state-checked BEFORE any fs call: reading a
+    // \\wsl.localhost\ path belonging to a stopped distro auto-starts its VM.
+    const wslCheck = await checkWslRoot(devRoot);
+    if (wslCheck && !wslCheck.ok) {
+      skippedRoots.push({ root: devRoot, reason: wslCheck.reason, distro: wslCheck.distro });
+      carryForwardRoot(devRoot);
+      continue;
+    }
+
     let entries: string[];
     try {
       const dirents = await fs.readdir(devRoot, { withFileTypes: true });
       entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
       // Root doesn't exist or isn't readable — skip it
+      skippedRoots.push({ root: devRoot, reason: "unreadable", distro: wslCheck?.distro });
+      carryForwardRoot(devRoot);
       continue;
     }
 
@@ -377,6 +440,18 @@ export async function scanAllProjects(): Promise<ScanResult> {
       await attachWorktreeOverlays(rootProjects, allDirNames, devRoot);
     }
 
+    const rootWalks = new Map<string, ProjectCatalogWalk>();
+    for (const p of rootProjects) {
+      const walk = catalogWalkByPath.get(p.path);
+      if (walk) rootWalks.set(p.path, walk);
+    }
+    // Store CLONES: the status/port-override pass below mutates the returned
+    // projects in place, and the stored copy must stay pristine (pre-override)
+    // so a later carry-forward re-applies whatever overrides exist THEN.
+    lastGood.set(normalizePathKey(devRoot), {
+      projects: structuredClone(rootProjects),
+      walks: rootWalks,
+    });
     allProjects.push(...rootProjects);
   }
 
@@ -406,5 +481,6 @@ export async function scanAllProjects(): Promise<ScanResult> {
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),
     catalogLintFindings,
+    ...(skippedRoots.length > 0 ? { skippedRoots } : {}),
   };
 }

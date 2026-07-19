@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { gitStatusCache } from "@/lib/gitStatusCache";
 import { scanGitDirtyStatus } from "@/lib/scanner/git";
+import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
 import { SlugSchema } from "../schemas";
 import { jsonResult, errorResult } from "../result";
 import { getCachedOrFreshScan as getScan } from "../scanHelper";
@@ -47,6 +48,17 @@ export function registerGitTools(server: McpServer): void {
       if (slug) {
         const project = scan.projects.find((p) => p.slug === slug);
         if (!project) return errorResult(`No project with slug '${slug}'.`);
+        // Never-wake preflight: refreshing a carried-forward project under a
+        // stopped WSL distro would spawn git on \\wsl.localhost and wake the VM.
+        if (parseWslUncPath(project.path)) {
+          const wslCheck = await checkWslRoot(project.path);
+          if (wslCheck && !wslCheck.ok) {
+            return errorResult(
+              `Skipped: WSL distro '${wslCheck.distro}' is not running (${wslCheck.reason}); ` +
+                `Minder never wakes a stopped distro. Start it and retry.`
+            );
+          }
+        }
         try {
           const status = await scanGitDirtyStatus(project.path);
           gitStatusCache.set(slug, status.isDirty, status.uncommittedCount, status.unknown);

@@ -7,6 +7,7 @@ import { useCommandPalette } from "./CommandPaletteProvider";
 import { usePulse } from "./PulseProvider";
 import { useScope } from "./ScopeProvider";
 import { PortConflictIndicator } from "./PortConflictIndicator";
+import { SkippedRootsIndicator } from "./SkippedRootsIndicator";
 import { McpHealthIndicator } from "./McpHealthIndicator";
 import { QuotaHud } from "./QuotaHud";
 import { HelpButton } from "./HelpButton";
@@ -148,6 +149,8 @@ export function AppTopbar({ onOpenSidebar, onOpenScopePicker, showSidebarToggle,
       </button>
 
       <PortConflictIndicator />
+
+      <SkippedRootsIndicator />
 
       <QuotaHud />
 

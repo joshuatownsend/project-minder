@@ -65,6 +65,7 @@ const slugTitles: Record<HelpSlug, string> = {
   commands: "Commands",
   projects: "Projects",
   swarms: "Swarms",
+  wsl: "WSL Integration",
 };
 
 const iconBtnBase: React.CSSProperties = {

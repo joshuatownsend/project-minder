@@ -8,6 +8,7 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { scanAllProjects } from "@/lib/scanner";
 import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "@/lib/wsl";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,13 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
   const { projectPath } = metadata as { projectPath?: unknown };
   if (typeof projectPath !== "string" || projectPath === "") return null;
 
+  // Never-wake preflight: stat/realpath on a stopped WSL distro's
+  // \\wsl.localhost path would auto-start its VM. Reject before probing.
+  if (parseWslUncPath(projectPath)) {
+    const check = await checkWslRoot(projectPath);
+    if (check && !check.ok) return new WslUnavailableError(check).message;
+  }
+
   let isDir = false;
   try {
     isDir = (await stat(projectPath)).isDirectory();
@@ -53,7 +61,18 @@ async function projectPathError(metadata: unknown): Promise<string | null> {
 
   const real = await resolveReal(projectPath);
   const { projects } = await scanAllProjects();
-  const known = await Promise.all(projects.map((p) => resolveReal(p.path)));
+  // Skip realpath for carried projects under a stopped distro (the requested
+  // path was already vetted above, so a blocked entry can never match anyway
+  // — and realpath'ing it would wake the VM). Use the scanned path verbatim.
+  const known = await Promise.all(
+    projects.map(async (p) => {
+      if (parseWslUncPath(p.path)) {
+        const check = await checkWslRoot(p.path);
+        if (check && !check.ok) return path.resolve(p.path);
+      }
+      return resolveReal(p.path);
+    })
+  );
   if (!known.some((k) => samePath(k, real))) {
     return "metadata.projectPath must be a scanned project";
   }

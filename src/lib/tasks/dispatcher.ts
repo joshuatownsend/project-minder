@@ -7,6 +7,7 @@ import { runClassicTask, runStreamTask, runWorktreeTask, sweepStalePids, getLive
 import type { Task } from "./types";
 import type { DecisionEvent } from "./decisionParser";
 import { readConfig } from "../config";
+import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "../wsl";
 import { onTaskCompleteToggleTodo } from "./todoDelegation";
 import { onTaskCompleteSyncBoard } from "./boardDelegation";
 
@@ -280,10 +281,37 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         }
 
         let worktreePath: string | undefined;
+        let projectPath: string | undefined;
         try {
-          worktreePath = (JSON.parse(task.metadata ?? "{}") as { worktreePath?: string }).worktreePath;
+          const meta = JSON.parse(task.metadata ?? "{}") as {
+            worktreePath?: string;
+            projectPath?: string;
+          };
+          worktreePath = meta.worktreePath;
+          projectPath = meta.projectPath;
         } catch { /* metadata not JSON */ }
         const isWorktree = task.swarm_id != null && !!worktreePath;
+
+        // Never-wake preflight: a task whose cwd target (projectPath or
+        // worktreePath) sits under a stopped WSL distro must not spawn —
+        // taskCwd()'s existsSync probe and runWorktreeTask's git calls would
+        // auto-start the VM. Fail the row with an actionable message rather
+        // than requeue: a pending requeue would re-claim and re-fail on every
+        // 30s tick for as long as the distro stays stopped.
+        const wslTarget = [worktreePath, projectPath].find(
+          (p): p is string => !!p && parseWslUncPath(p) !== null
+        );
+        if (wslTarget) {
+          const check = await checkWslRoot(wslTarget);
+          if (check && !check.ok) {
+            await failTask(task.id, {
+              error_message: new WslUnavailableError(check).message,
+            }).catch((err) =>
+              console.error(`[dispatcher] failTask (wsl-blocked) for task ${task!.id}:`, err)
+            );
+            continue;
+          }
+        }
 
         let promise: Promise<void>;
         if (isWorktree) {

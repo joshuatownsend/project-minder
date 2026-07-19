@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { runGit, detectMainBranch } from "./scanner/git";
+import { checkWslRoot, parseWslUncPath } from "./wsl";
 import { parseGitHubRemote } from "./githubRemote";
 import { emitMinderEvent } from "./events/bus";
 import type {
@@ -39,6 +40,14 @@ interface QueueItem {
 }
 
 const CACHE_TTL = 5 * 60_000; // 5 minutes — matches gitStatusCache + scan cache
+// Stopped-WSL sentinels expire fast (matches the wsl.ts negative-state TTL):
+// they describe a transient VM state, not a gh result, and must not hide
+// PR/CI activity for 5 minutes after the user starts the distro.
+const WSL_SENTINEL_TTL = 30_000;
+
+function ttlFor(entry: GithubActivity): number {
+  return entry.reason === "wsl-unavailable" ? WSL_SENTINEL_TTL : CACHE_TTL;
+}
 const BATCH_SIZE = 2; // gentler than git-status: up to 3 gh round-trips/repo (P6)
 const BATCH_DELAY = 800; // ms between batches
 const PR_LIMIT = 20; // cap the PR list payload
@@ -175,6 +184,18 @@ function toPrSummary(pr: GithubPrApi): GithubPrSummary {
 async function fetchActivity(
   item: QueueItem
 ): Promise<Omit<GithubActivity, "checkedAt">> {
+  // Never-wake preflight (mirrors gitStatusCache): carried-forward projects
+  // under a stopped WSL distro reach this queue with \\wsl.localhost paths,
+  // and spawning git/gh with cwd there would auto-start the VM. Cache an
+  // unavailable sentinel instead until the distro runs (5-min TTL). Sync-parse
+  // first so non-WSL paths skip the distro-list lookup entirely.
+  if (parseWslUncPath(item.path)) {
+    const wslCheck = await checkWslRoot(item.path);
+    if (wslCheck && !wslCheck.ok) {
+      return { available: false, reason: "wsl-unavailable" };
+    }
+  }
+
   // Resolve owner/repo from the supplied remote, else ask git once.
   let remote = item.remoteUrl;
   if (!remote) {
@@ -256,7 +277,7 @@ class GithubActivityCache {
       const cached = this.cache.get(p.slug);
       // available:false results are cached too — don't re-shell a gh-less or
       // non-GitHub repo every poll until TTL expires.
-      if (cached && Date.now() - cached.checkedAt < CACHE_TTL) continue;
+      if (cached && Date.now() - cached.checkedAt < ttlFor(cached)) continue;
       if (this.seen.has(p.slug)) continue;
 
       this.seen.add(p.slug);
@@ -319,18 +340,27 @@ class GithubActivityCache {
   get(slug: string): GithubActivity | null {
     const entry = this.cache.get(slug);
     if (!entry) return null;
-    if (Date.now() - entry.checkedAt > CACHE_TTL) return null;
+    if (Date.now() - entry.checkedAt > ttlFor(entry)) return null;
     return entry;
   }
 
   getAll(): Record<string, GithubActivity> {
     const result: Record<string, GithubActivity> = {};
     for (const [slug, entry] of this.cache) {
-      if (Date.now() - entry.checkedAt < CACHE_TTL) {
+      if (Date.now() - entry.checkedAt < ttlFor(entry)) {
         result[slug] = entry;
       }
     }
     return result;
+  }
+
+  /** Drop only the stopped-WSL sentinels so a user-initiated rescan re-probes
+   *  those projects immediately (the distro may have just been started).
+   *  Real gh results — including other unavailable reasons — keep their TTL. */
+  invalidateWslSentinels() {
+    for (const [slug, entry] of this.cache) {
+      if (entry.reason === "wsl-unavailable") this.cache.delete(slug);
+    }
   }
 
   get pending(): number {
