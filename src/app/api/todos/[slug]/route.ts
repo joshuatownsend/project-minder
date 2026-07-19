@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan, invalidateCache } from "@/lib/cache";
 import { appendTodosToFile, toggleTodoInFile, TodoWriteError } from "@/lib/todoWriter";
+import { WslUnavailableError } from "@/lib/wsl";
 import { demoMode } from "@/lib/demo/demoMode";
 
 async function findProjectPath(slug: string): Promise<string | null> {
@@ -70,6 +71,11 @@ export async function POST(
     if (err instanceof TodoWriteError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
+    // The writer's canonicalProjectDir choke point throws this for stopped-WSL
+    // targets (never-wake) — surface the actionable message, not a bare 500.
+    if (err instanceof WslUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 });
+    }
     return NextResponse.json(
       { error: "Failed to append TODOs" },
       { status: 500 }
@@ -108,7 +114,10 @@ export async function PATCH(
     const updated = await toggleTodoInFile(projectPath, safeLineNumber);
     invalidateCache();
     return NextResponse.json({ todos: updated });
-  } catch {
+  } catch (err) {
+    if (err instanceof WslUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 });
+    }
     return NextResponse.json({ error: "Failed to toggle TODO" }, { status: 500 });
   }
 }

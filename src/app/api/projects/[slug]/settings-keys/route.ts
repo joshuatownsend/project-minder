@@ -5,6 +5,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { tryParseJsonc } from "@/lib/scanner/util/jsonc";
 import { RESERVED_SETTINGS_KEYS } from "@/lib/template/jsonPath";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 interface SettingsKeyEntry {
   /** Dotted path under settings.json. */
@@ -34,6 +35,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
       { status: 404 }
     );
   }
+
+  // Never-wake preflight: reads the project's .claude/settings.json.
+  const wslResp = await wslGuardResponse(project.path);
+  if (wslResp) return wslResp;
 
   const settingsPath = path.join(project.path, ".claude", "settings.json");
   let doc: unknown;

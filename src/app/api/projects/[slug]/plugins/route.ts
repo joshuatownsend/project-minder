@@ -3,6 +3,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { scanProjectPluginEnables } from "@/lib/scanner/projectPlugins";
 import { loadInstalledPlugins } from "@/lib/indexer/walkPlugins";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 /** Returns the project's enabledPlugins entries, decorated with whether each
  *  is actually installed at user scope. Used by the MarkAsTemplateModal unit
@@ -18,6 +19,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
   if (!project) {
     return NextResponse.json({ error: { code: "NOT_FOUND", message: `No project "${slug}".` } }, { status: 404 });
   }
+
+  // Never-wake preflight: the enables scan reads the project's .claude dir.
+  const wslResp = await wslGuardResponse(project.path);
+  if (wslResp) return wslResp;
 
   const [enables, installed] = await Promise.all([
     scanProjectPluginEnables(project.path),

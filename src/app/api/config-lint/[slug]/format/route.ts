@@ -3,6 +3,7 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { checkFormatting, applyFormatting } from "@/lib/lint/format";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 /** Resolve a project slug to its on-disk path via the scan cache. Resolving
  *  server-side (rather than trusting a client-supplied path) keeps the
@@ -27,6 +28,11 @@ export async function POST(
   if (!projectPath) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
+
+  // Never-wake preflight: check/apply both read (and apply writes) the
+  // project's config files.
+  const wslResp = await wslGuardResponse(projectPath);
+  if (wslResp) return wslResp;
 
   let body: unknown;
   try {

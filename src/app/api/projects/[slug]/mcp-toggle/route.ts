@@ -5,6 +5,7 @@ import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { toggleProjectMcpServer } from "@/lib/mcpToggle";
 import { scanAllProjects } from "@/lib/scanner";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 export async function POST(
   request: NextRequest,
@@ -54,6 +55,10 @@ export async function POST(
       { status: 400 },
     );
   }
+
+  // Never-wake preflight: the toggle writes the project's .claude settings.
+  const wslResp = await wslGuardResponse(project.path);
+  if (wslResp) return wslResp;
 
   const { disabledList } = await toggleProjectMcpServer(project.path, serverName, enabled);
 

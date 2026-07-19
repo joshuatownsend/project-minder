@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import path from "path";
 import { readConfig } from "@/lib/config";
+import { getDevRoots } from "@/lib/config";
 import { bootstrapNewProject } from "@/lib/template/bootstrap";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 import { applyUnit } from "@/lib/template/apply";
 import { invalidateCache } from "@/lib/cache";
 import { toSlug } from "@/lib/scanner";
@@ -61,6 +63,12 @@ export async function POST(req: NextRequest) {
     : [];
 
   const config = await readConfig();
+
+  // Never-wake preflight: bootstrap creates the project under the first
+  // configured dev root — blocked while that root's WSL distro is stopped.
+  const wslResp = await wslGuardResponse(getDevRoots(config)[0]);
+  if (wslResp) return wslResp;
+
   const bootstrap = await bootstrapNewProject(config, { name, relPath, gitInit, dryRun });
 
   if (!bootstrap.ok) {
