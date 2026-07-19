@@ -24,10 +24,13 @@ export function getPrimaryClaudeHome(): string {
  * fall back to the plain normalized key.
  */
 function homeDedupeKey(p: string): string {
-  const parsed = parseWslUncPath(p);
-  if (!parsed) return normalizePathKey(p);
+  // Trim trailing separators first: `...\.claude` and `...\.claude\` are the
+  // same tree, and normalizePathKey preserves the trailing slash.
+  const trimmed = p.trim().replace(/[\\/]+$/, "");
+  const parsed = parseWslUncPath(trimmed);
+  if (!parsed) return normalizePathKey(trimmed);
   const rest = normalizePathKey(
-    p.trim().replace(/^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/][^\\/]+[\\/]?/i, "")
+    trimmed.replace(/^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/][^\\/]+[\\/]?/i, "")
   );
   return `wsl://${parsed.distro.toLowerCase()}/${rest.toLowerCase()}`;
 }
