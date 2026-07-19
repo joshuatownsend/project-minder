@@ -55,8 +55,15 @@ const nextConfig: NextConfig = {
   // (observed: 16.8 GB / 37k files, two levels deep), and every later build
   // crawls the whole jungle during compile/trace collection (#312's
   // remaining slowness). The Tauri Rust target dir gets the same treatment.
+  //
+  // These globs are compiled with picomatch `{ contains: true }` and the
+  // leading `./` is stripped, so each pattern is a SUBSTRING match on any
+  // path segment sequence. Keep them narrow: a broad `dist/**` would also
+  // match `node_modules/next/dist/server/...` and strip the Next runtime out
+  // of the standalone sidecar. `dist/minder-server/` and `src-tauri/target/`
+  // appear in no legitimate dependency path.
   outputFileTracingExcludes: {
-    "*": ["./dist/**", "./src-tauri/target/**"],
+    "*": ["./dist/minder-server/**", "./src-tauri/target/**"],
   },
 };
 
