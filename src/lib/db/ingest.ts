@@ -2772,7 +2772,15 @@ export async function reconcileAllSessions(
   // Claude tree), or a Codex/Gemini-only user who disables an adapter could
   // never prune its now-undiscovered sessions. The Claude prune-protection
   // below still shields Claude rows on a Claude-walk failure.
-  if (claudeWalkFailed && adapterSessions.length === 0 && existingAdapterMeta.size === 0) {
+  // BUT: a missing PRIMARY tree with a successfully-listed extra home (a
+  // WSL-only Claude setup) must still ingest the extras — only bail when the
+  // walk produced no Claude subdirs at all.
+  if (
+    claudeWalkFailed &&
+    subdirs.length === 0 &&
+    adapterSessions.length === 0 &&
+    existingAdapterMeta.size === 0
+  ) {
     return stats;
   }
 

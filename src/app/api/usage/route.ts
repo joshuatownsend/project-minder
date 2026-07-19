@@ -64,10 +64,14 @@ export async function GET(request: NextRequest) {
   // Salt the ETag with the backend so a runtime flag flip (e.g. operator
   // toggles MINDER_USE_DB between server starts) invalidates client caches
   // — backends could differ on edge cases until the schema is fully aligned.
+  // homesSig rides in `parts` for the same reason it keys the server cache:
+  // adding a WSL home whose sessions are all OLDER than local ones doesn't
+  // advance maxMtime, and without the signature a conditional request would
+  // 304 against the pre-save report.
   const etag = computeETag({
     salt: `usage-v3-${slot.backend}${demo ? "-demo" : ""}`,
     maxMtimeMs: slot.maxMtime,
-    parts: [safePeriod, project ?? "", source ?? ""],
+    parts: [safePeriod, project ?? "", source ?? "", homesSig],
   });
 
   const notModified = ifNoneMatch(request, etag);
