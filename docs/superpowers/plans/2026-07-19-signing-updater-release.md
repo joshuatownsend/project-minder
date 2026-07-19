@@ -215,7 +215,7 @@ SmartScreen; that is expected, not a failure.
 |---|---|---|
 | R1 | `scripts/release-local.mjs` + `pnpm release:local` | DONE (b8ba9e6) |
 | R2 | Document local release flow | DONE — `docs/help/tray-app.md` |
-| U1 | Generate + back up minisign keypair | PARTIAL — key generated; **backup + GitHub secret still MANUAL** |
+| U1 | Generate + back up minisign keypair | DONE — generated, backed up, secret set (2026-07-19) |
 | U2 | Updater config + `rust-version` bump | DONE |
 | U3 | Rust wiring (plugin, menu item, `on_before_exit`) | DONE (3d31ad5) |
 | U4 | Resolve `prevent_exit` vs forced-quit conflict | DONE — **non-issue**, see below |
@@ -242,10 +242,9 @@ installer fails on a locked file. `supervisor.shutdown()` therefore runs from th
 
 The CI path has never run. `latest.json` generation, the arm64 `app` target, and the Windows
 install hand-off are correct by construction and unit-tested, but no tagged release has
-exercised them end to end. The first `v*` tag after this lands is the real test — and it will
-**fail loudly** at the "Emit updater artifact" step until the `TAURI_SIGNING_PRIVATE_KEY`
-secret exists, because without a signing key Tauri emits no `.sig` and that step refuses to
-guess.
+exercised them end to end. The first `v*` tag after this lands is the real test. The
+`TAURI_SIGNING_PRIVATE_KEY` secret is in place as of 2026-07-19, so the pipeline is unblocked;
+watch the "Emit updater artifact" and "Publish updater manifest" steps on that first run.
 
 The first release carrying the updater also cannot be *received* as an update by anyone: the
 currently-installed 1.4.0 builds have no updater in them. Everyone must download the next

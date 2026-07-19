@@ -31,20 +31,18 @@ the critical path. The updater work (free) can proceed in parallel while you wai
   Done 2026-07-19. Generated with an empty password at `C:\Users\joshu\.tauri\minder.key`
   (public half at `minder.key.pub`). The public key is committed in
   `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
-- [ ] **Back up `~/.tauri/minder.key` to your password manager — do this before the first release**
+- [x] **Back up `~/.tauri/minder.key`** — confirmed backed up 2026-07-19.
   **This key is unrecoverable and permanent.** If it is lost, every already-installed user is
   stranded forever: their binary only trusts that one public key, so you can never ship them
-  another update. There is no recovery path and no way to re-key an installed client.
-  It has no password, so the file itself is the entire secret — treat it like a private SSH key.
-- [ ] Add `TAURI_SIGNING_PRIVATE_KEY` as a GitHub Actions secret
-  Value: the **full contents** of `C:\Users\joshu\.tauri\minder.key` (not the path).
-  `gh secret set TAURI_SIGNING_PRIVATE_KEY < "$env:USERPROFILE\.tauri\minder.key"`
-  No password secret is needed — the key was generated without one, and
-  `release-installers.yml` already passes an empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-  Until this secret exists, **the release build will fail** at the "Emit updater artifact"
-  step: without a signing key Tauri produces no `.sig`, and that step refuses to guess.
-  Note: Tauri does not read `.env` files for this — for local signed builds it must be a real
-  environment variable (`$env:TAURI_SIGNING_PRIVATE_KEY` in PowerShell).
+  another update. It has no password, so the file itself is the entire secret — treat it like
+  a private SSH key. The GitHub secret is **not** a backup: secrets are write-only and can
+  never be read back out.
+- [x] Add `TAURI_SIGNING_PRIVATE_KEY` as a GitHub Actions secret
+  Done 2026-07-19 (verified via `gh secret list`). No password secret is needed — the key was
+  generated without one, and `release-installers.yml` passes an empty
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+  Note for **local** signed builds: Tauri does not read `.env` files for this — it must be a
+  real environment variable (`$env:TAURI_SIGNING_PRIVATE_KEY` in PowerShell).
 
 ---
 
