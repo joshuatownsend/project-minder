@@ -927,9 +927,49 @@ export async function scanAllClaudeConversations(): Promise<ClaudeUsageStats> {
 export async function scanClaudeConversationsForProjects(
   projectPaths: string[]
 ): Promise<ClaudeUsageStats> {
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  // Sweep every readable Claude home, not just the primary tree: a
+  // UNC-scanned WSL project's sessions live under the Linux-encoded dir in
+  // its distro's home. Callers pass paths already expanded with their mapped
+  // forms (getClaudeUsage), so the encoded allow-set covers both encodings.
+  const { readConfig } = await import("../config");
+  const { getReadableClaudeHomes } = await import("../claudeHome");
+  const config = await readConfig();
+  const homes = await getReadableClaudeHomes(config);
   const allowedDirs = new Set(projectPaths.map((p) => encodePath(p)));
-  return scanConversationDirs(projectsDir, allowedDirs);
+
+  const parts: ClaudeUsageStats[] = [];
+  for (const home of homes) {
+    parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
+  }
+  return mergeClaudeUsageStats(parts);
+}
+
+/** Additive merge of per-home aggregates (sums, tool-usage key sums, model union). */
+function mergeClaudeUsageStats(parts: ClaudeUsageStats[]): ClaudeUsageStats {
+  const out: ClaudeUsageStats = {
+    totalTokens: 0, inputTokens: 0, outputTokens: 0,
+    cacheCreateTokens: 0, cacheReadTokens: 0,
+    totalTurns: 0, toolUsage: {}, errorCount: 0,
+    modelsUsed: [], costEstimate: 0, conversationCount: 0,
+  };
+  const models = new Set<string>();
+  for (const p of parts) {
+    out.totalTokens += p.totalTokens;
+    out.inputTokens += p.inputTokens;
+    out.outputTokens += p.outputTokens;
+    out.cacheCreateTokens += p.cacheCreateTokens;
+    out.cacheReadTokens += p.cacheReadTokens;
+    out.totalTurns += p.totalTurns;
+    out.errorCount += p.errorCount;
+    out.costEstimate += p.costEstimate;
+    out.conversationCount += p.conversationCount;
+    for (const [tool, n] of Object.entries(p.toolUsage)) {
+      out.toolUsage[tool] = (out.toolUsage[tool] ?? 0) + n;
+    }
+    for (const m of p.modelsUsed) models.add(m);
+  }
+  out.modelsUsed = [...models];
+  return out;
 }
 
 async function scanConversationDirs(

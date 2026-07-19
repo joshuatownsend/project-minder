@@ -28,7 +28,13 @@ const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 // rationale as the existing globalThis caches in /api/sessions, /api/stats etc.
 const globalForParser = globalThis as unknown as {
   __usageFileCache?: FileCache<UsageTurn[]>;
-  __usageAllSessionsInFlight?: Promise<Map<string, UsageTurn[]>>;
+  __usageAllSessionsInFlight?: {
+    promise: Promise<Map<string, UsageTurn[]>>;
+    /** JSON of (claudeHomes, pathMappings) the sweep was started under — a
+     *  request under NEW config must not await (and re-cache from) a sweep
+     *  that resolved the OLD homes. */
+    configKey: string;
+  };
 };
 
 function getFileCache(): FileCache<UsageTurn[]> {
@@ -619,14 +625,22 @@ export async function parseAllSessions(
   // server, only one of them does the 1.1 GB sweep — the rest await the
   // same promise. After the first call settles, subsequent calls hit the
   // FileCache directly and stat 3k files (cheap), no full re-parse.
-  let promise = globalForParser.__usageAllSessionsInFlight;
-  if (!promise) {
-    promise = buildAllSessions().finally(() => {
-      globalForParser.__usageAllSessionsInFlight = undefined;
+  // Keyed by the multi-home config: a caller under a just-saved homes/
+  // mappings value starts a fresh sweep instead of awaiting one that was
+  // resolving the old homes.
+  const inFlightCfg = await readConfig();
+  const configKey = JSON.stringify([inFlightCfg.claudeHomes ?? [], inFlightCfg.pathMappings ?? []]);
+  let slot = globalForParser.__usageAllSessionsInFlight;
+  if (!slot || slot.configKey !== configKey) {
+    const promise = buildAllSessions().finally(() => {
+      if (globalForParser.__usageAllSessionsInFlight?.promise === promise) {
+        globalForParser.__usageAllSessionsInFlight = undefined;
+      }
     });
-    globalForParser.__usageAllSessionsInFlight = promise;
+    slot = { promise, configKey };
+    globalForParser.__usageAllSessionsInFlight = slot;
   }
-  const full = await promise;
+  const full = await slot.promise;
 
   // The cached map carries subagent (sidechain) turns. The usage aggregator
   // opts in to see them; every other consumer gets the historical primary-only
