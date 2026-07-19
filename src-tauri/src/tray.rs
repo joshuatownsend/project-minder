@@ -69,6 +69,8 @@ pub fn init<R: Runtime>(
     .enabled(!attached)
     .build(app)?;
     let logs_item = MenuItemBuilder::with_id("view_logs", "View logs").build(app)?;
+    let update_item =
+        MenuItemBuilder::with_id("check_updates", "Check for updates…").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
@@ -81,6 +83,7 @@ pub fn init<R: Runtime>(
             &PredefinedMenuItem::separator(app)?,
             &restart_item,
             &logs_item,
+            &update_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
         ])
@@ -115,8 +118,16 @@ pub fn init<R: Runtime>(
         })
         .build(app)?;
 
-    // Health-poll loop: refresh the Status line + tray tooltip every 15s.
-    spawn_poll_loop(cfg.port, supervisor.clone(), status_item, tray);
+    // Health-poll loop: refresh the Status line + tray tooltip every 15s, and
+    // piggyback the periodic update check on the same timer (U3 — deliberately
+    // no second thread just to keep a slow clock).
+    spawn_poll_loop(
+        cfg.port,
+        supervisor.clone(),
+        status_item,
+        tray,
+        app.handle().clone(),
+    );
 
     // Manual-steps notification poll loop (C3): ~30s poll against the
     // watcher's change feed, toasting anything new unless muted.
@@ -148,6 +159,12 @@ fn handle_menu_event<R: Runtime>(
             thread::spawn(move || sup.restart());
         }
         "view_logs" => open_logs_dir(app),
+        "check_updates" => {
+            // install: true — an explicit menu click is the user asking for the
+            // update to be applied, unlike the periodic check (which only
+            // notifies; see crate::updater::notify_available).
+            crate::updater::spawn_check(app.clone(), supervisor.clone(), true);
+        }
         "quit" => {
             // Block until the sidecar is cleanly stopped, THEN exit — so Quit
             // never leaves an orphan node process behind.
@@ -239,11 +256,15 @@ fn spawn_poll_loop<R: Runtime>(
     supervisor: Arc<Supervisor>,
     status_item: MenuItem<R>,
     tray: tauri::tray::TrayIcon<R>,
+    app: tauri::AppHandle<R>,
 ) {
     thread::spawn(move || {
         // Cache the last rendered (line, tooltip) so steady-state polls are a
         // no-op instead of re-issuing identical set_text/set_tooltip calls.
         let mut last: Option<(String, String)> = None;
+        // Saturating so a machine left running for years can't wrap the counter
+        // into a burst of checks.
+        let mut tick: u64 = 0;
         loop {
             let status = health::probe(port);
             let next = describe(status, port, &supervisor);
@@ -252,6 +273,15 @@ fn spawn_poll_loop<R: Runtime>(
                 let _ = tray.set_tooltip(Some(&next.1));
                 last = Some(next);
             }
+
+            // install: false — the periodic path only looks and toasts. See
+            // crate::updater::notify_available for why it must not restart the
+            // server out from under an active session.
+            if crate::updater::is_check_tick(tick, crate::updater::CHECK_EVERY_TICKS) {
+                crate::updater::spawn_check(app.clone(), supervisor.clone(), false);
+            }
+            tick = tick.saturating_add(1);
+
             thread::sleep(POLL_INTERVAL);
         }
     });
