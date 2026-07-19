@@ -60,6 +60,55 @@ describe("normalizePathKey — case folding gated to Windows", () => {
   });
 });
 
+describe("sessionFileHomeKey — Claude-home derivation from a session file path (#311)", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.resetModules();
+  });
+
+  async function win32Fn() {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.resetModules();
+    const { sessionFileHomeKey } = await import("@/lib/platform");
+    return sessionFileHomeKey;
+  }
+
+  it("derives the home from a primary-home session file", async () => {
+    const fn = await win32Fn();
+    expect(fn("C:\\Users\\Me\\.claude\\projects\\C--dev-app\\abc.jsonl")).toBe(
+      "c:/users/me/.claude"
+    );
+  });
+
+  it("canonicalizes the legacy wsl$ alias like normalizePathKey does", async () => {
+    const fn = await win32Fn();
+    expect(fn("\\\\wsl$\\Ubuntu\\home\\me\\.claude\\projects\\-home-me-dev-app\\abc.jsonl")).toBe(
+      "//wsl.localhost/ubuntu/home/me/.claude"
+    );
+  });
+
+  it("handles subagent files two levels deeper", async () => {
+    const fn = await win32Fn();
+    expect(
+      fn("C:\\Users\\Me\\.claude\\projects\\C--dev-app\\abc\\subagents\\agent-1.jsonl")
+    ).toBe("c:/users/me/.claude");
+  });
+
+  it("uses the LAST /projects/ segment so a home path containing one still resolves", async () => {
+    const fn = await win32Fn();
+    expect(fn("D:\\projects\\.claude\\projects\\C--dev-app\\abc.jsonl")).toBe(
+      "d:/projects/.claude"
+    );
+  });
+
+  it("returns null for paths with no /projects/ segment", async () => {
+    const fn = await win32Fn();
+    expect(fn("C:\\Users\\Me\\.codex\\sessions\\abc.jsonl")).toBeNull();
+    expect(fn("abc.jsonl")).toBeNull();
+  });
+});
+
 describe("decodeDirName", () => {
   it("decodes Windows format: C--dev-project-minder (lossy — hyphens in name become backslashes)", async () => {
     const { decodeDirName } = await import("@/lib/platform");

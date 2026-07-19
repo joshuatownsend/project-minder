@@ -37,6 +37,8 @@ import { scanTodoMd } from "./todoMd";
 import { scanClaudeSessions } from "./claudeSessions";
 import { encodePath, toSlug as usageToSlug } from "./claudeConversations";
 import { canonicalizeDirName } from "../usage/parser";
+import { resolveUsageHomeKey } from "../usage/projectMatch";
+import { getClaudeHomes } from "../claudeHome";
 import { scanManualStepsMd } from "./manualStepsMd";
 import { scanInsightsMd } from "./insightsMd";
 import { scanBoardMd } from "./boardMd";
@@ -107,6 +109,7 @@ async function scanProject(
   flags: MinderConfig["featureFlags"],
   ctx: ProvenanceContext,
   pathMappings: PathMapping[] = [],
+  claudeHomes: string[] = [],
 ): Promise<{ project: ProjectData; catalogWalk: ProjectCatalogWalk | null } | null> {
   const projectPath = path.join(devRoot, dirName);
 
@@ -121,6 +124,9 @@ async function scanProject(
   // project's sessions were recorded (and encoded) under the distro-side Linux
   // path, so the usage slug must derive from that form, not the UNC path.
   const usageSlug = usageToSlug(canonicalizeDirName(encodePath(mapLocalPath(projectPath, pathMappings))));
+  // Home pin for the usage/cost join (#311): set only for mapped projects
+  // whose owning Claude home resolves — see resolveUsageHomeKey.
+  const usageHomeKey = resolveUsageHomeKey(projectPath, pathMappings, claudeHomes);
 
   const claudeMdPromise = scanClaudeMd(projectPath);
   // Audit reuses the buffer scanClaudeMd already read so we don't pay
@@ -256,6 +262,7 @@ async function scanProject(
   const project: ProjectData = {
     slug,
     usageSlug,
+    ...(usageHomeKey !== undefined ? { usageHomeKey } : {}),
     name: pkgResult.name || dirName,
     path: projectPath,
     status: "active", // Will be overridden from config
@@ -351,6 +358,16 @@ export async function scanAllProjects(): Promise<ScanResult> {
     ? await loadProvenanceContext()
     : ({} as Awaited<ReturnType<typeof loadProvenanceContext>>);
 
+  // Resolved once per scan for the usageHomeKey derivation (pure config +
+  // homedir read — no FS probing). Defensive: an unresolvable primary home
+  // (mocked or minimal test envs) degrades to no home pins, never a failed scan.
+  let claudeHomes: string[] = [];
+  try {
+    claudeHomes = getClaudeHomes(config);
+  } catch {
+    claudeHomes = [];
+  }
+
   const allProjects: ProjectData[] = [];
   // Side-channel map: path → catalog walk entries already computed by scanProject.
   // Passed to runCatalogLint so it can skip redundant per-project re-walks.
@@ -430,7 +447,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
     const rootProjects: ProjectData[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx, config.pathMappings ?? [])));
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx, config.pathMappings ?? [], claudeHomes)));
       for (const r of results) {
         if (r) {
           rootProjects.push(r.project);

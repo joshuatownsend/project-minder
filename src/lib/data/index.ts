@@ -526,12 +526,13 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
 async function runFileUsage(
   period: AggregatorPeriod,
   project: string | undefined,
-  source: string | undefined
+  source: string | undefined,
+  home: string | undefined
 ): Promise<UsageResult> {
   // `getJsonlMaxMtime()` is captured AFTER report generation —
   // `parseAllSessions` warms the FileCache as a side effect, so a
   // pre-call read returns 0 on a cold process.
-  const report = await generateUsageReport(period, project, source);
+  const report = await generateUsageReport(period, project, source, home);
   return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
 }
 
@@ -546,10 +547,13 @@ async function runFileUsage(
 export async function getUsage(
   period: AggregatorPeriod,
   project?: string,
-  source?: string
+  source?: string,
+  home?: string
 ): Promise<UsageResult> {
+  // Demo fixtures model a single synthetic home — the discriminator is
+  // meaningless there, so it's ignored rather than threaded through.
   if (await demoMode()) return demoUsage(period, project, Date.now(), source);
-  if (!dbModeRequested()) return runFileUsage(period, project, source);
+  if (!dbModeRequested()) return runFileUsage(period, project, source, home);
 
   const db = await getReadyDb();
   if (await checkV3Gate("getUsage", db)) {
@@ -557,10 +561,10 @@ export async function getUsage(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
     );
-    return runFileUsage(period, project, source);
+    return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
-    loadUsageReportFromSql(db, period, project, source)
+    loadUsageReportFromSql(db, period, project, source, home)
   );
   if (!project) await augmentPortfolioYield(report);
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
@@ -588,7 +592,8 @@ export interface UsageCompareResult {
 export async function getUsageCompare(
   period: string,
   project?: string,
-  source?: string
+  source?: string,
+  home?: string
 ): Promise<UsageCompareResult> {
   if (await demoMode()) {
     // Demo mode doesn't model two comparable historical windows; return a
@@ -625,7 +630,7 @@ export async function getUsageCompare(
   }
 
   const comparison = await callDbLoader("getUsageCompare", () =>
-    compareUsageFromSql(db, period, project, source)
+    compareUsageFromSql(db, period, project, source, home)
   );
   return { comparison, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }

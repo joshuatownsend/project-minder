@@ -4,8 +4,11 @@ import {
   gatherProjectTurns,
   buildProjectTurnsIndex,
   lookupProjectTurns,
+  resolveUsageHomeKey,
 } from "@/lib/usage/projectMatch";
+import { normalizePathKey } from "@/lib/platform";
 import type { UsageTurn } from "@/lib/usage/types";
+import type { PathMapping } from "@/lib/types";
 
 function makeTurn(sessionId: string, projectSlug: string, projectDirName: string): UsageTurn {
   return {
@@ -38,6 +41,45 @@ describe("encodeProjectPath", () => {
 
   it("encodes the full Windows dev path pattern used by Claude Code", () => {
     expect(encodeProjectPath("C:\\dev\\project-minder")).toBe("C--dev-project-minder");
+  });
+});
+
+describe("resolveUsageHomeKey (#311)", () => {
+  const UNC_PROJECT = "\\\\wsl.localhost\\Ubuntu\\home\\me\\dev\\app";
+  const MAPPING: PathMapping = {
+    from: "/home/me",
+    to: "\\\\wsl.localhost\\Ubuntu\\home\\me",
+  };
+  const WSL_HOME = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude";
+  const LOCAL_HOME = "C:\\Users\\Me\\.claude";
+
+  it("pins a mapped project to the home under the mapping's `to` prefix", () => {
+    const key = resolveUsageHomeKey(UNC_PROJECT, [MAPPING], [LOCAL_HOME, WSL_HOME]);
+    expect(key).toBe(normalizePathKey(WSL_HOME));
+  });
+
+  it("returns undefined for an unmapped local project — no home pin, no filter", () => {
+    expect(resolveUsageHomeKey("C:\\dev\\app", [MAPPING], [LOCAL_HOME, WSL_HOME])).toBeUndefined();
+    expect(resolveUsageHomeKey("C:\\dev\\app", [], [LOCAL_HOME])).toBeUndefined();
+  });
+
+  it("returns undefined when the mapping applies but no configured home matches", () => {
+    expect(resolveUsageHomeKey(UNC_PROJECT, [MAPPING], [LOCAL_HOME])).toBeUndefined();
+    expect(resolveUsageHomeKey(UNC_PROJECT, [MAPPING], [])).toBeUndefined();
+  });
+
+  it("pins to the home of the FIRST mapping that rewrites the path (mapLocalPath is first-match-wins)", () => {
+    const otherMapping: PathMapping = {
+      from: "/home/other",
+      to: "\\\\wsl.localhost\\Debian\\home\\other",
+    };
+    const debianHome = "\\\\wsl.localhost\\Debian\\home\\other\\.claude";
+    const key = resolveUsageHomeKey(
+      UNC_PROJECT,
+      [otherMapping, MAPPING],
+      [debianHome, WSL_HOME]
+    );
+    expect(key).toBe(normalizePathKey(WSL_HOME));
   });
 });
 

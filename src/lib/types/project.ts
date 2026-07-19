@@ -27,6 +27,14 @@ export interface ProjectData {
   // aggregates without re-deriving the encoding client-side.
   usageSlug: string;
 
+  // Home pin for the usage/cost report join (#311): the normalized key of
+  // the Claude home that records this project's sessions, set ONLY for
+  // mapped (e.g. UNC-scanned WSL) projects whose owning home resolves from
+  // config. Two distros with identical layouts share a usageSlug; passing
+  // this as `/api/usage?home=` keeps their spend separable. Local projects
+  // leave it unset — their usage requests carry no home filter.
+  usageHomeKey?: string;
+
   // Tech stack
   framework?: string;
   frameworkVersion?: string;

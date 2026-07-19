@@ -27,6 +27,7 @@ vi.mock("@/lib/httpCache", () => ({
 }));
 
 import { getUsage, dbModeRequested } from "@/lib/data";
+import { computeETag } from "@/lib/httpCache";
 import { GET } from "@/app/api/usage/route";
 import type { UsageReport } from "@/lib/usage/types";
 import { disposeAllRouteCaches } from "@/lib/routeCache";
@@ -79,7 +80,41 @@ describe("GET /api/usage", () => {
     const res = await GET(req);
 
     expect(res.status).toBe(200);
-    expect(getUsage).toHaveBeenCalledWith("7d", "my-app", "claude");
+    expect(getUsage).toHaveBeenCalledWith("7d", "my-app", "claude", undefined);
+  });
+
+  it("forwards the home param (normalized) to getUsage (#311)", async () => {
+    // Pre-normalized key passes through unchanged on every platform.
+    const req = makeGetRequest({ period: "7d", project: "my-app", home: "//wsl.localhost/ubuntu/home/me/.claude" });
+
+    await GET(req);
+
+    expect(getUsage).toHaveBeenCalledWith(
+      "7d",
+      "my-app",
+      undefined,
+      "//wsl.localhost/ubuntu/home/me/.claude"
+    );
+  });
+
+  it("caches per home — two homes never share a slot (#311)", async () => {
+    await GET(makeGetRequest({ period: "7d", home: "//wsl.localhost/ubuntu/home/me/.claude" }));
+    await GET(makeGetRequest({ period: "7d", home: "//wsl.localhost/debian/home/me/.claude" }));
+    // Same period, different home → two distinct getUsage calls, and the
+    // ETags must differ (home rides in the ETag parts).
+    expect(getUsage).toHaveBeenCalledTimes(2);
+
+    await GET(makeGetRequest({ period: "7d", home: "//wsl.localhost/ubuntu/home/me/.claude" }));
+    await GET(makeGetRequest({ period: "7d", home: "//wsl.localhost/debian/home/me/.claude" }));
+    // Third + fourth calls hit the cache (still 2 getUsage calls)...
+    expect(getUsage).toHaveBeenCalledTimes(2);
+    // ...and the home rides in the ETag parts so client 304s can't cross homes
+    // (computeETag itself is mocked — assert on its inputs).
+    const partsSeen = vi
+      .mocked(computeETag)
+      .mock.calls.map((c) => (c[0] as { parts: string[] }).parts);
+    expect(partsSeen.some((p) => p.includes("//wsl.localhost/ubuntu/home/me/.claude"))).toBe(true);
+    expect(partsSeen.some((p) => p.includes("//wsl.localhost/debian/home/me/.claude"))).toBe(true);
   });
 
   it("defaults period to '30d' when the param is absent", async () => {
@@ -88,7 +123,7 @@ describe("GET /api/usage", () => {
     await GET(req);
 
     // Absent param: params.get("period") is null → (null || "30d") → validatePeriod("30d") → "30d"
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
   });
 
   it("normalizes the legacy alias 'week' to '7d'", async () => {
@@ -96,7 +131,7 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
-    expect(getUsage).toHaveBeenCalledWith("7d", undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("7d", undefined, undefined, undefined);
   });
 
   it("normalizes the legacy alias 'month' to '30d'", async () => {
@@ -104,19 +139,19 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
   });
 
   it("defaults an invalid period value to '30d'", async () => {
     const req = makeGetRequest({ period: "banana" });
     await GET(req);
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
   });
 
   it("treats ?period=__proto__ as invalid and defaults to '30d'", async () => {
     const req = makeGetRequest({ period: "__proto__" });
     await GET(req);
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
   });
 
   it("returns the usage report body in the response", async () => {

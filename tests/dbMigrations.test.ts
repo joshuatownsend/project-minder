@@ -81,8 +81,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // but each still bumps the schema_version stamp. Note that v3
     // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
     // that's harmless because the indexer's first reconcile clears it.
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    expect(result.schemaVersion).toBe(17);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(result.schemaVersion).toBe(18);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -105,7 +105,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(17);
+    expect(result.schemaVersion).toBe(18);
     second.conn.closeDb();
   });
 
@@ -135,7 +135,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -165,7 +165,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(17);
+    expect(result.schemaVersion).toBe(18);
     second.conn.closeDb();
   });
 
@@ -219,8 +219,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    expect(result.schemaVersion).toBe(17);
+    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(result.schemaVersion).toBe(18);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
@@ -255,8 +255,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    expect(result.schemaVersion).toBe(17);
+    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(result.schemaVersion).toBe(18);
 
     const db2 = await second.conn.getDb();
     expect(db2).not.toBeNull();
@@ -285,7 +285,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(17);
+    expect(result.schemaVersion).toBe(18);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -309,7 +309,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(17);
+    expect(result.schemaVersion).toBe(18);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -319,6 +319,61 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(sessionNames).toContain("source");
 
     reloaded.conn.closeDb();
+  });
+
+  it("v18 migration adds home_key and backfills it from file_path (#311)", async () => {
+    // Build a real DB, roll it back to a v17 shape (no home_key), seed
+    // sessions as a pre-upgrade user would have them, and re-init. The
+    // migration must re-add the column AND backfill claude rows from their
+    // file_path — home_key is location-derived, so no re-parse is needed.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    await reloaded.mig.initDb();
+    const db = await reloaded.conn.getDb();
+    expect(db).not.toBeNull();
+
+    db!.exec("ALTER TABLE sessions DROP COLUMN home_key");
+    const seed = db!.prepare(
+      `INSERT INTO sessions
+       (session_id, project_dir_name, file_path, file_mtime_ms, file_size, byte_offset, derived_version, indexed_at_ms, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    // Windows-home Claude session, WSL-home Claude session (legacy wsl$
+    // alias), a subagent-depth file, an adapter session, and a fixture path
+    // with no /projects/ segment.
+    seed.run("s-win", "C--dev-app", "C:\\Users\\Me\\.claude\\projects\\C--dev-app\\s-win.jsonl", 1, 10, 0, 1, Date.now(), "claude");
+    seed.run("s-wsl", "-home-me-dev-app", "\\\\wsl$\\Ubuntu\\home\\me\\.claude\\projects\\-home-me-dev-app\\s-wsl.jsonl", 1, 10, 0, 1, Date.now(), "claude");
+    seed.run("s-sub", "C--dev-app", "C:\\Users\\Me\\.claude\\projects\\C--dev-app\\s-parent\\subagents\\agent-1.jsonl", 1, 10, 0, 1, Date.now(), "claude");
+    seed.run("s-codex", "C--dev-app", "C:\\Users\\Me\\.codex\\sessions\\s-codex.jsonl", 1, 10, 0, 1, Date.now(), "codex");
+    seed.run("s-orphan", "C--dev-app", "C:\\fixtures\\s-orphan.jsonl", 1, 10, 0, 1, Date.now(), "claude");
+    db!.prepare("UPDATE meta SET value = '17' WHERE key = 'schema_version'").run();
+    reloaded.conn.closeDb();
+
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    expect(result.appliedMigrations).toEqual([18]);
+    expect(result.schemaVersion).toBe(18);
+
+    const db2 = await second.conn.getDb();
+    const rows = db2!
+      .prepare("SELECT session_id, home_key FROM sessions ORDER BY session_id")
+      .all() as Array<{ session_id: string; home_key: string | null }>;
+    const byId = new Map(rows.map((r) => [r.session_id, r.home_key]));
+    // normalizePathKey case-folds only on Windows filesystems.
+    const winHome = isWindows ? "c:/users/me/.claude" : "C:/Users/Me/.claude";
+    const wslHome = isWindows
+      ? "//wsl.localhost/ubuntu/home/me/.claude"
+      : "//wsl.localhost/Ubuntu/home/me/.claude";
+    expect(byId.get("s-win")).toBe(winHome);
+    // wsl$ alias canonicalizes to wsl.localhost via normalizePathKey.
+    expect(byId.get("s-wsl")).toBe(wslHome);
+    // Subagent files sit two levels deeper but share the parent's home.
+    expect(byId.get("s-sub")).toBe(winHome);
+    // Non-Claude sources are out of scope for the discriminator.
+    expect(byId.get("s-codex")).toBeNull();
+    // No /projects/ segment → left NULL rather than guessed.
+    expect(byId.get("s-orphan")).toBeNull();
+    second.conn.closeDb();
   });
 });
 

@@ -5,6 +5,7 @@ import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageComparison } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { demoMode } from "@/lib/demo/demoMode";
+import { normalizePathKey } from "@/lib/platform";
 
 // Period-over-period comparison for /usage (item 4a). Mirrors the
 // /api/usage route's 2-minute slot cache: the comparison runs four
@@ -40,19 +41,22 @@ export async function GET(request: NextRequest) {
   const safePeriod = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
   const source = params.get("source") || undefined;
+  // Claude-home discriminator (#311) — see the /api/usage route.
+  const rawHome = params.get("home") || undefined;
+  const home = rawHome ? normalizePathKey(rawHome) : undefined;
 
   const requestedBackend = dbModeRequested() ? "db" : "file";
   // Salt with demo state so toggling the in-app `demoMode` flag invalidates the
   // slot immediately (see the /api/usage route for the rationale).
   const demo = (await demoMode()) ? "demo:" : "";
-  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}:${home || "all"}`;
   const cached = cache.get(cacheKey);
 
   let slot: CompareCacheSlot;
   if (cached) {
     slot = cached;
   } else {
-    const { comparison, meta } = await getUsageCompare(safePeriod, project, source);
+    const { comparison, meta } = await getUsageCompare(safePeriod, project, source, home);
     slot = { comparison, cachedAt: Date.now(), maxMtime: meta.maxMtimeMs, backend: meta.backend };
     cache.set(cacheKey, slot);
   }
@@ -60,7 +64,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: `usage-compare-v1-${slot.backend}${demo ? "-demo" : ""}`,
     maxMtimeMs: slot.maxMtime,
-    parts: [safePeriod, project ?? "", source ?? "", String(slot.cachedAt)],
+    parts: [safePeriod, project ?? "", source ?? "", home ?? "", String(slot.cachedAt)],
   });
 
   const notModified = ifNoneMatch(request, etag);

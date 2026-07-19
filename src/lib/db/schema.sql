@@ -120,7 +120,12 @@ CREATE TABLE sessions (
   work_mode_testing_pct     REAL,
   work_mode_other_pct       REAL,
   -- Wave 10.2a columns (schema v11): multi-platform adapter source id.
-  source TEXT NOT NULL DEFAULT 'claude'
+  source TEXT NOT NULL DEFAULT 'claude',
+  -- Schema v18 (#311): normalized key of the Claude home that owns this
+  -- session file (`sessionFileHomeKey(file_path)` — platform.ts). Lets
+  -- per-project usage/cost reads discriminate between configured homes with
+  -- identical path layouts. NULL for non-Claude adapter sessions.
+  home_key TEXT
 );
 
 CREATE INDEX idx_sessions_source          ON sessions(source);

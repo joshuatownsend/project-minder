@@ -42,7 +42,8 @@ import type { AggregatorPeriod as Period } from "./period";
 export async function generateUsageReport(
   period: Period,
   project?: string,
-  source?: string
+  source?: string,
+  home?: string
 ): Promise<UsageReport> {
   // includeSidechains: fold subagent (Task) turns into the usage aggregates.
   // Their tokens/cost belong in the totals (A1); session-scoped detectors and
@@ -61,6 +62,13 @@ export async function generateUsageReport(
   }
   if (source) {
     turns = turns.filter((t) => (t.source ?? "claude") === source);
+  }
+  // Home discriminator (#311): scope the report to turns recorded by ONE
+  // configured Claude home. Strict equality — a turn with no home stamp
+  // (adapter sources, single-session loads) is excluded rather than
+  // guessed, matching the DB backend's `home_key = @home` semantics.
+  if (home) {
+    turns = turns.filter((t) => t.homeKey === home);
   }
 
   // Activity/streak/heatmap reflect when the developer was working — subagent
@@ -261,15 +269,20 @@ export async function aggregateUsage(
     model.turns++;
     modelMap.set(turn.model, model);
 
-    // Project
-    const proj = projectMap.get(turn.projectSlug) ?? {
+    // Project — grouped per (slug, home) so two homes with identical path
+    // layouts (same encoded dirname → same slug) keep separable rows; the
+    // /costs join disambiguates on `homeKey` (#311). Single-home setups
+    // stamp one uniform homeKey, so their row count is unchanged.
+    const projKey = `${turn.projectSlug}\u0000${turn.homeKey ?? ""}`;
+    const proj = projectMap.get(projKey) ?? {
       projectSlug: turn.projectSlug, projectDirName: turn.projectDirName,
+      ...(turn.homeKey !== undefined ? { homeKey: turn.homeKey } : {}),
       tokens: 0, cost: 0, turns: 0,
     };
     proj.tokens += tokens;
     proj.cost += cost;
     proj.turns++;
-    projectMap.set(turn.projectSlug, proj);
+    projectMap.set(projKey, proj);
 
     // Category
     const cat = categoryMap.get(category) ?? { category, turns: 0, tokens: 0, cost: 0 };

@@ -6,7 +6,7 @@ import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
-import { normalizePathKey } from "@/lib/platform";
+import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
@@ -292,6 +292,14 @@ interface ParsedSession {
   workModeOtherPct: number | null;
   /** Adapter source id (e.g. "claude"). */
   source: string;
+  /**
+   * Normalized key of the Claude home that owns this session file
+   * (`sessionFileHomeKey(filePath)` — see platform.ts), or null for
+   * non-Claude adapter sessions and paths with no `/projects/` segment.
+   * Persisted as `sessions.home_key` so per-project usage/cost reports can
+   * discriminate between configured homes with identical path layouts (#311).
+   */
+  homeKey: string | null;
   /**
    * PRs harvested from `gh pr create` tool_result text (T2.2). Matched
    * by `tool_use_id` (not positional) so parallel Bash dispatches can't
@@ -1089,6 +1097,7 @@ async function readJsonlSession(
       workModeTestingPct: workMode.testing,
       workModeOtherPct: workMode.other,
       source: "claude",
+      homeKey: sessionFileHomeKey(filePath),
       // Run the PR extractor on the already-parsed entries. The walk is
       // cheap (no JSON.parse hit; reuses `parsedLines.entry`) and skips
       // sessions that never invoked `gh pr create`. A throw here would
@@ -1290,7 +1299,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        derived_version, indexed_at_ms,
        work_mode_exploration_pct, work_mode_building_pct,
        work_mode_testing_pct, work_mode_other_pct,
-       source
+       source, home_key
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
        @file_mtime_ms, @file_size, @byte_offset,
@@ -1306,7 +1315,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @derived_version, @indexed_at_ms,
        @work_mode_exploration_pct, @work_mode_building_pct,
        @work_mode_testing_pct, @work_mode_other_pct,
-       @source
+       @source, @home_key
      )`
   ).run({
     session_id: s.sessionId,
@@ -1356,6 +1365,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     work_mode_testing_pct: s.workModeTestingPct,
     work_mode_other_pct: s.workModeOtherPct,
     source: s.source,
+    home_key: s.homeKey,
   });
   rows++;
   if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
@@ -2557,6 +2567,9 @@ export function buildAdapterParsedSession(
     workModeTestingPct: workMode.testing,
     workModeOtherPct: workMode.other,
     source: file.source,
+    // Non-Claude harness homes don't participate in the Claude-home
+    // discriminator — their sessions are separable via `source` instead.
+    homeKey: null,
     prs: [],
     tickets: [],
     turns: parsedTurns,

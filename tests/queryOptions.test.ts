@@ -51,11 +51,12 @@ describe("queryOptions — keys", () => {
       "abc",
     ]);
     expect(statsQuery().queryKey).toEqual(["stats"]);
-    expect(usageQuery("30d").queryKey).toEqual(["usage", "30d", null]);
+    expect(usageQuery("30d").queryKey).toEqual(["usage", "30d", null, null]);
     expect(usageQuery("week", "proj").queryKey).toEqual([
       "usage",
       "week",
       "proj",
+      null,
     ]);
     expect(agentsQuery().queryKey).toEqual(["agents", null, null, null]);
     expect(skillsQuery("user").queryKey).toEqual([

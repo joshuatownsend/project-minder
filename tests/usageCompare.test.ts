@@ -171,7 +171,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
 
   it("splits turns into the current and previous windows, excluding older data", async () => {
     const { fromDb, db } = await buildDb();
-    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, undefined, NOW);
     assertComparable(cmp);
 
     // current: app-a (2 turns) + app-b (1 turn) = 3 turns across 2 sessions.
@@ -189,7 +189,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
 
   it("computes absolute and relative deltas with the same injected instant", async () => {
     const { fromDb, db } = await buildDb();
-    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, undefined, NOW);
     assertComparable(cmp);
 
     expect(cmp.deltas.sessions).toMatchObject({ current: 2, previous: 1, absolute: 1, pct: 1, basis: true });
@@ -200,7 +200,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
 
   it("emits the same instant for both window edges (previous.end === current.start)", async () => {
     const { fromDb, db } = await buildDb();
-    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, undefined, NOW);
     assertComparable(cmp);
     expect(cmp.currentWindow.end).toBe(NOW.toISOString());
     expect(cmp.previousWindow.end).toBe(cmp.currentWindow.start);
@@ -211,7 +211,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
     // 24h window ending at NOW: current = [04-29T12, 04-30T12), previous =
     // [04-28T12, 04-29T12). No fixture turns land in either window, so both
     // summaries are zero and every pct is null (0 → 0).
-    const cmp = fromDb.compareUsageFromSql(db, "24h", undefined, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "24h", undefined, undefined, undefined, NOW);
     assertComparable(cmp);
     expect(cmp.previous.cost).toBe(0);
     expect(cmp.deltas.cost.pct).toBeNull();
@@ -224,7 +224,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
     // same elapsed length as the current partial-day window, and abut it —
     // never a full 24h day against a partial morning.
     const midday = new Date("2026-04-30T09:30:00Z");
-    const cmp = fromDb.compareUsageFromSql(db, "today", undefined, undefined, midday);
+    const cmp = fromDb.compareUsageFromSql(db, "today", undefined, undefined, undefined, midday);
     assertComparable(cmp);
     const curLen = new Date(cmp.currentWindow.end).getTime() - new Date(cmp.currentWindow.start).getTime();
     const prevLen = new Date(cmp.previousWindow.end).getTime() - new Date(cmp.previousWindow.start).getTime();
@@ -239,7 +239,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
     // and 04-26 turns (3 turns, 1050 tokens). The 04-18 turn precedes the
     // previous window and is excluded.
     const later = new Date("2026-05-05T12:00:00Z");
-    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, later);
+    const cmp = fromDb.compareUsageFromSql(db, "7d", undefined, undefined, undefined, later);
     assertComparable(cmp);
 
     expect(cmp.current.turns).toBe(0);
@@ -260,7 +260,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
 
   it("returns not-comparable for 'all' (no prior window)", async () => {
     const { fromDb, db } = await buildDb();
-    const cmp = fromDb.compareUsageFromSql(db, "all", undefined, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "all", undefined, undefined, undefined, NOW);
     expect(cmp.comparable).toBe(false);
     if (!cmp.comparable) expect(cmp.reason).toBeTruthy();
   });
@@ -274,7 +274,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
     )?.project_slug;
     expect(slug).toBeTruthy();
 
-    const cmp = fromDb.compareUsageFromSql(db, "7d", slug, undefined, NOW);
+    const cmp = fromDb.compareUsageFromSql(db, "7d", slug, undefined, undefined, NOW);
     assertComparable(cmp);
     // app-b's current-window turn is dropped: current is app-a only (2 turns,
     // 600 tokens); previous is unchanged (1 turn, 150 tokens).

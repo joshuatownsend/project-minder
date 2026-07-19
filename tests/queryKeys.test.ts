@@ -18,11 +18,18 @@ describe("queryKeys", () => {
   it("normalizes optional params to null so omitted == undefined", () => {
     // useUsage("week") and useUsage("week", undefined) must hit one cache entry.
     expect(queryKeys.usage("week")).toEqual(queryKeys.usage("week", undefined));
-    expect(queryKeys.usage("week")).toEqual(["usage", "week", null]);
+    expect(queryKeys.usage("week")).toEqual(["usage", "week", null, null]);
     expect(queryKeys.usage("month", "proj")).toEqual([
       "usage",
       "month",
       "proj",
+      null,
+    ]);
+    expect(queryKeys.usage("month", "proj", "c:/users/x/.claude")).toEqual([
+      "usage",
+      "month",
+      "proj",
+      "c:/users/x/.claude",
     ]);
   });
 

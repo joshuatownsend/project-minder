@@ -685,7 +685,16 @@ export function UsageDashboard() {
   const compareEnabled = compare && period !== "all";
   const { data: compareData } = useUsageCompare(period, project, compareEnabled);
   const { data: allData } = useUsage(period);
-  const availableProjects = allData?.byProject ?? data?.byProject ?? [];
+  // Dedupe by slug: byProject emits one row per (slug, home) since #311, and
+  // this page's project filter is slug-scoped (selecting a slug shows every
+  // home's spend combined — the home-precise view is the project Costs tab).
+  const availableProjects = useMemo(() => {
+    const rows = allData?.byProject ?? data?.byProject ?? [];
+    const seen = new Set<string>();
+    return rows.filter((p) =>
+      seen.has(p.projectSlug) ? false : (seen.add(p.projectSlug), true)
+    );
+  }, [allData, data]);
 
   const oneShotAccent: "good" | "warn" | "error" | undefined =
     data && data.oneShot.totalVerifiedTasks > 0
@@ -1093,7 +1102,7 @@ export function UsageDashboard() {
                       const max = sorted[0]?.cost ?? 1;
                       return sorted.map((p) => (
                         <CostRow
-                          key={p.projectSlug}
+                          key={`${p.projectSlug} ${p.homeKey ?? ""}`}
                           label={decodeProjectName(p.projectDirName)}
                           cost={p.cost}
                           maxCost={max}

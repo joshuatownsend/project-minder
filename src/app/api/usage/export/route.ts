@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateUsageReport } from "@/lib/usage/aggregator";
 import { validatePeriod } from "@/lib/usage/constants";
+import { normalizePathKey } from "@/lib/platform";
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
   const format = params.get("format") || "json";
+  // Claude-home discriminator (#311) — see the /api/usage route.
+  const rawHome = params.get("home") || undefined;
+  const home = rawHome ? normalizePathKey(rawHome) : undefined;
 
-  const report = await generateUsageReport(safePeriod, project);
+  const report = await generateUsageReport(safePeriod, project, undefined, home);
 
   if (format === "csv") {
     const header = "date,cost,inputTokens,outputTokens,turns";
