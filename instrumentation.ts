@@ -13,6 +13,13 @@
 
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // `next build` sets NODE_ENV=production and boots render workers that
+  // invoke this hook. Without this gate the whole service starts inside
+  // every build worker — project scans, git/gh calls, the full ~/.claude
+  // sweep, SQLite ingest — and the chokidar watchers + interval timers keep
+  // the workers' event loops alive, stalling "Finalizing page optimization"
+  // for 20+ minutes on machines with real data (#312).
+  if (process.env.NEXT_PHASE === "phase-production-build") return;
   // Vitest sets NODE_ENV=test. Do not start any ingest path in test
   // contexts — both the worker and the in-process watcher have their
   // own NODE_ENV gates, but we short-circuit here so a stray

@@ -99,6 +99,22 @@ describe("shouldBootstrap (pure gating)", () => {
     ).toBe(false);
   });
 
+  it("never bootstraps inside next build workers, even with MINDER_BOOTSTRAP=1 (#312)", () => {
+    expect(
+      shouldBootstrap({
+        NODE_ENV: "production",
+        NEXT_PHASE: "phase-production-build",
+      } as NodeJS.ProcessEnv)
+    ).toBe(false);
+    expect(
+      shouldBootstrap({
+        NODE_ENV: "production",
+        NEXT_PHASE: "phase-production-build",
+        MINDER_BOOTSTRAP: "1",
+      } as NodeJS.ProcessEnv)
+    ).toBe(false);
+  });
+
   it("MINDER_BOOTSTRAP=0 wins even alongside MINDER_BOOTSTRAP=1 (checked first)", () => {
     // Can't literally be both at once, but this documents precedence: the "0"
     // check runs before the "1" check, so an off-override always wins.

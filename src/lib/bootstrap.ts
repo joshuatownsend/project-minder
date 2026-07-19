@@ -74,6 +74,11 @@ export function getBootstrapStatus(): BootstrapStatus {
  *  object (defaulting to `process.env`) so tests don't need to mutate the
  *  real process environment. */
 export function shouldBootstrap(env: NodeJS.ProcessEnv = process.env): boolean {
+  // Never inside `next build` — its workers set NODE_ENV=production, and the
+  // collectors' watchers/timers would keep them alive, stalling the build's
+  // page-optimization phase (#312). Checked before the explicit overrides:
+  // there is no legitimate reason to run collectors in a build worker.
+  if (env.NEXT_PHASE === "phase-production-build") return false;
   if (env.MINDER_BOOTSTRAP === "0") return false;
   if (env.MINDER_BOOTSTRAP === "1") return true;
   return env.NODE_ENV === "production";
