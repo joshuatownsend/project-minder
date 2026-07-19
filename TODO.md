@@ -2,7 +2,10 @@
 
 ## Service Mode + Tray App
 
-- [ ] **C5 — installer signing + auto-updater (deferred until the project has real users)** — Decided 2026-07-18: v1.3.0 ships unsigned (Windows SmartScreen "More info → Run anyway"; macOS right-click → Open). Revisit if Minder picks up outside users: Windows Authenticode cert, Apple Developer ID (~$99/yr) + notarization, and Tauri's updater plugin. Spec lives in `docs/superpowers/plans/2026-07-16-service-and-tray.md` (task C5); everything else in that plan shipped in v1.3.0.
+- [ ] **Signing + auto-updater + local release script** — Reopened 2026-07-19; **supersedes C5** of the service-and-tray plan. Full spec + status table: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`. Key reframe: C5 deferred "signing + updater" as one money-gated task, but the updater's **minisign signing is free and independent** of OS code signing — an updater-only slice ships at zero cost today. Decisions: Azure Artifact Signing (~$120/yr, cloud HSM, no dongle, individuals US/CA — **not** EV, which stopped granting instant SmartScreen reputation in 2024) + existing Apple Developer Program ($99/yr, Tauri automates notarization). Traditional OV certs are now CI-incompatible (CA/B Forum hardware-key rule, June 2023). No single cert can sign both platforms — structurally impossible. Account signups are in MANUAL_STEPS.md and are the critical path (Azure validation takes 1–20 business days).
+  - [ ] **R** — `scripts/release-local.mjs` + `pnpm release:local` (no dependencies, do first). Must stamp `tauri.conf.json`'s version like CI does, or local builds ship as `0.1.0` and update-loop once the updater lands.
+  - [ ] **U** — Updater. Feasibility confirmed: a **pure-Rust API exists**, so the windowless tray is not a blocker, and `supervisor.shutdown()` is already exactly what `on_before_exit` needs. Watch out for the `prevent_exit` guard at `main.rs:76-88` swallowing the updater's forced Windows quit, and note macOS arm64 CI builds `dmg` but the updater needs `.app.tar.gz`.
+  - [ ] **S** — Signing CI wiring, after the accounts validate.
 
 ## Housekeeping
 

@@ -1,3 +1,45 @@
+## 2026-07-19 14:30 | signing-updater | Accounts + keys for signed installers and auto-updates
+
+Plan: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`.
+Start the two account items FIRST — Azure validation can take up to 20 business days and is
+the critical path. The updater work (free) can proceed in parallel while you wait.
+
+- [ ] Sign up for **Azure Artifact Signing** and complete individual identity validation
+  ~$9.99/month. Renamed from "Trusted Signing" in Jan 2026.
+  Individuals are **US + Canada only** — you qualify (US).
+  Validation needs: government photo ID (passport / driver's license / state ID) **and** a
+  proof-of-address document (utility bill or bank statement) dated within ~3 months.
+  Takes 1–20 business days. **Verify at signup that the old "3 years of business history"
+  requirement is genuinely gone** — the live docs describe ID-only validation, but the exact
+  date that changed could not be confirmed during research.
+  See: https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart
+  Do NOT buy an EV certificate — since 2024 it no longer grants instant SmartScreen
+  reputation and costs ~4× more for no benefit. (Tauri's own docs are stale on this.)
+- [ ] Create an **Apple Developer ID Application** certificate (not App Store)
+  Uses your existing Apple Developer Program membership ($99/yr).
+  Export as `.p12`, then base64-encode it for CI.
+- [ ] Create an **App Store Connect API key** for notarization
+  Preferred over Apple ID + app-specific password, which ties builds to one person's
+  account permissions. Download the `.p8` — Apple only lets you download it once.
+  You'll need the Issuer ID and Key ID alongside it.
+- [ ] Add the GitHub Actions secrets once both accounts are validated
+  Windows (OIDC preferred): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+  and the `Trusted Signing Certificate Profile Signer` role assignment.
+  macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+  `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`.
+- [ ] Generate the updater signing keypair and **back it up durably**
+  `pnpm tauri signer generate -w ~/.tauri/minder.key`
+  Add the private key as the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret (plus
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if you set one).
+  **This key is unrecoverable.** If you lose it, every already-installed user is permanently
+  stranded — their installed binary only trusts that one public key, so you can never ship
+  them another update. Put the backup somewhere durable (password manager) BEFORE the first
+  signed release, not after.
+  Note: Tauri does not read `.env` files for this — it must be a real environment variable
+  (`$env:TAURI_SIGNING_PRIVATE_KEY` in PowerShell).
+
+---
+
 ## 2026-07-18 16:00 | wsl-integration | Bring the Ubuntu-26.04 WSL projects + sessions into the dashboard
 
 - [ ] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)
