@@ -55,12 +55,21 @@ export function mapForeignPath(p: string, mappings: PathMapping[] | undefined): 
  * UNC paths are case-insensitive and users mix slash styles).
  */
 export function mapLocalPath(p: string, mappings: PathMapping[] | undefined): string {
-  const canon = (s: string) => s.replace(/\//g, "\\");
+  // Canonicalize separators AND the WSL UNC host alias: \\wsl$\X and
+  // \\wsl.localhost\X address the same distro tree, and a scanned root using
+  // one alias must still match a mapping saved with the other. The rest is
+  // sliced from the canonical form — the two aliases differ in LENGTH, so
+  // slicing the raw path by the raw `to` length would misalign.
+  const canon = (s: string) =>
+    s.replace(/\//g, "\\").replace(/^\\\\wsl\$(?=\\)/i, "\\\\wsl.localhost");
   for (const m of mappings ?? []) {
     const to = trimSep(m.to);
-    if (!to || !hasPrefix(canon(p), canon(to), true)) continue;
+    if (!to) continue;
+    const canonP = canon(p);
+    const canonTo = canon(to);
+    if (!hasPrefix(canonP, canonTo, true)) continue;
     const from = trimSep(m.from);
-    return from + restyleRest(p.slice(to.length), from);
+    return from + restyleRest(canonP.slice(canonTo.length), from);
   }
   return p;
 }
