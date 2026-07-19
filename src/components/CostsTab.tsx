@@ -15,11 +15,13 @@ const DEFAULT_PERIOD = "30d";
  * Per-project cost breakdown for the project detail page. Keyed on the project's
  * `usageSlug` (the encoded-conversation-dir slug the usage module aggregates on),
  * NOT the route slug — the two differ (see ProjectData.usageSlug). Reuses the
- * existing `/api/usage?period=&project=` endpoint via `useUsage`.
+ * existing `/api/usage?period=&project=` endpoint via `useUsage`. For mapped
+ * (e.g. WSL) projects, `usageHomeKey` rides along as `&home=` so two distros
+ * with identical path layouts don't mix spend (#311).
  */
-export function CostsTab({ usageSlug }: { usageSlug: string }) {
+export function CostsTab({ usageSlug, usageHomeKey }: { usageSlug: string; usageHomeKey?: string }) {
   const [period, setPeriod] = useState<string>(DEFAULT_PERIOD);
-  const { data, loading } = useUsage(period, usageSlug);
+  const { data, loading } = useUsage(period, usageSlug, usageHomeKey);
   const { currency, fxRate } = useCurrency();
 
   const byModel = [...(data?.byModel ?? [])].sort((a, b) => b.cost - a.cost);

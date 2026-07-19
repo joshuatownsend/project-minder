@@ -6,6 +6,7 @@ import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import { renameWithRetry } from "../atomicWrite";
 import { resolveServerRoot } from "../serverRoot";
+import { sessionFileHomeKey } from "../platform";
 import { pruneNotificationLog } from "./maintenance";
 
 // Migration runner for the local SQLite index.
@@ -491,6 +492,35 @@ const MIGRATIONS: Migration[] = [
         db.prepare(
           "ALTER TABLE turns ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"
         ).run();
+      }
+    },
+  },
+  {
+    version: 18,
+    name: "#311: sessions.home_key — Claude-home provenance for per-project usage/cost filtering",
+    up: (db) => {
+      // Two configured Claude homes with identical path layouts (Ubuntu +
+      // Debian both /home/josh/dev/foo) produce the same project_slug, so
+      // `/api/usage?project=` mixed their spend. home_key records which home
+      // owns each session so the read side can discriminate.
+      const cols = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "home_key")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN home_key TEXT").run();
+      }
+      // Backfill from file_path — the owning home is a path prefix of every
+      // Claude session file (`<home>/projects/…`), i.e. location-derived,
+      // NOT content-derived. That's what makes this a plain backfill instead
+      // of a DERIVED_VERSION bump: no JSONL re-parse is needed, and fresh
+      // ingests stamp the identical value via the same helper.
+      const rows = db
+        .prepare(
+          "SELECT session_id, file_path FROM sessions WHERE source = 'claude' AND home_key IS NULL"
+        )
+        .all() as Array<{ session_id: string; file_path: string }>;
+      const update = db.prepare("UPDATE sessions SET home_key = ? WHERE session_id = ?");
+      for (const r of rows) {
+        const homeKey = sessionFileHomeKey(r.file_path);
+        if (homeKey) update.run(homeKey, r.session_id);
       }
     },
   },

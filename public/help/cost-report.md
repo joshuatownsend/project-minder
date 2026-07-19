@@ -45,6 +45,15 @@ Some rows (for example a bare `C:\dev` session or a temporary directory) have
 usage but no matching scanned project — these appear un-linked, since there is
 no project page to open.
 
+### Multiple Claude homes with identical layouts
+
+With extra **Claude Homes** configured (Settings → Claude Homes), two distros
+can record sessions under identical Linux paths — e.g. Ubuntu *and* Debian
+both at `/home/you/dev/app`. Their spend stays separable: the report keeps one
+row per *(project, home)* pair, and each row joins to the scanned project from
+the distro that actually recorded it. Projects without a home mapping are
+unaffected — they keep exactly one row.
+
 ## Per-project Costs tab
 
 Each project's detail page has a **Costs** tab (shown when the project has
@@ -54,6 +63,10 @@ project's:
 - **Headline** — total cost, tokens, turns, and sessions for the period.
 - **By model** — cost per Claude model (e.g. Opus vs Sonnet vs Haiku).
 - **By category** — cost per activity category (Coding, Testing, Git Ops, …).
+
+For a WSL project mapped to a distro-local Claude home, the tab automatically
+scopes to sessions recorded by **that distro's** home, so a second distro with
+the same path layout can't inflate the numbers.
 
 An **All projects →** link jumps back to this cross-project report.
 

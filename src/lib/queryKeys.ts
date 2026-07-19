@@ -22,8 +22,8 @@ export const queryKeys = {
     detail: (sessionId: string) => ["sessions", "detail", sessionId] as const,
   },
   stats: () => ["stats"] as const,
-  usage: (period: string, project?: string) =>
-    ["usage", period, project ?? null] as const,
+  usage: (period: string, project?: string, home?: string) =>
+    ["usage", period, project ?? null, home ?? null] as const,
   agents: (source?: string, project?: string, query?: string) =>
     ["agents", source ?? null, project ?? null, query ?? null] as const,
   skills: (source?: string, project?: string, query?: string) =>

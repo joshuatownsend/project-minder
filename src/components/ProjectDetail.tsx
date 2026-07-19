@@ -681,7 +681,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── COSTS ─────────────────────────────────────────────────── */}
           {activeTab === "costs" && (
-            <CostsTab usageSlug={project.usageSlug} />
+            <CostsTab usageSlug={project.usageSlug} usageHomeKey={project.usageHomeKey} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}

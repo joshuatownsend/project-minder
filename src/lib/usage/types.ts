@@ -141,6 +141,15 @@ export interface DailyBucket {
 export interface ProjectBreakdown {
   projectSlug: string;
   projectDirName: string;
+  /**
+   * Normalized key of the Claude home that recorded these turns
+   * (`normalizePathKey(home)`), when known. Two configured homes with
+   * identical path layouts (Ubuntu + Debian both `/home/josh/dev/foo`)
+   * produce the SAME projectSlug — rows are grouped per (slug, home) so
+   * their spend stays separable, and the /costs join disambiguates on
+   * this field (#311). Absent on rows from turns with no home stamp.
+   */
+  homeKey?: string;
   tokens: number;
   cost: number;
   turns: number;

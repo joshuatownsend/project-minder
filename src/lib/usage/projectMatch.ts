@@ -73,6 +73,32 @@ export function projectDirNameCandidates(
   return out;
 }
 
+/**
+ * The home pin for a project's usage/cost REPORT identity (#311):
+ * `ProjectData.usageHomeKey`. Only set when a mapping actually rewrote the
+ * path (the project's sessions were recorded by a foreign home) AND that
+ * mapping's owning home resolves — exactly the class where two distros with
+ * identical layouts collide on `usageSlug`. Local/unmapped projects return
+ * undefined so their usage requests carry no home filter (no behavior
+ * change for single-home setups, and no dependency on which rows have a
+ * home stamp yet).
+ */
+export function resolveUsageHomeKey(
+  projectPath: string,
+  mappings: PathMapping[] = [],
+  homes: string[] = []
+): string | undefined {
+  const mapped = mapLocalPath(projectPath, mappings);
+  if (mapped === projectPath) return undefined;
+  // `usageSlug` derives from first-match-wins mapLocalPath; the candidate
+  // with the SAME encoded dirname is the one produced by that winning
+  // mapping, so its home pin is the report's home.
+  const dirName = encodeProjectPath(mapped);
+  return projectDirNameCandidates(projectPath, mappings, homes).find(
+    (c) => c.dirName === dirName
+  )?.homeKey;
+}
+
 /** A turn matches a candidate when the dirnames agree and neither side's
  *  home pin (if present on both) disagrees. Missing keys — older cache
  *  entries, single-session loads, local candidates — fall back to

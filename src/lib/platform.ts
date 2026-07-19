@@ -156,6 +156,26 @@ export function normalizePathKey(p: string): string {
 }
 
 /**
+ * Derive the normalized key of the Claude home that owns a session JSONL
+ * from the file's own path. Every Claude session file lives under
+ * `<home>/projects/<encoded-dir>/…` (optionally one `<session-id>/subagents/`
+ * level deeper), so the home is the prefix before the LAST `/projects/`
+ * segment — last, not first, because a home path may itself contain a
+ * `projects` segment (`D:\projects\.claude`), while nothing AFTER the home
+ * can: encoded dir names are single dash-encoded segments and the only
+ * deeper directories are `<uuid>/subagents/`.
+ *
+ * Returns the same key space as `normalizePathKey(home)` — the form
+ * `UsageTurn.homeKey` and `sessions.home_key` are stamped in — or null for
+ * a path with no `/projects/` segment (adapter sessions, test fixtures).
+ */
+export function sessionFileHomeKey(sessionFilePath: string): string | null {
+  const key = normalizePathKey(sessionFilePath);
+  const i = key.lastIndexOf("/projects/");
+  return i > 0 ? key.slice(0, i) : null;
+}
+
+/**
  * Decodes a Claude Code project directory name back to an absolute path.
  *
  * Claude encodes project paths by replacing separators with dashes:

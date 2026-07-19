@@ -30,7 +30,7 @@ export const SQL_SCHEMA: TableSchema[] = [
       "distilled_text",
       "work_mode_exploration_pct", "work_mode_building_pct",
       "work_mode_testing_pct", "work_mode_other_pct",
-      "source",
+      "source", "home_key",
     ],
   },
   {

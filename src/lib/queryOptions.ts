@@ -170,13 +170,18 @@ export function statsQuery() {
   });
 }
 
-/** Token usage report for a period, optionally scoped to one project. */
-export function usageQuery(period: string, project?: string) {
+/**
+ * Token usage report for a period, optionally scoped to one project.
+ * `home` (ProjectData.usageHomeKey) disambiguates two Claude homes whose
+ * identical path layouts share a usage slug (#311).
+ */
+export function usageQuery(period: string, project?: string, home?: string) {
   return queryOptions({
-    queryKey: queryKeys.usage(period, project),
+    queryKey: queryKeys.usage(period, project, home),
     queryFn: async ({ signal }): Promise<UsageReport> => {
       const params = new URLSearchParams({ period });
       if (project) params.set("project", project);
+      if (home) params.set("home", home);
       const res = await fetch(`/api/usage?${params}`, { signal });
       if (!res.ok) throw new Error(`Failed to load usage: ${res.status}`);
       return res.json();

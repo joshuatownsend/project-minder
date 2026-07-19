@@ -90,6 +90,12 @@ interface FilterParams {
   startDay: string | null;
   /** Adapter source filter (e.g. "claude"). null for all sources. */
   source: string | null;
+  /**
+   * Claude-home discriminator (#311): normalized home key to scope the
+   * report to (`sessions.home_key`). null for all homes. Strict equality —
+   * NULL home_key rows (adapter sessions) don't match any home filter.
+   */
+  home: string | null;
 }
 
 /**
@@ -100,7 +106,8 @@ export function loadUsageReportFromSql(
   db: DatabaseT.Database,
   period: string,
   project?: string,
-  source?: string
+  source?: string,
+  home?: string
 ): UsageReport {
   const periodStart = periodStartIso(period);
   const filter: FilterParams = {
@@ -108,6 +115,7 @@ export function loadUsageReportFromSql(
     project: project ?? null,
     startDay: periodStart?.slice(0, 10) ?? null,
     source: source ?? null,
+    home: home ?? null,
   };
 
   const totals = queryTotals(db, filter);
@@ -191,7 +199,8 @@ function querySubagentTotals(
          AND t.is_sidechain = 1
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .get(f) as { cost: number; tokens: number };
   return { cost: row.cost, tokens: row.tokens };
@@ -226,7 +235,8 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .get(f) as Omit<TotalsRow, "distinct_sessions">;
   const sRow = prepCached(db,
@@ -234,7 +244,8 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
        FROM turns t JOIN sessions s USING (session_id)
        WHERE (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .get(f) as { distinct_sessions: number };
   return { ...a, distinct_sessions: sRow.distinct_sessions };
@@ -253,6 +264,7 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.source
        ORDER BY cost DESC`
     )
@@ -283,6 +295,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
        GROUP BY t.model
        ORDER BY cost DESC`
     )
@@ -290,10 +303,15 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
 }
 
 function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdown[] {
-  return prepCached(db,
+  // Grouped per (slug, home) so two homes with identical path layouts (same
+  // project_slug) keep separable rows — mirrors the file-parse aggregator's
+  // composite projectMap key (#311). Single-home setups have one uniform
+  // home_key, so their row count is unchanged.
+  const rows = prepCached(db,
       `SELECT
          s.project_slug      AS projectSlug,
          s.project_dir_name  AS projectDirName,
+         s.home_key          AS homeKey,
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
@@ -303,21 +321,27 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
-       GROUP BY s.project_slug, s.project_dir_name
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY s.project_slug, s.project_dir_name, s.home_key
        ORDER BY cost DESC`
     )
-    .all(f) as ProjectBreakdown[];
+    .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
+  // NULL → omitted, matching the file backend (homeKey is absent on rows
+  // whose turns carry no home stamp) so the two backends serialize alike.
+  return rows.map(({ homeKey, ...rest }) =>
+    homeKey === null ? rest : { ...rest, homeKey }
+  );
 }
 
 function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreakdown[] {
-  // Source-filtered: the `category_costs` rollup is keyed only by
-  // (day, project, category) with no `source` column, so it can't answer
-  // per-source. Recompute from `turns` joined to `sessions` (same approach as
-  // `queryDaily` / `queryByModel`) — otherwise a `?source=` byCategory would
-  // mix all sources while every other breakdown on the report is
-  // source-filtered. The token formula matches the rollup's
+  // Source- or home-filtered: the `category_costs` rollup is keyed only by
+  // (day, project, category) with no `source`/`home_key` column, so it can't
+  // answer per-source or per-home. Recompute from `turns` joined to `sessions`
+  // (same approach as `queryDaily` / `queryByModel`) — otherwise a `?source=`
+  // or `?home=` byCategory would mix everything while every other breakdown
+  // on the report is filtered. The token formula matches the rollup's
   // (`refreshCategoryCosts`): input + output + cache_create + cache_read.
-  if (f.source !== null) {
+  if (f.source !== null || f.home !== null) {
     const rows = prepCached(db,
         `SELECT
            t.category                 AS category,
@@ -330,6 +354,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            AND (@periodStart IS NULL OR t.ts >= @periodStart)
            AND (@project IS NULL OR s.project_slug = @project)
            AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
          GROUP BY t.category
          ORDER BY cost DESC`
       )
@@ -379,7 +404,8 @@ function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .all(f) as Array<{ ts: string; cost: number; inputTokens: number; outputTokens: number }>;
 
@@ -406,6 +432,7 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.tool_name
        ORDER BY count DESC
        LIMIT 15`
@@ -424,6 +451,7 @@ function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.mcp_server, tu.mcp_tool`
     )
     .all(f) as Array<{ server: string; tool: string; count: number }>;
@@ -450,10 +478,12 @@ function queryActivityTurns(
   f: FilterParams
 ): Array<{ timestamp: string; cost?: number }> {
   // Full-history (no period filter) assistant turns for activity aggregates.
-  // Only the project filter is applied so per-project activity is correct.
-  // Scalability note: this is a full table scan on large DBs. The /api/usage
-  // route has a 2-min globalThis cache (keyed by backend:period:project) that
-  // absorbs repeated calls; the cold-start cost is the only concern.
+  // The project/source/home filters ARE applied so scoped activity is correct;
+  // only the period bound is deliberately omitted (activity is full-history by
+  // design). Scalability note: this is a full table scan on large DBs. The
+  // /api/usage route has a 2-min globalThis cache (keyed by
+  // backend:period:project:source:home) that absorbs repeated calls; the
+  // cold-start cost is the only concern.
   const rows = prepCached(
     db,
     `SELECT t.ts AS timestamp, t.cost_usd AS cost
@@ -461,8 +491,9 @@ function queryActivityTurns(
       WHERE t.role = 'assistant'
         AND t.is_sidechain = 0
         AND (@project IS NULL OR s.project_slug = @project)
-        AND (@source IS NULL OR s.source = @source)`
-  ).all({ project: f.project, source: f.source }) as Array<{ timestamp: string; cost: number }>;
+        AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
+  ).all({ project: f.project, source: f.source, home: f.home }) as Array<{ timestamp: string; cost: number }>;
   return rows;
 }
 
@@ -479,7 +510,8 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
        WHERE tu.tool_name IN ('Bash', 'PowerShell')
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .all(f) as Array<{ arguments_json: string | null }>;
   const commands: string[] = [];
@@ -500,7 +532,8 @@ function queryOneShot(db: DatabaseT.Database, f: FilterParams) {
        FROM sessions
        WHERE (@periodStart IS NULL OR end_ts >= @periodStart)
          AND (@project IS NULL OR project_slug = @project)
-         AND (@source IS NULL OR source = @source)`
+         AND (@source IS NULL OR source = @source)
+         AND (@home IS NULL OR home_key = @home)`
     )
     .get(f) as { verified: number; oneShot: number };
   return {
@@ -526,6 +559,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug, s.project_dir_name
        ORDER BY cost DESC`
     )
@@ -542,17 +576,36 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // `prepCached`'s static-SQL contract. Use `db.prepare()` directly
   // here. The three queries each fire once per request anyway, and
   // their wins come from the SQL aggregation, not the prepare.
-  const catRows = db
-    .prepare(
-      `SELECT cc.project_slug AS projectSlug, cc.category AS category,
-              SUM(cc.cost_usd) AS cost, SUM(cc.turns) AS turns
-       FROM category_costs cc
-       WHERE (? IS NULL OR cc.day >= ?)
-         AND cc.project_slug IN (${placeholders})
-       GROUP BY cc.project_slug, cc.category
-       ORDER BY cost DESC`
-    )
-    .all(f.startDay, f.startDay, ...slugs) as Array<{
+  // The `category_costs` rollup has no home_key column, so a home-filtered
+  // request recomputes the per-project category mix from `turns` (same
+  // limitation-and-fallback as `queryByCategory`). The unfiltered path keeps
+  // the fast rollup read.
+  const catRows = (f.home !== null
+    ? db
+        .prepare(
+          `SELECT s.project_slug AS projectSlug, t.category AS category,
+                  SUM(t.cost_usd) AS cost, COUNT(*) AS turns
+           FROM turns t JOIN sessions s USING (session_id)
+           WHERE t.role = 'assistant'
+             AND t.category IS NOT NULL
+             AND (? IS NULL OR t.ts >= ?)
+             AND s.home_key = ?
+             AND s.project_slug IN (${placeholders})
+           GROUP BY s.project_slug, t.category
+           ORDER BY cost DESC`
+        )
+        .all(f.periodStart, f.periodStart, f.home, ...slugs)
+    : db
+        .prepare(
+          `SELECT cc.project_slug AS projectSlug, cc.category AS category,
+                  SUM(cc.cost_usd) AS cost, SUM(cc.turns) AS turns
+           FROM category_costs cc
+           WHERE (? IS NULL OR cc.day >= ?)
+             AND cc.project_slug IN (${placeholders})
+           GROUP BY cc.project_slug, cc.category
+           ORDER BY cost DESC`
+        )
+        .all(f.startDay, f.startDay, ...slugs)) as Array<{
     projectSlug: string;
     category: string;
     cost: number;
@@ -572,11 +625,12 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        JOIN sessions s ON s.session_id = t.session_id
        WHERE tu.tool_name NOT LIKE 'mcp__%'
          AND (? IS NULL OR t.ts >= ?)
+         AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.tool_name
        ORDER BY s.project_slug, count DESC`
     )
-    .all(f.periodStart, f.periodStart, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;
     name: string;
     count: number;
@@ -590,10 +644,11 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        JOIN sessions s ON s.session_id = t.session_id
        WHERE tu.mcp_server IS NOT NULL
          AND (? IS NULL OR t.ts >= ?)
+         AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.mcp_server`
     )
-    .all(f.periodStart, f.periodStart, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;
     server: string;
     count: number;
@@ -644,12 +699,13 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
 // history activity/streak/calendar aggregates that are meaningless in a
 // bounded compare.
 
-/** Inclusive-start, exclusive-end window plus the project/source filter. */
+/** Inclusive-start, exclusive-end window plus the project/source/home filter. */
 interface WindowParams {
   start: string;
   end: string;
   project: string | null;
   source: string | null;
+  home: string | null;
 }
 
 interface SummaryAggRow {
@@ -680,7 +736,8 @@ function queryPeriodSummary(db: DatabaseT.Database, w: WindowParams): PeriodSumm
        WHERE t.role = 'assistant'
          AND t.ts >= @start AND t.ts < @end
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .get(w) as SummaryAggRow;
   const sRow = prepCached(db,
@@ -688,7 +745,8 @@ function queryPeriodSummary(db: DatabaseT.Database, w: WindowParams): PeriodSumm
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.ts >= @start AND t.ts < @end
          AND (@project IS NULL OR s.project_slug = @project)
-         AND (@source IS NULL OR s.source = @source)`
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)`
     )
     .get(w) as { sessions: number };
   const osRow = prepCached(db,
@@ -698,7 +756,8 @@ function queryPeriodSummary(db: DatabaseT.Database, w: WindowParams): PeriodSumm
        FROM sessions
        WHERE end_ts >= @start AND end_ts < @end
          AND (@project IS NULL OR project_slug = @project)
-         AND (@source IS NULL OR source = @source)`
+         AND (@source IS NULL OR source = @source)
+         AND (@home IS NULL OR home_key = @home)`
     )
     .get(w) as { verified: number; oneShot: number };
 
@@ -752,6 +811,7 @@ export function compareUsageFromSql(
   period: string,
   project?: string,
   source?: string,
+  home?: string,
   now: Date = new Date()
 ): UsageComparison {
   const periodStart = periodStartIso(period, now);
@@ -767,7 +827,7 @@ export function compareUsageFromSql(
     end: periodStart,
   };
 
-  const filter = { project: project ?? null, source: source ?? null };
+  const filter = { project: project ?? null, source: source ?? null, home: home ?? null };
   const current = queryPeriodSummary(db, { ...currentWindow, ...filter });
   const previous = queryPeriodSummary(db, { ...previousWindow, ...filter });
 

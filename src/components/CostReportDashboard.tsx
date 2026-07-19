@@ -37,9 +37,15 @@ export function CostReportDashboard() {
 
   // Join usage rows to scanned projects by the precomputed usageSlug, so each
   // row can link to /project/<routeSlug>?tab=costs and show the real name.
+  // Home-pinned projects (mapped WSL, #311) are ALSO keyed by
+  // `usageSlug\u0000usageHomeKey` — two distros with identical layouts share
+  // a usageSlug, and the report emits one row per (slug, home).
   const routeByUsage = useMemo(() => {
     const m = new Map<string, ProjectData>();
-    for (const p of scan?.projects ?? []) m.set(p.usageSlug, p);
+    for (const p of scan?.projects ?? []) {
+      m.set(p.usageSlug, p);
+      if (p.usageHomeKey) m.set(`${p.usageSlug}\u0000${p.usageHomeKey}`, p);
+    }
     return m;
   }, [scan]);
 
@@ -47,7 +53,16 @@ export function CostReportDashboard() {
     const byProject: ProjectBreakdown[] = data?.byProject ?? [];
     const q = query.trim().toLowerCase();
     const decorated = byProject.map((r) => {
-      const routeProject = routeByUsage.get(r.projectSlug);
+      // Composite (slug, home) match first; slug-only as fallback — but a
+      // slug-only hit on a home-PINNED project must not claim a row from a
+      // DIFFERENT home (that's the other distro's spend).
+      const composite = r.homeKey ? routeByUsage.get(`${r.projectSlug}\u0000${r.homeKey}`) : undefined;
+      const bySlug = routeByUsage.get(r.projectSlug);
+      const routeProject =
+        composite ??
+        (bySlug?.usageHomeKey && r.homeKey && bySlug.usageHomeKey !== r.homeKey
+          ? undefined
+          : bySlug);
       const name = routeProject?.name ?? decodeDirName(r.projectDirName);
       return { ...r, name, routeSlug: routeProject?.slug };
     });
@@ -182,7 +197,7 @@ export function CostReportDashboard() {
                   <span style={{ color: "var(--text-secondary)" }}>{r.name}</span>
                 );
                 return (
-                  <tr key={r.projectSlug} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                  <tr key={`${r.projectSlug}\u0000${r.homeKey ?? ""}`} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
                     <td style={{ padding: "7px 10px", fontFamily: "var(--font-body)" }}>{nameCell}</td>
                     <td style={{ padding: "7px 10px", textAlign: "right", color: "var(--text-primary)" }}>
                       {formatCost(r.cost, currency, fxRate)}
