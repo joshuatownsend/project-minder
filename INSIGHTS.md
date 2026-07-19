@@ -1,5 +1,182 @@
 # Insights
 
+<!-- insight:9dc5a394e11e | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-19T01:13:03.444Z -->
+## ★ Insight
+The round-8 `canonicalProjectDir` guard is doing quiet work here: because all four planning writers funnel through that one function, the TODO write route needed only a catch-clause mapping (`WslUnavailableError` → 503), not a new guard. Choke-point guards pay for themselves; the per-route sweep was only needed for lanes that bypass the writers and read scanner modules directly.
+
+---
+
+<!-- insight:619a4f898528 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T20:59:53.624Z -->
+## ★ Insight
+The reason `printing-press/library` "just works" is that correlation happens at one seam: session paths are mapped foreign→local (`mapForeignPath`) when history keys are derived, and local→foreign (`mapLocalPath`) when usage slugs are derived. Because both operate on path *prefixes*, one `/home/josh` mapping covers every present and future project under that home — a per-directory mapping table would have needed an entry per repo location.
+
+---
+
+<!-- insight:7308818aaec7 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T19:49:06.065Z -->
+## ★ Insight
+The correlation fix lives at exactly two functions (`mapForeignPath`/`mapLocalPath`) applied where identity keys are *derived* — history match keys, `usageSlug`, encoded session dirs — rather than patched per-feature. That's why sessions, costs, worktree counts, and detail pages all lit up from one mechanism, and why a future second distro (or a remote mount) is just another config entry.
+
+---
+
+<!-- insight:742c51bc41fb | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T09:13:50.481Z -->
+## ★ Insight
+This is a nice example of docs review as *system* review: writing down "what does MINDER_STATE_DIR move?" forced the question of what actually consumes it, and the answer exposed that the C1 fix wired the variable into config/caches but nobody threaded it into the DB modules. Documentation that refuses to overclaim is effectively a conformance test for the code.
+
+---
+
+<!-- insight:f3360aca6340 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T06:46:06.946Z -->
+## ★ Insight
+Matrix jobs are three independent machines with no coordination — any "create if missing" step inside the matrix is a textbook check-then-act race. The two safe shapes are exactly what Codex offered: make the act idempotent (tolerate already-exists, verify, continue), or hoist creation into a single upstream job so the matrix only ever appends. The idempotent form is usually the smaller diff because it doesn't reshape the job graph.
+
+---
+
+<!-- insight:b5e3d9d27667 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T06:22:16.581Z -->
+## ★ Insight
+The Node pin isn't bureaucracy — it's an ABI contract. The payload carries better-sqlite3's prebuilt native module, and a `.node` binary only loads on the `NODE_MODULE_VERSION` it was compiled for. If the *bundled* runtime's major ever drifted from the major that `package:standalone` resolved prebuilts for, every installer would ship a server that dies on first DB open. Pinning both to 22.12.0 in one workflow makes the contract visible and enforced in one place.
+
+---
+
+<!-- insight:b53a1d798b37 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T05:36:42.777Z -->
+## ★ Insight
+The round-2 finding illustrates why review rounds compound value: round 1 made the cursor *stop* self-advancing on empty batches (fixing a data-loss race), which silently removed the accidental self-healing that a clock-based cursor had — turning "corrupt cursor" from a transient glitch into a permanent wedge. Fixes that remove implicit recovery paths need explicit validation to replace them; the bots caught the interaction within one round.
+
+---
+
+<!-- insight:8d68f2c8a92d | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T05:17:00.559Z -->
+## ★ Insight
+The cursor race is the classic "high-water mark from the wrong clock" bug. Any poll-based sync that filters `> since` must derive `since` from the *data stream itself* (max `changedAt` seen), never from the consumer's clock — otherwise every gap between server evaluation and client timestamping becomes a permanent blind spot. Binding to returned data also makes clock skew irrelevant, which matters here since the tray and server are different processes with no shared time authority beyond the OS.
+
+---
+
+<!-- insight:fcf9808aaab2 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T05:11:51.791Z -->
+## ★ Insight
+Two design details here are worth appreciating. First, the *cursor-advances-while-muted* rule: mute means "don't interrupt me," not "queue interruptions for later" — advancing the cursor silently makes unmute start from *now* instead of firehosing the backlog. Second, initializing the cursor to *now* on first run or corrupt state fails in the quiet direction: the worst outcome is a missed old toast, never a re-toast storm — the right asymmetry for a notification system.
+
+---
+
+<!-- insight:310bffef3c54 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T04:55:33.617Z -->
+## ★ Insight
+The "works once, fails on every rebuild" signature is a Windows-specific trap: `fs::copy` preserves the read-only attribute, and unlike Unix (where write permission on the *directory* suffices to replace a file), Windows refuses to overwrite a read-only *file* regardless of directory permissions. Any build system that mirrors git-controlled trees on Windows eventually meets this — the durable fix is never to let `.git` into a copied payload at all.
+
+---
+
+<!-- insight:634c64c55315 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T04:35:37.251Z -->
+## ★ Insight
+This finding shows why doc reviews benefit from bots that have read the code: the sentence was *technically true* on Windows (where `service:uninstall` never touches processes — the A3 incident made it identity-verified and process-free) but wrong on macOS/Linux, where `launchctl bootout`/`systemctl --user stop` semantics mean uninstall also stops the running server. Cross-platform docs inherit every platform asymmetry of the commands they describe.
+
+---
+
+<!-- insight:14eb71c1867a | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T04:22:28.413Z -->
+## ★ Insight
+The error-recovery shape here is worth noting: the fix distinguishes *two* failure depths. If `is_checked()` fails, we can still re-anchor to the OS registry (`is_enabled()`) — the deeper source of truth. But if *that* read also fails, the code deliberately does nothing rather than guess, because a wrong forced checkbox state is worse than a stale one. Encoding that as a pure `Result → Option` helper (`recovered_checked_state`) made an otherwise untestable Tauri-glue path unit-testable.
+
+---
+
+<!-- insight:d7a322770e20 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T04:11:18.359Z -->
+## ★ Insight
+A subtle Tauri v2 behavior the agent had to design around: when you click a `CheckMenuItem`, Tauri flips the visual checkmark *before* your event handler runs. So the handler reads `is_checked()` as the *desired* new state, not the current one — and on plugin failure it must call `set_checked()` to un-flip the visual back to what the OS registry actually says. Without that revert, a failed registry write would leave the menu lying about autostart being enabled.
+
+---
+
+<!-- insight:ff377d5b4ec0 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-18T03:49:56.279Z -->
+## ★ Insight
+Autostart is one of the few tray features where "persistence" needs no state file: the plugin writes the OS-native registration itself (on Windows, a `HKCU\...\Run` registry value pointing at the exe). The checkbox just mirrors `is_enabled()` at menu-build time — so the OS registry is the single source of truth, and the toggle automatically "survives restart" because there's nothing else to survive.
+
+---
+
+<!-- insight:8640906dc152 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-17T01:42:00.412Z -->
+## ★ Insight
+- Notice the progression of these three findings (schema.sql → nested deps → cwd anchoring): they're all instances of one root hazard — **the standalone bundle inherits assumptions that were only ever true in a dev checkout** (cwd = repo root, pnpm store present, source tree adjacent). Each fix has moved another implicit assumption into something explicit: a copied file, a tripwire, an anchored path.
+- This is also the bot-review rule paying for itself the same day it was adopted: without the grace window, this cwd bug would have merged and surfaced weeks later inside the Tauri sidecar (C1), where the server is *always* launched by path from a foreign cwd.
+
+---
+
+<!-- insight:3780c6071f9a | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-17T01:01:09.011Z -->
+## ★ Insight
+- This is the second Windows/pnpm-specific packaging landmine C0 has surfaced: first `cpSync` silently keeping nested directory symlinks, now Next's file tracer omitting `next`'s own nested `node_modules`. Both share a failure mode — the bundle *looks* complete and even runs on the build machine, because the pnpm store silently satisfies what the bundle lacks. The only honest test is booting the artifact where the store can't be found.
+- The "tripwire" requirement matters more than the backfill itself: a hardcoded fix rots on the next Next.js upgrade, but a packaging step that *asserts* the dependency closure resolves inside dist converts future rot into a loud build failure.
+
+---
+
+<!-- insight:45a32088837b | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-17T00:04:17.438Z -->
+## ★ Insight
+- This flake is a textbook **time-anchored test hazard**: deriving "same day" fixtures from `Date.now()` makes the test's correctness depend on *when* it runs. A 60-second offset is same-day 99.93% of the time — which is exactly why it survived 300 test files' worth of CI runs until a 23:59 UTC run hit it.
+- The repo actually hit a cousin of this before (a "midnight-cross" ETag bug noted in session history), which is why the diagnosis pattern-matched quickly: identical failure on both Node versions + identical wall-clock minute = environment-dependent, not code-dependent.
+
+---
+
+<!-- insight:698e0039ceb0 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-16T23:21:08.255Z -->
+## ★ Insight
+- The two tasks were deliberately given **non-overlapping port assignments** (4111 and 4123) for their smoke tests — port 4100 is a singleton resource in this repo (dev server, future service, future tray sidecar all want it), and parallel sub-agents would otherwise race on it.
+- Both agents commit locally and **don't push or touch the plan's Status table**. Both PRs would edit the same table (and CHANGELOG `[Unreleased]`), so as supervisor I'll sequence those edits per-branch to avoid guaranteed squash-merge conflicts.
+
+---
+
+<!-- insight:50c9e48d8658 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-16T22:44:29.372Z -->
+## ★ Insight
+The lazy-initialization pattern (`globalThis` singleton created on first request) is the standard survival tactic for stateful code inside Next.js, because the dev server hot-reloads modules and serverless platforms assume nothing outlives a request. Minder never had the serverless constraint — it's a local, long-lived server — so moving initialization to `instrumentation.ts` isn't a workaround, it's shedding an assumption the app never needed.
+
+---
+
+<!-- insight:5693d1b6e3b3 | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-16T22:36:08.323Z -->
+## ★ Insight
+The "rewrite for stability" instinct usually conflates two separate problems: **process lifecycle** (who starts/restarts/supervises the process) and **implementation language**. Service durability comes almost entirely from the first — systemd/launchd/Windows SCM give you auto-start, crash restart, and log capture regardless of what's inside the process. A Rust binary managed by nothing is *less* durable than a Node process under systemd.
+
+---
+
+<!-- insight:8357478013ea | session:95c687bc-cb76-4c0d-a197-694594f3a8f3 | 2026-07-16T21:21:27.687Z -->
+## ★ Insight
+- **OKLCH L=0.93 is not white** — it's ~92% light gray. "AAA contrast" and "looks white" are different goals; the ratio was already 16:1, but the *color* still reads gray. When someone says "brighter/whiter," they want higher lightness, not higher contrast.
+- **Dev-server staleness masquerades as a code bug.** The fix was merged and correct on disk, yet the browser showed old values — a full recompile (or a byte-changing edit) is needed after a git checkout that swaps many files without changing the one you're watching.
+
+---
+
+<!-- insight:389aad251fbe | session:95c687bc-cb76-4c0d-a197-694594f3a8f3 | 2026-07-16T20:30:39.408Z -->
+## ★ Insight
+- **`opacity` and color tokens compound.** A `--text-2` label at 0.85 opacity isn't `--text-2` — it's darker still, and the token audit alone wouldn't have caught it because the CSS var *looks* AA-compliant. Faintness bugs often live in the multiplier, not the token.
+- **Contrast ratio ≠ perceived legibility.** 7:1 passes AAA, yet 10px uppercase 500-weight text still reads faint — small size, tight tracking, and thin weight all erode apparent contrast. For persistent chrome, design above the numeric floor.
+
+---
+
+<!-- insight:e5bafcf9e86f | session:95c687bc-cb76-4c0d-a197-694594f3a8f3 | 2026-07-16T20:22:47.575Z -->
+## ★ Insight
+- **Same-hue contrast moves opposite to intuition.** For colored-text-on-its-own-tint, *lowering* the wash alpha darkens the background and *raises* contrast — my first instinct (bump the alpha up) was backwards, and computing it caught that before I shipped it.
+- **Token-driven theming turns a 995-file problem into a 4-line fix** — but it also means one token brightening (`--danger`) silently affects an unrelated surface (white-on-red dot). Centralization is leverage in both directions.
+
+---
+
+<!-- insight:2a812dfc96f5 | session:95c687bc-cb76-4c0d-a197-694594f3a8f3 | 2026-07-16T20:14:15.163Z -->
+## ★ Insight
+- **WCAG contrast is computed on *luminance*, not OKLCH lightness.** OKLCH `L` is perceptually uniform but the 4.5:1 ratio uses the WCAG relative-luminance formula, so you can't eyeball it from the `L` value — a token at `L=0.42` reads "medium gray" but lands at only 2.2:1. I converted every token OKLCH → linear sRGB → luminance → ratio.
+- **The whole UI routes text color through ~4 CSS variables** (zero raw `text-gray-*` classes). That's why one token can be wrong in 995 places — and why the fix is four lines, not 995 edits.
+
+---
+
+<!-- insight:7ae5176807d1 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T18:45:22.841Z -->
+## ★ Insight
+This repo's release mechanism is **tag-driven, not branch-driven**: `release.yml` fires on any `v*` tag push and re-runs the full quality gate *before* publishing — so the tag is the trigger, but the gate is the guarantee. That's why the flow is bump-via-PR → merge → tag: the version bump still goes through branch protection like any change, and the tag only lands on already-merged, already-green `main`. Pushing a tag isn't a commit to the protected branch, so it needs no `--admin` — the two concerns (mutating `main` vs. triggering a release) stay cleanly separated.
+
+---
+
+<!-- insight:69680d6aa7d7 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T18:27:22.253Z -->
+## ★ Insight
+The lesson worth keeping: **"consistent with existing behavior" is not the same as "correct for this change."** I'd waved off the deep-link gap because the codebase already tolerated empty panels for no-session projects. But a reviewer measures a change against *its own stated intent*, and by that standard the gap was a hole in the fix, not a pre-existing quirk to inherit. When you narrow a UI surface, guard every path that can reach it — the visible control *and* the URL/state that seeds it — not just the one the user clicks.
+
+---
+
+<!-- insight:7a02d921a17c | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T17:33:41.859Z -->
+## ★ Insight
+The **payload-borne marker vs. client flag** choice is the crux. Demo mode has two activation paths — the `MINDER_DEMO=1` env var and the `demoMode` feature flag — but only the flag reaches the client's `ConfigProvider`. Reading the client flag would leave `MINDER_DEMO=1` demos broken. Stamping the marker on the fixture (which the server produces regardless of *how* demo was triggered) makes detection path-agnostic — the same reasoning behind `SessionDetailView` keying on `data.sessionId.startsWith("demo-")` rather than the URL.
+Efficiency was deliberately left visible: it already had a demo guard and renders a structured (non-empty) report — the TODO correctly scoped it out.
+
+---
+
+<!-- insight:54c55d3048bd | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T17:24:59.206Z -->
+## ★ Insight
+The efficiency route already carries a demo guard (skips the DB snapshot write), which is *why* the TODO excludes it — it renders a structured report. Hot Files / Errors / Patterns have **no** demo guard, so they read real JSONL keyed on the fake `C:\dev\<slug>` path and come back empty. The `SessionDetailView` precedent is instructive: it keys demo-detection on the **returned payload** (`data.sessionId.startsWith("demo-")`), not the URL — robust to both activation paths (env var *and* flag). I'll mirror that with a payload-borne marker rather than reading the client-only flag, which would miss `MINDER_DEMO=1`.
+
+---
+
 <!-- insight:bd96e2187946 | session:7080653d-c73a-4348-b3a7-5f963af3a1dd | 2026-07-15T15:58:27.423Z -->
 ## ★ Insight
 This is the principle-of-least-authority endpoint of the seam: the route's job is to accept *intended project targets*, and "the scanned project set" is exactly that set — tighter and more meaningful than "anything under the dev root." Crucially, it's **safe to implement**: the launcher only ever sends paths that came from `/api/projects` (i.e. scanned projects), and `TaskComposer` sends no metadata at all — so no real caller breaks. The only cost is a (cached) scan-cache read in the route. That makes this a clear "implement" rather than a debatable tradeoff.
