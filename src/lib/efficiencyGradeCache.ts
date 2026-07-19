@@ -101,6 +101,10 @@ class EfficiencyGradeCache {
       }
 
       for (const item of batch) {
+        // Re-check per item, not just per batch: invalidateGrades()/dispose()
+        // during the drain must stop grades computed from the OLD config from
+        // landing in the just-cleared cache.
+        if (myGen !== this.generation) return;
         try {
           const path = projectPathMap.get(item.slug) ?? item.path;
           const turns = lookupProjectTurns(turnsIndex, item.slug, path, pathMappings, claudeHomes);
@@ -119,7 +123,9 @@ class EfficiencyGradeCache {
         } catch {
           // Skip this project; it'll be retried on the next enqueue cycle.
         }
-        this.inFlight--;
+        // dispose() zeroes inFlight for the new generation — don't drive it
+        // negative from a batch that belongs to the old one.
+        if (myGen === this.generation) this.inFlight--;
       }
 
       // Yield the event loop between batches so we don't starve route handlers.
@@ -130,7 +136,9 @@ class EfficiencyGradeCache {
 
     // Persist today's grade snapshots (best-effort; never throws, degrades to
     // "no trend" when the DB is unavailable). Done after the drain so it
-    // doesn't reintroduce per-project I/O into the CPU-only loop.
+    // doesn't reintroduce per-project I/O into the CPU-only loop. Skipped if
+    // the generation moved — these rows came from the old config.
+    if (myGen !== this.generation) return;
     await recordGradeSnapshots(snapshotRows);
 
     this.running = false;
@@ -167,13 +175,14 @@ class EfficiencyGradeCache {
     return this.cache.size;
   }
 
-  /** Drop cached grades only (queue and in-flight work untouched). Called by
-   *  PATCH /api/config when claudeHomes/pathMappings change — the grades were
-   *  computed from a turn set that depended on the old value, and the next
-   *  dashboard enqueue recomputes them because the fresh-cache skip no longer
-   *  finds an entry. */
+  /** Full cancel + clear, for PATCH /api/config when claudeHomes/pathMappings
+   *  change: clearing entries alone isn't enough — an in-flight drain that
+   *  loaded the OLD config could still land stale grades after the PATCH
+   *  returns. The generation bump (via dispose) makes the drain drop its
+   *  remaining work; the next dashboard enqueue recomputes everything against
+   *  the new config. */
   invalidateGrades() {
-    this.cache.clear();
+    this.dispose();
   }
 
   dispose() {
