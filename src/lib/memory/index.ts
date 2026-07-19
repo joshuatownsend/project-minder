@@ -10,6 +10,7 @@ import type {
 import { expandImports } from "../scanner/expandImports";
 import { memoryDirFor } from "../scanner/memoryWriter";
 import { encodeMemoryId, userMemoryPath } from "./safety";
+import { checkWslRoot, parseWslUncPath } from "../wsl";
 import { summarizeMemoryIndex } from "./memoryIndex";
 import { extractRefCandidates, verifyRefs } from "./staleRefs";
 
@@ -100,8 +101,16 @@ export async function listMemoryFiles(input: DiscoveryInput): Promise<MemoryList
 
   await Promise.all(
     input.projects.map(async (p) => {
-      const proj = await tryProject(p, ctx);
-      if (proj) entries.push(proj);
+      // Never-wake preflight: tryProject reads <p.path>/CLAUDE.md, which on a
+      // stopped WSL distro's UNC path would auto-start its VM. tryAuto stays
+      // unguarded — it reads the LOCAL ~/.claude memory mirror, never p.path.
+      const wslBlocked = parseWslUncPath(p.path)
+        ? await checkWslRoot(p.path).then((c) => c !== null && !c.ok)
+        : false;
+      if (!wslBlocked) {
+        const proj = await tryProject(p, ctx);
+        if (proj) entries.push(proj);
+      }
       const auto = await tryAuto(p, ctx);
       if (auto) {
         entries.push(...auto.entries);
