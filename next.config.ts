@@ -48,6 +48,16 @@ const nextConfig: NextConfig = {
   // instead of `.next/standalone/server.js`. Pinning here makes the
   // output path deterministic regardless of where the checkout lives.
   outputFileTracingRoot: projectRoot,
+  // Never trace prior build artifacts into the standalone output. Without
+  // this, the tracer sweeps dist/minder-server (the PREVIOUS package) into
+  // .next/standalone, and package-standalone then copies that back out to
+  // dist/minder-server — every build+package cycle nests another full copy
+  // (observed: 16.8 GB / 37k files, two levels deep), and every later build
+  // crawls the whole jungle during compile/trace collection (#312's
+  // remaining slowness). The Tauri Rust target dir gets the same treatment.
+  outputFileTracingExcludes: {
+    "*": ["./dist/**", "./src-tauri/target/**"],
+  },
 };
 
 export default nextConfig;

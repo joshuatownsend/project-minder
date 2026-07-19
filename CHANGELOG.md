@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Standalone packaging no longer nests its own previous output.** Next's output-file tracing swept `dist/minder-server` (the prior `pnpm package:standalone` result) into `.next/standalone`, which the packager then copied back out — each build+package cycle nested another full copy (observed: 16.8 GB / 37k files, two levels deep) and every subsequent build crawled it during compile and trace collection. `outputFileTracingExcludes` now bars `dist/**` and `src-tauri/target/**` from tracing. If your `dist/minder-server` predates this fix, delete it once and repackage.
 - **`pnpm build` no longer boots the background service inside build workers.** `next build` sets `NODE_ENV=production` and its render workers invoke the instrumentation hook, which passed the bootstrap gate and started the full collector suite per worker — project scans, git/GitHub probes, the complete `~/.claude` usage sweep, SQLite ingest, and the file watchers whose timers then kept the workers alive, stalling "Finalizing page optimization" for 20+ minutes on machines with real data (#312). `register()` and `shouldBootstrap` now short-circuit when `NEXT_PHASE=phase-production-build` (build wins even over an explicit `MINDER_BOOTSTRAP=1`).
 
 ### Added
