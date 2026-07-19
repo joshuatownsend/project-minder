@@ -265,6 +265,74 @@ describe("getDefaultDevRoot (platform-branched)", () => {
   });
 });
 
+describe("getDevRootCandidates / probeDefaultDevRoot (first-run detection)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("offers C:\\dev first then a home-relative fallback on Windows", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.resetModules();
+    const { getDevRootCandidates } = await import("@/lib/platform");
+    const candidates = getDevRootCandidates();
+    expect(candidates[0]).toBe("C:\\dev");
+    expect(candidates).toHaveLength(2);
+    expect(candidates[1]).toContain("dev");
+    expect(candidates[1]).not.toBe("C:\\dev");
+  });
+
+  it("offers only the home-relative root on POSIX (C:\\dev is meaningless there)", async () => {
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    vi.resetModules();
+    const { getDevRootCandidates } = await import("@/lib/platform");
+    const candidates = getDevRootCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).not.toBe("C:\\dev");
+  });
+
+  it("returns the first candidate that exists", async () => {
+    const { probeDefaultDevRoot, getDevRootCandidates } = await import("@/lib/platform");
+    const candidates = getDevRootCandidates();
+    expect(probeDefaultDevRoot(() => true)).toBe(candidates[0]);
+  });
+
+  it("skips a missing first candidate in favor of a later one", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.resetModules();
+    const { probeDefaultDevRoot, getDevRootCandidates } = await import("@/lib/platform");
+    const candidates = getDevRootCandidates();
+    expect(probeDefaultDevRoot((p) => p !== "C:\\dev")).toBe(candidates[1]);
+  });
+
+  // The signal the whole first-run flow hangs on: null means "we genuinely
+  // cannot guess", which routes to onboarding rather than to an empty grid.
+  it("returns null when NO candidate exists", async () => {
+    const { probeDefaultDevRoot } = await import("@/lib/platform");
+    expect(probeDefaultDevRoot(() => false)).toBeNull();
+  });
+
+  it("treats an unreadable candidate as absent instead of throwing", async () => {
+    const { probeDefaultDevRoot } = await import("@/lib/platform");
+    const exists = () => {
+      throw new Error("EPERM: permission denied");
+    };
+    expect(probeDefaultDevRoot(exists)).toBeNull();
+  });
+
+  it("keeps probing past an unreadable candidate to a readable one", async () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.resetModules();
+    const { probeDefaultDevRoot, getDevRootCandidates } = await import("@/lib/platform");
+    const candidates = getDevRootCandidates();
+    const exists = (p: string) => {
+      if (p === "C:\\dev") throw new Error("EPERM");
+      return true;
+    };
+    expect(probeDefaultDevRoot(exists)).toBe(candidates[1]);
+  });
+});
+
 describe("spawnDevServer (platform-branched)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { MinderConfig, ProjectStatus } from "./types";
-import { getDefaultDevRoot } from "./platform";
+import { getDefaultDevRoot, probeDefaultDevRoot } from "./platform";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
 import { resolveStateDir } from "./serverRoot";
 
@@ -11,7 +11,12 @@ import { resolveStateDir } from "./serverRoot";
 // bury (or fail to write) `.minder.json`. Repo runs keep the repo-root path.
 const CONFIG_PATH = path.join(resolveStateDir(), ".minder.json");
 
-export const DEFAULT_DEV_ROOT = getDefaultDevRoot();
+// Prefer a candidate that actually exists over the bare first choice, so a
+// machine with `~/dev` but no `C:\dev` scans the directory it really has
+// instead of a hardcoded convention it doesn't. Falls back to the first
+// candidate when neither exists — in that case nothing is worth scanning
+// anyway and `isFirstRun()` routes the user to setup instead.
+export const DEFAULT_DEV_ROOT = probeDefaultDevRoot() ?? getDefaultDevRoot();
 
 let configCache: { value: MinderConfig; expiresAt: number } | null = null;
 const CONFIG_TTL_MS = 3_000;
@@ -41,6 +46,34 @@ export async function readConfig(): Promise<MinderConfig> {
     const value = { ...DEFAULT_CONFIG };
     configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
     return value;
+  }
+}
+
+/**
+ * True when this looks like a brand-new install with nowhere to scan — the
+ * signal the dashboard uses to show first-run setup instead of an empty grid.
+ *
+ * Both halves matter:
+ *
+ *   - **No `.minder.json` on disk.** Anyone who has saved config once has
+ *     completed setup, so we must never interrupt them again — not even if
+ *     their roots are temporarily unreachable (an unplugged drive, a stopped
+ *     WSL distro). Note this checks the FILE, not `readConfig()`, which
+ *     always succeeds by falling back to defaults and so can't distinguish
+ *     "no config" from "default config".
+ *   - **No candidate root exists.** A fresh install on a machine that already
+ *     has `C:\dev` or `~/dev` needs no interruption — we can just scan it.
+ *
+ * Deliberately NOT first-run: a configured root that exists but is empty.
+ * That's a legitimate steady state (you deleted your last project), and
+ * hijacking the dashboard for it would be a bug.
+ */
+export async function isFirstRun(): Promise<boolean> {
+  try {
+    await fs.access(CONFIG_PATH);
+    return false;
+  } catch {
+    return probeDefaultDevRoot() === null;
   }
 }
 

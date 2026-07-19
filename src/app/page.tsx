@@ -15,6 +15,7 @@ import {
   Stat,
   Tag,
 } from "@/components/ui/design";
+import { FirstRunSetup } from "@/components/FirstRunSetup";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useScope } from "@/components/ScopeProvider";
 import { usePulse } from "@/components/PulseProvider";
@@ -84,6 +85,11 @@ export default function HomePage() {
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  // First-run setup gate. `null` means "not yet known" — we render the normal
+  // dashboard while this is in flight rather than flashing setup at every
+  // existing user for one paint.
+  const [firstRun, setFirstRun] = useState<{ firstRun: boolean; candidates: string[] } | null>(null);
+  const [setupDismissed, setSetupDismissed] = useState(false);
   // DB readiness from the data-layer state machine. We only render a banner
   // for `permanent-failed` — that state only fires after 2+ cumulative
   // quarantines fail to recover, so it's an honest "needs human" signal.
@@ -93,6 +99,17 @@ export default function HomePage() {
   // banner on every routine startup race would be alarmist and offer no
   // useful action. See `src/lib/data/index.ts` for the state machine.
   const [dbHealth, setDbHealth] = useState<DbHealthSnapshot | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetch("/api/first-run", { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      // On failure, fall through to the normal dashboard: a broken probe must
+      // never trap an existing user in setup for a root they already have.
+      .then((d) => setFirstRun(d ?? { firstRun: false, candidates: [] }))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, []);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -311,6 +328,22 @@ export default function HomePage() {
     attentionItems.push({ tag: "warn", label: `${pendingStepsCount} manual step${pendingStepsCount === 1 ? "" : "s"} pending`, href: "/manual-steps" });
   if (insightCount > 0)
     attentionItems.push({ tag: "warn", label: `${insightCount} insight${insightCount === 1 ? "" : "s"} to review`, href: "/insights" });
+
+  // Every hook above has already run, so this early return is safe. It sits
+  // last so setup replaces the whole dashboard rather than stacking a banner
+  // on top of an empty grid.
+  if (firstRun?.firstRun && !setupDismissed) {
+    return (
+      <FirstRunSetup
+        candidates={firstRun.candidates}
+        // A full reload is deliberate over threading a refetch through this
+        // page's dozen independent fetches: the scan root changed, so every
+        // one of them is now stale, and setup happens exactly once.
+        onComplete={() => window.location.reload()}
+        onSkip={() => setSetupDismissed(true)}
+      />
+    );
+  }
 
   const periodSubtext =
     period === "today" ? `${now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}` :
