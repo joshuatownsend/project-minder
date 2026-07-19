@@ -16,6 +16,7 @@ import { categorizeToolError } from "./toolErrorCategorizer";
 import { resolveSessionJsonl } from "./sessionPath";
 import { readConfig } from "@/lib/config";
 import { getReadableClaudeHomes } from "@/lib/claudeHome";
+import { normalizePathKey } from "@/lib/platform";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -115,6 +116,12 @@ export interface ParseSessionTurnsOptions {
    * usage reporting path (default: false preserves existing behavior).
    */
   includeSidechains?: boolean;
+  /**
+   * normalizePathKey of the Claude home this file was found under. Stamped
+   * onto every produced turn (multi-home disambiguation — see
+   * UsageTurn.homeKey). Omit for single-session loaders that don't need it.
+   */
+  homeKey?: string;
 }
 
 export async function parseSessionTurns(
@@ -238,6 +245,7 @@ export async function parseSessionTurns(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model,
         role: "assistant",
         inputTokens,
@@ -266,6 +274,7 @@ export async function parseSessionTurns(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model: "",
         role: "user",
         inputTokens: 0,
@@ -458,6 +467,7 @@ export async function parseSessionTurnsWithMeta(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model,
         role: "assistant",
         inputTokens,
@@ -484,6 +494,7 @@ export async function parseSessionTurnsWithMeta(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model: "",
         role: "user",
         inputTokens: 0,
@@ -580,7 +591,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
               // default for existing consumers; the usage aggregator opts in
               // via `{ includeSidechains: true }` to fold subagent cost into
               // the totals (A1).
-              return await parseSessionTurns(fp, dirName, { includeSidechains: true });
+              return await parseSessionTurns(fp, dirName, { includeSidechains: true, homeKey: normalizePathKey(home) });
             } catch {
               return [];
             }

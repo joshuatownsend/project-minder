@@ -1,6 +1,8 @@
 import type { UsageTurn } from "./types";
 import type { PathMapping } from "../types";
 import { mapLocalPath } from "../pathMapping";
+import { parseWslUncPath } from "../wsl";
+import { normalizePathKey } from "../platform";
 
 /**
  * Convert a Windows or POSIX project path to the canonical dirname
@@ -12,24 +14,60 @@ export function encodeProjectPath(projectPath: string): string {
   return projectPath.replace(/[:\\/]/g, "-");
 }
 
+/** One possible encoded session dirname for a project. `homeKey` is set on
+ *  foreign (mapped) candidates when the producing mapping's `to` distro
+ *  resolves to a configured Claude home — turns tagged with a DIFFERENT
+ *  home's key then don't match, so two distros with identical path layouts
+ *  (both `-home-josh-dev-x`) can't co-mingle analytics. */
+export interface DirNameCandidate {
+  dirName: string;
+  homeKey?: string;
+}
+
 /**
  * All encoded dirnames a project's sessions may be filed under. A UNC-scanned
  * WSL project's sessions were recorded inside the distro against the Linux
  * path, so its turns carry the foreign-encoded dirname (`-home-josh-dev-x`) —
  * `mapLocalPath` (config.pathMappings) recovers that form. Local projects
  * yield just their own encoding; the mapping seam stays in pathMapping.ts.
+ * Pass the configured Claude homes to pin each foreign candidate to its
+ * owning home (multi-distro disambiguation).
  */
 export function projectDirNameCandidates(
   projectPath: string,
-  mappings: PathMapping[] = []
-): string[] {
-  const names = [encodeProjectPath(projectPath)];
-  const mapped = mapLocalPath(projectPath, mappings);
-  if (mapped !== projectPath) {
-    const enc = encodeProjectPath(mapped);
-    if (!names.includes(enc)) names.push(enc);
+  mappings: PathMapping[] = [],
+  homes: string[] = []
+): DirNameCandidate[] {
+  const out: DirNameCandidate[] = [{ dirName: encodeProjectPath(projectPath) }];
+  for (const m of mappings) {
+    // Apply mappings one at a time so each foreign form is paired with the
+    // mapping that produced it (mapLocalPath alone is first-match-wins).
+    const mapped = mapLocalPath(projectPath, [m]);
+    if (mapped === projectPath) continue;
+    const dirName = encodeProjectPath(mapped);
+    const toDistro = parseWslUncPath(m.to)?.distro.toLowerCase();
+    const home = toDistro
+      ? homes.find((h) => parseWslUncPath(h)?.distro.toLowerCase() === toDistro)
+      : undefined;
+    const homeKey = home ? normalizePathKey(home) : undefined;
+    if (!out.some((c) => c.dirName === dirName && c.homeKey === homeKey)) {
+      out.push({ dirName, homeKey });
+    }
   }
-  return names;
+  return out;
+}
+
+/** A turn matches a candidate when the dirnames agree and neither side's
+ *  home pin (if present on both) disagrees. Missing keys — older cache
+ *  entries, single-session loads, local candidates — fall back to
+ *  dirname-only matching. */
+function turnMatchesCandidate(
+  turn: UsageTurn,
+  c: DirNameCandidate
+): boolean {
+  if (turn.projectDirName !== c.dirName) return false;
+  if (c.homeKey === undefined || turn.homeKey === undefined) return true;
+  return turn.homeKey === c.homeKey;
 }
 
 /**
@@ -49,14 +87,17 @@ export function gatherProjectTurns(
   sessionMap: Map<string, UsageTurn[]>,
   slug: string,
   projectPath: string,
-  mappings: PathMapping[] = []
+  mappings: PathMapping[] = [],
+  homes: string[] = []
 ): UsageTurn[] {
-  const expectedDirNames = projectDirNameCandidates(projectPath, mappings);
+  const candidates = projectDirNameCandidates(projectPath, mappings, homes);
   const result: UsageTurn[] = [];
   for (const turns of sessionMap.values()) {
     if (turns.length === 0) continue;
     const head = turns[0];
-    if (head.projectSlug !== slug && !expectedDirNames.includes(head.projectDirName)) continue;
+    if (head.projectSlug !== slug && !candidates.some((c) => turnMatchesCandidate(head, c))) {
+      continue;
+    }
     for (const t of turns) result.push(t);
   }
   return result;
@@ -117,11 +158,14 @@ export function lookupProjectTurns(
   index: ProjectTurnsIndex,
   slug: string,
   projectPath: string,
-  mappings: PathMapping[] = []
+  mappings: PathMapping[] = [],
+  homes: string[] = []
 ): UsageTurn[] {
-  const expectedDirNames = projectDirNameCandidates(projectPath, mappings);
+  const candidates = projectDirNameCandidates(projectPath, mappings, homes);
   const bySlugMatches = index.bySlug.get(slug) ?? [];
-  const byDirMatches = expectedDirNames.flatMap((d) => index.byDirName.get(d) ?? []);
+  const byDirMatches = candidates.flatMap((c) =>
+    (index.byDirName.get(c.dirName) ?? []).filter((e) => turnMatchesCandidate(e.turns[0], c))
+  );
   if (bySlugMatches.length === 0 && byDirMatches.length === 0) return [];
 
   const seen = new Set<number>();

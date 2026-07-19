@@ -7,6 +7,7 @@ import {
 import { parseAllSessions } from "@/lib/usage/parser";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
+import { getClaudeHomes } from "@/lib/claudeHome";
 
 // Composed lookup for "git activity by project slug + path". Used by the
 // /api/projects/[slug]/git-activity route AND the MCP `get-project-git-activity`
@@ -56,8 +57,9 @@ export async function getProjectGitActivity(
   // File-parse fallback: commands only, no branch info — UsageTurn doesn't
   // carry git_branch the way the DB sessions row does.
   const sessionMap = await parseAllSessions();
+  const cfg = await readConfig();
   const projectTurns = gatherProjectTurns(
-    sessionMap, slug, projectPath, (await readConfig()).pathMappings ?? []
+    sessionMap, slug, projectPath, cfg.pathMappings ?? [], getClaudeHomes(cfg)
   );
   const toolCommands = projectTurns.flatMap((t) =>
     t.toolCalls

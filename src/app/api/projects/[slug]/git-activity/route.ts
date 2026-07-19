@@ -32,7 +32,10 @@ export async function GET(
 ) {
   const { slug } = await params;
   try {
-    const mappingsSig = JSON.stringify((await readConfig()).pathMappings ?? []);
+    const cfg = await readConfig();
+    // Homes ride in the signature too: removing/adding a Claude home changes
+    // the turn sweep even when the mappings are untouched.
+    const mappingsSig = JSON.stringify([cfg.claudeHomes ?? [], cfg.pathMappings ?? []]);
     const cached = cache.get(slug);
     const currentMtime = getJsonlMaxMtime();
     if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {

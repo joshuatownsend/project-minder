@@ -8,6 +8,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
+import { getClaudeHomes } from "@/lib/claudeHome";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { recordGradeSnapshot, loadGradeTrend, type GradeTrend } from "@/lib/data/gradeSnapshots";
@@ -54,8 +55,11 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const pathMappings = (await readConfig()).pathMappings ?? [];
-  const mappingsSig = JSON.stringify(pathMappings);
+  const cfg = await readConfig();
+  const pathMappings = cfg.pathMappings ?? [];
+  // Homes ride in the signature too: removing/adding a Claude home changes
+  // the turn sweep even when the mappings are untouched.
+  const mappingsSig = JSON.stringify([cfg.claudeHomes ?? [], pathMappings]);
   const cached = cache.get(slug);
   const currentMtime = getJsonlMaxMtime();
   if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
@@ -78,7 +82,7 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings);
+  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings, getClaudeHomes(cfg));
 
   const waste = runWasteOptimizer({
     turns: projectTurns,

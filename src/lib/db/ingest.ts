@@ -2744,24 +2744,22 @@ export async function reconcileAllSessions(
     });
 
   const subdirs: { projectsDir: string; dirName: string }[] = [];
-  let claudeWalkFailed = false;
-  for (const [i, dir] of projectsDirs.entries()) {
+  let anyDirListed = false;
+  for (const dir of projectsDirs) {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
+      anyDirListed = true;
       for (const e of entries) {
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
       }
     } catch {
-      if (i === 0) {
-        // Missing/unreadable PRIMARY `~/.claude/projects` is no longer fatal —
-        // a non-Claude user may have no Claude tree at all. Fall through to
-        // the adapter pass (with prune protection for Claude rows below).
-        claudeWalkFailed = true;
-      } else {
-        // An extra home that listed as readable but failed anyway (distro
-        // stopped mid-cycle, network hiccup): shield its rows from prune.
-        unavailableDirs.push(dir);
-      }
+      // A projects dir that can't be listed — missing primary tree (a
+      // WSL-only Claude setup, or a non-Claude user), a distro that stopped
+      // mid-cycle, a transient UNC error — shields its rows from the prune
+      // pass BY PREFIX. Per-dir shielding (not a blanket keep-all-Claude-rows)
+      // so a home that listed successfully but is legitimately empty still
+      // prunes its stale rows this cycle.
+      unavailableDirs.push(dir);
     }
   }
 
@@ -2772,15 +2770,11 @@ export async function reconcileAllSessions(
   // Claude tree), or a Codex/Gemini-only user who disables an adapter could
   // never prune its now-undiscovered sessions. The Claude prune-protection
   // below still shields Claude rows on a Claude-walk failure.
-  // BUT: a missing PRIMARY tree with a successfully-listed extra home (a
-  // WSL-only Claude setup) must still ingest the extras — only bail when the
-  // walk produced no Claude subdirs at all.
-  if (
-    claudeWalkFailed &&
-    subdirs.length === 0 &&
-    adapterSessions.length === 0 &&
-    existingAdapterMeta.size === 0
-  ) {
+  // BUT: bail only when NO projects dir listed successfully — a missing
+  // primary tree with a successfully-listed extra home (a WSL-only Claude
+  // setup) must still ingest the extras, and a listed-but-empty extra home
+  // must still reach the prune pass so its stale rows are removed.
+  if (!anyDirListed && adapterSessions.length === 0 && existingAdapterMeta.size === 0) {
     return stats;
   }
 
@@ -2879,15 +2873,9 @@ export async function reconcileAllSessions(
 
   // Prune protection: if we couldn't enumerate a source this pass, keep its
   // existing rows "live" so the prune below doesn't delete data we simply
-  // failed to re-list. Claude rows are protected on a Claude-walk failure;
-  // non-Claude rows on an adapter discovery failure.
-  if (claudeWalkFailed) {
-    for (const r of db
-      .prepare("SELECT file_path FROM sessions WHERE source = 'claude'")
-      .all() as Array<{ file_path: string }>) {
-      liveFilePaths.add(r.file_path);
-    }
-  }
+  // failed to re-list. Claude rows are protected per failed dir via the
+  // unavailableDirs prefix shield below; non-Claude rows on an adapter
+  // discovery failure.
   if (adapterDiscoveryFailed) {
     for (const fp of existingAdapterMeta.keys()) liveFilePaths.add(fp);
   }

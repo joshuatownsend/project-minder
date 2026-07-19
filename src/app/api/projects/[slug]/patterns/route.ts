@@ -7,6 +7,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
+import { getClaudeHomes } from "@/lib/claudeHome";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // Cross-session workflow pattern detection for a project. Cached with a 5-min
@@ -37,8 +38,11 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const pathMappings = (await readConfig()).pathMappings ?? [];
-  const mappingsSig = JSON.stringify(pathMappings);
+  const cfg = await readConfig();
+  const pathMappings = cfg.pathMappings ?? [];
+  // Homes ride in the signature too: removing/adding a Claude home changes
+  // the turn sweep even when the mappings are untouched.
+  const mappingsSig = JSON.stringify([cfg.claudeHomes ?? [], pathMappings]);
   const cached = cache.get(slug);
   const currentMtime = getJsonlMaxMtime();
   if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
@@ -60,7 +64,7 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings);
+  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings, getClaudeHomes(cfg));
   const result = detectWorkflowPatterns({
     turns: projectTurns,
     skillsCatalog: catalog.skills.filter(

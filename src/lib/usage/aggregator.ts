@@ -13,6 +13,7 @@ import { computeContributionCalendar } from "./contributionCalendar";
 import { computeProjectYield } from "./computeProjectYield";
 import { gatherProjectTurns, projectDirNameCandidates } from "./projectMatch";
 import { readConfig } from "../config";
+import { getClaudeHomes } from "../claudeHome";
 import { getCachedScan } from "@/lib/cache";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import type {
@@ -116,10 +117,14 @@ export async function augmentPortfolioYield(report: UsageReport): Promise<void> 
   // pd.projectDirName from the usage parser, not the scanner's short slug.
   // A UNC-scanned WSL project's turns carry the FOREIGN encoding (the Linux
   // path they were recorded under), so key every candidate encoding.
-  const pathMappings = (await readConfig()).pathMappings ?? [];
+  const cfg = await readConfig();
+  const pathMappings = cfg.pathMappings ?? [];
+  const claudeHomes = getClaudeHomes(cfg);
   const projectPathMap = new Map(
     scan.projects.flatMap((p) =>
-      projectDirNameCandidates(p.path, pathMappings).map((d) => [d, p.path] as const)
+      projectDirNameCandidates(p.path, pathMappings, claudeHomes).map(
+        (c) => [c.dirName, p.path] as const
+      )
     )
   );
 
@@ -134,7 +139,7 @@ export async function augmentPortfolioYield(report: UsageReport): Promise<void> 
       batch.map(async (pd) => {
         const path = projectPathMap.get(pd.projectDirName);
         if (!path) return null;
-        const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path, pathMappings);
+        const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path, pathMappings, claudeHomes);
         try {
           const result = await computeProjectYield(path, projectTurns);
           return { detail: pd, result };

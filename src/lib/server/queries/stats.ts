@@ -36,6 +36,14 @@ const globalForStats = globalThis as unknown as {
   };
 };
 
+/** Drop the cached Claude-usage slot. Called by PATCH /api/config when
+ *  claudeHomes/pathMappings change — the sweep the slot was built from
+ *  depended on the old homes, and its 10-min TTL would otherwise keep
+ *  serving the pre-save portfolio numbers. */
+export function invalidateClaudeUsageCache(): void {
+  globalForStats.__claudeUsageCache = undefined;
+}
+
 export interface StatsInputs {
   result: Awaited<ReturnType<typeof scanAllProjects>>;
   usage: ClaudeUsageStats;

@@ -3,6 +3,7 @@ import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
 import { buildFileCoupling, type FileCouplingResult } from "@/lib/usage/fileCoupling";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
+import { getClaudeHomes } from "@/lib/claudeHome";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
@@ -36,8 +37,11 @@ export async function GET(
   try {
     // Cache key includes the threshold so changing ?min= yields fresh data.
     const cacheKey = `${slug}:${minCoOccurrences}`;
-    const pathMappings = (await readConfig()).pathMappings ?? [];
-    const mappingsSig = JSON.stringify(pathMappings);
+    const cfg = await readConfig();
+    const pathMappings = cfg.pathMappings ?? [];
+    // Homes ride in the signature too: removing/adding a Claude home changes
+    // the turn sweep even when the mappings are untouched.
+    const mappingsSig = JSON.stringify([cfg.claudeHomes ?? [], pathMappings]);
     const cached = cache.get(cacheKey);
     const currentMtime = getJsonlMaxMtime();
     if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
@@ -55,7 +59,7 @@ export async function GET(
     }
 
     const sessionMap = await parseAllSessions();
-    const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings);
+    const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings, getClaudeHomes(cfg));
 
     const result = buildFileCoupling(projectTurns, minCoOccurrences);
     const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };

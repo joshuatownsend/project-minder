@@ -9,6 +9,7 @@ import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
 import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
+import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -422,10 +423,13 @@ export async function PATCH(request: NextRequest) {
   });
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
-  // Grades depend on the multi-home turn set; drop them so the next dashboard
-  // enqueue recomputes with the new homes/mappings instead of serving the old
-  // grade for the rest of the 5-minute TTL.
-  if (multiHomeChanged) efficiencyGradeCache.invalidateGrades();
+  // Grades and the portfolio usage slot depend on the multi-home sweep; drop
+  // both so the next request recomputes with the new homes/mappings instead
+  // of serving the old data for the rest of their TTLs (5 min / 10 min).
+  if (multiHomeChanged) {
+    efficiencyGradeCache.invalidateGrades();
+    invalidateClaudeUsageCache();
+  }
   return NextResponse.json({ ok: true, config });
 }
 
