@@ -4,7 +4,7 @@ import { normalizePathKey, isWindows } from "../platform";
 import { encodePath, type ConversationEntry } from "./claudeConversations";
 import { inferSessionStatus } from "./sessionStatus";
 import { readConfig } from "../config";
-import { getReadableClaudeHomes } from "../claudeHome";
+import { getReadableClaudeHomes, scopeMappingsToHome } from "../claudeHome";
 import { mapForeignPath, mapLocalPath } from "../pathMapping";
 import type { PathMapping } from "../types";
 import type { SessionStatus } from "../types";
@@ -47,6 +47,10 @@ let cacheConfigKey = "";
 const HISTORY_CACHE_TTL = 60_000; // 1 minute
 
 async function buildHomeView(home: string, mappings: PathMapping[]): Promise<HomeView> {
+  // Scope the rewrites to this home's distro: with two distros sharing a
+  // foreign prefix (both `/home/josh`), an unscoped first-match would map
+  // this home's history onto the OTHER distro's UNC projects.
+  const scopedMappings = scopeMappingsToHome(home, mappings);
   const map = new Map<string, HistoryEntry[]>();
   try {
     const content = await fs.readFile(path.join(home, "history.jsonl"), "utf-8");
@@ -60,7 +64,7 @@ async function buildHomeView(home: string, mappings: PathMapping[]): Promise<Hom
         //    them match the scanner's projectPath. Unmapped paths pass through.
         //  - normalizePathKey: lowercased on Windows — drive-letter/segment
         //    casing in history.jsonl can differ from the scanner's casing (B1).
-        const key = normalizePathKey(mapForeignPath(entry.project, mappings));
+        const key = normalizePathKey(mapForeignPath(entry.project, scopedMappings));
         const list = map.get(key) || [];
         list.push(entry);
         map.set(key, list);
@@ -131,11 +135,16 @@ export async function scanClaudeSessions(
 
   const { views, mappings } = await getHomeViews();
 
-  // Encoded-dir candidates for this project's session dirs: the local path as
-  // recorded by a same-machine Claude, plus the foreign form (e.g. the Linux
-  // path a WSL-side Claude recorded) when a mapping rewrites it.
-  const foreignPath = mapLocalPath(projectPath, mappings);
-  const encodedCandidates = [...new Set([encodePath(projectPath), encodePath(foreignPath)])];
+  // Encoded-dir candidates are computed PER VIEW: the local path as recorded
+  // by a same-machine Claude, plus the foreign form — but only via mappings
+  // scoped to that view's home. With two distros sharing a foreign prefix,
+  // a global candidate list would count one distro's `-home-...` session
+  // dirs toward the other distro's project.
+  const candidatesFor = (home: string): string[] => {
+    const scoped = scopeMappingsToHome(home, mappings);
+    const foreignPath = mapLocalPath(projectPath, scoped);
+    return [...new Set([encodePath(projectPath), encodePath(foreignPath)])];
+  };
 
   // Case-fold comparisons only on Windows — the on-disk dir name is encoded
   // from whatever cwd casing was active during that Claude Code session (B1).
@@ -155,7 +164,7 @@ export async function scanClaudeSessions(
     // in this home's projects dir. A dir is counted once even if it matches
     // more than one encoded candidate.
     const matched = new Set<string>();
-    for (const candidate of encodedCandidates) {
+    for (const candidate of candidatesFor(view.home)) {
       const candidateFolded = fold(candidate);
       for (const d of view.projectDirs) {
         if (matched.has(d)) continue;

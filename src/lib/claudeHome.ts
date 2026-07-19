@@ -1,8 +1,8 @@
 import os from "os";
 import path from "path";
-import type { MinderConfig } from "./types";
+import type { MinderConfig, PathMapping } from "./types";
 import { normalizePathKey } from "./platform";
-import { checkWslRoot } from "./wsl";
+import { checkWslRoot, parseWslUncPath } from "./wsl";
 
 /**
  * Multi-home Claude resolution. The primary home is always this machine's
@@ -45,4 +45,25 @@ export async function getReadableClaudeHomes(config: MinderConfig): Promise<stri
     readable.push(home);
   }
   return readable;
+}
+
+/**
+ * The mappings that may be applied when correlating THROUGH a given Claude
+ * home. Two WSL distros can share a foreign prefix (Ubuntu and Debian both
+ * recording `/home/josh/...`); a mapping whose `to` targets one distro must
+ * not rewrite history read from the other distro's home, or sessions get
+ * attributed across distros. A WSL-targeted mapping is scoped to the home
+ * under the same distro; non-WSL mappings apply everywhere.
+ */
+export function scopeMappingsToHome(
+  home: string,
+  mappings: PathMapping[] | undefined
+): PathMapping[] {
+  if (!mappings || mappings.length === 0) return [];
+  const homeDistro = parseWslUncPath(home)?.distro.toLowerCase();
+  return mappings.filter((m) => {
+    const toDistro = parseWslUncPath(m.to)?.distro.toLowerCase();
+    if (!toDistro) return true; // non-WSL mapping — no distro to scope by
+    return toDistro === homeDistro;
+  });
 }

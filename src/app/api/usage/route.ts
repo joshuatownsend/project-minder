@@ -5,6 +5,7 @@ import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { demoMode } from "@/lib/demo/demoMode";
+import { readConfig } from "@/lib/config";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -38,7 +39,12 @@ export async function GET(request: NextRequest) {
   // invalidate the slot immediately, else the usage page serves real data after
   // enabling (or synthetic after disabling) for the rest of the 2-min TTL.
   const demo = (await demoMode()) ? "demo:" : "";
-  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
+  // And with the multi-home config: the all-sessions sweep depends on
+  // claudeHomes/pathMappings, so a Settings save that adds or removes a home
+  // must invalidate immediately, not after the 2-min TTL.
+  const cfg = await readConfig();
+  const homesSig = JSON.stringify([cfg.claudeHomes ?? [], cfg.pathMappings ?? []]);
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}:${homesSig}`;
   const cached = cache.get(cacheKey);
 
   let slot: UsageCacheSlot;

@@ -18,9 +18,12 @@ vi.mock("@/lib/config", () => ({
   readConfig: vi.fn(),
 }));
 
-vi.mock("@/lib/wsl", () => ({
-  checkWslRoot: vi.fn().mockResolvedValue(null),
-}));
+// Keep parseWslUncPath real (pure/sync — scopeMappingsToHome needs it) but
+// stub checkWslRoot so never-wake gating never spawns wsl.exe in tests.
+vi.mock("@/lib/wsl", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/wsl")>();
+  return { ...actual, checkWslRoot: vi.fn().mockResolvedValue(null) };
+});
 
 import { promises as fs } from "fs";
 import { readConfig } from "@/lib/config";
