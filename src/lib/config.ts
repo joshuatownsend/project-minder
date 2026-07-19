@@ -72,7 +72,18 @@ export async function isFirstRun(): Promise<boolean> {
   try {
     await fs.access(CONFIG_PATH);
     return false;
-  } catch {
+  } catch (err) {
+    // Only a genuinely ABSENT config means "never set up". Any other errno
+    // (EACCES, EPERM, EIO, EBUSY) means a config file most likely EXISTS but
+    // couldn't be reached this instant — and treating that as first-run would
+    // hijack a long-time user's dashboard over a transient permissions or I/O
+    // blip, with `FirstRunSetup`'s save then overwriting the real config they
+    // still have. Failing closed keeps the guarantee this doc comment makes:
+    // anyone who has saved config once is never interrupted again.
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    // ENOTDIR counts as absent too: a non-directory parent component means the
+    // file cannot exist at that path.
+    if (code !== "ENOENT" && code !== "ENOTDIR") return false;
     return probeDefaultDevRoot() === null;
   }
 }

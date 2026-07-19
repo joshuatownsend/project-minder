@@ -418,6 +418,7 @@ function defaultResolveNextBin(root) {
  *   platform?: string,
  *   existsSync?: (path: string) => boolean,
  *   resolveNextBin?: (root: string) => string,
+ *   port?: number,
  * }} opts
  */
 export function resolveServerLaunch(opts) {
@@ -426,6 +427,7 @@ export function resolveServerLaunch(opts) {
     execPath = process.execPath,
     existsSync = fsExistsSync,
     resolveNextBin = defaultResolveNextBin,
+    port = DEFAULT_SERVICE_PORT,
   } = opts;
   const standaloneServer = path.join(root, "dist", "minder-server", "server.js");
   if (existsSync(standaloneServer)) {
@@ -464,7 +466,14 @@ export function resolveServerLaunch(opts) {
       // than relying on the HOSTNAME env var the templates already set
       // (that env var is for the standalone server.js path, which reads
       // process.env.HOSTNAME directly — "next start" does not).
-      args: [nextBinPath, "start", "-p", "4100", "--hostname", "127.0.0.1"],
+      // `port` is threaded in from resolveServicePort() at the call site, NOT
+      // defaulted to 4100 here. An explicit `-p` overrides the PORT env var the
+      // generated launcher sets, so a hardcoded 4100 would silently pin a
+      // custom-port fallback install to 4100 while the manifest, the proxy's
+      // Origin allowlist, and `service:stop`'s port scan all used the custom
+      // value — a dashboard that 403s its own /api calls and a service that
+      // stop can't find (PR #316 review).
+      args: [nextBinPath, "start", "-p", String(port), "--hostname", "127.0.0.1"],
       cwd: root,
     };
   }

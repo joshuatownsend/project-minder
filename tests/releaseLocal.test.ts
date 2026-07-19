@@ -7,6 +7,7 @@ import {
   checkVersionConsistency,
   selectReleaseTag,
   stampVersionInConf,
+  canSignUpdaterArtifacts,
   formatSize,
   buildPlan,
 } from "../scripts/release/lib.mjs";
@@ -174,6 +175,50 @@ describe("stampVersionInConf", () => {
     const { text } = stampVersionInConf(conf, "1.4.0");
     expect(text.endsWith("\n")).toBe(true);
     expect(text).toContain('\n  "version": "1.4.0"');
+  });
+});
+
+describe("canSignUpdaterArtifacts", () => {
+  it("is true only when the signing key is present and non-empty", () => {
+    expect(canSignUpdaterArtifacts({ TAURI_SIGNING_PRIVATE_KEY: "untrusted..." })).toBe(true);
+    expect(canSignUpdaterArtifacts({})).toBe(false);
+    expect(canSignUpdaterArtifacts({ TAURI_SIGNING_PRIVATE_KEY: "" })).toBe(false);
+  });
+});
+
+describe("stampVersionInConf — updater artifacts", () => {
+  const conf =
+    JSON.stringify(
+      { version: "0.1.0", bundle: { active: true, createUpdaterArtifacts: true } },
+      null,
+      2
+    ) + "\n";
+
+  // PR #316 review: createUpdaterArtifacts is committed as true so CI signs
+  // every release, but Tauri then REQUIRES TAURI_SIGNING_PRIVATE_KEY and fails
+  // the build late without it. A contributor running `pnpm release:local`
+  // without the release key would hit that — while the docs promise a
+  // self-contained unsigned installer.
+  it("turns updater artifacts off when the build cannot sign", () => {
+    const { text } = stampVersionInConf(conf, "1.4.0", { updaterArtifacts: false });
+    expect(JSON.parse(text).bundle.createUpdaterArtifacts).toBe(false);
+  });
+
+  it("leaves updater artifacts on when the build can sign", () => {
+    const { text } = stampVersionInConf(conf, "1.4.0", { updaterArtifacts: true });
+    expect(JSON.parse(text).bundle.createUpdaterArtifacts).toBe(true);
+  });
+
+  it("preserves the rest of the bundle config either way", () => {
+    const { text } = stampVersionInConf(conf, "1.4.0", { updaterArtifacts: false });
+    expect(JSON.parse(text).bundle.active).toBe(true);
+    expect(JSON.parse(text).version).toBe("1.4.0");
+  });
+
+  // Omitting the option must not silently rewrite the committed value.
+  it("leaves the flag untouched when no option is passed", () => {
+    const { text } = stampVersionInConf(conf, "1.4.0");
+    expect(JSON.parse(text).bundle.createUpdaterArtifacts).toBe(true);
   });
 });
 

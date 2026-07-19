@@ -469,6 +469,54 @@ describe("resolveServerLaunch", () => {
     });
   });
 
+  // PR #316 review: `-p` OVERRIDES the PORT env var the generated launcher
+  // sets, so a hardcoded 4100 here would pin a custom-port fallback install to
+  // 4100 while the manifest, the proxy's Origin allowlist, and service:stop's
+  // port scan all used the custom value — a dashboard that 403s its own /api
+  // calls, and a service that stop can't find.
+  it("threads a custom port into the fallback launch args", () => {
+    const launch = resolveServerLaunch({
+      root,
+      execPath: "C:/nodejs/node.exe",
+      existsSync: (p: string) => p.replace(/\\/g, "/").includes(".next/BUILD_ID"),
+      resolveNextBin,
+      port: 4199,
+    });
+    expect(launch?.args).toEqual([
+      fakeNextBinPath,
+      "start",
+      "-p",
+      "4199",
+      "--hostname",
+      "127.0.0.1",
+    ]);
+  });
+
+  it("defaults the fallback port to DEFAULT_SERVICE_PORT when none is given", () => {
+    const launch = resolveServerLaunch({
+      root,
+      execPath: "C:/nodejs/node.exe",
+      existsSync: (p: string) => p.replace(/\\/g, "/").includes(".next/BUILD_ID"),
+      resolveNextBin,
+    });
+    expect(launch?.args).toContain(String(DEFAULT_SERVICE_PORT));
+  });
+
+  // The standalone server reads process.env.PORT directly, so it takes no port
+  // argument — passing one must not start injecting flags into that mode.
+  it("does not add a port argument to the standalone launch", () => {
+    const launch = resolveServerLaunch({
+      root,
+      execPath: "C:/nodejs/node.exe",
+      existsSync: (p: string) => p.replace(/\\/g, "/").includes("dist/minder-server/server.js"),
+      resolveNextBin,
+      port: 4199,
+    });
+    expect(launch?.mode).toBe("standalone");
+    expect(launch?.args).not.toContain("-p");
+    expect(launch?.args).not.toContain("4199");
+  });
+
   it("degrades to null if resolving the next bin throws, even though .next/BUILD_ID exists", () => {
     const launch = resolveServerLaunch({
       root,

@@ -223,7 +223,10 @@ async function runSteps(steps) {
 // --- Actions -------------------------------------------------------------
 
 function resolveLaunchOrFail() {
-  const launch = resolveServerLaunch({ root });
+  // The fallback (`next start`) mode takes an explicit `-p`, which OVERRIDES the
+  // PORT env var the generated launcher sets — so the install-time port has to
+  // be threaded in here too, not just into the templates (PR #316 review).
+  const launch = resolveServerLaunch({ root, port: resolveServicePort() });
   if (!launch) {
     console.error(`[service] ${NO_BUILD_MESSAGE}`);
     process.exit(1);
@@ -550,7 +553,11 @@ async function runStop(platformKind) {
           "freshly recomputed identity from the current filesystem. This may not match what's actually " +
           "installed if the build changed since install."
       );
-      launch = resolveServerLaunch({ root });
+      // Recompute against the INSTALLED port resolved above, not the ambient
+      // environment — this whole branch exists to approximate what is actually
+      // running, and a stop invoked from a plain shell must not reintroduce the
+      // 4100 assumption the installed-port lookup just eliminated.
+      launch = resolveServerLaunch({ root, port });
     }
     const identity = buildServerIdentityMarkers({ root, launch, vbsPath });
 

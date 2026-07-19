@@ -50,6 +50,7 @@ import {
   checkVersionConsistency,
   selectReleaseTag,
   stampVersionInConf,
+  canSignUpdaterArtifacts,
   formatSize,
   buildPlan,
 } from "./release/lib.mjs";
@@ -121,9 +122,23 @@ function tagAtHead() {
  */
 function stampTauriVersion(version) {
   const original = readFileSync(tauriConfPath, "utf8");
-  const { text, previous } = stampVersionInConf(original, version);
+  // Without a signing key Tauri fails the build outright rather than skipping
+  // the updater artifacts, so this must be decided BEFORE the build, not
+  // recovered from afterwards.
+  const signable = canSignUpdaterArtifacts();
+  const { text, previous } = stampVersionInConf(original, version, {
+    updaterArtifacts: signable,
+  });
   writeFileSync(tauriConfPath, text);
   log(`stamped tauri.conf.json version ${previous} -> ${version}`);
+  if (signable) {
+    log("TAURI_SIGNING_PRIVATE_KEY is set — building signed updater artifacts");
+  } else {
+    log(
+      "no TAURI_SIGNING_PRIVATE_KEY — building WITHOUT updater artifacts. " +
+        "The installer works, but cannot self-update. Set the env var to build a releasable one."
+    );
+  }
 
   let restored = false;
   return function restore() {

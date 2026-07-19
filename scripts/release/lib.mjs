@@ -137,11 +137,40 @@ export function selectReleaseTag(gitTagOutput) {
  *
  * @returns {{text: string, previous: string}}
  */
-export function stampVersionInConf(originalText, version) {
+export function stampVersionInConf(originalText, version, { updaterArtifacts } = {}) {
   const conf = JSON.parse(originalText);
   const previous = conf.version;
   conf.version = version;
+  if (typeof updaterArtifacts === "boolean") {
+    conf.bundle = { ...conf.bundle, createUpdaterArtifacts: updaterArtifacts };
+  }
   return { text: JSON.stringify(conf, null, 2) + "\n", previous };
+}
+
+/**
+ * Whether this build can produce signed updater artifacts.
+ *
+ * `bundle.createUpdaterArtifacts` is committed as `true` so CI signs every
+ * release, but Tauri then REQUIRES `TAURI_SIGNING_PRIVATE_KEY` and fails the
+ * build late without it. That would break `pnpm release:local` for every
+ * contributor who doesn't hold the release key — while the docs promise it
+ * produces a self-contained unsigned installer. So a local build without the
+ * key turns updater artifacts off for that build rather than dying (PR #316
+ * review); the installer it produces is simply not self-updatable, which is
+ * exactly what "unsigned local build" already meant.
+ */
+/**
+ * Typed as just the one key this reads, not the full `NodeJS.ProcessEnv` —
+ * that interface has required members (NODE_ENV), which would force every
+ * caller and test to construct a whole environment to pass one variable.
+ * Same treatment as `resolveBoundPort` in src/lib/boundPort.ts.
+ *
+ * @param {{ TAURI_SIGNING_PRIVATE_KEY?: string }} [env]
+ */
+export function canSignUpdaterArtifacts(
+  env = /** @type {{ TAURI_SIGNING_PRIVATE_KEY?: string }} */ (process.env)
+) {
+  return Boolean(env.TAURI_SIGNING_PRIVATE_KEY);
 }
 
 export function formatSize(bytes) {

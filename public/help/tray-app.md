@@ -233,6 +233,14 @@ If `HEAD` carries a `v*` tag, the script requires it to agree with `package.json
 
 `pnpm release:local` produces **unsigned** installers, exactly as CI does today. Windows will show a SmartScreen warning and macOS a Gatekeeper warning for any build produced this way.
 
+Separately, if `TAURI_SIGNING_PRIVATE_KEY` is not set in your environment, the script builds **without updater artifacts** and says so. The installer works normally; it just can't self-update, which is what an unsigned local build already implied. Set the variable to produce a releasable build:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$env:USERPROFILE\.tauri\minder.key"
+```
+
+Tauri does not read `.env` files for this — it must be a real environment variable.
+
 ## Comparison with Service Mode
 
 Project Minder offers two ways to run continuously:
