@@ -16,15 +16,32 @@ export function getPrimaryClaudeHome(): string {
   return path.join(os.homedir(), ".claude");
 }
 
-/** Primary home + configured extras, deduped (primary always first). */
+/**
+ * Dedupe key that treats WSL's two UNC hosts as the same tree:
+ * `\\wsl$\Ubuntu\home\josh\.claude` and `\\wsl.localhost\Ubuntu\home\josh\.claude`
+ * are aliases for one filesystem, and letting both through would parse the
+ * same history.jsonl twice and double-count every session. Non-WSL paths
+ * fall back to the plain normalized key.
+ */
+function homeDedupeKey(p: string): string {
+  const parsed = parseWslUncPath(p);
+  if (!parsed) return normalizePathKey(p);
+  const rest = normalizePathKey(
+    p.trim().replace(/^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/][^\\/]+[\\/]?/i, "")
+  );
+  return `wsl://${parsed.distro.toLowerCase()}/${rest.toLowerCase()}`;
+}
+
+/** Primary home + configured extras, deduped (primary always first; WSL
+ *  `wsl$`/`wsl.localhost` aliases collapse to one entry). */
 export function getClaudeHomes(config: MinderConfig): string[] {
   const primary = getPrimaryClaudeHome();
   const homes = [primary];
-  const seen = new Set([normalizePathKey(primary)]);
+  const seen = new Set([homeDedupeKey(primary)]);
   for (const h of config.claudeHomes ?? []) {
     const trimmed = h.trim();
     if (!trimmed) continue;
-    const key = normalizePathKey(trimmed);
+    const key = homeDedupeKey(trimmed);
     if (seen.has(key)) continue;
     seen.add(key);
     homes.push(trimmed);

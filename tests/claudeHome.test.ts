@@ -4,9 +4,12 @@ import os from "os";
 import type { MinderConfig } from "@/lib/types";
 import type { WslRootCheck } from "@/lib/wsl";
 
-vi.mock("@/lib/wsl", () => ({
-  checkWslRoot: vi.fn(),
-}));
+// Keep parseWslUncPath real (pure/sync — homeDedupeKey needs it) but stub
+// checkWslRoot so readability gating never spawns wsl.exe in tests.
+vi.mock("@/lib/wsl", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/wsl")>();
+  return { ...actual, checkWslRoot: vi.fn() };
+});
 
 import { checkWslRoot } from "@/lib/wsl";
 import { getPrimaryClaudeHome, getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
