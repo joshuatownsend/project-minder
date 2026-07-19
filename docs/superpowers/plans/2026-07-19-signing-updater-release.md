@@ -213,15 +213,40 @@ SmartScreen; that is expected, not a failure.
 
 | Task | Description | Status |
 |---|---|---|
-| R1 | `scripts/release-local.mjs` + `pnpm release:local` | ☐ not started |
-| R2 | Document local release flow | ☐ not started |
-| U1 | Generate + back up minisign keypair | ☐ MANUAL — not started |
-| U2 | Updater config + `rust-version` bump | ☐ not started |
-| U3 | Rust wiring (plugin, menu item, `on_before_exit`) | ☐ not started |
-| U4 | Resolve `prevent_exit` vs forced-quit conflict | ☐ not started |
-| U5 | CI: arm64 `app` target, `latest.json`, signing secret | ☐ not started |
-| U6 | Document `.deb` no-self-update limitation | ☐ not started |
-| S1 | Azure Artifact Signing signup + validation | ☐ MANUAL — not started |
-| S2 | Apple Developer ID cert + API key | ☐ MANUAL — not started |
-| S3 | CI signing wiring (Windows `signCommand`, macOS notarization) | ☐ not started |
-| S4 | Verify on clean machines | ☐ not started |
+| R1 | `scripts/release-local.mjs` + `pnpm release:local` | DONE (b8ba9e6) |
+| R2 | Document local release flow | DONE — `docs/help/tray-app.md` |
+| U1 | Generate + back up minisign keypair | PARTIAL — key generated; **backup + GitHub secret still MANUAL** |
+| U2 | Updater config + `rust-version` bump | DONE |
+| U3 | Rust wiring (plugin, menu item, `on_before_exit`) | DONE (3d31ad5) |
+| U4 | Resolve `prevent_exit` vs forced-quit conflict | DONE — **non-issue**, see below |
+| U5 | CI: arm64 `app` target, `latest.json`, signing secret | DONE — untested until a real tag |
+| U6 | Document `.deb` no-self-update limitation | DONE |
+| S1 | Azure Artifact Signing signup + validation | **DROPPED for now** — decision 2026-07-19: no cert spend |
+| S2 | Apple Developer ID cert + API key | DEFERRED — account already held, wire up later |
+| S3 | CI signing wiring (Windows `signCommand`, macOS notarization) | blocked on S1/S2 |
+| S4 | Verify on clean machines | blocked on S3 |
+
+### U4 resolved — the guard was never the problem
+
+The plan predicted `main.rs`'s `prevent_exit` guard might swallow the updater's forced
+Windows quit. It cannot: `download_and_install` exits via `std::process::exit()`, which
+never reaches Tauri's event loop, so there is no `ExitRequested` for the guard to see.
+
+The real hazard is the *other* consequence of that same hard exit — **no destructors run**.
+The Node sidecar is a child process, not a resource freed by unwinding, so without explicit
+action it survives as an orphan, keeps `resources/node/node.exe` locked, and the NSIS
+installer fails on a locked file. `supervisor.shutdown()` therefore runs from the plugin's
+`on_before_exit` hook, the only code that executes in that window.
+
+### What is NOT yet verified
+
+The CI path has never run. `latest.json` generation, the arm64 `app` target, and the Windows
+install hand-off are correct by construction and unit-tested, but no tagged release has
+exercised them end to end. The first `v*` tag after this lands is the real test — and it will
+**fail loudly** at the "Emit updater artifact" step until the `TAURI_SIGNING_PRIVATE_KEY`
+secret exists, because without a signing key Tauri emits no `.sig` and that step refuses to
+guess.
+
+The first release carrying the updater also cannot be *received* as an update by anyone: the
+currently-installed 1.4.0 builds have no updater in them. Everyone must download the next
+release manually once; self-updating begins from the release after that.

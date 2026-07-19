@@ -165,11 +165,30 @@ Unsigned installers trigger this warning. This is expected and normal.
 - Click **Run anyway**.
 - The installer will proceed.
 
-(Signed installers and auto-updates are planned for a future release.)
+This applies to the **initial download** only. Once installed, the app updates itself and verifies every update against the project's signing key — see [Updates](#updates). Signed installers, which would remove this warning, are still planned.
 
 ### Tray app won't quit cleanly
 
 If Quit hangs, the server may be unresponsive to the graceful-shutdown signal. Force-kill the process via task manager and relaunch. The SQLite database is resilient to unclean stops (WAL recovery on next startup).
+
+## Updates
+
+The tray app updates itself from GitHub Releases.
+
+- **Automatic check** — every ~6 hours (piggybacked on the existing health-poll timer, so there's no extra background thread). If a new version exists you get a desktop notification. The check **never installs on its own**: this app is supervising a dashboard server you may be actively using, and an unannounced restart would drop in-flight scans and any dev servers it's managing.
+- **Installing** — choose **Check for updates…** in the tray menu. That downloads and installs the update, stops the server cleanly, and relaunches.
+
+Each update is a full ~100 MB download; Tauri does not do differential updates.
+
+### What's verified, and what isn't
+
+Update payloads are signed with the project's minisign key, and your installed app will refuse any update it can't verify against that key. This is what protects you from a tampered update.
+
+That is **separate** from OS code signing, which Project Minder does not yet have. The first time you download an installer, Windows SmartScreen or macOS Gatekeeper will still warn you — see [SmartScreen warning on Windows](#smartscreen-warning-on-windows). Signing the installers is planned but not done; the two mechanisms are unrelated, and neither substitutes for the other.
+
+### Linux: `.deb` cannot self-update
+
+If you installed the `.deb`, the updater will report `Currently only an AppImage can be updated`. This is by design, not a bug — a system package manager owns those files, so an app that rewrote them would fight it. Update by downloading the next `.deb` from the Releases page, or switch to the **AppImage**, which self-updates normally.
 
 ## Building Installers Locally
 

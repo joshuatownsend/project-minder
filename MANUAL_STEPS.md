@@ -27,16 +27,24 @@ the critical path. The updater work (free) can proceed in parallel while you wai
   and the `Trusted Signing Certificate Profile Signer` role assignment.
   macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
   `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`.
-- [ ] Generate the updater signing keypair and **back it up durably**
-  `pnpm tauri signer generate -w ~/.tauri/minder.key`
-  Add the private key as the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret (plus
-  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if you set one).
-  **This key is unrecoverable.** If you lose it, every already-installed user is permanently
-  stranded — their installed binary only trusts that one public key, so you can never ship
-  them another update. Put the backup somewhere durable (password manager) BEFORE the first
-  signed release, not after.
-  Note: Tauri does not read `.env` files for this — it must be a real environment variable
-  (`$env:TAURI_SIGNING_PRIVATE_KEY` in PowerShell).
+- [x] Generate the updater signing keypair
+  Done 2026-07-19. Generated with an empty password at `C:\Users\joshu\.tauri\minder.key`
+  (public half at `minder.key.pub`). The public key is committed in
+  `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
+- [ ] **Back up `~/.tauri/minder.key` to your password manager — do this before the first release**
+  **This key is unrecoverable and permanent.** If it is lost, every already-installed user is
+  stranded forever: their binary only trusts that one public key, so you can never ship them
+  another update. There is no recovery path and no way to re-key an installed client.
+  It has no password, so the file itself is the entire secret — treat it like a private SSH key.
+- [ ] Add `TAURI_SIGNING_PRIVATE_KEY` as a GitHub Actions secret
+  Value: the **full contents** of `C:\Users\joshu\.tauri\minder.key` (not the path).
+  `gh secret set TAURI_SIGNING_PRIVATE_KEY < "$env:USERPROFILE\.tauri\minder.key"`
+  No password secret is needed — the key was generated without one, and
+  `release-installers.yml` already passes an empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+  Until this secret exists, **the release build will fail** at the "Emit updater artifact"
+  step: without a signing key Tauri produces no `.sig`, and that step refuses to guess.
+  Note: Tauri does not read `.env` files for this — for local signed builds it must be a real
+  environment variable (`$env:TAURI_SIGNING_PRIVATE_KEY` in PowerShell).
 
 ---
 

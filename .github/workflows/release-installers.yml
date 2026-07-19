@@ -26,9 +26,19 @@
 # deterministically there, see the matrix comment), .AppImage + .deb (Linux
 # x64, built on ubuntu-22.04 for the oldest supported glibc baseline).
 #
-# Signing: UNSIGNED for now — C5 (signing + updater) is a separate, opt-in task.
-# No signing env vars are set and no updater is configured in tauri.conf.json, so
-# tauri build emits plain unsigned installers.
+# Signing — two independent things, only one of which is done:
+#   * UPDATE PAYLOADS are signed with the project's minisign key
+#     (TAURI_SIGNING_PRIVATE_KEY), so an installed client will only accept an
+#     update that we produced. This is wired up.
+#   * OS CODE SIGNING (Authenticode / Apple Developer ID) is NOT. Installers are
+#     unsigned, so a first-time download still trips SmartScreen and Gatekeeper.
+#     That is plan task S, deferred on cost.
+# The two are unrelated: minisign does nothing for SmartScreen, and a code
+# signing cert does nothing for update verification.
+#
+# The `updater-manifest` job below assembles latest.json from all four build
+# jobs' signatures and attaches it to the Release — that upload is what actually
+# publishes an update to installed clients.
 #
 # Artifact sizes: EXPECT ~100 MB+ per installer. The bundled Node runtime
 # (~80 MB) plus the standalone Next server payload (hundreds of MB uncompressed,
@@ -71,31 +81,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `updater` is the Tauri updater target key this job's artifact is
+          # published under in latest.json. It is a protocol string the installed
+          # client asks for by name — a typo means "no update for this platform,
+          # ever", silently. Validated against an allowlist in
+          # scripts/updater/lib.mjs.
           - os: windows-latest
             name: Windows (NSIS .exe)
             bundles: nsis
+            updater: windows-x86_64
           # macos-latest is the arm64 (Apple Silicon) runner; the Intel runner
           # is a separate label. arm64 builds a .dmg. Intel builds the bare
-          # .app instead (collected as a .tar.gz below): DMG bundling fails
+          # .app instead (shipped as the signed updater .tar.gz): DMG bundling fails
           # DETERMINISTICALLY on the Intel runner — bundle_dmg.sh creates and
           # mounts the image fine, then `hdiutil detach` dies with "timeout
           # for DiskArbitration expired / drive not detached" (create-dmg#72)
           # on every attempt, with XProtect stopped AND Spotlight indexing
           # disabled, across 3 dry-run rounds — while the identical arm64 job
           # passes. The .app tar.gz needs no hdiutil at all.
+          # arm64 builds `app` ALONGSIDE `dmg`: the .dmg is the human download,
+          # but the updater can only consume a .app.tar.gz, which the `app`
+          # target produces. Without it, Apple Silicon users would install fine
+          # and then never receive an update.
           - os: macos-latest
             name: macOS arm64 (.dmg)
-            bundles: dmg
+            bundles: dmg,app
+            updater: darwin-aarch64
           - os: macos-26-intel
             name: macOS x86_64 (.app.tar.gz)
             bundles: app
+            updater: darwin-x86_64
           # Pin Linux to the OLDEST supported base (22.04), not ubuntu-latest
           # (24.04): AppImage/glibc-linked binaries bake in the build host's
           # glibc baseline, and Tauri's AppImage guidance is to build on the
           # oldest distro you intend to support so newer hosts still run it.
+          # Only the AppImage is updatable — .deb and .rpm structurally cannot
+          # self-update (the plugin errors with "Currently only an AppImage can
+          # be updated"), by design: a system package manager owns those files.
+          # .deb users update by downloading the next release manually.
           - os: ubuntu-22.04
             name: Linux (.AppImage + .deb)
             bundles: deb,appimage
+            updater: linux-x86_64
 
     steps:
       - uses: actions/checkout@v7
@@ -210,6 +237,14 @@ jobs:
       # own output (tauri suppresses it otherwise).
       - name: Build Tauri installers
         shell: bash
+        env:
+          # Signs the UPDATE PAYLOAD with the project's minisign key so an
+          # installed client will accept it. This is NOT OS code signing —
+          # installers remain unsigned and still trip SmartScreen/Gatekeeper on
+          # a first download. Without this secret, `createUpdaterArtifacts`
+          # produces no .sig and the emit step below fails the job.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: |
           set -u
           for attempt in 1 2; do
@@ -222,6 +257,14 @@ jobs:
           done
           echo "::error::tauri build failed after 2 attempts"
           exit 1
+
+      # Copy this job's signed updater artifact into installers/ and write a
+      # fragment carrying the signature's CONTENT for the aggregation job below.
+      # Runs BEFORE "Collect installers" because on Intel macOS the updater
+      # tarball is the ONLY asset that job produces — collect's empty-dir guard
+      # would otherwise fail the job before this step ever ran.
+      - name: Emit updater artifact + fragment
+        run: node scripts/updater-manifest.mjs emit --platform ${{ matrix.updater }} --out installers
 
       # Collect the produced installers into one dir for uniform upload. Only the
       # patterns relevant to this OS match; nullglob drops the rest.
@@ -238,19 +281,13 @@ jobs:
             echo "collecting $f"
             cp "$f" installers/
           done
-          # Intel macOS ships the bare .app as a tar.gz (see the matrix
-          # comment: hdiutil detach times out deterministically there, so no
-          # DMG can be produced). Named like Tauri names DMGs —
-          # <Product>_<version>_x64 — so Release assets stay consistent.
-          if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.bundles }}" == "app" ]]; then
-            VERSION="$(node -p "require('./package.json').version")"
-            for app in src-tauri/target/release/bundle/macos/*.app; do
-              [ -d "$app" ] || continue
-              out="installers/$(basename "${app%.app}")_${VERSION}_x64.app.tar.gz"
-              echo "collecting $app -> $out"
-              tar -czf "$out" -C "$(dirname "$app")" "$(basename "$app")"
-            done
-          fi
+          # The macOS .app tarball is NOT hand-rolled here any more. Enabling
+          # bundle.createUpdaterArtifacts makes Tauri produce (and sign) its own
+          # <Product>.app.tar.gz, and the "Emit updater artifact" step above
+          # already copied it in under an arch-tagged name. Tarring the .app a
+          # second time would upload ~100 MB of duplicate, and the copy the user
+          # downloaded would be the UNSIGNED one — so Intel macOS now ships the
+          # updater tarball as its single download, as it must.
           echo "--- installers ---"
           ls -la installers
           if [ -z "$(ls -A installers)" ]; then
@@ -306,3 +343,62 @@ jobs:
           # files; --clobber also covers a same-file re-run.
           gh release upload "$TAG" installers/* --clobber
           echo "uploaded installers to Release $TAG"
+
+  # Assemble latest.json — the static manifest the updater plugin checks — from
+  # every build job's signature fragment, and attach it to the Release.
+  #
+  # This MUST be a separate job: the manifest names all four platforms at once,
+  # so it can only be built after every matrix job has produced its signature.
+  #
+  # `needs: build` requires ALL matrix jobs to succeed (fail-fast: false only
+  # stops one failure from cancelling the others; it does not make a failed job
+  # count as success). That is the conservative behavior we want — a partial
+  # manifest would silently strand whichever platform failed to build on its
+  # current version, with no error anywhere the user can see. No manifest at all
+  # simply means "no update yet", and the previous release's manifest keeps
+  # serving until this one is fixed and re-run.
+  updater-manifest:
+    name: Publish updater manifest
+    needs: build
+    # Tag pushes only — a dispatch dry run has no Release to attach to, and must
+    # never mutate the published manifest (same single-writer rule as the
+    # installer upload step above).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No `name:` — downloads every matrix job's artifact into its own
+      # subdirectory under artifacts/, which is what the merge step walks.
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Build latest.json
+        run: |
+          node scripts/updater-manifest.mjs merge \
+            --dir artifacts \
+            --repo "${{ github.repository }}" \
+            --tag "${{ github.ref_name }}" \
+            --out latest.json
+          echo "--- latest.json ---"
+          cat latest.json
+
+      # The updater's configured endpoint is
+      # /releases/latest/download/latest.json, which GitHub resolves to the
+      # newest non-prerelease Release — so uploading here is what actually
+      # publishes the update to every installed client.
+      - name: Attach latest.json to the Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.ref_name }}" latest.json --clobber
+          echo "published updater manifest for ${{ github.ref_name }}"

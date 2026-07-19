@@ -3,9 +3,12 @@
 ## Service Mode + Tray App
 
 - [ ] **Signing + auto-updater + local release script** — Reopened 2026-07-19; **supersedes C5** of the service-and-tray plan. Full spec + status table: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`. Key reframe: C5 deferred "signing + updater" as one money-gated task, but the updater's **minisign signing is free and independent** of OS code signing — an updater-only slice ships at zero cost today. Decisions: Azure Artifact Signing (~$120/yr, cloud HSM, no dongle, individuals US/CA — **not** EV, which stopped granting instant SmartScreen reputation in 2024) + existing Apple Developer Program ($99/yr, Tauri automates notarization). Traditional OV certs are now CI-incompatible (CA/B Forum hardware-key rule, June 2023). No single cert can sign both platforms — structurally impossible. Account signups are in MANUAL_STEPS.md and are the critical path (Azure validation takes 1–20 business days).
-  - [ ] **R** — `scripts/release-local.mjs` + `pnpm release:local` (no dependencies, do first). Must stamp `tauri.conf.json`'s version like CI does, or local builds ship as `0.1.0` and update-loop once the updater lands.
-  - [ ] **U** — Updater. Feasibility confirmed: a **pure-Rust API exists**, so the windowless tray is not a blocker, and `supervisor.shutdown()` is already exactly what `on_before_exit` needs. Watch out for the `prevent_exit` guard at `main.rs:76-88` swallowing the updater's forced Windows quit, and note macOS arm64 CI builds `dmg` but the updater needs `.app.tar.gz`.
-  - [ ] **S** — Signing CI wiring, after the accounts validate.
+  - [x] **R** — `scripts/release-local.mjs` + `pnpm release:local`. Shipped 2026-07-19 (b8ba9e6), documented in `docs/help/tray-app.md`.
+  - [x] **U** — Updater. Shipped 2026-07-19 (3d31ad5 + CI). U4 turned out to be a non-issue: the Windows updater exits via `std::process::exit()`, which never reaches the event loop, so `prevent_exit` can't swallow it — but that same hard exit runs no destructors, so the sidecar shutdown had to move into `on_before_exit` to stop an orphaned `node.exe` locking the installer out.
+  - [ ] **Publish the first updater-carrying release** — two things must happen before self-updating works, in order:
+    1. Add the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret (MANUAL_STEPS.md). Until it exists **the release build fails** at "Emit updater artifact".
+    2. Tag a release. Note the installed 1.4.0 builds contain no updater, so **everyone must download that release manually once**; self-updating starts from the release after it.
+  - [ ] **S** — Signing. **Dropped 2026-07-19** — decision: no cert spend for now. Apple Developer ID is already held and could be wired up as a follow-on (macOS half only, ~half the work: Tauri automates notarization once `APPLE_*` secrets are set). Windows would need Azure Artifact Signing (~$120/yr) and stays unstarted. Installers remain unsigned; SmartScreen/Gatekeeper warnings on first download are expected, and are unrelated to the (working) update verification.
 
 ## Housekeeping
 
