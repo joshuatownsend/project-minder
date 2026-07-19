@@ -5,6 +5,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { getProjectGitActivity } from "@/lib/projectGitActivity";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 interface GitActivityResponse {
   slug: string;
@@ -42,6 +43,11 @@ export async function GET(
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
+
+    // Never-wake preflight: git-log activity spawns git with cwd on the
+    // project path — blocked while its WSL distro is stopped.
+    const wslResp = await wslGuardResponse(project.path);
+    if (wslResp) return wslResp;
 
     const activity = await getProjectGitActivity(slug, project.path);
     const data: GitActivityResponse = { slug, activity, generatedAt: new Date().toISOString() };

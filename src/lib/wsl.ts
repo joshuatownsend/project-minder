@@ -249,6 +249,23 @@ async function isDir(p: string): Promise<boolean> {
 }
 
 /**
+ * Route-level never-wake preflight: returns the failing WslRootCheck for the
+ * first supplied path that sits under a non-running WSL distro, or null when
+ * every path is safe to touch (non-WSL paths are always safe). Sync-parses
+ * first so all-local calls cost nothing.
+ */
+export async function firstBlockedWslPath(
+  ...paths: (string | undefined)[]
+): Promise<Extract<WslRootCheck, { ok: false }> | null> {
+  for (const p of paths) {
+    if (!p || !parseWslUncPath(p)) continue;
+    const check = await checkWslRoot(p);
+    if (check && !check.ok) return check;
+  }
+  return null;
+}
+
+/**
  * Decide whether a WSL UNC root may be read right now. Callers must invoke
  * this BEFORE any fs operation on the root (the fs call is what wakes the VM).
  * Non-WSL paths return ok so callers can guard unconditionally.

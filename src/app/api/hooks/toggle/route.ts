@@ -10,6 +10,7 @@ import {
   type ToggleScope,
 } from "@/lib/hookToggle";
 import { invalidateUserConfigCache } from "@/lib/userConfigCache";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 import { invalidateClaudeConfigRouteCache } from "../../claude-config/route";
 import { getCachedScan, invalidateCache, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
@@ -77,6 +78,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         "projectPath must be the absolute root of a scanned project.",
       );
     }
+    // Never-wake preflight: the local-scope toggle writes
+    // <projectPath>/.claude/settings.local.json.
+    const wslResp = await wslGuardResponse(projectPath);
+    if (wslResp) return wslResp;
   }
 
   try {

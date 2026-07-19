@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { computeContextBudget } from "@/lib/scanner/contextBudget";
+import { wslGuardResponse } from "@/lib/wslRouteGuard";
 
 /**
  * Component-model "tokens consumed before your first line of code" estimate
@@ -24,6 +25,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
       { status: 404 }
     );
   }
+
+  // Never-wake preflight: the budget computation reads project config files.
+  const wslResp = await wslGuardResponse(project.path);
+  if (wslResp) return wslResp;
 
   const budget = await computeContextBudget(project.path, project.slug);
   return NextResponse.json(budget);
