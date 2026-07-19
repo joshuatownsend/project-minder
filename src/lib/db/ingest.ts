@@ -5,6 +5,8 @@ import { performance } from "perf_hooks";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
+import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
+import { normalizePathKey } from "@/lib/platform";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
@@ -2665,7 +2667,6 @@ export async function reconcileAllSessions(
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
   const stats: IngestStats = { filesSeen: 0, filesChanged: 0, rowsWritten: 0, errors: 0 };
-  const projectsDir = options.projectsDir ?? path.join(os.homedir(), ".claude", "projects");
 
   await loadPricing();
 
@@ -2676,6 +2677,25 @@ export async function reconcileAllSessions(
   // (`enabledAdapters` unset → ["claude"]) `discoverAllSessions` yields Claude
   // files only and the `!== "claude"` filter empties the list — a pure no-op.
   const config = options.config ?? (await readConfig());
+
+  // Claude projects dirs: an explicit options.projectsDir (tests, worker
+  // wiring) pins a single dir; otherwise walk every READABLE Claude home
+  // (primary + config.claudeHomes). Homes excluded by the never-wake gate
+  // (stopped WSL distro) are remembered so the prune pass can shield their
+  // already-ingested rows — skipping a home must never delete its sessions.
+  let projectsDirs: string[];
+  let unavailableDirs: string[] = [];
+  if (options.projectsDir) {
+    projectsDirs = [options.projectsDir];
+  } else {
+    const allHomes = getClaudeHomes(config);
+    const readableHomes = await getReadableClaudeHomes(config);
+    const readableSet = new Set(readableHomes);
+    projectsDirs = readableHomes.map((h) => path.join(h, "projects"));
+    unavailableDirs = allHomes
+      .filter((h) => !readableSet.has(h))
+      .map((h) => path.join(h, "projects"));
+  }
 
   // One up-front read of every existing non-Claude row: powers the per-file
   // skip-gate (keyed on file_path, since the real sessionId isn't known until
@@ -2723,16 +2743,24 @@ export async function reconcileAllSessions(
       return adapter ? adapter.parseFile(f) : [];
     });
 
-  let subdirs: string[];
-  let claudeWalkFailed = false;
-  try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    subdirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    // Missing/unreadable `~/.claude/projects` is no longer fatal — a non-Claude
-    // user may have no Claude tree at all. Fall through to the adapter pass.
-    subdirs = [];
-    claudeWalkFailed = true;
+  const subdirs: { projectsDir: string; dirName: string }[] = [];
+  let anyDirListed = false;
+  for (const dir of projectsDirs) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      anyDirListed = true;
+      for (const e of entries) {
+        if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
+      }
+    } catch {
+      // A projects dir that can't be listed — missing primary tree (a
+      // WSL-only Claude setup, or a non-Claude user), a distro that stopped
+      // mid-cycle, a transient UNC error — shields its rows from the prune
+      // pass BY PREFIX. Per-dir shielding (not a blanket keep-all-Claude-rows)
+      // so a home that listed successfully but is legitimately empty still
+      // prunes its stale rows this cycle.
+      unavailableDirs.push(dir);
+    }
   }
 
   // Nothing to discover AND nothing already indexed under a non-Claude source
@@ -2742,7 +2770,11 @@ export async function reconcileAllSessions(
   // Claude tree), or a Codex/Gemini-only user who disables an adapter could
   // never prune its now-undiscovered sessions. The Claude prune-protection
   // below still shields Claude rows on a Claude-walk failure.
-  if (claudeWalkFailed && adapterSessions.length === 0 && existingAdapterMeta.size === 0) {
+  // BUT: bail only when NO projects dir listed successfully — a missing
+  // primary tree with a successfully-listed extra home (a WSL-only Claude
+  // setup) must still ingest the extras, and a listed-but-empty extra home
+  // must still reach the prune pass so its stale rows are removed.
+  if (!anyDirListed && adapterSessions.length === 0 && existingAdapterMeta.size === 0) {
     return stats;
   }
 
@@ -2758,7 +2790,7 @@ export async function reconcileAllSessions(
   // connection. Parallelism would just queue on the busy_timeout. The
   // worker_thread wrap (P2a-2.4) is where we'd consider a producer/consumer
   // split if ingest throughput becomes a bottleneck.
-  for (const dirName of subdirs) {
+  for (const { projectsDir, dirName } of subdirs) {
     const dirPath = path.join(projectsDir, dirName);
     let filePaths: string[];
     let sessionDirs: string[];
@@ -2769,6 +2801,11 @@ export async function reconcileAllSessions(
         .map((e) => path.join(dirPath, e.name));
       sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
+      // A dir that LISTED in the home enumeration but fails its own readdir
+      // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
+      // "all its sessions vanished" — shield its rows from the prune pass
+      // exactly like a home that was skipped up front.
+      unavailableDirs.push(dirPath);
       continue;
     }
     // Newer Claude Code writes subagent transcripts to
@@ -2836,17 +2873,27 @@ export async function reconcileAllSessions(
 
   // Prune protection: if we couldn't enumerate a source this pass, keep its
   // existing rows "live" so the prune below doesn't delete data we simply
-  // failed to re-list. Claude rows are protected on a Claude-walk failure;
-  // non-Claude rows on an adapter discovery failure.
-  if (claudeWalkFailed) {
+  // failed to re-list. Claude rows are protected per failed dir via the
+  // unavailableDirs prefix shield below; non-Claude rows on an adapter
+  // discovery failure.
+  if (adapterDiscoveryFailed) {
+    for (const fp of existingAdapterMeta.keys()) liveFilePaths.add(fp);
+  }
+  // Rows under a Claude home we deliberately didn't read this cycle (stopped
+  // WSL distro, or a mid-cycle listing failure) stay live: the files almost
+  // certainly still exist — we just can't look without waking the VM.
+  if (unavailableDirs.length > 0) {
+    // normalizePathKey yields forward-slash keys on every platform, so the
+    // boundary separator MUST be "/" — appending path.sep ("\\" on Windows)
+    // would make startsWith never match and the prune below would delete the
+    // very rows this shield exists to keep.
+    const prefixes = unavailableDirs.map((d) => normalizePathKey(d) + "/");
     for (const r of db
       .prepare("SELECT file_path FROM sessions WHERE source = 'claude'")
       .all() as Array<{ file_path: string }>) {
-      liveFilePaths.add(r.file_path);
+      const key = normalizePathKey(r.file_path);
+      if (prefixes.some((p) => key.startsWith(p))) liveFilePaths.add(r.file_path);
     }
-  }
-  if (adapterDiscoveryFailed) {
-    for (const fp of existingAdapterMeta.keys()) liveFilePaths.add(fp);
   }
 
   // Prune sessions whose JSONL file vanished. One SELECT pulls the full

@@ -8,6 +8,8 @@ import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
+import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
+import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -33,6 +35,9 @@ type Patch = (config: MinderConfig) => void;
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
+  // Set when claudeHomes/pathMappings are being patched: grades are computed
+  // from turn sets that depend on both, so cached grades must drop with them.
+  let multiHomeChanged = false;
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -50,6 +55,35 @@ export async function PATCH(request: NextRequest) {
       c.devRoots = roots;
       c.devRoot = roots[0];
     });
+  }
+
+  // Extra Claude home dirs (multi-home session correlation). Empty array is
+  // valid — it clears the extras (the primary ~/.claude is implicit).
+  if (Array.isArray(body.claudeHomes)) {
+    if (body.claudeHomes.some((h: unknown) => typeof h !== "string")) {
+      return NextResponse.json({ error: "claudeHomes elements must be strings" }, { status: 400 });
+    }
+    const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
+    patches.push((c) => { c.claudeHomes = homes; });
+    multiHomeChanged = true;
+  }
+
+  // Cross-environment path prefix mappings ({from, to} pairs, both non-empty).
+  if (Array.isArray(body.pathMappings)) {
+    for (const m of body.pathMappings as unknown[]) {
+      const pair = m as { from?: unknown; to?: unknown };
+      if (
+        typeof pair !== "object" || pair === null ||
+        typeof pair.from !== "string" || !pair.from.trim() ||
+        typeof pair.to !== "string" || !pair.to.trim()
+      ) {
+        return NextResponse.json({ error: "pathMappings entries must be { from, to } non-empty strings" }, { status: 400 });
+      }
+    }
+    const mappings = (body.pathMappings as { from: string; to: string }[])
+      .map((m) => ({ from: m.from.trim(), to: m.to.trim() }));
+    patches.push((c) => { c.pathMappings = mappings; });
+    multiHomeChanged = true;
   }
 
   if (typeof body.scanBatchSize === "number") {
@@ -389,6 +423,13 @@ export async function PATCH(request: NextRequest) {
   });
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
+  // Grades and the portfolio usage slot depend on the multi-home sweep; drop
+  // both so the next request recomputes with the new homes/mappings instead
+  // of serving the old data for the rest of their TTLs (5 min / 10 min).
+  if (multiHomeChanged) {
+    efficiencyGradeCache.invalidateGrades();
+    invalidateClaudeUsageCache();
+  }
   return NextResponse.json({ ok: true, config });
 }
 

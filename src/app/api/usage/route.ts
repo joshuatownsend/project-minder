@@ -5,6 +5,7 @@ import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { demoMode } from "@/lib/demo/demoMode";
+import { readConfig } from "@/lib/config";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -38,7 +39,12 @@ export async function GET(request: NextRequest) {
   // invalidate the slot immediately, else the usage page serves real data after
   // enabling (or synthetic after disabling) for the rest of the 2-min TTL.
   const demo = (await demoMode()) ? "demo:" : "";
-  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}`;
+  // And with the multi-home config: the all-sessions sweep depends on
+  // claudeHomes/pathMappings, so a Settings save that adds or removes a home
+  // must invalidate immediately, not after the 2-min TTL.
+  const cfg = await readConfig();
+  const homesSig = JSON.stringify([cfg.claudeHomes ?? [], cfg.pathMappings ?? []]);
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}:${homesSig}`;
   const cached = cache.get(cacheKey);
 
   let slot: UsageCacheSlot;
@@ -58,10 +64,14 @@ export async function GET(request: NextRequest) {
   // Salt the ETag with the backend so a runtime flag flip (e.g. operator
   // toggles MINDER_USE_DB between server starts) invalidates client caches
   // — backends could differ on edge cases until the schema is fully aligned.
+  // homesSig rides in `parts` for the same reason it keys the server cache:
+  // adding a WSL home whose sessions are all OLDER than local ones doesn't
+  // advance maxMtime, and without the signature a conditional request would
+  // 304 against the pre-save report.
   const etag = computeETag({
     salt: `usage-v3-${slot.backend}${demo ? "-demo" : ""}`,
     maxMtimeMs: slot.maxMtime,
-    parts: [safePeriod, project ?? "", source ?? ""],
+    parts: [safePeriod, project ?? "", source ?? "", homesSig],
   });
 
   const notModified = ifNoneMatch(request, etag);

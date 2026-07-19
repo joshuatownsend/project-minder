@@ -1,6 +1,7 @@
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { readConfig } from "@/lib/config";
+import { getReadableClaudeHomes } from "@/lib/claudeHome";
 import type { SessionAdapter, SessionFile } from "./types";
 import type { UsageTurn } from "@/lib/usage/types";
 import {
@@ -14,19 +15,26 @@ const claudeAdapter: SessionAdapter = {
   displayName: "Claude Code",
 
   async discover(): Promise<SessionFile[]> {
-    const projectsDir = path.join(os.homedir(), ".claude", "projects");
+    // Every readable Claude home (primary + config.claudeHomes); a home
+    // inside a stopped WSL distro is skipped for the cycle, never woken.
+    const config = await readConfig();
+    const homes = await getReadableClaudeHomes(config);
 
-    let subdirs: string[];
-    try {
-      const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-      subdirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
-      return [];
+    const subdirs: { home: string; dirName: string }[] = [];
+    for (const home of homes) {
+      try {
+        const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory()) subdirs.push({ home, dirName: e.name });
+        }
+      } catch {
+        // No projects dir in this home
+      }
     }
 
     const perDir = await Promise.all(
-      subdirs.map(async (dirName) => {
-        const dirPath = path.join(projectsDir, dirName);
+      subdirs.map(async ({ home, dirName }) => {
+        const dirPath = path.join(home, "projects", dirName);
         try {
           const entries = await fs.readdir(dirPath);
           return entries

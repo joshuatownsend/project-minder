@@ -141,7 +141,11 @@ export function normalizePath(p: string): string {
  * for display — only as a comparison/lookup key.
  */
 export function normalizePathKey(p: string): string {
-  const normalized = normalizePath(p);
+  // \\wsl$\X and \\wsl.localhost\X are aliases for the same distro tree —
+  // canonicalize the legacy host so keys built from mixed sources (a legacy
+  // config entry vs a Detect-WSL suggestion, a history.jsonl recorded against
+  // either form) compare equal. Never used for display, so the rewrite is safe.
+  const normalized = normalizePath(p).replace(/^\/\/wsl\$(?=\/)/i, "//wsl.localhost");
   // Only fold case on case-insensitive filesystems (Windows). On POSIX,
   // `/home/me/foo` and `/home/me/Foo` are DIFFERENT directories, so
   // lowercasing would merge distinct projects and misattribute their sessions

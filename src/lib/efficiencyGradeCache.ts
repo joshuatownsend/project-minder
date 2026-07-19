@@ -3,6 +3,8 @@ import { loadCatalog } from "./indexer/catalog";
 import { runWasteOptimizer } from "./scanner/wasteOptimizer";
 import { buildProjectTurnsIndex, lookupProjectTurns } from "./usage/projectMatch";
 import { getCachedScan } from "./cache";
+import { readConfig } from "./config";
+import { getClaudeHomes } from "./claudeHome";
 import { recordGradeSnapshots, type GradeSnapshotRow } from "./data/gradeSnapshots";
 
 export type EfficiencyGrade = "A" | "B" | "C" | "D" | "F";
@@ -66,6 +68,12 @@ class EfficiencyGradeCache {
 
     const scan = getCachedScan();
     const projectPathMap = new Map(scan?.projects.map((p) => [p.slug, p.path]) ?? []);
+    // Threaded into lookupProjectTurns so UNC-scanned WSL projects also match
+    // their foreign-encoded (Linux-path) session dirs. Defensive: a broken
+    // config read degrades to no mappings, never kills the grade drain.
+    const { pathMappings, claudeHomes } = await readConfig()
+      .then((c) => ({ pathMappings: c.pathMappings ?? [], claudeHomes: getClaudeHomes(c) }))
+      .catch(() => ({ pathMappings: [], claudeHomes: [] as string[] }));
     const mcpMap = new Map(
       scan?.projects.map((p) => [p.slug, p.mcpServers?.servers ?? []]) ?? []
     );
@@ -93,9 +101,13 @@ class EfficiencyGradeCache {
       }
 
       for (const item of batch) {
+        // Re-check per item, not just per batch: invalidateGrades()/dispose()
+        // during the drain must stop grades computed from the OLD config from
+        // landing in the just-cleared cache.
+        if (myGen !== this.generation) return;
         try {
           const path = projectPathMap.get(item.slug) ?? item.path;
-          const turns = lookupProjectTurns(turnsIndex, item.slug, path);
+          const turns = lookupProjectTurns(turnsIndex, item.slug, path, pathMappings, claudeHomes);
           const info = runWasteOptimizer({
             turns,
             configuredMcpServers: mcpMap.get(item.slug) ?? [],
@@ -111,7 +123,9 @@ class EfficiencyGradeCache {
         } catch {
           // Skip this project; it'll be retried on the next enqueue cycle.
         }
-        this.inFlight--;
+        // dispose() zeroes inFlight for the new generation — don't drive it
+        // negative from a batch that belongs to the old one.
+        if (myGen === this.generation) this.inFlight--;
       }
 
       // Yield the event loop between batches so we don't starve route handlers.
@@ -122,7 +136,9 @@ class EfficiencyGradeCache {
 
     // Persist today's grade snapshots (best-effort; never throws, degrades to
     // "no trend" when the DB is unavailable). Done after the drain so it
-    // doesn't reintroduce per-project I/O into the CPU-only loop.
+    // doesn't reintroduce per-project I/O into the CPU-only loop. Skipped if
+    // the generation moved — these rows came from the old config.
+    if (myGen !== this.generation) return;
     await recordGradeSnapshots(snapshotRows);
 
     this.running = false;
@@ -157,6 +173,16 @@ class EfficiencyGradeCache {
 
   get total(): number {
     return this.cache.size;
+  }
+
+  /** Full cancel + clear, for PATCH /api/config when claudeHomes/pathMappings
+   *  change: clearing entries alone isn't enough — an in-flight drain that
+   *  loaded the OLD config could still land stale grades after the PATCH
+   *  returns. The generation bump (via dispose) makes the drain drop its
+   *  remaining work; the next dashboard enqueue recomputes everything against
+   *  the new config. */
+  invalidateGrades() {
+    this.dispose();
   }
 
   dispose() {

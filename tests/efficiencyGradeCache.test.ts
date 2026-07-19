@@ -18,6 +18,9 @@ vi.mock("@/lib/usage/projectMatch", () => ({
 vi.mock("@/lib/cache", () => ({
   getCachedScan: vi.fn().mockReturnValue(null),
 }));
+vi.mock("@/lib/config", () => ({
+  readConfig: vi.fn().mockResolvedValue({}),
+}));
 
 import { efficiencyGradeCache, type EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 

@@ -46,6 +46,12 @@ export interface UsageTurn {
   isSidechain?: boolean;
   /** Adapter source id (e.g. "claude", "codex"). Optional; aggregator coerces absent to "claude". */
   source?: string;
+  /** normalizePathKey of the Claude home whose projects tree this turn was
+   *  parsed from (multi-home). Disambiguates identically-encoded session dirs
+   *  from two distros (e.g. both `-home-josh-dev-x`). Optional — turns from
+   *  single-session loaders or older cache entries omit it, and matching
+   *  falls back to dirname-only. */
+  homeKey?: string;
 }
 
 export type CategoryType =

@@ -42,4 +42,11 @@ Run any `git status` against one of the repos afterwards to confirm. Alternative
 
 ## Claude sessions inside WSL
 
-A distro's `~/.claude` (session history, usage data) is discovered by `GET /api/wsl` but not yet joined into the dashboard — sessions recorded inside WSL reference Linux paths (`/home/<user>/dev/...`) that don't match the UNC-scanned project paths. Cross-home session correlation is tracked as follow-up work.
+Sessions recorded by Claude Code running *inside* the distro live in the distro's own `~/.claude` and reference Linux paths (`/home/<user>/dev/...`), which don't match the UNC paths the scanner sees. Two Settings concepts bridge this, both under **Settings → Claude Homes**:
+
+- **Extra Claude homes** — additional `.claude` directories to read session history from, e.g. `\\wsl.localhost\<distro>\home\<user>\.claude`.
+- **Path mappings** — prefix rewrites (`/home/<user>` ↔ `\\wsl.localhost\<distro>\home\<user>`) applied when joining session data to scanned projects: history matching, session counts and live status, and the usage-slug that links a project to its cost/usage aggregates.
+
+The easy path is **Detect WSL** in that section: it finds each running distro's `.claude` homes and one click adds the home *and* its implied path mapping. After **Save & Rescan**, WSL projects show their session counts, last-session previews, and live status exactly like native ones.
+
+The same never-wake rule applies: a Claude home inside a stopped distro is skipped for the cycle and picked back up when the distro runs.

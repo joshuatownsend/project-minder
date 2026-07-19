@@ -1,7 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { MinderConfig, ProjectData, PortConflict, ScanResult, SkippedRoot } from "../types";
+import { MinderConfig, PathMapping, ProjectData, PortConflict, ScanResult, SkippedRoot } from "../types";
 import { checkWslRoot } from "../wsl";
+import { mapLocalPath } from "../pathMapping";
 import { normalizePathKey } from "../platform";
 
 // Last successful per-root scan results, keyed by normalized root path.
@@ -105,6 +106,7 @@ async function scanProject(
   devRoot: string,
   flags: MinderConfig["featureFlags"],
   ctx: ProvenanceContext,
+  pathMappings: PathMapping[] = [],
 ): Promise<{ project: ProjectData; catalogWalk: ProjectCatalogWalk | null } | null> {
   const projectPath = path.join(devRoot, dirName);
 
@@ -115,8 +117,10 @@ async function scanProject(
   // from the filesystem-basename route slug above. Derive it here (server-side,
   // using the same encode→canonicalize→toSlug pipeline the usage parser uses)
   // so cost/usage views can join a scanned project to its usage data. See the
-  // `usageSlug` field doc on ProjectData.
-  const usageSlug = usageToSlug(canonicalizeDirName(encodePath(projectPath)));
+  // `usageSlug` field doc on ProjectData. mapLocalPath first: a UNC-scanned WSL
+  // project's sessions were recorded (and encoded) under the distro-side Linux
+  // path, so the usage slug must derive from that form, not the UNC path.
+  const usageSlug = usageToSlug(canonicalizeDirName(encodePath(mapLocalPath(projectPath, pathMappings))));
 
   const claudeMdPromise = scanClaudeMd(projectPath);
   // Audit reuses the buffer scanClaudeMd already read so we don't pay
@@ -426,7 +430,7 @@ export async function scanAllProjects(): Promise<ScanResult> {
     const rootProjects: ProjectData[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx)));
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx, config.pathMappings ?? [])));
       for (const r of results) {
         if (r) {
           rootProjects.push(r.project);

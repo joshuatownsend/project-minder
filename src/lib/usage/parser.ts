@@ -1,6 +1,5 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import {
   toSlug,
   type ConversationEntry,
@@ -15,6 +14,9 @@ import {
 } from "./contentBlocks";
 import { categorizeToolError } from "./toolErrorCategorizer";
 import { resolveSessionJsonl } from "./sessionPath";
+import { readConfig } from "@/lib/config";
+import { getReadableClaudeHomes } from "@/lib/claudeHome";
+import { normalizePathKey } from "@/lib/platform";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -26,7 +28,13 @@ const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 // rationale as the existing globalThis caches in /api/sessions, /api/stats etc.
 const globalForParser = globalThis as unknown as {
   __usageFileCache?: FileCache<UsageTurn[]>;
-  __usageAllSessionsInFlight?: Promise<Map<string, UsageTurn[]>>;
+  __usageAllSessionsInFlight?: {
+    promise: Promise<Map<string, UsageTurn[]>>;
+    /** JSON of (claudeHomes, pathMappings) the sweep was started under — a
+     *  request under NEW config must not await (and re-cache from) a sweep
+     *  that resolved the OLD homes. */
+    configKey: string;
+  };
 };
 
 function getFileCache(): FileCache<UsageTurn[]> {
@@ -114,6 +122,12 @@ export interface ParseSessionTurnsOptions {
    * usage reporting path (default: false preserves existing behavior).
    */
   includeSidechains?: boolean;
+  /**
+   * normalizePathKey of the Claude home this file was found under. Stamped
+   * onto every produced turn (multi-home disambiguation — see
+   * UsageTurn.homeKey). Omit for single-session loaders that don't need it.
+   */
+  homeKey?: string;
 }
 
 export async function parseSessionTurns(
@@ -237,6 +251,7 @@ export async function parseSessionTurns(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model,
         role: "assistant",
         inputTokens,
@@ -265,6 +280,7 @@ export async function parseSessionTurns(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model: "",
         role: "user",
         inputTokens: 0,
@@ -457,6 +473,7 @@ export async function parseSessionTurnsWithMeta(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model,
         role: "assistant",
         inputTokens,
@@ -483,6 +500,7 @@ export async function parseSessionTurnsWithMeta(
         sessionId,
         projectSlug,
         projectDirName: canonicalDir,
+        homeKey: options.homeKey,
         model: "",
         role: "user",
         inputTokens: 0,
@@ -515,16 +533,25 @@ export async function parseSessionTurnsWithMeta(
 // ── All-sessions parser with mtime caching ───────────────────────────────────
 
 async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
   const cache = getFileCache();
 
-  let subdirs: string[];
-  try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    subdirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return new Map();
+  // Sweep every readable Claude home (primary + config.claudeHomes) — a home
+  // inside a stopped WSL distro is excluded for the cycle rather than woken.
+  // Each subdir keeps its own home so file paths resolve into the right tree.
+  const config = await readConfig();
+  const homes = await getReadableClaudeHomes(config);
+  const subdirs: { home: string; dirName: string }[] = [];
+  for (const home of homes) {
+    try {
+      const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory()) subdirs.push({ home, dirName: e.name });
+      }
+    } catch {
+      // No projects dir in this home
+    }
   }
+  if (subdirs.length === 0) return new Map();
 
   const result = new Map<string, UsageTurn[]>();
   // Track every JSONL we observed during this sweep so we can evict slots for
@@ -538,8 +565,8 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   for (let i = 0; i < subdirs.length; i += 5) {
     const batch = subdirs.slice(i, i + 5);
     await Promise.all(
-      batch.map(async (dirName) => {
-        const dirPath = path.join(projectsDir, dirName);
+      batch.map(async ({ home, dirName }) => {
+        const dirPath = path.join(home, "projects", dirName);
         let files: string[];
         try {
           const entries = await fs.readdir(dirPath);
@@ -570,7 +597,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
               // default for existing consumers; the usage aggregator opts in
               // via `{ includeSidechains: true }` to fold subagent cost into
               // the totals (A1).
-              return await parseSessionTurns(fp, dirName, { includeSidechains: true });
+              return await parseSessionTurns(fp, dirName, { includeSidechains: true, homeKey: normalizePathKey(home) });
             } catch {
               return [];
             }
@@ -598,14 +625,22 @@ export async function parseAllSessions(
   // server, only one of them does the 1.1 GB sweep — the rest await the
   // same promise. After the first call settles, subsequent calls hit the
   // FileCache directly and stat 3k files (cheap), no full re-parse.
-  let promise = globalForParser.__usageAllSessionsInFlight;
-  if (!promise) {
-    promise = buildAllSessions().finally(() => {
-      globalForParser.__usageAllSessionsInFlight = undefined;
+  // Keyed by the multi-home config: a caller under a just-saved homes/
+  // mappings value starts a fresh sweep instead of awaiting one that was
+  // resolving the old homes.
+  const inFlightCfg = await readConfig();
+  const configKey = JSON.stringify([inFlightCfg.claudeHomes ?? [], inFlightCfg.pathMappings ?? []]);
+  let slot = globalForParser.__usageAllSessionsInFlight;
+  if (!slot || slot.configKey !== configKey) {
+    const promise = buildAllSessions().finally(() => {
+      if (globalForParser.__usageAllSessionsInFlight?.promise === promise) {
+        globalForParser.__usageAllSessionsInFlight = undefined;
+      }
     });
-    globalForParser.__usageAllSessionsInFlight = promise;
+    slot = { promise, configKey };
+    globalForParser.__usageAllSessionsInFlight = slot;
   }
-  const full = await promise;
+  const full = await slot.promise;
 
   // The cached map carries subagent (sidechain) turns. The usage aggregator
   // opts in to see them; every other consumer gets the historical primary-only
@@ -674,68 +709,58 @@ export async function loadSessionTurnsBySessionId(
 ): Promise<UsageTurn[] | null> {
   if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
 
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  let dirs: string[];
+  // resolveSessionJsonl walks every readable Claude home. ENOENT is folded to
+  // null inside it (legitimate: no Claude Code / fresh install → route 404s);
+  // any other listing failure on the primary home throws and is wrapped as
+  // `SessionTurnsLoadError` so the route surfaces a 500 instead of
+  // masquerading as "Session not found" (reviewer-flagged shape).
+  let found: { filePath: string; projectDirName: string } | null;
   try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    found = await resolveSessionJsonl(sessionId);
   } catch (err) {
-    // ENOENT is legitimate (no Claude Code on this machine, or fresh
-    // install before any session) — return null so the route 404s.
-    // Anything else (EACCES, EIO, EPERM) is a real misconfiguration:
-    // throw `SessionTurnsLoadError` so the route surfaces a 500 instead
-    // of masquerading as "Session not found." Reviewer (Codex P2 +
-    // Copilot) flagged the prior `console.warn + return null` shape.
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return null;
-    }
     throw new SessionTurnsLoadError(
-      `Failed to list ${projectsDir}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to list Claude projects dirs: ${err instanceof Error ? err.message : String(err)}`,
       sessionId,
-      projectsDir,
+      "~/.claude/projects",
       err
     );
   }
+  if (!found) return null;
+  const { filePath: candidate, projectDirName: dir } = found;
 
-  for (const dir of dirs) {
-    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-    let stat;
-    try {
-      stat = await fs.stat(candidate);
-    } catch {
-      continue;
-    }
-    // Oversized files return null (treated as "not found" by the route's
-    // 404 path). Per-turn diagnosis on a 50MB+ JSONL would also stress
-    // the parser — bailing here is consistent with the buildAllSessions
-    // sweep behavior.
-    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
-    // Parse in strict mode so `fs.readFile` failures (EACCES, EIO,
-    // mid-stream EBUSY from a writer) propagate as throws instead of
-    // being swallowed as `[]`. Without `strict: true`, a permissions
-    // error on a real session file would render a misleading green
-    // "looks healthy" panel — reviewer-flagged (Codex P1 + Copilot).
-    // Per-line JSON parse errors still soft-skip; a session with a few
-    // mangled lines is still diagnosable from its valid lines.
-    //
-    // We don't use the FileCache's factory pattern here because that
-    // pattern swallows throws as `[]`. Diagnosis is single-session and
-    // infrequent, so skipping the cache costs a re-parse on tab-revisit
-    // but never produces a misleading healthy verdict on a broken file.
-    let turns: UsageTurn[];
-    try {
-      turns = await parseSessionTurns(candidate, dir, { strict: true });
-    } catch (err) {
-      throw new SessionTurnsLoadError(
-        `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
-        sessionId,
-        candidate,
-        err
-      );
-    }
-    return turns;
+  let stat;
+  try {
+    stat = await fs.stat(candidate);
+  } catch {
+    return null; // removed between resolve and stat
   }
-  return null;
+  // Oversized files return null (treated as "not found" by the route's
+  // 404 path). Per-turn diagnosis on a 50MB+ JSONL would also stress
+  // the parser — bailing here is consistent with the buildAllSessions
+  // sweep behavior.
+  if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+  // Parse in strict mode so `fs.readFile` failures (EACCES, EIO,
+  // mid-stream EBUSY from a writer) propagate as throws instead of
+  // being swallowed as `[]`. Without `strict: true`, a permissions
+  // error on a real session file would render a misleading green
+  // "looks healthy" panel — reviewer-flagged (Codex P1 + Copilot).
+  // Per-line JSON parse errors still soft-skip; a session with a few
+  // mangled lines is still diagnosable from its valid lines.
+  //
+  // We don't use the FileCache's factory pattern here because that
+  // pattern swallows throws as `[]`. Diagnosis is single-session and
+  // infrequent, so skipping the cache costs a re-parse on tab-revisit
+  // but never produces a misleading healthy verdict on a broken file.
+  try {
+    return await parseSessionTurns(candidate, dir, { strict: true });
+  } catch (err) {
+    throw new SessionTurnsLoadError(
+      `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
+      sessionId,
+      candidate,
+      err
+    );
+  }
 }
 
 /**
@@ -765,40 +790,36 @@ export async function loadSessionWithMetaBySessionId(
 ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta } | null> {
   if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
 
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
-  let dirs: string[];
+  // Same multi-home resolve + error contract as loadSessionTurnsBySessionId.
+  let found: { filePath: string; projectDirName: string } | null;
   try {
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true });
-    dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    found = await resolveSessionJsonl(sessionId);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
     throw new SessionTurnsLoadError(
-      `Failed to list ${projectsDir}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to list Claude projects dirs: ${err instanceof Error ? err.message : String(err)}`,
       sessionId,
-      projectsDir,
+      "~/.claude/projects",
       err
     );
   }
+  if (!found) return null;
+  const { filePath: candidate, projectDirName: dir } = found;
 
-  for (const dir of dirs) {
-    const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-    let stat;
-    try {
-      stat = await fs.stat(candidate);
-    } catch {
-      continue;
-    }
-    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
-    try {
-      return await parseSessionTurnsWithMeta(candidate, dir, { strict: true });
-    } catch (err) {
-      throw new SessionTurnsLoadError(
-        `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
-        sessionId,
-        candidate,
-        err
-      );
-    }
+  let stat;
+  try {
+    stat = await fs.stat(candidate);
+  } catch {
+    return null; // removed between resolve and stat
   }
-  return null;
+  if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+  try {
+    return await parseSessionTurnsWithMeta(candidate, dir, { strict: true });
+  } catch (err) {
+    throw new SessionTurnsLoadError(
+      `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,
+      sessionId,
+      candidate,
+      err
+    );
+  }
 }

@@ -25,6 +25,8 @@ import type {
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
 import { demoMode } from "@/lib/demo/demoMode";
+import { readConfig } from "@/lib/config";
+import { mapLocalPath } from "@/lib/pathMapping";
 import { demoSessionsList, demoSessionDetail } from "@/lib/demo/sessions";
 import { demoUsage, demoClaudeUsage, demoAgentUsage, demoSkillUsage } from "@/lib/demo/usage";
 import type { UsageReport, AgentStats, SkillStats, UsageComparison } from "@/lib/usage/types";
@@ -960,7 +962,21 @@ export interface ClaudeUsageResult {
  */
 export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsageResult> {
   if (await demoMode()) return demoClaudeUsage(projectPaths, Date.now());
-  if (!dbModeRequested()) return runFileClaudeUsage(projectPaths);
+  // Expand each path with its mapped (foreign) form so UNC-scanned WSL
+  // projects match their Linux-encoded session dirs in BOTH backends — the
+  // DB loader filters by encodePath(path), and the file fallback matches
+  // encoded dir names across homes.
+  const usageCfg = await readConfig();
+  const usageMappings = usageCfg.pathMappings ?? [];
+  const expandedPaths = [
+    ...new Set(
+      projectPaths.flatMap((p) => {
+        const mapped = mapLocalPath(p, usageMappings);
+        return mapped !== p ? [p, mapped] : [p];
+      })
+    ),
+  ];
+  if (!dbModeRequested()) return runFileClaudeUsage(expandedPaths);
 
   const db = await getReadyDb();
   if (await checkV3Gate("getClaudeUsage", db)) {
@@ -968,17 +984,17 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
       "getClaudeUsage",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
-    return runFileClaudeUsage(projectPaths);
+    return runFileClaudeUsage(expandedPaths);
   }
   const stats = await callDbLoader("getClaudeUsage", () =>
-    loadClaudeUsageStatsFromDb(db, projectPaths)
+    loadClaudeUsageStatsFromDb(db, expandedPaths)
   );
   if (stats.conversationCount === 0) {
     logIntentionalFallthrough(
       "getClaudeUsage",
       "DB has zero conversations for the filter set (indexer warming up?)"
     );
-    return runFileClaudeUsage(projectPaths);
+    return runFileClaudeUsage(expandedPaths);
   }
   return { stats, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }

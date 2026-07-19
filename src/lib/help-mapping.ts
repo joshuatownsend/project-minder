@@ -24,6 +24,7 @@ export const helpMapping: Record<string, string> = {
   '/setup': 'setup',
   '/settings': 'settings',
   '/settings/scan-roots': 'settings',
+  '/settings/claude-homes': 'wsl',
   '/settings/cost': 'cost',
   '/settings/notifications': 'notifications',
   '/settings/integrations': 'telegram',

@@ -8,6 +8,7 @@ The Settings page (`/settings`) controls Project Minder's own behavior — what 
 |---------|------|------------------|
 | **Features** | 1 | Subsystem on/off toggles. Decide which scanners and watchers run. |
 | **Scan Roots** | 1 | Directories scanned for projects — add extra drives or WSL locations. |
+| **Claude Homes** | 1 | Extra `.claude` session sources (WSL) + cross-environment path mappings. |
 | **Appearance** | 12 | View mode default, theme, keyboard shortcuts. |
 | **Cost** | 8 | Currency display, custom pricing rules, schedule mode for quota burndown. |
 | **Notifications** | 7 | Web push and Telegram per-event toggles. |
