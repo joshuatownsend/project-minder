@@ -3,6 +3,7 @@ import { loadCatalog } from "./indexer/catalog";
 import { runWasteOptimizer } from "./scanner/wasteOptimizer";
 import { buildProjectTurnsIndex, lookupProjectTurns } from "./usage/projectMatch";
 import { getCachedScan } from "./cache";
+import { readConfig } from "./config";
 import { recordGradeSnapshots, type GradeSnapshotRow } from "./data/gradeSnapshots";
 
 export type EfficiencyGrade = "A" | "B" | "C" | "D" | "F";
@@ -66,6 +67,12 @@ class EfficiencyGradeCache {
 
     const scan = getCachedScan();
     const projectPathMap = new Map(scan?.projects.map((p) => [p.slug, p.path]) ?? []);
+    // Threaded into lookupProjectTurns so UNC-scanned WSL projects also match
+    // their foreign-encoded (Linux-path) session dirs. Defensive: a broken
+    // config read degrades to no mappings, never kills the grade drain.
+    const pathMappings = await readConfig()
+      .then((c) => c.pathMappings ?? [])
+      .catch(() => []);
     const mcpMap = new Map(
       scan?.projects.map((p) => [p.slug, p.mcpServers?.servers ?? []]) ?? []
     );
@@ -95,7 +102,7 @@ class EfficiencyGradeCache {
       for (const item of batch) {
         try {
           const path = projectPathMap.get(item.slug) ?? item.path;
-          const turns = lookupProjectTurns(turnsIndex, item.slug, path);
+          const turns = lookupProjectTurns(turnsIndex, item.slug, path, pathMappings);
           const info = runWasteOptimizer({
             turns,
             configuredMcpServers: mcpMap.get(item.slug) ?? [],

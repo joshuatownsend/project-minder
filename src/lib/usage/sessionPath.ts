@@ -50,8 +50,13 @@ export async function resolveSessionJsonl(
   }
 
   for (const { projectsDir, dirs } of scanned) {
+    const root = path.resolve(projectsDir);
     for (const dir of dirs) {
-      const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+      // Containment barrier (CodeQL js/path-injection): sessionId is already
+      // regex-validated and `dir` comes from readdir, but resolve + prefix-
+      // check anyway so no combination of inputs can escape the projects dir.
+      const candidate = path.resolve(root, dir, `${sessionId}.jsonl`);
+      if (!candidate.startsWith(root + path.sep)) continue;
       try {
         await fs.access(candidate);
         return { filePath: candidate, projectDirName: dir };

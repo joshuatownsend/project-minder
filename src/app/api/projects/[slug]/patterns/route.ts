@@ -6,6 +6,7 @@ import { loadCatalog } from "@/lib/indexer/catalog";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import { readConfig } from "@/lib/config";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 
 // Cross-session workflow pattern detection for a project. Cached with a 5-min
@@ -54,7 +55,9 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
+  const projectTurns = gatherProjectTurns(
+    sessionMap, slug, project.path, (await readConfig()).pathMappings ?? []
+  );
   const result = detectWorkflowPatterns({
     turns: projectTurns,
     skillsCatalog: catalog.skills.filter(

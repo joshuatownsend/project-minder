@@ -7,6 +7,7 @@ import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { loadCatalog } from "@/lib/indexer/catalog";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import { readConfig } from "@/lib/config";
 import { classifyTurn } from "@/lib/usage/classifier";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
 import { recordGradeSnapshot, loadGradeTrend, type GradeTrend } from "@/lib/data/gradeSnapshots";
@@ -72,7 +73,9 @@ export async function GET(
     loadCatalog({ includeProjects: true }),
   ]);
 
-  const projectTurns = gatherProjectTurns(sessionMap, slug, project.path);
+  const projectTurns = gatherProjectTurns(
+    sessionMap, slug, project.path, (await readConfig()).pathMappings ?? []
+  );
 
   const waste = runWasteOptimizer({
     turns: projectTurns,

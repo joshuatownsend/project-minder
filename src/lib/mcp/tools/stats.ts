@@ -7,6 +7,7 @@ import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { gatherContextOverhead } from "@/lib/contextOverheadComposed";
 import { parseAllSessions } from "@/lib/usage/parser";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
+import { readConfig } from "@/lib/config";
 import { buildHotFiles } from "@/lib/usage/fileTracker";
 import { buildErrorPropagation } from "@/lib/usage/errorPropagation";
 import { buildFileCoupling } from "@/lib/usage/fileCoupling";
@@ -92,7 +93,9 @@ export function registerStatsTools(server: McpServer): void {
       const project = scan.projects.find((p) => p.slug === slug);
       if (!project) return errorResult(`No project with slug '${slug}'.`);
       const sessionMap = await parseAllSessions();
-      const turns = gatherProjectTurns(sessionMap, slug, project.path);
+      const turns = gatherProjectTurns(
+        sessionMap, slug, project.path, (await readConfig()).pathMappings ?? []
+      );
       const result = buildHotFiles(turns, limit);
       return jsonResult({ slug, result });
     }
@@ -138,7 +141,9 @@ export function registerStatsTools(server: McpServer): void {
       const project = scan.projects.find((p) => p.slug === slug);
       if (!project) return errorResult(`No project with slug '${slug}'.`);
       const sessionMap = await parseAllSessions();
-      const turns = gatherProjectTurns(sessionMap, slug, project.path);
+      const turns = gatherProjectTurns(
+        sessionMap, slug, project.path, (await readConfig()).pathMappings ?? []
+      );
       const result = buildFileCoupling(turns, minOccurrences);
       return jsonResult({ slug, result });
     }

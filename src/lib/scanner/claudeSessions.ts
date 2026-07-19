@@ -38,8 +38,12 @@ interface ViewsCache {
 
 // Cache parsed history/views to avoid re-reading the files 61 times per scan.
 // Module-level (not globalThis) on purpose: tests reset it via vi.resetModules().
+// Keyed by the config that shaped the views (homes + mappings) so a Settings
+// "Save & Rescan" that changes claudeHomes/pathMappings rebuilds immediately
+// instead of serving the prior homes for up to a minute.
 let cachedViews: ViewsCache | null = null;
 let cacheTime = 0;
+let cacheConfigKey = "";
 const HISTORY_CACHE_TTL = 60_000; // 1 minute
 
 async function buildHomeView(home: string, mappings: PathMapping[]): Promise<HomeView> {
@@ -79,17 +83,23 @@ async function buildHomeView(home: string, mappings: PathMapping[]): Promise<Hom
 }
 
 async function getHomeViews(): Promise<ViewsCache> {
-  if (cachedViews && Date.now() - cacheTime < HISTORY_CACHE_TTL) {
-    return cachedViews;
-  }
   const config = await readConfig();
   const mappings = config.pathMappings ?? [];
+  const configKey = JSON.stringify([config.claudeHomes ?? [], mappings]);
+  if (
+    cachedViews &&
+    cacheConfigKey === configKey &&
+    Date.now() - cacheTime < HISTORY_CACHE_TTL
+  ) {
+    return cachedViews;
+  }
   // getReadableClaudeHomes applies the never-wake rule: a home inside a
   // stopped WSL distro is left out for this cycle rather than auto-started.
   const homes = await getReadableClaudeHomes(config);
   const views = await Promise.all(homes.map((h) => buildHomeView(h, mappings)));
   cachedViews = { views, mappings };
   cacheTime = Date.now();
+  cacheConfigKey = configKey;
   return cachedViews;
 }
 
