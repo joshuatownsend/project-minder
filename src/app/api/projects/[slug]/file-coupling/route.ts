@@ -18,6 +18,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 interface CacheSlot {
   data: FileCouplingResponse;
   jsonlMtime: number;
+  /** JSON of config.pathMappings at compute time — a Settings save that
+   *  changes the mappings must invalidate (turn matching depends on them). */
+  mappingsSig: string;
 }
 
 const cache = getOrCreateRouteCache<CacheSlot>("file-coupling", { ttlMs: CACHE_TTL_MS });
@@ -33,9 +36,11 @@ export async function GET(
   try {
     // Cache key includes the threshold so changing ?min= yields fresh data.
     const cacheKey = `${slug}:${minCoOccurrences}`;
+    const pathMappings = (await readConfig()).pathMappings ?? [];
+    const mappingsSig = JSON.stringify(pathMappings);
     const cached = cache.get(cacheKey);
     const currentMtime = getJsonlMaxMtime();
-    if (cached && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
       return NextResponse.json(cached.data);
     }
 
@@ -50,13 +55,11 @@ export async function GET(
     }
 
     const sessionMap = await parseAllSessions();
-    const projectTurns = gatherProjectTurns(
-      sessionMap, slug, project.path, (await readConfig()).pathMappings ?? []
-    );
+    const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings);
 
     const result = buildFileCoupling(projectTurns, minCoOccurrences);
     const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };
-    cache.set(cacheKey, { data, jsonlMtime: currentMtime });
+    cache.set(cacheKey, { data, jsonlMtime: currentMtime, mappingsSig });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[file-coupling] Error processing slug="${slug}":`, err);

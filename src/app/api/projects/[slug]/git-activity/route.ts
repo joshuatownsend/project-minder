@@ -6,6 +6,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { getProjectGitActivity } from "@/lib/projectGitActivity";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { wslGuardResponse } from "@/lib/wslRouteGuard";
+import { readConfig } from "@/lib/config";
 
 interface GitActivityResponse {
   slug: string;
@@ -18,6 +19,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 interface CacheSlot {
   data: GitActivityResponse;
   jsonlMtime: number;
+  /** JSON of config.pathMappings at compute time — a Settings save that
+   *  changes the mappings must invalidate (turn matching depends on them). */
+  mappingsSig: string;
 }
 
 const cache = getOrCreateRouteCache<CacheSlot>("git-activity", { ttlMs: CACHE_TTL_MS });
@@ -28,9 +32,10 @@ export async function GET(
 ) {
   const { slug } = await params;
   try {
+    const mappingsSig = JSON.stringify((await readConfig()).pathMappings ?? []);
     const cached = cache.get(slug);
     const currentMtime = getJsonlMaxMtime();
-    if (cached && cached.jsonlMtime === currentMtime) {
+    if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
       return NextResponse.json(cached.data);
     }
 
@@ -51,7 +56,7 @@ export async function GET(
 
     const activity = await getProjectGitActivity(slug, project.path);
     const data: GitActivityResponse = { slug, activity, generatedAt: new Date().toISOString() };
-    cache.set(slug, { data, jsonlMtime: currentMtime });
+    cache.set(slug, { data, jsonlMtime: currentMtime, mappingsSig });
     return NextResponse.json(data);
   } catch (err) {
     console.error(`[git-activity] Error processing slug="${slug}":`, err);

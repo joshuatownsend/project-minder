@@ -2882,7 +2882,11 @@ export async function reconcileAllSessions(
   // WSL distro, or a mid-cycle listing failure) stay live: the files almost
   // certainly still exist — we just can't look without waking the VM.
   if (unavailableDirs.length > 0) {
-    const prefixes = unavailableDirs.map((d) => normalizePathKey(d) + path.sep);
+    // normalizePathKey yields forward-slash keys on every platform, so the
+    // boundary separator MUST be "/" — appending path.sep ("\\" on Windows)
+    // would make startsWith never match and the prune below would delete the
+    // very rows this shield exists to keep.
+    const prefixes = unavailableDirs.map((d) => normalizePathKey(d) + "/");
     for (const r of db
       .prepare("SELECT file_path FROM sessions WHERE source = 'claude'")
       .all() as Array<{ file_path: string }>) {
