@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import type { ProjectData } from "../types";
 import { memoryDirFor } from "../scanner/memoryWriter";
+import { checkWslRoot, parseWslUncPath } from "../wsl";
 
 // PUT to /api/memory/by-id/[id] decodes its `id` into an absolute path. Without
 // an allowlist, that becomes a write-anywhere primitive. We constrain accepted
@@ -66,6 +67,14 @@ export async function classifyMemoryPath(
   absPath: string,
   projects: ProjectData[],
 ): Promise<AllowedPathInfo | null> {
+  // Never-wake preflight: the candidate is user-supplied (decoded memory id),
+  // so realpath'ing it while its WSL distro is stopped would auto-start the
+  // VM. Refuse to classify — the caller treats null as "not allowed".
+  if (parseWslUncPath(absPath)) {
+    const check = await checkWslRoot(absPath);
+    if (check && !check.ok) return null;
+  }
+
   const realCandidate = await safeRealpath(absPath);
   if (!realCandidate) return null;
 
@@ -75,9 +84,21 @@ export async function classifyMemoryPath(
   }
 
   for (const p of projects) {
-    const realProjectMd = await safeRealpath(projectMemoryPath(p.path));
-    if (realProjectMd && realCandidate === realProjectMd) {
-      return { scope: "project", projectSlug: p.slug, projectPath: p.path };
+    // Never-wake preflight for the project-scope half only: realpath'ing
+    // <p.path>/CLAUDE.md under a stopped WSL distro would auto-start its VM.
+    // The auto-scope half below stays active — memoryDirFor(p.path) derives a
+    // LOCAL ~/.claude path from the path string, so managing a stopped-WSL
+    // project's auto memories (which live locally) keeps working.
+    let projectMdBlocked = false;
+    if (parseWslUncPath(p.path)) {
+      const check = await checkWslRoot(p.path);
+      projectMdBlocked = check !== null && !check.ok;
+    }
+    if (!projectMdBlocked) {
+      const realProjectMd = await safeRealpath(projectMemoryPath(p.path));
+      if (realProjectMd && realCandidate === realProjectMd) {
+        return { scope: "project", projectSlug: p.slug, projectPath: p.path };
+      }
     }
 
     const realMemDir = await safeRealpath(memoryDirFor(p.path));
