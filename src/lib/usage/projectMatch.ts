@@ -45,10 +45,26 @@ export function projectDirNameCandidates(
     const mapped = mapLocalPath(projectPath, [m]);
     if (mapped === projectPath) continue;
     const dirName = encodeProjectPath(mapped);
-    const toDistro = parseWslUncPath(m.to)?.distro.toLowerCase();
-    const home = toDistro
-      ? homes.find((h) => parseWslUncPath(h)?.distro.toLowerCase() === toDistro)
-      : undefined;
+    // Owning home = the configured home that lives UNDER the mapping's `to`
+    // prefix (e.g. to=\\wsl\Ubuntu\home\bob contains home ...\home\bob\.claude).
+    // Path-prefix first — two homes can share a distro (different users), and
+    // a distro-level pick could pin Bob's candidate to Josh's home, making
+    // turnMatchesCandidate reject every one of Bob's turns. Distro match is
+    // only a fallback when it's unambiguous (exactly one home in the distro).
+    const toKey = normalizePathKey(m.to);
+    let home = homes.find((h) => {
+      const hk = normalizePathKey(h);
+      return hk === toKey || hk.startsWith(toKey + "/");
+    });
+    if (!home) {
+      const toDistro = parseWslUncPath(m.to)?.distro.toLowerCase();
+      if (toDistro) {
+        const inDistro = homes.filter(
+          (h) => parseWslUncPath(h)?.distro.toLowerCase() === toDistro
+        );
+        if (inDistro.length === 1) home = inDistro[0];
+      }
+    }
     const homeKey = home ? normalizePathKey(home) : undefined;
     if (!out.some((c) => c.dirName === dirName && c.homeKey === homeKey)) {
       out.push({ dirName, homeKey });
