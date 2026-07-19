@@ -171,6 +171,49 @@ Unsigned installers trigger this warning. This is expected and normal.
 
 If Quit hangs, the server may be unresponsive to the graceful-shutdown signal. Force-kill the process via task manager and relaunch. The SQLite database is resilient to unclean stops (WAL recovery on next startup).
 
+## Building Installers Locally
+
+Installers are normally built by CI: pushing a `v*` tag runs `.github/workflows/release-installers.yml`, which builds all four platform targets and attaches them to the GitHub Release.
+
+To reproduce that build on your own machine — to test a change to the packaging chain, or to produce an installer from an untagged commit — use:
+
+```bash
+pnpm release:local
+```
+
+This runs the same five steps CI does, in the same order:
+
+1. `pnpm build` — the Next app (its `prebuild` hook builds the worker)
+2. `pnpm package:standalone` — the Node sidecar payload into `dist/minder-server`
+3. `node scripts/verify-payload-hygiene.mjs` — the gate that fails the build if `.git`, `.env*`, or `.claude/` leaked into the payload
+4. `node scripts/fetch-node-runtime.mjs` — the pinned, SHA-256-verified Node runtime into `dist/node`
+5. `pnpm tauri build --bundles <targets>` — the installers
+
+Finished installers are listed with their paths and sizes at the end, under `src-tauri/target/release/bundle/`.
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--bundles <list>` | Comma-separated Tauri targets (e.g. `nsis`, `deb,appimage`). Defaults to the host OS's natural set. |
+| `--skip-build` | Reuse the existing `.next` and `dist/minder-server` instead of rebuilding. |
+| `--skip-node` | Reuse the existing `dist/node` instead of re-downloading (~80 MB). |
+| `--dry-run` | Print the plan and exit without running anything. |
+
+`--skip-build` and `--skip-node` are for iterating on the Tauri layer, where re-running the slow earlier steps buys nothing. The hygiene gate always runs — it is the backstop that keeps secrets out of a shipped installer, so it is deliberately not skippable.
+
+### Version stamping
+
+`src-tauri/tauri.conf.json` is checked in with a placeholder version of `0.1.0`; the real version is stamped from `package.json` at build time. `pnpm release:local` performs that same stamp and then restores the file, so it leaves no diff in your working tree.
+
+This matters more than it looks: an installer built without the stamp reports itself as version `0.1.0` forever. Once auto-updates ship, such a build would consider itself permanently out of date and re-download every release in a loop.
+
+If `HEAD` carries a `v*` tag, the script requires it to agree with `package.json` and fails loudly otherwise — the same mistagged-release guard CI applies. On an untagged commit it says so and proceeds, since building a release candidate before tagging is the normal local workflow.
+
+### Signing
+
+`pnpm release:local` produces **unsigned** installers, exactly as CI does today. Windows will show a SmartScreen warning and macOS a Gatekeeper warning for any build produced this way.
+
 ## Comparison with Service Mode
 
 Project Minder offers two ways to run continuously:
