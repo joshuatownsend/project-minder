@@ -478,10 +478,12 @@ function queryActivityTurns(
   f: FilterParams
 ): Array<{ timestamp: string; cost?: number }> {
   // Full-history (no period filter) assistant turns for activity aggregates.
-  // Only the project filter is applied so per-project activity is correct.
-  // Scalability note: this is a full table scan on large DBs. The /api/usage
-  // route has a 2-min globalThis cache (keyed by backend:period:project) that
-  // absorbs repeated calls; the cold-start cost is the only concern.
+  // The project/source/home filters ARE applied so scoped activity is correct;
+  // only the period bound is deliberately omitted (activity is full-history by
+  // design). Scalability note: this is a full table scan on large DBs. The
+  // /api/usage route has a 2-min globalThis cache (keyed by
+  // backend:period:project:source:home) that absorbs repeated calls; the
+  // cold-start cost is the only concern.
   const rows = prepCached(
     db,
     `SELECT t.ts AS timestamp, t.cost_usd AS cost
