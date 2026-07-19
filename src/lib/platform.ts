@@ -1,15 +1,80 @@
 import { spawn, ChildProcess } from "child_process";
+// Namespace import, NOT `import { existsSync }`: a named binding is resolved
+// when the module graph loads, so every test that does a partial `vi.mock("fs")`
+// without listing existsSync would fail at import time — in a module this
+// widely imported that was 13 unrelated test files. Accessing it off the
+// namespace defers to call time, and `fsExists` guards the mocked case.
+import * as nodeFs from "fs";
 import path from "path";
 import os from "os";
 
 export const isWindows = process.platform === "win32";
 
 /**
- * Returns the default dev root for the current platform.
- * Can be overridden via .minder.json devRoot/devRoots.
+ * The directories to look for projects in, in preference order, when the user
+ * has not configured `devRoot`/`devRoots` in `.minder.json`.
+ *
+ * `C:\dev` leads on Windows because it's this tool's original convention and
+ * an existing install must keep resolving there — but it is a convention, not
+ * a guarantee, so a home-relative `~/dev` follows it. On POSIX only the
+ * home-relative form is meaningful.
+ */
+export function getDevRootCandidates(): string[] {
+  const homeDev = path.join(os.homedir(), "dev");
+  return isWindows ? ["C:\\dev", homeDev] : [homeDev];
+}
+
+/**
+ * Returns the default dev root for the current platform — the FIRST candidate,
+ * whether or not it exists on disk.
+ *
+ * This is the "we must produce a path" answer, used as `MinderConfig.devRoot`'s
+ * default so the config shape stays non-nullable for every existing consumer.
+ * To ask the different question "is there actually anywhere worth scanning?",
+ * use `probeDefaultDevRoot()` — a fresh install where neither candidate exists
+ * should onboard the user rather than silently scan a directory that isn't
+ * there and render an empty dashboard that looks broken.
  */
 export function getDefaultDevRoot(): string {
-  return isWindows ? "C:\\dev" : path.join(os.homedir(), "dev");
+  return getDevRootCandidates()[0];
+}
+
+/**
+ * The first candidate dev root that actually EXISTS, or `null` if none do.
+ *
+ * `null` is the first-run signal: it means this machine has no conventional
+ * project directory, so we can't guess, and the UI should ask instead. It is
+ * deliberately distinct from "the configured root is currently empty" (a
+ * legitimate steady state we must not interrupt).
+ *
+ * @param exists injectable for tests — defaults to a real filesystem probe.
+ */
+/**
+ * Real-filesystem existence check, tolerant of a partially-mocked `fs`.
+ *
+ * `config.ts` calls `probeDefaultDevRoot()` at MODULE scope to seed
+ * `DEFAULT_DEV_ROOT`, so this runs during import in any test that touches the
+ * config module. Under a partial `fs` mock `existsSync` is simply absent —
+ * reporting "not found" there yields exactly the pre-probe default, whereas
+ * throwing would break unrelated suites.
+ */
+function fsExists(p: string): boolean {
+  return typeof nodeFs.existsSync === "function" ? nodeFs.existsSync(p) : false;
+}
+
+export function probeDefaultDevRoot(
+  exists: (p: string) => boolean = fsExists
+): string | null {
+  for (const candidate of getDevRootCandidates()) {
+    try {
+      if (exists(candidate)) return candidate;
+    } catch {
+      // An unreadable candidate (permissions, a disconnected drive) is not a
+      // usable root — keep probing rather than failing the whole first-run
+      // check, which would strand the user with no dashboard at all.
+    }
+  }
+  return null;
 }
 
 /**

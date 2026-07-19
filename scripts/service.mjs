@@ -73,6 +73,8 @@ import {
   describeStepFailure,
   isTaskkillAlreadyGone,
   SERVICE_MANIFEST_FILENAME,
+  resolveServicePort,
+  resolveInstalledPort,
   resolveInstalledLaunch,
 } from "./service/lib.mjs";
 
@@ -117,7 +119,7 @@ function buildWindowsArtifacts(launch) {
 
   const vbsContent = renderTemplate(readTemplate("windows-run-hidden.vbs.tmpl"), {
     WORKING_DIR: launch.cwd,
-    PORT: "4100",
+    PORT: String(resolveServicePort()),
     HOSTNAME: "127.0.0.1",
     COMMAND_LINE: escapeVbsString(commandLine),
   });
@@ -162,7 +164,7 @@ function buildMacArtifacts(launch) {
     LABEL: escapeXml(LAUNCHD_LABEL),
     PROGRAM_ARGUMENTS: programArgumentsXml,
     WORKING_DIR: escapeXml(launch.cwd),
-    PORT: escapeXml("4100"),
+    PORT: escapeXml(String(resolveServicePort())),
     HOSTNAME: escapeXml("127.0.0.1"),
     LOG_DIR: escapeXml(logDir),
     PATH_VALUE: escapeXml(installTimePath()),
@@ -188,7 +190,7 @@ function buildLinuxArtifacts(launch) {
   const unitContent = renderTemplate(readTemplate("minder.service.tmpl"), {
     EXEC_START: execStart,
     WORKING_DIR: escapeSystemdPercent(launch.cwd),
-    PORT: "4100",
+    PORT: String(resolveServicePort()),
     HOSTNAME: "127.0.0.1",
     PATH_VALUE: escapeSystemdPercent(installTimePath()),
   });
@@ -221,7 +223,10 @@ async function runSteps(steps) {
 // --- Actions -------------------------------------------------------------
 
 function resolveLaunchOrFail() {
-  const launch = resolveServerLaunch({ root });
+  // The fallback (`next start`) mode takes an explicit `-p`, which OVERRIDES the
+  // PORT env var the generated launcher sets — so the install-time port has to
+  // be threaded in here too, not just into the templates (PR #316 review).
+  const launch = resolveServerLaunch({ root, port: resolveServicePort() });
   if (!launch) {
     console.error(`[service] ${NO_BUILD_MESSAGE}`);
     process.exit(1);
@@ -265,6 +270,12 @@ async function runInstall(platformKind) {
         exe: launch.exe,
         args: launch.args,
         cwd: launch.cwd,
+        // Recorded so `service:stop` scans the port this install actually
+        // listens on rather than re-reading MINDER_PORT/PORT from whatever
+        // shell happens to run the stop. Additive: parseServiceManifest
+        // ignores unknown keys, so older readers are unaffected and manifests
+        // written before this field fall back to the vbs, then to 4100.
+        port: resolveServicePort(),
       },
       null,
       2
@@ -486,22 +497,6 @@ async function queryWindowsProcessCommandLine(pid) {
 
 async function runStop(platformKind) {
   if (platformKind === "windows") {
-    // See the file-level comment: schtasks has nothing left to signal by
-    // now, so find whatever is LISTENING on 4100 — but LISTENING alone
-    // isn't proof it's ours. Verify each candidate PID's command line
-    // against this installation's own server entry point before killing it.
-    let stdout = "";
-    try {
-      ({ stdout } = await execFileAsync("netstat", ["-ano"], { windowsHide: true }));
-    } catch (err) {
-      fail(`Failed to run netstat: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    const pids = parseNetstatListeningPids(stdout, 4100);
-    if (pids.length === 0) {
-      step("Nothing is listening on port 4100 — server is not running.");
-      return;
-    }
-
     // F14 review fix: derive the stop identity from what was ACTUALLY
     // INSTALLED (the JSON manifest, or the vbs itself for older installs)
     // rather than recomputing resolveServerLaunch() against the CURRENT
@@ -512,11 +507,38 @@ async function runStop(platformKind) {
     // when neither installed source exists/parses do we fall back to a
     // freshly recomputed launch, with a printed note that it may not
     // match what's actually installed.
+    //
+    // Read BEFORE the netstat scan because the PORT to scan comes from the
+    // same installed sources: an install done with MINDER_PORT=4199 must be
+    // stoppable from a plain shell, which re-resolving the env would break
+    // (we'd scan 4100, find nothing, and report success while it kept running).
     const vbsPath = path.join(windowsServiceDir, "run-hidden.vbs");
     const manifestPath = path.join(windowsServiceDir, SERVICE_MANIFEST_FILENAME);
     const manifestJson = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
     const vbsContent = existsSync(vbsPath) ? readFileSync(vbsPath, "utf8") : null;
     const { launch: installedLaunch, source } = resolveInstalledLaunch({ manifestJson, vbsContent });
+    const { port, source: portSource } = resolveInstalledPort({ manifestJson, vbsContent });
+    if (portSource === "default") {
+      step(`No installed port recorded — assuming the default ${port}.`);
+    } else {
+      step(`Installed service port is ${port} (from ${portSource === "manifest" ? SERVICE_MANIFEST_FILENAME : "run-hidden.vbs"}).`);
+    }
+
+    // See the file-level comment: schtasks has nothing left to signal by
+    // now, so find whatever is LISTENING on that port — but LISTENING alone
+    // isn't proof it's ours. Verify each candidate PID's command line
+    // against this installation's own server entry point before killing it.
+    let stdout = "";
+    try {
+      ({ stdout } = await execFileAsync("netstat", ["-ano"], { windowsHide: true }));
+    } catch (err) {
+      fail(`Failed to run netstat: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const pids = parseNetstatListeningPids(stdout, port);
+    if (pids.length === 0) {
+      step(`Nothing is listening on port ${port} — server is not running.`);
+      return;
+    }
 
     let launch = installedLaunch;
     if (launch) {
@@ -531,7 +553,11 @@ async function runStop(platformKind) {
           "freshly recomputed identity from the current filesystem. This may not match what's actually " +
           "installed if the build changed since install."
       );
-      launch = resolveServerLaunch({ root });
+      // Recompute against the INSTALLED port resolved above, not the ambient
+      // environment — this whole branch exists to approximate what is actually
+      // running, and a stop invoked from a plain shell must not reintroduce the
+      // 4100 assumption the installed-port lookup just eliminated.
+      launch = resolveServerLaunch({ root, port });
     }
     const identity = buildServerIdentityMarkers({ root, launch, vbsPath });
 
@@ -547,14 +573,14 @@ async function runStop(platformKind) {
       const commandLine = await queryWindowsProcessCommandLine(pid);
       if (!commandLineMatchesServer(commandLine, identity)) {
         step(
-          `Port 4100 is held by PID ${pid}, but its command line doesn't match this Minder ` +
+          `Port ${port} is held by PID ${pid}, but its command line doesn't match this Minder ` +
             `installation — NOT killing it.`
         );
         step(`  Command line: ${commandLine || "(could not be determined — process may have already exited)"}`);
         step(`  If you're certain this IS Minder, stop it manually: taskkill /F /T /PID ${pid}`);
         continue;
       }
-      step(`Port 4100 is held by PID ${pid} (verified as this installation) — hard-stopping (taskkill /F /T).`);
+      step(`Port ${port} is held by PID ${pid} (verified as this installation) — hard-stopping (taskkill /F /T).`);
       const killResults = await runSteps([{ exe: "taskkill", args: ["/F", "/T", "/PID", pid] }]);
       const failure = findFirstStepFailure(killResults);
       if (!failure) continue;

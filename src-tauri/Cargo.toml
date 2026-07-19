@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Project Minder tray app — supervises the local dashboard server as a sidecar."
 authors = ["Josh Townsend"]
 edition = "2021"
-rust-version = "1.77"
+# 1.77.2 is tauri-plugin-updater's minimum, above the 1.77 the rest of the app
+# needs. Raising it here keeps `cargo build` failing with a clear MSRV message
+# rather than an inscrutable error from inside the plugin's dependency tree.
+rust-version = "1.77.2"
 
 # The library the mobile/desktop entry points share isn't needed for this
 # desktop-only tray app; a plain binary keeps the scaffold minimal.
@@ -38,6 +41,12 @@ tauri-plugin-single-instance = "2"
 # LaunchAgent / Linux autostart .desktop entry) — the tray's "Start at login"
 # checkbox reads/writes through this, desktop-only like single-instance above.
 tauri-plugin-autostart = "2"
+# Self-update from the GitHub Release's latest.json. Desktop-only alongside the
+# plugins above. Update PAYLOADS are authenticated with a minisign key (the
+# `pubkey` in tauri.conf.json) — that is independent of OS code signing, which
+# this app does not yet have: installers remain unsigned, so a first-time
+# download still trips SmartScreen/Gatekeeper even though updates are verified.
+tauri-plugin-updater = "2"
 
 [profile.release]
 # Smaller, faster-to-ship tray binary.

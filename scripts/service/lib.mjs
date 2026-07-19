@@ -201,6 +201,71 @@ export function isTaskkillAlreadyGone(result) {
 /** The filename the JSON sidecar recording the installed launch is written under (Windows only, in `~/.minder/service/` alongside run-hidden.vbs/task.xml). */
 export const SERVICE_MANIFEST_FILENAME = "service-manifest.json";
 
+/** The port `pnpm dev`/`pnpm start` bind when nothing overrides them. Mirrors DEFAULT_PORT in src/lib/boundPort.ts. */
+export const DEFAULT_SERVICE_PORT = 4100;
+
+/**
+ * The port to BAKE INTO the generated launcher at install time. `MINDER_PORT`
+ * is checked before `PORT` so an operator can pick the installed service's port
+ * without also changing the port of whatever else in the shell inherits `PORT`.
+ *
+ * Only used at INSTALL time. `service:stop` must NOT call this — it reads the
+ * port back out of what was actually installed (`resolveInstalledPort`),
+ * because the environment at stop time need not match the environment at
+ * install time. See the file-level comment in service.mjs.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {number}
+ */
+export function resolveServicePort(env = process.env) {
+  const raw = env.MINDER_PORT ?? env.PORT;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : DEFAULT_SERVICE_PORT;
+}
+
+/**
+ * Recovers the port the INSTALLED service actually listens on, using the same
+ * precedence as `resolveInstalledLaunch`: the JSON manifest first, then the
+ * generated vbs (installs predating the manifest's `port` field), then the
+ * default.
+ *
+ * This exists because `service:stop` finds the server by looking for whoever
+ * is LISTENING on a port. Re-resolving that port from the current environment
+ * would mean an install done with `MINDER_PORT=4199` could not be stopped from
+ * a plain shell — `stop` would scan 4100, find nothing, and report success
+ * while the service kept running.
+ *
+ * @param {{ manifestJson?: string | null, vbsContent?: string | null }} [sources]
+ * @returns {{ port: number, source: "manifest" | "vbs" | "default" }}
+ */
+export function resolveInstalledPort(sources = {}) {
+  const { manifestJson, vbsContent } = sources;
+
+  if (typeof manifestJson === "string" && manifestJson.trim()) {
+    try {
+      const data = JSON.parse(manifestJson);
+      const p = data?.port;
+      if (Number.isInteger(p) && p >= 1 && p <= 65535) {
+        return { port: p, source: "manifest" };
+      }
+    } catch {
+      // fall through to the vbs — same tolerance as parseServiceManifest
+    }
+  }
+
+  if (typeof vbsContent === "string" && vbsContent.trim()) {
+    const m = vbsContent.match(/WshEnv\("PORT"\)\s*=\s*"(\d{1,5})"/);
+    if (m) {
+      const p = Number.parseInt(m[1], 10);
+      if (Number.isInteger(p) && p >= 1 && p <= 65535) {
+        return { port: p, source: "vbs" };
+      }
+    }
+  }
+
+  return { port: DEFAULT_SERVICE_PORT, source: "default" };
+}
+
 /**
  * @typedef {{ mode: "standalone" | "fallback", exe: string, args: string[], cwd?: string }} InstalledLaunch
  */
@@ -353,6 +418,7 @@ function defaultResolveNextBin(root) {
  *   platform?: string,
  *   existsSync?: (path: string) => boolean,
  *   resolveNextBin?: (root: string) => string,
+ *   port?: number,
  * }} opts
  */
 export function resolveServerLaunch(opts) {
@@ -361,6 +427,7 @@ export function resolveServerLaunch(opts) {
     execPath = process.execPath,
     existsSync = fsExistsSync,
     resolveNextBin = defaultResolveNextBin,
+    port = DEFAULT_SERVICE_PORT,
   } = opts;
   const standaloneServer = path.join(root, "dist", "minder-server", "server.js");
   if (existsSync(standaloneServer)) {
@@ -399,7 +466,14 @@ export function resolveServerLaunch(opts) {
       // than relying on the HOSTNAME env var the templates already set
       // (that env var is for the standalone server.js path, which reads
       // process.env.HOSTNAME directly — "next start" does not).
-      args: [nextBinPath, "start", "-p", "4100", "--hostname", "127.0.0.1"],
+      // `port` is threaded in from resolveServicePort() at the call site, NOT
+      // defaulted to 4100 here. An explicit `-p` overrides the PORT env var the
+      // generated launcher sets, so a hardcoded 4100 would silently pin a
+      // custom-port fallback install to 4100 while the manifest, the proxy's
+      // Origin allowlist, and `service:stop`'s port scan all used the custom
+      // value — a dashboard that 403s its own /api calls and a service that
+      // stop can't find (PR #316 review).
+      args: [nextBinPath, "start", "-p", String(port), "--hostname", "127.0.0.1"],
       cwd: root,
     };
   }

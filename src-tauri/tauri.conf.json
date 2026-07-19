@@ -12,9 +12,21 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMzOUIxRDFBMzQ2MDM5RUUKUldUdU9XQTBHaDJidzVDQ3dyS3BVL1J0S0lDZE02UHlMdDZZeG13SlBpOWhtT3BEZTRzenNEVVkK",
+      "endpoints": [
+        "https://github.com/joshuatownsend/project-minder/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

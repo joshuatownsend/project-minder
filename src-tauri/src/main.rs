@@ -13,6 +13,7 @@ mod health;
 mod notify;
 mod supervisor;
 mod tray;
+mod updater;
 
 use std::sync::Arc;
 
@@ -44,6 +45,11 @@ fn main() {
         ))
         // Native OS toast notifications for the manual-steps poller (C3).
         .plugin(tauri_plugin_notification::init())
+        // Self-update from the GitHub Release manifest (U3). Registration only;
+        // all the logic — including the Windows sidecar-shutdown hand-off that
+        // keeps the installer from tripping over a locked node.exe — lives in
+        // crate::updater.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let mut cfg = cfg;
             // Resolve where the packaged server lives: MINDER_SERVER_DIST (dev)
@@ -81,6 +87,13 @@ fn main() {
                 // arrives here with `code: Some(0)`; that one we let through so
                 // Tauri tears the tray icon down cleanly (the sidecar was
                 // already stopped by supervisor.shutdown() before exit).
+                //
+                // This guard does NOT interfere with the updater (U4). The
+                // Windows updater quits via `std::process::exit()`, which never
+                // reaches the event loop, so there is no ExitRequested here to
+                // swallow. The flip side is that no destructor runs either —
+                // which is why crate::updater stops the sidecar from the
+                // plugin's `on_before_exit` hook instead of relying on this path.
                 if code.is_none() {
                     api.prevent_exit();
                 }

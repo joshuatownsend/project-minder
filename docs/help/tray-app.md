@@ -165,11 +165,81 @@ Unsigned installers trigger this warning. This is expected and normal.
 - Click **Run anyway**.
 - The installer will proceed.
 
-(Signed installers and auto-updates are planned for a future release.)
+This applies to the **initial download** only. Once installed, the app updates itself and verifies every update against the project's signing key — see [Updates](#updates). Signed installers, which would remove this warning, are still planned.
 
 ### Tray app won't quit cleanly
 
 If Quit hangs, the server may be unresponsive to the graceful-shutdown signal. Force-kill the process via task manager and relaunch. The SQLite database is resilient to unclean stops (WAL recovery on next startup).
+
+## Updates
+
+The tray app updates itself from GitHub Releases.
+
+- **Automatic check** — every ~6 hours (piggybacked on the existing health-poll timer, so there's no extra background thread). If a new version exists you get a desktop notification. The check **never installs on its own**: this app is supervising a dashboard server you may be actively using, and an unannounced restart would drop in-flight scans and any dev servers it's managing.
+- **Installing** — choose **Check for updates…** in the tray menu. That downloads and installs the update, stops the server cleanly, and relaunches.
+
+Each update is a full ~100 MB download; Tauri does not do differential updates.
+
+### What's verified, and what isn't
+
+Update payloads are signed with the project's minisign key, and your installed app will refuse any update it can't verify against that key. This is what protects you from a tampered update.
+
+That is **separate** from OS code signing, which Project Minder does not yet have. The first time you download an installer, Windows SmartScreen or macOS Gatekeeper will still warn you — see [SmartScreen warning on Windows](#smartscreen-warning-on-windows). Signing the installers is planned but not done; the two mechanisms are unrelated, and neither substitutes for the other.
+
+### Linux: `.deb` cannot self-update
+
+If you installed the `.deb`, the updater will report `Currently only an AppImage can be updated`. This is by design, not a bug — a system package manager owns those files, so an app that rewrote them would fight it. Update by downloading the next `.deb` from the Releases page, or switch to the **AppImage**, which self-updates normally.
+
+## Building Installers Locally
+
+Installers are normally built by CI: pushing a `v*` tag runs `.github/workflows/release-installers.yml`, which builds all four platform targets and attaches them to the GitHub Release.
+
+To reproduce that build on your own machine — to test a change to the packaging chain, or to produce an installer from an untagged commit — use:
+
+```bash
+pnpm release:local
+```
+
+This runs the same five steps CI does, in the same order:
+
+1. `pnpm build` — the Next app (its `prebuild` hook builds the worker)
+2. `pnpm package:standalone` — the Node sidecar payload into `dist/minder-server`
+3. `node scripts/verify-payload-hygiene.mjs` — the gate that fails the build if `.git`, `.env*`, or `.claude/` leaked into the payload
+4. `node scripts/fetch-node-runtime.mjs` — the pinned, SHA-256-verified Node runtime into `dist/node`
+5. `pnpm tauri build --bundles <targets>` — the installers
+
+Finished installers are listed with their paths and sizes at the end, under `src-tauri/target/release/bundle/`.
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--bundles <list>` | Comma-separated Tauri targets (e.g. `nsis`, `deb,appimage`). Defaults to the host OS's natural set. |
+| `--skip-build` | Reuse the existing `.next` and `dist/minder-server` instead of rebuilding. |
+| `--skip-node` | Reuse the existing `dist/node` instead of re-downloading (~80 MB). |
+| `--dry-run` | Print the plan and exit without running anything. |
+
+`--skip-build` and `--skip-node` are for iterating on the Tauri layer, where re-running the slow earlier steps buys nothing. The hygiene gate always runs — it is the backstop that keeps secrets out of a shipped installer, so it is deliberately not skippable.
+
+### Version stamping
+
+`src-tauri/tauri.conf.json` is checked in with a placeholder version of `0.1.0`; the real version is stamped from `package.json` at build time. `pnpm release:local` performs that same stamp and then restores the file, so it leaves no diff in your working tree.
+
+This matters more than it looks: an installer built without the stamp reports itself as version `0.1.0` forever. Once auto-updates ship, such a build would consider itself permanently out of date and re-download every release in a loop.
+
+If `HEAD` carries a `v*` tag, the script requires it to agree with `package.json` and fails loudly otherwise — the same mistagged-release guard CI applies. On an untagged commit it says so and proceeds, since building a release candidate before tagging is the normal local workflow.
+
+### Signing
+
+`pnpm release:local` produces **unsigned** installers, exactly as CI does today. Windows will show a SmartScreen warning and macOS a Gatekeeper warning for any build produced this way.
+
+Separately, if `TAURI_SIGNING_PRIVATE_KEY` is not set in your environment, the script builds **without updater artifacts** and says so. The installer works normally; it just can't self-update, which is what an unsigned local build already implied. Set the variable to produce a releasable build:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$env:USERPROFILE\.tauri\minder.key"
+```
+
+Tauri does not read `.env` files for this — it must be a real environment variable.
 
 ## Comparison with Service Mode
 
