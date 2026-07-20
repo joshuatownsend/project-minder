@@ -6,7 +6,8 @@ import {
 } from "@/lib/wslCompanions";
 import { parseWslUncPath } from "@/lib/wsl";
 import { mapLocalPath } from "@/lib/pathMapping";
-import { encodePath } from "@/lib/scanner/claudeConversations";
+import { encodePath, toSlug as usageToSlug } from "@/lib/scanner/claudeConversations";
+import { canonicalizeDirName } from "@/lib/usage/parser";
 
 const DISTRO = "\\\\wsl.localhost\\Ubuntu-26.04";
 const HOME = `${DISTRO}\\home\\josh`;
@@ -209,6 +210,40 @@ describe("derived mapping resolves a WSL project to its real session directory",
     expect(encodePath(mapLocalPath(project, []))).not.toBe(
       "-home-josh-printing-press-library-bamcli"
     );
+  });
+
+  /**
+   * The invariant the per-project Sessions tab now relies on (#325): the
+   * scanner's `usageSlug` and the session parser's `SessionSummary.projectSlug`
+   * are the same string, so a client can filter on equality instead of
+   * re-deriving a key from the project path — which cannot see pathMappings and
+   * so matched nothing for every WSL project.
+   */
+  it("usageSlug equals the projectSlug the session parser derives", () => {
+    const { pathMappings } = mergeWslCompanions([`${HOME}\\printing-press\\library`]);
+    const project = `${HOME}\\printing-press\\library\\bamcli`;
+
+    // What the scanner stamps on ProjectData.
+    const usageSlug = usageToSlug(
+      canonicalizeDirName(encodePath(mapLocalPath(project, pathMappings)))
+    );
+    // What the session parser stamps on each SessionSummary, starting from the
+    // real on-disk directory name.
+    const sessionSlug = usageToSlug(
+      canonicalizeDirName("-home-josh-printing-press-library-bamcli")
+    );
+
+    expect(usageSlug).toBe(sessionSlug);
+    expect(usageSlug).toBe("home-josh-printing-press-library-bamcli");
+  });
+
+  it("the old path-derived key would not have matched", () => {
+    // The #325 bug in one line: encoding the UNC path in the browser yields a
+    // key bearing no resemblance to the distro-recorded directory.
+    const project = `${HOME}\\printing-press\\library\\bamcli`;
+    const browserDerived = project.replace(/[:\\/]/g, "-");
+    expect(browserDerived).not.toBe("-home-josh-printing-press-library-bamcli");
+    expect(browserDerived).toContain("wsl.localhost");
   });
 
   it("one home mapping serves roots at different depths", () => {

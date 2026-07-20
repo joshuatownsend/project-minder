@@ -661,7 +661,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── SESSIONS ──────────────────────────────────────────────── */}
           {activeTab === "sessions" && (
-            <ProjectSessions projectPath={project.path} />
+            <ProjectSessions usageSlug={project.usageSlug} />
           )}
 
           {/* ── MANUAL STEPS ──────────────────────────────────────────── */}

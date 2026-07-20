@@ -74,7 +74,7 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
   return { primary: "Untitled session", isRecap: false, isPlaceholder: true };
 }
 
-export function ProjectSessions({ projectPath }: { projectPath: string }) {
+export function ProjectSessions({ usageSlug }: { usageSlug: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   // T2.2: in-page filter set by clicking a PR chip on a session row.
@@ -97,19 +97,27 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
   }, []);
 
   useEffect(() => {
-    // Match via projectName (raw encoded dir, e.g. "C--dev-project-minder") to avoid
-    // the lossy decodeDirName() path which corrupts hyphenated project names.
-    const encoded = projectPath.replace(/[:\\/]/g, "-");
-    // Pass encoded name as query param to reduce JSON payload — exact client-side
-    // filter below guards against the API's looser substring match.
-    fetch(`/api/sessions?project=${encodeURIComponent(encoded)}`)
+    // Match on the scanner-derived usageSlug: it comes from the same
+    // encode → canonicalize → toSlug pipeline that produces
+    // `SessionSummary.projectSlug`, so the equality holds by construction.
+    // Re-deriving the key from the project path here instead (#325) only ever
+    // worked because a Windows path encodes to the same string Claude Code
+    // used, and it could not see `config.pathMappings` — a WSL project's
+    // sessions are recorded under the distro's Linux path, so the browser-built
+    // key matched nothing and the tab rendered empty. That mapping is
+    // server-side, so the key has to come from the scan.
+    // Caveat (pre-existing, see ProjectData.usageHomeKey): two distros with
+    // identical layouts share a usageSlug and would merge here.
+    // The query param narrows the payload; the filter still guards against the
+    // API's looser substring fallback on project name.
+    fetch(`/api/sessions?project=${encodeURIComponent(usageSlug)}`)
       .then((res) => res.json())
       .then((all: SessionSummary[]) => {
-        setSessions(all.filter((s) => s.projectName === encoded));
+        setSessions(all.filter((s) => s.projectSlug === usageSlug));
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [projectPath]);
+  }, [usageSlug]);
 
   const stats = useMemo(() => {
     if (sessions.length === 0) return null;
