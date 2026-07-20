@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   PLATFORM_KEYS,
   isValidPlatformKey,
+  UPDATABLE_ARTIFACT,
+  selectUpdaterSignature,
   splitExtension,
   updaterAssetName,
   assetUrl,
@@ -27,6 +29,72 @@ describe("PLATFORM_KEYS", () => {
     expect(isValidPlatformKey("darwin-arm64")).toBe(false);
     expect(isValidPlatformKey("windows-x64")).toBe(false);
     expect(isValidPlatformKey("")).toBe(false);
+  });
+});
+
+describe("selectUpdaterSignature", () => {
+  // These are the ACTUAL filenames from the v1.5.0 Linux job, which failed
+  // because the code assumed exactly one .sig per job. Tauri signs the .deb
+  // too, even though a .deb can never self-update.
+  const linuxSigs = [
+    "/b/appimage/Project Minder Tray_1.5.0_amd64.AppImage.sig",
+    "/b/deb/Project Minder Tray_1.5.0_amd64.deb.sig",
+  ];
+
+  it("picks the AppImage on Linux and ignores the signed .deb", () => {
+    expect(selectUpdaterSignature(linuxSigs, "linux-x86_64")).toBe(linuxSigs[0]);
+  });
+
+  // Publishing the .deb would put a URL in latest.json that every Linux client
+  // downloads and then refuses ("Currently only an AppImage can be updated"),
+  // and a bad entry can break checks on every other platform too.
+  it("never selects a .deb", () => {
+    expect(selectUpdaterSignature(linuxSigs, "linux-x86_64")).not.toContain(".deb");
+  });
+
+  it("picks the NSIS installer on Windows", () => {
+    const sigs = [
+      "/b/nsis/Project Minder Tray_1.5.0_x64-setup.exe.sig",
+    ];
+    expect(selectUpdaterSignature(sigs, "windows-x86_64")).toBe(sigs[0]);
+  });
+
+  // The arm64 job builds dmg,app — a signed .dmg would be the wrong artifact.
+  it("picks the .app.tar.gz on macOS, not a .dmg", () => {
+    const sigs = [
+      "/b/dmg/Project Minder Tray_1.5.0_aarch64.dmg.sig",
+      "/b/macos/Project Minder Tray.app.tar.gz.sig",
+    ];
+    expect(selectUpdaterSignature(sigs, "darwin-aarch64")).toBe(sigs[1]);
+  });
+
+  it("throws when the updatable bundle was not built", () => {
+    expect(() =>
+      selectUpdaterSignature(["/b/deb/x.deb.sig"], "linux-x86_64")
+    ).toThrow(/no signed updatable artifact/);
+  });
+
+  // Signing silently produces nothing without the key; say so specifically.
+  it("names the missing signing key when there are no signatures at all", () => {
+    expect(() => selectUpdaterSignature([], "linux-x86_64")).toThrow(
+      /TAURI_SIGNING_PRIVATE_KEY/
+    );
+  });
+
+  it("refuses to guess between two matches", () => {
+    expect(() =>
+      selectUpdaterSignature(["/b/a.AppImage.sig", "/b/c/b.AppImage.sig"], "linux-x86_64")
+    ).toThrow(/refusing to guess/);
+  });
+
+  it("throws for a platform with no rule", () => {
+    expect(() => selectUpdaterSignature([], "solaris-sparc")).toThrow(/no updatable-artifact rule/);
+  });
+
+  it("has a rule for every platform key the CI matrix uses", () => {
+    for (const key of Object.values(PLATFORM_KEYS)) {
+      expect(UPDATABLE_ARTIFACT[key as keyof typeof UPDATABLE_ARTIFACT]).toBeInstanceOf(RegExp);
+    }
   });
 });
 
