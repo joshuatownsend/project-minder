@@ -121,6 +121,37 @@ export function deriveWslCompanions(root: string): WslCompanions | null {
   return { claudeHome: null, pathMapping: { from: `/${top}`, to: `${base}\\${top}` } };
 }
 
+/**
+ * The mapping implied by a WSL **Claude home** (`…\<user-home>\.claude`), as
+ * opposed to a scan root.
+ *
+ * Kept separate from `deriveWslCompanions` because the two infer the prefix
+ * differently, and neither generalizes to the other: a scan root can sit at any
+ * depth so its home has to be guessed from the `/home/<user>` convention, while
+ * a Claude home names its own directory exactly — whatever contains `.claude`
+ * IS the home. That precision is why this isn't just a call into the other one:
+ * delegating would map `\\…\Ubuntu\opt\myuser\.claude` to `/opt` instead of
+ * `/opt/myuser`, a prefix broad enough to swallow unrelated paths.
+ *
+ * They do share the UNC parse below, which is the part worth having once (#326).
+ *
+ * Returns null for non-WSL paths and for anything not ending in `.claude`.
+ */
+export function deriveWslMappingFromHome(claudeHome: string): PathMapping | null {
+  const parts = splitWslRoot(claudeHome);
+  if (!parts) return null;
+
+  const { host, distro, segments } = parts;
+  if (segments.length < 2) return null; // needs `.claude` plus a home to sit in
+  if (segments[segments.length - 1].toLowerCase() !== ".claude") return null;
+
+  const home = segments.slice(0, -1);
+  return {
+    from: `/${home.join("/")}`,
+    to: `\\\\${host}\\${distro}\\${home.join("\\")}`,
+  };
+}
+
 /** Case- and alias-insensitive identity for a filesystem path. */
 function homeKey(p: string): string {
   return pathKey(p);

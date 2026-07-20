@@ -523,10 +523,22 @@ export async function scanAllProjects(): Promise<ScanResult> {
     // Filter out hidden projects
     entries = entries.filter((e) => !hiddenSet.has(e.toLowerCase()));
 
-    // Narrow to actual projects BEFORE assigning slugs. scanProject re-checks
-    // this, but doing it here keeps a non-repo directory from consuming a
-    // disambiguated slug that a real project in this root wants.
-    const repoFlags = await Promise.all(entries.map((e) => isGitRepo(path.join(devRoot, e))));
+    // Narrow to actual projects BEFORE assigning slugs, so a non-repo directory
+    // can't consume a disambiguated slug a real project in this root wants.
+    // (scanProject is then told not to re-stat — see its repoAlreadyChecked.)
+    //
+    // Batched at BATCH_SIZE like the scan below rather than one Promise.all over
+    // every entry: on a UNC/WSL root each stat is a network round-trip, and an
+    // unbounded burst here would bypass the very throttle `scanBatchSize` exists
+    // to provide — worst on the roots that can least afford it.
+    const repoFlags: boolean[] = [];
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      repoFlags.push(
+        ...(await Promise.all(
+          entries.slice(i, i + BATCH_SIZE).map((e) => isGitRepo(path.join(devRoot, e)))
+        ))
+      );
+    }
     entries = entries.filter((_, i) => repoFlags[i]);
 
     // Assign each project a slug that no earlier root has claimed.
