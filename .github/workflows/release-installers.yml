@@ -263,8 +263,16 @@ jobs:
       # Runs BEFORE "Collect installers" because on Intel macOS the updater
       # tarball is the ONLY asset that job produces — collect's empty-dir guard
       # would otherwise fail the job before this step ever ran.
+      # The signature fragment goes to a SEPARATE directory from the installer:
+      # the release-upload step globs installers/*, so a fragment written there
+      # is attached to the public Release as a stray build artifact (v1.5.0
+      # shipped three of them before this was split).
       - name: Emit updater artifact + fragment
-        run: node scripts/updater-manifest.mjs emit --platform ${{ matrix.updater }} --out installers
+        run: |
+          node scripts/updater-manifest.mjs emit \
+            --platform ${{ matrix.updater }} \
+            --out installers \
+            --fragment-out updater-fragments
 
       # Collect the produced installers into one dir for uniform upload. Only the
       # patterns relevant to this OS match; nullglob drops the rest.
@@ -301,7 +309,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: minder-installers-${{ matrix.os }}
-          path: installers/*
+          # Both dirs: the aggregation job needs the fragments, but only
+          # installers/* is ever attached to the Release (see the upload step).
+          path: |
+            installers/*
+            updater-fragments/*
           if-no-files-found: error
 
       # Tag builds only: attach installers to the tag's GitHub Release. release.yml

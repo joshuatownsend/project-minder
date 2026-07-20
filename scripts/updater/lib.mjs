@@ -20,6 +20,62 @@ export function isValidPlatformKey(key) {
 }
 
 /**
+ * The bundle Tauri can actually self-update, per platform.
+ *
+ * `createUpdaterArtifacts` signs MORE bundles than it can update: on Linux it
+ * emits both `*.AppImage.sig` AND `*.deb.sig`, even though a `.deb` can never
+ * self-update ("Currently only an AppImage can be updated" — a system package
+ * manager owns those files). Publishing the wrong one would put a URL in
+ * latest.json that every Linux client downloads and then refuses, and because
+ * Tauri validates the WHOLE manifest before comparing versions, a bad entry
+ * can break update checks on every other platform too.
+ *
+ * So the artifact is chosen by what the platform can install, never by
+ * "whichever signature we happened to find" (the v1.5.0 release surfaced this:
+ * the Linux job found 2 signatures and correctly refused to guess).
+ */
+export const UPDATABLE_ARTIFACT = {
+  "windows-x86_64": /(-setup\.exe|\.msi)$/i,
+  "darwin-aarch64": /\.app\.tar\.gz$/i,
+  "darwin-x86_64": /\.app\.tar\.gz$/i,
+  "linux-x86_64": /\.AppImage$/i,
+};
+
+/**
+ * Pick the one signed artifact to publish for `platformKey` from every `.sig`
+ * a build job produced.
+ *
+ * Throws on zero or multiple matches rather than choosing: zero means the
+ * updatable bundle wasn't built (a `--bundles` list that no longer includes
+ * it), and multiple means this table has drifted from what Tauri emits. Both
+ * are release-breaking and must not be papered over.
+ *
+ * @param sigPaths paths ending in `.sig`
+ * @param platformKey a Tauri updater target key
+ * @returns the matching `.sig` path
+ */
+export function selectUpdaterSignature(sigPaths, platformKey) {
+  const pattern = UPDATABLE_ARTIFACT[platformKey];
+  if (!pattern) {
+    throw new Error(`no updatable-artifact rule for platform ${platformKey}`);
+  }
+  const matches = sigPaths.filter((p) => pattern.test(p.replace(/\.sig$/i, "")));
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    throw new Error(
+      `no signed updatable artifact for ${platformKey} (expected one matching ${pattern}).` +
+        (sigPaths.length
+          ? ` Signatures present:\n  ${sigPaths.join("\n  ")}`
+          : " No .sig files were produced at all — is TAURI_SIGNING_PRIVATE_KEY set?")
+    );
+  }
+  throw new Error(
+    `${matches.length} signed artifacts match ${pattern} for ${platformKey}; refusing to guess:\n  ` +
+      matches.join("\n  ")
+  );
+}
+
+/**
  * Extension chains we may see on an updater artifact, longest first so
  * `.app.tar.gz` wins over `.tar.gz` and neither is mistaken for `.gz`.
  */

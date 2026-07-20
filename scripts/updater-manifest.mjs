@@ -31,6 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isValidPlatformKey,
+  selectUpdaterSignature,
   updaterAssetName,
   buildManifest,
 } from "./updater/lib.mjs";
@@ -84,28 +85,32 @@ function emit(flags) {
     );
   }
   const outDir = path.resolve(root, flags.out ?? "installers");
+  // Fragments land in a SEPARATE directory from the installers on purpose: the
+  // release-upload step globs the installer dir, so a fragment written there
+  // gets attached to the public Release as a stray build artifact (it happened
+  // on v1.5.0 — three `_updater-*.json` files shipped as release assets).
+  const fragmentDir = path.resolve(root, flags["fragment-out"] ?? outDir);
   mkdirSync(outDir, { recursive: true });
+  mkdirSync(fragmentDir, { recursive: true });
 
   const bundleRoot = path.join(root, "src-tauri", "target", "release", "bundle");
   if (!existsSync(bundleRoot)) {
     fail(`no bundle directory at ${bundleRoot} — did tauri build run?`);
   }
 
-  // Exactly one .sig is expected per job: `createUpdaterArtifacts` signs the
-  // NSIS setup exe on Windows, the .app.tar.gz on macOS, and the AppImage on
-  // Linux — the .dmg and .deb in the same jobs produce none, because neither can
-  // self-update. Anything other than one means our assumption about which
-  // bundles are updatable has drifted, and guessing would ship a wrong manifest.
+  // `createUpdaterArtifacts` signs more bundles than it can update — Linux gets
+  // BOTH a .AppImage.sig and a .deb.sig, though a .deb can never self-update —
+  // so the artifact is chosen by what this platform can actually install, not
+  // by count. selectUpdaterSignature throws on zero or ambiguous matches rather
+  // than picking one.
   const sigs = walk(bundleRoot).filter((f) => f.endsWith(".sig"));
-  if (sigs.length !== 1) {
-    fail(
-      `expected exactly 1 .sig under ${bundleRoot}, found ${sigs.length}` +
-        (sigs.length ? `:\n  ${sigs.join("\n  ")}` : "") +
-        `\nCheck bundle.createUpdaterArtifacts and the --bundles list for this job.`
-    );
+  let sigPath;
+  try {
+    sigPath = selectUpdaterSignature(sigs, platform);
+  } catch (e) {
+    fail(`${e.message}\n(searched ${bundleRoot})`);
+    return;
   }
-
-  const sigPath = sigs[0];
   const assetPath = sigPath.slice(0, -".sig".length);
   if (!existsSync(assetPath)) {
     fail(`signature ${sigPath} has no matching artifact at ${assetPath}`);
@@ -126,7 +131,7 @@ function emit(flags) {
     // CONTENT, not a path: Tauri expects the literal signature string here.
     signature: readFileSync(sigPath, "utf8").trim(),
   };
-  const fragmentPath = path.join(outDir, `${FRAGMENT_PREFIX}${platform}.json`);
+  const fragmentPath = path.join(fragmentDir, `${FRAGMENT_PREFIX}${platform}.json`);
   writeFileSync(fragmentPath, JSON.stringify(fragment, null, 2) + "\n");
 
   const sizeMb = (statSync(destPath).size / (1024 * 1024)).toFixed(1);
