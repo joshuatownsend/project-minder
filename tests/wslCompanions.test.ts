@@ -237,6 +237,31 @@ describe("derived mapping resolves a WSL project to its real session directory",
     expect(usageSlug).toBe("home-josh-printing-press-library-bamcli");
   });
 
+  /**
+   * Why the Sessions tab keys on the encoded dir and not the usage slug:
+   * `claudeConversations.toSlug` deliberately drops the drive prefix, so two
+   * projects with the same tail on different drives collapse to one slug. A
+   * slug-based filter would show each project the other's sessions.
+   */
+  it("usageSlug collides across drives; the encoded dir does not", () => {
+    const cDir = encodePath("C:\\dev\\bamcli");
+    const dDir = encodePath("D:\\dev\\bamcli");
+
+    expect(usageToSlug(canonicalizeDirName(cDir))).toBe(
+      usageToSlug(canonicalizeDirName(dDir))
+    );
+    expect(cDir).not.toBe(dDir);
+    expect(cDir).toBe("C--dev-bamcli");
+    expect(dDir).toBe("D--dev-bamcli");
+  });
+
+  it("the encoded dir still distinguishes the two WSL checkouts", () => {
+    const { pathMappings } = mergeWslCompanions([`${HOME}\\printing-press\\library`]);
+    const wsl = encodePath(mapLocalPath(`${HOME}\\printing-press\\library\\bamcli`, pathMappings));
+    expect(wsl).toBe("-home-josh-printing-press-library-bamcli");
+    expect(wsl).not.toBe(encodePath("C:\\dev\\bamcli"));
+  });
+
   it("the old path-derived key would not have matched", () => {
     // The #325 bug in one line: encoding the UNC path in the browser yields a
     // key bearing no resemblance to the distro-recorded directory.

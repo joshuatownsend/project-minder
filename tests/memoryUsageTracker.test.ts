@@ -17,6 +17,7 @@ function project(slug: string, projectPath: string): ProjectData {
   return {
     slug,
     usageSlug: `dev-${slug}`,
+    usageDirName: `C--dev-${slug}`,
     name: slug,
     path: projectPath,
     status: "active",

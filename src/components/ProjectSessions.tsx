@@ -74,7 +74,7 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
   return { primary: "Untitled session", isRecap: false, isPlaceholder: true };
 }
 
-export function ProjectSessions({ usageSlug }: { usageSlug: string }) {
+export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   // T2.2: in-page filter set by clicking a PR chip on a session row.
@@ -97,27 +97,32 @@ export function ProjectSessions({ usageSlug }: { usageSlug: string }) {
   }, []);
 
   useEffect(() => {
-    // Match on the scanner-derived usageSlug: it comes from the same
-    // encode → canonicalize → toSlug pipeline that produces
-    // `SessionSummary.projectSlug`, so the equality holds by construction.
-    // Re-deriving the key from the project path here instead (#325) only ever
-    // worked because a Windows path encodes to the same string Claude Code
-    // used, and it could not see `config.pathMappings` — a WSL project's
-    // sessions are recorded under the distro's Linux path, so the browser-built
-    // key matched nothing and the tab rendered empty. That mapping is
-    // server-side, so the key has to come from the scan.
-    // Caveat (pre-existing, see ProjectData.usageHomeKey): two distros with
-    // identical layouts share a usageSlug and would merge here.
-    // The query param narrows the payload; the filter still guards against the
-    // API's looser substring fallback on project name.
-    fetch(`/api/sessions?project=${encodeURIComponent(usageSlug)}`)
+    // Match the scanner-derived encoded dir name against
+    // `SessionSummary.projectName`, which is the same string.
+    //
+    // This used to be re-derived here from the project path
+    // (`projectPath.replace(/[:\\/]/g, "-")`), which worked only because a
+    // Windows path encodes to what Claude Code used, and was blind to
+    // `config.pathMappings` — a WSL project's sessions are recorded under the
+    // distro's Linux path, so the browser-built key matched nothing and the tab
+    // rendered empty (#325). That mapping is server-side, so the key has to
+    // come from the scan.
+    //
+    // usageDirName rather than usageSlug: `toSlug` strips the drive prefix, so
+    // C:\dev\foo and D:\dev\foo share a usageSlug and each project's tab would
+    // list the other's sessions. The encoded dir keeps them distinct, which is
+    // the exactness the old projectName check had and this must not lose.
+    //
+    // Query param narrows the payload via the API's substring fallback; the
+    // filter below is what makes it exact.
+    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}`)
       .then((res) => res.json())
       .then((all: SessionSummary[]) => {
-        setSessions(all.filter((s) => s.projectSlug === usageSlug));
+        setSessions(all.filter((s) => s.projectName === usageDirName));
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [usageSlug]);
+  }, [usageDirName]);
 
   const stats = useMemo(() => {
     if (sessions.length === 0) return null;
