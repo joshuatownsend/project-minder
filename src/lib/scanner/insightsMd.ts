@@ -377,7 +377,13 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
  * InsightsInfo. Returns undefined if no entries exist.
  */
 export async function scanInsightsMd(
-  projectPath: string
+  projectPath: string,
+  // The project's resolved slug. Defaults to the directory basename, but must
+  // be passed when the scanner disambiguated a cross-root collision: the
+  // all-insights browser groups and links by `entry.project`, so a
+  // basename-derived slug would file `bamcli-library`'s insights under the
+  // unrelated `bamcli` that won the plain slug.
+  projectSlug?: string
 ): Promise<InsightsInfo | undefined> {
   let syncedContent: string | null = null;
   try {
@@ -396,10 +402,10 @@ export async function scanInsightsMd(
     const { info } = parseInsightsMd(content);
     if (info.entries.length === 0) return undefined;
 
-    const projectSlug = toSlug(path.basename(projectPath));
+    const resolvedSlug = projectSlug ?? toSlug(path.basename(projectPath));
     const entries = info.entries.map((e) => ({
       ...e,
-      project: projectSlug,
+      project: resolvedSlug,
       projectPath,
     }));
 

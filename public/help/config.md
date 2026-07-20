@@ -52,7 +52,7 @@ Add one or more directories for Project Minder to scan. For each root, Project M
 - **Adding** — type a full path (e.g. `C:\work`) and click Add or press Enter.
 - **Removing** — click the trash icon. You must keep at least one root.
 
-> **Slug collisions**: if two roots contain directories with the same name (same slug), the first root wins and the duplicate is skipped.
+> **Slug collisions**: if two roots contain directories with the same name, both are kept. The first root keeps the plain slug and the later one is suffixed with its root's folder name — `C:\dev\bamcli` stays `bamcli`, while `…\printing-press\library\bamcli` is indexed as `bamcli-library`. Reordering roots can move which project carries the suffix, so its URL and any saved status/port override move with it.
 
 ## Scan Behavior
 

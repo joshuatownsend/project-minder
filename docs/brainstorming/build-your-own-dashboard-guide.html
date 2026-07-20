@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Claude Code's Diary — How This Works</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface-2: #1a1a27;
+    --surface-3: #22222f;
+    --border: #2a2a3d;
+    --border-glow: #3d3d5c;
+    --text: #e8e8f0;
+    --text-dim: #8888a0;
+    --text-subtle: #5a5a70;
+    --accent-blue: #4d7cff;
+    --accent-purple: #8b5cf6;
+    --accent-pink: #ec4899;
+    --accent-green: #10b981;
+    --accent-orange: #f59e0b;
+    --accent-red: #ef4444;
+    --accent-cyan: #06b6d4;
+    --gradient-hero: linear-gradient(135deg, #4d7cff, #8b5cf6);
+    --gradient-warm: linear-gradient(135deg, #f59e0b, #ec4899);
+    --gradient-cool: linear-gradient(135deg, #06b6d4, #4d7cff);
+    --gradient-community: linear-gradient(135deg, #8b5cf6, #ec4899);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(circle at 15% 5%, rgba(77, 124, 255, 0.10), transparent 45%),
+      radial-gradient(circle at 85% 50%, rgba(139, 92, 246, 0.08), transparent 45%),
+      radial-gradient(circle at 50% 100%, rgba(236, 72, 153, 0.05), transparent 40%);
+    background-attachment: fixed;
+  }
+
+  code, .mono { font-family: 'JetBrains Mono', 'Menlo', monospace; }
+
+  .container { max-width: 1120px; margin: 0 auto; padding: 96px 32px 120px; }
+
+  /* ─── HERO ─────────────────────────────────── */
+  .hero { text-align: center; margin-bottom: 120px; }
+
+  .hero .kicker {
+    display: inline-block;
+    padding: 7px 16px;
+    border-radius: 24px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.8px;
+    color: var(--accent-blue);
+    background: rgba(77, 124, 255, 0.1);
+    border: 1px solid rgba(77, 124, 255, 0.25);
+    margin-bottom: 28px;
+  }
+
+  .hero h1 {
+    font-size: 64px;
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1.02;
+    margin-bottom: 24px;
+    background: var(--gradient-hero);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero .tagline {
+    font-size: 20px;
+    color: var(--text-dim);
+    max-width: 680px;
+    margin: 0 auto 40px;
+    line-height: 1.55;
+  }
+
+  .hero-cta {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    padding: 13px 26px;
+    border-radius: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid transparent;
+  }
+
+  .btn-primary {
+    background: var(--gradient-hero);
+    color: white;
+    box-shadow: 0 8px 28px rgba(77, 124, 255, 0.28);
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 36px rgba(77, 124, 255, 0.38);
+  }
+
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--border-glow);
+    background: var(--surface-2);
+  }
+
+  /* ─── SECTIONS ────────────────────────────── */
+  section { margin-bottom: 96px; }
+
+  .section-label {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-subtle);
+    margin-bottom: 14px;
+  }
+
+  h2 {
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.7px;
+    margin-bottom: 14px;
+    line-height: 1.2;
+  }
+
+  .section-lede {
+    font-size: 17px;
+    color: var(--text-dim);
+    margin-bottom: 36px;
+    max-width: 760px;
+  }
+
+  /* ─── PROBLEM CALLOUT ───────────────────── */
+  .problem {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-orange);
+    border-radius: 14px;
+    padding: 30px 34px;
+    max-width: 860px;
+  }
+
+  .problem p {
+    font-size: 16px;
+    color: var(--text);
+    line-height: 1.75;
+  }
+
+  .problem strong {
+    color: var(--accent-orange);
+    font-weight: 600;
+  }
+
+  /* ─── DATA BLOCKS ───────────────────────── */
+  .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  .data-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 30px;
+    transition: all 0.2s ease;
+  }
+
+  .data-card:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-2px);
+  }
+
+  .data-card .chip {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 5px;
+    letter-spacing: 0.6px;
+    margin-bottom: 16px;
+  }
+
+  .data-card.jsonl .chip {
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--accent-cyan);
+  }
+
+  .data-card.otel .chip {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--accent-orange);
+  }
+
+  .data-card h3 {
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+
+  .data-card p {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    margin-bottom: 18px;
+  }
+
+  .data-card code {
+    display: block;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--accent-cyan);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .data-card.otel code { color: var(--accent-orange); }
+
+  .data-card ul { list-style: none; margin-top: 16px; }
+
+  .data-card ul li {
+    font-size: 13px;
+    color: var(--text-dim);
+    padding: 5px 0;
+    padding-left: 20px;
+    position: relative;
+  }
+
+  .data-card ul li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--text-subtle);
+  }
+
+  /* ─── FLOW ────────────────────────────────── */
+  .flow {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 44px 36px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+
+  .flow-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+  }
+
+  .flow-row:last-child { margin-bottom: 0; }
+
+  .flow-box {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: transform 0.2s ease;
+  }
+
+  .flow-box:hover { transform: translateY(-1px); }
+
+  .flow-box.source { border-color: var(--accent-cyan); }
+  .flow-box.ingest { border-color: var(--accent-blue); }
+  .flow-box.store  { border-color: var(--accent-green); }
+  .flow-box.view   { border-color: var(--accent-purple); }
+  .flow-box.optional {
+    border-color: var(--text-subtle);
+    opacity: 0.55;
+    border-style: dashed;
+  }
+
+  .flow-box .fb-label {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-subtle);
+  }
+  .flow-box.source .fb-label  { color: var(--accent-cyan); }
+  .flow-box.ingest .fb-label  { color: var(--accent-blue); }
+  .flow-box.store  .fb-label  { color: var(--accent-green); }
+  .flow-box.view   .fb-label  { color: var(--accent-purple); }
+
+  .flow-box .fb-body {
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .flow-arrow {
+    color: var(--text-subtle);
+    font-size: 18px;
+    font-weight: 400;
+    padding: 0 4px;
+  }
+
+  .flow-caption {
+    margin-top: 16px;
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    color: var(--text-subtle);
+    font-style: italic;
+  }
+
+  /* ─── PANELS GRID ─────────────────────── */
+  .panels-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+
+  .panel-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    transition: all 0.2s ease;
+  }
+
+  .panel-card:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-3px);
+  }
+
+  .panel-card .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-subtle);
+    margin-bottom: 12px;
+  }
+
+  .panel-card h4 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .panel-card .question {
+    font-size: 13px;
+    color: var(--accent-blue);
+    font-style: italic;
+    margin-bottom: 10px;
+  }
+
+  .panel-card p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.55;
+  }
+
+  .panel-card.centerpiece {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(236, 72, 153, 0.05));
+    border-color: rgba(139, 92, 246, 0.35);
+    box-shadow: 0 8px 32px rgba(139, 92, 246, 0.15);
+  }
+
+  .panel-card.centerpiece .num { color: var(--accent-purple); font-weight: 700; }
+  .panel-card.centerpiece .question { color: var(--accent-pink); }
+
+  /* ─── OTEL EXPLAINER ───────────────── */
+  .otel-explainer {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px;
+  }
+
+  .otel-explainer p {
+    font-size: 15px;
+    color: var(--text);
+    line-height: 1.75;
+    margin-bottom: 16px;
+  }
+
+  .otel-explainer p:last-child { margin-bottom: 0; color: var(--text-dim); }
+
+  .otel-explainer strong {
+    color: var(--accent-orange);
+    font-weight: 600;
+  }
+
+  /* ─── PREREQS STRIP ─────────────────── */
+  .prereqs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  .prereq {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px;
+  }
+
+  .prereq .p-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--accent-cyan);
+    margin-bottom: 8px;
+  }
+
+  .prereq h4 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .prereq p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* ─── INSTALL STEPS (horizontal) ───── */
+  .install-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .install-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 28px;
+    display: flex;
+    gap: 22px;
+    align-items: flex-start;
+    transition: border-color 0.2s ease;
+  }
+
+  .install-step:hover { border-color: var(--border-glow); }
+
+  .install-step-num {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--gradient-hero);
+    color: white;
+    font-size: 14px;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(77, 124, 255, 0.28);
+  }
+
+  .install-step-body h4 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .install-step-body p {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.55;
+    margin-bottom: 10px;
+  }
+
+  .install-step-body p:last-child { margin-bottom: 0; }
+
+  .install-step-body code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--accent-cyan);
+  }
+
+  .env-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-x: auto;
+    margin-top: 20px;
+  }
+
+  .env-block .env-key  { color: var(--accent-cyan); }
+  .env-block .env-val  { color: var(--accent-green); }
+  .env-block .env-punc { color: var(--text-subtle); }
+
+  .tip {
+    margin-top: 18px;
+    padding: 16px 20px;
+    background: rgba(16, 185, 129, 0.06);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .tip strong { color: var(--accent-green); }
+
+  /* ─── PRIVACY STRIP ─────────────────── */
+  .privacy {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 32px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+  }
+
+  .privacy-item .p-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--accent-green);
+    margin-bottom: 6px;
+  }
+
+  .privacy-item .p-text {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.45;
+  }
+
+  /* ─── FOOTER DUAL CTA ─────────────── */
+  .footer-cta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+
+  .cta-card {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 36px;
+    text-decoration: none;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.25s ease;
+  }
+
+  .cta-card:hover { transform: translateY(-4px); }
+
+  .cta-card.option-a {
+    background: var(--surface);
+  }
+
+  .cta-card.option-a:hover { border-color: var(--border-glow); }
+
+  .cta-card.option-b {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.06));
+    border-color: rgba(139, 92, 246, 0.35);
+    box-shadow: 0 12px 40px rgba(139, 92, 246, 0.18);
+  }
+
+  .cta-card.option-b:hover {
+    border-color: rgba(139, 92, 246, 0.6);
+    box-shadow: 0 18px 52px rgba(139, 92, 246, 0.28);
+  }
+
+  .cta-card .cta-kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.8px;
+    margin-bottom: 12px;
+  }
+
+  .cta-card.option-a .cta-kicker { color: var(--text-subtle); }
+  .cta-card.option-b .cta-kicker { color: var(--accent-purple); }
+
+  .cta-card h3 {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    line-height: 1.2;
+    color: var(--text);
+  }
+
+  .cta-card p {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    line-height: 1.6;
+  }
+
+  .cta-card .cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 22px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+  }
+
+  .cta-card.option-a .cta-btn {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .cta-card.option-a:hover .cta-btn {
+    background: var(--surface-3);
+    border-color: var(--border-glow);
+  }
+
+  .cta-card.option-b .cta-btn {
+    background: var(--gradient-community);
+    color: white;
+    box-shadow: 0 6px 22px rgba(139, 92, 246, 0.3);
+  }
+
+  /* ─── SIGN-OFF ────────────────────── */
+  .signoff {
+    text-align: center;
+    margin-top: 96px;
+    padding-top: 44px;
+    border-top: 1px solid var(--border);
+    color: var(--text-subtle);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.5px;
+  }
+
+  /* ─── RESPONSIVE ────────────────── */
+  @media (max-width: 900px) {
+    .hero h1 { font-size: 44px; }
+    .data-grid, .panels-grid, .prereqs, .privacy, .footer-cta {
+      grid-template-columns: 1fr !important;
+    }
+    .privacy { grid-template-columns: 1fr 1fr !important; }
+    .container { padding: 56px 20px 80px; }
+    h2 { font-size: 28px; }
+    .install-step { flex-direction: column; }
+    .flow { padding: 28px 20px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- ─── HERO ─────────────────────────── -->
+  <header class="hero">
+    <span class="kicker">Companion guide · free</span>
+    <h1>Reading Claude Code's Diary</h1>
+    <p class="tagline">
+      Claude Code already writes a detailed log of everything your agent does,
+      on your own laptop. This page explains what's in the diary, where it
+      lives, and how a tiny local dashboard turns it into something you can
+      actually read.
+    </p>
+    <div class="hero-cta">
+      <a href="build-your-own-dashboard-prompt.md" class="btn btn-primary">Get the build prompt →</a>
+      <a href="#flow" class="btn btn-secondary">See how it connects</a>
+    </div>
+  </header>
+
+  <!-- ─── PROBLEM ─────────────────────── -->
+  <section>
+    <span class="section-label">The problem</span>
+    <h2>You're paying for Claude and you can't see what it's doing</h2>
+    <div class="problem">
+      <p>
+        On Pro/Max, Anthropic gives you a <strong>billing number</strong> and
+        almost nothing else. No tool latency, no MCP server breakdown, no
+        session history, no cache hit rate. Every other video on YouTube
+        rebuilds this as an eight-microservice war room with voice avatars — a
+        second full-time job to maintain. There's a quieter option: read the
+        data Claude Code already writes to your disk and show it to yourself.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── DATA ─────────────────────────── -->
+  <section>
+    <span class="section-label">Where the data lives</span>
+    <h2>Two sources, both on your Mac</h2>
+    <p class="section-lede">
+      Claude Code is already writing forensic detail about every session you
+      run. You just don't have anything reading it.
+    </p>
+
+    <div class="data-grid">
+      <div class="data-card jsonl">
+        <span class="chip">ALWAYS ON</span>
+        <h3>Session JSONLs</h3>
+        <p>One file per session. Each line is a JSON event — every tool call, every token, every message.</p>
+        <code>~/.claude/projects/*/*.jsonl</code>
+        <ul>
+          <li>user / assistant messages (with token usage)</li>
+          <li>tool_use + tool_result pairs (latency comes from here)</li>
+          <li>session result: duration, errors, model</li>
+        </ul>
+      </div>
+
+      <div class="data-card otel">
+        <span class="chip">OPT-IN</span>
+        <h3>OTEL telemetry</h3>
+        <p>Real-time event firehose. POSTed to any URL you specify. Cleaner than JSONL. Opt-in via settings.json.</p>
+        <code>POST /v1/logs · /v1/metrics</code>
+        <ul>
+          <li>tool_result · api_request · api_error</li>
+          <li>hook_execution_start / complete</li>
+          <li>compaction · tool_decision · MCP attribution</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FLOW ─────────────────────────── -->
+  <section id="flow">
+    <span class="section-label">How it connects</span>
+    <h2>Your laptop is both the source and the sink</h2>
+    <p class="section-lede">
+      The dashboard runs a small web server on
+      <code class="mono">localhost:8765</code>, ingests both sources, stores
+      them in SQLite, and renders a UI. Zero outbound network calls.
+    </p>
+
+    <div class="flow">
+      <div class="flow-row">
+        <div class="flow-box source">
+          <span class="fb-label">You use it normally</span>
+          <span class="fb-body">Claude Code</span>
+        </div>
+        <span class="flow-arrow">───</span>
+        <div class="flow-box source">
+          <span class="fb-label">Writes JSONL</span>
+          <span class="fb-body">~/.claude/projects/</span>
+        </div>
+        <span class="flow-arrow">+</span>
+        <div class="flow-box source">
+          <span class="fb-label">Emits OTEL</span>
+          <span class="fb-body">HTTP POST</span>
+        </div>
+      </div>
+
+      <div class="flow-row">
+        <div class="flow-box ingest">
+          <span class="fb-label">Your local server</span>
+          <span class="fb-body">FastAPI on :8765</span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box store">
+          <span class="fb-label">Writes to</span>
+          <span class="fb-body">SQLite (one file)</span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box view">
+          <span class="fb-label">Renders</span>
+          <span class="fb-body">Dashboard UI</span>
+        </div>
+      </div>
+
+      <div class="flow-row">
+        <div class="flow-box optional">
+          <span class="fb-label">Optional extensions</span>
+          <span class="fb-body">Scheduler · HITL · Telegram pager · task dispatcher</span>
+        </div>
+      </div>
+
+      <div class="flow-caption">
+        The free build gets you the first two rows. The dashed box (Mission
+        Control, HITL, Telegram) is what the community version ships with
+        already wired up.
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── PANELS ─────────────────────────── -->
+  <section>
+    <span class="section-label">What you'll see</span>
+    <h2>Six panels that answer six questions</h2>
+    <p class="section-lede">
+      Each panel exists because it answers something you can't easily find
+      out any other way.
+    </p>
+
+    <div class="panels-grid">
+      <div class="panel-card">
+        <div class="num">01</div>
+        <h4>Live sessions</h4>
+        <p class="question">"What's running right now?"</p>
+        <p>All sessions modified in the last 5 minutes — title, model, tokens, started-at.</p>
+      </div>
+
+      <div class="panel-card">
+        <div class="num">02</div>
+        <h4>Token usage</h4>
+        <p class="question">"Where is my money going?"</p>
+        <p>Today / 7d / 30d stacked bars. Input, output, cache-read, cache-create. Tokens only.</p>
+      </div>
+
+      <div class="panel-card">
+        <div class="num">03</div>
+        <h4>Tool latency</h4>
+        <p class="question">"Which tool is slow?"</p>
+        <p>p50 / p95 / max per tool, plus error rate. Sorted by p95 descending.</p>
+      </div>
+
+      <div class="panel-card centerpiece">
+        <div class="num">04 · CENTERPIECE</div>
+        <h4>MCP server drill-down</h4>
+        <p class="question">"Which MCP is costing me real time?"</p>
+        <p>Per-server + per-tool latency. The one panel that catches the 14-second Notion call everyone has and doesn't know about.</p>
+      </div>
+
+      <div class="panel-card">
+        <div class="num">05</div>
+        <h4>Session outcomes</h4>
+        <p class="question">"How often does my work finish cleanly?"</p>
+        <p>Daily buckets: errored · rate_limited · truncated · unfinished · ok. Stacked, mutually exclusive.</p>
+      </div>
+
+      <div class="panel-card">
+        <div class="num">06</div>
+        <h4>Cache efficiency</h4>
+        <p class="question">"Am I getting value from prompt caching?"</p>
+        <p>Overall hit rate, daily trend. Target 70%+. Low-sample badge if the window is quiet.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── OTEL ─────────────────────────── -->
+  <section>
+    <span class="section-label">Plain-english</span>
+    <h2>What "OTEL" actually is</h2>
+    <p class="section-lede">For the non-observability folks.</p>
+
+    <div class="otel-explainer">
+      <p>
+        <strong>OpenTelemetry</strong> (OTEL) is the standard most developer
+        tools use to emit "what's happening right now" events. It's a spec — a
+        shape for the data — and an endpoint format
+        (<code class="mono">POST /v1/logs</code>,
+        <code class="mono">/v1/metrics</code>).
+      </p>
+      <p>
+        Claude Code supports it. You tell Claude Code to send telemetry to any
+        OTEL endpoint you want. The dashboard on your laptop <em>is</em> an
+        OTEL endpoint. You point Claude Code at
+        <code class="mono">http://localhost:8765</code>, and suddenly you're
+        reading your own agent's firehose — no hosted service, no enterprise
+        plan, no paywall between you and your data.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── PREREQS ─────────────────── -->
+  <section>
+    <span class="section-label">Before you start</span>
+    <h2>What you'll need</h2>
+    <p class="section-lede">Three things. All you probably already have.</p>
+
+    <div class="prereqs">
+      <div class="prereq">
+        <div class="p-label">→ Platform</div>
+        <h4>macOS 12+</h4>
+        <p>The JSONL paths and install script are macOS-specific today. Linux support later.</p>
+      </div>
+      <div class="prereq">
+        <div class="p-label">→ Runtime</div>
+        <h4>Python 3.10+</h4>
+        <p>3.9 works too (with a <code class="mono">from __future__ import annotations</code>). <code class="mono">brew install python@3.12</code> if you don't have it.</p>
+      </div>
+      <div class="prereq">
+        <div class="p-label">→ Claude Code</div>
+        <h4>Run once first</h4>
+        <p>The installer reads <code class="mono">~/.claude/projects/</code>. Make sure it exists by running Claude Code at least once.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── INSTALL / ENABLE STEPS ─── -->
+  <section>
+    <span class="section-label">Setup · 3 steps</span>
+    <h2>How to enable it on your Mac</h2>
+    <p class="section-lede">
+      The build prompt ships a helper that does this for you, backing up your
+      settings first. Here's what's actually happening under the hood.
+    </p>
+
+    <div class="install-steps">
+      <div class="install-step">
+        <span class="install-step-num">1</span>
+        <div class="install-step-body">
+          <h4>Add six env keys to <code>~/.claude/settings.json</code></h4>
+          <p>These turn on telemetry and point Claude Code at your local dashboard. The setup helper backs up the file first and only adds keys that aren't already there — it never overwrites your own config.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <span class="install-step-num">2</span>
+        <div class="install-step-body">
+          <h4>Quit Claude Code and reopen it</h4>
+          <p>Env vars only apply to new sessions. Any existing sessions won't emit telemetry until they restart. One-time chore, then you're done.</p>
+        </div>
+      </div>
+
+      <div class="install-step">
+        <span class="install-step-num">3</span>
+        <div class="install-step-body">
+          <h4>Run a prompt — events start flowing in ~30 seconds</h4>
+          <p>Open <code>http://localhost:8765</code>. First load might show empty panels for a few seconds — that's the initial JSONL sync. Then your live data lights up.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="env-block">
+<span class="env-punc">{</span>
+  <span class="env-punc">"env":</span> <span class="env-punc">{</span>
+    <span class="env-key">"CLAUDE_CODE_ENABLE_TELEMETRY"</span><span class="env-punc">:</span> <span class="env-val">"1"</span><span class="env-punc">,</span>
+    <span class="env-key">"OTEL_EXPORTER_OTLP_ENDPOINT"</span><span class="env-punc">:</span> <span class="env-val">"http://localhost:8765"</span><span class="env-punc">,</span>
+    <span class="env-key">"OTEL_EXPORTER_OTLP_PROTOCOL"</span><span class="env-punc">:</span> <span class="env-val">"http/json"</span><span class="env-punc">,</span>
+    <span class="env-key">"OTEL_METRICS_EXPORTER"</span><span class="env-punc">:</span> <span class="env-val">"otlp"</span><span class="env-punc">,</span>
+    <span class="env-key">"OTEL_LOGS_EXPORTER"</span><span class="env-punc">:</span> <span class="env-val">"otlp"</span><span class="env-punc">,</span>
+    <span class="env-key">"OTEL_LOG_TOOL_DETAILS"</span><span class="env-punc">:</span> <span class="env-val">"1"</span>
+  <span class="env-punc">}</span>
+<span class="env-punc">}</span>
+    </div>
+
+    <div class="tip">
+      <strong>Don't edit by hand</strong> — the build prompt instructs the agent to generate a setup script that backs up your <code class="mono">settings.json</code> before writing, and only adds missing keys. It never overwrites anything you've already set.
+    </div>
+  </section>
+
+  <!-- ─── PRIVACY ─────────────────── -->
+  <section>
+    <span class="section-label">Privacy model</span>
+    <h2>Why this stays on your Mac</h2>
+    <p class="section-lede">Observability without the creepy stuff.</p>
+
+    <div class="privacy">
+      <div class="privacy-item">
+        <div class="p-label">→ Bind 127.0.0.1</div>
+        <div class="p-text">Server only reachable from your laptop. Never <code>0.0.0.0</code>.</div>
+      </div>
+      <div class="privacy-item">
+        <div class="p-label">→ No cloud</div>
+        <div class="p-text">No SaaS account, no remote database, no outbound sync.</div>
+      </div>
+      <div class="privacy-item">
+        <div class="p-label">→ SQLite on disk</div>
+        <div class="p-text">One file. Delete it anytime. Starts fresh next sync.</div>
+      </div>
+      <div class="privacy-item">
+        <div class="p-label">→ Zero telemetry out</div>
+        <div class="p-text">The dashboard collects nothing about you. Ever.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER DUAL CTA ─────────── -->
+  <section>
+    <span class="section-label">Two ways in</span>
+    <h2>Pick your path</h2>
+
+    <div class="footer-cta">
+      <a href="build-your-own-dashboard-prompt.md" class="cta-card option-a">
+        <div class="cta-kicker">Option A · Free · Build it yourself</div>
+        <h3>Get the build prompt</h3>
+        <p>
+          Copy the prompt, paste it into Claude Code, let it cook for about
+          two hours. You get a working version of all six panels on your
+          own laptop. Keep it, tweak it, fork it — it's yours.
+        </p>
+        <span class="cta-btn">Open the prompt →</span>
+      </a>
+
+      <a href="https://www.skool.com/ainative" target="_blank" rel="noopener" class="cta-card option-b">
+        <div class="cta-kicker">Option B · Community · Skip the build</div>
+        <h3>Get the polished version</h3>
+        <p>
+          My production build ships with the parts the prompt leaves out —
+          HITL approvals, scheduled tasks, Telegram pager, posture audits,
+          emergency stop. Plus support and live office hours. Installs in
+          one command.
+        </p>
+        <span class="cta-btn">Join the community →</span>
+      </a>
+    </div>
+  </section>
+
+  <div class="signoff">
+    macOS · Python + SQLite · localhost-only · no accounts, no tracking
+  </div>
+
+</div>
+
+</body>
+</html>

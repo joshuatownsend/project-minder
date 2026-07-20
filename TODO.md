@@ -1,5 +1,15 @@
 # TODO
 
+## Project Groups — one project, many locations
+
+*Full spec + status table: `docs/superpowers/plans/2026-07-20-project-groups-multi-location.md`. Driver: the same repo checked out on Windows and inside WSL should aggregate costs/insights into one view while each location stays independently drillable — different branches, different dev servers, and different per-machine Claude configs (skills/agents/plugins/MCP).*
+
+*Prerequisites shipped 2026-07-20 (PR #324) — slug-collision fix and P0 WSL attribution; details in `TODO.archive.md`.*
+
+- [ ] **P1 — Identity + grouping** — normalize the git remote (`parseGitHubRemote`) to `github.com/owner/repo` as the group key; pure `deriveProjectGroups()` over scanned projects, excluding worktree-overlay dirs (they share a remote and would become phantom locations). Config opt-out for users who want two checkouts kept separate. API-only, no UI, so grouping can be validated against real data first. **Decide the URL space here** before any UI — group slug `bamcli` collides with member slug `bamcli`.
+- [ ] **P2 — Aggregation layer** — pure `aggregateGroup(members)` implementing the four merge rules: repo-borne files **dedupe** (insight/issue IDs are stable; TODO items need content hashing) and surface divergence as signal; activity **sums**; location-bound state (branch, dirty, dev server, worktrees) **never merges**; environment-borne catalogs **diff**. Derived rates must recompute over the union — averaging two one-shot rates weights a 3-session location like a 100-session one. This is where double-counting bugs live; test heavily.
+- [ ] **P3 — UI** — group card with a `2 locations` chip, Locations strip (per-checkout path/branch/dirty/dev-server), divergence flags on repo-borne tabs, per-location breakdown under every aggregate, and a new Environments tab comparing skills/agents/MCP across Claude homes (`source=user|plugin` = per-machine, `source=project` = repo-borne). A group of one must render exactly as today.
+
 ## Service Mode + Tray App
 
 - [ ] **Signing + auto-updater + local release script** — Reopened 2026-07-19; **supersedes C5** of the service-and-tray plan. Full spec + status table: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`. Key reframe: C5 deferred "signing + updater" as one money-gated task, but the updater's **minisign signing is free and independent** of OS code signing — an updater-only slice ships at zero cost today. Decisions: Azure Artifact Signing (~$120/yr, cloud HSM, no dongle, individuals US/CA — **not** EV, which stopped granting instant SmartScreen reputation in 2024) + existing Apple Developer Program ($99/yr, Tauri automates notarization). Traditional OV certs are now CI-incompatible (CA/B Forum hardware-key rule, June 2023). No single cert can sign both platforms — structurally impossible. Account signups are in MANUAL_STEPS.md and are the critical path (Azure validation takes 1–20 business days).

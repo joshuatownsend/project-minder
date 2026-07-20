@@ -172,7 +172,15 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   useEffect(() => {
     if (!(project.claude && project.claude.sessionCount > 0)) return;
     let cancelled = false;
-    fetch(`/api/sessions?project=${encodeURIComponent(project.slug)}`)
+    // usageSlug, not slug: /api/sessions matches `s.projectSlug` (derived from
+    // the encoded conversation dir) and falls back to a substring match on the
+    // project NAME. The route slug only ever matched via that fallback, which
+    // breaks the moment a slug is disambiguated — "bamcli".includes(
+    // "bamcli-library") is false, so a second checkout would silently show no
+    // sessions. usageSlug is built by the same encode→canonicalize→toSlug
+    // pipeline as `s.projectSlug` (and applies pathMappings, so WSL projects
+    // resolve too), making this an exact match rather than a lucky one.
+    fetch(`/api/sessions?project=${encodeURIComponent(project.usageSlug || project.slug)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: SessionSummary[] | null) => {
         if (cancelled || !Array.isArray(data)) return;

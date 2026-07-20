@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
 import { ScanRootsEditor } from "@/components/ScanRootsEditor";
+import { mergeWslCompanions, analyzeWslRoots } from "@/lib/wslCompanions";
 import { S } from "./styles";
 
 interface WslDistroSuggestion {
@@ -60,15 +61,37 @@ export function ScanRootsSection({
   async function save() {
     setSaving(true);
     try {
+      // A WSL root on its own is only half a setup: without a matching
+      // `claudeHomes` entry the distro's sessions are never read, and without a
+      // `pathMappings` entry its Linux-recorded paths can't be matched to the
+      // UNC-scanned project. Both failures are silent — the projects appear and
+      // every cost, session and insight attached to them reads as zero — so the
+      // companions are derived and saved alongside the roots rather than left as
+      // two invisible settings the user has to know about. Existing entries are
+      // never overwritten.
+      const merged = mergeWslCompanions(roots, {
+        claudeHomes: config?.claudeHomes,
+        pathMappings: config?.pathMappings,
+      });
+      const patch: Partial<MinderConfig> = { devRoots: roots };
+      if (merged.added > 0) {
+        patch.claudeHomes = merged.claudeHomes;
+        patch.pathMappings = merged.pathMappings;
+      }
       // PATCH /api/config validates the list and mirrors devRoot = roots[0].
-      await onConfigChange({ devRoots: roots });
+      await onConfigChange(patch);
       // Force a rescan so the new roots show up without waiting out the 5-min
       // scan-cache TTL. Failure here is non-fatal: the config is saved and the
       // next natural rescan picks it up.
       try {
         const res = await fetch("/api/scan", { method: "POST" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast("Scan roots saved", "Rescanning projects now");
+        showToast(
+          "Scan roots saved",
+          merged.added > 0
+            ? "Rescanning projects now — also linked this distro's Claude sessions"
+            : "Rescanning projects now"
+        );
       } catch {
         showToast(
           "Scan roots saved, but rescan failed",
@@ -77,6 +100,39 @@ export function ScanRootsSection({
       }
     } catch {
       // onConfigChange already toasted the error; keep the draft for retry.
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Setups configured before the companions were wired up (or built by hand)
+  // have WSL roots whose Claude data silently never joins. Surface them: there
+  // is no symptom to notice — the projects look fine and merely report zero
+  // sessions and zero cost, which is indistinguishable from "I haven't worked
+  // there yet". Reported against SAVED config, not the draft, so it reflects
+  // what is actually in effect.
+  const { repairable: unmappedRoots, conflicted } = config
+    ? analyzeWslRoots(config)
+    : { repairable: [], conflicted: [] };
+
+  async function repairWslCompanions() {
+    if (!config) return;
+    setSaving(true);
+    try {
+      const merged = mergeWslCompanions(savedRoots ?? [], {
+        claudeHomes: config.claudeHomes,
+        pathMappings: config.pathMappings,
+      });
+      await onConfigChange({
+        claudeHomes: merged.claudeHomes,
+        pathMappings: merged.pathMappings,
+      });
+      showToast(
+        "WSL settings linked",
+        "Sessions and costs recorded in the distro will appear on the next scan"
+      );
+    } catch {
+      // onConfigChange already toasted the failure.
     } finally {
       setSaving(false);
     }
@@ -122,6 +178,73 @@ export function ScanRootsSection({
                 {detecting ? "Detecting…" : "Detect WSL"}
               </button>
             </div>
+
+            {unmappedRoots.length > 0 && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "10px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--warning, #f59e0b)",
+                  background: "color-mix(in oklch, var(--warning, #f59e0b) 8%, transparent)",
+                }}
+              >
+                <div style={{ ...S.label, marginBottom: "4px" }}>
+                  {unmappedRoots.length === 1 ? "A WSL root is" : `${unmappedRoots.length} WSL roots are`}{" "}
+                  only half configured
+                </div>
+                <p style={{ ...S.muted, marginBottom: "8px" }}>
+                  Projects under{" "}
+                  {unmappedRoots.map((r, i) => (
+                    <span key={r}>
+                      {i > 0 && ", "}
+                      <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{r}</code>
+                    </span>
+                  ))}{" "}
+                  are being scanned, but the sessions and costs recorded inside the distro are not
+                  linked to them — those projects will report zero usage no matter how much work you
+                  do there. Linking adds the distro&apos;s Claude home and a path mapping; your
+                  existing entries are left untouched.
+                </p>
+                <button
+                  style={{ ...S.btn, opacity: saving ? 0.5 : 1, cursor: saving ? "not-allowed" : "pointer" }}
+                  onClick={repairWslCompanions}
+                  disabled={saving}
+                >
+                  {saving ? "Linking…" : "Link WSL Claude data"}
+                </button>
+              </div>
+            )}
+
+            {conflicted.length > 0 && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "10px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div style={{ ...S.label, marginBottom: "4px" }}>
+                  Can&apos;t link {conflicted.length === 1 ? "one root" : `${conflicted.length} roots`} automatically
+                </div>
+                <p style={S.muted}>
+                  {conflicted.map((c) => (
+                    <span key={c.root} style={{ display: "block", marginBottom: "4px" }}>
+                      <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.root}</code>{" "}
+                      needs <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.from}</code>, which
+                      already points at{" "}
+                      <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.existingTo}</code>.
+                    </span>
+                  ))}
+                  Two distros share a Linux home path, and a recorded path carries no distro to tell them apart — only
+                  the first mapping can ever match. Rename one distro&apos;s user, or edit{" "}
+                  <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>pathMappings</code> in{" "}
+                  <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>.minder.json</code> to choose
+                  which one wins.
+                </p>
+              </div>
+            )}
 
             {wsl !== null && (
               <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
