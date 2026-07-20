@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { MinderConfig, PathMapping } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
+import { deriveWslMappingFromHome } from "@/lib/wslCompanions";
 import { S } from "./styles";
 
 interface WslDistroSuggestion {
@@ -19,14 +20,14 @@ interface WslDistroSuggestion {
  * \\wsl.localhost\<distro>\home\<user>\.claude →
  *   { from: "/home/<user>", to: "\\wsl.localhost\<distro>\home\<user>" }.
  * Returns null for homes that don't match the pattern (native paths etc.).
+ *
+ * Delegates to the shared derivation rather than parsing UNC paths a second
+ * time (#326). The Scan Roots section derives the same mapping from a scan
+ * root, and two independent parsers of the same path shape is the pattern that
+ * produced several defects in #324 — one that only shows up when they drift.
  */
 export function deriveWslMapping(claudeHome: string): PathMapping | null {
-  const m = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]([^\\/]+)[\\/]home[\\/]([^\\/]+)[\\/]\.claude[\\/]?$/i.exec(
-    claudeHome.trim()
-  );
-  if (!m) return null;
-  const [, host, distro, user] = m;
-  return { from: `/home/${user}`, to: `\\\\${host}\\${distro}\\home\\${user}` };
+  return deriveWslMappingFromHome(claudeHome);
 }
 
 const sameMapping = (a: PathMapping, b: PathMapping) =>
