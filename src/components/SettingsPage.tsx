@@ -181,18 +181,36 @@ export function SettingsPage() {
   // prior reference when a field-equal response arrives, so the `select` below
   // still avoids re-rendering InitStatusRow on an unchanged tick (replacing the
   // old `dbStatusEqual` guard). Health failures stay quiet (no toast).
-  const dbStatusQuery = useQuery({
+  //
+  // `select` returns an object rather than the bare `db` slice so the running
+  // version can ride along on the poll this page already makes. TanStack caches
+  // the select result against the `data` reference, so an unchanged tick still
+  // returns the prior object — the no-re-render property the note above
+  // describes is preserved, not traded away for the extra field.
+  const healthQuery = useQuery({
     queryKey: queryKeys.health(),
-    queryFn: async ({ signal }): Promise<{ db: InitStatus }> => {
+    queryFn: async ({ signal }): Promise<{ db: InitStatus; version?: string }> => {
       const res = await fetch("/api/health", { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // 503 is not a failure to read: `/api/health` answers 503 for every DB
+      // state other than `success` and carries the FULL body regardless of
+      // status code, by documented contract (see the route's header comment).
+      // A bare `!res.ok` throw therefore discarded the payload in exactly the
+      // situation it exists to describe — `InitStatusRow` renders nothing on a
+      // null status, so the DB status row vanished whenever the DB was
+      // actually broken, which is when a user goes looking for it.
+      if (!res.ok && res.status !== 503) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    select: (data) => data.db,
+    select: (data) => ({ db: data.db, version: data.version ?? null }),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
-  const dbStatus: InitStatus | null = dbStatusQuery.data ?? null;
+  const dbStatus: InitStatus | null = healthQuery.data?.db ?? null;
+  // Null only before the first tick, or if the server is genuinely unreachable
+  // — a degraded (503) server still reports its version, per the queryFn note
+  // above. Rendering nothing in that window is deliberate: an absent version is
+  // better than a stale or guessed one.
+  const appVersion: string | null = healthQuery.data?.version ?? null;
 
   async function patchConfig(patch: Partial<MinderConfig>): Promise<void> {
     const res = await fetch("/api/config", {
@@ -271,6 +289,20 @@ export function SettingsPage() {
             );
           })}
         </nav>
+        {appVersion && (
+          <p
+            style={{
+              margin: "16px 0 0 0",
+              padding: "0 10px",
+              fontFamily: "var(--font-mono)",
+              fontSize: "0.65rem",
+              color: "var(--text-muted)",
+            }}
+            title="The version of the server currently running"
+          >
+            v{appVersion}
+          </p>
+        )}
       </aside>
 
       <main style={{ flex: 1, minWidth: 0 }}>

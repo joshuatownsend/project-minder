@@ -306,6 +306,10 @@
 
 - [x] **Execute the Service Mode + Tray App plan** — Completed 2026-07-18 (archived same day). Why: every non-optional task shipped and v1.3.0 released with all four platform installers. Phase A (A1 bootstrap #281/#286, A2 lifecycle #290, A3 service wrappers #291, A4 docs #293), C0 standalone packaging (#285), C1 Tauri tray (#294), C2 autostart toggle (#298), C3 native notifications (#300), C4 packaging CI (#301 + hardening #305), C6 docs (#302), release cut (#304, tag v1.3.0 on ce683af — NSIS/.dmg/.app.tar.gz/AppImage/.deb all live). Phase B (daemon/UI split) deferred indefinitely; C5 (signing + updater) deferred until the project has real users — the one live remnant, tracked in TODO.md. Status table in `docs/superpowers/plans/2026-07-16-service-and-tray.md` is the historical record.
 
+## Housekeeping (archived 2026-07-20)
+
+- [x] **Show the running version in the tray menu and the dashboard** — completed 2026-07-20. Why: nothing in the UI reported the running build, so the 1.5.0 → 1.5.1 auto-update could not be confirmed from inside the app. Tray gained a disabled `Version x.y.z` item directly above **Check for updates…**, sourced from `app.package_info().version` (build-time metadata, so it reflects the binary actually executing); Settings shows the same under its section nav, sourced from the `version` field of `GET /api/health` on the poll that page already makes. The two sources are deliberately independent — a disagreement means the tray binary and the bundled server came from different builds, which the tray-app help doc now explains.
+
 ## Project Groups — prerequisites (archived 2026-07-20)
 
 > Both shipped in PR #324. Moved out of `TODO.md` because they are done; the remaining P1–P3 phases stay active there. Plan: `docs/superpowers/plans/2026-07-20-project-groups-multi-location.md`.

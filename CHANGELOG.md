@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **The running version is now visible in the tray menu and on the Settings page.** Nothing in the UI reported which build was executing, so after an auto-update from 1.5.0 to 1.5.1 there was no way to confirm the update had applied without checking the installer or the Releases page — precisely the question shipping an auto-updater creates. The tray shows a disabled `Version x.y.z` item directly above **Check for updates…**, so the two read together; Settings shows `vx.y.z` under the section nav. The tray reads `app.package_info().version` (from `tauri.conf.json`, stamped from `package.json` at build time by both CI and `pnpm release:local`) rather than a literal, so it reports the binary actually running. Settings reads `version` from `GET /api/health`, which the page already polls every 15s — no new request. The two therefore have independent sources: normally identical, and a disagreement is real information, meaning the tray binary and the bundled server came from different builds.
+
+### Fixed
+- **The Settings DB-status row went blank exactly when the database was broken.** `/api/health` answers 503 for every DB state other than `success` and carries the full body regardless of status code — a contract its own header comment states explicitly, because the Home banner, Settings, and the tray all read the body either way. The Settings query nevertheless threw on a bare `!res.ok`, discarding the payload in precisely the situation the payload exists to describe: `InitStatusRow` renders nothing on a null status, so the DB status, attempt count, quarantine count, and last error all disappeared the moment the DB failed, leaving the page looking healthy. Found while adding the version display, which read the same query and inherited the same blindness. The query now treats 503 as a readable response and still throws on other non-OK statuses.
+
 ## [1.5.1] - 2026-07-20
 
 ### Fixed
