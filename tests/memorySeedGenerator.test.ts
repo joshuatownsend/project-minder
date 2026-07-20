@@ -7,6 +7,7 @@ function project(opts: Partial<ProjectData> & { slug: string; path: string; name
   return {
     slug: opts.slug,
     usageSlug: opts.usageSlug ?? `dev-${opts.slug}`,
+    usageDirName: `C--dev-${opts.slug}`,
     name: opts.name ?? opts.slug,
     path: opts.path,
     status: opts.status ?? "active",

@@ -186,7 +186,11 @@ async function scanProject(
   // `usageSlug` field doc on ProjectData. mapLocalPath first: a UNC-scanned WSL
   // project's sessions were recorded (and encoded) under the distro-side Linux
   // path, so the usage slug must derive from that form, not the UNC path.
-  const usageSlug = usageToSlug(canonicalizeDirName(encodePath(mapLocalPath(projectPath, pathMappings))));
+  // The encoded conversation-dir name, shared by both keys below. Kept as its
+  // own value so the un-slugified form is available: it is the only one of the
+  // two that uniquely identifies a project (see usageDirName's doc).
+  const usageDirName = encodePath(mapLocalPath(projectPath, pathMappings));
+  const usageSlug = usageToSlug(canonicalizeDirName(usageDirName));
   // Home pin for the usage/cost join (#311): set only for mapped projects
   // whose owning Claude home resolves — see resolveUsageHomeKey.
   const usageHomeKey = resolveUsageHomeKey(projectPath, pathMappings, claudeHomes);
@@ -325,6 +329,7 @@ async function scanProject(
   const project: ProjectData = {
     slug,
     usageSlug,
+    usageDirName,
     ...(usageHomeKey !== undefined ? { usageHomeKey } : {}),
     name: pkgResult.name || dirName,
     path: projectPath,

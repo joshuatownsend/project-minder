@@ -74,7 +74,7 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
   return { primary: "Untitled session", isRecap: false, isPlaceholder: true };
 }
 
-export function ProjectSessions({ projectPath }: { projectPath: string }) {
+export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   // T2.2: in-page filter set by clicking a PR chip on a session row.
@@ -97,19 +97,32 @@ export function ProjectSessions({ projectPath }: { projectPath: string }) {
   }, []);
 
   useEffect(() => {
-    // Match via projectName (raw encoded dir, e.g. "C--dev-project-minder") to avoid
-    // the lossy decodeDirName() path which corrupts hyphenated project names.
-    const encoded = projectPath.replace(/[:\\/]/g, "-");
-    // Pass encoded name as query param to reduce JSON payload — exact client-side
-    // filter below guards against the API's looser substring match.
-    fetch(`/api/sessions?project=${encodeURIComponent(encoded)}`)
+    // Match the scanner-derived encoded dir name against
+    // `SessionSummary.projectName`, which is the same string.
+    //
+    // This used to be re-derived here from the project path
+    // (`projectPath.replace(/[:\\/]/g, "-")`), which worked only because a
+    // Windows path encodes to what Claude Code used, and was blind to
+    // `config.pathMappings` — a WSL project's sessions are recorded under the
+    // distro's Linux path, so the browser-built key matched nothing and the tab
+    // rendered empty (#325). That mapping is server-side, so the key has to
+    // come from the scan.
+    //
+    // usageDirName rather than usageSlug: `toSlug` strips the drive prefix, so
+    // C:\dev\foo and D:\dev\foo share a usageSlug and each project's tab would
+    // list the other's sessions. The encoded dir keeps them distinct, which is
+    // the exactness the old projectName check had and this must not lose.
+    //
+    // Query param narrows the payload via the API's substring fallback; the
+    // filter below is what makes it exact.
+    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}`)
       .then((res) => res.json())
       .then((all: SessionSummary[]) => {
-        setSessions(all.filter((s) => s.projectName === encoded));
+        setSessions(all.filter((s) => s.projectName === usageDirName));
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [projectPath]);
+  }, [usageDirName]);
 
   const stats = useMemo(() => {
     if (sessions.length === 0) return null;

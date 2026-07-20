@@ -27,6 +27,17 @@ export interface ProjectData {
   // aggregates without re-deriving the encoding client-side.
   usageSlug: string;
 
+  // The `~/.claude/projects/` directory name this project's sessions are
+  // recorded under — i.e. `SessionSummary.projectName`. Same derivation as
+  // `usageSlug` minus the final canonicalize+slugify, and it must stay that
+  // way: `toSlug` strips the drive prefix, so `C:\dev\foo` and `D:\dev\foo`
+  // share a usageSlug (`dev-foo`) while their encoded dirs (`C--dev-foo`,
+  // `D--dev-foo`) stay distinct. Anything selecting sessions for ONE project
+  // needs this; `usageSlug` is for joining usage aggregates, which key on the
+  // slug. Precomputed here because the mapping that makes a WSL project's
+  // Linux-recorded path resolve is server-side config.
+  usageDirName: string;
+
   // Home pin for the usage/cost report join (#311): the normalized key of
   // the Claude home that records this project's sessions, set ONLY for
   // mapped (e.g. UNC-scanned WSL) projects whose owning home resolves from

@@ -441,6 +441,7 @@ function buildProject(seed: Seed, nowMs: number): ProjectData {
     path: `C:\\dev\\${seed.slug}`,
     status: seed.status,
     usageSlug: `dev-${seed.slug}`,
+    usageDirName: `C--dev-${seed.slug}`,
     framework: seed.framework,
     frameworkVersion: seed.frameworkVersion,
     dependencies: seed.dependencies,
