@@ -100,6 +100,17 @@ describe("resolveProjectSlug", () => {
     }
   });
 
+  // Regression: the scan loop reserves every uncontested natural slug in a root
+  // BEFORE resolving collisions. Without that, an earlier `bamcli` plus a root
+  // holding both `bamcli` and `bamcli-library` would hand `bamcli-library` to
+  // the colliding `bamcli`, pushing the genuinely-unique project out to
+  // `bamcli-library-library` — moving the URL and saved overrides of a project
+  // that never collided with anything.
+  it("routes around a natural slug already reserved in this root", () => {
+    const taken = new Set(["bamcli", "bamcli-library"]);
+    expect(resolveProjectSlug("bamcli", WSL_LIBRARY, taken)).toBe("bamcli-library-2");
+  });
+
   it("produces slugs that are already canonical under toSlug", () => {
     const taken = new Set(["bamcli"]);
     const slug = resolveProjectSlug("bamcli", "\\\\wsl.localhost\\Ubuntu-26.04", taken);

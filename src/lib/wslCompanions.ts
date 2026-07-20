@@ -25,8 +25,48 @@
  */
 
 import type { PathMapping } from "./types";
-import { parseWslUncPath } from "./wsl";
-import { normalizePathKey } from "./platform";
+
+// ---------------------------------------------------------------------------
+// This module is imported by a `"use client"` component (the Settings scan-roots
+// section), so it must stay free of Node built-ins. It deliberately does NOT
+// import `./wsl` or `./platform`: both pull `child_process`/`fs` at module
+// scope, and Turbopack fails the whole build with "Module not found: Can't
+// resolve 'child_process'" rather than tree-shaking them away. Neither
+// `pnpm typecheck` nor the Vitest suite catches that — only `pnpm build` does.
+//
+// The two helpers below are therefore local copies of the pure parts of those
+// modules. `tests/wslCompanions.test.ts` cross-checks them against the
+// originals over a shared table of inputs, so the duplication cannot drift
+// silently.
+// ---------------------------------------------------------------------------
+
+/** Local copy of `wsl.ts`'s WSL_UNC_RE — see the note above. */
+const WSL_UNC_RE = /^[\\/]{2}(?:wsl\.localhost|wsl\$)[\\/]([^\\/]+)(?:[\\/]|$)/i;
+
+/** Local copy of `wsl.ts`'s `parseWslUncPath` — see the note above. */
+function parseWslUncPath(p: string): { distro: string } | null {
+  const m = WSL_UNC_RE.exec(p.trim());
+  if (!m) return null;
+  const distro = m[1].trim();
+  return distro ? { distro } : null;
+}
+
+/**
+ * Local, always-case-folding equivalent of `platform.ts`'s `normalizePathKey`.
+ *
+ * Unconditional folding is correct here where the platform version's is
+ * conditional: every path this compares is a Windows UNC path reaching a WSL
+ * distro, which is case-insensitive regardless of the OS running the code. It
+ * also keeps the derivation deterministic in tests on either platform.
+ */
+function pathKey(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/\/wsl\$(?=\/)/i, "//wsl.localhost")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
 
 /** Settings implied by a single WSL scan root. */
 export interface WslCompanions {
@@ -83,37 +123,71 @@ export function deriveWslCompanions(root: string): WslCompanions | null {
 
 /** Case- and alias-insensitive identity for a filesystem path. */
 function homeKey(p: string): string {
-  return normalizePathKey(p.trim());
+  return pathKey(p);
+}
+
+/** A root whose Linux prefix is already mapped somewhere else. */
+export interface WslMappingConflict {
+  root: string;
+  /** The Linux prefix both roots claim, e.g. "/home/josh". */
+  from: string;
+  /** Where that prefix already points — a different distro's UNC tree. */
+  existingTo: string;
+}
+
+/** Normalized identity for a mapping's `from` prefix. */
+function fromKey(from: string): string {
+  return from.trim().replace(/\/+$/, "");
 }
 
 /**
  * Merge the companions implied by `roots` into existing config values.
  *
  * Existing entries always win: a `from` prefix the user has already mapped is
- * left exactly as they set it, since a hand-tuned mapping (a different distro,
- * a bind mount, a renamed home) is more authoritative than anything derivable
- * from a path. This function only ever *adds*.
+ * left exactly as they set it, since a hand-tuned mapping (a bind mount, a
+ * renamed home) is more authoritative than anything derivable from a path. This
+ * function only ever *adds*.
+ *
+ * Two distros with the same Linux username (Ubuntu and Debian both under
+ * `/home/josh`) derive the same `from` pointing at different UNC trees. That is
+ * reported as a **conflict** rather than resolved, because it genuinely cannot
+ * be: a Linux path carries no distro, and `mapForeignPath` returns on the first
+ * matching prefix — so a second entry for the same `from` would be dead config
+ * that makes the setup look fixed while the second distro still reads as zero.
  */
 export function mergeWslCompanions(
   roots: string[],
   existing: { claudeHomes?: string[]; pathMappings?: PathMapping[] } = {}
-): { claudeHomes: string[]; pathMappings: PathMapping[]; added: number } {
+): {
+  claudeHomes: string[];
+  pathMappings: PathMapping[];
+  added: number;
+  conflicts: WslMappingConflict[];
+} {
   const claudeHomes = [...(existing.claudeHomes ?? [])];
   const pathMappings = [...(existing.pathMappings ?? [])];
   const seenHomes = new Set(claudeHomes.map(homeKey));
-  const seenFrom = new Set(pathMappings.map((m) => m.from.trim().replace(/\/+$/, "")));
+  const mappedTo = new Map(pathMappings.map((m) => [fromKey(m.from), m.to]));
+  const conflicts: WslMappingConflict[] = [];
   let added = 0;
 
   for (const root of roots) {
     const companions = deriveWslCompanions(root);
     if (!companions) continue;
 
-    const from = companions.pathMapping.from;
-    if (!seenFrom.has(from)) {
-      seenFrom.add(from);
+    const { from, to } = companions.pathMapping;
+    const existingTo = mappedTo.get(fromKey(from));
+    if (existingTo === undefined) {
+      mappedTo.set(fromKey(from), to);
       pathMappings.push(companions.pathMapping);
       added++;
+    } else if (homeKey(existingTo) !== homeKey(to)) {
+      conflicts.push({ root, from, existingTo });
+      // Deliberately no claudeHome either: adding one without a usable mapping
+      // would read the distro's sessions and then fail to match any project.
+      continue;
     }
+
     if (companions.claudeHome && !seenHomes.has(homeKey(companions.claudeHome))) {
       seenHomes.add(homeKey(companions.claudeHome));
       claudeHomes.push(companions.claudeHome);
@@ -121,22 +195,27 @@ export function mergeWslCompanions(
     }
   }
 
-  return { claudeHomes, pathMappings, added };
+  return { claudeHomes, pathMappings, added, conflicts };
 }
 
 /**
- * WSL roots that are missing at least one companion setting — i.e. roots whose
- * projects scan but whose Claude data cannot join.
+ * Classify every configured root by whether its Claude data can actually join.
  *
- * Drives the Settings warning for setups configured before this was wired up,
- * who otherwise have no way to discover that their WSL costs read as zero.
+ * `repairable` roots are missing companions that `mergeWslCompanions` will add.
+ * `conflicted` roots cannot be fixed automatically and need the user to decide
+ * — surfacing them separately matters because a repair button that silently
+ * does nothing is worse than no button.
+ *
+ * Matching is on the mapping's `to`, not just its `from`: a root whose prefix is
+ * mapped to a *different* distro is not configured, however satisfied a
+ * `from`-only check would look.
  */
-export function findUnmappedWslRoots(config: {
+export function analyzeWslRoots(config: {
   devRoots?: string[];
   devRoot?: string;
   claudeHomes?: string[];
   pathMappings?: PathMapping[];
-}): string[] {
+}): { repairable: string[]; conflicted: WslMappingConflict[] } {
   const roots =
     config.devRoots && config.devRoots.length > 0
       ? config.devRoots
@@ -145,14 +224,30 @@ export function findUnmappedWslRoots(config: {
         : [];
 
   const seenHomes = new Set((config.claudeHomes ?? []).map(homeKey));
-  const seenFrom = new Set(
-    (config.pathMappings ?? []).map((m) => m.from.trim().replace(/\/+$/, ""))
-  );
+  const mappedTo = new Map((config.pathMappings ?? []).map((m) => [fromKey(m.from), m.to]));
 
-  return roots.filter((root) => {
+  const repairable: string[] = [];
+  const conflicted: WslMappingConflict[] = [];
+
+  for (const root of roots) {
     const companions = deriveWslCompanions(root);
-    if (!companions) return false;
-    if (!seenFrom.has(companions.pathMapping.from)) return true;
-    return Boolean(companions.claudeHome) && !seenHomes.has(homeKey(companions.claudeHome!));
-  });
+    if (!companions) continue;
+
+    const { from, to } = companions.pathMapping;
+    const existingTo = mappedTo.get(fromKey(from));
+
+    if (existingTo === undefined) {
+      repairable.push(root);
+      continue;
+    }
+    if (homeKey(existingTo) !== homeKey(to)) {
+      conflicted.push({ root, from, existingTo });
+      continue;
+    }
+    if (companions.claudeHome && !seenHomes.has(homeKey(companions.claudeHome))) {
+      repairable.push(root);
+    }
+  }
+
+  return { repairable, conflicted };
 }

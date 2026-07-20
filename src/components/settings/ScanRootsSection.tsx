@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
 import { ScanRootsEditor } from "@/components/ScanRootsEditor";
-import { mergeWslCompanions, findUnmappedWslRoots } from "@/lib/wslCompanions";
+import { mergeWslCompanions, analyzeWslRoots } from "@/lib/wslCompanions";
 import { S } from "./styles";
 
 interface WslDistroSuggestion {
@@ -111,7 +111,9 @@ export function ScanRootsSection({
   // sessions and zero cost, which is indistinguishable from "I haven't worked
   // there yet". Reported against SAVED config, not the draft, so it reflects
   // what is actually in effect.
-  const unmappedRoots = config ? findUnmappedWslRoots(config) : [];
+  const { repairable: unmappedRoots, conflicted } = config
+    ? analyzeWslRoots(config)
+    : { repairable: [], conflicted: [] };
 
   async function repairWslCompanions() {
     if (!config) return;
@@ -211,6 +213,36 @@ export function ScanRootsSection({
                 >
                   {saving ? "Linking…" : "Link WSL Claude data"}
                 </button>
+              </div>
+            )}
+
+            {conflicted.length > 0 && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "10px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div style={{ ...S.label, marginBottom: "4px" }}>
+                  Can&apos;t link {conflicted.length === 1 ? "one root" : `${conflicted.length} roots`} automatically
+                </div>
+                <p style={S.muted}>
+                  {conflicted.map((c) => (
+                    <span key={c.root} style={{ display: "block", marginBottom: "4px" }}>
+                      <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.root}</code>{" "}
+                      needs <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.from}</code>, which
+                      already points at{" "}
+                      <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>{c.existingTo}</code>.
+                    </span>
+                  ))}
+                  Two distros share a Linux home path, and a recorded path carries no distro to tell them apart — only
+                  the first mapping can ever match. Rename one distro&apos;s user, or edit{" "}
+                  <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>pathMappings</code> in{" "}
+                  <code style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem" }}>.minder.json</code> to choose
+                  which one wins.
+                </p>
               </div>
             )}
 

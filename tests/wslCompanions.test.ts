@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   deriveWslCompanions,
   mergeWslCompanions,
-  findUnmappedWslRoots,
+  analyzeWslRoots,
 } from "@/lib/wslCompanions";
+import { parseWslUncPath } from "@/lib/wsl";
 import { mapLocalPath } from "@/lib/pathMapping";
 import { encodePath } from "@/lib/scanner/claudeConversations";
 
@@ -109,6 +110,41 @@ describe("mergeWslCompanions", () => {
     expect(merged.pathMappings).toEqual([custom]);
   });
 
+  it("treats a same-prefix/different-distro mapping as a conflict, not a merge", () => {
+    // Two distros with the same Linux username both derive "/home/josh". A
+    // second entry would be dead config — mapForeignPath returns on the first
+    // match — so this is reported rather than silently 'fixed'.
+    const debian = "\\\\wsl.localhost\\Debian\\home\\josh";
+    const merged = mergeWslCompanions([`${HOME}\\dev`, `${debian}\\dev`], {});
+    expect(merged.pathMappings).toEqual([{ from: "/home/josh", to: HOME }]);
+    expect(merged.conflicts).toEqual([
+      { root: `${debian}\\dev`, from: "/home/josh", existingTo: HOME },
+    ]);
+  });
+
+  it("does not add a Claude home for a conflicted root", () => {
+    // Reading a distro's sessions with no usable mapping finds nothing to
+    // match them against — it would cost the read and change no outcome.
+    const debian = "\\\\wsl.localhost\\Debian\\home\\josh";
+    const merged = mergeWslCompanions([`${HOME}\\dev`, `${debian}\\dev`], {});
+    expect(merged.claudeHomes).toEqual([`${HOME}\\.claude`]);
+  });
+
+  it("reports no conflict when the existing mapping already points here", () => {
+    const merged = mergeWslCompanions([`${HOME}\\dev`], {
+      pathMappings: [{ from: "/home/josh", to: HOME }],
+    });
+    expect(merged.conflicts).toEqual([]);
+  });
+
+  it("matches an existing mapping written with the other host alias", () => {
+    const merged = mergeWslCompanions([`${HOME}\\dev`], {
+      pathMappings: [{ from: "/home/josh", to: "\\\\wsl$\\Ubuntu-26.04\\home\\josh" }],
+    });
+    expect(merged.conflicts).toEqual([]);
+    expect(merged.pathMappings).toHaveLength(1);
+  });
+
   it("is idempotent — re-merging adds nothing", () => {
     const first = mergeWslCompanions([`${HOME}\\dev`], {});
     const second = mergeWslCompanions([`${HOME}\\dev`], first);
@@ -132,64 +168,6 @@ describe("mergeWslCompanions", () => {
     });
     expect(merged.pathMappings).toContainEqual(other);
     expect(merged.claudeHomes).toContain("D:\\claude");
-  });
-});
-
-describe("findUnmappedWslRoots", () => {
-  it("reports a WSL root with no companions at all", () => {
-    expect(findUnmappedWslRoots({ devRoots: ["C:\\dev", `${HOME}\\dev`] })).toEqual([
-      `${HOME}\\dev`,
-    ]);
-  });
-
-  it("reports a root that has a mapping but no Claude home", () => {
-    expect(
-      findUnmappedWslRoots({
-        devRoots: [`${HOME}\\dev`],
-        pathMappings: [{ from: "/home/josh", to: HOME }],
-      })
-    ).toEqual([`${HOME}\\dev`]);
-  });
-
-  it("reports a root that has a Claude home but no mapping", () => {
-    expect(
-      findUnmappedWslRoots({
-        devRoots: [`${HOME}\\dev`],
-        claudeHomes: [`${HOME}\\.claude`],
-      })
-    ).toEqual([`${HOME}\\dev`]);
-  });
-
-  it("reports nothing once both are present", () => {
-    expect(
-      findUnmappedWslRoots({
-        devRoots: [`${HOME}\\dev`],
-        claudeHomes: [`${HOME}\\.claude`],
-        pathMappings: [{ from: "/home/josh", to: HOME }],
-      })
-    ).toEqual([]);
-  });
-
-  it("never reports non-WSL roots", () => {
-    expect(findUnmappedWslRoots({ devRoots: ["C:\\dev", "D:\\work"] })).toEqual([]);
-  });
-
-  it("does not require a Claude home for a root outside /home", () => {
-    expect(
-      findUnmappedWslRoots({
-        devRoots: [`${DISTRO}\\opt\\src`],
-        pathMappings: [{ from: "/opt", to: `${DISTRO}\\opt` }],
-      })
-    ).toEqual([]);
-  });
-
-  it("falls back to the legacy single devRoot", () => {
-    expect(findUnmappedWslRoots({ devRoot: `${HOME}\\dev` })).toEqual([`${HOME}\\dev`]);
-  });
-
-  it("is satisfied by whatever mergeWslCompanions produces", () => {
-    const roots = ["C:\\dev", `${HOME}\\dev`, `${DISTRO}\\opt\\src`];
-    expect(findUnmappedWslRoots({ devRoots: roots, ...mergeWslCompanions(roots) })).toEqual([]);
   });
 });
 
@@ -240,5 +218,123 @@ describe("derived mapping resolves a WSL project to its real session directory",
     expect(
       encodePath(mapLocalPath(`${HOME}\\printing-press\\library\\bamcli`, pathMappings))
     ).toBe("-home-josh-printing-press-library-bamcli");
+  });
+});
+
+describe("analyzeWslRoots", () => {
+  const DEBIAN_HOME = "\\\\wsl.localhost\\Debian\\home\\josh";
+
+  it("reports a WSL root with no companions as repairable", () => {
+    const r = analyzeWslRoots({ devRoots: ["C:\\dev", `${HOME}\\dev`] });
+    expect(r.repairable).toEqual([`${HOME}\\dev`]);
+    expect(r.conflicted).toEqual([]);
+  });
+
+  it("reports a root that has a mapping but no Claude home", () => {
+    expect(
+      analyzeWslRoots({
+        devRoots: [`${HOME}\\dev`],
+        pathMappings: [{ from: "/home/josh", to: HOME }],
+      }).repairable
+    ).toEqual([`${HOME}\\dev`]);
+  });
+
+  it("reports a root that has a Claude home but no mapping", () => {
+    expect(
+      analyzeWslRoots({
+        devRoots: [`${HOME}\\dev`],
+        claudeHomes: [`${HOME}\\.claude`],
+      }).repairable
+    ).toEqual([`${HOME}\\dev`]);
+  });
+
+  it("reports nothing once both are present", () => {
+    const r = analyzeWslRoots({
+      devRoots: [`${HOME}\\dev`],
+      claudeHomes: [`${HOME}\\.claude`],
+      pathMappings: [{ from: "/home/josh", to: HOME }],
+    });
+    expect(r.repairable).toEqual([]);
+    expect(r.conflicted).toEqual([]);
+  });
+
+  // Matching on `from` alone would call this configured while the mapping
+  // actually points at a different distro — a repair button that does nothing.
+  it("does not consider a root configured by another distro's mapping", () => {
+    const r = analyzeWslRoots({
+      devRoots: [`${DEBIAN_HOME}\\dev`],
+      pathMappings: [{ from: "/home/josh", to: HOME }],
+    });
+    expect(r.repairable).toEqual([]);
+    expect(r.conflicted).toEqual([
+      { root: `${DEBIAN_HOME}\\dev`, from: "/home/josh", existingTo: HOME },
+    ]);
+  });
+
+  it("never reports non-WSL roots", () => {
+    expect(analyzeWslRoots({ devRoots: ["C:\\dev", "D:\\work"] }).repairable).toEqual([]);
+  });
+
+  it("does not require a Claude home for a root outside /home", () => {
+    expect(
+      analyzeWslRoots({
+        devRoots: [`${DISTRO}\\opt\\src`],
+        pathMappings: [{ from: "/opt", to: `${DISTRO}\\opt` }],
+      }).repairable
+    ).toEqual([]);
+  });
+
+  it("falls back to the legacy single devRoot", () => {
+    expect(analyzeWslRoots({ devRoot: `${HOME}\\dev` }).repairable).toEqual([`${HOME}\\dev`]);
+  });
+
+  it("is satisfied by whatever mergeWslCompanions produces", () => {
+    const roots = ["C:\\dev", `${HOME}\\dev`, `${DISTRO}\\opt\\src`];
+    const r = analyzeWslRoots({ devRoots: roots, ...mergeWslCompanions(roots) });
+    expect(r.repairable).toEqual([]);
+    expect(r.conflicted).toEqual([]);
+  });
+});
+
+/**
+ * `wslCompanions` is imported by a "use client" component, so it cannot import
+ * `./wsl` (child_process) or `./platform` (fs) — Turbopack fails the build
+ * rather than tree-shaking them, and neither typecheck nor the unit suite
+ * notices. It therefore keeps local copies of the pure helpers it needs.
+ *
+ * These tests are the drift guard for that duplication: they run under Node, so
+ * they CAN import the originals and assert the copies still agree.
+ */
+describe("local helper copies stay in sync with their originals", () => {
+  const paths = [
+    "\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\dev",
+    "\\\\wsl$\\Ubuntu-26.04\\home\\josh\\dev",
+    "//wsl.localhost/Ubuntu-26.04/home/josh/dev",
+    "\\\\wsl.localhost\\My Distro\\home\\josh",
+    "\\\\wsl.localhost\\Ubuntu-26.04",
+    "  \\\\wsl.localhost\\Ubuntu-26.04\\home  ",
+    "C:\\dev",
+    "/home/josh/dev",
+    "",
+    "\\\\wsl.localhost\\",
+    "\\\\notwsl\\share\\dir",
+  ];
+
+  it.each(paths)("agrees with parseWslUncPath on %j", (p) => {
+    // A non-null derivation implies the real parser accepts the path too — the
+    // reverse isn't required, since derivation additionally needs a segment
+    // past the distro.
+    const derived = deriveWslCompanions(p);
+    if (derived !== null) {
+      const parsed = parseWslUncPath(p);
+      expect(parsed).not.toBeNull();
+      expect(derived.pathMapping.to).toContain(parsed!.distro);
+    }
+  });
+
+  it("rejects every path the real parser rejects", () => {
+    for (const p of paths) {
+      if (parseWslUncPath(p) === null) expect(deriveWslCompanions(p)).toBeNull();
+    }
   });
 });

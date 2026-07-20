@@ -168,10 +168,15 @@ async function scanProject(
   // must be decided BEFORE this point: the slug is stamped onto every catalog
   // entry by the walks below, so it cannot be corrected after the fact.
   slugOverride?: string,
+  // Set by callers that have already established `.git` exists. The scan loop
+  // must check it early (to keep non-repo directories from consuming slugs), and
+  // re-statting here would double the `.git` stats on every scan — paid per
+  // project, and over the network for UNC/WSL roots.
+  repoAlreadyChecked = false,
 ): Promise<{ project: ProjectData; catalogWalk: ProjectCatalogWalk | null } | null> {
   const projectPath = path.join(devRoot, dirName);
 
-  if (!(await isGitRepo(projectPath))) return null;
+  if (!repoAlreadyChecked && !(await isGitRepo(projectPath))) return null;
 
   const slug = slugOverride ?? toSlug(dirName);
   // Usage aggregates key on the encoded-conversation-dir slug, which differs
@@ -274,7 +279,7 @@ async function scanProject(
       ? scanManualStepsMd(projectPath)
       : Promise.resolve(undefined),
     getFlag(flags, "scanInsights")
-      ? scanInsightsMd(projectPath)
+      ? scanInsightsMd(projectPath, slug)
       : Promise.resolve(undefined),
     getFlag(flags, "scanBoard")
       ? scanBoardMd(projectPath)
@@ -369,26 +374,40 @@ async function scanProject(
 }
 
 function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
-  const portMap = new Map<number, { projects: Set<string>; type: PortConflict["type"] }>();
+  // Keyed by SLUG, not by display name. Two checkouts of one repo under
+  // different scan roots share a package name, so a name-keyed set collapsed
+  // them into a single entry and emitted no conflict — losing the warning for
+  // precisely the duplicated-checkout case that keeping both projects enables.
+  // The value carries the name so the banner can still show something human.
+  const portMap = new Map<
+    number,
+    { projects: Map<string, string>; type: PortConflict["type"] }
+  >();
 
-  function addPort(port: number, projectName: string, type: PortConflict["type"]) {
-    const entry = portMap.get(port) || { projects: new Set<string>(), type };
-    entry.projects.add(projectName);
+  function addPort(port: number, slug: string, projectName: string, type: PortConflict["type"]) {
+    const entry = portMap.get(port) || { projects: new Map<string, string>(), type };
+    entry.projects.set(slug, projectName);
     portMap.set(port, entry);
   }
 
   for (const project of projects) {
-    if (project.devPort) addPort(project.devPort, project.name, "dev");
-    if (project.dbPort) addPort(project.dbPort, project.name, "db");
+    if (project.devPort) addPort(project.devPort, project.slug, project.name, "dev");
+    if (project.dbPort) addPort(project.dbPort, project.slug, project.name, "db");
     for (const dp of project.dockerPorts) {
-      addPort(dp.host, project.name, "docker");
+      addPort(dp.host, project.slug, project.name, "docker");
     }
   }
 
   const conflicts: PortConflict[] = [];
   for (const [port, entry] of portMap) {
     if (entry.projects.size > 1) {
-      conflicts.push({ port, projects: Array.from(entry.projects), type: entry.type });
+      // "bamcli, bamcli" would be a useless warning, so when two members share
+      // a display name, qualify each with its (unique) slug.
+      const names = [...entry.projects.values()];
+      const labels = [...entry.projects].map(([slug, name]) =>
+        names.filter((n) => n === name).length > 1 ? `${name} (${slug})` : name
+      );
+      conflicts.push({ port, projects: labels, type: entry.type });
     }
   }
 
@@ -505,27 +524,51 @@ export async function scanAllProjects(): Promise<ScanResult> {
     const repoFlags = await Promise.all(entries.map((e) => isGitRepo(path.join(devRoot, e))));
     entries = entries.filter((_, i) => repoFlags[i]);
 
-    // Assign each project a slug that no earlier root has claimed. Resolution
-    // order is sorted rather than readdir order so the numeric fallback lands on
-    // the same directory every scan.
+    // Assign each project a slug that no earlier root has claimed.
+    //
+    // Sorted by codepoint rather than readdir order (and NOT via localeCompare,
+    // whose collation varies with process locale and ICU data) so the numeric
+    // fallback lands on the same directory on every machine, every scan.
+    const ordered = [...entries].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+    // Two passes, because a suffix must never displace a project that had a
+    // unique name of its own. With an earlier `bamcli`, a root containing BOTH
+    // `bamcli` and `bamcli-library`, single-pass resolution would hand
+    // `bamcli-library` to the colliding `bamcli` and then push the real
+    // `bamcli-library` out to `bamcli-library-library` — moving the URL and
+    // saved status/port overrides of a project that never collided with
+    // anything. Reserving every natural slug in this root first makes the
+    // suffix route around them instead.
     const slugByDir = new Map<string, string>();
-    for (const e of [...entries].sort((a, b) => a.localeCompare(b))) {
+    for (const e of ordered) {
+      // Tested against the LIVE set, not a snapshot: two names in this root that
+      // normalize alike are not both uncontested — the first claims the slug and
+      // the second must fall through to the second pass.
+      const natural = toSlug(e);
+      if (seenSlugs.has(natural)) continue;
+      seenSlugs.add(natural);
+      slugByDir.set(e, natural);
+    }
+    for (const e of ordered) {
+      if (slugByDir.has(e)) continue;
       const slug = resolveProjectSlug(e, devRoot, seenSlugs);
       seenSlugs.add(slug);
       slugByDir.set(e, slug);
-      if (slug !== toSlug(e)) {
-        console.info(
-          `[scanner] Slug "${toSlug(e)}" is already claimed by an earlier root; ` +
-            `"${e}" in ${devRoot} is indexed as "${slug}".`
-        );
-      }
+      // Says "another root" rather than "an earlier root": this also fires for
+      // two names in THIS root that normalize alike (`bam_cli` / `bam-cli`),
+      // and blaming an earlier root would send anyone diagnosing that down the
+      // wrong path entirely.
+      console.info(
+        `[scanner] Slug "${toSlug(e)}" is already claimed by another root or directory; ` +
+          `"${e}" in ${devRoot} is indexed as "${slug}".`
+      );
     }
 
     // Process in batches to avoid overwhelming the system
     const rootProjects: ProjectData[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx, config.pathMappings ?? [], claudeHomes, slugByDir.get(d))));
+      const results = await Promise.all(batch.map((d) => scanProject(d, devRoot, flags, ctx, config.pathMappings ?? [], claudeHomes, slugByDir.get(d), true)));
       for (const r of results) {
         if (r) {
           rootProjects.push(r.project);

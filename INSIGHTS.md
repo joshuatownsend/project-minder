@@ -1,5 +1,85 @@
 # Insights
 
+<!-- insight:5859ac752b0f | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T14:30:28.757Z -->
+## ★ Insight
+One subtlety that would have produced a silent half-fix: the derivation preserves whichever UNC alias you wrote. `mapLocalPath` folds `wsl$` and `wsl.localhost` together when *comparing*, but `mapForeignPath` concatenates `to` verbatim when *rewriting*. So a mapping emitted as `wsl.localhost` against a scan root written as `wsl$` would map foreign paths to strings that no scanned project matches — the mapping would exist, look right in Settings, and join nothing.
+
+---
+
+<!-- insight:11271a388dbc | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T14:03:21.691Z -->
+## ★ Insight
+This is why I wanted the check before designing aggregation. Summing costs across locations today would have produced a number that looked authoritative and was ~3% correct — and it would have *looked* like the feature worked, because a sum with a missing addend renders identically to a correct one. The failure is only visible if you know the WSL number should be large.
+
+---
+
+<!-- insight:16a3670feb6d | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T13:52:44.439Z -->
+## ★ Insight
+The naive implementation — union everything — double-counts your entire insight log, because `INSIGHTS.md` is a committed file that both checkouts have verbatim. You'd open the merged view and see every insight twice.
+
+---
+
+<!-- insight:4ff64aa3866b | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T13:43:23.554Z -->
+## ★ Insight
+This is why the "just rename it after scanning" shortcut fails: `walkProjectSkills(projectPath, slug, ctx)` tags every discovered skill/agent/command with the project slug for `?project=<slug>` filtering. Reassigning `project.slug` post-scan would leave the catalog entries pointing at the colliding name — two projects' skills would merge under one filter.
+
+---
+
+<!-- insight:be7a79d97204 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T13:38:28.404Z -->
+## ★ Insight
+The collision filter runs **before** `isGitRepo`, which is why `~/dev/bamcli` never even reaches the git check — it's eliminated as a name duplicate first. That ordering also means the warning fires for directories that aren't projects at all, so the server log will be noisier than the actual problem.
+
+---
+
+<!-- insight:de8ad14d22d6 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T12:24:30.402Z -->
+## ★ Insight
+This is why I checked the live endpoint instead of trusting a green pipeline. Every job passed, the manifest is valid JSON, the signatures are correct — and it's completely non-functional. A client would see "update available," download, and fail. Percent-encoding the spaces was the right call for a URL; the mistake was assuming the stored filename still *had* spaces.
+
+---
+
+<!-- insight:e8a7b9376d23 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T11:06:28.344Z -->
+## ★ Insight
+This is the guard paying for itself on its first real run. Had I written `sigs[0]`, the Linux entry in `latest.json` would have pointed at whichever file the directory walk hit first — plausibly the `.deb`. Every Linux user's update check would then have downloaded a `.deb` and failed with "Currently only an AppImage can be updated," and because Tauri validates the *whole* manifest before comparing versions, a malformed entry there could have broken update checks on **every** platform.
+
+---
+
+<!-- insight:f75e731bfee0 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T20:29:00.508Z -->
+## ★ Insight
+One behavioral decision I'm making deliberately, and flagging: the **periodic** check will *notify* rather than auto-install. This is a dashboard whose server the user actively depends on — a silent 6-hourly self-restart would kill in-flight scans and dev-server child processes with no warning. Installing stays an explicit menu click. Easy to flip if you disagree; it's one boolean at the call site.
+
+---
+
+<!-- insight:bfa6a37f5c60 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T20:27:38.695Z -->
+## ★ Insight
+The docs just resolved U4 — and not the way the plan predicted. `on_before_exit` exists as a *dedicated* hook precisely because the Windows updater calls `std::process::exit()` directly rather than routing through Tauri's event loop. That means:
+- The `prevent_exit` guard **cannot** swallow the updater's exit (good — U4's blocker is a non-issue).
+- But `std::process::exit()` skips every destructor, so the Node sidecar would be **orphaned**, keeping its lock on `node.exe` and failing the install. `on_before_exit` isn't optional cleanup here; it's the only thing standing between an update and a corrupted install.
+
+---
+
+<!-- insight:b9929d113e5a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T20:18:33.822Z -->
+## ★ Insight
+Two things shaped the design before I wrote a line:
+
+---
+
+<!-- insight:37d6acf7404a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T17:53:30.240Z -->
+## ★ Insight
+This is a real hazard of adding an `fs` dependency to a widely-imported module. `import { existsSync } from "fs"` creates a binding resolved when the module graph loads, so any test doing `vi.mock("fs")` with a partial factory now fails at *import* time — 13 files, none of which care about dev roots. A namespace import (`import * as nodeFs`) defers the property access to call time, and combined with a runtime `typeof` guard the module degrades to "candidate not found" under a partial mock instead of exploding. `config.ts` calls the probe at module scope, so this had to be safe under mocks, not merely non-throwing.
+
+---
+
+<!-- insight:2367528c08f7 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T17:33:00.336Z -->
+## ★ Insight
+`proxy.ts` already contains a carefully-reasoned `resolveBoundPort` with a subtle security property documented at lines 76-78: it trusts *only* the bound port, deliberately **not** also `:4100`. Trusting the canonical port on a server bound to 4199 would let any other local process serving a page on 4100 drive the 4199 APIs cross-origin. If I wrote a second resolver in the MCP module, that reasoning would exist in one copy and not the other — exactly how the current drift happened. Extracting to a shared module makes the two allowlists structurally incapable of diverging.
+
+---
+
+<!-- insight:20fe97fc1bb8 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-19T17:23:08.403Z -->
+## ★ Insight
+Worth knowing why `package-standalone.mjs` is 59 KB rather than a `cp -r`: Next's standalone output is *incomplete by design*. It omits `.next/static` and `public/` (assumes a CDN serves them), and its file tracer misses `instrumentation.js` and dynamic chunks. On top of that, pnpm's `node_modules` is a symlink farm into a content-addressed store — so the copy must dereference, or the payload ships dangling links. That script is essentially a hand-rolled linker for the deploy artifact.
+
+---
+
 <!-- insight:9dc5a394e11e | session:687f38e5-3625-4aa0-ac80-e75f9c23a1e5 | 2026-07-19T01:13:03.444Z -->
 ## ★ Insight
 The round-8 `canonicalProjectDir` guard is doing quiet work here: because all four planning writers funnel through that one function, the TODO write route needed only a catch-clause mapping (`WslUnavailableError` → 503), not a new guard. Choke-point guards pay for themselves; the per-route sweep was only needed for lanes that bypass the writers and read scanner modules directly.
