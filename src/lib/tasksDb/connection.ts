@@ -26,7 +26,10 @@ try {
   loadError = err as Error;
 }
 
-export const TASKS_DB_DIR = path.join(os.homedir(), ".minder");
+/** Same resolution as the index DB — see the note on `DB_DIR` in
+ *  `src/lib/db/connection.ts` for why this honours `MINDER_STATE_DIR` but
+ *  falls back to `~/.minder` rather than to `resolveStateDir()`. */
+export const TASKS_DB_DIR = process.env.MINDER_STATE_DIR || path.join(os.homedir(), ".minder");
 export const TASKS_DB_PATH = path.join(TASKS_DB_DIR, "tasks.db");
 
 interface ConnectionState {
