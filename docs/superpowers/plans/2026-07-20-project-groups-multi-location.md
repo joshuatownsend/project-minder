@@ -147,7 +147,8 @@ the derived-metric recomputation. Heavily unit-tested — this is where double-c
 | 3 | `TODO.md` dedupe is content-hash based and approximate — reworded items appear twice | Accept; show divergence rather than claiming a clean merge. |
 | 4 | Worktrees share a remote and would become phantom locations | Exclude overlay-attached dirs in P1; test explicitly. |
 | 5 | Group slug `bamcli` collides with the member slug `bamcli` in routing | Decide the URL space in P1 before any UI: separate `/group/` namespace, or groups own the base slug and members move under it. |
-| 6 | Reading a second Claude home means reading a WSL path | Must honor the existing never-wake rule — `getReadableClaudeHomes()` already does; P0 must not bypass it. |
+| 6 | Reading a second Claude home means reading a WSL path | Must honor the existing never-wake rule — `getReadableClaudeHomes()` already does; P0 must not bypass it. P0 only writes config, so nothing new reads a WSL path. |
+| 9 | **Dev and installed builds read different configs.** `resolveStateDir()` is `MINDER_STATE_DIR \|\| process.cwd()`; the tray sets it to `%USERPROFILE%\.minder` (`supervisor.rs:446`), while `pnpm dev` falls back to the repo root. | Config changes made while testing in dev do not affect the installed instance and vice versa. When verifying against real data, confirm which `.minder.json` is in play. |
 | 7 | Aggregation over a stopped WSL distro shows a partial sum that looks authoritative | Mark aggregates as partial when a member's location is unreachable; never silently drop a member from a total. |
 | 8 | Same repo, different branches → repo-borne files legitimately differ | Divergence is surfaced, not resolved. Do not attempt a merge. |
 
@@ -157,7 +158,7 @@ the derived-metric recomputation. Heavily unit-tested — this is where double-c
 |---|---|---|
 | A0 | Attribution check — quantify the join gap | DONE (2026-07-20) — 97% of `bamcli` sessions invisible; two config causes identified |
 | — | Slug collision fix (prerequisite) | DONE — PR #324 |
-| P0 | Persist `claudeHomes` + `pathMappings` from Detect WSL; Settings editors | NOT STARTED |
+| P0 | Persist `claudeHomes` + `pathMappings` from Detect WSL; Settings editors | DONE (2026-07-20) — `src/lib/wslCompanions.ts`, derived from the root rather than the suggestion (covers hand-typed roots); repair banner for existing setups; 31 tests incl. an end-to-end resolve to the real session dir. **Deviation:** free-form editors for `claudeHomes`/`pathMappings` were *not* built — derivation covers every case reachable from a scan root, and the repair path handles pre-existing setups. Hand-editing is still possible in `.minder.json`. Revisit if a non-derivable mapping (bind mount, renamed home, non-WSL cross-machine) is ever needed. |
 | P1 | Remote normalization, `deriveProjectGroups()`, config opt-out, API exposure | NOT STARTED |
 | P2 | `aggregateGroup()` — four merge rules, derived-metric recomputation | NOT STARTED |
 | P3 | UI: group cards, Locations strip, divergence flags, Environments tab | NOT STARTED |

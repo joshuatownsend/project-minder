@@ -14,6 +14,21 @@ You can also type the path manually, e.g.:
 
 The legacy `\\wsl$\<distro>\...` form works too. Each immediate subdirectory becomes a dashboard project, exactly like a native root (note: like every scan root, only directories containing a `.git` are picked up as projects).
 
+## What a WSL root needs besides the root
+
+A scan root alone only makes the *projects* appear. Two further settings decide whether any Claude data attaches to them:
+
+| Setting | Without it |
+|---|---|
+| `claudeHomes` — the distro's `~/.claude` | Sessions recorded inside the distro are never read at all |
+| `pathMappings` — `/home/<user>` ↔ `\\wsl.localhost\<distro>\home\<user>` | Linux-recorded paths can't be matched to the UNC-scanned project |
+
+Both failures are **silent**: the projects scan and look healthy, and every session, cost, and insight attached to them reads as zero — indistinguishable from "I haven't worked there yet".
+
+Minder now derives both from the root path whenever you save scan roots, including hand-typed ones, and never overwrites entries you set yourself. If you configured a WSL root before this existed, Settings shows a **"only half configured"** warning with a one-click **Link WSL Claude data** button.
+
+The mapping is cut at the *user home*, not at the scan root, so one entry covers every repo under that home — including repos nested well below the root you added.
+
 Two things to check if a WSL root shows no projects:
 
 - **Depth.** Only *immediate* children are scanned. Pointing a root at a folder whose children are themselves containers (`printing-press/library/bamcli`) finds nothing — add the container that directly holds the repos (`…/printing-press/library`).
