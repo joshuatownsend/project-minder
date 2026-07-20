@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Settings as SettingsIcon } from "lucide-react";
 import { queryKeys } from "@/lib/queryKeys";
-import type { FeatureFlagKey, InitStatus, MinderConfig } from "@/lib/types";
+import type { FeatureFlagKey, HealthResponse, InitStatus, MinderConfig } from "@/lib/types";
 import { FEATURE_FLAG_META, getFlag } from "@/lib/featureFlags";
 import { useToast } from "@/components/ToastProvider";
 import { useConfigRefresh } from "@/components/ConfigProvider";
@@ -189,7 +189,7 @@ export function SettingsPage() {
   // describes is preserved, not traded away for the extra field.
   const healthQuery = useQuery({
     queryKey: queryKeys.health(),
-    queryFn: async ({ signal }): Promise<{ db: InitStatus; version?: string }> => {
+    queryFn: async ({ signal }): Promise<HealthResponse> => {
       const res = await fetch("/api/health", { signal });
       // 503 is not a failure to read: `/api/health` answers 503 for every DB
       // state other than `success` and carries the FULL body regardless of
@@ -201,7 +201,7 @@ export function SettingsPage() {
       if (!res.ok && res.status !== 503) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    select: (data) => ({ db: data.db, version: data.version ?? null }),
+    select: (data) => ({ db: data.db, version: data.version }),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
