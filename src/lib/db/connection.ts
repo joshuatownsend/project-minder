@@ -43,7 +43,30 @@ try {
   loadError = err as Error;
 }
 
-export const DB_DIR = path.join(os.homedir(), ".minder");
+/**
+ * Where the index lives. `MINDER_STATE_DIR` wins when set; otherwise the
+ * historical `~/.minder`.
+ *
+ * The env var is honoured because it previously was not (#303): it relocated
+ * config and caches while the two SQLite files stayed pinned to the real home,
+ * so a relocated install still wrote its DB to `~/.minder` — and, more sharply,
+ * the test suite had no way to point the DB anywhere else. The tray already
+ * sets this to `~/.minder` (src-tauri/src/supervisor.rs), so installs resolve
+ * exactly as before; the fallback keeps every other existing setup unchanged.
+ *
+ * Deliberately NOT `resolveStateDir()`, which falls back to `process.cwd()`.
+ * Routing the DB through that would silently relocate every existing user's
+ * 400 MB index to whatever directory they happened to launch from, and hand
+ * them an empty dashboard.
+ *
+ * **Precedence matters to the test suite.** ~23 test files isolate their DB by
+ * spying `os.homedir()` and re-importing this module. Because the env var is
+ * checked FIRST, setting `MINDER_STATE_DIR` for a test run overrides that spy
+ * and points every one of them at the same directory — measured at 24 failures
+ * when tried. Don't set it in test env; isolate via the homedir spy, as the
+ * existing DB tests do.
+ */
+export const DB_DIR = process.env.MINDER_STATE_DIR || path.join(os.homedir(), ".minder");
 export const DB_PATH = path.join(DB_DIR, "index.db");
 
 interface ConnectionState {
