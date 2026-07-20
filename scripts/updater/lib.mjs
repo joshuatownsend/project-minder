@@ -106,9 +106,31 @@ const ARCH_TOKEN = /(x64|x86_64|amd64|aarch64|arm64)/i;
  * Mac users the wrong architecture.
  */
 export function updaterAssetName(originalName, platformKey) {
-  if (ARCH_TOKEN.test(originalName)) return originalName;
-  const [stem, ext] = splitExtension(originalName);
-  return `${stem}_${platformKey}${ext}`;
+  const named = ARCH_TOKEN.test(originalName)
+    ? originalName
+    : (() => {
+        const [stem, ext] = splitExtension(originalName);
+        return `${stem}_${platformKey}${ext}`;
+      })();
+  return githubAssetName(named);
+}
+
+/**
+ * The filename GitHub will actually store a release asset under.
+ *
+ * GitHub REWRITES spaces to dots when an asset is uploaded: upload
+ * `Project Minder Tray_1.5.0_x64-setup.exe` and the asset is served as
+ * `Project.Minder.Tray_1.5.0_x64-setup.exe`. A manifest URL built from the
+ * local filename therefore 404s — and silently, long after the update check
+ * has already told the user an update is available (v1.5.0 shipped exactly
+ * that: a valid, correctly-signed manifest in which all four URLs were dead).
+ *
+ * Normalizing up front means the name we upload is already the name GitHub
+ * keeps, so the URL is predictable rather than guessed at. `verifyAssetUrls`
+ * in the merge step is the backstop if this rule ever changes.
+ */
+export function githubAssetName(name) {
+  return name.replace(/ /g, ".");
 }
 
 /**

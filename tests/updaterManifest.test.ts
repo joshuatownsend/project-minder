@@ -6,6 +6,7 @@ import {
   selectUpdaterSignature,
   splitExtension,
   updaterAssetName,
+  githubAssetName,
   assetUrl,
   buildManifest,
 } from "../scripts/updater/lib.mjs";
@@ -132,11 +133,13 @@ describe("updaterAssetName", () => {
   // tarball with no arch, so both Mac jobs would upload different binaries
   // under one filename and the second would clobber the first.
   it("disambiguates the arch-less macOS tarball", () => {
+    // Dots, not spaces: the returned name is the one GitHub will store (see
+    // githubAssetName), so it is directly usable in a URL.
     expect(updaterAssetName("Project Minder Tray.app.tar.gz", "darwin-aarch64")).toBe(
-      "Project Minder Tray_darwin-aarch64.app.tar.gz"
+      "Project.Minder.Tray_darwin-aarch64.app.tar.gz"
     );
     expect(updaterAssetName("Project Minder Tray.app.tar.gz", "darwin-x86_64")).toBe(
-      "Project Minder Tray_darwin-x86_64.app.tar.gz"
+      "Project.Minder.Tray_darwin-x86_64.app.tar.gz"
     );
   });
 
@@ -160,9 +163,68 @@ describe("updaterAssetName", () => {
   });
 });
 
+describe("githubAssetName", () => {
+  // GitHub rewrites spaces to dots at upload time. The v1.5.0 release shipped a
+  // structurally perfect, correctly-signed manifest in which ALL FOUR URLs
+  // 404'd for exactly this reason, with every CI job green.
+  it("rewrites spaces to dots the way GitHub does on upload", () => {
+    expect(githubAssetName("Project Minder Tray_1.5.0_x64-setup.exe")).toBe(
+      "Project.Minder.Tray_1.5.0_x64-setup.exe"
+    );
+  });
+
+  it("leaves names without spaces untouched", () => {
+    expect(githubAssetName("minder_1.5.0_amd64.AppImage")).toBe(
+      "minder_1.5.0_amd64.AppImage"
+    );
+  });
+
+  it("is idempotent", () => {
+    const once = githubAssetName("a b c.exe");
+    expect(githubAssetName(once)).toBe(once);
+  });
+});
+
+describe("updaterAssetName — matches what GitHub actually stores", () => {
+  // These are the REAL asset names GitHub served for the v1.5.0 release. They
+  // are the oracle: whatever we put in latest.json must equal these exactly.
+  const ACTUAL_GITHUB_NAMES = [
+    "Project.Minder.Tray_1.5.0_x64-setup.exe",
+    "Project.Minder.Tray_1.5.0_amd64.AppImage",
+    "Project.Minder.Tray_darwin-aarch64.app.tar.gz",
+    "Project.Minder.Tray_darwin-x86_64.app.tar.gz",
+  ];
+
+  it("produces the exact name GitHub stores, for every platform", () => {
+    expect(updaterAssetName("Project Minder Tray_1.5.0_x64-setup.exe", "windows-x86_64")).toBe(
+      ACTUAL_GITHUB_NAMES[0]
+    );
+    expect(updaterAssetName("Project Minder Tray_1.5.0_amd64.AppImage", "linux-x86_64")).toBe(
+      ACTUAL_GITHUB_NAMES[1]
+    );
+    expect(updaterAssetName("Project Minder Tray.app.tar.gz", "darwin-aarch64")).toBe(
+      ACTUAL_GITHUB_NAMES[2]
+    );
+    expect(updaterAssetName("Project Minder Tray.app.tar.gz", "darwin-x86_64")).toBe(
+      ACTUAL_GITHUB_NAMES[3]
+    );
+  });
+
+  // If the name has no spaces, the URL needs no escaping at all — which is the
+  // whole point of normalizing before upload rather than encoding after.
+  it("never emits a name that a URL would have to escape", () => {
+    for (const key of Object.values(PLATFORM_KEYS)) {
+      const name = updaterAssetName("Project Minder Tray.app.tar.gz", key);
+      expect(name).not.toContain(" ");
+      expect(encodeURIComponent(name)).toBe(name.replace(/\(/g, "%28").replace(/\)/g, "%29"));
+    }
+  });
+});
+
 describe("assetUrl", () => {
-  // GitHub serves asset names percent-encoded; an unencoded URL 404s at
-  // download time, long after the check reported an update as available.
+  // Belt and braces. Names now reach here already normalized by
+  // githubAssetName, so they contain no spaces — but assetUrl takes an
+  // arbitrary string and must still produce a valid URL if one ever does.
   it("percent-encodes spaces in the asset name", () => {
     expect(assetUrl("o/r", "v1.4.0", "Project Minder Tray_1.4.0_x64-setup.exe")).toBe(
       "https://github.com/o/r/releases/download/v1.4.0/Project%20Minder%20Tray_1.4.0_x64-setup.exe"

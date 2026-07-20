@@ -398,13 +398,20 @@ jobs:
         with:
           path: artifacts
 
-      - name: Build latest.json
+      # --verify-urls HEADs every URL in the manifest and fails the job if any
+      # doesn't resolve. A manifest can be structurally perfect and still be
+      # completely dead: on the first v1.5.0 attempt all four URLs 404'd because
+      # GitHub rewrites spaces in asset names to dots at upload time, and every
+      # CI job was green. This runs before the upload below, so a failure leaves
+      # the previous release's manifest serving rather than replacing it.
+      - name: Build and verify latest.json
         run: |
           node scripts/updater-manifest.mjs merge \
             --dir artifacts \
             --repo "${{ github.repository }}" \
             --tag "${{ github.ref_name }}" \
-            --out latest.json
+            --out latest.json \
+            --verify-urls true
           echo "--- latest.json ---"
           cat latest.json
 
