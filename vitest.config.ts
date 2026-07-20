@@ -14,6 +14,10 @@ export default defineConfig({
   },
   test: {
     include: ["tests/**/*.test.ts"],
+    // Runs before each test file is imported — the only point early enough to
+    // affect the module-level DB path constants. See the file for why the
+    // suite must not inherit a MINDER_STATE_DIR from the developer's shell.
+    setupFiles: ["tests/setup/clearStateDirEnv.ts"],
     testTimeout: 30000,
     execArgv: ["--max-old-space-size=4096"],
     // Cap fork concurrency to avoid Windows VirtualAlloc failures when running
