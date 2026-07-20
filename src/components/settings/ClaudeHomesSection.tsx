@@ -16,10 +16,15 @@ interface WslDistroSuggestion {
 }
 
 /**
- * Derive the path mapping implied by a WSL Claude-home UNC path:
- * \\wsl.localhost\<distro>\home\<user>\.claude →
- *   { from: "/home/<user>", to: "\\wsl.localhost\<distro>\home\<user>" }.
- * Returns null for homes that don't match the pattern (native paths etc.).
+ * Derive the path mapping implied by a WSL Claude-home UNC path. Whatever
+ * directory contains `.claude` is taken as the home, at any depth:
+ *   \\wsl.localhost\<distro>\home\<user>\.claude → { from: "/home/<user>", … }
+ *   \\wsl.localhost\<distro>\root\.claude        → { from: "/root", … }
+ *   \\wsl.localhost\<distro>\opt\me\.claude      → { from: "/opt/me", … }
+ * `/home/<user>` is the common shape, not a requirement — restricting to it
+ * meant a root-user WSL setup could never correlate its sessions.
+ *
+ * Returns null for non-WSL paths and for anything not ending in `.claude`.
  *
  * Delegates to the shared derivation rather than parsing UNC paths a second
  * time (#326). The Scan Roots section derives the same mapping from a scan
