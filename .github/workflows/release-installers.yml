@@ -286,13 +286,24 @@ jobs:
         run: |
           mkdir -p installers
           shopt -s nullglob
+          # Names are normalized to GitHub's own convention (spaces -> dots) on
+          # the way in, for two reasons. It is what GitHub stores anyway, so the
+          # Release asset name becomes predictable instead of discovered after
+          # the fact. And it must MATCH what the emit step above wrote: both
+          # steps populate this directory, and for Windows/Linux they handle the
+          # SAME artifact (the NSIS exe, the AppImage). If they disagree on the
+          # name, `gh release upload installers/*` uploads two copies that
+          # GitHub then collapses onto one asset name, and the second upload
+          # 404s -- which is exactly how the third v1.5.0 attempt failed.
           for f in \
             src-tauri/target/release/bundle/nsis/*.exe \
             src-tauri/target/release/bundle/dmg/*.dmg \
             src-tauri/target/release/bundle/deb/*.deb \
             src-tauri/target/release/bundle/appimage/*.AppImage; do
-            echo "collecting $f"
-            cp "$f" installers/
+            base="$(basename "$f")"
+            dest="installers/${base// /.}"
+            echo "collecting $f -> $dest"
+            cp "$f" "$dest"
           done
           # The macOS .app tarball is NOT hand-rolled here any more. Enabling
           # bundle.createUpdaterArtifacts makes Tauri produce (and sign) its own

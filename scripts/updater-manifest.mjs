@@ -122,6 +122,25 @@ function emit(flags) {
 
   const assetName = updaterAssetName(path.basename(assetPath), platform);
   const destPath = path.join(outDir, assetName);
+
+  // The collect step writes into this same directory, and on Windows/Linux it
+  // handles the SAME artifact we do (the NSIS exe, the AppImage). Landing on the
+  // same name is therefore expected and fine — but landing on the same name with
+  // DIFFERENT bytes would mean the two steps disagree about which file is the
+  // release artifact, and `gh release upload` would collapse them onto one asset
+  // non-deterministically. Fail rather than let that reach a Release.
+  if (existsSync(destPath)) {
+    const existing = statSync(destPath);
+    const incoming = statSync(assetPath);
+    if (existing.size !== incoming.size) {
+      fail(
+        `${destPath} already exists with a different size (${existing.size} vs ${incoming.size}).\n` +
+          `Another step wrote a different file under this name — the collect step and the ` +
+          `updater emit step must agree on asset naming.`
+      );
+    }
+  }
+
   copyFileSync(assetPath, destPath);
 
   const fragment = {
