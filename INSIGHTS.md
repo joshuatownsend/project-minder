@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:d88b821d6cce | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T15:31:25.941Z -->
+## ★ Insight
+The old code wasn't unreasonable — it even carried a comment explaining why it matched on `projectName` (avoiding a lossy `decodeDirName()`). It was correct for every project that existed when it was written. WSL support arrived later and moved the ground under it: the path the scanner sees and the path Claude Code recorded stopped being the same string, and the reconciliation lives server-side in `pathMappings`.
+
+---
+
+<!-- insight:29f8f0a56adc | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T15:06:21.564Z -->
+## ★ Insight
+The fix is to reserve every *uncontested* natural slug in a root before resolving any collision. My first attempt computed that set with `.filter()` up front — which was itself wrong, because two names in one root that normalize alike (`bam_cli`, `bam-cli`) would both pass a snapshot test and both claim the same slug. It has to test against the live set as it grows.
+
+---
+
 <!-- insight:5859ac752b0f | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T14:30:28.757Z -->
 ## ★ Insight
 One subtlety that would have produced a silent half-fix: the derivation preserves whichever UNC alias you wrote. `mapLocalPath` folds `wsl$` and `wsl.localhost` together when *comparing*, but `mapForeignPath` concatenates `to` verbatim when *rewriting*. So a mapping emitted as `wsl.localhost` against a scan root written as `wsl$` would map foreign paths to strings that no scanned project matches — the mapping would exist, look right in Settings, and join nothing.
