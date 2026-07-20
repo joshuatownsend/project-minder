@@ -178,6 +178,51 @@ function merge(flags) {
 
   log(`version ${manifest.version}, platforms: ${Object.keys(manifest.platforms).join(", ")}`);
   log(`wrote ${outPath}`);
+  return manifest;
+}
+
+/**
+ * HEAD every URL in the manifest and fail if any doesn't resolve.
+ *
+ * This exists because a manifest can be structurally perfect — valid JSON,
+ * correct signatures, every platform present — and still be entirely dead. On
+ * v1.5.0 all four URLs 404'd, because GitHub rewrites spaces in asset names to
+ * dots at upload time and the URLs were built from the local filenames. Every
+ * CI job was green. The only way to catch that class of bug is to actually
+ * fetch what we just published, so a release now fails loudly instead of
+ * telling users an update is available and then handing them a 404.
+ *
+ * Runs AFTER the build jobs have uploaded their installers (the aggregation
+ * job depends on all of them) and BEFORE latest.json is attached, so a failure
+ * here leaves the previous release's manifest serving rather than replacing it
+ * with a broken one.
+ */
+async function verifyAssetUrls(manifest) {
+  const failures = [];
+  for (const [platform, entry] of Object.entries(manifest.platforms)) {
+    let status = 0;
+    try {
+      const res = await fetch(entry.url, { method: "HEAD", redirect: "follow" });
+      status = res.status;
+    } catch (e) {
+      failures.push(`${platform}: ${entry.url} — request failed (${e.message})`);
+      continue;
+    }
+    if (status !== 200) {
+      failures.push(`${platform}: HTTP ${status} — ${entry.url}`);
+    } else {
+      log(`  OK  ${platform} -> ${decodeURIComponent(entry.url.split("/").pop())}`);
+    }
+  }
+  if (failures.length) {
+    fail(
+      `${failures.length} of ${Object.keys(manifest.platforms).length} updater URLs do not resolve:\n  ` +
+        failures.join("\n  ") +
+        `\n\nThe manifest was NOT published. Asset names on the Release must match the URLs ` +
+        `in latest.json exactly — note GitHub rewrites spaces to dots at upload time.`
+    );
+  }
+  log(`all ${Object.keys(manifest.platforms).length} updater URLs resolve`);
 }
 
 // ---------------------------------------------------------------- main
@@ -189,9 +234,15 @@ switch (mode) {
   case "emit":
     emit(flags);
     break;
-  case "merge":
-    merge(flags);
+  case "merge": {
+    const manifest = merge(flags);
+    // Opt-in because it needs the assets to already be on the Release — true in
+    // the aggregation job, not when merging downloaded artifacts locally.
+    if (flags["verify-urls"] === "true" && manifest) {
+      await verifyAssetUrls(manifest);
+    }
     break;
+  }
   default:
     fail(`unknown mode "${mode ?? ""}". Expected "emit" or "merge".`);
 }
