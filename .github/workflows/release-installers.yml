@@ -267,7 +267,12 @@ jobs:
       # the release-upload step globs installers/*, so a fragment written there
       # is attached to the public Release as a stray build artifact (v1.5.0
       # shipped three of them before this was split).
+      # shell: bash is REQUIRED, not stylistic — the default shell on the Windows
+      # runner is PowerShell, where a bash `\` line continuation is a parse
+      # error. Every other multi-line step in this workflow sets it for the same
+      # reason; this step shipped without it and failed the v1.5.0 Windows job.
       - name: Emit updater artifact + fragment
+        shell: bash
         run: |
           node scripts/updater-manifest.mjs emit \
             --platform ${{ matrix.updater }} \
