@@ -178,6 +178,8 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 ## Verification Gates
 Before committing or opening a PR, ALWAYS run: (1) `pnpm typecheck`, (2) full test suite. Report exact pass counts (e.g., '934 tests passing'). Do not mark a task complete until both pass.
 
+**Also run `pnpm build` when the change touches `src/`.** Typecheck and the test suite cannot see client/server boundary violations — a `"use client"` component importing a module that pulls `fs` or `child_process` at module scope passes both gates and then fails the Turbopack build with `Module not found: Can't resolve 'child_process'`. This has shipped to CI red at least once (PR #324). The build is slow (~5 min), so run it in the background while doing other work rather than skipping it.
+
 ## Context Management
 - For long sessions, prefer `Grep` and targeted `Read` with offset/limit over re-reading whole large files.
 - When observing another session's tool-output files, read incrementally and summarize early — do not accumulate full file contents in context.

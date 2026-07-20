@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-20
+
 ### Fixed
 - **`MINDER_STATE_DIR` now relocates the SQLite databases, not just config and caches (#303).** `index.db` and `tasks.db` were pinned to `os.homedir()/.minder` regardless of the variable, so a relocated install still wrote its databases to the real home — and a test run had no way to point them elsewhere. Both now check `MINDER_STATE_DIR` first, falling back to the historical `~/.minder`. Deliberately not routed through `resolveStateDir()`, whose fallback is `process.cwd()`: that would silently relocate every existing user's index to whatever directory they launched from and hand them an empty dashboard. The tray already sets the variable to `~/.minder`, so packaged installs resolve exactly as before.
 - **The test suite is no longer affected by a `MINDER_STATE_DIR` inherited from the developer's shell.** Because `DB_DIR` resolves that variable ahead of `os.homedir()`, and ~23 test files isolate their database by spying `os.homedir()`, a machine with the variable set bypassed every one of those spies at once — 24 failures that look like a code regression but are purely environmental, and, more seriously, "isolated" tests then opening and writing the developer's real relocated `index.db`/`tasks.db`. A vitest `setupFile` now deletes the variable before any test module is imported, so the suite behaves identically whether or not it is set. Verified by running the full suite with `MINDER_STATE_DIR` pointed at a scratch directory: 3822 passing and the directory left empty.
