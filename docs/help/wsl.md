@@ -14,6 +14,11 @@ You can also type the path manually, e.g.:
 
 The legacy `\\wsl$\<distro>\...` form works too. Each immediate subdirectory becomes a dashboard project, exactly like a native root (note: like every scan root, only directories containing a `.git` are picked up as projects).
 
+Two things to check if a WSL root shows no projects:
+
+- **Depth.** Only *immediate* children are scanned. Pointing a root at a folder whose children are themselves containers (`printing-press/library/bamcli`) finds nothing — add the container that directly holds the repos (`…/printing-press/library`).
+- **Same-named repos.** Checking out the same repository on both Windows and WSL is fine; both appear. The later root's copy takes a suffixed slug (`bamcli-library`) — see [Scan Roots](config.md#scan-roots).
+
 ## Discovery API
 
 `GET /api/wsl` enumerates installed distros and, for **running** ones, probes `/home/<user>` for `dev` directories (scan-root candidates) and `.claude` homes. Utility distros (`docker-desktop*`) are excluded. Stopped distros are listed with their state but their filesystems are never touched.
