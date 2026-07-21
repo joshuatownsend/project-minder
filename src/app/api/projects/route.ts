@@ -20,12 +20,15 @@ let scanInProgress: Promise<void> | null = null;
  * reflects the current opt-out list without an extra cache to invalidate.
  */
 function withGroups(result: ScanResult, config: MinderConfig): ScanResult {
-  return {
-    ...result,
-    groups: deriveProjectGroups(result.projects, {
-      ungroupedPaths: config.ungroupedPaths,
-    }),
-  };
+  const groups = deriveProjectGroups(result.projects, {
+    ungroupedPaths: config.ungroupedPaths,
+  });
+  // Omit the key entirely when nothing grouped, rather than sending `[]`.
+  // `ScanResult.groups` is optional, and the point of never emitting a group
+  // of one is that a user with no multi-location repos sees byte-for-byte the
+  // response they saw before this feature existed. An always-present `[]`
+  // would undercut that. (Raised by Copilot review on #340.)
+  return groups.length > 0 ? { ...result, groups } : result;
 }
 
 export async function GET() {

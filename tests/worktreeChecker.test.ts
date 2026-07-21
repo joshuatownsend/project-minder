@@ -89,3 +89,54 @@ describe("checkWorktreeStatus", () => {
     expect(s.isMergedLocally).toBe(true);
   });
 });
+
+describe("safe.directory waiver", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * Same silent-no-op hazard pinned in tests/git.scanner.test.ts, and the
+   * reason this file's git calls needed the waiver at all: without it, every
+   * worktree status check against a UNC/WSL repo fails with "detected dubious
+   * ownership" and is swallowed into ""/null. (Requested by Copilot on #340.)
+   */
+  const PARENT = "\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo";
+  const WORKTREE = "\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo--claude-worktrees-x";
+
+  it("scopes safe.directory to each call's own cwd, before the subcommand", async () => {
+    stubOutputs(["refs/remotes/origin/main", "", "", "", ""]);
+    await checkWorktreeStatus(PARENT, WORKTREE, "feature/x");
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(0);
+    for (const [bin, args, opts] of execFileMock.mock.calls) {
+      expect(bin).toBe("git");
+      // `-c` is a git-level option: after the subcommand it silently no-ops.
+      expect((args as string[])[0]).toBe("-c");
+      // The waiver must name the directory THIS call reads. checkWorktreeStatus
+      // uses two different cwds — the parent repo for branch/remote queries and
+      // the worktree for status/log — so a single hardcoded value would trust
+      // the wrong tree for half the calls. Backslashes must also be normalized,
+      // or the value never matches the path git reports and the waiver silently
+      // stops applying on UNC.
+      const cwd = (opts as { cwd: string }).cwd;
+      expect((args as string[])[1]).toBe(
+        `safe.directory=${cwd.replace(/\\/g, "/")}`
+      );
+    }
+
+    // Both cwds were actually exercised — otherwise the assertion above could
+    // pass while only ever seeing one of them.
+    const cwds = new Set(
+      execFileMock.mock.calls.map((c) => (c[2] as { cwd: string }).cwd)
+    );
+    expect(cwds).toEqual(new Set([PARENT, WORKTREE]));
+  });
+
+  it("never uses the * wildcard, which would trust nested foreign repos", async () => {
+    stubOutputs(["refs/remotes/origin/main", "", "", "", ""]);
+    await checkWorktreeStatus("C:\\dev\\repo", "C:\\dev\\repo-wt", "feature/x");
+
+    for (const [, args] of execFileMock.mock.calls) {
+      expect(args as string[]).not.toContain("safe.directory=*");
+    }
+  });
+});

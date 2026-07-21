@@ -20,6 +20,20 @@ const execFileAsync = promisify(execFile);
  * (`git config --global --add safe.directory …`), which would also apply to
  * the user's interactive shell and every other tool on the machine.
  *
+ * The value is the **specific directory being read**, not `*`. A wildcard
+ * would opt this git process out of the ownership guard for every repository
+ * git may traverse — a submodule or nested repo owned by a different user
+ * included — so a foreign `.git/config` could influence a call that
+ * previously failed closed. Naming the directory keeps the waiver to the one
+ * worktree Minder was asked to read. (Raised by Codex review on #340.)
+ *
+ * Separators are normalized to `/` because git compares the config value
+ * against its own normalized repository path: `safe.directory` with
+ * `\\wsl.localhost\…` does **not** match a repo git reports as
+ * `//wsl.localhost/…`, and the waiver silently fails to apply. Verified
+ * empirically against a real WSL checkout — the backslash form still errors
+ * with "detected dubious ownership".
+ *
  * Residual risk, accepted: `safe.directory` also guards against a repository
  * whose `.git/config` names an executable (`core.pager`, `diff.external`,
  * `core.fsmonitor`). Minder already runs these same commands against every
@@ -30,15 +44,13 @@ const execFileAsync = promisify(execFile);
  * Prepended, not appended: `-c` is a git-level option and must precede the
  * subcommand.
  */
-const SAFE_DIRECTORY_ARGS = ["-c", "safe.directory=*"];
-
-function gitArgs(args: string[]): string[] {
-  return [...SAFE_DIRECTORY_ARGS, ...args];
+export function gitArgs(args: string[], cwd: string): string[] {
+  return ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args];
 }
 
 export async function runGit(args: string[], cwd: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", gitArgs(args), { cwd, timeout: 2000 });
+    const { stdout } = await execFileAsync("git", gitArgs(args, cwd), { cwd, timeout: 2000 });
     return stdout.trim();
   } catch {
     return "";
@@ -60,7 +72,7 @@ export interface GitExecResult {
  */
 export async function runGitChecked(args: string[], cwd: string): Promise<GitExecResult> {
   try {
-    const { stdout } = await execFileAsync("git", gitArgs(args), { cwd, timeout: 2000 });
+    const { stdout } = await execFileAsync("git", gitArgs(args, cwd), { cwd, timeout: 2000 });
     return { ok: true, stdout: stdout.trim() };
   } catch {
     return { ok: false, stdout: "" };
@@ -77,7 +89,7 @@ export async function runGitChecked(args: string[], cwd: string): Promise<GitExe
  */
 async function runGitLong(args: string[], cwd: string, timeoutMs = 8000): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", gitArgs(args), {
+    const { stdout } = await execFileAsync("git", gitArgs(args, cwd), {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024, // 16 MB — enough for ~50k commits at ~300 bytes per `--format=%H|%aI|%s` line
@@ -195,8 +207,16 @@ export async function scanGit(projectPath: string): Promise<GitInfo | undefined>
   if (rawRemote) {
     // Convert SSH format (git@github.com:user/repo.git) to HTTPS
     const sshMatch = rawRemote.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+    // `ssh://git@host/owner/repo(.git)` and `git://host/owner/repo` matched
+    // neither branch below and fell through to `remoteUrl === undefined`, so
+    // a checkout cloned that way reported no remote at all — invisible in the
+    // UI, and unable to pair with an https clone of the same repo during
+    // project grouping. (Raised by Codex review on #340.)
+    const schemeMatch = rawRemote.match(/^(?:ssh|git):\/\/(?:[^@/]*@)?([^/]+)\/(.+?)(?:\.git)?\/?$/);
     if (sshMatch) {
       remoteUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
+    } else if (schemeMatch) {
+      remoteUrl = `https://${schemeMatch[1]}/${schemeMatch[2]}`;
     } else if (rawRemote.startsWith("https://") || rawRemote.startsWith("http://")) {
       remoteUrl = rawRemote.replace(/\.git$/, "");
     }
