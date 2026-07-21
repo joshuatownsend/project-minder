@@ -1,5 +1,347 @@
 # Insights
 
+<!-- insight:94c914696d26 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T18:06:17.819Z -->
+## ★ Insight
+Worth flagging for P2, since it's the next phase and this changes its inputs: the `safe.directory` fix means WSL projects now report real branches, dirty counts, and commit history where they previously reported nothing. P2's aggregation rules treat branch and dirty state as *location-bound, never merged* — that rule was written when the WSL side was structurally empty, so it was never actually exercised. It will be now, and divergence between a Windows `main` and a WSL feature branch becomes real data rather than a blank.
+
+---
+
+<!-- insight:6c6a24cc8522 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T18:04:25.039Z -->
+## ★ Insight
+The strongest argument for the plan's "API-only first" sequencing is that it worked *as a bug detector*. Had P3 shipped alongside, the Locations strip would have rendered empty for `bamcli` and the obvious suspect would have been the grouping logic — which was correct the whole time. The actual fault was three layers down in a git wrapper, behind a `catch {}` that turned a fatal error into an empty string.
+
+---
+
+<!-- insight:fa2332d8718a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T17:57:37.066Z -->
+## ★ Insight
+`ungroupedPaths` lives in `.minder.json`, which is **hand-edited JSON** — and in JSON a Windows path needs doubled backslashes (`"C:\\dev\\foo"`). The natural thing to write instead is `"C:/dev/foo"`, which is also a perfectly valid Windows path.
+
+---
+
+<!-- insight:52b893d5f67a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T17:39:25.642Z -->
+## ★ Insight
+**Grouping works** — it correctly found `lce911` + `lce911b` (two Windows checkouts of one repo). But **the motivating case can't group**, and not for a grouping reason.
+
+---
+
+<!-- insight:4c3f540104b5 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T17:33:57.534Z -->
+## ★ Insight
+`$TMPDIR` is unset in this Git Bash, so `pnpm build > "$TMPDIR/build.log"` became `> /build.log` → **Permission denied**, and the build never started. The background-task notification still said *"completed (exit code 0)"* — that's the shell's status, not the build's.
+
+---
+
+<!-- insight:81506c92ce8c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T16:43:56.614Z -->
+## ★ Insight
+That test was `expect(normalizeRemote(A)).toBe(normalizeRemote(B))` — comparing two calls to the function under test. With a stub returning `null`, it read `null === null` and **passed**. It would have kept passing against any implementation that returned a constant.
+
+---
+
+<!-- insight:62fb46b2ad1b | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T16:39:06.765Z -->
+## ★ Insight
+**1. The scanner already half-normalizes remotes** (`git.ts:160-172`): SCP-style `git@github.com:o/r.git` is rewritten to `https://github.com/o/r`, and `.git` is stripped. So a Windows and a WSL checkout usually arrive already byte-identical — grouping mostly works before I write anything. But `ssh://git@host/owner/repo` falls through *both* branches and yields `remoteUrl === undefined`, so such a checkout silently can't group. That's a scanner gap, not a grouping gap.
+
+---
+
+<!-- insight:4ddef9f645ee | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T16:37:53.020Z -->
+## ★ Insight
+The plan's Risk #4 says *"Worktrees share a remote and would become phantom locations — exclude overlay-attached dirs in P1."* That work isn't needed: it's already structurally impossible.
+
+---
+
+<!-- insight:5d46b7c9f42a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T15:23:53.699Z -->
+## ★ Insight
+Risk #5 in the plan doc: *"Group slug `bamcli` collides with the member slug `bamcli` in routing."* This is a consequence of the #324 slug fix — when two checkouts of the same repo are scanned, one keeps the base slug (`bamcli`) and the other gets a discriminator (`bamcli-library`). So the natural group key, the base slug, is already taken by a specific location.
+
+---
+
+<!-- insight:86aca99dd947 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T15:09:19.923Z -->
+## ★ Insight
+Two details from `package.json` shaped how I wrote this item:
+
+---
+
+<!-- insight:c0a5a311a881 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T14:39:15.033Z -->
+## ★ Insight
+The through-line worth keeping from today is that most of what we fixed were **failures of observability, not logic**: a status row that hid when it mattered, a tray confidently displaying the wrong version, a build gate reporting green while proving nothing, a payload correct only by accident of step ordering, and a warning counter that moved convincingly while measuring noise.
+
+---
+
+<!-- insight:38dc140b4ae2 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T14:34:13.091Z -->
+## ★ Insight
+Worth noting what makes this TODO entry useful versus a one-liner. The expensive knowledge from today isn't "upgrade Next" — it's the three things that would otherwise be re-derived from scratch: that the annotation target is the `fs` call, that the warning count is a lying metric, and that the repo's existing fixes are probably inert. Any of those costs hours to rediscover, and the second one actively misleads you into thinking you're making progress.
+
+---
+
+<!-- insight:79d3dc9476e0 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T14:24:38.848Z -->
+## ★ Insight
+The lesson I'd actually keep from today: **I searched upstream sixteen builds too late.** A closed issue contained the answer, the maintainer's explanation, and the version gate. Ten minutes of searching would have replaced roughly an hour of bisection.
+
+---
+
+<!-- insight:ed4b2b82ce22 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T14:15:38.447Z -->
+## ★ Insight
+I should have run it first. Not after sixteen builds — *first*, before writing a single annotation. The answer was sitting in a closed issue with a maintainer's explanation, and the specific mistake I spent hours empirically rediscovering is one the reporter of #95125 made too, then had corrected in two comments.
+
+---
+
+<!-- insight:16b5eb50d817 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:32:15.537Z -->
+## ★ Insight
+The most valuable output here is negative, and it's worth stating plainly: **the premise the issue is built on is false.** "Unbounded filesystem paths cause the bailout" is what #284 says, what the three merged `turbopackIgnore` fixes assumed, and what I spent a dozen builds testing from every angle. `tp-raw` falsified it in one measurement — a plain `path.join(os.homedir(), …)` + `readdir` traces perfectly clean.
+
+---
+
+<!-- insight:4d4eece12b48 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:26:32.554Z -->
+## ★ Insight
+This is roughly 14 builds and ~an hour of wall-clock into a root-cause hunt, and the honest assessment is that I've been *narrowing* well but not *converging*. Each answer eliminates a hypothesis without producing the mechanism, and the discovery that there are multiple independent triggers means even a clean answer for one route doesn't close the issue.
+
+---
+
+<!-- insight:14d9b1697fca | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:20:10.047Z -->
+## ★ Insight
+The `store` discrepancy may invalidate a large part of what I've reported, and I'd rather flag that now than after the result.
+
+---
+
+<!-- insight:2e7ee68b26f4 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:13:07.744Z -->
+## ★ Insight
+That's four wrong attributions in one session — warning-count as progress, `rm -rf` as the cause of a deletion, a 25s timeout as a hang, and now a listening port as a dev server. Each followed the same three steps: observe something real, reach for the most familiar explanation, then state it as established.
+
+---
+
+<!-- insight:244c10092c73 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:10:40.348Z -->
+## ★ Insight
+There's a pattern in how I've been driving this investigation that the build collisions expose. I've been treating ~4-minute builds as if they were free, firing the next one the moment I had a hypothesis, and that impatience is what produced both the collision and the mid-build file deletion.
+
+---
+
+<!-- insight:635e9d3ed617 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:08:22.498Z -->
+## ★ Insight
+Worth being precise about what I got wrong, because "it's temporary scratch" was doing a lot of work in my reasoning. Two things made it actually dangerous rather than theoretically so:
+
+---
+
+<!-- insight:9aaf5edf262c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T13:06:04.536Z -->
+## ★ Insight
+I split this into two probes deliberately rather than one. If only `tp-readfile` sweeps, the trigger is `readFile` specifically. If both sweep, it's the *opaque parameter* — any `fs` call on a value with no traceable origin — and `readdir` was only clean in `tp-raw` because I handed it a locally-constructed path.
+
+---
+
+<!-- insight:a59a5cc2404a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:59:19.125Z -->
+## ★ Insight
+There's a satisfying structural reason `claudeHome` is a strong candidate beyond "it's the one I haven't checked." It imports `./wsl`, and this repo's WSL support is documented in memory as having a "never-wake invariant" — code that probes whether a distro is running without starting it. That kind of check tends to involve shelling out or touching UNC paths like `\\wsl.localhost\<distro>\...`, which is about as unbounded as a filesystem reference gets.
+
+---
+
+<!-- insight:deef72f9ded0 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:54:15.423Z -->
+## ★ Insight
+`tp-raw` returning 101 is the single most valuable measurement of this investigation, and it's a *negative* one. It falsifies the premise everyone has been working from — #284's opening paragraph, the three merged "fixes," my four annotations, and the three I added to the adapters an hour ago. A plain unbounded `path.join(os.homedir(), x)` feeding a `readdir` traces cleanly. Whatever triggers this bailout, **it is not that shape**.
+
+---
+
+<!-- insight:2bea85ad39ff | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:48:22.221Z -->
+## ★ Insight
+The `tp-raw` vs `tp-ign` pair is the experiment I should have run before ever touching a source file. Two routes, identical unbounded `path.join(os.homedir(), …)` feeding a `readdir`, differing only by the annotation. It answers "does this mechanism do anything in this codebase?" with no confounds — no import graph, no question of whether I picked the right file.
+
+---
+
+<!-- insight:6ebb2da299a0 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:39:32.090Z -->
+## ★ Insight
+I told you — and wrote into PR #338 and issue #284 — that "`turbopackIgnore` does not work here," based on annotating four files and seeing the manifest not move.
+
+---
+
+<!-- insight:8e61357576b2 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:33:29.128Z -->
+## ★ Insight
+There's a design observation here independent of the tracer. `adapters/index.ts` registers Claude, Codex, and Gemini at module scope, so every route that touches the registry loads all three adapters' filesystem code — even though `enabledAdapters` defaults to `["claude"]` alone. The eager registry is what turns one adapter's unbounded path into a build-wide problem.
+
+---
+
+<!-- insight:af75922a2221 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:26:54.051Z -->
+## ★ Insight
+The survey did more than narrow the search — it invalidated the issue's central premise. #284 states the effect is "a *global* fallback — every route's `.nft.json` balloons to ~1500+ files regardless of which specific route is affected." The data says otherwise: 109 swept, 97 clean, in the same build. `swarms/[id]/page` is clean while `api/adapters` is swept.
+
+---
+
+<!-- insight:de83d85a7a92 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T12:11:26.017Z -->
+## ★ Insight
+Serial bisection would have been ~8 builds at ~4 minutes each. But Next writes a **separate `.nft.json` per route**, and the tracer's analysis is per-entry-point even though its *failure* is global. So seven probe routes in one build give seven independent measurements for the price of one.
+
+---
+
+<!-- insight:55337f210aee | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T11:50:14.905Z -->
+## ★ Insight
+The recurring pattern across all three (warning count, `docs/perf` attribution, this) is the same: **a negative or absent result treated as evidence of a specific cause.** No response within 25s → "it hangs." Files missing → "my `rm -rf` ate them." Warning count moved → "the fix worked."
+
+---
+
+<!-- insight:1838381d6ed4 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T11:34:36.138Z -->
+## ★ Insight
+The failure mode here is more interesting than a wrong guess. I had the right instinct — I ran a test specifically to check the junction theory, and I correctly reported it as inconclusive. Then I reasoned from the packager's header comment ("Next recreates them as SymbolicLink reparse points"), found a *plausible* mechanism, and let plausibility promote itself to fact across two messages.
+
+---
+
+<!-- insight:a7cd3e97de92 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T11:30:18.475Z -->
+## ★ Insight
+The rule I should have followed is in CLAUDE.md's neighbourhood already — the repo warns that `git stash` can silently destroy TODO/INSIGHTS files, and the whole `package-standalone.mjs` module exists because Windows link semantics differ from POSIX in ways that bite. I had both signals and still reached for `rm -rf` on a directory a build tool had populated.
+
+---
+
+<!-- insight:a228d37f86f8 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:54:37.664Z -->
+## ★ Insight
+The 27,242 → 1,369 number is real but it's *my machine's* number, and reporting it as the win would have been the same error I just made with the warning count — a big, satisfying figure that doesn't describe what users get. `.claude/worktrees/` is 24,212 of those entries and exists only because I run agent worktrees locally. A CI runner has none of it.
+
+---
+
+<!-- insight:64a71125bd18 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:45:55.979Z -->
+## ★ Insight
+The mistake has a specific shape worth naming: I picked the *available* metric over the *meaningful* one. Warning count was cheap to grep and moved immediately, which made it feel responsive. Manifest entry count required a script and was slower — but it's the thing we actually care about, and it never moved.
+
+---
+
+<!-- insight:cc7397fe53b1 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:35:57.315Z -->
+## ★ Insight
+Worth noting what the first iteration actually proved. The warning count moving 5 → 4 confirms the mechanism is right — annotations do suppress the fallback — but it also shows the issue's framing of "one remaining warning" was optimistic. These accumulate: each unbounded path in a route's closure can trigger independently, so the count is a *sum* over call sites, not a single root cause to find.
+
+---
+
+<!-- insight:8a3c304d014e | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:25:36.711Z -->
+## ★ Insight
+The decisive question for each site turned out to be **code loading vs. data reading**, and NFT structurally cannot tell them apart. `DB_DIR` resolves to a SQLite file in the user's home directory that doesn't exist until first run — tracing it is meaningless. But `path.join(__dirname, "schema.sql")` two files away looks nearly identical to the analyzer and *must* be traced, because `schema.sql` genuinely has to ship in the payload.
+
+---
+
+<!-- insight:56d09e015b5a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:21:15.910Z -->
+## ★ Insight
+This explains something beyond size: it's why builds are slow (#312's "remaining slowness"). Every build walks ~27k files per route to compute a manifest that needed ~243 entries.
+
+---
+
+<!-- insight:b708e196acd2 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T03:13:44.989Z -->
+## ★ Insight
+The rule couldn't go where the existing ones live, and that constraint shaped the design. The hygiene module matches forbidden **basenames at any depth** — perfect for `.git` and `.env*`, which are never legitimate anywhere. But `node` is a wildly common directory name: `node_modules/.bin/node`, `node_modules/next/dist/node`, plenty of packages ship their own. Adding `node` to that set would have stripped real dependencies out of the payload — a far worse failure than the duplication it was fixing, and one that would surface as a mysterious runtime crash on a user's machine rather than a build error.
+
+---
+
+<!-- insight:d975c41b2b9e | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T02:38:03.443Z -->
+## ★ Insight
+That last one is a latent bug, not a safe design. It's the identical failure mode as #312 — where `dist/minder-server` got traced into `.next/standalone` and every build+package cycle nested another full copy (16.8 GB observed). The fix added `./dist/minder-server/**` to `outputFileTracingExcludes` but not `./dist/node/**`, because at the time the ordering made it moot.
+
+---
+
+<!-- insight:d29192970b36 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T02:10:49.457Z -->
+## ★ Insight
+The merge attempt is worth a second look. `gh pr merge` failed with *"the base branch policy prohibits the merge"* — and my `; echo "MERGE_EXIT=$?"` printed **0**. Same pipe-laundering the CLAUDE.md gate line was added to prevent, on a command I wasn't thinking of as a "gate."
+
+---
+
+<!-- insight:76b4019d8cff | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T02:02:54.757Z -->
+## ★ Insight
+Copilot asked a sharper question than the surface one: *"what (if anything) is the stamp step still used for?"* Answering it honestly meant splitting the step in two, and the halves turn out to have very different weight now:
+
+---
+
+<!-- insight:265943abd26c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T01:47:52.643Z -->
+## ★ Insight
+Two things from this stretch worth keeping.
+
+---
+
+<!-- insight:7f796a640eb1 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T01:35:43.419Z -->
+## ★ Insight
+Two things nearly slipped past here, both worth naming.
+
+---
+
+<!-- insight:5b257bf90eb5 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T01:17:08.616Z -->
+## ★ Insight
+Worth noting what this PR turned out to be about. It started as "display a string in two places" — genuinely trivial. It surfaced two things that weren't:
+
+---
+
+<!-- insight:1618f3b74b55 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T22:31:30.672Z -->
+## ★ Insight
+Worth noting what the verification step above actually bought. I claimed the shared type "catches regressions at compile time" — the same claim Copilot made about its own suggestion, which was false. So I tested it: deleted `version: appVersion()` from the route and confirmed `TS2741: Property 'version' is missing in type ... but required in type 'HealthResponse'`.
+
+---
+
+<!-- insight:25c1f42c97ee | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T21:34:30.190Z -->
+## ★ Insight
+Worth noting where this rule sits. The existing build gate says *run this gate*; the new line says *invoke it in a way that can report failure*. Those are genuinely different failure modes — #324 skipped the gate, today's near-miss ran it and couldn't hear the answer.
+
+---
+
+<!-- insight:0f57edbc200d | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T20:23:11.353Z -->
+## ★ Insight
+The false-green above is worth naming, because it's a trap this repo has hit before in a different form. `pnpm build 2>&1 | tail -20` reports **tail's** exit status, not the build's — bash pipelines exit with the last stage. So a build that died with `ELIFECYCLE ... exit code 1` came back as exit 0, and both the harness and I would have called it passing had I not read the output text.
+
+---
+
+<!-- insight:226c1ee7bde1 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T20:08:17.780Z -->
+## ★ Insight
+The Settings change touched a query with a load-bearing comment: `select: (data) => data.db` existed specifically so TanStack's structural sharing returns the prior reference on an unchanged tick, avoiding a re-render of `InitStatusRow`. Widening it to `select: (data) => ({ db, version })` *looks* like it trades that away — a fresh object literal every call.
+
+---
+
+<!-- insight:20d5e259e8ef | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T19:55:48.177Z -->
+## ★ Insight
+The tray side is worth doing via `package_info()` rather than a hardcoded string, and the reason is specific to how you release: both CI and `pnpm release:local` stamp `tauri.conf.json` from `package.json`. So `package_info()` is the *actually running binary's* version — a string constant would be whatever was true when someone last edited the file, which is exactly the failure mode you're trying to eliminate.
+
+---
+
+<!-- insight:ba865c05705c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T19:50:12.079Z -->
+## ★ Insight
+The two session numbers aren't a contradiction, and the difference is informative. `sessionCount` = 68 comes from `history.jsonl` entries matched by path; the Sessions tab's 5 comes from actual JSONL conversation files in `~/.claude/projects/`. They measure different things — history entries vs. distinct conversations.
+
+---
+
+<!-- insight:645d73b517b3 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T19:41:25.015Z -->
+## ★ Insight
+Your first observation after a successful update was *"I can't tell what version I'm running."* That's the feature request an auto-updater generates by existing — before it, the version was implicit in whatever you'd deliberately installed; after it, the app changes underneath you and the answer stops being obvious.
+
+---
+
+<!-- insight:b5ebf2f402c0 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T19:12:47.817Z -->
+## ★ Insight
+That `on_before_exit` line is the whole reason this is worth watching. `std::process::exit()` runs **no destructors** — so without that hook, the Node sidecar survives as an orphan holding an open handle on `resources/node/node.exe`, and the installer fails on a locked file.
+
+---
+
+<!-- insight:7eb79ad9f789 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T18:00:11.357Z -->
+## ★ Insight
+The fix is one line, and it's the exact inverse of my first attempt:
+
+---
+
+<!-- insight:8a7bac2c4f5e | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T17:31:40.346Z -->
+## ★ Insight
+The interaction is worth remembering: adding an env var *ahead* of an existing resolution step silently disables every test that isolates via that step. The precedence order is the whole story — `MINDER_STATE_DIR || os.homedir()` and `os.homedir()` with a spy are fine separately and mutually exclusive together.
+
+---
+
+<!-- insight:c84349baf0c6 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T17:19:09.988Z -->
+## ★ Insight
+There's a trap in the obvious fix. `resolveStateDir()` is `MINDER_STATE_DIR || process.cwd()` — so simply routing the DBs through it would relocate every existing user's database from `~/.minder/index.db` to `<cwd>/index.db` the moment they run `pnpm dev`. They'd get a silently empty dashboard and an orphaned DB.
+
+---
+
+<!-- insight:21a15d1726e7 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T17:16:02.035Z -->
+## ★ Insight
+The mechanism traces back to an issue you already have open. `src/lib/db/connection.ts:46` hardcodes `DB_DIR = path.join(os.homedir(), ".minder")` — it never consults `MINDER_STATE_DIR`, which is exactly **#303**. So every test that initializes a DB writes to the CI runner's *real* home directory, with no per-test isolation.
+
+---
+
+<!-- insight:f92de6a5c6d5 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T16:39:22.899Z -->
+## ★ Insight
+The two functions look like duplicates but infer the home differently, and neither rule generalizes:
+
+---
+
+<!-- insight:dd5128dea91c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T16:01:30.284Z -->
+## ★ Insight
+The original code was *right about the requirement* and wrong only about where to compute it. It needed an exact, unique key — and `projectName` is exactly that. My mistake was reaching for the nearest scanner-derived field rather than asking which one carries the same information the old key did.
+
+---
+
 <!-- insight:d88b821d6cce | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-20T15:31:25.941Z -->
 ## ★ Insight
 The old code wasn't unreasonable — it even carried a comment explaining why it matched on `projectName` (avoiding a lossy `decodeDirName()`). It was correct for every project that existed when it was written. WSL support arrived later and moved the ground under it: the path the scanner sees and the path Claude Code recorded stopped being the same string, and the reconciliation lives server-side in `pathMappings`.
