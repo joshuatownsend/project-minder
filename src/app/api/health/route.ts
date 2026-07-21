@@ -10,6 +10,7 @@ import { githubActivityCache } from "@/lib/githubActivityCache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { isDispatcherRunning } from "@/lib/tasks/dispatcher";
 import { resolveServerRoot } from "@/lib/serverRoot";
+import type { HealthResponse } from "@/lib/types/init";
 
 /**
  * GET /api/health — liveness + readiness probe.
@@ -84,17 +85,23 @@ export async function GET(): Promise<NextResponse> {
   ]);
   const ok = initStatus.state === "success";
 
+  // Annotated with the shared `HealthResponse` so this route is the enforced
+  // producer of the contract documented above: dropping or renaming a field
+  // fails the build here, rather than arriving `undefined` at the tray, the
+  // Home banner, and Settings.
+  const body: HealthResponse = {
+    ok,
+    status: ok ? "ok" : "degraded",
+    version: appVersion(),
+    uptimeSec: Math.round(process.uptime()),
+    demoMode: demo,
+    db: initStatus,
+    bootstrap: getBootstrapStatus(),
+    watchers: collectWatchers(),
+  };
+
   return NextResponse.json(
-    {
-      ok,
-      status: ok ? "ok" : "degraded",
-      version: appVersion(),
-      uptimeSec: Math.round(process.uptime()),
-      demoMode: demo,
-      db: initStatus,
-      bootstrap: getBootstrapStatus(),
-      watchers: collectWatchers(),
-    },
+    body,
     {
       status: ok ? 200 : 503,
       headers: { "Cache-Control": "no-store" },

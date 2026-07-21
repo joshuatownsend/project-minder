@@ -67,7 +67,11 @@ Click the tray icon to open the menu. The menu resets its status display every 1
 | **Mute notifications** | Checkbox that suppresses new-manual-steps toasts | When checked, `MANUAL_STEPS.md` changes no longer trigger OS notifications. The mute flag persists to disk. |
 | **Restart server** | Graceful server restart | **Disabled when in attach mode** (see [Modes](#modes) below). Blocks ~6s on graceful shutdown. Useful when the server becomes unresponsive. |
 | **View logs** | Opens `~/.minder/logs/` directory in your file manager | Reveals the rotating `minder.log` file for troubleshooting. |
+| **Version x.y.z** | Display-only line showing the running build | Read from the binary's own build metadata, not a configured value — so it is the version actually executing, which is what you want to check after an update. Sits directly above **Check for updates…** so the two read together. The Settings page shows the same version under its section nav, sourced independently from the server; see the note below. |
+| **Check for updates…** | Checks for, downloads, and installs a newer release | See [Updating](#updating) below. Stops the server cleanly and relaunches. |
 | **Quit** | Cleanly stops the tray app | Gracefully shuts down the spawned server (or leaves an attached server untouched), then exits. No orphan processes. |
+
+> **If the tray and Settings disagree on the version**, that is meaningful rather than a display bug: the tray reports the desktop binary, Settings reports the server it is talking to. They differ when the tray is *attached* to a server you started separately (see [Modes](#modes)), or after an update where one half did not restart. Restarting the tray reconciles them in the spawn case.
 
 ## Notifications
 

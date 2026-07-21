@@ -69,6 +69,16 @@ pub fn init<R: Runtime>(
     .enabled(!attached)
     .build(app)?;
     let logs_item = MenuItemBuilder::with_id("view_logs", "View logs").build(app)?;
+    // Sits directly above "Check for updates…" so the two read together: which
+    // build is running, and the control that changes it. Sourced from
+    // `package_info()` (i.e. `tauri.conf.json`, stamped from package.json at
+    // build time by CI and `pnpm release:local`) rather than a literal, so it
+    // is the version of the binary actually executing — the whole point after
+    // an auto-update.
+    let version_item =
+        MenuItemBuilder::with_id("version", format!("Version {}", app.package_info().version))
+            .enabled(false)
+            .build(app)?;
     let update_item =
         MenuItemBuilder::with_id("check_updates", "Check for updates…").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -83,6 +93,7 @@ pub fn init<R: Runtime>(
             &PredefinedMenuItem::separator(app)?,
             &restart_item,
             &logs_item,
+            &version_item,
             &update_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,

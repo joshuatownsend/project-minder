@@ -180,6 +180,8 @@ Before committing or opening a PR, ALWAYS run: (1) `pnpm typecheck`, (2) full te
 
 **Also run `pnpm build` when the change touches `src/`.** Typecheck and the test suite cannot see client/server boundary violations — a `"use client"` component importing a module that pulls `fs` or `child_process` at module scope passes both gates and then fails the Turbopack build with `Module not found: Can't resolve 'child_process'`. This has shipped to CI red at least once (PR #324). The build is slow (~5 min), so run it in the background while doing other work rather than skipping it.
 
+**Never pipe a gate's output through a filter.** `pnpm build 2>&1 | tail -20` reports *tail's* exit status, not the build's — a build that dies with `ELIFECYCLE ... exit code 1` comes back as exit 0, and both the shell and the agent harness will call it passing. Redirect to a file and check `$?` (`pnpm build > "$LOG" 2>&1; echo "EXIT=$?"`), or `set -o pipefail` first. This is the same failure class the build gate above exists to prevent — a gate that looks green while proving nothing — and it has already produced a false green in this repo (2026-07-20, where the "successful" build had actually aborted with `Another next build process is already running` because a prior background build still held the lock). Corollary: only one `pnpm build` can run at a time; don't start a second before the first finishes.
+
 ## Context Management
 - For long sessions, prefer `Grep` and targeted `Read` with offset/limit over re-reading whole large files.
 - When observing another session's tool-output files, read incrementally and summarize early — do not accumulate full file contents in context.
