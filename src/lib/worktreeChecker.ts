@@ -2,9 +2,19 @@ import { execFile } from "child_process";
 import { WorktreeStatus } from "./types";
 export { worktreeSlug } from "./worktreeUtils";
 
+/**
+ * Waive git's `safe.directory` ownership check for these read-only calls —
+ * see the full rationale on `SAFE_DIRECTORY_ARGS` in `scanner/git.ts`. Without
+ * it, every worktree status check against a UNC/WSL repo fails with "detected
+ * dubious ownership" and is swallowed into `""`/`null`.
+ */
+function gitArgs(args: string[]): string[] {
+  return ["-c", "safe.directory=*", ...args];
+}
+
 function runGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, timeout: 5000 }, (err, stdout) => {
+    execFile("git", gitArgs(args), { cwd, timeout: 5000 }, (err, stdout) => {
       resolve(err ? "" : stdout.trim());
     });
   });
@@ -13,7 +23,7 @@ function runGit(args: string[], cwd: string): Promise<string> {
 /** Returns null if the command failed (e.g., network error), empty string if command succeeded with no output. */
 function runGitNullable(args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, timeout: 5000 }, (err, stdout) => {
+    execFile("git", gitArgs(args), { cwd, timeout: 5000 }, (err, stdout) => {
       resolve(err ? null : stdout.trim());
     });
   });

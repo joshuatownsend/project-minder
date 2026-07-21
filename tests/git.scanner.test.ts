@@ -184,3 +184,36 @@ describe("runGitChecked — distinguishes exec failure from empty stdout", () =>
     expect(result).toEqual({ ok: false, stdout: "" });
   });
 });
+
+describe("safe.directory waiver", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * Without this flag, every git call against a UNC/WSL repo fails with
+   * "detected dubious ownership" and is swallowed into "" — which surfaced as
+   * `git: undefined` on every WSL-scanned project (no branch, no remote, no
+   * dirty count) and blocked project grouping entirely. The failure is silent
+   * by construction, so it needs a test that fails loudly if the flag is ever
+   * dropped in a refactor.
+   */
+  it("passes -c safe.directory=* before the subcommand", async () => {
+    stubGitCalls(["main"]);
+    await runGitChecked(["rev-parse", "--abbrev-ref", "HEAD"], "C:\\dev\\repo");
+
+    const [bin, args] = execFileAsyncMock.mock.calls[0];
+    expect(bin).toBe("git");
+    // `-c` is a git-level option: it MUST precede the subcommand, or git
+    // parses it as an argument to `rev-parse` and the waiver silently no-ops.
+    expect(args.slice(0, 2)).toEqual(["-c", "safe.directory=*"]);
+    expect(args.slice(2)).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
+  });
+
+  it("applies to scanGit's invocations too", async () => {
+    stubGitCalls(["main", "", ""]);
+    await scanGit("\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo");
+
+    for (const [, args] of execFileAsyncMock.mock.calls) {
+      expect(args.slice(0, 2)).toEqual(["-c", "safe.directory=*"]);
+    }
+  });
+});

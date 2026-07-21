@@ -112,6 +112,12 @@ export interface MinderConfig {
   defaultStatusFilter?: "all" | "active" | "paused" | "archived"; // dashboard default filter
   viewMode?: "full" | "compact" | "list"; // dashboard card layout
   pinnedSlugs?: string[]; // slugs pinned to top of all dashboard views
+  /** Checkout paths opted out of project grouping, for users who want two
+   *  clones of the same repo kept genuinely separate. Keyed on PATH rather
+   *  than slug because slugs move between rescans when `devRoots` is
+   *  reordered (see `resolveProjectSlug` in `scanner/index.ts`), which would
+   *  silently re-merge a pair the user had split. */
+  ungroupedPaths?: string[];
   templates?: {
     /** Default conflict policy for the apply-template modal. */
     defaultConflictPolicy?: ConflictPolicy;

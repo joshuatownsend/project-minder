@@ -4,9 +4,41 @@ import { GitInfo } from "../types";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Waive git's `safe.directory` ownership check for Minder's own read-only
+ * git calls.
+ *
+ * Git refuses to operate on a repository whose owner differs from the current
+ * user ("detected dubious ownership"). Every project scanned over UNC —
+ * notably a WSL distro at `\\wsl.localhost\<distro>\home\<user>\…` — trips
+ * this, because the files carry a Linux UID. `runGit` swallows the error and
+ * returns `""`, so the whole `GitInfo` came back `undefined`: no branch, no
+ * remote, no dirty count, no commit history for any WSL project, silently.
+ *
+ * Passing `-c` scopes the waiver to a single invocation. That is strictly
+ * narrower than the remedy git itself prints in the error
+ * (`git config --global --add safe.directory …`), which would also apply to
+ * the user's interactive shell and every other tool on the machine.
+ *
+ * Residual risk, accepted: `safe.directory` also guards against a repository
+ * whose `.git/config` names an executable (`core.pager`, `diff.external`,
+ * `core.fsmonitor`). Minder already runs these same commands against every
+ * directory in the configured scan roots, so this widens the existing
+ * exposure to UNC roots rather than creating a new class of it — and scan
+ * roots are user-configured, not attacker-supplied.
+ *
+ * Prepended, not appended: `-c` is a git-level option and must precede the
+ * subcommand.
+ */
+const SAFE_DIRECTORY_ARGS = ["-c", "safe.directory=*"];
+
+function gitArgs(args: string[]): string[] {
+  return [...SAFE_DIRECTORY_ARGS, ...args];
+}
+
 export async function runGit(args: string[], cwd: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 2000 });
+    const { stdout } = await execFileAsync("git", gitArgs(args), { cwd, timeout: 2000 });
     return stdout.trim();
   } catch {
     return "";
@@ -28,7 +60,7 @@ export interface GitExecResult {
  */
 export async function runGitChecked(args: string[], cwd: string): Promise<GitExecResult> {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 2000 });
+    const { stdout } = await execFileAsync("git", gitArgs(args), { cwd, timeout: 2000 });
     return { ok: true, stdout: stdout.trim() };
   } catch {
     return { ok: false, stdout: "" };
@@ -45,7 +77,7 @@ export async function runGitChecked(args: string[], cwd: string): Promise<GitExe
  */
 async function runGitLong(args: string[], cwd: string, timeoutMs = 8000): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", args, {
+    const { stdout } = await execFileAsync("git", gitArgs(args), {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024, // 16 MB — enough for ~50k commits at ~300 bytes per `--format=%H|%aI|%s` line

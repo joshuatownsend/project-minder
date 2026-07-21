@@ -11,6 +11,7 @@ import type {
   LspConfigInfo,
 } from "./claudeConfig";
 import type { CiCdInfo } from "./cicd";
+import type { ProjectGroup } from "@/lib/groups/types";
 
 export interface ProjectData {
   slug: string;
@@ -236,4 +237,9 @@ export interface ScanResult {
   catalogLintFindings: LintFinding[];
   /** Roots skipped this cycle (stopped WSL distro, unreadable path, …). Absent = none. */
   skippedRoots?: SkippedRoot[];
+  /** Repos with more than one checkout, derived from normalized git remotes.
+   *  Groups of one are never emitted, so an empty array means every scanned
+   *  project is single-location. Derived per-response rather than cached —
+   *  it is a pure reshape of `projects`. */
+  groups?: ProjectGroup[];
 }

@@ -4,8 +4,29 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { enqueueProjectCaches } from "@/lib/projectCacheEnqueue";
 import { readConfig } from "@/lib/config";
 import { demoMode } from "@/lib/demo/demoMode";
+import { deriveProjectGroups } from "@/lib/groups/derive";
+import type { MinderConfig } from "@/lib/types/config";
+import type { ScanResult } from "@/lib/types/project";
 
 let scanInProgress: Promise<void> | null = null;
+
+/**
+ * Attach derived groups to a scan result.
+ *
+ * Spreads onto a new object rather than mutating the cached `ScanResult` —
+ * the cache is shared across requests, and `enqueueProjectCaches` already
+ * mutates `p.git` in place; a second in-place mutation would compound that.
+ * Grouping is a pure reshape, so recomputing per response is cheap and always
+ * reflects the current opt-out list without an extra cache to invalidate.
+ */
+function withGroups(result: ScanResult, config: MinderConfig): ScanResult {
+  return {
+    ...result,
+    groups: deriveProjectGroups(result.projects, {
+      ungroupedPaths: config.ungroupedPaths,
+    }),
+  };
+}
 
 export async function GET() {
   const config = await readConfig();
@@ -19,7 +40,7 @@ export async function GET() {
 
   if (cached) {
     if (!isDemo) enqueueProjectCaches(cached.projects, flags);
-    return NextResponse.json(cached);
+    return NextResponse.json(withGroups(cached, config));
   }
 
   // Prevent multiple concurrent scans
@@ -38,7 +59,7 @@ export async function GET() {
   const result = getCachedScan();
   if (result) {
     if (!isDemo) enqueueProjectCaches(result.projects, flags);
-    return NextResponse.json(result);
+    return NextResponse.json(withGroups(result, config));
   }
 
   return NextResponse.json(

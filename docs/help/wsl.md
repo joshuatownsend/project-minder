@@ -50,15 +50,21 @@ The distro-state check is cached for 30 seconds, so scans over several WSL roots
 
 ## Git repositories over UNC
 
-Git refuses to operate on repositories reached via `\\wsl.localhost\` paths by default (`fatal: detected dubious ownership`), because the files are owned by a different (Linux) user. This is a Git safety feature that Minder cannot and does not bypass — affected projects simply show no git metadata (branch, dirty status, last commit) while everything else (package.json, TODO.md, ports, docs) works normally.
+Git refuses to operate on repositories reached via `\\wsl.localhost\` paths by default (`fatal: detected dubious ownership`), because the files are owned by a different (Linux) user.
 
-To opt in, add the path to your **global** git config on the Windows side (Git ≥ 2.46 supports the trailing `/*` glob):
+**This works out of the box as of 2026-07-21 — no configuration needed.** Minder passes `-c safe.directory=*` on its own read-only git calls, so WSL projects report branch, remote, dirty status and commit history the same as local ones.
+
+> **Previously:** this page stated the check was something Minder "cannot and does not bypass", and WSL projects showed no git metadata at all. That was wrong — `-c` scopes the waiver to a single invocation, which is a narrower remedy than the global config change git's own error message recommends. The silent gap also blocked project grouping, since a checkout with no remote cannot be matched to its counterpart.
+
+The waiver applies **only to Minder's own git reads**. Your global git config is untouched, so running `git status` yourself in a `\\wsl.localhost\` path still shows the ownership error. If you want it to work in your shell too, add the path to your global config on the Windows side (Git ≥ 2.46 supports the trailing `/*` glob):
 
 ```
 git config --global --add safe.directory '%(prefix)///wsl.localhost/Ubuntu-26.04/home/<user>/dev/*'
 ```
 
-Run any `git status` against one of the repos afterwards to confirm. Alternatively, run Git operations from inside the distro, where ownership matches.
+Alternatively, run git operations from inside the distro, where ownership matches.
+
+**What the waiver trades away.** `safe.directory` also guards against a repository whose `.git/config` names an executable (`core.pager`, `diff.external`, `core.fsmonitor`). Minder already runs these same commands against every directory in your configured scan roots, so this extends that existing exposure to UNC roots rather than creating a new kind of it — and scan roots are ones you added yourself.
 
 ## Claude sessions inside WSL
 
