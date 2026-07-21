@@ -152,7 +152,7 @@ jobs:
       # (version comes from the packageManager field in package.json).
       - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -325,7 +325,7 @@ jobs:
       # Always keep the installers on the workflow run (this is the whole output
       # of a workflow_dispatch dry run).
       - name: Upload installers to workflow run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: minder-installers-${{ matrix.os }}
           # Both dirs: the aggregation job needs the fragments, but only
@@ -402,13 +402,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       # No `name:` — downloads every matrix job's artifact into its own
       # subdirectory under artifacts/, which is what the merge step walks.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
