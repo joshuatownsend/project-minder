@@ -74,8 +74,47 @@ const nextConfig: NextConfig = {
   // of the standalone sidecar — which is also why this is `dist/node/` and not
   // `node/`. `dist/minder-server/`, `dist/node/` and `src-tauri/target/`
   // appear in no legitimate dependency path.
+  // The entries below are a MITIGATION for #284, not a fix. NFT hits a
+  // "whole project was traced unintentionally" bailout somewhere in the graph
+  // and falls back to sweeping the entire repo root into every route's trace —
+  // measured at 27,242 entries for /api/health, of which 243 were actual
+  // node_modules dependencies. The bailout itself is still unfixed; annotating
+  // the obvious unbounded `path.join` sites with `turbopackIgnore` (the
+  // approach that fixed earlier instances) was tried and measured to change
+  // the manifest by nothing at all. See the negative result on #284 before
+  // repeating that experiment.
+  //
+  // These directories are provably never needed by the server at runtime, so
+  // excluding them bounds the damage: 27,242 -> 1,369 entries, and traced repo
+  // content 337 MB -> 15 MB. `src/` is deliberately NOT excluded — the worker
+  // resolves `src/lib/db/schema.sql` at runtime and package-standalone.mjs has
+  // a dedicated step to plant it, so a blanket `./src/**` would prune the DB
+  // schema and break the index on a user's machine.
+  //
+  // `.git/` and `.claude/` earn their place on hygiene grounds rather than
+  // size: both were being traced into .next/standalone on every build and were
+  // stopped only by package-standalone's prune at the copy boundary (#284
+  // shipped a real `.git` and `.env.local` once). Excluding them means they
+  // never enter the pipeline at all, rather than being caught on the way out.
+  //
+  // Substring-match caveat (see the note above): `./tests/**` and `./docs/**`
+  // also match e.g. `node_modules/<pkg>/tests/**`. Verified non-destructive by
+  // measurement — the traced node_modules entry count is 243 both with and
+  // without these excludes. Re-check that number if you add another entry.
   outputFileTracingExcludes: {
-    "*": ["./dist/minder-server/**", "./dist/node/**", "./src-tauri/target/**"],
+    "*": [
+      "./dist/minder-server/**",
+      "./dist/node/**",
+      "./src-tauri/target/**",
+      "./.git/**",
+      "./.claude/**",
+      "./tests/**",
+      "./docs/**",
+      "./site/**",
+      "./screenshots/**",
+      "./uiux-review/**",
+      "./plans/**",
+    ],
   },
 };
 
