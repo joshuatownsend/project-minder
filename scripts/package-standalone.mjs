@@ -68,7 +68,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { isForbiddenName } from "./payload-hygiene-rules.mjs";
+import {
+  isForbiddenName,
+  isForbiddenRootRelative,
+} from "./payload-hygiene-rules.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -126,6 +129,16 @@ function copyDereferenced(src, dest, ancestry = new Set()) {
   // as the independent backstop.
   if (isForbiddenName(path.basename(src))) {
     step(`  pruned forbidden entry: ${path.relative(root, src)}`);
+    return;
+  }
+  // Root-anchored rules (currently dist/node, the bundled Node runtime that
+  // Tauri ships as its own resource). Keyed on the DESTINATION, since these are
+  // defined relative to the payload root; the later node_modules repair copies
+  // also route through here and land under `node_modules/...`, which matches
+  // nothing in the set.
+  const destRel = path.relative(outDir, dest);
+  if (isForbiddenRootRelative(destRel)) {
+    step(`  pruned forbidden payload path: ${destRel}`);
     return;
   }
   let real;

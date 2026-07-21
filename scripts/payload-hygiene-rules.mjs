@@ -17,7 +17,29 @@ export const FORBIDDEN_EXACT = new Set([
 ]);
 
 // Human-readable summary for log lines, kept next to the rules it describes.
-export const FORBIDDEN_SUMMARY = ".git, .env*, .claude, .mcp.json, agentlytics-repo";
+export const FORBIDDEN_SUMMARY =
+  ".git, .env*, .claude, .mcp.json, agentlytics-repo, dist/node";
+
+// Forbidden paths anchored at the PAYLOAD ROOT, unlike FORBIDDEN_EXACT which
+// matches a basename at any depth. Anchoring is the whole point here: `node` is
+// far too common a directory name to ban outright (node_modules/.bin/node, and
+// plenty of packages ship a `node` subdir), so only the specific root-relative
+// location is forbidden.
+//
+// `dist/node` is the ~79 MB Node runtime fetched by fetch-node-runtime.mjs.
+// tauri.conf.json bundles it separately as its own `node` resource, so a copy
+// inside the payload puts the whole runtime in every installer twice. The
+// tracer only sweeps it in when it already exists from an earlier build (see
+// next.config.ts) — which means it never fires on a clean CI run and would go
+// unnoticed until someone reorders the build steps or adds `dist/` caching.
+// That is exactly the kind of silent regression this gate exists to catch.
+export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node"]);
+
+// `relPath` is a payload-root-relative path in either separator style.
+export function isForbiddenRootRelative(relPath) {
+  if (!relPath) return false;
+  return FORBIDDEN_ROOT_RELATIVE.has(relPath.replace(/\\/g, "/").toLowerCase());
+}
 
 // Maximum allowed path length INSIDE the payload, relative to the payload root.
 // Budget: Windows MAX_PATH is 260, makensis (Tauri's NSIS bundler) is not

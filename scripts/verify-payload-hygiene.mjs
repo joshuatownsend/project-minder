@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isForbiddenName,
+  isForbiddenRootRelative,
   FORBIDDEN_SUMMARY,
   MAX_PAYLOAD_REL_PATH,
 } from "./payload-hygiene-rules.mjs";
@@ -81,6 +82,14 @@ function walk(dir) {
       continue;
     }
     const rel = path.relative(payloadDir, full);
+    // Root-anchored rules, checked against the payload-relative path rather
+    // than the basename (see payload-hygiene-rules.mjs for why `node` alone
+    // cannot be banned). Same treatment as a forbidden name: record it and do
+    // not descend, since the offender may be a whole bundled runtime.
+    if (isForbiddenRootRelative(rel)) {
+      offenders.push(rel);
+      continue;
+    }
     if (rel.length > MAX_PAYLOAD_REL_PATH) {
       tooLong.push(rel);
     }
