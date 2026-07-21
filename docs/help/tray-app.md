@@ -227,9 +227,9 @@ Finished installers are listed with their paths and sizes at the end, under `src
 
 ### Version stamping
 
-`src-tauri/tauri.conf.json` is checked in with a placeholder version of `0.1.0`; the real version is stamped from `package.json` at build time. `pnpm release:local` performs that same stamp and then restores the file, so it leaves no diff in your working tree.
+`src-tauri/tauri.conf.json` sets `version` to `"../package.json"`. Tauri accepts a path there as well as a semver literal, resolving it relative to `src-tauri/`, so the tray reports the product version by construction — including under `pnpm tray:dev`, which runs no stamping step at all.
 
-This matters more than it looks: an installer built without the stamp reports itself as version `0.1.0` forever. Once auto-updates ship, such a build would consider itself permanently out of date and re-download every release in a loop.
+That field used to be a hardcoded `0.1.0` placeholder, which made the stamp load-bearing: an installer built without it reported version `0.1.0` forever, and under the auto-updater such a build would consider itself permanently out of date and re-download every release in a loop. Release builds still rewrite the field to a literal — CI's "Stamp app version" step and `pnpm release:local` both do — but that is now redundancy rather than the mechanism. `pnpm release:local` restores the file afterwards, so it leaves no diff in your working tree, and it reuses the same rewrite to switch `createUpdaterArtifacts` off when no signing key is present.
 
 If `HEAD` carries a `v*` tag, the script requires it to agree with `package.json` and fails loudly otherwise — the same mistagged-release guard CI applies. On an untagged commit it says so and proceeds, since building a release candidate before tagging is the normal local workflow.
 

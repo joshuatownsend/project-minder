@@ -158,7 +158,7 @@ describe("checkVersionConsistency", () => {
 describe("stampVersionInConf", () => {
   const conf = JSON.stringify({ productName: "X", version: "0.1.0" }, null, 2) + "\n";
 
-  it("replaces the placeholder version", () => {
+  it("replaces a semver literal version", () => {
     const { text, previous } = stampVersionInConf(conf, "1.4.0");
     expect(previous).toBe("0.1.0");
     expect(JSON.parse(text).version).toBe("1.4.0");

@@ -13,12 +13,15 @@
 // src-tauri/tauri.conf.json, exactly as the CI "Stamp app version" step does,
 // then restores the file afterwards (see restoreOnExit for why).
 //
-// Why the stamp is load-bearing rather than cosmetic: tauri.conf.json is
-// authored as the placeholder "0.1.0" and CI rewrites it at build time. A local
-// build that skipped the stamp would produce an installer that reports itself as
-// 0.1.0 — and once the auto-updater lands (plan task U), every such install
-// would consider itself ancient, download the current release, still report
-// 0.1.0, and update-loop forever. So this script refuses to build unstamped.
+// What the stamp is still for: tauri.conf.json's `version` is the path
+// "../package.json", which Tauri resolves itself, so the built version is
+// already correct without stamping. The rewrite pins that to a literal anyway
+// (matching CI byte-for-byte) and — the part that is genuinely load-bearing —
+// is the same edit that switches createUpdaterArtifacts off when there is no
+// signing key. Before the path form landed the field was a hardcoded "0.1.0",
+// and an unstamped build shipped an installer that reported 0.1.0 forever;
+// under the auto-updater every such install would consider itself ancient,
+// download the current release, still report 0.1.0, and update-loop forever.
 //
 // Usage:
 //   pnpm release:local                       # host OS's natural bundles

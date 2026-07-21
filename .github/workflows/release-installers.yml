@@ -191,11 +191,14 @@ jobs:
       # Build the tray app + bundle the installers. UNSIGNED (see header). No
       # beforeBuildCommand runs (frontendDist is a static ./frontend), so this
       # does not rebuild the Next app or spawn the server.
-      # Stamp the real app version into tauri.conf.json before bundling, so
-      # installers don't ship the placeholder 0.1.0. package.json is the single
-      # source of truth (release.yml's chore(release) bumps it and the tag
-      # matches). On a tag push, assert package.json == tag (minus the leading
-      # `v`) and fail loudly on mismatch — catches a mistagged release. Dispatch
+      # Stamp the real app version into tauri.conf.json before bundling. The
+      # committed `version` is the path "../package.json", which Tauri already
+      # resolves, so this rewrite is redundancy rather than the mechanism — it
+      # pins the literal that gets bundled and keeps the built config explicit.
+      # package.json is the single source of truth either way (release.yml's
+      # chore(release) bumps it and the tag matches). The load-bearing half is
+      # the assertion: on a tag push, package.json must equal the tag (minus the
+      # leading `v`) or we fail loudly — catches a mistagged release. Dispatch
       # dry runs stamp package.json as-is. Rewriting the workspace file (vs a
       # `--config` inline-JSON merge) keeps the build step shell-agnostic — no
       # cross-shell JSON quoting between pwsh (Windows) and bash.
