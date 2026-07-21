@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:ba9da7d82f19 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T20:50:17.767Z -->
+## ★ Insight
+Line 61 finds the matching worktree from the **scan result**, then lines 66–97 keep using `body.worktreePath` — the raw request value. At runtime they're identical strings, so the code is correct today. But it's correct *by coincidence of the equality check*, not by construction.
+
+---
+
+<!-- insight:1c5899fa180c | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T20:43:46.948Z -->
+## ★ Insight
+The `worktreeChecker` test is the one place where writing it properly mattered more than writing it. My first version asserted every call carried the *same* `safe.directory` value — which failed, and the failure was informative: `checkWorktreeStatus` deliberately uses two cwds, the parent repo for branch/remote queries and the worktree for status/log.
+
+---
+
+<!-- insight:d9daf399b281 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T19:25:47.132Z -->
+## ★ Insight
+The heredoc failure at the start is worth a note, since it's the second shell-quoting trap this session after the `$TMPDIR` one. Chaining two `<<'EOF'` heredocs plus `git`/`gh` invocations in a single `bash -c` string hit `unexpected EOF while looking for matching '` — the outer command string and the heredoc bodies interact badly once the content is long and contains quotes and backticks.
+
+---
+
 <!-- insight:94c914696d26 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T18:06:17.819Z -->
 ## ★ Insight
 Worth flagging for P2, since it's the next phase and this changes its inputs: the `safe.directory` fix means WSL projects now report real branches, dirty counts, and commit history where they previously reported nothing. P2's aggregation rules treat branch and dirty state as *location-bound, never merged* — that rule was written when the WSL side was structurally empty, so it was never actually exercised. It will be now, and divergence between a Windows `main` and a WSL feature branch becomes real data rather than a blank.
