@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-21
+
 ### Added
 - **`GET /api/projects` now reports project groups — the same repo checked out in more than one location.** A `groups` array pairs checkouts that share a normalized git remote, so a Windows clone and a WSL clone of one repo can be recognized as a single logical project while each location stays independently addressable. Identity is the normalized remote (`host/owner/repo`, case-folded, `.git` and scheme stripped) rather than a slug, because slugs move between rescans when scan roots are reordered. Groups of one are never emitted, which makes "a single-location project behaves exactly as before" structural rather than a convention every consumer has to honour. Deliberately API-only for now — no UI — so the grouping could be validated against real scan data first; that validation is what surfaced the `safe.directory` bug below. Users who want two clones kept genuinely separate can list checkout paths under `ungroupedPaths` in `.minder.json`. Groups will be addressed at `/group/<slug>` when the UI lands, leaving every existing `/project/<slug>` URL meaning exactly what it means today.
 
