@@ -56,14 +56,26 @@ const nextConfig: NextConfig = {
   // crawls the whole jungle during compile/trace collection (#312's
   // remaining slowness). The Tauri Rust target dir gets the same treatment.
   //
+  // `dist/node` is the ~79 MB Node runtime that scripts/fetch-node-runtime.mjs
+  // downloads for the installer. tauri.conf.json bundles it separately as its
+  // own `node` resource, so a copy traced into the payload ships the entire
+  // runtime TWICE in one installer. Today's release builds happen to escape
+  // that: CI runs `pnpm build` (which traces) before `fetch-node-runtime`, so
+  // on a fresh runner the directory doesn't exist yet. That makes the payload
+  // correct by accident of step ordering rather than by construction —
+  // reordering those steps, caching `dist/` between runs, or simply running
+  // `pnpm release:local` twice reintroduces it silently. Excluding it here
+  // makes the property hold regardless of what already exists on disk.
+  //
   // These globs are compiled with picomatch `{ contains: true }` and the
   // leading `./` is stripped, so each pattern is a SUBSTRING match on any
   // path segment sequence. Keep them narrow: a broad `dist/**` would also
   // match `node_modules/next/dist/server/...` and strip the Next runtime out
-  // of the standalone sidecar. `dist/minder-server/` and `src-tauri/target/`
+  // of the standalone sidecar — which is also why this is `dist/node/` and not
+  // `node/`. `dist/minder-server/`, `dist/node/` and `src-tauri/target/`
   // appear in no legitimate dependency path.
   outputFileTracingExcludes: {
-    "*": ["./dist/minder-server/**", "./src-tauri/target/**"],
+    "*": ["./dist/minder-server/**", "./dist/node/**", "./src-tauri/target/**"],
   },
 };
 
