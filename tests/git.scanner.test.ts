@@ -22,6 +22,7 @@ import {
   scanGit,
   scanGitDirtyStatus,
   runGitChecked,
+  gitArgs,
 } from "@/lib/scanner/git";
 import type { CommitMeta } from "@/lib/scanner/git";
 
@@ -182,5 +183,91 @@ describe("runGitChecked — distinguishes exec failure from empty stdout", () =>
     stubGitCalls([new Error("boom")]);
     const result = await runGitChecked(["status"], "C:\\dev\\repo");
     expect(result).toEqual({ ok: false, stdout: "" });
+  });
+});
+
+describe("safe.directory waiver", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * Without this flag, every git call against a UNC/WSL repo fails with
+   * "detected dubious ownership" and is swallowed into "" — which surfaced as
+   * `git: undefined` on every WSL-scanned project (no branch, no remote, no
+   * dirty count) and blocked project grouping entirely. The failure is silent
+   * by construction, so it needs a test that fails loudly if the flag is ever
+   * dropped in a refactor.
+   */
+  it("scopes safe.directory to the cwd, before the subcommand", async () => {
+    stubGitCalls(["main"]);
+    await runGitChecked(["rev-parse", "--abbrev-ref", "HEAD"], "C:\\dev\\repo");
+
+    const [bin, args] = execFileAsyncMock.mock.calls[0];
+    expect(bin).toBe("git");
+    // `-c` is a git-level option: it MUST precede the subcommand, or git
+    // parses it as an argument to `rev-parse` and the waiver silently no-ops.
+    expect(args.slice(0, 2)).toEqual(["-c", "safe.directory=C:/dev/repo"]);
+    expect(args.slice(2)).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
+  });
+
+  it("never uses the * wildcard, which would trust nested foreign repos", () => {
+    // A wildcard opts the whole git process out of the ownership guard,
+    // including submodules and nested repos owned by another user.
+    expect(gitArgs(["status"], "C:\\dev\\repo")).not.toContain("safe.directory=*");
+  });
+
+  it("normalizes backslashes, or the waiver silently fails to apply on UNC", () => {
+    // git compares the config value against its own normalized repo path, so
+    // `\\wsl.localhost\…` does not match a repo git reports as
+    // `//wsl.localhost/…`. Verified against a real WSL checkout.
+    const args = gitArgs(["status"], "\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo");
+    expect(args[1]).toBe("safe.directory=//wsl.localhost/Ubuntu/home/josh/repo");
+  });
+
+  it("applies to scanGit's invocations too", async () => {
+    stubGitCalls(["main", "", ""]);
+    await scanGit("\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo");
+
+    expect(execFileAsyncMock.mock.calls.length).toBeGreaterThan(0);
+    for (const [, args] of execFileAsyncMock.mock.calls) {
+      expect(args[0]).toBe("-c");
+      expect(args[1]).toBe("safe.directory=//wsl.localhost/Ubuntu/home/josh/repo");
+    }
+  });
+});
+
+describe("scanGit — remote URL normalization", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** branch, then the `log -1` line, then `remote get-url origin`. */
+  async function remoteFor(rawRemote: string): Promise<string | undefined> {
+    stubGitCalls(["main", "2026-01-01T00:00:00Z|||msg", rawRemote]);
+    const info = await scanGit("C:\\dev\\repo");
+    return info?.remoteUrl;
+  }
+
+  it("normalizes https, stripping .git", async () => {
+    expect(await remoteFor("https://github.com/o/r.git")).toBe("https://github.com/o/r");
+  });
+
+  it("normalizes SCP-style ssh", async () => {
+    expect(await remoteFor("git@github.com:o/r.git")).toBe("https://github.com/o/r");
+  });
+
+  /**
+   * These fell through every branch and yielded `undefined`, so a checkout
+   * cloned this way reported no remote at all — invisible in the UI, and
+   * unable to pair with an https clone of the same repo during grouping.
+   */
+  it("normalizes ssh:// URLs, which previously produced no remote at all", async () => {
+    expect(await remoteFor("ssh://git@github.com/o/r.git")).toBe("https://github.com/o/r");
+    expect(await remoteFor("ssh://github.com/o/r")).toBe("https://github.com/o/r");
+  });
+
+  it("normalizes git:// URLs", async () => {
+    expect(await remoteFor("git://github.com/o/r.git")).toBe("https://github.com/o/r");
+  });
+
+  it("leaves an unrecognized remote undefined rather than guessing", async () => {
+    expect(await remoteFor("some-weird-remote")).toBeUndefined();
   });
 });

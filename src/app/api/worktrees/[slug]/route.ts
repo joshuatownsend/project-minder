@@ -61,9 +61,21 @@ export async function POST(
   const wt = project.worktrees?.find((w) => w.worktreePath === body.worktreePath);
   if (!wt) return NextResponse.json({ error: "Worktree not found" }, { status: 404 });
 
+  // Every filesystem operation below uses `wt.worktreePath` — the value the
+  // SCANNER discovered — rather than `body.worktreePath`, which came from the
+  // request. The two are equal here by the check above, so this is not a
+  // behaviour change; it means the paths handed to git and the process manager
+  // provably originate from the scan result instead of being request data that
+  // happens to have passed a guard four lines earlier. That is what makes the
+  // allowlist visible to a reader (and to CodeQL, which cannot see an equality
+  // comparison as a sanitizer), and it stays correct if the match above is ever
+  // relaxed to compare case-insensitively or on normalized separators, where
+  // the two strings could legitimately differ.
+  const worktreePath = wt.worktreePath;
+
   // Both actions touch the filesystem (git probes, dev-server spawn) at the
   // project AND worktree paths — refuse outright while the distro is stopped.
-  const blocked = await wslBlocked(project.path, body.worktreePath);
+  const blocked = await wslBlocked(project.path, worktreePath);
   if (blocked) {
     return NextResponse.json(
       {
@@ -83,18 +95,18 @@ export async function POST(
     const startPort = rawPort + 1;
     const port = await findFreePort(startPort);
     if (!port) return NextResponse.json({ error: `No free port from ${startPort}` }, { status: 409 });
-    const info = await processManager.start(wtSlug, body.worktreePath, port);
+    const info = await processManager.start(wtSlug, worktreePath, port);
     return NextResponse.json({ ...info, resolvedPort: port });
   }
 
   if (body.action === "remove") {
-    const status = await checkWorktreeStatus(project.path, body.worktreePath, wt.branch);
+    const status = await checkWorktreeStatus(project.path, worktreePath, wt.branch);
     if (!status.isStale) {
       return NextResponse.json({ error: "Worktree is not stale — cannot remove automatically" }, { status: 400 });
     }
     try {
       const { stdout, stderr } = await execFileAsync(
-        "git", ["worktree", "remove", body.worktreePath],
+        "git", ["worktree", "remove", worktreePath],
         { cwd: project.path, timeout: 10000 }
       );
       return NextResponse.json({ removed: true, output: stdout || stderr });
