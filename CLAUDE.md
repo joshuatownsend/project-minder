@@ -182,6 +182,16 @@ Before committing or opening a PR, ALWAYS run: (1) `pnpm typecheck`, (2) full te
 
 **Never pipe a gate's output through a filter.** `pnpm build 2>&1 | tail -20` reports *tail's* exit status, not the build's — a build that dies with `ELIFECYCLE ... exit code 1` comes back as exit 0, and both the shell and the agent harness will call it passing. Redirect to a file and check `$?` (`pnpm build > "$LOG" 2>&1; echo "EXIT=$?"`), or `set -o pipefail` first. This is the same failure class the build gate above exists to prevent — a gate that looks green while proving nothing — and it has already produced a false green in this repo (2026-07-20, where the "successful" build had actually aborted with `Another next build process is already running` because a prior background build still held the lock). Corollary: only one `pnpm build` can run at a time; don't start a second before the first finishes.
 
+## Windows Filesystem Hazards
+
+**Prefer not to `rm -rf` a directory a build tool populated.** In Git Bash on Windows a *junction* is usually presented as an ordinary directory rather than a link, so `rm -rf` can recurse **through** it and delete the link target's real contents. Next's `.next/standalone` output is link-heavy by design — that's the entire reason `scripts/package-standalone.mjs` dereferences manually — so hand-deleting build output carries a risk that source elsewhere in the repo goes with it. This is a precaution, not a post-mortem: no such loss has been observed in this repo.
+
+Use the tool's own reset (`pnpm package:standalone` already clears `outDir` itself) or Node's `fs.rmSync(dir, { recursive: true, force: true })`, which uses `lstat` and unlinks links instead of following them. If you do delete build output by hand, run `git status` afterwards and confirm no unexpected `D` lines appeared.
+
+**Don't attribute a deletion you didn't witness.** On 2026-07-21 three tracked files under `docs/perf/` showed as deleted mid-session; I attributed it to my own earlier `rm -rf` on build output, wrote that up as established fact, and was wrong — the user had deleted the directory manually. A test that would have distinguished the two was run, correctly labelled inconclusive, and then contradicted anyway. If the evidence is inconclusive, the report must stay inconclusive: say what changed, restore what's recoverable, and *ask* before naming a cause.
+
+**Don't let `cd` leak across commands.** The Bash tool's working directory persists between calls, so a `cd src-tauri && cargo check` leaves later `grep`/`sed` calls resolving against the wrong directory — where they return *empty results that look like clean answers*. Prefer absolute paths, or prefix each command with the repo root. A search that silently ran in the wrong tree is the same failure class as a piped gate: it executed, reported success, and proved nothing.
+
 ## Context Management
 - For long sessions, prefer `Grep` and targeted `Read` with offset/limit over re-reading whole large files.
 - When observing another session's tool-output files, read incrementally and summarize early — do not accumulate full file contents in context.
