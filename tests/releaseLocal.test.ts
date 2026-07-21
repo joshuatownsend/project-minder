@@ -176,6 +176,24 @@ describe("stampVersionInConf", () => {
     expect(text.endsWith("\n")).toBe(true);
     expect(text).toContain('\n  "version": "1.4.0"');
   });
+
+  // The committed `version` is no longer a semver literal — it is the relative
+  // path `../package.json`, which Tauri resolves so the tray can never drift
+  // from the product version. `release-local.mjs` restores whatever `previous`
+  // held once the build finishes, so the stamper has to round-trip that path
+  // form unchanged. A future "validate that previous is semver" guard would
+  // break the restore and silently leave a stamped literal in the working
+  // tree, which is exactly the drift the path form removes.
+  it("round-trips a package.json path, not just a semver literal", () => {
+    const pathConf = JSON.stringify({ productName: "X", version: "../package.json" }, null, 2) + "\n";
+    const { text, previous } = stampVersionInConf(pathConf, "1.5.2");
+    expect(previous).toBe("../package.json");
+    expect(JSON.parse(text).version).toBe("1.5.2");
+
+    // …and restoring `previous` yields the committed file back, byte for byte.
+    const { text: restored } = stampVersionInConf(text, previous);
+    expect(restored).toBe(pathConf);
+  });
 });
 
 describe("canSignUpdaterArtifacts", () => {
