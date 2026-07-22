@@ -1,5 +1,33 @@
 # Insights
 
+<!-- insight:1a447c010a24 | session:9b18058a-40af-4491-8f2c-28513fda8472 | 2026-07-22T03:04:22.203Z -->
+## ★ Insight
+- **The GA "rename" was really a repackaging.** The fast native path you were on (`tsgo` from `@typescript/native-preview`) didn't get promoted in place — the compiler graduated into the mainline `typescript` package at v7 with the binary renamed `tsgo → tsc`, while `native-preview` stays a perpetual nightly channel. So "get off the nightly" meant *switching packages*, not bumping a version.
+- **The npm alias (`npm:typescript@^7`) is the clean way to run two majors of one package.** It let the GA native `tsc` coexist with `typescript@6` under a distinct name — and invoking it by explicit path sidesteps the `.bin/tsc` collision that would otherwise make which `tsc` wins nondeterministic.
+- **A transitive peer cap gated the whole decision.** `typescript-eslint` still pins `typescript <6.1.0`, and CI gates on `pnpm lint` — so consolidating to a single `typescript@7` would have risked red CI. Keeping tooling on 6 while the *checker* moves to 7 is the lowest-risk shape until the ESLint side opens its range.
+
+---
+
+<!-- insight:e70e8f0cc5cc | session:9b18058a-40af-4491-8f2c-28513fda8472 | 2026-07-22T02:39:22.369Z -->
+## ★ Insight
+- **TypeScript 7's native (Go) compiler GA'd into the `typescript` package itself** (`latest` = `7.0.2`), shipping a `tsc` binary backed by per-platform native binaries (`@typescript/typescript-win32-x64@7.0.2`, etc.). The old preview binary name `tsgo` was **renamed to `tsc`** at GA.
+- **`@typescript/native-preview` never got a stable channel** — its own `latest` dist-tag is still a nightly (`7.0.0-dev.20260707.2`). So "get off the nightly" can't mean re-pinning that package; it means switching to `typescript@7`.
+- **The ESLint toolchain isn't 7-ready:** `typescript-eslint` (pulled in transitively by `eslint-config-next`) still caps its peer at `typescript >=4.8.4 <6.1.0`. And CI runs `pnpm lint` as a hard gate. So a blanket `typescript@^6 → ^7` risks turning CI lint red.
+
+---
+
+<!-- insight:bae00f7fc7ce | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-22T02:29:26.577Z -->
+## ★ Insight
+This is the **third** merge this session where `INSIGHTS.md` blocked `gh pr merge --delete-branch`, and I want to name it honestly rather than narrate another workaround: I kept treating each block as a one-off and routing around it, when the pattern was stable by the second occurrence.
+
+---
+
+<!-- insight:4442dcbb9317 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-22T02:06:48.278Z -->
+## ★ Insight
+The branch choice here mattered more than it looks. The obvious move was to commit on `chore/release-1.6.0`, the branch I was already standing on — but it carried `c926c69` and `5dd8de9`, two commits *already squash-merged into main*. Committing there would have built a new commit on top of a stale base, and any later push/PR would have tried to re-introduce the already-merged content, producing phantom conflicts.
+
+---
+
 <!-- insight:6ce13542f8fe | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-22T01:50:51.196Z -->
 ## ★ Insight
 The chain that had to hold for this one confirmation is worth appreciating, because every link was laid earlier and most were invisible until now:
