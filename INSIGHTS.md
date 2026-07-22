@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:6ce13542f8fe | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-22T01:50:51.196Z -->
+## ★ Insight
+The chain that had to hold for this one confirmation is worth appreciating, because every link was laid earlier and most were invisible until now:
+
+---
+
+<!-- insight:cd65ca2ec266 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T21:35:41.824Z -->
+## ★ Insight
+Tagging worked around a problem rather than solving it, and that's worth naming. `INSIGHTS.md` blocked `gh pr merge --delete-branch` **twice**, because the insight hook appends to it continuously while I work — so it's essentially always dirty during an active session.
+
+---
+
+<!-- insight:3326e48ec24a | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T21:23:47.830Z -->
+## ★ Insight
+`package.json` in this repo is stored **minified on a single line**. Round-tripping it through `JSON.parse` → `JSON.stringify(…, null, 2)` produced a 111-line diff for a three-character change — functionally identical, but it would have buried the actual bump in reformatting noise and made `git blame` useless for every dependency line.
+
+---
+
 <!-- insight:ba9da7d82f19 | session:e8bdba5a-43b2-4441-be4d-010fd08a208c | 2026-07-21T20:50:17.767Z -->
 ## ★ Insight
 Line 61 finds the matching worktree from the **scan result**, then lines 66–97 keep using `body.worktreePath` — the raw request value. At runtime they're identical strings, so the code is correct today. But it's correct *by coincidence of the equality check*, not by construction.
