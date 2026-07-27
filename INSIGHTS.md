@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:b5c12d909641 | session:77fcf4b0-c6d5-4967-a5b2-f991b4db0e3b | 2026-07-27T02:38:01.236Z -->
+## ★ Insight
+I wrote down the *rejected* option (fuzzy attribution) alongside the chosen one. A checklist that only records decisions loses the reasoning, and the most common failure mode when picking a parked item back up months later is re-proposing something you already ruled out — here, the cheap-looking fuzzy match that quietly corrupts cost numbers.
+
+---
+
+<!-- insight:10ea11a4a361 | session:77fcf4b0-c6d5-4967-a5b2-f991b4db0e3b | 2026-07-27T02:30:14.258Z -->
+## ★ Insight
+This is the useful diagnostic: the value isn't "more data," it's that an existing cross-link silently returns fewer matches as web usage grows. Features that degrade proportionally to a behavior change are worth fixing before the behavior change, not after.
+
+---
+
+<!-- insight:137a2c6a2082 | session:77fcf4b0-c6d5-4967-a5b2-f991b4db0e3b | 2026-07-27T02:22:24.041Z -->
+## ★ Insight
+The README carries a live warning: both `web` commands are **currently broken** (issue #77) because those undocumented endpoints changed shape. That's the actual design constraint — anything you build on this seam is a scraper against a moving target, so it has to fail *soft* rather than being load-bearing.
+
+---
+
+<!-- insight:0b7aa0a4783d | session:77fcf4b0-c6d5-4967-a5b2-f991b4db0e3b | 2026-07-27T02:22:24.041Z -->
+## ★ Insight
+This is the same move as the WSL/multi-home work: rather than teaching every consumer about a new session *kind*, you normalize at the edge so "where sessions live" stays the only thing that varies. `getReadableClaudeHomes()` already proves the pattern — N homes, one parse path.
+
+---
+
 <!-- insight:1a447c010a24 | session:9b18058a-40af-4491-8f2c-28513fda8472 | 2026-07-22T03:04:22.203Z -->
 ## ★ Insight
 - **The GA "rename" was really a repackaging.** The fast native path you were on (`tsgo` from `@typescript/native-preview`) didn't get promoted in place — the compiler graduated into the mainline `typescript` package at v7 with the binary renamed `tsgo → tsc`, while `native-preview` stays a perpetual nightly channel. So "get off the nightly" meant *switching packages*, not bumping a version.
