@@ -21,6 +21,17 @@ vi.mock("@/lib/cache", () => ({
 vi.mock("@/lib/config", () => ({
   readConfig: vi.fn().mockResolvedValue({}),
 }));
+// The drain's one remaining I/O call. Unmocked, it reaches the real SQLite
+// index at ~/.minder/index.db via getDb/ensureSchemaReady — and better-sqlite3
+// is synchronous, so it blocks the event loop rather than yielding. Sibling
+// tests each leave a background drain running past their own end, so those
+// blocking calls stack up and starve this file's timers: the async test below
+// blew the 30s testTimeout instead of failing its own 2s vi.waitFor. Mocking
+// it also stops the suite writing grade-snapshot rows into the developer's
+// real index DB.
+vi.mock("@/lib/data/gradeSnapshots", () => ({
+  recordGradeSnapshots: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { efficiencyGradeCache, type EfficiencyGrade } from "@/lib/efficiencyGradeCache";
 
