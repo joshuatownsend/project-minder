@@ -72,6 +72,7 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
 ## Search & Sort
 
 - **Search** — filter by prompt text, **message body content** (full-text via SQLite FTS5 when the index is available), project name, session ID, slug, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.
+- **How results are ranked** — two searches actually run: one keyword search over message text, and one over the "title" columns (slug, project name, git branch, first and last prompt). Their results are combined by **Reciprocal Rank Fusion**, which compares each session's *position* in the two lists rather than their raw scores — the two scoring systems aren't on a common scale, so comparing them directly would be meaningless. The practical effect: **a session that both searches find ranks above one that only a single search finds, even if that single match looked very strong.** Title matches carry somewhat more weight than body matches, since a hit on a slug or branch name is usually deliberate while a hit in a long transcript can be incidental.
 - **Sort** — by most recent, longest duration, most tokens, or best one-shot rate
 
 ## Slugs and Continuations
