@@ -30,6 +30,7 @@ import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
 import { DiagnosisPanel } from "./DiagnosisPanel";
+import { ContextAttributionPanel } from "./ContextAttributionPanel";
 import { SessionMetaPanel } from "./SessionMetaPanel";
 import { HandoffPanel } from "./HandoffPanel";
 import { HandoffDocModal } from "./HandoffDocModal";
@@ -463,7 +464,7 @@ function GenerateTitleButton({
 // Stats-strip cell now uses the shared primitive — see src/components/ui/StatCell.tsx.
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "diagnosis" | "feedback";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "context" | "diagnosis" | "feedback";
 
 function TabBar({
   tabs, active, onChange,
@@ -527,6 +528,15 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   // or the unknown-id fallback that serves the first fixture — has a synthetic
   // `data.sessionId` even when the route param doesn't start with "demo-".
   const isDemoSession = (data?.sessionId ?? sessionId).startsWith("demo-");
+  // The context-attribution endpoint resolves transcripts via
+  // `resolveSessionJsonl`, which only walks Claude's
+  // `projects/<dir>/<sessionId>.jsonl`. Codex and Gemini sessions live
+  // under their own adapters' directories, so the request 404s by
+  // construction — the tab would be a guaranteed error for every
+  // non-Claude session. Gate it on the source rather than shipping a
+  // control that cannot work. Legacy rows carry no `source` and are
+  // Claude by definition (see SessionSummary.source).
+  const supportsContextAttribution = (data?.source ?? "claude") === "claude";
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
@@ -607,6 +617,9 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
           { key: "diagnosis", label: "Diagnosis" },
           { key: "feedback",  label: "Feedback"  },
         ] as { key: TabKey; label: string }[])
+      : []),
+    ...(!isDemoSession && supportsContextAttribution
+      ? ([{ key: "context", label: "Context" }] as { key: TabKey; label: string }[])
       : []),
   ];
 
@@ -1012,6 +1025,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
               sessionId={data.sessionId}
               onOpenDocModal={() => setDocModalOpen(true)}
             />
+          )}
+
+          {activeTab === "context" && (
+            <ContextAttributionPanel sessionId={data.sessionId} />
           )}
 
           {activeTab === "diagnosis" && (
