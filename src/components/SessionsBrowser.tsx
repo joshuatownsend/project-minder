@@ -32,7 +32,7 @@ import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 
-type SortOption = "recent" | "longest" | "tokens" | "oneshot";
+type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";
@@ -625,6 +625,9 @@ type FlatItem =
 
 // ── Main browser ──────────────────────────────────────────────────────────────
 const SEARCH_DEBOUNCE_MS = 250;
+// Minimum query length before the FTS request fires. Shared with the
+// relevance-sort switch so the two can't drift apart.
+const MIN_SEARCH_CHARS = 2;
 
 interface SearchApiResponse {
   hits: Array<{ sessionId: string; score: number; source: "titles" | "prompts" }>;
@@ -640,7 +643,13 @@ interface SearchApiResponse {
 type SearchState =
   | { kind: "idle" } //  query under the 2-char gate
   | { kind: "pending" } //  fetch in flight
-  | { kind: "db"; ids: Set<string> } //  FTS-backed hits
+  //  FTS-backed hits. A Map rather than a Set so RRF ordering survives:
+  //  the value is the hit's 0-based rank from the API, which the
+  //  `relevance` sort reads. Keeping only a Set discarded the ranking the
+  //  server just computed, so a prompt-only hit could outrank a
+  //  dual-retriever one in the list. `.has()` works the same, so the
+  //  membership filter below is unchanged.
+  | { kind: "db"; ids: Map<string, number> }
   | { kind: "file" }; //  MINDER_USE_DB=0 OR fetch failed
 
 export function SessionsBrowser() {
@@ -655,7 +664,7 @@ export function SessionsBrowser() {
 
   useEffect(() => {
     const trimmed = search.trim();
-    if (trimmed.length < 2) {
+    if (trimmed.length < MIN_SEARCH_CHARS) {
       setSearchState({ kind: "idle" });
       return;
     }
@@ -677,7 +686,12 @@ export function SessionsBrowser() {
         if (json.backend === "file") {
           setSearchState({ kind: "file" });
         } else {
-          setSearchState({ kind: "db", ids: new Set(json.hits.map((h) => h.sessionId)) });
+          // Preserve the server's RRF ordering as rank indices. `hits` is
+          // already sorted best-first by `searchSessionsInDb`.
+          setSearchState({
+            kind: "db",
+            ids: new Map(json.hits.map((h, i) => [h.sessionId, i])),
+          });
         }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
@@ -688,6 +702,21 @@ export function SessionsBrowser() {
       clearTimeout(timer);
       controller.abort();
     };
+  }, [search]);
+
+  // Relevance ordering is only meaningful while a search is active, so it
+  // becomes the sort when one starts and steps back down when it ends.
+  // Guarded on `prev` so it only ever replaces the DEFAULT sort — a user
+  // who explicitly picked "Most tokens" keeps it through the search, and
+  // one who explicitly picked relevance isn't stranded on a dead sort
+  // once the query is cleared.
+  useEffect(() => {
+    const active = search.trim().length >= MIN_SEARCH_CHARS;
+    setSortBy((prev) => {
+      if (active && prev === "recent") return "relevance";
+      if (!active && prev === "relevance") return "recent";
+      return prev;
+    });
   }, [search]);
 
   const availableSources = useMemo(() => {
@@ -714,8 +743,22 @@ export function SessionsBrowser() {
           s.searchableText?.toLowerCase().includes(q)
       );
     }
+    const rank = searchState.kind === "db" ? searchState.ids : null;
+    const endedAt = (s: typeof result[number]) =>
+      s.endTime ? new Date(s.endTime).getTime() : 0;
     return [...result].sort((a, b) => {
       switch (sortBy) {
+        case "relevance": {
+          // Server-computed RRF order. Sessions matched only client-side
+          // (title substring / cached searchableText) carry no rank, so
+          // they sort after every ranked hit rather than jumping to the
+          // top on a rank of 0 — then fall back to recency among
+          // themselves so the tail stays deterministic.
+          const ra = rank?.get(a.sessionId) ?? Number.MAX_SAFE_INTEGER;
+          const rb = rank?.get(b.sessionId) ?? Number.MAX_SAFE_INTEGER;
+          if (ra !== rb) return ra - rb;
+          return endedAt(b) - endedAt(a);
+        }
         case "longest": return (b.durationMs || 0) - (a.durationMs || 0);
         case "tokens":  return (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens);
         case "oneshot": {
@@ -724,11 +767,7 @@ export function SessionsBrowser() {
           if (b.oneShotRate === undefined) return -1;
           return b.oneShotRate - a.oneShotRate;
         }
-        default: {
-          const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
-          const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
-          return tb - ta;
-        }
+        default: return endedAt(b) - endedAt(a);
       }
     });
   }, [data, search, sortBy, searchState, starredOnly, sourceFilter]);
@@ -786,6 +825,13 @@ export function SessionsBrowser() {
   });
 
   const sortOptions: { value: SortOption; label: string }[] = [
+    // Offered only while the FTS backend is actually serving ranked hits.
+    // Under `MINDER_USE_DB=0` (or a failed request) matching is
+    // client-side substring filtering with no ranking at all, so the
+    // option would be a button that silently does nothing.
+    ...(searchState.kind === "db"
+      ? ([{ value: "relevance", label: "Relevance" }] as { value: SortOption; label: string }[])
+      : []),
     { value: "recent",  label: "Recent" },
     { value: "longest", label: "Longest" },
     { value: "tokens",  label: "Tokens" },

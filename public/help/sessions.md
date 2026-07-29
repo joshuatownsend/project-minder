@@ -73,7 +73,9 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
 
 - **Search** — filter by prompt text, **message body content** (full-text via SQLite FTS5 when the index is available), project name, session ID, slug, or git branch. When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.
 - **How results are ranked** — two searches actually run: one keyword search over message text, and one over the "title" columns (slug, project name, git branch, first and last prompt). Their results are combined by **Reciprocal Rank Fusion**, which compares each session's *position* in the two lists rather than their raw scores — the two scoring systems aren't on a common scale, so comparing them directly would be meaningless. The practical effect: **a session that both searches find ranks above one that only a single search finds, even if that single match looked very strong.** Title matches carry somewhat more weight than body matches, since a hit on a slug or branch name is usually deliberate while a hit in a long transcript can be incidental.
-- **Sort** — by most recent, longest duration, most tokens, or best one-shot rate
+
+  This ranking is what the **Relevance** sort orders by, and starting a search switches to it automatically. Picking any other sort (Recent, Longest, …) deliberately discards the ranking and orders by that field instead — so if you sort by Recent while searching, you get matches newest-first, not best-match-first. A sort you chose yourself is kept when you start searching; only the default Recent is swapped for Relevance.
+- **Sort** — by relevance (while searching), most recent, longest duration, most tokens, or best one-shot rate. **Relevance appears only when the FTS index is serving** — without it (`MINDER_USE_DB=0`, or a failed search request) matching falls back to plain substring filtering, which produces no ranking to sort by.
 
 ## Slugs and Continuations
 
