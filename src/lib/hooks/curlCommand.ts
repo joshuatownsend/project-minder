@@ -65,14 +65,28 @@ export function deriveApprovalUrl(hookUrl: string): string {
     const u = new URL(hookUrl);
     u.search = "";
     u.hash = "";
-    u.pathname = u.pathname.replace(/\/+$/, "") + "/permission";
+    u.pathname = stripTrailingSlashes(u.pathname) + "/permission";
     return u.toString();
   } catch {
     // Not a parseable URL — the install route validates before we get here,
     // so this is only reachable from direct calls. Fall back to naive
     // concatenation rather than throwing during hook installation.
-    return hookUrl.replace(/\/+$/, "") + "/permission";
+    return stripTrailingSlashes(hookUrl) + "/permission";
   }
+}
+
+/**
+ * Trim trailing `/` characters.
+ *
+ * Deliberately not `replace(/\/+$/, "")`: that pattern backtracks
+ * quadratically on a long run of slashes (the engine retries the `+` from
+ * every position), and this input is a URL that arrives over HTTP. The
+ * character scan is linear and evidently so.
+ */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return s.slice(0, end);
 }
 
 /**

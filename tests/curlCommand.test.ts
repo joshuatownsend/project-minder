@@ -84,4 +84,14 @@ describe("deriveApprovalUrl", () => {
   it("preserves a non-default port", () => {
     expect(deriveApprovalUrl("http://127.0.0.1:9999/api/hooks")).toContain("127.0.0.1:9999");
   });
+
+  it("handles a long run of trailing slashes in linear time", () => {
+    // The obvious `replace(/\/+$/, "")` backtracks quadratically here, and
+    // this input arrives over HTTP. 50k slashes finishes instantly with the
+    // character scan and visibly stalls with the regex.
+    const start = Date.now();
+    const out = deriveApprovalUrl("http://localhost:4100/api/hooks" + "/".repeat(50_000));
+    expect(out).toBe("http://localhost:4100/api/hooks/permission");
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });

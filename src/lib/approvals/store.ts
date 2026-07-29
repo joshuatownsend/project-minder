@@ -82,11 +82,21 @@ export const MAX_APPROVAL_TIMEOUT_MS = 10 * 60_000;
  */
 export const MAX_PENDING_APPROVALS = 50;
 
-/** Clamp an externally-supplied deadline into the supported range. */
+/**
+ * Clamp an externally-supplied deadline into the supported range.
+ *
+ * Written as explicit comparisons rather than `Math.min`/`Math.max` because
+ * the bound is applied AGAIN at the `setTimeout` below, and there it has to be
+ * legible at the sink itself — to a reader and to static analysis — instead of
+ * being one call away. The duplication is the point: a future caller that
+ * forgets to clamp cannot create an unbounded timer.
+ */
 export function clampApprovalTimeout(ms: unknown): number {
   const n = Number(ms);
   if (!Number.isFinite(n)) return DEFAULT_APPROVAL_TIMEOUT_MS;
-  return Math.min(MAX_APPROVAL_TIMEOUT_MS, Math.max(MIN_APPROVAL_TIMEOUT_MS, n));
+  if (n < MIN_APPROVAL_TIMEOUT_MS) return MIN_APPROVAL_TIMEOUT_MS;
+  if (n > MAX_APPROVAL_TIMEOUT_MS) return MAX_APPROVAL_TIMEOUT_MS;
+  return n;
 }
 
 interface Waiter {
@@ -177,7 +187,13 @@ export function requestApproval(
     return { id: null, outcome: Promise.resolve("timeout") };
   }
 
-  const boundedMs = clampApprovalTimeout(timeoutMs);
+  // Bound the deadline HERE, in the same function as the `setTimeout` it
+  // feeds, with the comparisons written out. See `clampApprovalTimeout`.
+  let boundedMs = Number(timeoutMs);
+  if (!Number.isFinite(boundedMs)) boundedMs = DEFAULT_APPROVAL_TIMEOUT_MS;
+  if (boundedMs < MIN_APPROVAL_TIMEOUT_MS) boundedMs = MIN_APPROVAL_TIMEOUT_MS;
+  if (boundedMs > MAX_APPROVAL_TIMEOUT_MS) boundedMs = MAX_APPROVAL_TIMEOUT_MS;
+
   const id = newId(s.seq++);
   const entry: PendingApproval = {
     ...input,
