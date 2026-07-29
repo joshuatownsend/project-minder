@@ -238,6 +238,9 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "ui",
     wired: true,
+    // Must match `getFlag(..., false)` in /api/hooks/permission — otherwise
+    // the toggle renders ON while the gate is off.
+    defaultOn: false,
   },
   {
     key: "mcpHealth",

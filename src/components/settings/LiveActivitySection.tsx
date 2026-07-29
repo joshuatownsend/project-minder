@@ -10,6 +10,9 @@ interface InstallStatus {
   installed: boolean;
   hookUrl: string | null;
   eventsRegistered: string[];
+  /** Whether the blocking approval command is on PreToolUse. Absent from
+   *  older server builds, hence optional. */
+  approvalHookRegistered?: boolean;
   lastReceivedAt: number | null;
 }
 
@@ -167,6 +170,22 @@ export function LiveActivitySection({
                 {ev}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* An older install satisfies `installed` while the blocking approval
+            entry is missing, so the Tool approval gate flag would do nothing
+            with no visible reason why. Reported separately, and only when
+            hooks ARE installed — before that, "not installed" already says it. */}
+        {status?.installed && status.approvalHookRegistered === false && (
+          <div style={{ ...S.muted, marginBottom: "10px", fontSize: "0.72rem" }}>
+            {/* --accent is the project's designated attention/action-required
+                signal (muted amber), not an ad-hoc warning colour. */}
+            <span style={{ color: "var(--accent)" }}>
+              Tool approval gate hook not registered.
+            </span>{" "}
+            Re-run <strong>Install hooks</strong> to add it — the gate can&apos;t hold a tool call
+            without it, even with the feature flag on.
           </div>
         )}
 

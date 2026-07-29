@@ -57,6 +57,38 @@ export interface PendingApproval extends ApprovalRequestInput {
 /** Default wait before failing open. Matches claude-pulse's 60s. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 60_000;
 
+/**
+ * Hard bounds on how long a request may block, clamped HERE rather than only
+ * at the route.
+ *
+ * The deadline arrives in the hook payload, i.e. from outside, and this
+ * module is what turns it into a `setTimeout`. Validating at the caller
+ * leaves the sink itself trusting whatever the next caller passes; clamping
+ * at the sink means no call path can produce an unbounded timer. The lower
+ * bound matters too: a negative or zero value passes `Number.isFinite` and
+ * would fire the deadline immediately, making the gate look broken rather
+ * than merely fast.
+ */
+export const MIN_APPROVAL_TIMEOUT_MS = 1_000;
+export const MAX_APPROVAL_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Ceiling on concurrently blocked calls. Property 3 above claims the registry
+ * is BOUNDED; without this it is only bounded in *time*, so a burst of
+ * requests could hold an unbounded number of entries, timers, and
+ * notifications at once. Past the cap we fail open — the whole design says an
+ * unanswerable request becomes Claude's normal prompt, and that applies just
+ * as much when the reason is "too many already waiting".
+ */
+export const MAX_PENDING_APPROVALS = 50;
+
+/** Clamp an externally-supplied deadline into the supported range. */
+export function clampApprovalTimeout(ms: unknown): number {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return DEFAULT_APPROVAL_TIMEOUT_MS;
+  return Math.min(MAX_APPROVAL_TIMEOUT_MS, Math.max(MIN_APPROVAL_TIMEOUT_MS, n));
+}
+
 interface Waiter {
   resolve: (outcome: ApprovalOutcome) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -139,13 +171,19 @@ export function requestApproval(
   if (input.sessionId && s.allowAll.has(input.sessionId)) {
     return { id: null, outcome: Promise.resolve("auto_allow") };
   }
+  // Over the cap: fail open rather than queue. A queued request would block
+  // its tool call while being invisible to whoever is meant to answer it.
+  if (s.pending.size >= MAX_PENDING_APPROVALS) {
+    return { id: null, outcome: Promise.resolve("timeout") };
+  }
 
+  const boundedMs = clampApprovalTimeout(timeoutMs);
   const id = newId(s.seq++);
   const entry: PendingApproval = {
     ...input,
     id,
     createdAtMs: nowMs,
-    expiresAtMs: nowMs + timeoutMs,
+    expiresAtMs: nowMs + boundedMs,
   };
   s.pending.set(id, entry);
 
@@ -157,7 +195,7 @@ export function requestApproval(
       cur.pending.delete(id);
       cur.waiters.delete(id);
       resolve("timeout");
-    }, timeoutMs);
+    }, boundedMs);
     // Don't hold the process open for a pending approval — the server
     // should be able to shut down cleanly mid-request.
     if (typeof timer === "object" && "unref" in timer) timer.unref();

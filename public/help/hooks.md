@@ -65,6 +65,10 @@ Enable **Tool approval gate** in Settings → Feature flags to hold Claude's too
 
 It works through Claude Code's `PreToolUse` hook, which is synchronous: the tool call waits for the hook process to exit, and Claude reads the decision from its output. Minder holds the request open, shows you what's about to happen, and writes your answer back.
 
+**You need the hook installed, not just the flag on.** The blocking hook is written into `~/.claude/settings.json` by **Install hooks** on the Setup page, alongside the ordinary activity hook — flipping the feature flag alone does nothing if hooks were never installed. If you installed Minder's hooks *before* this feature existed, re-run **Install hooks**: it adds the missing entry and leaves everything else untouched. The Setup page reports this separately from "hooks installed" so you can tell the two states apart.
+
+The flag itself is read on every request rather than at install time, so you can turn the gate on and off in Settings without reinstalling anything. While it's off, the hook posts, gets "no opinion" back, and Claude prompts you exactly as it normally would.
+
 ### What you'll see
 
 An approval card naming the tool and a one-line summary of what it will do — the actual command for a shell call, the path and size for a write, the URL for a fetch. Answer **Allow**, **Allow all**, or **Deny**.
@@ -75,6 +79,7 @@ An approval card naming the tool and a one-line summary of what it will do — t
 
 - **It will never block you if something goes wrong.** If Minder isn't running, the server errors, or you simply don't answer within 60 seconds, the tool call falls back to Claude's normal terminal prompt. The gate never denies on its own — only an explicit **Deny** does that. Not answering is not the same as saying no.
 - **It will never approve a stale request.** A decision only counts while that exact call is still waiting. If you tap a notification after it timed out, you'll get "no longer waiting" rather than silently approving whatever is waiting *now*.
+- **It will never pile up more than 50 waiting calls.** Past that, further calls fall back to the normal prompt instead of queueing behind ones you haven't answered. A queued call would be blocked while being invisible to you.
 
 ### What isn't gated
 

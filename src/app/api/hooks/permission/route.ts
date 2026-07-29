@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   requestApproval,
+  clampApprovalTimeout,
   DEFAULT_APPROVAL_TIMEOUT_MS,
   type ApprovalRequestInput,
 } from "@/lib/approvals/store";
@@ -9,6 +10,9 @@ import { summarizeToolCall } from "@/lib/approvals/summarize";
 import { getFlag } from "@/lib/featureFlags";
 import { readConfig } from "@/lib/config";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
+import { resolveProjectSlug, UNKNOWN_PROJECT_SLUG } from "@/lib/hooks/resolveProjectSlug";
+import { getCachedScan } from "@/lib/cache";
+import { SENTINEL_UA_APPROVAL } from "@/lib/hooks/curlCommand";
 
 // `POST /api/hooks/permission` — the BLOCKING half of the hook surface.
 //
@@ -30,9 +34,6 @@ import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaiting
 // route is explicitly dynamic.
 export const dynamic = "force-dynamic";
 
-/** Hard ceiling regardless of what the caller asks for. */
-const MAX_TIMEOUT_MS = 10 * 60_000;
-
 export async function POST(request: NextRequest) {
   try {
     // Default-OFF via `getFlag`'s third argument. A gate that switched itself
@@ -42,6 +43,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         failOpenHookOutput("Project Minder approval gate is disabled")
       );
+    }
+
+    // Origin check, mirroring `/api/hooks`. Unlike that route this answers
+    // 200-with-`ask` rather than 403: the invariant above says every response
+    // is a valid hook payload, and a stray caller must not be able to create
+    // a pending entry (each one holds a timer and a notification).
+    if (request.headers.get("user-agent") !== SENTINEL_UA_APPROVAL) {
+      return NextResponse.json(failOpenHookOutput("Unrecognized hook caller"));
     }
 
     let payload: Record<string, unknown>;
@@ -73,17 +82,29 @@ export async function POST(request: NextRequest) {
           : null;
     const cwd = typeof payload.cwd === "string" ? payload.cwd : null;
 
-    const timeoutMs = Math.min(
-      MAX_TIMEOUT_MS,
-      Number.isFinite(Number(payload.timeout_ms))
-        ? Number(payload.timeout_ms)
-        : DEFAULT_APPROVAL_TIMEOUT_MS
+    // Bounds live in the store, next to the `setTimeout` they constrain, so
+    // no call path can hand it an unbounded deadline. See
+    // `clampApprovalTimeout`.
+    const timeoutMs = clampApprovalTimeout(
+      payload.timeout_ms ?? DEFAULT_APPROVAL_TIMEOUT_MS
     );
+
+    // A session id is NOT a project slug. `dispatchAwaitingPermission` builds
+    // its deep link as `/project/${slug}`, so passing the session id through
+    // produced a notification that opened a route which does not exist.
+    const projectSlug = cwd ? resolveProjectSlug(cwd) : null;
+    const projectName =
+      (projectSlug
+        ? getCachedScan()?.projects.find((p) => p.slug === projectSlug)?.name
+        : undefined) ??
+      projectSlug ??
+      "project";
 
     const input: ApprovalRequestInput = {
       sessionId,
       toolName,
       summary: summarizeToolCall(toolName, rawInput),
+      projectSlug,
       cwd,
     };
 
@@ -96,10 +117,8 @@ export async function POST(request: NextRequest) {
       // Never let notification delivery affect the decision path: a failed
       // push must not turn into a stalled tool call.
       void dispatchAwaitingPermission({
-        slug: sessionId ?? "unknown-session",
-        // Split on BOTH separators — a Windows cwd (`C:\dev\foo`) would
-        // otherwise never split and the whole path would become the name.
-        projectName: cwd ? (cwd.split(/[\\/]/).filter(Boolean).pop() ?? "project") : "project",
+        slug: projectSlug ?? UNKNOWN_PROJECT_SLUG,
+        projectName,
         message: `${toolName} — ${input.summary}`,
       }).catch(() => {});
     }

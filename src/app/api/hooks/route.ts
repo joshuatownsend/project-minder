@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { getCachedScan } from "@/lib/cache";
-import { toSlug } from "@/lib/scanner/index";
+import { resolveProjectSlug } from "@/lib/hooks/resolveProjectSlug";
 import {
   pushHookEvent,
   updateLiveSession,
@@ -29,28 +28,6 @@ const VALID_EVENTS = new Set<string>([
   "SessionStart",
   "SessionEnd",
 ]);
-
-/** Resolve a cwd path to a project slug using the live scan cache. */
-function resolveSlug(cwd: string): string {
-  const resolved = path.resolve(cwd);
-  const scan = getCachedScan();
-  if (scan) {
-    for (const p of scan.projects) {
-      if (!p.path) continue;
-      const projectResolved = path.resolve(p.path);
-      // Exact match or cwd is a subdirectory of the project
-      if (
-        resolved === projectResolved ||
-        (resolved.startsWith(projectResolved + path.sep) &&
-          !path.relative(projectResolved, resolved).startsWith(".."))
-      ) {
-        return p.slug;
-      }
-    }
-  }
-  // Fallback: derive slug from the directory basename (may not match exactly)
-  return toSlug(path.basename(resolved)) || "__unknown__";
-}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Check feature flag before parsing the body
@@ -90,7 +67,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const eventName = hook_event_name as HookEventName;
-  const slug = resolveSlug(cwd);
+  const slug = resolveProjectSlug(cwd);
 
   // Normalize failure signal from PostToolUse payloads.
   // Canonical: is_error (Anthropic tool_result flag). Bash-specific: non-zero return_code.

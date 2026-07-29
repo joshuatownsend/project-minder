@@ -6,7 +6,11 @@ import {
   isSessionAutoAllowed,
   clearSessionAutoAllow,
   _resetApprovalsForTesting,
+  clampApprovalTimeout,
   DEFAULT_APPROVAL_TIMEOUT_MS,
+  MIN_APPROVAL_TIMEOUT_MS,
+  MAX_APPROVAL_TIMEOUT_MS,
+  MAX_PENDING_APPROVALS,
 } from "@/lib/approvals/store";
 import { isReadOnlyTool, readOnlyToolNames } from "@/lib/approvals/readOnlyTools";
 import { buildHookOutput, failOpenHookOutput } from "@/lib/approvals/hookResponse";
@@ -179,6 +183,46 @@ describe("requestApproval / decideApproval", () => {
       expect(listPendingApprovals(base).length).toBe(1);
       // A hook that died mid-request must not leak its entry forever.
       expect(listPendingApprovals(base + 1_001).length).toBe(0);
+    });
+
+    it("clamps the deadline into a fixed range regardless of what is asked for", () => {
+      vi.useFakeTimers();
+      const base = 2_000_000;
+      // The deadline arrives in the hook payload, i.e. from outside. Clamping
+      // happens in the store so no call path can create an unbounded timer.
+      const huge = requestApproval(req(), Number.MAX_SAFE_INTEGER, base);
+      expect(listPendingApprovals(base)[0]!.expiresAtMs).toBe(base + MAX_APPROVAL_TIMEOUT_MS);
+      decideApproval(huge.id!, "deny");
+
+      // A negative value passes Number.isFinite and would otherwise fire the
+      // deadline immediately, making the gate look broken rather than fast.
+      requestApproval(req(), -5_000, base);
+      expect(listPendingApprovals(base).at(-1)!.expiresAtMs).toBe(
+        base + MIN_APPROVAL_TIMEOUT_MS,
+      );
+    });
+
+    it("falls back to the default for a non-numeric deadline", () => {
+      expect(clampApprovalTimeout("not a number")).toBe(DEFAULT_APPROVAL_TIMEOUT_MS);
+      expect(clampApprovalTimeout(undefined)).toBe(DEFAULT_APPROVAL_TIMEOUT_MS);
+      expect(clampApprovalTimeout(NaN)).toBe(DEFAULT_APPROVAL_TIMEOUT_MS);
+    });
+
+    it("fails open past the concurrent-pending cap instead of queueing", async () => {
+      vi.useFakeTimers();
+      const base = 3_000_000;
+      for (let i = 0; i < MAX_PENDING_APPROVALS; i++) {
+        const r = requestApproval(req({ sessionId: `sess-${i}` }), 60_000, base);
+        expect(r.id).not.toBeNull();
+      }
+      expect(listPendingApprovals(base).length).toBe(MAX_PENDING_APPROVALS);
+
+      // One over the cap: no entry created, and the caller gets the same
+      // fail-open outcome a real timeout produces — never a queued block.
+      const overflow = requestApproval(req({ sessionId: "sess-overflow" }), 60_000, base);
+      expect(overflow.id).toBeNull();
+      await expect(overflow.outcome).resolves.toBe("timeout");
+      expect(listPendingApprovals(base).length).toBe(MAX_PENDING_APPROVALS);
     });
   });
 
