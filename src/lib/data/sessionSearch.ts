@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { prepCached } from "@/lib/db/connection";
+import { fuseRrf } from "./rrf";
 
 // SQL-backed session search backing `/api/sessions/search`. Two distinct
 // paths are stitched together depending on `scope`:
@@ -13,9 +14,15 @@ import { prepCached } from "@/lib/db/connection";
 //     `git_branch`). Best for slug-grouped lookup and project-name
 //     prefix scans. NOT routable through `prompts_fts` because that
 //     FTS table only indexes turn previews.
-//   - `both`    → UNION ALL of the above with JS-side dedup by
-//     `session_id`, retaining the higher of the two relevance scores
-//     for ranking.
+//   - `both`    → both retrievers run, and their two RANKED LISTS are
+//     merged by Reciprocal Rank Fusion (`./rrf.ts`) rather than by
+//     comparing scores. bm25 magnitudes and `LIKE` matches live on
+//     incomparable scales; RRF fuses on ordinal position only, so no
+//     normalization — and no invented constant — is required.
+//
+// Each retriever is queried for `CANDIDATE_MULTIPLIER x limit` rows so
+// fusion has room to rescue a session that one retriever ranked deeply
+// and the other ranked highly; the pool is truncated to `limit` after.
 //
 // Returns a flat ranked-by-score list of `(sessionId, score)` pairs.
 // Callers (the route + the SessionsBrowser client filter) join against
@@ -27,20 +34,32 @@ export interface SessionSearchHit {
   /** Matching session_id (one entry per session — the loader dedupes). */
   sessionId: string;
   /**
-   * Relevance score in [0, 1]. SQLite FTS5 returns bm25 as a NEGATIVE
-   * number (more-negative = better match), so we map it via
-   * `-rank / (1 + -rank)` — strong matches asymptote to 1, weak ones
-   * approach 0. `LIKE` matches use a flat 0.5 to keep mixed-source
-   * UNION sortable without claiming spurious precision; titles win
-   * ties via `>=` in the dedup pass.
+   * Reciprocal Rank Fusion score (see `./rrf.ts`). Strictly positive and
+   * descending-sortable, but NOT a relevance percentage — only the
+   * ORDER is meaningful, and absolute values are small by construction
+   * (a lone rank-1 hit scores ~0.016). Do not render as a percentage.
+   *
+   * Replaces the previous scheme, which squashed bm25 into [0,1] for
+   * prompt hits and assigned a hardcoded 0.5 to every title hit. That
+   * made all title hits tie with each other and gave them an arbitrary
+   * threshold advantage over prompt hits scoring below 0.5.
    */
   score: number;
   /**
-   * Which path produced this hit. `'titles'` for sessions-column
-   * matches, `'prompts'` for FTS5 turn-preview matches. UNION mode
-   * picks whichever score was higher and reports that origin.
+   * Which retriever contributed most to this hit's score. `'titles'`
+   * for sessions-column matches, `'prompts'` for FTS5 turn matches.
+   * Ties resolve to `'titles'` (it is fused first) — preserving the
+   * long-standing intent that column-specific matches are more
+   * user-meaningful than generic preview hits.
    */
   source: "titles" | "prompts";
+  /**
+   * 1-based rank within each retriever that found this session, absent
+   * for retrievers that didn't. Purely diagnostic: it makes "why did
+   * this outrank that?" answerable from an API response without
+   * re-running the query. Additive — no existing consumer reads it.
+   */
+  ranks: { titles?: number; prompts?: number };
 }
 
 export type SessionSearchScope = "titles" | "prompts" | "both";
@@ -93,6 +112,32 @@ export class SessionSearchError extends Error {
 
 const DEFAULT_LIMIT = 50;
 
+/**
+ * How many candidates to pull from EACH retriever before fusing, as a
+ * multiple of the caller's `limit`.
+ *
+ * Fusion can only reorder what it is given. Fetching exactly `limit` rows
+ * per list would mean a session ranked 55th by keyword but 1st by title
+ * never enters the pool for a `limit=50` query — precisely the cross-
+ * retriever rescue RRF exists to perform. Over-fetching 3x costs one
+ * wider SQLite scan and is discarded immediately after fusion.
+ */
+const CANDIDATE_MULTIPLIER = 3;
+/** Absolute ceiling on the over-fetch, so `limit=200` can't scan 600 rows. */
+const MAX_CANDIDATES = 300;
+
+/**
+ * Per-retriever fusion weights.
+ *
+ * Titles are weighted above prompts because a match on a slug, project
+ * name, or git branch is a deliberate, high-precision signal, whereas a
+ * turn-preview match can be incidental. This encodes the intent the
+ * previous implementation expressed as a hardcoded `0.5` score floor plus
+ * a `>=` tie-break — but as a smooth per-rank weight rather than a cliff.
+ */
+const TITLE_WEIGHT = 1.5;
+const PROMPT_WEIGHT = 1.0;
+
 interface FtsRow {
   session_id: string;
   rank: number;
@@ -115,7 +160,12 @@ export function searchSessionsInDb(
     throw new SessionSearchError("invalid-scope", `unknown scope: ${scope}`);
   }
 
-  const hits = new Map<string, SessionSearchHit>();
+  // Each retriever produces a ranked list of session_ids, best-first.
+  // Neither list's raw scores are ever compared against the other's —
+  // `fuseRrf` consumes ordinal position only. See `./rrf.ts`.
+  const candidateLimit = Math.min(limit * CANDIDATE_MULTIPLIER, MAX_CANDIDATES);
+  let promptKeys: string[] = [];
+  let titleKeys: string[] = [];
 
   if (scope === "prompts" || scope === "both") {
     const ftsExpr = buildFtsQuery(q);
@@ -141,7 +191,7 @@ export function searchSessionsInDb(
             GROUP BY session_id
             ORDER BY rank
             LIMIT ?`
-        ).all(ftsExpr, limit) as FtsRow[];
+        ).all(ftsExpr, candidateLimit) as FtsRow[];
       } catch (err) {
         // bm25() requires the FTS column was indexed; the wrapped
         // expression should always be syntactically valid given our
@@ -153,17 +203,12 @@ export function searchSessionsInDb(
           err
         );
       }
-      for (const r of rows) {
-        // SQLite FTS5 returns bm25 as a NEGATIVE number (more-negative
-        // = better match). Negate to get a positive magnitude, then
-        // squash with `x / (1 + x)` so very strong matches asymptote
-        // toward 1 while weak ones (rank close to 0) approach 0. The
-        // earlier `Math.max(0, r.rank)` shape was wrong — it clamped
-        // every match to score=1 and lost relative ordering.
-        const magnitude = Math.max(0, -r.rank);
-        const score = magnitude / (1 + magnitude);
-        hits.set(r.session_id, { sessionId: r.session_id, score, source: "prompts" });
-      }
+      // `ORDER BY rank` already emits best-first (FTS5 bm25 is negative,
+      // more-negative = better, so ascending IS descending relevance).
+      // Position in this array is the rank RRF consumes; the raw bm25
+      // magnitude is deliberately discarded — that's the entire point of
+      // fusing on ordinals rather than normalizing incomparable scales.
+      promptKeys = rows.map((r) => r.session_id);
     }
   }
 
@@ -182,20 +227,28 @@ export function searchSessionsInDb(
             OR git_branch IS NOT NULL AND lower(git_branch) LIKE ?
          ORDER BY end_ts DESC
          LIMIT ?`
-    ).all(pat, pat, pat, pat, pat, limit) as TitleRow[];
+    ).all(pat, pat, pat, pat, pat, candidateLimit) as TitleRow[];
 
-    for (const r of rows) {
-      const existing = hits.get(r.session_id);
-      const titleScore = 0.5;
-      // UNION-mode dedup: keep the higher score, and prefer 'titles' as
-      // the source when scores tie — column-specific matches are more
-      // user-meaningful than generic preview hits. Using `>=` rather
-      // than `>` is what enforces the tie-break direction.
-      if (!existing || titleScore >= existing.score) {
-        hits.set(r.session_id, { sessionId: r.session_id, score: titleScore, source: "titles" });
-      }
-    }
+    // `LIKE` yields no relevance score at all, so recency (`end_ts DESC`)
+    // is the only ordering signal available. RRF's k=60 damping is what
+    // keeps that weak signal from being over-trusted at deep ranks.
+    titleKeys = rows.map((r) => r.session_id);
   }
 
-  return Array.from(hits.values()).sort((a, b) => b.score - a.score).slice(0, limit);
+  // Titles are fused FIRST so they win `topSource` on an exact tie — the
+  // documented preference carried over from the previous implementation.
+  const fused = fuseRrf([
+    { label: "titles", keys: titleKeys, weight: TITLE_WEIGHT },
+    { label: "prompts", keys: promptKeys, weight: PROMPT_WEIGHT },
+  ]);
+
+  return fused.slice(0, limit).map((f) => ({
+    sessionId: f.key,
+    score: f.score,
+    source: f.topSource as "titles" | "prompts",
+    ranks: {
+      ...(f.ranks.titles !== undefined ? { titles: f.ranks.titles } : {}),
+      ...(f.ranks.prompts !== undefined ? { prompts: f.ranks.prompts } : {}),
+    },
+  }));
 }

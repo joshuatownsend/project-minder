@@ -144,11 +144,12 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     expect(hits.find((h) => h.sessionId === "search-a")).toBeDefined();
     expect(hits.find((h) => h.sessionId === "search-b")).toBeUndefined();
     expect(hits[0].source).toBe("prompts");
-    // Score must reflect actual relevance — pre-fix a clamping bug
-    // collapsed every prompt hit to score=1 (losing relative ordering
-    // and guaranteeing prompts always beat title hits' 0.5).
+    // Scores are RRF (see src/lib/data/rrf.ts): strictly positive, small
+    // by construction, order-meaningful only. A rank-1 prompt hit at
+    // weight 1.0 scores 1/(60+1).
     expect(hits[0].score).toBeGreaterThan(0);
     expect(hits[0].score).toBeLessThan(1);
+    expect(hits[0].ranks).toEqual({ prompts: 1 });
     conn.closeDb();
   });
 
@@ -248,6 +249,74 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     const hits = search.searchSessionsInDb(db, "gizmo", "both");
     expect(hits.length).toBe(1); // dedup by session_id
     expect(hits[0].sessionId).toBe("dual-a");
+    // Fusion records provenance from BOTH retrievers for a dual match.
+    expect(hits[0].ranks).toEqual({ titles: 1, prompts: 1 });
+    conn.closeDb();
+  });
+
+  it("ranks a session matched by BOTH retrievers above prompt-only matches", async () => {
+    // The behaviour RRF was adopted for. `dual` matches on slug and in
+    // prompt text; `promptonly` matches prompt text more densely. Under
+    // the previous scheme a title hit was pinned at a flat 0.5 and a
+    // dense prompt hit could squash above it, so agreement across
+    // retrievers counted for nothing. Now it is the dominant signal.
+    //
+    // NOTE ON CORPUS SHAPE: the `titles` retriever's LIKE also scans
+    // `initial_prompt` / `last_prompt`, not just `slug`. So the keyword is
+    // kept out of each session's FIRST and LAST user turns — otherwise a
+    // prompt-dense session matches the titles retriever too and the test
+    // proves nothing about cross-retriever agreement.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "dual.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "checking the component behaviour"),
+      userTurn("2026-04-30T10:00:01Z", "does the widget look right to you"),
+      assistantTurn("2026-04-30T10:00:02Z", "claude-sonnet-4-5", "looks fine", "widget-inspector-calm"),
+      userTurn("2026-04-30T10:00:03Z", "great, thanks"),
+    ]);
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "promptonly.jsonl"), [
+      userTurn("2026-04-30T11:00:00Z", "starting the review now"),
+      userTurn("2026-04-30T11:00:01Z", "widget widget widget widget widget widget widget"),
+      assistantTurn("2026-04-30T11:00:02Z", "claude-sonnet-4-5", "widget widget widget"),
+      userTurn("2026-04-30T11:00:03Z", "ok all done"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "widget", "both");
+    expect(hits.map((h) => h.sessionId)).toContain("dual");
+    expect(hits[0].sessionId).toBe("dual");
+    expect(hits[0].ranks.titles).toBeDefined();
+    expect(hits[0].ranks.prompts).toBeDefined();
+    // The prompt-only session still ranks, just below.
+    const promptOnly = hits.find((h) => h.sessionId === "promptonly")!;
+    expect(promptOnly.ranks.titles).toBeUndefined();
+    expect(hits[0].score).toBeGreaterThan(promptOnly.score);
+    conn.closeDb();
+  });
+
+  it("over-fetches candidates so fusion can rescue a deeply-ranked match", async () => {
+    // With `limit=2`, a naive implementation would fetch only 2 rows per
+    // retriever and never see `rescue` in the prompt list at all. The
+    // 3x candidate pool is what lets its title match pull it into the
+    // final results.
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (let i = 0; i < 5; i++) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `noise-${i}.jsonl`), [
+        userTurn(`2026-04-30T10:0${i}:00Z`, "sprocket sprocket sprocket sprocket sprocket"),
+        assistantTurn(`2026-04-30T10:0${i}:01Z`, "claude-sonnet-4-5", "sprocket sprocket"),
+      ]);
+    }
+    // Mentions the term once (weak bm25) but carries it in the slug.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "rescue.jsonl"), [
+      userTurn("2026-04-30T11:00:00Z", "a passing mention of sprocket among much other unrelated text here"),
+      assistantTurn("2026-04-30T11:00:01Z", "claude-sonnet-4-5", "noted", "sprocket-rescue-session"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "sprocket", "both", 2);
+    expect(hits.length).toBe(2);
+    expect(hits.map((h) => h.sessionId)).toContain("rescue");
     conn.closeDb();
   });
 
