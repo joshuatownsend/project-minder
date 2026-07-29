@@ -53,6 +53,18 @@ When a session has been re-indexed under the current `DERIVED_VERSION` (or scann
 
 Click into a session to see the full breakdown on the **Diagnosis** tab.
 
+### Context tab
+
+Shows **what actually filled the context window** during this session, broken into six sources: your prompts, attached context, Claude's replies, extended thinking, tool inputs, and tool output. A headline names the biggest contributor — e.g. *"Tool output accounted for 71% of the context this session put into the window."*
+
+This is the retrospective counterpart to the context-overhead estimate on **Stats**, which tells you what your MCP servers, skills, and memory files cost *before* you type anything. Same subject, opposite direction.
+
+- **Segmented at compaction.** When Claude compacts, the window is discarded and rebuilt, so the chart restarts rather than drawing a line straight through the reset. Each segment shows its own peak fill — this is how you find the moment a session hit the limit.
+- **Per-turn strip.** Each bar is one turn, coloured by its largest contributor; red marks the first turn after a compaction. Spikes show you which single turn dumped 40k of file content into the window.
+- **"Unattributed" is deliberate.** Total window size per turn is *measured* (Claude Code reports it), but the split is *estimated* from message sizes. The system prompt, tool definitions, CLAUDE.md, and skill bodies never appear in the transcript, so they can't be attributed — rather than quietly scaling the chart to 100%, that gap is shown as unattributed. If it's large, the Stats page tells you what's in it.
+- **Attached context ≠ your prompts.** `<system-reminder>` blocks and `@`-mention file expansions arrive as user messages but you didn't type them, so they're counted separately.
+- **Subagents are excluded.** They run in their own context window; their tokens still appear in cost totals.
+
 ### PR chips
 
 When a session ran `gh pr create` and the resulting PR URL appeared in the tool result, the session row on a project's **Sessions** tab shows a `PR #N` chip per PR (multiple if the session opened several). Chips are ordered by PR number ascending; the repo is derived from the URL itself (so PRs against a fork or sibling repo are attributed correctly, not against the session's git remote).

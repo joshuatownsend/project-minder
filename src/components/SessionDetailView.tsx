@@ -30,6 +30,7 @@ import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
 import { DiagnosisPanel } from "./DiagnosisPanel";
+import { ContextAttributionPanel } from "./ContextAttributionPanel";
 import { SessionMetaPanel } from "./SessionMetaPanel";
 import { HandoffPanel } from "./HandoffPanel";
 import { HandoffDocModal } from "./HandoffDocModal";
@@ -463,7 +464,7 @@ function GenerateTitleButton({
 // Stats-strip cell now uses the shared primitive — see src/components/ui/StatCell.tsx.
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "diagnosis" | "feedback";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "context" | "diagnosis" | "feedback";
 
 function TabBar({
   tabs, active, onChange,
@@ -604,6 +605,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(!isDemoSession
       ? ([
           { key: "handoff",   label: "Handoff"   },
+          { key: "context",   label: "Context"   },
           { key: "diagnosis", label: "Diagnosis" },
           { key: "feedback",  label: "Feedback"  },
         ] as { key: TabKey; label: string }[])
@@ -1012,6 +1014,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
               sessionId={data.sessionId}
               onOpenDocModal={() => setDocModalOpen(true)}
             />
+          )}
+
+          {activeTab === "context" && (
+            <ContextAttributionPanel sessionId={data.sessionId} />
           )}
 
           {activeTab === "diagnosis" && (
