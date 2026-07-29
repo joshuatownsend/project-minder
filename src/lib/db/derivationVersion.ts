@@ -13,8 +13,13 @@
 //   re-extracted from the JSONL — without a bump, mtime+size unchanged
 //   files skip re-parse and the new columns stay NULL on the existing
 //   corpus indefinitely (only newly-modified files would populate them).
-// - Don't bump for FTS5 trigger changes (those rebuild on insert/update).
-export const DERIVED_VERSION = 11;
+// - Don't bump for `catalog_fts` trigger changes (those rebuild on
+//   insert/update, because their source tables store the indexed text).
+//   This exemption NO LONGER covers `prompts_fts`: as of schema v19 it is
+//   writer-populated from full JSONL text that is never stored in `turns`,
+//   so nothing rebuilds it on an UPDATE and only a real re-parse can fill
+//   it. Changes to what goes into it DO require a bump.
+export const DERIVED_VERSION = 12;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -113,3 +118,26 @@ export const DERIVED_VERSION = 11;
 //     so the corpus reclassifies. No read-side gate — pre-reconcile the
 //     affected turns just read as `Coding` (the prior behavior), degraded not
 //     wrong.
+// 12 — schema v19 made `prompts_fts` hold FULL turn bodies (prose + extended
+//     thinking) as overlapping chunks instead of the 500-char
+//     `turns.text_preview` mirror. This is the one bump reason that is
+//     structural rather than semantic: the full text is NOT stored in any
+//     column, so unlike every prior entry there is nothing to re-derive
+//     from — only a genuine JSONL re-read can populate the index, and
+//     `derived_version` staleness is what forces one. Without the bump the
+//     new index would stay empty on the existing corpus indefinitely and
+//     prompt-scope search would silently return almost nothing.
+//
+//     Thinking-block text is newly captured at parse time (it was
+//     previously read for the `has_thinking` flag and then discarded), so
+//     the re-parse is also what makes thinking searchable at all.
+//
+//     Scope limit: the adapter path (Codex/Gemini) caps text at 500 chars
+//     inside each adapter (`adapters/utils.ts` TEXT_CAP) before ingest sees
+//     a turn, so those sessions remain preview-indexed. Widening that
+//     requires changing the SessionAdapter contract, deliberately not done
+//     here.
+//
+//     No read-side gate — during catch-up, prompt search returns fewer hits
+//     than it will afterwards. Degraded, not wrong; a gate would make it
+//     return nothing, which is worse.

@@ -7,6 +7,7 @@ import type DatabaseT from "better-sqlite3";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
+import { chunkText } from "./textChunks";
 import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
@@ -109,6 +110,69 @@ const ARGS_JSON_LIMIT = 32_000;
 const USAGE_USER_TEXT_LIMIT = 500;
 const USAGE_TOOL_RESULT_LIMIT = 2000;
 
+/**
+ * Full prose + extended-thinking text of a message, for the chunked FTS
+ * index (content tier B — tool inputs/outputs excluded).
+ *
+ * Used on the sidechain path, which needs the text but not the tool_use
+ * blocks. The primary assistant loop deliberately does NOT call this: it
+ * extracts text, tool blocks, and the thinking flag in one fused pass over
+ * `content`, and splitting that into two passes would double the walk over
+ * the hottest loop in ingest for no behavioural gain.
+ */
+/**
+ * Write a turn's full text into `prompts_fts` as overlapping chunks.
+ *
+ * `prompts_fts` is writer-owned as of schema v19 — the triggers that used
+ * to mirror `turns.text_preview` were dropped, because the full body is
+ * never stored in `turns` for a trigger to read. Both writers
+ * (`writeSession` and `appendSessionTail`) must call this for every turn
+ * they insert, or those turns become invisible to prompt-scope search.
+ *
+ * Cleanup is unchanged and still session-scoped: the existing
+ * `DELETE FROM prompts_fts WHERE session_id = ?` contract never keyed on
+ * `turn_index`, so it removes every chunk of every turn in one scan.
+ *
+ * Returns the number of FTS rows written, for the `rowsWritten` metric.
+ */
+function insertTurnChunks(
+  stmt: DatabaseT.Statement,
+  sessionId: string,
+  turn: Pick<ParsedTurn, "turnIndex" | "role" | "ts" | "searchText">
+): number {
+  const chunks = chunkText(turn.searchText);
+  for (let i = 0; i < chunks.length; i++) {
+    stmt.run({
+      session_id: sessionId,
+      turn_index: turn.turnIndex,
+      chunk_index: i,
+      role: turn.role,
+      ts: turn.ts,
+      text: chunks[i],
+    });
+  }
+  return chunks.length;
+}
+
+const INSERT_FTS_CHUNK_SQL = `
+  INSERT INTO prompts_fts (session_id, turn_index, chunk_index, role, ts, text)
+  VALUES (@session_id, @turn_index, @chunk_index, @role, @ts, @text)
+`;
+
+function extractProseAndThinking(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return typeof content === "string" ? content : "";
+  }
+  const parts: string[] = [];
+  for (const b of content as Array<Record<string, unknown>>) {
+    if (b?.type === "text" && typeof b.text === "string" && b.text) parts.push(b.text);
+    else if (b?.type === "thinking" && typeof b.thinking === "string" && b.thinking) {
+      parts.push(b.thinking);
+    }
+  }
+  return parts.join("\n");
+}
+
 interface IngestStats {
   filesSeen: number;
   filesChanged: number;
@@ -144,6 +208,22 @@ interface ParsedTurn {
   isError: 0 | 1;
   parentToolUseId: string | null;
   textPreview: string | null;
+  /**
+   * FULL turn text for the chunked `prompts_fts` index — assistant prose
+   * plus extended-thinking content, or the complete user prompt. Never
+   * truncated, and deliberately NOT persisted as a column: it is chunked
+   * into FTS rows by the writer and then dropped, which is what keeps the
+   * ~150 MB of body text out of the `turns` table on top of the index.
+   *
+   * `null` when there is nothing to index, and always `null` on the
+   * adapter path (Codex/Gemini) — those adapters cap text at 500 chars
+   * (`adapters/utils.ts` TEXT_CAP) before ingest ever sees the turn, so
+   * full-body indexing is not available there without changing the
+   * `SessionAdapter` contract.
+   *
+   * Excludes tool inputs/outputs by design (content tier B).
+   */
+  searchText: string | null;
   /**
    * For user turns carrying a tool_result, the truncated result text.
    * Stored separately from `textPreview` so `detectOneShot`'s error-
@@ -528,6 +608,12 @@ async function readJsonlSession(
     // parentToolUseID of the spawning Task call, so DB-backed sidechain turns
     // can be grouped by their parent (parity with the file parser).
     parentToolUseId?: string;
+    // Full prose + thinking for the chunked FTS index. Subagent transcripts
+    // were previously unsearchable at any length (these rows carry
+    // `textPreview: null`), so work delegated to a Task agent simply did not
+    // appear in search results — a notable blind spot given how much work
+    // runs through subagents.
+    searchText?: string;
   }> = [];
 
   const tParse = PROFILE ? performance.now() : 0;
@@ -583,6 +669,7 @@ async function readJsonlSession(
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
               userIntentText: prevUserText,
               parentToolUseId: entry.parentToolUseID ?? undefined,
+              searchText: extractProseAndThinking(entry.message?.content) || undefined,
             });
           }
         }
@@ -634,8 +721,9 @@ async function readJsonlSession(
       assistantTurnCount++;
 
       const content = entry.message?.content ?? [];
-      // Single pass: extract text, tool_use blocks, and thinking flag together.
+      // Single pass: extract text, tool_use blocks, and thinking together.
       let text = "";
+      let thinkingText = "";
       let hasTurnThinking = false;
       const toolBlocks: Array<{ id?: string; name?: string; input?: unknown }> = [];
       if (Array.isArray(content)) {
@@ -648,10 +736,28 @@ async function readJsonlSession(
           } else if (b?.type === "thinking") {
             hasTurnThinking = true;
             hasThinkingSession = true;
+            // Capture the reasoning body for the full-body FTS index. This
+            // block used to set the flag and drop the content on the floor,
+            // which is why "what was Claude thinking when it chose X" was
+            // never searchable. Feeds `searchText` ONLY — deliberately kept
+            // out of `text`, because `text` flows into `textPreview`,
+            // `usageTurn.assistantText`, and from there into the classifier
+            // and self-correction detectors, whose thresholds are tuned on
+            // user-visible prose. Mixing thinking in there would change
+            // classification verdicts as a side effect of a search change.
+            if (typeof b.thinking === "string" && b.thinking) {
+              if (thinkingText) thinkingText += "\n";
+              thinkingText += b.thinking;
+            }
           }
         }
       }
       const textPreview = truncateText(text, TEXT_PREVIEW_LIMIT);
+      // Tier B: prose + thinking, no tool I/O. Tool payloads are ~60% of
+      // total transcript volume and are mostly grep output and file dumps —
+      // high index cost, low search signal, and the underlying files are on
+      // disk anyway.
+      const searchText = thinkingText ? (text ? `${text}\n${thinkingText}` : thinkingText) : text;
 
       const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
       let slashWindowConsumed = false;
@@ -731,6 +837,7 @@ async function readJsonlSession(
         isError,
         parentToolUseId: null,
         textPreview,
+        searchText: searchText || null,
         toolResultPreview: null,
         toolUses,
         usageTurn,
@@ -771,10 +878,15 @@ async function readJsonlSession(
       // `searchableText` (built from assistant array blocks) alongside
       // empty prompt fields and Home's Live activity card read "(no prompt)"
       // for every session. Slicing applies to either shape.
-      const userText = (typeof textSource === "string"
-        ? textSource
-        : extractText(textSource)
-      ).slice(0, USAGE_USER_TEXT_LIMIT);
+      // Extract ONCE at full length, then cap. `USAGE_USER_TEXT_LIMIT` is a
+      // parity contract with the file-parse path (see its definition) — the
+      // classifier, one-shot detector, and self-correction check must see
+      // identical text on both backends, so the capped value is what flows
+      // into `usageTurn`. The uncapped value feeds only the FTS index, which
+      // no detector reads.
+      const fullUserText =
+        typeof textSource === "string" ? textSource : extractText(textSource);
+      const userText = fullUserText.slice(0, USAGE_USER_TEXT_LIMIT);
       const toolResultText = extractToolResults(textSource).slice(0, USAGE_TOOL_RESULT_LIMIT);
       const previewSource = userText || toolResultText;
       const textPreview = truncateText(previewSource, TEXT_PREVIEW_LIMIT);
@@ -814,6 +926,10 @@ async function readJsonlSession(
         isError: 0,
         parentToolUseId: null,
         textPreview,
+        // Tier B excludes tool results, so a tool-result-only user turn
+        // contributes nothing to the index — correct: its content is tool
+        // I/O wearing a user-turn costume, not something a human wrote.
+        searchText: fullUserText || null,
         toolResultPreview: toolResultText || null,
         toolUses: [],
         usageTurn,
@@ -981,6 +1097,9 @@ async function readJsonlSession(
       isError: 0,
       parentToolUseId: sc.parentToolUseId ?? null,
       textPreview: null,
+      // Sidechain rows carry no preview column (they never did), but their
+      // body IS indexed — see the field note on `sidechainCollected`.
+      searchText: sc.searchText ?? null,
       toolResultPreview: null,
       toolUses: [],
       usageTurn,
@@ -1387,6 +1506,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @derived_version
      )`
   );
+  const insertFtsChunk = db.prepare(INSERT_FTS_CHUNK_SQL);
   const insertToolUse = db.prepare(
     `INSERT INTO tool_uses (
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
@@ -1457,6 +1577,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       derived_version: DERIVED_VERSION,
     });
     rows++;
+    rows += insertTurnChunks(insertFtsChunk, s.sessionId, t);
 
     for (const tu of t.toolUses) {
       insertToolUse.run({
@@ -1765,6 +1886,7 @@ function appendSessionTail(
        @derived_version
      )`
   );
+  const insertFtsChunk = db.prepare(INSERT_FTS_CHUNK_SQL);
   const insertToolUse = db.prepare(
     `INSERT INTO tool_uses (
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
@@ -1835,6 +1957,7 @@ function appendSessionTail(
       derived_version: DERIVED_VERSION,
     });
     rows++;
+    rows += insertTurnChunks(insertFtsChunk, sessionId, t);
 
     for (const tu of t.toolUses) {
       insertToolUse.run({
@@ -2488,6 +2611,15 @@ export function buildAdapterParsedSession(
       isError,
       parentToolUseId: turn.parentToolUseId ?? null,
       textPreview,
+      // Adapter path (Codex/Gemini): full text is NOT available. Each
+      // adapter caps `assistantText` / `userMessageText` at 500 chars
+      // (`adapters/utils.ts` TEXT_CAP) before ingest sees the turn, so the
+      // longest text reachable here is already the preview. Indexing
+      // `textPreview` keeps these sessions searchable exactly as well as
+      // they were before this change — no regression — while native Claude
+      // sessions gain full-body coverage. Lifting this needs a widened
+      // SessionAdapter contract, which is out of scope here.
+      searchText: textPreview,
       toolResultPreview,
       toolUses,
       usageTurn: { ...turn, source: file.source },

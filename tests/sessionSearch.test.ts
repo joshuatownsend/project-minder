@@ -320,6 +320,160 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     conn.closeDb();
   });
 
+  it("finds text far beyond the 500-char preview cap", async () => {
+    // The regression this whole feature exists to fix. `prompts_fts` used
+    // to mirror `turns.text_preview` (500 chars), so a keyword at char
+    // 3000 of an assistant reply was silently unsearchable — the search
+    // returned no error, just nothing.
+    const { conn, ingest, search, projectsDir } = await setup();
+    const filler = "lorem ipsum dolor sit amet consectetur adipiscing elit ";
+    const longBody = filler.repeat(60) + " zzmarkerdeep " + filler.repeat(60);
+    expect(longBody.indexOf("zzmarkerdeep")).toBeGreaterThan(500);
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "deep.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "explain something at length"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", longBody),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "zzmarkerdeep", "prompts");
+    expect(hits.map((h) => h.sessionId)).toContain("deep");
+    conn.closeDb();
+  });
+
+  it("spans a chunk boundary without losing the text", async () => {
+    // Text longer than one 4000-char chunk must be fully indexed, not
+    // truncated at the first chunk.
+    const { conn, ingest, search, projectsDir } = await setup();
+    const body = "alpha beta gamma delta epsilon ".repeat(400) + " zzmarkerlast";
+    expect(body.length).toBeGreaterThan(9000);
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "spanning.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "a very long answer please"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", body),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      search.searchSessionsInDb(db, "zzmarkerlast", "prompts").map((h) => h.sessionId)
+    ).toContain("spanning");
+    // One session, many chunks — the GROUP BY in searchSessionsInDb must
+    // collapse them, or a long session would flood the result list.
+    const hits = search.searchSessionsInDb(db, "alpha", "prompts");
+    expect(hits.filter((h) => h.sessionId === "spanning").length).toBe(1);
+    conn.closeDb();
+  });
+
+  it("indexes extended-thinking content", async () => {
+    // Thinking blocks were parsed only to set `has_thinking` and then
+    // discarded, so "why did Claude decide X" was never searchable.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "thinky.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "pick an approach"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-30T10:00:01Z",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [
+            { type: "thinking", thinking: "weighing zzthinkmarker against the alternative" },
+            { type: "text", text: "I'll go with the second option." },
+          ],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100, output_tokens: 50,
+            cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+          },
+        },
+      },
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      search.searchSessionsInDb(db, "zzthinkmarker", "prompts").map((h) => h.sessionId)
+    ).toContain("thinky");
+    conn.closeDb();
+  });
+
+  it("does NOT index tool inputs or outputs (content tier B)", async () => {
+    // Tool I/O is ~60% of transcript volume and mostly grep output and
+    // file dumps. Excluding it is the deliberate sizing decision behind
+    // this index; a regression that starts indexing it would roughly
+    // double the database with no announcement.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "tooly.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "run the thing"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-30T10:00:01Z",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [
+            { type: "text", text: "running it now" },
+            { type: "tool_use", id: "t1", name: "Bash", input: { command: "echo zztoolinput" } },
+          ],
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 100, output_tokens: 50,
+            cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+          },
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-04-30T10:00:02Z",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "zztooloutput was printed" },
+          ],
+        },
+      },
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(search.searchSessionsInDb(db, "zztoolinput", "prompts")).toEqual([]);
+    expect(search.searchSessionsInDb(db, "zztooloutput", "prompts")).toEqual([]);
+    // The turn's own prose is still indexed — only the tool payloads aren't.
+    expect(
+      search.searchSessionsInDb(db, "running", "prompts").map((h) => h.sessionId)
+    ).toContain("tooly");
+    conn.closeDb();
+  });
+
+  it("indexes subagent (sidechain) transcripts", async () => {
+    // Sidechain rows carry `textPreview: null`, so delegated work was
+    // invisible to search at any length.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "delegated.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "delegate this"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "spawning an agent"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-30T10:00:02Z",
+        isSidechain: true,
+        parentToolUseID: "task-1",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "subagent reporting zzsubagentmarker found" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100, output_tokens: 50,
+            cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+          },
+        },
+      } as any,
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(
+      search.searchSessionsInDb(db, "zzsubagentmarker", "prompts").map((h) => h.sessionId)
+    ).toContain("delegated");
+    conn.closeDb();
+  });
+
   it("returns [] for empty query", async () => {
     const { conn, search } = await setup();
     const db = (await conn.getDb())!;

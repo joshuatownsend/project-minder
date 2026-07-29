@@ -134,7 +134,19 @@ describe.skipIf(!Database)("schema.sql", () => {
     expect(count.n).toBe(2);
   });
 
-  it("FTS5 trigger keeps prompts_fts in sync with turns on INSERT/UPDATE", () => {
+  it("prompts_fts is NOT trigger-populated — the writer owns it (schema v19)", () => {
+    // Inverts the previous assertion deliberately. `turns_ai` / `turns_au`
+    // mirrored `turns.text_preview` into prompts_fts; they were dropped
+    // because they cannot express full-body indexing — the full text is
+    // never stored in `turns` for a trigger to read, only the 500-char
+    // preview is. `writeSession` / `appendSessionTail` now chunk the
+    // parsed JSONL and insert FTS rows themselves.
+    //
+    // Pinning the ABSENCE matters: if a trigger were ever re-added, every
+    // turn would gain a duplicate 500-char FTS row alongside its real
+    // chunks, and bm25's length normalization would quietly skew ranking
+    // toward the short duplicates. That failure is invisible without this
+    // test.
     db.prepare(
       "INSERT INTO sessions (session_id, project_dir_name, file_path, file_mtime_ms, file_size, indexed_at_ms) " +
         "VALUES ('fts', 'd', '/fts', 0, 0, 0)"
@@ -143,17 +155,53 @@ describe.skipIf(!Database)("schema.sql", () => {
       "INSERT INTO turns (session_id, turn_index, ts, role, text_preview) " +
         "VALUES ('fts', 0, '2026-01-01', 'user', 'fix the migration bug')"
     ).run();
+    expect(
+      db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'migration'").all().length
+    ).toBe(0);
 
-    // turns_ai trigger fired on INSERT.
-    const hits = db.prepare("SELECT session_id, turn_index FROM prompts_fts WHERE prompts_fts MATCH 'migration'").all();
-    expect(hits.length).toBe(1);
-
-    // turns_au trigger fired on UPDATE OF text_preview.
+    // An UPDATE of the mirrored columns must likewise do nothing — a
+    // re-derive pass no longer churns FTS rows for unchanged text.
     db.prepare("UPDATE turns SET text_preview = 'all done' WHERE session_id = 'fts' AND turn_index = 0").run();
-    const stillMigration = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'migration'").all();
-    expect(stillMigration.length).toBe(0);
-    const nowDone = db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'done'").all();
-    expect(nowDone.length).toBe(1);
+    expect(db.prepare("SELECT 1 FROM prompts_fts WHERE prompts_fts MATCH 'done'").all().length).toBe(0);
+
+    // The writer's own insert shape works and carries chunk_index.
+    db.prepare(
+      "INSERT INTO prompts_fts (session_id, turn_index, chunk_index, role, ts, text) " +
+        "VALUES ('fts', 0, 0, 'user', '2026-01-01', 'fix the migration bug')"
+    ).run();
+    const rows = db
+      .prepare(
+        "SELECT session_id, turn_index, chunk_index FROM prompts_fts WHERE prompts_fts MATCH 'migration'"
+      )
+      .all() as Array<{ session_id: string; turn_index: number; chunk_index: number }>;
+    expect(rows.length).toBe(1);
+    expect(rows[0].chunk_index).toBe(0);
+  });
+
+  it("prompts_fts stores one row per chunk, so a turn may have several", () => {
+    // The shape readers must account for: `sessionSearch.ts` collapses
+    // chunks with `MIN(rank) ... GROUP BY session_id`. A reader that
+    // forgot would return one hit per chunk and let a single long session
+    // flood the result list.
+    db.prepare(
+      "INSERT INTO sessions (session_id, project_dir_name, file_path, file_mtime_ms, file_size, indexed_at_ms) " +
+        "VALUES ('multi', 'd', '/m', 0, 0, 0)"
+    ).run();
+    const ins = db.prepare(
+      "INSERT INTO prompts_fts (session_id, turn_index, chunk_index, role, ts, text) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    ins.run("multi", 0, 0, "assistant", "2026-01-01", "shared marker first part");
+    ins.run("multi", 0, 1, "assistant", "2026-01-01", "shared marker second part");
+
+    const all = db.prepare("SELECT chunk_index FROM prompts_fts WHERE prompts_fts MATCH 'marker'").all();
+    expect(all.length).toBe(2);
+
+    const grouped = db
+      .prepare(
+        "SELECT session_id FROM (SELECT session_id, rank FROM prompts_fts WHERE prompts_fts MATCH 'marker') GROUP BY session_id"
+      )
+      .all();
+    expect(grouped.length).toBe(1);
   });
 
   it("DELETE on turns does NOT auto-clean prompts_fts (writer's responsibility)", () => {
@@ -171,6 +219,12 @@ describe.skipIf(!Database)("schema.sql", () => {
     db.prepare(
       "INSERT INTO turns (session_id, turn_index, ts, role, text_preview) " +
         "VALUES ('orphan', 0, '2026-01-01', 'user', 'orphan needle text')"
+    ).run();
+    // Seed the FTS row the way the writer does. As of schema v19 there is
+    // no INSERT trigger to do it — see the test above.
+    db.prepare(
+      "INSERT INTO prompts_fts (session_id, turn_index, chunk_index, role, ts, text) " +
+        "VALUES ('orphan', 0, 0, 'user', '2026-01-01', 'orphan needle text')"
     ).run();
     db.prepare("DELETE FROM turns WHERE session_id = 'orphan' AND turn_index = 0").run();
     // The FTS row remains because no trigger handled the delete.

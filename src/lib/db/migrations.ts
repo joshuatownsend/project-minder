@@ -524,6 +524,57 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 19,
+    name: "chunked full-body prompts_fts — drop turn triggers, add chunk_index, force reindex",
+    up: (db) => {
+      // `prompts_fts` mirrored `turns.text_preview` (500 chars), so most of
+      // what any substantial turn said was silently unsearchable. It now
+      // holds FULL turn bodies (prose + extended thinking) split into
+      // overlapping chunks — one FTS row per chunk.
+      //
+      // Three things have to happen together, and none of them is optional:
+      //
+      // 1. DROP the triggers. They can't express the new behaviour: the
+      //    full body is never stored in `turns` (only the 500-char preview
+      //    is), so a trigger has nothing to read. The writer owns
+      //    population now.
+      //
+      // 2. RECREATE the table. FTS5 virtual tables do not support
+      //    `ALTER TABLE ... ADD COLUMN`, so adding `chunk_index` means drop
+      //    and create. Dropping also discards the old preview rows, which
+      //    is required rather than merely convenient — leaving them would
+      //    mix 500-char documents in with ~4000-char ones under bm25's
+      //    length normalization and quietly skew every ranking.
+      //
+      // 3. FORCE a re-parse. This is why DERIVED_VERSION goes to 12 in the
+      //    same change. Re-deriving from stored columns CANNOT repopulate
+      //    this index — the text simply isn't in the database. Only a
+      //    genuine JSONL re-read can, and `derived_version` staleness is
+      //    the mechanism that triggers one (see derivationVersion.ts).
+      //
+      // Until that reconcile completes, prompt-scope search returns fewer
+      // hits than it will afterwards. That is degraded, not wrong: title
+      // -scope search is unaffected, and no result returned during the
+      // window is incorrect. Chose that over a read-side gate because a
+      // gate would make search return NOTHING during catch-up, which is a
+      // worse experience than returning less.
+      db.exec("DROP TRIGGER IF EXISTS turns_ai");
+      db.exec("DROP TRIGGER IF EXISTS turns_au");
+      db.exec("DROP TABLE IF EXISTS prompts_fts");
+      db.exec(`
+        CREATE VIRTUAL TABLE prompts_fts USING fts5(
+          session_id   UNINDEXED,
+          turn_index   UNINDEXED,
+          chunk_index  UNINDEXED,
+          role         UNINDEXED,
+          ts           UNINDEXED,
+          text,
+          tokenize='porter unicode61'
+        )
+      `);
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {
