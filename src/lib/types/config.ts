@@ -29,6 +29,7 @@ export type FeatureFlagKey =
   | "scanBoard"
   | "scanOps"
   | "githubActivity"
+  | "blockingApprovals"
   | "mcpHealth"
   | "mcpHealthStdioProbe"
   | "burnHud"

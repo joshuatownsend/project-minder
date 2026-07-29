@@ -24,3 +24,44 @@ export function buildCurlCommand(hookUrl: string): string {
 export function isManagedCommand(command: string): boolean {
   return command.includes(SENTINEL_UA);
 }
+
+/**
+ * Build the curl command for the BLOCKING approval hook (`PreToolUse`).
+ *
+ * Differs from `buildCurlCommand` in two ways that carry the whole
+ * fail-open guarantee:
+ *
+ * 1. **`--max-time`** — curl itself enforces a ceiling, so the tool call
+ *    cannot hang even if the server accepts the connection and then never
+ *    answers (process suspended, machine slept, deadlock). Set a couple of
+ *    seconds above the server's own deadline so the server normally wins
+ *    the race and can return a considered `ask`; curl's timeout is the
+ *    backstop, not the primary path.
+ *
+ * 2. **`-f` (`--fail`)** — on any HTTP error, curl writes NOTHING to
+ *    stdout and exits non-zero. Combined with `-sS` (errors to stderr
+ *    only), that means every failure produces empty stdout, which Claude
+ *    Code treats as "the hook expressed no opinion" and falls back to the
+ *    normal permission prompt. The absence of output is therefore a safe
+ *    default rather than a parse error.
+ *
+ * Note the ordering guarantee this relies on: stdout carries ONLY the
+ * decision JSON. Anything else printed here (progress meters, error text)
+ * would be fed to Claude Code's parser, which is why `-sS` is not
+ * optional.
+ */
+export function buildApprovalCurlCommand(
+  hookUrl: string,
+  serverTimeoutMs: number
+): string {
+  // +3s over the server deadline: enough for connection setup and the
+  // response to come back before curl gives up on a healthy server.
+  const maxTimeSec = Math.max(1, Math.ceil(serverTimeoutMs / 1000) + 3);
+  return (
+    `curl -sS -f -X POST "${hookUrl}"` +
+    ` -H "Content-Type: application/json"` +
+    ` -A "${SENTINEL_UA}"` +
+    ` --max-time ${maxTimeSec}` +
+    ` --data-binary @-`
+  );
+}
