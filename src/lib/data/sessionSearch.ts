@@ -6,14 +6,19 @@ import { fuseRrf } from "./rrf";
 // SQL-backed session search backing `/api/sessions/search`. Two distinct
 // paths are stitched together depending on `scope`:
 //
-//   - `prompts` → FTS5 `MATCH` against `prompts_fts.text` (which mirrors
-//     `turns.text_preview`). Best for in-conversation content matching:
-//     "did Claude help me debug the auth middleware in any session?"
+//   - `prompts` → FTS5 `MATCH` against `prompts_fts.text`, which since
+//     schema v19 holds FULL turn bodies as overlapping chunks (prose +
+//     extended thinking, including subagent transcripts) rather than the
+//     old 500-char `turns.text_preview` mirror. Best for in-conversation
+//     content matching: "did Claude help me debug the auth middleware in
+//     any session?" Prompt hits also carry a `snippet` excerpt, because
+//     the row renderer has no other access to that text.
 //   - `titles`  → `LIKE` over `sessions` columns (`slug`,
 //     `initial_prompt`, `last_prompt`, `project_dir_name`,
 //     `git_branch`). Best for slug-grouped lookup and project-name
-//     prefix scans. NOT routable through `prompts_fts` because that
-//     FTS table only indexes turn previews.
+//     prefix scans. Deliberately NOT routed through `prompts_fts`: those
+//     columns are session metadata, not turn text, and are not indexed
+//     there at all.
 //   - `both`    → both retrievers run, and their two RANKED LISTS are
 //     merged by Reciprocal Rank Fusion (`./rrf.ts`) rather than by
 //     comparing scores. bm25 magnitudes and `LIKE` matches live on
@@ -60,6 +65,21 @@ export interface SessionSearchHit {
    * re-running the query. Additive — no existing consumer reads it.
    */
   ranks: { titles?: number; prompts?: number };
+  /**
+   * Excerpt of the matched text, from FTS5's `snippet()` on the
+   * best-ranked chunk. Present only for `prompts` hits — a `titles` hit
+   * matched a column the row already displays.
+   *
+   * This exists because the row renderer otherwise has nowhere to get
+   * one: `SessionSummary.searchableText` is assembled from
+   * `turns.text_preview` (500 chars, and `WHERE text_preview <> ''`
+   * excludes sidechain rows entirely), so a match in a long body, in
+   * extended thinking, or in a subagent transcript could not be shown at
+   * all — the row would display an unrelated preview instead. Since
+   * `prompts_fts` now holds the full text, the excerpt can come from the
+   * genuinely matched content.
+   */
+  snippet?: string;
 }
 
 export type SessionSearchScope = "titles" | "prompts" | "both";
@@ -166,6 +186,11 @@ export function searchSessionsInDb(
   const candidateLimit = Math.min(limit * CANDIDATE_MULTIPLIER, MAX_CANDIDATES);
   let promptKeys: string[] = [];
   let titleKeys: string[] = [];
+  // Excerpt per session, from the best-ranked matching chunk. Carried
+  // alongside the ranked lists rather than through `fuseRrf`, which is
+  // deliberately generic over opaque string keys and must not learn
+  // about session-specific payloads.
+  const snippetBySession = new Map<string, string>();
 
   if (scope === "prompts" || scope === "both") {
     const ftsExpr = buildFtsQuery(q);
@@ -176,10 +201,19 @@ export function searchSessionsInDb(
         // default; reading it directly in a column projection works,
         // but wrapping `bm25(prompts_fts)` in an aggregate function
         // throws "unable to use function bm25 in the requested
-        // context" because bm25 needs row-level FTS context. The
-        // subquery shape below picks per-row rank inside the MATCH
+        // context" because bm25 needs row-level FTS context.
+        //
+        // The subquery shape below picks per-row rank inside the MATCH
         // context and aggregates plain-number rank values in the
         // outer query.
+        //
+        // `snippet()` carries the SAME restriction, and it is stricter
+        // than it first appears: it fails not only inside an aggregate
+        // but also alongside a window function ("unable to use function
+        // snippet in the requested context"), because SQLite
+        // materializes the subquery and the FTS row context is gone by
+        // the time the outer query runs. So snippets CANNOT be folded
+        // into this ranking query — they are fetched separately below.
         rows = prepCached(
           db,
           `SELECT session_id, MIN(rank) AS rank
@@ -192,6 +226,39 @@ export function searchSessionsInDb(
             ORDER BY rank
             LIMIT ?`
         ).all(ftsExpr, candidateLimit) as FtsRow[];
+
+        // Second pass, purely for excerpts. A plain projection over the
+        // MATCH keeps the FTS row context `snippet()` requires — no
+        // aggregate, no window. Rows arrive best-first, so the FIRST
+        // occurrence of each session is its best-ranked chunk; later
+        // chunks of the same session are skipped.
+        //
+        // Column 5 is `text` — (session_id, turn_index, chunk_index,
+        // role, ts, text), 0-indexed. Empty start/end markers because
+        // the client highlights by locating the query itself; markup
+        // emitted here would have to be escaped downstream.
+        //
+        // Bounded at 2x the candidate pool rather than unbounded: the
+        // limit counts CHUNKS, not sessions, so one very long session
+        // could otherwise crowd out the rest. If it does, the sessions
+        // that miss out simply have no snippet and the row falls back to
+        // its previous rendering — degraded, never wrong.
+        const snipRows = prepCached(
+          db,
+          `SELECT session_id, snippet(prompts_fts, 5, '', '', '…', 18) AS snip
+             FROM prompts_fts
+            WHERE prompts_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?`
+        ).all(ftsExpr, candidateLimit * 2) as Array<{
+          session_id: string;
+          snip: string | null;
+        }>;
+        for (const r of snipRows) {
+          if (r.snip && !snippetBySession.has(r.session_id)) {
+            snippetBySession.set(r.session_id, r.snip);
+          }
+        }
       } catch (err) {
         // bm25() requires the FTS column was indexed; the wrapped
         // expression should always be syntactically valid given our
@@ -250,5 +317,8 @@ export function searchSessionsInDb(
       ...(f.ranks.titles !== undefined ? { titles: f.ranks.titles } : {}),
       ...(f.ranks.prompts !== undefined ? { prompts: f.ranks.prompts } : {}),
     },
+    // Only prompt hits carry one; a title hit matched a column the row
+    // already renders.
+    ...(snippetBySession.has(f.key) ? { snippet: snippetBySession.get(f.key) } : {}),
   }));
 }

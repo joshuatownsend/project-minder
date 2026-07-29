@@ -476,9 +476,21 @@ CREATE INDEX indexer_runs_by_started ON indexer_runs(started_at_ms DESC);
 -- paying the FTS retrieval cost. Tokenizer choice: `porter unicode61`
 -- gives us folded case + stemming for English without hand-tuning.
 
+-- prompts_fts holds FULL turn bodies split into overlapping chunks (see
+-- `src/lib/db/textChunks.ts`), one row per chunk — NOT one row per turn.
+-- `chunk_index` is 0-based within its turn, so (session_id, turn_index,
+-- chunk_index) identifies a row. Readers that want per-session results
+-- must collapse chunks themselves; `sessionSearch.ts` does this with
+-- `MIN(rank) ... GROUP BY session_id`.
+--
+-- Chunking exists because bm25 normalizes by document length: indexing a
+-- 40 KB turn and a 200-char turn as single documents makes them not
+-- comparably rankable. Uniform chunks keep document length roughly
+-- constant so bm25 compares like with like.
 CREATE VIRTUAL TABLE prompts_fts USING fts5(
   session_id   UNINDEXED,
   turn_index   UNINDEXED,
+  chunk_index  UNINDEXED,
   role         UNINDEXED,
   ts           UNINDEXED,
   text,
@@ -499,10 +511,21 @@ CREATE VIRTUAL TABLE catalog_fts USING fts5(
 -- the indexer having to remember. Each trigger maps an INSERT/UPDATE/DELETE
 -- on the source to the matching FTS row.
 --
--- prompts_fts mirrors `turns.text_preview` (first ~500 chars). For full-body
--- search we'd need to also stream JSONL content into FTS — explicitly
--- deferred to keep DB size bounded. The preview covers prompt-text search,
--- which is the primary use case.
+-- **prompts_fts is NOT trigger-populated.** It was, mirroring
+-- `turns.text_preview` (first ~500 chars), with full-body search
+-- "explicitly deferred to keep DB size bounded". That deferral was
+-- reversed deliberately: the preview cap meant most of what any
+-- substantial turn said was silently unsearchable. Triggers cannot
+-- express the replacement, because the full body is never stored in
+-- `turns` at all — only the 500-char preview is — so there is nothing
+-- for a trigger to read. The writer (`writeSession` / `appendSessionTail`)
+-- now chunks the parsed JSONL text and inserts FTS rows directly.
+--
+-- This continues the direction migration v4 started (writer-owned FTS
+-- deletes) and supersedes the "FTS5 triggers, not ingest discipline"
+-- principle stated in this file's header for `prompts_fts` specifically.
+-- `catalog_fts` is still fully trigger-driven — its source tables DO
+-- store the indexed text.
 --
 -- Why DELETE+INSERT rather than UPDATE on the FTS row? FTS5 with UNINDEXED
 -- columns doesn't support partial UPDATE cleanly — the recommended pattern
@@ -520,23 +543,12 @@ CREATE VIRTUAL TABLE catalog_fts USING fts5(
 -- deletes turns must also clean `prompts_fts` for the affected session.
 -- Today both writers go through helpers in `ingest.ts` that handle this.
 
-CREATE TRIGGER turns_ai AFTER INSERT ON turns
-BEGIN
-  INSERT INTO prompts_fts (session_id, turn_index, role, ts, text)
-  VALUES (NEW.session_id, NEW.turn_index, NEW.role, NEW.ts, COALESCE(NEW.text_preview, ''));
-END;
-
--- Narrow the trigger to only the columns mirrored into FTS. A re-derive
--- UPDATE that only touches `category` / `derived_version` / token counts
--- doesn't fire this trigger at all. `AFTER UPDATE OF <columns>` is
--- evaluated by SQLite at the statement level, cheaper than a per-row
--- WHEN clause.
-CREATE TRIGGER turns_au AFTER UPDATE OF text_preview, role, ts ON turns
-BEGIN
-  DELETE FROM prompts_fts WHERE session_id = OLD.session_id AND turn_index = OLD.turn_index;
-  INSERT INTO prompts_fts (session_id, turn_index, role, ts, text)
-  VALUES (NEW.session_id, NEW.turn_index, NEW.role, NEW.ts, COALESCE(NEW.text_preview, ''));
-END;
+-- (No `turns_ai` / `turns_au` triggers — see the note above. They were
+-- dropped in schema v19 and mirrored `text_preview`; the writer owns
+-- `prompts_fts` population now. A re-derive UPDATE that rewrites
+-- `turns.category` therefore no longer churns FTS rows either, which is a
+-- side benefit: those updates used to delete and reinsert an FTS row per
+-- turn for text that hadn't changed.)
 
 -- catalog_fts is a union view over agents/skills/commands; one trigger set
 -- per source table writes/updates/deletes the matching `kind` row.

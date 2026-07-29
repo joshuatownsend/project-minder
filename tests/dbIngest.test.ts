@@ -205,7 +205,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(11);
+    expect(session.derived_version).toBe(12);
     expect(session.source).toBe("claude");
 
     const turnRows = db
@@ -1574,7 +1574,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
       .get() as { slug: string | null; derived_version: number };
     expect(row.slug).toBe("graceful-pivoting-ferret");
-    expect(row.derived_version).toBe(11);
+    expect(row.derived_version).toBe(12);
     reloaded.conn.closeDb();
   });
 
