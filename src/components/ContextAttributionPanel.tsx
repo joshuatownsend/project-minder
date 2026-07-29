@@ -191,7 +191,16 @@ export function ContextAttributionPanel({ sessionId }: { sessionId: string }) {
                     ? `Turns ${seg.startTurn}–${seg.endTurn}`
                     : `After compaction ${seg.index} · turns ${seg.startTurn}–${seg.endTurn}`}
                 </span>
-                <span>
+                <span
+                  title={
+                    seg.unattributedTokens !== null && seg.attributedAtPeak !== null
+                      ? `At peak fill (${fmtTokens(seg.peakMeasuredTokens ?? 0)}), ` +
+                        `${fmtTokens(seg.attributedAtPeak)} was attributable to the transcript; ` +
+                        `the remaining ${fmtTokens(seg.unattributedTokens)} is harness-injected ` +
+                        `(system prompt, tool definitions, CLAUDE.md, skills).`
+                      : undefined
+                  }
+                >
                   {fmtTokens(seg.attributedTotal)} attributed
                   {seg.unattributedTokens !== null && seg.unattributedTokens > 0 && (
                     <> · {fmtTokens(seg.unattributedTokens)} unattributed</>

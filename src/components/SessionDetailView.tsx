@@ -528,6 +528,15 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   // or the unknown-id fallback that serves the first fixture — has a synthetic
   // `data.sessionId` even when the route param doesn't start with "demo-".
   const isDemoSession = (data?.sessionId ?? sessionId).startsWith("demo-");
+  // The context-attribution endpoint resolves transcripts via
+  // `resolveSessionJsonl`, which only walks Claude's
+  // `projects/<dir>/<sessionId>.jsonl`. Codex and Gemini sessions live
+  // under their own adapters' directories, so the request 404s by
+  // construction — the tab would be a guaranteed error for every
+  // non-Claude session. Gate it on the source rather than shipping a
+  // control that cannot work. Legacy rows carry no `source` and are
+  // Claude by definition (see SessionSummary.source).
+  const supportsContextAttribution = (data?.source ?? "claude") === "claude";
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [generatedTitle, setGeneratedTitle] = useState<string | undefined>(undefined);
@@ -605,10 +614,12 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
     ...(!isDemoSession
       ? ([
           { key: "handoff",   label: "Handoff"   },
-          { key: "context",   label: "Context"   },
           { key: "diagnosis", label: "Diagnosis" },
           { key: "feedback",  label: "Feedback"  },
         ] as { key: TabKey; label: string }[])
+      : []),
+    ...(!isDemoSession && supportsContextAttribution
+      ? ([{ key: "context", label: "Context" }] as { key: TabKey; label: string }[])
       : []),
   ];
 

@@ -121,15 +121,44 @@ describe("attributeContext", () => {
         }),
       ]);
       expect(report.attributedTotal).toBe(100);
-      expect(report.segments[0].unattributedTokens).toBe(49_900);
+      // 50_000 - 0, NOT 50_000 - 100: the assistant's own reply is OUTPUT
+      // and was never in the input window that measured 50_000.
+      expect(report.segments[0].attributedAtPeak).toBe(0);
+      expect(report.segments[0].unattributedTokens).toBe(50_000);
+    });
+
+    it("compares the peak against attribution AS OF the peak, not the segment total", () => {
+      // The subtle bug this guards: `peakMeasuredTokens` is the window as
+      // it was fed IN to one assistant turn, so it excludes that turn's
+      // own output and every turn after it. Subtracting the whole-segment
+      // total mixes two moments in time and always understates the
+      // remainder — by at least the final response.
+      const report = attributeContext("s", [
+        user([{ type: "text", text: text(1_000) }]),
+        // Peak measured here. Everything before it is 1_000 attributed.
+        assistant([{ type: "text", text: text(700) }], { input_tokens: 10_000 }),
+        // Plenty more attribution AFTER the peak; it must not be
+        // subtracted from a measurement taken before it existed.
+        user([{ type: "text", text: text(5_000) }]),
+        assistant([{ type: "text", text: text(400) }], { input_tokens: 900 }),
+      ]);
+      const seg = report.segments[0];
+      expect(seg.peakMeasuredTokens).toBe(10_000);
+      expect(seg.attributedAtPeak).toBe(1_000);
+      expect(seg.unattributedTokens).toBe(9_000);
+      // The segment total is far larger; using it would have given 2_900.
+      expect(seg.attributedTotal).toBe(7_100);
     });
 
     it("floors unattributedTokens at zero rather than showing negative", () => {
       // Over-attribution (the 4-bytes-per-token heuristic over-counting
-      // dense text) must not render as "saved tokens".
+      // dense text) must not render as "saved tokens". Needs content
+      // BEFORE the peak turn, since that is what the peak is compared to.
       const report = attributeContext("s", [
-        assistant([{ type: "text", text: text(10_000) }], { input_tokens: 5 }),
+        user([{ type: "text", text: text(10_000) }]),
+        assistant([{ type: "text", text: text(1) }], { input_tokens: 5 }),
       ]);
+      expect(report.segments[0].attributedAtPeak).toBe(10_000);
       expect(report.segments[0].unattributedTokens).toBe(0);
     });
 
@@ -156,6 +185,39 @@ describe("attributeContext", () => {
       expect(report.segments[1].totals.userText).toBe(20);
       // Session-wide totals still sum across segments.
       expect(report.totals.userText).toBe(30);
+    });
+
+    it("recognises every established compaction marker shape", () => {
+      // Claude Code has emitted at least four shapes across CLI versions
+      // (see `readCompactionSummary` in sessionHandoff.ts). Missing one
+      // means the report silently accumulates across a reset that really
+      // happened — no error, just wrong segment peaks and cumulative bars.
+      const shapes: AttributionEntry[][] = [
+        [{ type: "system", subtype: "compact_boundary" }],
+        [{ type: "compact_summary" }],
+        [{ compactSummary: "summary text" }],
+        [{ type: "system", content: "… [compact summary] …" }],
+        [{ type: "system", content: "compact_boundary reached" }],
+      ];
+      for (const [marker] of shapes.map((x) => x)) {
+        const report = attributeContext("s", [
+          user([{ type: "text", text: text(1) }]),
+          marker,
+          user([{ type: "text", text: text(1) }]),
+        ]);
+        expect(report.compactionCount).toBe(1);
+        expect(report.segments.length).toBe(2);
+      }
+    });
+
+    it("does not treat an ordinary system message as a boundary", () => {
+      // The shape-4 text check must not fire on unrelated system content.
+      const report = attributeContext("s", [
+        user([{ type: "text", text: text(1) }]),
+        { type: "system", content: "just a normal system note" },
+        user([{ type: "text", text: text(1) }]),
+      ]);
+      expect(report.compactionCount).toBe(0);
     });
 
     it("recognises the isCompactSummary boundary shape too", () => {
@@ -204,6 +266,49 @@ describe("attributeContext", () => {
       ]);
       expect(report.totals.assistantText).toBe(0);
       expect(report.turns.length).toBe(1);
+    });
+
+    it("deduplicates re-emitted assistant messages by message.id", () => {
+      // Claude Code re-logs an assistant message on retries and on
+      // resumed-session re-emit. Counting each copy double-counts its
+      // reply, thinking, and tool inputs — inflating exactly the sessions
+      // most worth inspecting. The canonical parser guards this; a raw
+      // -entry loop has to guard it too.
+      const dup = {
+        type: "assistant",
+        timestamp: "2026-01-01T00:00:01Z",
+        message: {
+          id: "msg_abc",
+          content: [{ type: "text", text: text(50) }],
+          usage: { input_tokens: 10 },
+        },
+      } as AttributionEntry;
+      const report = attributeContext("s", [dup, dup]);
+      expect(report.turns.length).toBe(1);
+      expect(report.totals.assistantText).toBe(50);
+    });
+
+    it("falls back to requestId when message.id is absent", () => {
+      const dup = {
+        type: "assistant",
+        timestamp: "2026-01-01T00:00:01Z",
+        requestId: "req_xyz",
+        message: { content: [{ type: "text", text: text(20) }] },
+      } as AttributionEntry;
+      const report = attributeContext("s", [dup, dup]);
+      expect(report.turns.length).toBe(1);
+      expect(report.totals.assistantText).toBe(20);
+    });
+
+    it("keeps distinct assistant messages that carry no id at all", () => {
+      // Only ids actually present are guarded — otherwise genuinely
+      // distinct turns would collapse into one.
+      const report = attributeContext("s", [
+        assistant([{ type: "text", text: text(10) }]),
+        assistant([{ type: "text", text: text(10) }]),
+      ]);
+      expect(report.turns.length).toBe(2);
+      expect(report.totals.assistantText).toBe(20);
     });
 
     it("excludes meta entries and non-turn entry types", () => {

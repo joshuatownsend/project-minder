@@ -112,12 +112,31 @@ export interface AttributionSegment {
    */
   peakMeasuredTokens: number | null;
   /**
-   * `peakMeasured - attributedTotal`, floored at 0. This is the harness-
-   * injected remainder: system prompt, tool definitions, CLAUDE.md, skill
-   * bodies. Null when nothing was measured. Floored because the estimate
-   * is a lower bound and a negative would render as "saved tokens".
+   * `peakMeasured - (attribution as it stood WHEN the peak was measured)`,
+   * floored at 0. The harness-injected remainder: system prompt, tool
+   * definitions, CLAUDE.md, skill bodies. Null when nothing was measured.
+   *
+   * **Why not `attributedTotal`.** `peakMeasuredTokens` is
+   * `input_tokens + cache` on one assistant turn — the window as it was
+   * fed IN, which by construction excludes that turn's own reply,
+   * thinking, and tool calls, and every turn after it. Subtracting the
+   * whole-segment total compares two different moments and always
+   * understates the remainder by at least the final response; a large
+   * response could floor it to zero and hide the harness overhead
+   * entirely. So the cumulative total is snapshotted at the peak turn,
+   * before that turn's own contribution is added.
+   *
+   * Floored because the estimate is a lower bound and a negative would
+   * render as "saved tokens".
    */
   unattributedTokens: number | null;
+  /**
+   * Attributed tokens as they stood at the peak measurement — the left
+   * side of the subtraction above. Exposed so the UI can show what the
+   * remainder was actually computed against rather than implying it was
+   * the segment total.
+   */
+  attributedAtPeak: number | null;
 }
 
 export interface ContextAttributionReport {
@@ -177,7 +196,13 @@ export interface AttributionEntry {
   isSidechain?: boolean;
   isCompactSummary?: boolean;
   subtype?: string;
+  /** Shape 3 — top-level field on some CLI versions. */
+  compactSummary?: string;
+  /** Shape 4 — older versions embed the marker in system-message text. */
+  content?: unknown;
+  requestId?: string;
   message?: {
+    id?: string;
     role?: string;
     content?: unknown;
     usage?: {
@@ -208,8 +233,20 @@ function isAttachedContext(text: string): boolean {
  * `isCompactSummary` flag, and a system entry whose text names it.
  */
 function isCompactionBoundary(e: AttributionEntry): boolean {
+  // Shape 1 — system + compact_boundary subtype.
   if (e.subtype === "compact_boundary") return true;
+  // Shape 2 — dedicated compact_summary entry type.
+  if (e.type === "compact_summary") return true;
+  // Shape 3 — top-level compactSummary field.
+  if (typeof e.compactSummary === "string" && e.compactSummary) return true;
+  // Minder's own flag, set by some parse paths.
   if (e.isCompactSummary === true) return true;
+  // Shape 4 — older versions embed the marker in a system message's text.
+  if (e.type === "system" && typeof e.content === "string") {
+    return (
+      e.content.includes("[compact summary]") || e.content.includes("compact_boundary")
+    );
+  }
   return false;
 }
 
@@ -233,15 +270,27 @@ export function attributeContext(
 ): ContextAttributionReport {
   const turns: TurnAttribution[] = [];
   const segments: AttributionSegment[] = [];
+  // Claude Code can re-log an assistant message on a retry or a
+  // resumed-session re-emit. The canonical parser guards this by
+  // `message.id` (falling back to `requestId`); a raw-entry loop that
+  // skips the guard counts the same reply, thinking, and tool inputs
+  // twice, inflating both turn counts and every category total in
+  // exactly the sessions most worth inspecting. Only ids actually
+  // present are guarded, so genuinely distinct turns are all kept.
+  const seenMessageIds = new Set<string>();
 
   let segmentTotals = emptyCategoryTokens();
   let segmentStart = 0;
   let segmentPeak: number | null = null;
+  // Cumulative attributed tokens at the moment `segmentPeak` was observed,
+  // excluding the peak turn's own output. See `unattributedTokens`.
+  let segmentAttributedAtPeak: number | null = null;
   let pendingCompaction = false;
   let turnIndex = 0;
 
   const closeSegment = (endTurn: number) => {
     const attributedTotal = sum(segmentTotals);
+    const atPeak = segmentAttributedAtPeak;
     segments.push({
       index: segments.length,
       startTurn: segmentStart,
@@ -249,11 +298,15 @@ export function attributeContext(
       totals: segmentTotals,
       attributedTotal,
       peakMeasuredTokens: segmentPeak,
+      attributedAtPeak: atPeak,
       unattributedTokens:
-        segmentPeak === null ? null : Math.max(0, segmentPeak - attributedTotal),
+        segmentPeak === null || atPeak === null
+          ? null
+          : Math.max(0, segmentPeak - atPeak),
     });
     segmentTotals = emptyCategoryTokens();
     segmentPeak = null;
+    segmentAttributedAtPeak = null;
     segmentStart = endTurn + 1;
   };
 
@@ -271,6 +324,13 @@ export function attributeContext(
     if (e.type !== "user" && e.type !== "assistant") continue;
 
     const role = e.type as "user" | "assistant";
+    if (role === "assistant") {
+      const messageId = e.message?.id ?? e.requestId;
+      if (messageId) {
+        if (seenMessageIds.has(messageId)) continue;
+        seenMessageIds.add(messageId);
+      }
+    }
     const added = emptyCategoryTokens();
     const content = e.message?.content;
 
@@ -332,6 +392,10 @@ export function attributeContext(
     if (measuredContextTokens !== null) {
       if (segmentPeak === null || measuredContextTokens > segmentPeak) {
         segmentPeak = measuredContextTokens;
+        // Snapshot BEFORE `addInto` below: this turn's own reply, thinking,
+        // and tool calls are output, not part of the input window that
+        // produced `measuredContextTokens`.
+        segmentAttributedAtPeak = sum(segmentTotals);
       }
     }
 
