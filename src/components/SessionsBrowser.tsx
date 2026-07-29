@@ -256,10 +256,13 @@ function SessionRow({
   session,
   showProject = true,
   search = "",
+  ftsSnippet,
 }: {
   session: SessionSummary;
   showProject?: boolean;
   search?: string;
+  /** FTS5 excerpt of the matched text, when the server returned one. */
+  ftsSnippet?: string;
 }) {
   const { currency, fxRate } = useCurrency();
   const prefetch = useHoverPrefetch();
@@ -275,10 +278,17 @@ function SessionRow({
     .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
-  const isContentMatch = trimmedSearch
+  // Prefer the server's excerpt: it comes from the full indexed text, so
+  // it can show WHY a session matched even when the match lies past the
+  // 500-char preview, inside thinking, or inside a subagent transcript —
+  // none of which `searchableText` contains. The local check remains the
+  // fallback for the file backend (MINDER_USE_DB=0), which has no FTS and
+  // therefore no snippet.
+  const localContentMatch = trimmedSearch
     ? !!(session.searchableText?.toLowerCase().includes(searchLower)) &&
       !matchesTitleScope(session, searchLower)
     : false;
+  const snippetText = ftsSnippet ?? (localContentMatch ? session.searchableText : undefined);
 
   return (
     <Link
@@ -357,8 +367,8 @@ function SessionRow({
               whiteSpace: "nowrap",
             }}
           >
-            {isContentMatch && session.searchableText
-              ? <MatchSnippet text={session.searchableText} query={trimmedSearch} />
+            {trimmedSearch && snippetText
+              ? <MatchSnippet text={snippetText} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
               : session.generatedTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
@@ -630,7 +640,12 @@ const SEARCH_DEBOUNCE_MS = 250;
 const MIN_SEARCH_CHARS = 2;
 
 interface SearchApiResponse {
-  hits: Array<{ sessionId: string; score: number; source: "titles" | "prompts" }>;
+  hits: Array<{
+    sessionId: string;
+    score: number;
+    source: "titles" | "prompts";
+    snippet?: string;
+  }>;
   backend: "db" | "file";
 }
 
@@ -644,12 +659,19 @@ type SearchState =
   | { kind: "idle" } //  query under the 2-char gate
   | { kind: "pending" } //  fetch in flight
   //  FTS-backed hits. A Map rather than a Set so RRF ordering survives:
-  //  the value is the hit's 0-based rank from the API, which the
+  //  `rank` is the hit's 0-based position from the API, which the
   //  `relevance` sort reads. Keeping only a Set discarded the ranking the
   //  server just computed, so a prompt-only hit could outrank a
   //  dual-retriever one in the list. `.has()` works the same, so the
   //  membership filter below is unchanged.
-  | { kind: "db"; ids: Map<string, number> }
+  //
+  //  `snippet` is FTS5's excerpt of the matched text. It is the ONLY
+  //  source of an excerpt for content the row can't otherwise see:
+  //  `searchableText` is built from `turns.text_preview` (500 chars,
+  //  and sidechain rows are excluded outright), so matches deep in a
+  //  body, in extended thinking, or in a subagent transcript have no
+  //  local text to highlight.
+  | { kind: "db"; ids: Map<string, { rank: number; snippet?: string }> }
   | { kind: "file" }; //  MINDER_USE_DB=0 OR fetch failed
 
 export function SessionsBrowser() {
@@ -690,7 +712,9 @@ export function SessionsBrowser() {
           // already sorted best-first by `searchSessionsInDb`.
           setSearchState({
             kind: "db",
-            ids: new Map(json.hits.map((h, i) => [h.sessionId, i])),
+            ids: new Map(
+              json.hits.map((h, i) => [h.sessionId, { rank: i, snippet: h.snippet }])
+            ),
           });
         }
       } catch (err) {
@@ -754,8 +778,8 @@ export function SessionsBrowser() {
           // they sort after every ranked hit rather than jumping to the
           // top on a rank of 0 — then fall back to recency among
           // themselves so the tail stays deterministic.
-          const ra = rank?.get(a.sessionId) ?? Number.MAX_SAFE_INTEGER;
-          const rb = rank?.get(b.sessionId) ?? Number.MAX_SAFE_INTEGER;
+          const ra = rank?.get(a.sessionId)?.rank ?? Number.MAX_SAFE_INTEGER;
+          const rb = rank?.get(b.sessionId)?.rank ?? Number.MAX_SAFE_INTEGER;
           if (ra !== rb) return ra - rb;
           return endedAt(b) - endedAt(a);
         }
@@ -1014,7 +1038,16 @@ export function SessionsBrowser() {
                       onToggle={() => toggleCollapse(item.group.projectSlug)}
                     />
                   ) : (
-                    <SessionRow session={item.session} showProject={item.showProject} search={search} />
+                    <SessionRow
+                      session={item.session}
+                      showProject={item.showProject}
+                      search={search}
+                      ftsSnippet={
+                        searchState.kind === "db"
+                          ? searchState.ids.get(item.session.sessionId)?.snippet
+                          : undefined
+                      }
+                    />
                   )}
                 </div>
               );

@@ -474,6 +474,104 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     conn.closeDb();
   });
 
+  it("returns a snippet of the matched text for prompt hits", async () => {
+    // Without this, a match deep in a body has nothing to render: the
+    // browser builds its excerpt from `SessionSummary.searchableText`,
+    // which comes from `turns.text_preview` (500 chars), so the row would
+    // show an unrelated preview and never say WHY it matched.
+    const { conn, ingest, search, projectsDir } = await setup();
+    const filler = "padding text that is not interesting ";
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "snip.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "explain at length"),
+      assistantTurn(
+        "2026-04-30T10:00:01Z",
+        "claude-sonnet-4-5",
+        filler.repeat(40) + " the zzsnippetword appears here " + filler.repeat(40)
+      ),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "zzsnippetword", "prompts");
+    const hit = hits.find((h) => h.sessionId === "snip")!;
+    expect(hit.snippet).toBeDefined();
+    // The excerpt must contain the term — that is the entire point.
+    expect(hit.snippet!.toLowerCase()).toContain("zzsnippetword");
+    // And be an excerpt, not the whole body.
+    expect(hit.snippet!.length).toBeLessThan(600);
+    conn.closeDb();
+  });
+
+  it("snippets text the preview column cannot contain (thinking)", async () => {
+    // `turns.text_preview` never holds thinking content, so this excerpt
+    // can only come from the FTS index.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "thinksnip.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "choose an approach"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-30T10:00:01Z",
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [
+            { type: "thinking", thinking: "considering zzthinksnippet as the option" },
+            { type: "text", text: "going with the second one" },
+          ],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100, output_tokens: 50,
+            cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+          },
+        },
+      },
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hit = search
+      .searchSessionsInDb(db, "zzthinksnippet", "prompts")
+      .find((h) => h.sessionId === "thinksnip")!;
+    expect(hit.snippet!.toLowerCase()).toContain("zzthinksnippet");
+    conn.closeDb();
+  });
+
+  it("returns one hit with one snippet even when many chunks match", async () => {
+    // The ROW_NUMBER() collapse: a session matching in six chunks must
+    // yield one row, not six, or a single long session floods the list.
+    const { conn, ingest, search, projectsDir } = await setup();
+    const body = ("zzrepeatword and some surrounding words ").repeat(600);
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "manychunks.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "long one please"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", body),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "zzrepeatword", "prompts");
+    expect(hits.filter((h) => h.sessionId === "manychunks").length).toBe(1);
+    expect(hits[0].snippet).toBeDefined();
+    conn.closeDb();
+  });
+
+  it("omits the snippet on title-only hits", async () => {
+    // A title hit matched a column the row already renders, so an
+    // excerpt would be noise.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "titleonly.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "nothing notable here"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok", "zzsluggish-otter-calm"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hit = search
+      .searchSessionsInDb(db, "zzsluggish", "both")
+      .find((h) => h.sessionId === "titleonly")!;
+    expect(hit.source).toBe("titles");
+    expect(hit.snippet).toBeUndefined();
+    conn.closeDb();
+  });
+
   it("returns [] for empty query", async () => {
     const { conn, search } = await setup();
     const db = (await conn.getDb())!;
