@@ -25,6 +25,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "scanBoard",
   "scanOps",
   "githubActivity",
+  "blockingApprovals",
   "mcpHealth",
   "mcpHealthStdioProbe",
   "burnHud",
@@ -228,6 +229,18 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "active",
     appliesAt: "watcher",
     wired: true,
+  },
+  {
+    key: "blockingApprovals",
+    label: "Tool approval gate",
+    description:
+      "Hold tool calls at a PreToolUse hook until you approve them in Minder (or on your phone over the LAN). Read-only tools pass through; every failure path falls back to Claude's normal terminal prompt.",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
+    // Must match `getFlag(..., false)` in /api/hooks/permission — otherwise
+    // the toggle renders ON while the gate is off.
+    defaultOn: false,
   },
   {
     key: "mcpHealth",
