@@ -25,6 +25,10 @@ export interface PulseChange {
   title: string;
   changedAt: string;
   kind?: string;
+  /** Set only on `kind: "rule-match"` (a notification rule firing). */
+  ruleId?: string;
+  ruleName?: string;
+  severity?: string;
 }
 
 export interface LiveProcessInfo {

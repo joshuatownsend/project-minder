@@ -53,6 +53,28 @@ export function NotificationListener() {
           }
 
           playNotificationSound();
+        } else if (change.kind === "rule-match") {
+          // No prefs lookup here, unlike the two fixed events below: the rule
+          // itself carries the `os` channel opt-in, and the server only queues
+          // a match when that channel is on. Re-checking notificationPrefs
+          // would gate rules behind an unrelated event's setting.
+          const heading = change.ruleName
+            ? `${change.projectName} — ${change.ruleName}`
+            : change.projectName;
+          showToast(heading, change.title);
+
+          if (
+            typeof window !== "undefined" &&
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            new Notification(heading, {
+              body: change.title,
+              tag: `rule-match:${change.ruleId ?? ""}:${change.slug}`,
+            });
+          }
+
+          playNotificationSound();
         } else if (change.kind === "task-decision-required") {
           showToast("Task decision required", change.title);
           playNotificationSound();

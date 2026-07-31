@@ -55,7 +55,7 @@ Rules live in **Settings → Notifications → Rules**. Start from a suggested r
 | `tool.name` | tool events | `Bash`, `Edit`, `Write`, `Read`, `Task`, … |
 | `tool.input` | tool events | Command text, file path, patch body. Where `.env` access shows up. |
 | `tool.response` | `PostToolUse` | Result text, including error messages. |
-| `tool.failed` | `PostToolUse` | `true` / `false`. |
+| `tool.failed` | `PostToolUse` | `true` / `false` — always set on `PostToolUse`, so `equals false` matches successful calls. |
 | `tool.durationMs` | `PostToolUse` | Numeric — use **is greater than**. |
 | `prompt` | `UserPromptSubmit` | Text you submitted. |
 | `message` | `Notification`, `SubagentStop` | Claude Code's own notification text. |
@@ -63,6 +63,8 @@ Rules live in **Settings → Notifications → Rules**. Start from a suggested r
 | `agentType` | `SubagentStop` | |
 
 A rule whose field is absent from an event never fires — so a `prompt` rule is silently skipped on a tool call rather than matching an empty string.
+
+The **os** channel is delivered by the dashboard: a match is held server-side until a Minder tab next polls, then raised as a toast and a browser notification. It needs a tab open (any page) and browser notification permission granted. `push` and `telegram` are sent by the server and do not.
 
 ### Operators
 
@@ -77,13 +79,15 @@ Two shapes are therefore refused:
 | Shape | Example | Why |
 |---|---|---|
 | A quantifier applied to a group that itself quantifies or alternates | `(a+)+`, `(a\|b)*`, `([a-z]+)*` | Exponential — the engine can split the same input exponentially many ways. |
-| Two adjacent unbounded quantifiers over overlapping characters | `.*.*`, `\w+\w+` | Polynomial in the field length. |
+| Two adjacent unbounded quantifiers whose atoms can match the same character | `.*.*`, `\w+\w+`, `\w+\d+` | Polynomial in the field length. |
 
-The check is deliberately **strict**, so it also refuses some patterns that are in fact safe — `(foo|bar)+` is fine, because the alternatives cannot overlap, but no cheap check can tell. Erring strict is the cheaper mistake: a rejected pattern costs you one confusing "my rule never fires", while an accepted bad one stalls your session.
+The second rule compares **character sets, not spelling**. `\w+\d+` looks like two different atoms but every digit is also a word character, so a run of digits can still be split between them in quadratically many ways — measured at ~22 seconds on a 4 000-character field. Conversely, adjacent quantifiers over genuinely *disjoint* atoms are fine and accepted: `a*b+`, `\w+\s*`, `[a-z]+[0-9]*`, `\W+\w+`, `\d+\.\d+`.
 
-**The workaround is almost always to lift the quantifier off the group**: `(foo|bar)+` → `(foo|bar)` or `foo|bar`. Adjacent quantifiers over *different* character sets are unaffected — `a*b+`, `\w+\s*`, `\d+\.\d+` and `[a-z]+[0-9]*` are all accepted.
+The check is deliberately **strict** where it cannot decide, so it also refuses some patterns that are in fact safe — `(foo|bar)+` is fine, because the alternatives cannot overlap, but no cheap check can tell. Erring strict is the cheaper mistake: a rejected pattern costs you one confusing rule, while an accepted bad one stalls your session.
 
-A rejected pattern is not an error: the rule simply never fires. Invalid regex *syntax*, by contrast, is rejected when you save the rule, with a message.
+**The workaround is almost always to lift the quantifier off the group**: `(foo|bar)+` → `(foo|bar)` or `foo|bar`.
+
+Saving a rejected pattern gives you an **error explaining why**, so you can fix it. (A pattern hand-written straight into `.minder.json`, bypassing that check, is caught again at match time — there it simply never fires.)
 
 ### Noise control
 

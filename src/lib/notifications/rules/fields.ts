@@ -115,6 +115,12 @@ export function extractFields(event: HookEvent, projectSlug: string): FieldValue
         const response = stringifyToolField(p.toolResponse);
         if (response) fields["tool.response"] = response;
         if (p.durationMs !== undefined) fields["tool.durationMs"] = p.durationMs;
+        // Always present on PostToolUse, including "false". The route leaves
+        // `toolFailed` undefined on success, and since absent fields never
+        // match, omitting it here would make `tool.failed equals false`
+        // impossible to satisfy — while the editor and help both offer it.
+        // Success is a fact this event carries, not a missing value.
+        fields["tool.failed"] = String(event.toolFailed === true);
         break;
       }
       case "UserPromptSubmit":

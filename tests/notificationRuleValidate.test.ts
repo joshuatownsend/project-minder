@@ -94,6 +94,20 @@ describe("validateNotificationRules — rejections", () => {
     expect(err([{ ...OK, op: "regex", pattern: "([" }])).toMatch(/not a valid regular expression/);
   });
 
+  it("rejects an unsafe-but-valid regex with an actionable message", () => {
+    // Syntax errors and safety refusals are deliberately distinct outcomes: a
+    // refused pattern otherwise saves fine and then silently never fires.
+    const message = err([{ ...OK, op: "regex", pattern: "(" + "a+" + ")+" }]);
+    expect(message).toMatch(/rejected as unsafe/);
+    expect(message).toMatch(/lifting the quantifier off the group/);
+  });
+
+  it("rejects an unsafe pattern only for op: regex — a literal is never compiled", () => {
+    // The same text under `contains` is a harmless substring search.
+    const r = validateNotificationRules([{ ...OK, op: "contains", pattern: "(" + "a+" + ")+" }]);
+    expect(r.ok).toBe(true);
+  });
+
   it("rejects an unknown channel or a non-boolean channel value", () => {
     expect(err([{ ...OK, channels: { sms: true } }])).toMatch(/unknown channel/);
     expect(err([{ ...OK, channels: { os: "yes" } }])).toMatch(/must be boolean/);

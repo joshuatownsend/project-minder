@@ -127,6 +127,29 @@ describe("extractFields — per-event payloads", () => {
     expect(f["tool.response"]).toContain("permission denied");
   });
 
+  it("reports tool.failed as \"false\" on a successful PostToolUse", () => {
+    // The route leaves `toolFailed` undefined on success. Since absent fields
+    // never match, omitting it would make `tool.failed equals false`
+    // unsatisfiable while the editor and help both offer it.
+    const f = extractFields(
+      {
+        hookEventName: "PostToolUse",
+        sessionId: "s",
+        cwd: "C:\\dev\\p",
+        receivedAt: 0,
+        toolName: "Bash",
+        payload: { kind: "PostToolUse", toolName: "Bash" },
+      },
+      "p",
+    );
+    expect(f["tool.failed"]).toBe("false");
+  });
+
+  it("still omits tool.failed on PreToolUse, where success is not yet known", () => {
+    const f = extractFields(preToolUse("Bash", { command: "ls" }), "p");
+    expect(f["tool.failed"]).toBeUndefined();
+  });
+
   it("captures permissionMode — the bypass-detection field", () => {
     const f = extractFields(
       {

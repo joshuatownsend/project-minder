@@ -100,15 +100,20 @@ export function isPatternSafe(pattern: string): boolean {
     // quantifies or alternates.
     if (closed?.risky) return false;
 
-    // The polynomial case: two *adjacent* unbounded quantifiers over
-    // overlapping character sets — `.*.*`, `\w+\w+`. Restricted to identical
-    // atoms or a `.` (which overlaps everything) on purpose: the naive
-    // "two unbounded quantifiers in a row" rule also rejects `a*b+` and
-    // `\w+\s*`, which are disjoint, safe, and extremely common. Rejecting
-    // those would push this from strict into unusable.
+    // The polynomial case: two *adjacent* unbounded quantifiers whose atoms
+    // can match the same character — `.*.*`, `\w+\w+`, and crucially
+    // `\w+\d+$`, where the atoms are textually different but digits are a
+    // subset of word characters, so the engine can still split a run of
+    // digits between them in quadratically many ways.
+    //
+    // Overlap is decided by `atomsMayOverlap`, not by string equality: an
+    // equality test accepts `\w+\d+$` (~22s on a 4 000-character field —
+    // long enough to stall the hook receiver), while the opposite extreme,
+    // rejecting every adjacent pair, kills `a*b+`, `\w+\s*` and
+    // `[a-z]+[0-9]*`, which are disjoint, safe and ubiquitous.
     const atom = pattern.slice(atomStart, atomEnd + 1);
     if (q.unbounded && prevAtomUnbounded && prevAtom !== null) {
-      if (atom === prevAtom || atom === "." || prevAtom === ".") return false;
+      if (atomsMayOverlap(atom, prevAtom)) return false;
     }
 
     // Quantifying anything makes the enclosing group risky.
@@ -123,6 +128,146 @@ export function isPatternSafe(pattern: string): boolean {
   // Unclosed groups would throw at compile time anyway; reject here so the
   // reason is "unsafe" rather than a swallowed syntax error.
   return groups.length === 0;
+}
+
+/**
+ * Characters used to decide whether two atoms can match the same input.
+ *
+ * Exhaustive over printable ASCII rather than a hand-picked sample of
+ * equivalence classes, because a sample is unsound in the dangerous
+ * direction: a *missed* overlap accepts an unsafe pattern. `[a-f]+[d-z]*`
+ * overlaps only on `d`–`f`, so any probe set without one of those letters
+ * would wave it through.
+ *
+ * Cost is irrelevant here — this runs only when a pattern actually contains
+ * two adjacent unbounded quantifiers, and the verdict is cached per pattern.
+ *
+ * Residual limit: overlap that exists *only* outside these characters (two
+ * disjoint-looking non-ASCII ranges that in fact intersect) is not detected.
+ * Such a pattern is still bounded by the field cap, and no realistic rule
+ * looks like that.
+ */
+const OVERLAP_PROBES: readonly string[] = (() => {
+  const chars = ["\t", "\n", "\r", "é", "€"];
+  for (let code = 0x20; code <= 0x7e; code++) chars.push(String.fromCharCode(code));
+  return chars;
+})();
+
+function isDigit(c: string): boolean {
+  return c >= "0" && c <= "9";
+}
+
+function isWordChar(c: string): boolean {
+  return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || isDigit(c) || c === "_";
+}
+
+function isSpaceChar(c: string): boolean {
+  return c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v";
+}
+
+/** Escape sequences that denote a literal control character. */
+const ESCAPE_LITERALS: Record<string, string> = {
+  n: "\n", t: "\t", r: "\r", f: "\f", v: "\v", "0": "\0",
+};
+
+/**
+ * Does `atom` match the single character `ch`? Returns null when this cannot
+ * be decided (a group, a zero-width assertion, an unrecognised construct) —
+ * callers must treat null as "assume it overlaps".
+ *
+ * Deliberately hand-rolled rather than `new RegExp("^(?:"+atom+")$")`: that
+ * would build a regex out of user input inside the very function whose job is
+ * to make user input safe, which is both a fresh injection sink and circular.
+ */
+function atomMatches(atom: string, ch: string): boolean | null {
+  if (atom === ".") return ch !== "\n";
+  if (atom.length === 1) return atom === ch;
+
+  if (atom.startsWith("\\") && atom.length === 2) {
+    const k = atom[1];
+    switch (k) {
+      case "w": return isWordChar(ch);
+      case "W": return !isWordChar(ch);
+      case "d": return isDigit(ch);
+      case "D": return !isDigit(ch);
+      case "s": return isSpaceChar(ch);
+      case "S": return !isSpaceChar(ch);
+      case "b": case "B": return null; // zero-width, not a character atom
+      default: return (ESCAPE_LITERALS[k] ?? k) === ch;
+    }
+  }
+
+  if (atom.startsWith("[")) return classMatches(atom, ch);
+  return null;
+}
+
+/** Membership test for a `[...]` class, including ranges, escapes and `^`. */
+function classMatches(atom: string, ch: string): boolean | null {
+  let i = 1;
+  let negated = false;
+  if (atom[i] === "^") {
+    negated = true;
+    i++;
+  }
+  const end = atom.length - 1; // index of the closing `]`
+  let hit = false;
+
+  while (i < end) {
+    let lo: string;
+    if (atom[i] === "\\") {
+      const k = atom[i + 1];
+      if (k === "w" || k === "W" || k === "d" || k === "D" || k === "s" || k === "S") {
+        const m = atomMatches(`\\${k}`, ch);
+        if (m === null) return null;
+        if (m) hit = true;
+        i += 2;
+        continue;
+      }
+      lo = ESCAPE_LITERALS[k] ?? k;
+      i += 2;
+    } else {
+      lo = atom[i];
+      i += 1;
+    }
+
+    // A `-` that is not the last member introduces a range.
+    if (atom[i] === "-" && i + 1 < end) {
+      i++;
+      let hi: string;
+      if (atom[i] === "\\") {
+        hi = ESCAPE_LITERALS[atom[i + 1]] ?? atom[i + 1];
+        i += 2;
+      } else {
+        hi = atom[i];
+        i += 1;
+      }
+      if (ch >= lo && ch <= hi) hit = true;
+    } else if (ch === lo) {
+      hit = true;
+    }
+  }
+
+  return negated ? !hit : hit;
+}
+
+/**
+ * Can these two atoms match the same character? Conservative: anything it
+ * cannot decide is reported as overlapping, so a construct this scanner does
+ * not model can never widen the accepted set.
+ */
+function atomsMayOverlap(a: string, b: string): boolean {
+  if (a === b) return true;
+  // `)` stands for a whole group here; its contents are not available, so the
+  // only safe answer is "yes".
+  if (a === ")" || b === ")") return true;
+
+  for (const ch of OVERLAP_PROBES) {
+    const ma = atomMatches(a, ch);
+    const mb = atomMatches(b, ch);
+    if (ma === null || mb === null) return true;
+    if (ma && mb) return true;
+  }
+  return false;
 }
 
 /** Index of the closing `]`, or -1 if the class never terminates. */
@@ -182,18 +327,28 @@ function readQuantifier(
 const regexCache = new Map<string, RegExp | null>();
 const MAX_REGEX_CACHE = 100;
 
+/**
+ * The single place a rule pattern becomes a RegExp.
+ *
+ * Building a regex is linear and cannot backtrack — only *running* one can —
+ * so construction is safe even for a catastrophic pattern. `isPatternSafe`
+ * therefore guards evaluation (`compile`, below), not this.
+ */
+function tryConstruct(pattern: string): RegExp | null {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return null; // invalid syntax
+  }
+}
+
 function compile(pattern: string): RegExp | null {
   const cached = regexCache.get(pattern);
   if (cached !== undefined) return cached;
 
-  let compiled: RegExp | null = null;
-  if (isPatternSafe(pattern)) {
-    try {
-      compiled = new RegExp(pattern, "i");
-    } catch {
-      compiled = null; // invalid syntax — rule never fires
-    }
-  }
+  // Safety first here: an unsafe pattern is never handed to a caller that
+  // will `.test()` it.
+  const compiled = isPatternSafe(pattern) ? tryConstruct(pattern) : null;
 
   if (regexCache.size >= MAX_REGEX_CACHE) regexCache.clear();
   regexCache.set(pattern, compiled);
@@ -203,6 +358,28 @@ function compile(pattern: string): RegExp | null {
 /** Test-only: drop the compiled-pattern cache. */
 export function clearRegexCache(): void {
   regexCache.clear();
+}
+
+export type PatternVerdict = "ok" | "unsafe" | "invalid";
+
+/**
+ * Classify a pattern for the `/api/config` validator.
+ *
+ * Exists so the validator never calls `new RegExp` on user input itself: this
+ * module is the single place a rule pattern is compiled, and the call there is
+ * guarded by `isPatternSafe` in the same function. It also lets an unsafe
+ * pattern be *reported* at save time rather than only degrading to a rule that
+ * silently never fires — the matcher keeps its own guard for patterns
+ * hand-written straight into `.minder.json`.
+ */
+export function describePattern(pattern: string): PatternVerdict {
+  // Syntax before safety, deliberately. The safety scan also rejects malformed
+  // input (`([` is an unterminated class), so checking it first would report
+  // an ordinary typo as "unsafe" — true, but useless to whoever has to fix it.
+  // Constructing first costs nothing: it is the *execution* of a catastrophic
+  // pattern that hangs, and this result is discarded.
+  if (!tryConstruct(pattern)) return "invalid";
+  return isPatternSafe(pattern) ? "ok" : "unsafe";
 }
 
 function excerpt(value: string | number): string {

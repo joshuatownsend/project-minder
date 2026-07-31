@@ -6,6 +6,7 @@ import { sweepAndGetState, drainNewAwaitingTransitions } from "@/lib/hooks/buffe
 import { countOpenDecisions, countInboxMessages, countNewDecisions } from "@/lib/tasks/store";
 import { getFlag } from "@/lib/featureFlags";
 import { readConfig } from "@/lib/config";
+import { drainOsNotifications } from "@/lib/notifications/rules/osQueue";
 
 // Single endpoint that bundles every signal the dashboard chrome polls for.
 // Replaces three independent client-side intervals (5s + 10s + 30s) with one
@@ -91,6 +92,21 @@ export async function GET(request: NextRequest) {
     kind: "awaiting-permission" as const,
   }));
 
+  // Notification-rule matches destined for the `os` channel. Same edge-trigger
+  // shape as awaiting-permission above: draining is what makes it fire once.
+  const ruleChanges = since
+    ? drainOsNotifications().map((n) => ({
+        slug: n.projectSlug,
+        projectName: n.projectName,
+        title: `${n.ruleName}: ${n.excerpt}`,
+        changedAt: n.at,
+        kind: "rule-match" as const,
+        ruleId: n.ruleId,
+        ruleName: n.ruleName,
+        severity: n.severity,
+      }))
+    : [];
+
   // Task dispatcher signals — only computed when taskDispatcher flag is on
   let decisionCount = 0;
   let inboxCount = 0;
@@ -129,7 +145,7 @@ export async function GET(request: NextRequest) {
     decisionCount,
     inboxCount,
     dispatcherPaused,
-    changes: [...changes, ...awaitingChanges, ...decisionChanges],
+    changes: [...changes, ...awaitingChanges, ...ruleChanges, ...decisionChanges],
     liveSlugs,
     awaitingSlugs,
     verifiedLiveSlugs,
@@ -145,7 +161,18 @@ export type PulsePayload = {
   decisionCount: number;
   inboxCount: number;
   dispatcherPaused: boolean;
-  changes: { slug: string; projectName: string; title: string; changedAt: string; kind?: string }[];
+  changes: {
+    slug: string;
+    projectName: string;
+    title: string;
+    changedAt: string;
+    kind?: string;
+    // Present only on `kind: "rule-match"` — lets the listener show the rule
+    // name and its severity without re-parsing `title`.
+    ruleId?: string;
+    ruleName?: string;
+    severity?: string;
+  }[];
   liveSlugs: string[];
   awaitingSlugs: string[];
   verifiedLiveSlugs: string[];

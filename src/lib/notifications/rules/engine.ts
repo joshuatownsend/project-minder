@@ -21,6 +21,7 @@ import { sendTelegram } from "@/lib/notifications/telegram";
 import { extractFields } from "./fields";
 import { matchRules } from "./matcher";
 import { claimCooldown } from "./cooldown";
+import { queueOsNotification } from "./osQueue";
 import { DEFAULT_COOLDOWN_SEC, type RuleMatch, type RuleSeverity } from "./types";
 
 const SEVERITY_PREFIX: Record<RuleSeverity, string> = {
@@ -97,8 +98,22 @@ function deliver(match: RuleMatch, projectName: string): Promise<unknown>[] {
     );
   }
 
-  // The `os` channel is browser-side: NotificationListener surfaces it from the
-  // live-activity buffer, which already holds this event. Nothing to send here.
+  // `os` cannot be delivered from here — only a browser with permission can
+  // raise an OS notification — so the match is queued for `/api/pulse` to hand
+  // to whichever tab polls next. Queuing is not optional: `os` is the default
+  // channel for a new custom rule and the only channel on two presets, so
+  // dropping it here would make those rules silently do nothing.
+  if (rule.channels.os) {
+    queueOsNotification({
+      ruleId: rule.id,
+      ruleName: rule.name,
+      severity: rule.severity ?? "info",
+      projectSlug,
+      projectName,
+      excerpt,
+      at: new Date().toISOString(),
+    });
+  }
 
   return jobs;
 }

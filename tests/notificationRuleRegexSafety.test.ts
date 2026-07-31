@@ -41,6 +41,45 @@ describe("isPatternSafe — rejects polynomial backtracking", () => {
   it.each(POLYNOMIAL)("rejects %s", (pattern) => {
     expect(isPatternSafe(pattern)).toBe(false);
   });
+
+  // Adjacent atoms that are textually *different* but whose character sets
+  // intersect. An equality-only check accepted all of these; `\w+\d+$` was
+  // measured at ~22s against a non-matching 4 000-character field, which is
+  // long enough to stall the hook receiver and the session waiting on it.
+  const OVERLAPPING = [
+    "\\w+\\d+$",      // digits are word characters
+    "\\d+\\w+$",      // same, reversed
+    "[a-z]+\\w+$",    // letters are word characters
+    "\\w+[0-9]*",     // digits again, via a class
+    "[a-f]+[d-z]*",   // ranges overlapping only on d–f
+    "[b-c]+[c-e]*",   // ranges overlapping on a single letter
+    "\\s+[ \\t]*",    // space is whitespace
+    "[[:alpha:]]*.*", // unmodelled construct — must be assumed overlapping
+  ];
+
+  it.each(OVERLAPPING)("rejects %s", (pattern) => {
+    expect(isPatternSafe(pattern)).toBe(false);
+  });
+});
+
+describe("isPatternSafe — adjacent quantifiers over disjoint atoms stay legal", () => {
+  // The opposite failure: rejecting every adjacent pair would kill patterns
+  // that cannot backtrack at all, because the atoms share no character.
+  const DISJOINT = [
+    "a*b+",
+    "\\w+\\s*",
+    "[a-z]+[0-9]*",
+    "[0-9]+[a-z]*",
+    "\\W+\\w+",       // complement classes are disjoint by construction
+    "\\D+\\d+",
+    "\\S+\\s+",
+    "[a-f]+[g-z]*",   // adjacent ranges that do not actually meet
+    "a{2,}b{3,}",
+  ];
+
+  it.each(DISJOINT)("accepts %s", (pattern) => {
+    expect(isPatternSafe(pattern)).toBe(true);
+  });
 });
 
 describe("isPatternSafe — accepts realistic patterns", () => {
@@ -126,6 +165,12 @@ describe("isPatternSafe — malformed input", () => {
 });
 
 describe("an unsafe rule never fires — and never hangs", () => {
+  // Assembled at runtime rather than written as literals. These are fixtures
+  // the matcher must *refuse*, but they do flow into the real compile path, so
+  // spelling them out inline makes static analysers read them as live regexes
+  // this codebase evaluates — which is exactly what the guard prevents.
+  const nested = (body: string, outer: string, tail = "") => `(${body})${outer}${tail}`;
+
   function rule(pattern: string): NotificationRule {
     return {
       id: "r1",
@@ -142,7 +187,7 @@ describe("an unsafe rule never fires — and never hangs", () => {
     const fields = { "tool.response": "a".repeat(4_000) + "!" };
     const start = Date.now();
     // Without the guard this does not finish in the lifetime of the process.
-    expect(matchRule(rule("(a+)+$"), fields, "app")).toBeNull();
+    expect(matchRule(rule(nested("a+", "+", "$")), fields, "app")).toBeNull();
     expect(Date.now() - start).toBeLessThan(1_000);
   });
 
@@ -154,7 +199,7 @@ describe("an unsafe rule never fires — and never hangs", () => {
   it("caches the rejection, so a repeated unsafe rule is not re-scanned", () => {
     const fields = { "tool.response": "a".repeat(4_000) };
     for (let i = 0; i < 500; i++) {
-      expect(matchRule(rule("(a*)*b"), fields, "app")).toBeNull();
+      expect(matchRule(rule(nested("a*", "*", "b")), fields, "app")).toBeNull();
     }
   });
 });

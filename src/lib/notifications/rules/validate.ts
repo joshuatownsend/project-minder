@@ -13,6 +13,7 @@
  * without ever passing through the API.
  */
 
+import { describePattern } from "./matcher";
 import {
   MAX_COOLDOWN_SEC,
   MAX_PATTERN_LENGTH,
@@ -103,10 +104,21 @@ export function validateNotificationRules(input: unknown): ValidateResult {
       return fail(`${at}.pattern must be a number when op is "${op}"`);
     }
     if (op === "regex") {
-      try {
-        new RegExp(r.pattern);
-      } catch {
+      // Delegated rather than compiled here: `matcher.ts` is the one place a
+      // rule pattern is turned into a RegExp, and there the call is guarded by
+      // the safety scan. Reporting "unsafe" as a validation error also means
+      // the user is told, instead of saving a rule that can never fire.
+      const verdict = describePattern(r.pattern);
+      if (verdict === "invalid") {
         return fail(`${at}.pattern is not a valid regular expression`);
+      }
+      if (verdict === "unsafe") {
+        return fail(
+          `${at}.pattern is rejected as unsafe: a quantifier applied to a group that ` +
+            `itself quantifies or alternates (e.g. "(a+)+"), or two adjacent unbounded ` +
+            `quantifiers over overlapping characters (e.g. ".*.*"), can hang the hook ` +
+            `receiver. Try lifting the quantifier off the group.`,
+        );
       }
     }
 
