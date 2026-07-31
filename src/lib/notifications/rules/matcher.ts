@@ -333,6 +333,19 @@ const MAX_REGEX_CACHE = 100;
  * Building a regex is linear and cannot backtrack — only *running* one can —
  * so construction is safe even for a catastrophic pattern. `isPatternSafe`
  * therefore guards evaluation (`compile`, below), not this.
+ *
+ * CodeQL flags this line as `js/regex-injection`, and will keep flagging it
+ * wherever it lives: the query fires on a regex built from user input, and a
+ * user-authored regex is precisely the feature. The alert is dismissed rather
+ * than worked around, because every "fix" is cosmetic relocation — the sink
+ * moves, the behaviour does not.
+ *
+ * What the query is really a proxy for is ReDoS, and that is addressed
+ * directly: `isPatternSafe` refuses superlinear patterns before any of them
+ * reaches `.test()`, and fields are length-capped before matching. Note also
+ * that the "user" is the operator of a localhost-only dashboard editing their
+ * own `.minder.json` — there is no privilege boundary here for an injected
+ * pattern to cross.
  */
 function tryConstruct(pattern: string): RegExp | null {
   try {
