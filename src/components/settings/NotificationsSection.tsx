@@ -11,6 +11,7 @@ import {
 } from "@/lib/clientPush";
 import { S } from "./styles";
 import { Toggle } from "./Toggle";
+import { NotificationRulesEditor } from "./NotificationRulesEditor";
 
 interface PushSub {
   id: number;
@@ -121,15 +122,31 @@ export function NotificationsSection({
     const current = config?.notificationPrefs?.events?.["manual-step-added"] ?? {};
     const updated: EventPrefs = { ...current, [channel]: next };
     await onConfigChange({
-      notificationPrefs: { events: { "manual-step-added": updated } },
+      // Spread the sibling events back in: PUT /api/config replaces
+      // `notificationPrefs` wholesale rather than merging, so sending only this
+      // one key silently wiped the awaiting-permission channels.
+      notificationPrefs: {
+        events: {
+          ...(config?.notificationPrefs?.events ?? {}),
+          "manual-step-added": updated,
+        },
+      },
     });
   }
 
-  const futureRows: Array<{ event: string; wave: number; description: string }> = [
-    { event: "Session errored", wave: 7.2, description: "Fires when a session ends in an error state." },
-    { event: "Awaiting permission", wave: 7.2, description: "Fires when a session needs your approval (hook server)." },
-    { event: "Dispatcher emergency stop", wave: 9, description: "Fires when the dispatcher halts unexpectedly." },
-  ];
+  const awaitingPrefs = config?.notificationPrefs?.events?.["awaiting-permission"] ?? {};
+
+  async function toggleAwaitingChannel(channel: Channel, next: boolean) {
+    const current = config?.notificationPrefs?.events?.["awaiting-permission"] ?? {};
+    await onConfigChange({
+      notificationPrefs: {
+        events: {
+          ...(config?.notificationPrefs?.events ?? {}),
+          "awaiting-permission": { ...current, [channel]: next },
+        },
+      },
+    });
+  }
 
   return (
     <section>
@@ -236,21 +253,30 @@ export function NotificationsSection({
         </div>
       </div>
 
-      {/* Future events (disabled rows) */}
-      {futureRows.map((row) => (
-        <div
-          key={row.event}
-          style={{ ...S.row, opacity: 0.5, marginBottom: "1px" }}
-        >
-          <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={S.label}>{row.event}</span>
-              <span style={S.badge}>Coming in wave {row.wave}</span>
-            </div>
-            <div style={S.muted}>{row.description}</div>
+      {/* Live event: awaiting-permission */}
+      <div style={{ ...S.row, marginBottom: "8px" }}>
+        <div style={{ flex: 1 }}>
+          <div style={S.label}>Awaiting permission</div>
+          <div style={S.muted}>
+            Fires when a session needs your approval or input (requires the hook server).
+          </div>
+          <div style={{ display: "flex", gap: "16px", marginTop: "8px" }}>
+            {(["push", "telegram", "os"] as Channel[]).map((ch) => (
+              <label key={ch} style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                <Toggle
+                  value={!!(awaitingPrefs as Record<string, boolean | undefined>)[ch]}
+                  onChange={(v) => toggleAwaitingChannel(ch, v)}
+                  label={`${ch} for awaiting-permission`}
+                />
+                <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{ch}</span>
+              </label>
+            ))}
           </div>
         </div>
-      ))}
+      </div>
+
+      {/* Open-ended rules engine */}
+      <NotificationRulesEditor config={config} onConfigChange={onConfigChange} />
 
       {testMsg && (
         <div style={{ marginTop: "12px", fontSize: "0.78rem", color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>

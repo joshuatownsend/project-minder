@@ -13,6 +13,7 @@ import {
 } from "@/lib/hooks/buffer";
 import { parseHookPayload } from "@/lib/hooks/payload";
 import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaitingPermission";
+import { evaluateAndDispatchRules } from "@/lib/notifications/rules/engine";
 import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import { bridgeHookToEventBus } from "@/lib/agentView/eventBus";
 import type { HookEventName } from "@/lib/types";
@@ -99,6 +100,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   pushHookEvent(slug, event);
   bridgeHookToEventBus(slug, session_id, eventName, event.toolName, event.message);
 
+  const projectName = getCachedScan()?.projects.find((p) => p.slug === slug)?.name ?? slug;
+
+  // Notification rules run against *every* event, not just Notification ones —
+  // that is the whole point of the engine (a .env read arrives as PreToolUse).
+  // Fire-and-forget: the Claude Code process is blocked on this response, and
+  // push/telegram delivery crosses the network.
+  evaluateAndDispatchRules(config, event, slug, projectName).catch((err: unknown) => {
+    console.warn("[hooks] rule dispatch failed:", err);
+  });
+
   if (STOP_EVENTS.has(eventName)) {
     clearLiveSession(session_id);
   } else {
@@ -107,10 +118,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (eventName === "Notification") {
       const isNew = setAwaiting(slug);
       if (isNew) {
-        // Find project name for the notification payload
-        const scan = getCachedScan();
-        const projectName =
-          scan?.projects.find((p) => p.slug === slug)?.name ?? slug;
         // Fire and forget — don't block the hook response
         dispatchAwaitingPermission({
           slug,

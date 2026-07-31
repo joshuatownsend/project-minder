@@ -1,6 +1,6 @@
 # Notifications
 
-Project Minder can alert you when a new manual step is added to any project's `MANUAL_STEPS.md`, even when the dashboard tab is closed.
+Project Minder can alert you when a new manual step is added to any project's `MANUAL_STEPS.md`, when a session is waiting on you, or when any **notification rule** you define matches a live hook event — all while the dashboard tab is closed.
 
 ## Setup
 
@@ -17,6 +17,87 @@ Project Minder can alert you when a new manual step is added to any project's `M
 | **os** | In-tab OS notification using the Web Notification API. Requires browser permission. |
 
 Enable or disable each channel per event in the **Event toggles** section.
+
+## Rules
+
+The two event toggles cover fixed triggers. **Rules** are open-ended: each one watches a single field of every live hook event and notifies you when it matches.
+
+A rule is a `{field, operator, pattern}` triple plus the channels to notify on:
+
+| Part | Example |
+|------|---------|
+| field | `tool.input` |
+| operator | `contains` |
+| pattern | `.env` |
+| channels | push + os |
+
+Rules live in **Settings → Notifications → Rules**. Start from a suggested rule (**Add**) or build your own (**Add custom rule**).
+
+### Suggested rules
+
+| Rule | What it catches |
+|------|-----------------|
+| **Secret file accessed** | Any tool call whose path or command contains `.env`. The highest-value alert here: it tells you the moment a session reads credentials. |
+| **Running with permissions bypassed** | A session in `bypassPermissions` mode — the state where nothing else asks you first. |
+| **Tool call failed** | Any tool returning an error or non-zero exit code. |
+| **Destructive shell command** | `rm -rf`. |
+| **Force push** | `git push --force`. |
+| **Tool call took over a minute** | Long builds and test runs. Ships disabled. |
+
+### Fields
+
+| Field | Set on | Notes |
+|-------|--------|-------|
+| `any` | all | Every text field concatenated — the catch-all. |
+| `event` | all | `PreToolUse`, `PostToolUse`, `Stop`, … |
+| `project` / `cwd` | all | Project slug and working directory. |
+| `permissionMode` | all | `default`, `acceptEdits`, `plan`, `bypassPermissions`. |
+| `tool.name` | tool events | `Bash`, `Edit`, `Write`, `Read`, `Task`, … |
+| `tool.input` | tool events | Command text, file path, patch body. Where `.env` access shows up. |
+| `tool.response` | `PostToolUse` | Result text, including error messages. |
+| `tool.failed` | `PostToolUse` | `true` / `false`. |
+| `tool.durationMs` | `PostToolUse` | Numeric — use **is greater than**. |
+| `prompt` | `UserPromptSubmit` | Text you submitted. |
+| `message` | `Notification`, `SubagentStop` | Claude Code's own notification text. |
+| `model` | `SessionStart` | |
+| `agentType` | `SubagentStop` | |
+
+A rule whose field is absent from an event never fires — so a `prompt` rule is silently skipped on a tool call rather than matching an empty string.
+
+### Operators
+
+`contains` and `equals` are **case-insensitive** — every realistic pattern (`.env`, `Bash`, `bypassPermissions`) is a human-typed literal where case sensitivity is a footgun. `matches regex` is also case-insensitive. `is greater than` / `is less than` compare numerically.
+
+### Why some regexes are rejected
+
+Rules run inline on the request a Claude Code session is blocked on, and JavaScript's regex engine backtracks and **cannot be interrupted** — there is no timeout to fall back on. A pattern like `(a+)+$` against a few thousand characters does not finish in the lifetime of the process, so it would not be a slow rule, it would be a frozen editor.
+
+Two shapes are therefore refused:
+
+| Shape | Example | Why |
+|---|---|---|
+| A quantifier applied to a group that itself quantifies or alternates | `(a+)+`, `(a\|b)*`, `([a-z]+)*` | Exponential — the engine can split the same input exponentially many ways. |
+| Two adjacent unbounded quantifiers over overlapping characters | `.*.*`, `\w+\w+` | Polynomial in the field length. |
+
+The check is deliberately **strict**, so it also refuses some patterns that are in fact safe — `(foo|bar)+` is fine, because the alternatives cannot overlap, but no cheap check can tell. Erring strict is the cheaper mistake: a rejected pattern costs you one confusing "my rule never fires", while an accepted bad one stalls your session.
+
+**The workaround is almost always to lift the quantifier off the group**: `(foo|bar)+` → `(foo|bar)` or `foo|bar`. Adjacent quantifiers over *different* character sets are unaffected — `a*b+`, `\w+\s*`, `\d+\.\d+` and `[a-z]+[0-9]*` are all accepted.
+
+A rejected pattern is not an error: the rule simply never fires. Invalid regex *syntax*, by contrast, is rejected when you save the rule, with a message.
+
+### Noise control
+
+Each rule has a **cooldown** (default 60s): the minimum gap between deliveries for that rule *in that project*. A failing test loop trips a `tool.failed` rule on every retry; the cooldown collapses that into one ping. Set it to `0` to disable throttling.
+
+This is separate from the 5-minute duplicate-payload window, which suppresses *identical* notifications. Cooldown suppresses *different* ones from the same rule.
+
+### Requirements and limits
+
+- Rules see only what the hook receiver receives, so they need the **Live activity (hook server)** flag on and hooks installed (**Settings → Live activity → Install hooks**).
+- The **Notification rules** feature flag is on by default, but nothing fires until you add a rule.
+- Up to 50 rules; patterns up to 200 characters.
+- Regex patterns whose worst-case cost is superlinear are rejected — see [Why some regexes are rejected](#why-some-regexes-are-rejected) above.
+- Token-usage thresholds are **not** available as a rule field: hook events carry no token counts. That needs a polling evaluator over the usage index and is not built yet.
 
 ## Managing subscriptions
 

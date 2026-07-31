@@ -1,6 +1,7 @@
 import type { ProjectStatus } from "./project";
 import type { ConflictPolicy } from "./template";
 import type { PluginsInfo, HooksInfo, McpServersInfo } from "./claudeConfig";
+import type { NotificationRule } from "../notifications/rules/types";
 
 /** Keys in MinderConfig.featureFlags. Each flag defaults to ON; `false`
  *  disables the named subsystem on next scan / next server restart. The
@@ -37,7 +38,8 @@ export type FeatureFlagKey =
   | "serverActions"
   | "liveEvents"
   | "demoMode"
-  | "workflowLauncher";
+  | "workflowLauncher"
+  | "notificationRules";
 
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
 export type HookEventName =
@@ -135,6 +137,12 @@ export interface MinderConfig {
   terminal?: string;
   /** Telegram bridge config. Bot token is stored in secrets.json, not here. Wave 7 (P) honors. */
   telegram?: { chatId?: string };
+  /**
+   * User-defined notification rules, evaluated against every live hook event.
+   * The open-ended successor to `notificationPrefs.events` below (which stays
+   * for the two built-in triggers). Order is evaluation order.
+   */
+  notificationRules?: NotificationRule[];
   /** Notification preferences. Wave 7 (P) honors. */
   notificationPrefs?: {
     events: {
