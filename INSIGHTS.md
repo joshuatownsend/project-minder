@@ -1,5 +1,65 @@
 # Insights
 
+<!-- insight:340aa16095b6 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T22:42:36.916Z -->
+## ★ Insight
+The failing test was the interesting one. `"is idempotent — skips events already having managed entry"` used a fixture built by hand to look like an install, and it was *asserting the bug*: that a config with a managed `PreToolUse` entry gets no further writes.
+
+---
+
+<!-- insight:02e9d422f407 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T22:25:41.986Z -->
+## ★ Insight
+The P1 finding is the same shape as the three bugs on the previous PRs: **documentation promising behavior the code didn't wire up**. The gate's entire mechanism existed and was tested — it just had no caller, because `installLiveActivityHooks` registered `PreToolUse` with the fire-and-forget command and its idempotency check (`alreadyManaged`) would have skipped the event on any existing install even if I had added it.
+
+---
+
+<!-- insight:55f4e25966a5 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T21:27:41.353Z -->
+## ★ Insight
+**The bypass list must default to "requires approval," not "safe."** A read-only bypass is a hole in the gate, so an unknown tool — a new built-in, or any `mcp__*` server tool — has to fall through to approval. Getting the polarity backwards means every future tool silently skips the gate, and nothing surfaces that it happened.
+
+---
+
+<!-- insight:5e75dfb624b8 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T19:02:50.030Z -->
+## ★ Insight
+**Finding #2 is the sharpest one, and I'd have shipped a subtly wrong number.** `peakMeasuredTokens` is `input_tokens + cache` on an assistant turn — the window *as it was fed in*, which by definition excludes that turn's own reply, thinking, and tool calls. But `attributedTotal` sums the entire segment, including everything after the peak. Subtracting them compares two different moments in time, so the "unattributed" remainder is always understated by at least the final response — and a large response could floor it to zero, hiding the harness overhead entirely. The fix is to snapshot cumulative attribution *at the peak turn, before adding that turn's own contribution*.
+
+---
+
+<!-- insight:540a2bb34e1b | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T17:15:14.984Z -->
+## ★ Insight
+**FTS5 has `snippet()` built in, and PR #2 is what made it useful.** It returns an excerpt centred on the match, straight out of the indexed column — so now that `prompts_fts` holds full bodies rather than 500-char previews, the excerpt can come from *the actual matched text*, including thinking and subagent content that no other table stores.
+
+---
+
+<!-- insight:b9cccc2e3923 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T12:42:32.330Z -->
+## ★ Insight
+**The honest framing matters more than the categories here.** Per-turn input token *totals* are ground truth (the API reports them), but the *breakdown* is not — the JSONL never says "8k of this turn was CLAUDE.md." So any attribution is an estimate from character counts. The design decision that makes this trustworthy rather than decorative is reconciling attributed-vs-measured per turn and surfacing the remainder explicitly, the same posture `contextOverhead.ts` already takes with `unaccountedTokens`. A chart that silently normalized to 100% would look more polished and be worth less.
+
+---
+
+<!-- insight:caabfd7f61ff | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T12:22:42.249Z -->
+## ★ Insight
+**My 4.12× overhead figure was measured correctly but extrapolated wrongly.** I derived it from production, where `prompts_fts` holds 154,097 rows averaging ~128 bytes of text each. At that shape, per-row bookkeeping (the `_content` table storing five UNINDEXED columns per row) dominates the actual indexed text. I then applied that ratio to a much larger text volume — implicitly assuming overhead scales with *bytes*.
+
+---
+
+<!-- insight:95998f9a4165 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T11:48:24.877Z -->
+## ★ Insight
+**Why chunk overlap is a correctness property, not a tuning knob.** Splitting text at a fixed stride means a phrase straddling a boundary — "the migration is failing" split as "…the migra" / "tion is failing…" — exists in *neither* chunk, so an FTS phrase query can never match it. Overlapping by N characters guarantees any span shorter than N is wholly contained in at least one chunk. The overlap size is therefore a bound on the longest reliably-matchable phrase, which is why 400 (not 40) is the right order of magnitude.
+
+---
+
+<!-- insight:9ddf4973690f | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T02:12:56.681Z -->
+## ★ Insight
+**Why this becomes a separate pure module rather than inline SQL.** The whole point of RRF is that it needs *no* knowledge of where the lists came from — it consumes ordinal positions only. Keeping it in `rrf.ts` with zero DB imports means it's testable without the `driverAvailable` skip guard that gates every other test in `sessionSearch.test.ts`. That matters here: the fusion math is the part most likely to regress silently, and it's the part currently least covered.
+
+---
+
+<!-- insight:aeded57d0f2d | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T01:49:43.181Z -->
+## ★ Insight
+**Why RRF is the right primitive here even without embeddings.** The reason `titleScore = 0.5` exists is that BM25 magnitudes and LIKE matches live on incomparable scales — there's no honest way to normalize them into one number. RRF sidesteps normalization entirely by discarding magnitude and keeping only *ordinal position within each list*. It doesn't matter that BM25 returns −5.0 and LIKE returns nothing; what matters is "3rd in the keyword list, 1st in the title list." The `k=60` constant is a damping term: large `k` flattens the curve so rank-1 and rank-10 differ little (trusting neither retriever much), small `k` sharpens it toward winner-take-all.
+
+---
+
 <!-- insight:b5c12d909641 | session:77fcf4b0-c6d5-4967-a5b2-f991b4db0e3b | 2026-07-27T02:38:01.236Z -->
 ## ★ Insight
 I wrote down the *rejected* option (fuzzy attribution) alongside the chosen one. A checklist that only records decisions loses the reasoning, and the most common failure mode when picking a parked item back up months later is re-proposing something you already ruled out — here, the cheap-looking fuzzy match that quietly corrupts cost numbers.
