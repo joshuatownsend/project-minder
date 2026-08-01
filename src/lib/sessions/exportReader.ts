@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import readline from "readline";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
+import { getAdapter } from "@/lib/adapters";
 import type { SessionDetail } from "@/lib/types";
 import type { ExportBlock, ExportMessage, ExportMeta } from "./markdownExport";
 
@@ -314,12 +315,7 @@ export async function loadExportSource(
   detail: SessionDetail,
   options: { sidechains?: boolean } = {},
 ): Promise<ExportSource> {
-  let located: { filePath: string } | null = null;
-  try {
-    located = await resolveSessionJsonl(sessionId);
-  } catch {
-    located = null;
-  }
+  const located = await locateTranscript(sessionId, detail.source);
 
   if (!located) {
     return {
@@ -353,17 +349,19 @@ export async function loadExportSource(
       };
     }
 
+    let subUnread = 0;
     if (options.sidechains) {
       const sub = await readSubagentMessages(located.filePath, sessionId);
-      if (sub.length > 0) {
+      subUnread = sub.unread;
+      if (sub.messages.length > 0) {
         // Appended rather than interleaved: subagent files carry their own
         // timelines and merging them by timestamp would imply an ordering
         // relationship across processes that the data doesn't support.
-        messages.push(...sub);
+        messages.push(...sub.messages);
       }
     }
 
-    return { messages, fidelity: "full", unread };
+    return { messages, fidelity: "full", unread: unread + subUnread };
   } catch {
     return {
       messages: timelineToMessages(detail),
@@ -371,6 +369,49 @@ export async function loadExportSource(
       degradedReason: "unreadable",
       unread: 0,
     };
+  }
+}
+
+/**
+ * Find the transcript file for a session.
+ *
+ * `resolveSessionJsonl` only walks Claude's `projects/<dir>/<id>.jsonl`
+ * layout, so a Codex or Gemini session always missed and fell back to the
+ * index previews — the export silently became preview-quality for every
+ * non-Claude session even though the raw transcript was sitting on disk.
+ *
+ * Claude keeps the fast path (a direct filename probe). Other adapters are
+ * asked to `discover()` and the result is matched on basename, which is the
+ * only session identity the `SessionFile` contract exposes. That walk is the
+ * reason it is not used for Claude too: this runs on an explicit user action,
+ * but there is no need to pay for it when a direct lookup works.
+ */
+async function locateTranscript(
+  sessionId: string,
+  source: string | undefined,
+): Promise<{ filePath: string } | null> {
+  if (!source || source === "claude") {
+    try {
+      return await resolveSessionJsonl(sessionId);
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const adapter = getAdapter(source);
+    if (!adapter) return null;
+    const files = await adapter.discover();
+    const match = files.find((f) => {
+      // `path.parse` rather than a regex: this string has been through a
+      // shell heredoc more than once, and every escaping mistake here fails
+      // silently as "session not found" and a preview-quality export.
+      const base = path.basename(f.filePath);
+      return base === sessionId || path.parse(base).name === sessionId;
+    });
+    return match ? { filePath: match.filePath } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -390,26 +431,34 @@ export async function loadExportSource(
 async function readSubagentMessages(
   parentFilePath: string,
   sessionId: string,
-): Promise<ExportMessage[]> {
+): Promise<{ messages: ExportMessage[]; unread: number }> {
   const dir = path.join(path.dirname(parentFilePath), sessionId, "subagents");
   let entries: string[];
   try {
     entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();
   } catch {
-    return [];
+    return { messages: [], unread: 0 };
   }
 
   const out: ExportMessage[] = [];
-  for (const name of entries) {
-    if (out.length >= MAX_MESSAGES) break;
+  let unread = 0;
+  for (const [i, name] of entries.entries()) {
+    // Stopping here without counting would report fidelity "full" over a
+    // document missing whole agents — the same silent-cap failure the parent
+    // read already had to fix. Count what is left rather than dropping it.
+    if (out.length >= MAX_MESSAGES) {
+      unread += entries.length - i;
+      break;
+    }
     try {
-      const { messages } = await readJsonlMessages(path.join(dir, name));
-      for (const m of messages) out.push({ ...m, isSidechain: true });
+      const result = await readJsonlMessages(path.join(dir, name));
+      unread += result.unread;
+      for (const m of result.messages) out.push({ ...m, isSidechain: true });
     } catch {
       // One unreadable agent file must not lose the others.
     }
   }
-  return out;
+  return { messages: out, unread };
 }
 
 /** Assemble the front-matter metadata from an already-loaded detail. */

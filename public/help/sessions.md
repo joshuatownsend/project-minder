@@ -222,6 +222,7 @@ When the JSONL is unavailable — pruned by Claude Code's own retention, synced 
 #### Notes
 
 - Everything the detail level leaves out is counted in an **Export notes** line at the bottom of the document. Nothing is dropped silently — including messages that rendered nothing at the chosen level, subagent messages excluded, and anything beyond the reader's 20,000-message cap.
+- **Codex and Gemini sessions export from their own transcripts too.** The file is located through the session's adapter rather than Claude's `projects/<dir>/<id>.jsonl` layout, which those sessions never matched — so they used to fall back to index previews even though the raw transcript was on disk.
 - **Subagent transcripts are read from their own files.** Modern Claude Code keeps them at `<project>/<session-id>/subagents/agent-*.jsonl` rather than inline in the parent session, so `Full` (or `sidechains=1`) opens those too and appends them, tagged `(subagent)`. They are appended rather than interleaved: the files carry independent timelines, and merging by timestamp would imply an ordering across processes the data doesn't support.
 - **Re-emitted assistant messages are collapsed.** Claude Code re-logs a message on a retry or a resumed session; the export dedupes by `message.id` (falling back to `requestId`), the same rule the usage parser uses.
 - **Image attachments** are noted in place rather than dropped — markdown can't carry them, but a prompt shouldn't lose half its content invisibly.

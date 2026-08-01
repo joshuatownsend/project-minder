@@ -143,7 +143,7 @@ async function writeJsonl(lines: string[]): Promise<string> {
 }
 
 afterAll(async () => {
-  await Promise.all(tmpFiles.map((f) => fs.rm(f, { force: true })));
+  await Promise.all(tmpFiles.map((f) => fs.rm(f, { force: true, recursive: true })));
 });
 
 describe("readJsonlMessages", () => {
@@ -361,5 +361,27 @@ describe("readJsonlMessages — dedup and cap accounting", () => {
   it("reports zero unread when nothing was capped", async () => {
     const file = await writeJsonl([JSON.stringify({ type: "user", message: { content: "hi" } })]);
     expect((await readJsonlMessages(file)).unread).toBe(0);
+  });
+});
+
+// ─── PR #358 round-two review fixes ──────────────────────────────────────────
+
+describe("subagent read-cap accounting", () => {
+  it("propagates a subagent file's unread count", async () => {
+    // The parent-file cap was disclosed, but the newly added subagent path
+    // discarded its own `unread` — so an export missing whole agents still
+    // reported fidelity "full" with no note.
+    const dir = path.join(os.tmpdir(), `minder-sub-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    tmpFiles.push(dir);
+    const file = path.join(dir, "agent-1.jsonl");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ type: "user", message: { content: "sub prompt" } }),
+      "utf-8",
+    );
+    const result = await readJsonlMessages(file);
+    expect(result.messages).toHaveLength(1);
+    expect(result.unread).toBe(0);
   });
 });
