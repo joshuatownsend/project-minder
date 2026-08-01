@@ -88,10 +88,35 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
   When the match is in the message body rather than the prompt, the matched snippet is highlighted in the session row. A small **FTS** badge on the search input lights up while the FTS5 index is serving — when it's absent, you're seeing client-side filtering against the cached preview only.
 
   *After upgrading, search results fill in as your history is re-indexed in the background — you may see fewer body matches than usual until that finishes. Nothing returned in the meantime is wrong, there's just less of it.*
-- **How results are ranked** — two searches actually run: one keyword search over message text, and one over the "title" columns (slug, project name, git branch, first and last prompt). Their results are combined by **Reciprocal Rank Fusion**, which compares each session's *position* in the two lists rather than their raw scores — the two scoring systems aren't on a common scale, so comparing them directly would be meaningless. The practical effect: **a session that both searches find ranks above one that only a single search finds, even if that single match looked very strong.** Title matches carry somewhat more weight than body matches, since a hit on a slug or branch name is usually deliberate while a hit in a long transcript can be incidental.
+- **How results are ranked** — two searches actually run (three with semantic search enabled — see below): one keyword search over message text, and one over the "title" columns (slug, project name, git branch, first and last prompt). Their results are combined by **Reciprocal Rank Fusion**, which compares each session's *position* in the two lists rather than their raw scores — the two scoring systems aren't on a common scale, so comparing them directly would be meaningless. The practical effect: **a session that both searches find ranks above one that only a single search finds, even if that single match looked very strong.** Title matches carry somewhat more weight than body matches, since a hit on a slug or branch name is usually deliberate while a hit in a long transcript can be incidental.
 
   This ranking is what the **Relevance** sort orders by, and starting a search switches to it automatically. Picking any other sort (Recent, Longest, …) deliberately discards the ranking and orders by that field instead — so if you sort by Recent while searching, you get matches newest-first, not best-match-first. A sort you chose yourself is kept when you start searching; only the default Recent is swapped for Relevance.
 - **Sort** — by relevance (while searching), most recent, longest duration, most tokens, or best one-shot rate. **Relevance appears only when the FTS index is serving** — without it (`MINDER_USE_DB=0`, or a failed search request) matching falls back to plain substring filtering, which produces no ranking to sort by.
+
+### Semantic search (optional, off by default)
+
+Keyword search only finds what you can spell. A session that says *"database migration error"* will not surface for the query *"the migration is failing"* unless the words happen to overlap. Semantic search adds a third retriever that matches on **meaning** instead of tokens, and feeds its ranking into the same Reciprocal Rank Fusion as the other two.
+
+It is **off by default**, and turning it on is what consents to the setup cost:
+
+| Cost | Detail |
+|---|---|
+| Model download | ~80 MB (`all-MiniLM-L6-v2`, ONNX) on first use, cached in `~/.minder/models/` |
+| Backfill | Roughly **40 minutes** of background CPU to embed an existing corpus (measured at ~15 ms per chunk against ~157 000 chunks) |
+| Disk | ~**58 MB** of vectors (384 bytes each), a ~7% increase on the index |
+| Per query | ~**162 ms** for a full scan, with ~58 MB held in memory once the first semantic query runs |
+
+Run the backfill from Settings, or `POST /api/embeddings` with an optional `{ "chunks": N }` budget. Each call embeds a bounded batch and returns; it is resumable, and **newest chunks are embedded first** so recent sessions become searchable long before the pass completes. `GET /api/embeddings` reports coverage without triggering the download.
+
+**What it degrades to.** Everything about this is optional. If the model package isn't installed, the download fails, the index is missing, or nothing has been embedded yet, the semantic retriever contributes an empty list — and an empty list contributes nothing to the fusion. Search silently becomes keyword-only rather than erroring. The same is true if the model errors mid-query.
+
+**Requires the chunked search index.** Embeddings are built over the full-body chunk corpus (schema v19). On a database that hasn't been opened since that landed, the API says so explicitly rather than failing generically — restart Minder so the migration runs.
+
+**Known limits, stated rather than discovered:**
+
+- Chunk text is capped at 2 000 characters before embedding. `all-MiniLM-L6-v2` truncates at 256 word-piece tokens (~1 000 characters of English) regardless, so the tail of a long chunk was never going to reach the encoder. The back half of a very long chunk is not semantically indexed; the chunk overlap mitigates it.
+- Vectors are stored as int8. That preserves ranking among meaningfully different results, but similarities within ~0.004 of each other may reorder — harmless, because fusion damps deep ranks heavily anyway.
+- A session is scored by its **best** chunk, not an average. A long session with one highly relevant passage is exactly the result a semantic query is for.
 
 ## Slugs and Continuations
 

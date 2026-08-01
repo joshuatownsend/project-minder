@@ -22,6 +22,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentView",
   "claudeStatusAlerts",
   "configLint",
+  "semanticSearch",
   "scanBoard",
   "scanOps",
   "githubActivity",
@@ -203,6 +204,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     description: "Workspace-wide config audit: CLAUDE.md, skills, agents, commands, hooks, MCPs, plugins, output styles, and LSPs.",
     group: "passive",
     appliesAt: "scan",
+    wired: true,
+  },
+  {
+    key: "semanticSearch",
+    label: "Semantic session search",
+    description:
+      "Adds an embedding-similarity retriever to session search, fused with the existing keyword and title retrievers. Turning this on downloads a ~80 MB model on first use and embedding the existing corpus takes roughly 40 minutes of background CPU. Defaults off; search stays keyword-only until it is enabled.",
+    group: "passive",
+    appliesAt: "ingest",
     wired: true,
   },
   {

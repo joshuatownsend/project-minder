@@ -1,5 +1,76 @@
 # Insights
 
+<!-- insight:bf46bdb2b98f | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:51:00.131Z -->
+## ★ Insight
+- The displayed text comes from `SELECT text FROM prompts_fts WHERE session_id=? LIMIT 1` — the session's *first* chunk, not the chunk that actually matched. I nearly concluded "ranking is poor" from a display bug in my own diagnostic.
+- Also, "newest 400 chunks" means *this session's own transcript*, which is unrepresentative. A fair check needs a sample spread across the corpus.
+
+---
+
+<!-- insight:0ec64baa608b | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:46:44.680Z -->
+## ★ Insight
+- The live `index.db` is at **schema_version 18**. Migration 19 (the chunked FTS from #2) has never run on it, because the server hasn't been started since that PR merged — so `prompts_fts` has no `chunk_index` column and still holds 500-char previews.
+- My `selectUnembedded` joins on `chunk_index`, so on this very common state it throws, gets swallowed by the backfill's catch, and reports a bare `"error"`. That's degradation without explanation. Embeddings genuinely *require* the chunk corpus, so the right behaviour is to detect the schema and say so.
+
+---
+
+<!-- insight:577ef03404bc | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:38:15.024Z -->
+## ★ Insight
+- Random 384-dim unit vectors are all near-orthogonal (cosines 0.02–0.11), and adjacent gaps in the top 12 are as small as **0.0005** — while int8 quantization noise is ~**0.004**, eight times larger. My test was asserting that quantization preserves an ordering that is pure noise.
+- The property actually worth pinning is rank preservation among *meaningfully separated* similarities — which is the real case (my earlier probe measured 0.76 for related text vs ~0 for unrelated). The near-tie reordering is a genuine limit and belongs in a test that says so, not hidden by a looser assertion.
+
+---
+
+<!-- insight:6d62d3337890 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:19:17.424Z -->
+## ★ Insight
+- **40 minutes** to embed 157k chunks at the best batch size. That settles it: the backfill has to be incremental and budgeted, never a blocking "build the index" step.
+- The default `cacheDir` is **inside `node_modules`** — a `pnpm install` would silently delete the 80 MB model and re-download it. It has to be redirected to `~/.minder/models/`, alongside the index DB.
+
+---
+
+<!-- insight:41b3d4522b79 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:11:22.886Z -->
+## ★ Insight
+- `inlineCell` escapes `|` as `\|` for "table cells" but never escapes the backslash first, so input containing `\|` becomes `\\|` — a literal backslash followed by an *unescaped* pipe. CodeQL's `js/incomplete-sanitization` is exactly right.
+- The correct fix isn't a better escape: **the export contains no markdown tables at all.** The helper's output goes into `**bold**` lines and callouts, where `|` is an ordinary character. I wrote a comment claiming table-safety and then never built a table. Removing the escape kills the alert honestly and deletes a false claim.
+
+---
+
+<!-- insight:c6a40286aac2 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:04:03.032Z -->
+## ★ Insight
+- 24 of the 57 Claude skills are **symlinks** into `~/.agents/skills/`. `readdir({withFileTypes})` reports those as `isSymbolicLink()`, never `isDirectory()`, so my reader silently dropped all 24 — the exact gotcha `instructions.ts:135` already documents, which I'd read and not applied.
+- The damage isn't a wrong count. A skill missing from Claude's *inventory* but present in Codex gets reported as "missing from Claude" — the tool would tell you to install something you already have. A false positive here is far more corrosive than a missed finding.
+
+---
+
+<!-- insight:0385ea53a518 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T12:46:37.877Z -->
+## ★ Insight
+- A naive per-item diff would emit ~48 "skill missing in Codex" findings on this machine alone — technically correct and completely unusable. The fix is to summarize *count-style* divergence (one finding per kind per harness-pair, with sample names) and reserve per-item findings for the genuinely actionable case: same name, different definition.
+- Instructions need a **canonical identity**, not a filename match. `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` are the same artifact under three names — comparing by filename would report each as permanently missing from the other two.
+
+---
+
+<!-- insight:7f54894ee5d3 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T12:02:51.836Z -->
+## ★ Insight
+- I collapsed blank lines with `.replace(/\n{3,}/g, "\n\n")` over the **finished document** — a cosmetic tidy that also rewrites the transcript itself. A tool result containing three consecutive newlines inside a fenced block would come out altered, which is exactly the silent infidelity this exporter exists to avoid.
+- The fix is structural rather than a smarter regex: make blank lines de-duplicate at *emit* time, so the writer can never stack two, and content strings are never post-processed at all.
+
+---
+
+<!-- insight:274e3a0e8e0a | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T11:42:02.041Z -->
+## ★ Insight
+- `SessionDetailView.tsx:308` has a `buildMarkdown()` that renders `data.timeline` — so #6 is not "build an exporter", it's "**replace a lossy one**". The existing version inherits the 300/500-char preview cap *and* emits no code fences at all, so a session containing ``` or raw tool output produces a document whose structure collapses partway through.
+- That reframes the UI work: keep the modal users already know, swap its body for the server route, and let it report fidelity honestly.
+
+---
+
+<!-- insight:10af0cdb7dea | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T11:32:01.234Z -->
+## ★ Insight
+- `SessionDetail.timeline` caps assistant text at **300 chars** (file path) / 500 (DB path), and `UsageTurn.assistantText` caps at 500. Every in-memory session abstraction in this repo is a *preview*, built for list rendering and search — none of them can back a faithful transcript export.
+- So a real exporter must go to the JSONL itself (`resolveSessionJsonl`), and the interesting design question becomes what to do when the JSONL is *gone* (pruned, or demo mode) but the index still has the session.
+- The answer that fits this repo's ethos: export anyway from the index, and stamp `fidelity: index` in the front matter — degrade visibly rather than 404 or lie.
+
+---
+
 <!-- insight:340aa16095b6 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T22:42:36.916Z -->
 ## ★ Insight
 The failing test was the interesting one. `"is idempotent — skips events already having managed entry"` used a fixture built by hand to look like an install, and it was *asserting the bug*: that a config with a managed `PreToolUse` entry gets no further writes.
