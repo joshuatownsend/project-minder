@@ -1,5 +1,26 @@
 # Insights
 
+<!-- insight:41b3d4522b79 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:11:22.886Z -->
+## ★ Insight
+- `inlineCell` escapes `|` as `\|` for "table cells" but never escapes the backslash first, so input containing `\|` becomes `\\|` — a literal backslash followed by an *unescaped* pipe. CodeQL's `js/incomplete-sanitization` is exactly right.
+- The correct fix isn't a better escape: **the export contains no markdown tables at all.** The helper's output goes into `**bold**` lines and callouts, where `|` is an ordinary character. I wrote a comment claiming table-safety and then never built a table. Removing the escape kills the alert honestly and deletes a false claim.
+
+---
+
+<!-- insight:c6a40286aac2 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:04:03.032Z -->
+## ★ Insight
+- 24 of the 57 Claude skills are **symlinks** into `~/.agents/skills/`. `readdir({withFileTypes})` reports those as `isSymbolicLink()`, never `isDirectory()`, so my reader silently dropped all 24 — the exact gotcha `instructions.ts:135` already documents, which I'd read and not applied.
+- The damage isn't a wrong count. A skill missing from Claude's *inventory* but present in Codex gets reported as "missing from Claude" — the tool would tell you to install something you already have. A false positive here is far more corrosive than a missed finding.
+
+---
+
+<!-- insight:0385ea53a518 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T12:46:37.877Z -->
+## ★ Insight
+- A naive per-item diff would emit ~48 "skill missing in Codex" findings on this machine alone — technically correct and completely unusable. The fix is to summarize *count-style* divergence (one finding per kind per harness-pair, with sample names) and reserve per-item findings for the genuinely actionable case: same name, different definition.
+- Instructions need a **canonical identity**, not a filename match. `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` are the same artifact under three names — comparing by filename would report each as permanently missing from the other two.
+
+---
+
 <!-- insight:7f54894ee5d3 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T12:02:51.836Z -->
 ## ★ Insight
 - I collapsed blank lines with `.replace(/\n{3,}/g, "\n\n")` over the **finished document** — a cosmetic tidy that also rewrites the transcript itself. A tool result containing three consecutive newlines inside a fenced block would come out altered, which is exactly the silent infidelity this exporter exists to avoid.

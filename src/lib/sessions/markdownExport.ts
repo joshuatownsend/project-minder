@@ -208,11 +208,21 @@ function codeBlock(content: string, lang = ""): string {
   return `${fence}${lang}\n${body}\n${fence}`;
 }
 
-/** Collapse to one line and escape the pipes/backticks a table cell can't hold. */
-function inlineCell(value: string, max = 120): string {
+/**
+ * Collapse a value to a single line, ellipsised past `max`.
+ *
+ * Deliberately does no markdown escaping. An earlier version escaped `|` for
+ * "table cells" — but this document contains no tables, and the escape was
+ * itself wrong: it rewrote `|` without first escaping backslashes, so `\|` in
+ * the input became `\\|`, a literal backslash followed by an unescaped pipe
+ * (CodeQL `js/incomplete-sanitization`). Both call sites put the result in a
+ * bold line or a callout, where `|` is an ordinary character. Escaping nothing
+ * is correct here; adding a table later means adding escaping deliberately,
+ * not inheriting a half-done one.
+ */
+function inlineOneLine(value: string, max = 120): string {
   const flat = value.replace(/\s+/g, " ").trim();
-  const cut = flat.length > max ? `${flat.slice(0, max)}…` : flat;
-  return cut.replace(/\|/g, "\\|");
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
 // ─── Front matter ────────────────────────────────────────────────────────────
@@ -265,7 +275,7 @@ export function summarizeToolInput(input: Record<string, unknown> | undefined): 
   if (!input) return "";
   for (const key of ["file_path", "command", "pattern", "path", "url", "description", "prompt"]) {
     const value = input[key];
-    if (typeof value === "string" && value.trim()) return inlineCell(value);
+    if (typeof value === "string" && value.trim()) return inlineOneLine(value);
   }
   return "";
 }
@@ -439,7 +449,7 @@ function renderBlock(w: Writer, block: ExportBlock, opts: ResolvedExportOptions)
       const text = (block.text ?? "").trim() || "API error";
       w.stats.blocks++;
       w.push(`> [!CAUTION]`);
-      w.push(`> **Error** — ${inlineCell(text, 400)}`);
+      w.push(`> **Error** — ${inlineOneLine(text, 400)}`);
       w.blank();
       return;
     }
