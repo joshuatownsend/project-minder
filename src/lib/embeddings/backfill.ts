@@ -1,8 +1,20 @@
 import "server-only";
 import type * as DatabaseT from "better-sqlite3";
-import { EMBED_BATCH_SIZE, loadEmbedder } from "./model";
+import { EMBED_BATCH_SIZE, EMBEDDING_MODEL, loadEmbedder } from "./model";
 import { quantize } from "./quantize";
-import { chunkCorpusReady, countChunks, countEmbedded, putVectors, selectUnembedded } from "./store";
+import {
+  chunkCorpusReady,
+  countChunks,
+  countEmbedded,
+  hashChunkText,
+  pruneInvalidVectors,
+  putVectors,
+  selectUnembedded,
+  truncateForModel,
+} from "./store";
+
+// Re-exported: truncation lives beside the hash that has to agree with it.
+export { truncateForModel, MAX_CHUNK_CHARS } from "./store";
 import { invalidateVectorCache } from "./search";
 
 /**
@@ -22,8 +34,6 @@ import { invalidateVectorCache } from "./search";
 /** Default per-pass budget: ~30 s of CPU at the measured rate. */
 export const DEFAULT_PASS_CHUNKS = 2_000;
 
-/** Chunk text is capped before embedding — see `truncateForModel`. */
-export const MAX_CHUNK_CHARS = 2_000;
 
 export interface BackfillResult {
   /** Chunks embedded by this pass. */
@@ -37,23 +47,6 @@ export interface BackfillResult {
   durationMs: number;
   /** Set when the pass stopped early. */
   stoppedBecause?: "no-model" | "no-chunk-corpus" | "nothing-to-do" | "error";
-}
-
-/**
- * all-MiniLM-L6-v2 truncates at 256 word-piece tokens — roughly 1 000
- * characters of English. A 4 000-character chunk is therefore *already*
- * mostly discarded by the model, and passing the whole thing wastes
- * tokenizer time on text that can never reach the encoder.
- *
- * Cutting at 2 000 characters keeps a margin for token-dense text (code,
- * paths, non-English) while dropping the tail the model would ignore anyway.
- * This is a real recall limit and not a tuning knob: the back half of a long
- * chunk is not semantically indexed. It is mitigated by the chunk overlap
- * already in `textChunks.ts` and stated plainly in the help doc rather than
- * left for someone to discover.
- */
-export function truncateForModel(text: string, max = MAX_CHUNK_CHARS): string {
-  return text.length > max ? text.slice(0, max) : text;
 }
 
 /**
@@ -84,6 +77,16 @@ export async function runEmbeddingBackfill(
   }
 
   const total = countChunks(db);
+
+  // Sweep before embedding: a vector whose chunk was re-ingested no longer
+  // describes it, and one whose session is gone still consumes result slots.
+  // Bounded, and failure here must not stop the pass.
+  try {
+    pruneInvalidVectors(db, EMBEDDING_MODEL);
+  } catch {
+    // Non-fatal — a stale row is worse than an unswept one, but neither is
+    // worth failing a backfill over.
+  }
 
   const embedder = await loadEmbedder();
   if (!embedder) {
@@ -128,6 +131,7 @@ export async function runEmbeddingBackfill(
             chunkIndex: batch[i].chunkIndex,
           },
           vec: quantize(vectors[i]),
+          hash: hashChunkText(batch[i].text),
         });
       }
       if (pairs.length === 0) break;

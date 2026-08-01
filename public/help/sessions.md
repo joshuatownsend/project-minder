@@ -108,6 +108,8 @@ It is **off by default**, and turning it on is what consents to the setup cost:
 
 Run the backfill from Settings, or `POST /api/embeddings` with an optional `{ "chunks": N }` budget. Each call embeds a bounded batch and returns; it is resumable, and **newest chunks are embedded first** so recent sessions become searchable long before the pass completes. `GET /api/embeddings` reports coverage without triggering the download.
 
+**Native build scripts are intentionally skipped.** `@huggingface/transformers` pulls `onnxruntime-node`, whose install script is not in this repo's `pnpm.onlyBuiltDependencies` allowlist, so `pnpm install` prints an "Ignored build scripts" warning. That is deliberate — the shipped prebuilt binary is sufficient, verified by running a full embed-and-search pass on an install where those scripts never ran. Adding a native postinstall to every install for a default-off feature would be the worse trade.
+
 **What it degrades to.** Everything about this is optional. If the model package isn't installed, the download fails, the index is missing, or nothing has been embedded yet, the semantic retriever contributes an empty list — and an empty list contributes nothing to the fusion. Search silently becomes keyword-only rather than erroring. The same is true if the model errors mid-query.
 
 **Requires the chunked search index.** Embeddings are built over the full-body chunk corpus (schema v19). On a database that hasn't been opened since that landed, the API says so explicitly rather than failing generically — restart Minder so the migration runs.
@@ -115,6 +117,7 @@ Run the backfill from Settings, or `POST /api/embeddings` with an optional `{ "c
 **Known limits, stated rather than discovered:**
 
 - Chunk text is capped at 2 000 characters before embedding. `all-MiniLM-L6-v2` truncates at 256 word-piece tokens (~1 000 characters of English) regardless, so the tail of a long chunk was never going to reach the encoder. The back half of a very long chunk is not semantically indexed; the chunk overlap mitigates it.
+- Vectors are re-checked against their source text. A session reparse recreates its chunk rows, and the `(session, turn, chunk)` key survives that — so each vector stores a hash of the text it was built from, and a mismatch drops it for re-embedding. Vectors whose session is gone are pruned too, rather than left to consume result slots in every scan.
 - Vectors are stored as int8. That preserves ranking among meaningfully different results, but similarities within ~0.004 of each other may reorder — harmless, because fusion damps deep ranks heavily anyway.
 - A session is scored by its **best** chunk, not an average. A long session with one highly relevant passage is exactly the result a semantic query is for.
 

@@ -64,7 +64,16 @@ export function cosineInt8(a: Int8Array, b: Int8Array): number {
   if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-  return dot / (INT8_SCALE * INT8_SCALE);
+  // Clamped to the documented range. Rounding during quantization can push
+  // the sum a hair past ±scale², so a vector compared against itself could
+  // score marginally above 1.0 — harmless for ranking, but the type says
+  // [-1, 1] and anything comparing against a threshold deserves that to be
+  // true.
+  return clampUnit(dot / (INT8_SCALE * INT8_SCALE));
+}
+
+function clampUnit(value: number): number {
+  return value > 1 ? 1 : value < -1 ? -1 : value;
 }
 
 /**

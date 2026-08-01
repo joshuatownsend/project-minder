@@ -214,6 +214,11 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "passive",
     appliesAt: "ingest",
     wired: true,
+    // Explicit: the Settings toggle falls back to `f.defaultOn ?? true`, so
+    // omitting this rendered the switch ON for a fresh config while both the
+    // search path and the backfill endpoint gate on `getFlag(..., false)`.
+    // The feature looked enabled and could return nothing.
+    defaultOn: false,
   },
   {
     key: "scanBoard",

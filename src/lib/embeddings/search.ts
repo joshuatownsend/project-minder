@@ -128,7 +128,10 @@ export async function semanticSearch(
     const offset = i * dims;
     let dot = 0;
     for (let d = 0; d < dims; d++) dot += queryVec[d] * buffer[offset + d];
-    const score = dot / (INT8_SCALE * INT8_SCALE);
+    // Same clamp as `cosineInt8` — quantization rounding can nudge a
+    // self-similarity a hair past 1.0, and the hit type documents [-1, 1].
+    const raw = dot / (INT8_SCALE * INT8_SCALE);
+    const score = raw > 1 ? 1 : raw < -1 ? -1 : raw;
     const sessionId = keys[i].sessionId;
     const prev = bestBySession.get(sessionId);
     if (prev === undefined || score > prev) bestBySession.set(sessionId, score);
