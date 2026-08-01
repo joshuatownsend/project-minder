@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import { getUserConfig } from "../userConfigCache";
 import { getAdapter } from "../adapters";
+import { resolveGeminiContextFileName } from "../indexer/instructions";
 import type { DriftHarness, DriftItem, DriftKind, HarnessInventory } from "./types";
 
 /**
@@ -75,23 +76,46 @@ async function readEntries(dir: string): Promise<{ name: string; kind: EntryKind
   } catch {
     return [];
   }
-  const bounded = entries.slice(0, MAX_ENTRIES).filter((e) => !e.name.startsWith("."));
+  // Filter and SORT before capping. Capping the raw readdir output meant
+  // dotfiles could consume slots that real entries needed, and the surviving
+  // subset depended on filesystem order — so in a large directory the drift
+  // report could flap between runs without anything changing on disk.
+  const bounded = entries
+    .filter((e) => !e.name.startsWith("."))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, MAX_ENTRIES);
   const kinds = await Promise.all(bounded.map((e) => classify(dir, e)));
   return bounded.map((e, i) => ({ name: e.name, kind: kinds[i] }));
 }
 
 /**
  * List a skills directory. Both layouts count as one skill: a directory
- * (bundled, with `SKILL.md` inside) and a bare `.md` file — the same two
- * shapes `walkSkills` handles, so a Claude standalone skill and a Codex
- * bundled one of the same name compare equal.
+ * containing `SKILL.md` (bundled) and a bare `.md` file (standalone) — the
+ * same two shapes `walkSkillsRoot` handles, so a Claude standalone skill and
+ * a Codex bundled one of the same name compare equal.
+ *
+ * A directory WITHOUT a `SKILL.md` is not a skill. The canonical walker
+ * checks for that file and skips the directory when it is absent; treating
+ * every subdirectory as an installed skill made ordinary scratch folders
+ * (and, on some layouts, shared asset directories) show up as "missing from
+ * Codex" — a finding telling the user to install something that was never a
+ * skill in the first place.
+ *
+ * @internal Exported for vitest.
  */
-/** @internal Exported for vitest. */
 export async function listSkills(dir: string, kind: DriftKind = "skill"): Promise<DriftItem[]> {
+  const entries = await readEntries(dir);
   const items: DriftItem[] = [];
-  for (const entry of await readEntries(dir)) {
+  const bundled = await Promise.all(
+    entries.map(async (e) =>
+      e.kind === "dir" ? await exists(path.join(dir, e.name, "SKILL.md")) : false
+    )
+  );
+
+  for (const [i, entry] of entries.entries()) {
     let name: string;
     if (entry.kind === "dir") {
+      if (!bundled[i]) continue;
       name = entry.name;
     } else if (entry.kind === "file" && entry.name.toLowerCase().endsWith(".md")) {
       name = entry.name.slice(0, -3);
@@ -135,7 +159,13 @@ function mcpSignature(spec: {
 // ─── Claude ──────────────────────────────────────────────────────────────────
 
 async function claudeInventory(): Promise<HarnessInventory> {
-  const home = resolveHome("CLAUDE_CONFIG_DIR", ".claude");
+  // Deliberately NOT `CLAUDE_CONFIG_DIR`-aware. `getUserConfig()` — the
+  // source of the MCP half below — reads `~/.claude` and `~/.claude.json`
+  // unconditionally, so honouring the override here produced a MIXED
+  // inventory: skills and instructions from the override, MCP servers from
+  // the default home. That yields both false "missing" findings and false
+  // conflicts. Claiming no support is honest; claiming half of it is not.
+  const home = path.join(os.homedir(), ".claude");
   const present = await exists(home);
   const items: DriftItem[] = [];
 
@@ -267,9 +297,15 @@ async function geminiInventory(): Promise<HarnessInventory> {
       // Absent or malformed settings — no MCP items, not an error.
     }
 
+    // Gemini CLI lets the global context file be renamed via
+    // `context.fileName` (or the legacy flat `contextFileName`). Hardcoding
+    // GEMINI.md meant a user who renamed it got a false finding that Claude's
+    // and Codex's root instructions were missing from Gemini. Reuses the
+    // resolver the instructions indexer already ships.
+    const contextFile = await resolveGeminiContextFileName(home).catch(() => "GEMINI.md");
     const [skills, root] = await Promise.all([
       listSkills(path.join(home, "skills")),
-      rootInstruction(path.join(home, "GEMINI.md")),
+      rootInstruction(path.join(home, contextFile)),
     ]);
     items.push(...skills, ...root);
   }

@@ -16,7 +16,6 @@ The **Config Lint** tab on each project detail page runs a workspace-wide audit 
 | **Plugins** | Plugins that are enabled but blocked; enabled plugins without a version pin or git SHA. |
 | **Output Styles** | Frontmatter validity for `.claude/output-styles/` style definitions. |
 | **LSP Config** | Validity of `.claude/lsp.json` language-server definitions. |
-| **Cross-harness Drift** | MCP servers, skills, and instruction files present in one coding harness but not another. See below. |
 
 ## Severity levels
 
@@ -74,6 +73,8 @@ Global-pass findings appear in the browser badges but do not have an associated 
 
 ## Cross-harness drift
 
+> **Where to find it:** Settings → Adapters, not this panel. Drift is a property of your machine's harness config homes rather than of any one project, so it lives beside the adapter toggles that decide which harnesses get compared.
+
 When you run more than one coding harness — Claude Code plus Codex and/or Gemini CLI — their configurations tend to diverge quietly. A skill you install for Claude isn't there next time you reach for Codex; an MCP server gets upgraded in one place and not the other. Config Lint surfaces those gaps under the **Cross-harness Drift** target.
 
 **Minder never writes harness config.** This is the deliberate inversion of tools like ai-devkit, which reconcile `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` / MCP config by generating them from one source of truth. The filesystem is the source of truth here and the index is derived from it; becoming a config writer would break that invariant. Drift is *reported*, and you decide what to do about it.
@@ -100,6 +101,10 @@ Two shapes, deliberately different in granularity:
 ### Severity
 
 Every drift finding is **P2**. Two harnesses configured differently is frequently deliberate, and `hasBlocking` — the strict-lint gate — is any P0 or P1. Enabling a second adapter should not be able to fail your CI on a parity observation.
+
+### Where it appears
+
+**Settings → Adapters.** Findings are grouped by kind (MCP servers, skills, instruction files), each naming a count, a sample, and the target harness's config home. A **Re-check** button re-reads the homes on demand — there is no cached scan behind it.
 
 ### When it runs
 

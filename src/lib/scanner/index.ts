@@ -53,7 +53,6 @@ import { scanOutputStyles } from "./outputStyles";
 import { scanLspConfig } from "./lspConfig";
 import { runConfigLint } from "./configLint";
 import { runCatalogLint } from "./catalogLint";
-import { runDriftLint } from "./driftLint";
 import { walkProjectAgents } from "../indexer/walkAgents";
 import { walkProjectSkills } from "../indexer/walkSkills";
 import { walkProjectCommands } from "../indexer/walkCommands";
@@ -632,19 +631,20 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
-  // Both are one-shot, user-scope passes producing `LintFinding[]` for the
-  // same report; they touch different config homes so they run concurrently.
-  const [catalogLintFindings, driftFindings] = await Promise.all([
-    runCatalogLint(allProjects, flags, ctx, catalogWalkByPath),
-    runDriftLint(config),
-  ]);
+  // Drift findings deliberately do NOT ride along here. `catalogLintFindings`
+  // is consumed by stats and by per-entry badges keyed on a catalog id, which
+  // a synthetic `drift:*` key never matches — appending them produced counts
+  // no one could click through to. Drift is machine-scope rather than
+  // project-scope anyway, so it is served by `GET /api/drift` and rendered in
+  // Settings beside the adapter toggles that decide what gets compared.
+  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx, catalogWalkByPath);
 
   return {
     projects: allProjects,
     portConflicts,
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),
-    catalogLintFindings: [...catalogLintFindings, ...driftFindings],
+    catalogLintFindings,
     ...(skippedRoots.length > 0 ? { skippedRoots } : {}),
   };
 }

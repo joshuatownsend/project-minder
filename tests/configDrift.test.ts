@@ -293,12 +293,14 @@ describe("listSkills / listRules", () => {
     const target = await tmpdir();
     const dir = await tmpdir();
     await fs.mkdir(path.join(target, "linked-skill"));
+    await fs.writeFile(path.join(target, "linked-skill", "SKILL.md"), "x");
 
     try {
       await fs.symlink(path.join(target, "linked-skill"), path.join(dir, "linked-skill"), "junction");
     } catch {
-      // Symlink creation can require privileges; a skipped assertion beats a
-      // false pass, so say so rather than silently returning.
+      // Symlink creation can require elevated privileges on Windows. Failing
+      // loudly beats a silent pass that proves nothing, so this fails the
+      // test rather than returning early.
       expect.unreachable("could not create a symlink on this machine");
     }
 
@@ -334,5 +336,58 @@ describe("listSkills / listRules", () => {
     await fs.writeFile(path.join(dir, ".DS_Store"), "x");
     await fs.writeFile(path.join(dir, "real.md"), "x");
     expect((await listSkills(dir)).map((s) => s.name)).toEqual(["real"]);
+  });
+});
+
+// ─── PR #359 review fixes ────────────────────────────────────────────────────
+
+describe("a directory is only a skill when it carries SKILL.md", () => {
+  const roots2: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots2.map((r) => fs.rm(r, { recursive: true, force: true })));
+  });
+  async function tmp(): Promise<string> {
+    const dir = path.join(os.tmpdir(), `minder-drift2-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    roots2.push(dir);
+    return dir;
+  }
+
+  it("skips a plain subdirectory with no SKILL.md", async () => {
+    // The canonical walker requires the file; treating every directory as an
+    // installed skill made scratch folders show up as "missing from Codex".
+    const dir = await tmp();
+    await fs.mkdir(path.join(dir, "not-a-skill"));
+    await fs.mkdir(path.join(dir, "real"));
+    await fs.writeFile(path.join(dir, "real", "SKILL.md"), "x");
+    expect((await listSkills(dir)).map((s) => s.name)).toEqual(["real"]);
+  });
+
+  it("still accepts a standalone .md skill", async () => {
+    const dir = await tmp();
+    await fs.writeFile(path.join(dir, "standalone.md"), "x");
+    expect((await listSkills(dir)).map((s) => s.name)).toEqual(["standalone"]);
+  });
+});
+
+describe("directory listings are stable", () => {
+  const roots3: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots3.map((r) => fs.rm(r, { recursive: true, force: true })));
+  });
+
+  it("sorts and filters dotfiles before applying the entry cap", async () => {
+    // Capping raw readdir output let dotfiles consume slots real entries
+    // needed, and left the surviving subset dependent on filesystem order —
+    // so a large directory could make the report flap between runs.
+    const dir = path.join(os.tmpdir(), `minder-drift3-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    roots3.push(dir);
+    for (const n of [".hidden", "zeta.md", "alpha.md", ".DS_Store", "mid.md"]) {
+      await fs.writeFile(path.join(dir, n), "x");
+    }
+    const names = (await listSkills(dir)).map((s) => s.name);
+    expect(names).toEqual(["alpha", "mid", "zeta"]);
+    expect(names).toEqual([...names].sort());
   });
 });
