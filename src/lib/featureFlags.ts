@@ -22,6 +22,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentView",
   "claudeStatusAlerts",
   "configLint",
+  "configDrift",
   "scanBoard",
   "scanOps",
   "githubActivity",
@@ -204,6 +205,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "passive",
     appliesAt: "scan",
     wired: true,
+  },
+  {
+    key: "configDrift",
+    label: "Cross-harness drift",
+    description:
+      "Reports MCP servers, skills, and instruction files present in one harness but not another. Read-only — Minder never writes harness config. Silent unless a second adapter (Codex/Gemini) is enabled.",
+    group: "passive",
+    appliesAt: "scan",
+    wired: true,
+    defaultOn: true,
   },
   {
     key: "scanBoard",

@@ -1,5 +1,12 @@
 # Insights
 
+<!-- insight:41b3d4522b79 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:11:22.886Z -->
+## ★ Insight
+- `inlineCell` escapes `|` as `\|` for "table cells" but never escapes the backslash first, so input containing `\|` becomes `\\|` — a literal backslash followed by an *unescaped* pipe. CodeQL's `js/incomplete-sanitization` is exactly right.
+- The correct fix isn't a better escape: **the export contains no markdown tables at all.** The helper's output goes into `**bold**` lines and callouts, where `|` is an ordinary character. I wrote a comment claiming table-safety and then never built a table. Removing the escape kills the alert honestly and deletes a false claim.
+
+---
+
 <!-- insight:c6a40286aac2 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:04:03.032Z -->
 ## ★ Insight
 - 24 of the 57 Claude skills are **symlinks** into `~/.agents/skills/`. `readdir({withFileTypes})` reports those as `isSymbolicLink()`, never `isDirectory()`, so my reader silently dropped all 24 — the exact gotcha `instructions.ts:135` already documents, which I'd read and not applied.

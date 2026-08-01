@@ -15,7 +15,11 @@ export type LintTarget =
   | "mcp"
   | "plugin"
   | "output-style"
-  | "lsp";
+  | "lsp"
+  /** Cross-harness divergence (Claude vs Codex vs Gemini). Advisory: every
+   *  drift finding is P2, so enabling a second adapter can never flip
+   *  `hasBlocking` and fail someone's strict-lint gate. */
+  | "drift";
 
 /** Which engine produced a finding. */
 export type LintEngine = "adapter" | "library" | "vendored";

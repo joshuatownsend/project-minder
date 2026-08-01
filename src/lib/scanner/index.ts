@@ -53,6 +53,7 @@ import { scanOutputStyles } from "./outputStyles";
 import { scanLspConfig } from "./lspConfig";
 import { runConfigLint } from "./configLint";
 import { runCatalogLint } from "./catalogLint";
+import { runDriftLint } from "./driftLint";
 import { walkProjectAgents } from "../indexer/walkAgents";
 import { walkProjectSkills } from "../indexer/walkSkills";
 import { walkProjectCommands } from "../indexer/walkCommands";
@@ -631,14 +632,19 @@ export async function scanAllProjects(): Promise<ScanResult> {
   });
 
   const portConflicts = detectPortConflicts(allProjects);
-  const catalogLintFindings = await runCatalogLint(allProjects, flags, ctx, catalogWalkByPath);
+  // Both are one-shot, user-scope passes producing `LintFinding[]` for the
+  // same report; they touch different config homes so they run concurrently.
+  const [catalogLintFindings, driftFindings] = await Promise.all([
+    runCatalogLint(allProjects, flags, ctx, catalogWalkByPath),
+    runDriftLint(config),
+  ]);
 
   return {
     projects: allProjects,
     portConflicts,
     hiddenCount: config.hidden.length,
     scannedAt: new Date().toISOString(),
-    catalogLintFindings,
+    catalogLintFindings: [...catalogLintFindings, ...driftFindings],
     ...(skippedRoots.length > 0 ? { skippedRoots } : {}),
   };
 }
