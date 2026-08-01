@@ -215,3 +215,63 @@ describe("decision shape", () => {
     expect(evaluateQuotaGate(bare, {}, NOW).hold).toBe(false);
   });
 });
+
+// ─── PR #360 review fixes ────────────────────────────────────────────────────
+
+describe("an unrecognized status is not treated as throttled", () => {
+  it('does not hold on the literal "unknown" status parseWindow defaults to', () => {
+    // `parseWindow()` writes "unknown" whenever the status header is simply
+    // absent. Testing `status !== "allowed"` therefore read an ordinary
+    // incomplete reading as throttled and — with a valid future reset beside
+    // it — would pause the whole default-on queue for up to eight days.
+    const reading = quota({
+      windows: {
+        "5h": win({ status: "unknown", utilization: 0.1, resetAt: iso(3_600_000) }),
+        "7d": win(),
+        overage: win(),
+      },
+    });
+    const result = evaluateQuotaGate(reading, {}, NOW);
+    expect(result.hold).toBe(false);
+    expect(result.reason).toBe("quota available");
+  });
+
+  it("still holds on an unknown status once utilization crosses the threshold", () => {
+    // Falling through to utilization is the point — an unfamiliar status
+    // means "no authoritative signal", not "ignore this window".
+    const reading = quota({
+      windows: {
+        "5h": win({ status: "unknown", utilization: 0.99, resetAt: iso(3_600_000) }),
+        "7d": win(),
+        overage: win(),
+      },
+    });
+    expect(evaluateQuotaGate(reading, {}, NOW).hold).toBe(true);
+  });
+
+  it("recognizes the throttled family case-insensitively", () => {
+    for (const status of ["throttled", "Throttled", " REJECTED ", "blocked", "exceeded"]) {
+      const reading = quota({
+        windows: {
+          "5h": win({ status, utilization: 0.1, resetAt: iso(600_000) }),
+          "7d": win(),
+          overage: win(),
+        },
+      });
+      expect(evaluateQuotaGate(reading, {}, NOW).hold).toBe(true);
+    }
+  });
+
+  it("does not hold on other benign statuses", () => {
+    for (const status of ["allowed", "allowed_warning", "", "queued"]) {
+      const reading = quota({
+        windows: {
+          "5h": win({ status, utilization: 0.1, resetAt: iso(600_000) }),
+          "7d": win(),
+          overage: win(),
+        },
+      });
+      expect(evaluateQuotaGate(reading, {}, NOW).hold).toBe(false);
+    }
+  });
+});

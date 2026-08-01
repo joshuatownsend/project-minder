@@ -72,10 +72,25 @@ function parseIso(value: string | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/**
+ * Statuses that authoritatively mean "this window is spent".
+ *
+ * An allowlist, not `status !== "allowed"`. `parseWindow()` defaults the
+ * status to the literal string `"unknown"` whenever the header is simply
+ * absent, so the negative test treated a perfectly ordinary incomplete
+ * reading as throttled — and, with a valid future reset alongside it, would
+ * pause the entire default-on task queue for up to eight days. Only a
+ * recognized bad status short-circuits; anything unfamiliar falls through to
+ * the utilization check, which is the documented fail-open behaviour.
+ */
+const THROTTLED_STATUSES = new Set(["throttled", "rejected", "blocked", "exceeded", "exhausted"]);
+
 function isExhausted(window: QuotaWindow | undefined, threshold: number): boolean {
   if (!window) return false;
-  // `status` is the authoritative signal; utilization is the early warning.
-  if (typeof window.status === "string" && window.status && window.status !== "allowed") return true;
+  // A known-bad status is authoritative; utilization is the early warning.
+  if (typeof window.status === "string" && THROTTLED_STATUSES.has(window.status.trim().toLowerCase())) {
+    return true;
+  }
   return typeof window.utilization === "number" && window.utilization >= threshold;
 }
 

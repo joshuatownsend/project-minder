@@ -202,8 +202,18 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         // Config read failure is non-fatal — proceed without gate check
       }
       const paused = !!cfg?.emergencyStop;
-      writeHeartbeat(lastTickAt, inFlight.size, paused, quotaHold);
-      if (paused) return;
+      if (paused) {
+        // Recompute rather than publish the last known hold. An emergency
+        // stop used to return before `readQuotaHold()` ran, so a hold
+        // recorded just before the stop was frozen: `getDispatcherStats()`,
+        // the heartbeat and the task composer kept advertising an expired
+        // resume time indefinitely, even after the window reset or the flag
+        // was turned off.
+        quotaHold = await readQuotaHold(cfg);
+        writeHeartbeat(lastTickAt, inFlight.size, true, quotaHold);
+        return;
+      }
+      writeHeartbeat(lastTickAt, inFlight.size, false, quotaHold);
 
       // F15: periodic reconcile — resolve rows a previous instance left
       // 'running', including a boot-preserved alive child that has since
@@ -237,11 +247,17 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       // table: rows stay `pending` and the next tick claims them the moment the
       // window resets, so there is no stamped deadline to un-stamp if the
       // reading was wrong. Fails open on every unclear case — see quotaGate.ts.
+      const previousHold = quotaHold;
       quotaHold = await readQuotaHold(cfg);
-      if (quotaHold) {
-        writeHeartbeat(lastTickAt, inFlight.size, paused, quotaHold);
-        return;
+      // Rewritten whenever the hold CHANGED, not only when one is active:
+      // the heartbeat above was written with the previous tick's value, so a
+      // hold that just cleared would otherwise keep being advertised for the
+      // rest of this tick (and longer if the tick runs long) while dispatch
+      // had already resumed.
+      if (quotaHold || previousHold) {
+        writeHeartbeat(lastTickAt, inFlight.size, false, quotaHold);
       }
+      if (quotaHold) return;
 
       // Don't claim/spawn any new work once shutdown has begun. Checked here
       // (a tick can reach this point after several awaits during which stop()

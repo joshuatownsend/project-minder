@@ -1,5 +1,33 @@
 # Insights
 
+<!-- insight:bf46bdb2b98f | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:51:00.131Z -->
+## ★ Insight
+- The displayed text comes from `SELECT text FROM prompts_fts WHERE session_id=? LIMIT 1` — the session's *first* chunk, not the chunk that actually matched. I nearly concluded "ranking is poor" from a display bug in my own diagnostic.
+- Also, "newest 400 chunks" means *this session's own transcript*, which is unrepresentative. A fair check needs a sample spread across the corpus.
+
+---
+
+<!-- insight:0ec64baa608b | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:46:44.680Z -->
+## ★ Insight
+- The live `index.db` is at **schema_version 18**. Migration 19 (the chunked FTS from #2) has never run on it, because the server hasn't been started since that PR merged — so `prompts_fts` has no `chunk_index` column and still holds 500-char previews.
+- My `selectUnembedded` joins on `chunk_index`, so on this very common state it throws, gets swallowed by the backfill's catch, and reports a bare `"error"`. That's degradation without explanation. Embeddings genuinely *require* the chunk corpus, so the right behaviour is to detect the schema and say so.
+
+---
+
+<!-- insight:577ef03404bc | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:38:15.024Z -->
+## ★ Insight
+- Random 384-dim unit vectors are all near-orthogonal (cosines 0.02–0.11), and adjacent gaps in the top 12 are as small as **0.0005** — while int8 quantization noise is ~**0.004**, eight times larger. My test was asserting that quantization preserves an ordering that is pure noise.
+- The property actually worth pinning is rank preservation among *meaningfully separated* similarities — which is the real case (my earlier probe measured 0.76 for related text vs ~0 for unrelated). The near-tie reordering is a genuine limit and belongs in a test that says so, not hidden by a looser assertion.
+
+---
+
+<!-- insight:6d62d3337890 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:19:17.424Z -->
+## ★ Insight
+- **40 minutes** to embed 157k chunks at the best batch size. That settles it: the backfill has to be incremental and budgeted, never a blocking "build the index" step.
+- The default `cacheDir` is **inside `node_modules`** — a `pnpm install` would silently delete the 80 MB model and re-download it. It has to be redirected to `~/.minder/models/`, alongside the index DB.
+
+---
+
 <!-- insight:41b3d4522b79 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T13:11:22.886Z -->
 ## ★ Insight
 - `inlineCell` escapes `|` as `\|` for "table cells" but never escapes the backslash first, so input containing `\|` becomes `\\|` — a literal backslash followed by an *unescaped* pipe. CodeQL's `js/incomplete-sanitization` is exactly right.
