@@ -22,6 +22,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentView",
   "claudeStatusAlerts",
   "configLint",
+  "quotaAwareDispatch",
   "scanBoard",
   "scanOps",
   "githubActivity",
@@ -204,6 +205,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "passive",
     appliesAt: "scan",
     wired: true,
+  },
+  {
+    key: "quotaAwareDispatch",
+    label: "Quota-aware dispatch",
+    description:
+      "Holds the background task queue while a Claude rate-limit window is exhausted, resuming automatically at the window's reset. Without it a task spawned at the limit fails immediately and is not retried. Defaults on; fails open when quota is unreadable.",
+    group: "active",
+    appliesAt: "ingest",
+    wired: true,
+    defaultOn: true,
   },
   {
     key: "scanBoard",

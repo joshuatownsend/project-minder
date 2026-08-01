@@ -54,9 +54,24 @@ The dispatcher is an in-process singleton (`globalThis.__minderDispatcher`) that
 1. Writes a heartbeat to `~/.minder/dispatcher-heartbeat.json` on each 30-second tick
 2. Materializes due schedules into `ops_tasks` rows
 3. Promotes `pending + requires_approval` tasks to `awaiting_approval`
-4. Claims and spawns up to 3 concurrent tasks — `classic` mode via `claude -p --output-format text`, `stream` mode via `claude -p --output-format stream-json --verbose`
-5. In stream mode, writes `session_id` to the task row as soon as the init event arrives (before the task completes)
-6. Writes a PID file to `~/.minder/pids/<pid>` for each spawned child (used by the Wave 9.2 emergency stop)
+4. Checks the **quota gate** (below) and holds the queue if a rate-limit window is exhausted
+5. Claims and spawns up to 3 concurrent tasks — `classic` mode via `claude -p --output-format text`, `stream` mode via `claude -p --output-format stream-json --verbose`
+6. In stream mode, writes `session_id` to the task row as soon as the init event arrives (before the task completes)
+7. Writes a PID file to `~/.minder/pids/<pid>` for each spawned child (used by the Wave 9.2 emergency stop)
+
+### Quota gate
+
+The dispatcher does not retry. A task claimed while your Claude rate-limit window is exhausted spawns straight into the wall, fails, and the work is gone. The quota gate turns that lost task into a late one: while a window is exhausted, dispatch holds, and the first tick after the window resets picks the queue back up.
+
+The gate reads the authoritative `anthropic-ratelimit-unified-*` headers — the same source as the burn HUD, not an estimate from indexed usage. It holds when any window reports a non-`allowed` status, or when utilization reaches **98%** (below 1.0 deliberately: a long task started at 99% hits the wall mid-run and dies with its work unsaved). When more than one window is exhausted, the hold runs to the **latest** reset among them — releasing at the 5-hour reset while the 7-day window is also exhausted would send the queue straight back into the wall.
+
+**Nothing is written to the task rows.** Rows stay `pending` and the next tick claims them. Stamping a reset time onto `scheduled_for` would mean owning the un-stamping too, and would strand the queue behind a stale deadline if quota recovered early or the reading turned out to be wrong — and it would overwrite any `scheduled_for` you set yourself.
+
+**Every unclear case fails open.** The gate does not hold when: quota isn't configured; the reading is older than 30 minutes (`loadQuota()` falls back to a disk cache when its probe fails, so a reading can be arbitrarily old); the reading is future-dated; an exhausted window carries no reset time; the reset has already passed; or the reset is more than 8 days out. A gate that holds on bad data silently stops all background work, which is worse than one visible failed task.
+
+While held, the state appears in the dispatcher heartbeat (`quotaHold`), in `GET /api/tasks` under `dispatcher.quotaHold`, and as a **Dispatch paused** notice in the task composer naming the resume time. Creating a task during a hold is still worth doing — it queues and starts itself.
+
+Gated behind the **`quotaAwareDispatch` feature flag** (default **on**). Turn it off to spawn regardless of quota.
 
 The dispatcher lifecycle is bound to the Next.js server process — restarting the server restarts the dispatcher. Tasks that were `running` when the server stopped will remain stuck in that state; use the re-run endpoint to reset them to `pending`.
 
