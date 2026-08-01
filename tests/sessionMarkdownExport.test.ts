@@ -383,3 +383,98 @@ describe("helpers", () => {
     expect(isExportDetail(2)).toBe(false);
   });
 });
+
+// ─── PR #358 review fixes ────────────────────────────────────────────────────
+
+describe("stats count what the document actually contains", () => {
+  it("does not count a message whose every block was filtered out", () => {
+    // Under `minimal` a tool-only assistant turn renders nothing, and its
+    // heading is dropped. Counting it anyway made the front matter, the
+    // subtitle, the JSON stats and the download toast all overstate the
+    // document — a partial export reading as a complete one.
+    const messages: ExportMessage[] = [
+      user("go"),
+      { role: "assistant", blocks: [{ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } }] },
+      { role: "user", blocks: [{ kind: "tool_result", toolName: "Read", text: "contents" }] },
+    ];
+    const { markdown, stats } = render(messages, { detail: "minimal" });
+    expect(stats.messages).toBe(1);
+    expect(markdown).toContain("messages: 1");
+    expect(markdown).toContain("> project-minder · 2026-07-30 · 1h 12m · 1 message");
+  });
+
+  it("says so in the footer when messages were dropped for having nothing to show", () => {
+    const messages: ExportMessage[] = [
+      user("go"),
+      { role: "assistant", blocks: [{ kind: "tool_use", toolName: "Read" }] },
+      { role: "assistant", blocks: [{ kind: "tool_use", toolName: "Grep" }] },
+    ];
+    const { markdown } = render(messages, { detail: "minimal" });
+    expect(markdown).toContain("2 messages left nothing to show at this detail level");
+  });
+
+  it("discloses messages the reader never loaded", () => {
+    // The reader's own cap is invisible to the renderer, so it is threaded in
+    // rather than left to make a truncated export look whole.
+    const { markdown, stats } = render([user("hi")], { messagesUnread: 1_234 });
+    expect(stats.messagesUnread).toBe(1_234);
+    expect(markdown).toContain("1,234 messages beyond the read cap were not included");
+  });
+});
+
+describe("explicit toggles override a preset that would erase them", () => {
+  it("detail=minimal + results=1 actually renders results", () => {
+    // `minimal` carries maxToolChars: 0, so the override previously resolved
+    // to "include tool output, capped at zero characters" — a toggle the
+    // endpoint documents that did nothing.
+    const messages: ExportMessage[] = [
+      { role: "user", blocks: [{ kind: "tool_result", toolName: "Bash", text: "4151 passed" }] },
+    ];
+    const { markdown } = render(messages, { detail: "minimal", toolResults: true });
+    expect(markdown).toContain("4151 passed");
+  });
+
+  it("leaves an explicit maxToolChars alone", () => {
+    // Asking for results AND a zero cap is coherent; only the preset's
+    // implicit zero is overridden.
+    expect(resolveExportOptions({ detail: "minimal", toolResults: true, maxToolChars: 0 }).maxToolChars).toBe(0);
+    expect(resolveExportOptions({ detail: "minimal", toolResults: true }).maxToolChars).toBe(1_500);
+  });
+
+  it("does not raise the cap when the preset already allows tool content", () => {
+    expect(resolveExportOptions({ detail: "full", toolResults: true }).maxToolChars).toBe(8_000);
+  });
+});
+
+describe("error callouts obey the visible-truncation guarantee", () => {
+  it("keeps a long API error in full rather than cutting it at 400 chars", () => {
+    // It used to be flattened to 400 characters with no marker and no entry
+    // in blocksTruncated, so the footer claimed nothing was lost while the
+    // actionable half of the diagnostic was already gone.
+    const long = "boom ".repeat(1_000);
+    const { markdown, stats } = render(
+      [{ role: "assistant", blocks: [{ kind: "error", text: long }] }],
+      { detail: "full" },
+    );
+    expect(markdown).toContain("characters, full text below");
+    expect(markdown).toContain(long.trim());
+    expect(stats.blocksTruncated).toBe(0); // `full` is uncapped — nothing lost
+  });
+
+  it("marks and counts the cut when a detail level does cap it", () => {
+    const long = "boom ".repeat(2_000);
+    const { markdown, stats } = render(
+      [{ role: "assistant", blocks: [{ kind: "error", text: long }] }],
+      { detail: "minimal" },
+    );
+    expect(stats.blocksTruncated).toBe(1);
+    expect(stats.charsTruncated).toBeGreaterThan(0);
+    expect(markdown).toContain("… truncated");
+    expect(markdown).toContain("1 block truncated");
+  });
+
+  it("leaves a short error untouched and uncounted", () => {
+    const { stats } = render([{ role: "assistant", blocks: [{ kind: "error", text: "529 overloaded" }] }]);
+    expect(stats.blocksTruncated).toBe(0);
+  });
+});

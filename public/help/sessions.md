@@ -221,7 +221,11 @@ When the JSONL is unavailable — pruned by Claude Code's own retention, synced 
 
 #### Notes
 
-- Everything the detail level leaves out is counted in an **Export notes** line at the bottom of the document. Nothing is dropped silently.
+- Everything the detail level leaves out is counted in an **Export notes** line at the bottom of the document. Nothing is dropped silently — including messages that rendered nothing at the chosen level, subagent messages excluded, and anything beyond the reader's 20,000-message cap.
+- **Subagent transcripts are read from their own files.** Modern Claude Code keeps them at `<project>/<session-id>/subagents/agent-*.jsonl` rather than inline in the parent session, so `Full` (or `sidechains=1`) opens those too and appends them, tagged `(subagent)`. They are appended rather than interleaved: the files carry independent timelines, and merging by timestamp would imply an ordering across processes the data doesn't support.
+- **Re-emitted assistant messages are collapsed.** Claude Code re-logs a message on a retry or a resumed session; the export dedupes by `message.id` (falling back to `requestId`), the same rule the usage parser uses.
+- **Image attachments** are noted in place rather than dropped — markdown can't carry them, but a prompt shouldn't lose half its content invisibly.
+- An **API error longer than 2,000 characters** gets a short callout plus the full text in a fenced block below, so `Full` really is full.
 - Code fences in the transcript are handled: a tool result containing ` ``` ` is wrapped in a longer fence so the block doesn't close early and turn the rest of the file into prose.
 - Front matter values are quoted, so Windows paths and project names containing `:` or `#` stay valid YAML.
 - The endpoint is `GET /api/sessions/<id>/export`. Add `?format=json` for `{ markdown, stats, fidelity }`, or `?download=1` for an attachment `Content-Disposition`. Query params `detail`, `thinking`, `tools`, `results`, and `sidechains` mirror the modal's controls.

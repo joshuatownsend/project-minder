@@ -5,6 +5,7 @@ import {
   EXPORT_DETAILS,
   isExportDetail,
   renderSessionMarkdown,
+  resolveExportOptions,
   type ExportOptions,
 } from "@/lib/sessions/markdownExport";
 
@@ -73,7 +74,17 @@ export async function GET(
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  const source = await loadExportSource(detail.sessionId, detail);
+  // Sidechains have to be resolved BEFORE the read: modern subagent
+  // transcripts live in sibling files, so whether to open them is a decision
+  // for the reader, not a filter the renderer can apply after the fact.
+  const resolved = resolveExportOptions({
+    detail: detailParam ?? undefined,
+    sidechains: boolParam(search.get("sidechains")),
+  });
+
+  const source = await loadExportSource(detail.sessionId, detail, {
+    sidechains: resolved.sidechains,
+  });
   const options: ExportOptions = {
     detail: detailParam ?? undefined,
     thinking: boolParam(search.get("thinking")),
@@ -81,6 +92,7 @@ export async function GET(
     toolResults: boolParam(search.get("results")),
     sidechains: boolParam(search.get("sidechains")),
     exportedAt: new Date().toISOString(),
+    messagesUnread: source.unread,
   };
 
   const { markdown, stats } = renderSessionMarkdown(

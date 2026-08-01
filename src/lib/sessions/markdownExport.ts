@@ -85,6 +85,12 @@ export interface ExportOptions {
   maxToolChars?: number | null;
   /** Injected so the rendered document is deterministic under test. */
   exportedAt?: string;
+  /**
+   * Messages the caller's reader dropped before handing them over (its own
+   * read cap). Threaded in so the footer and stats can disclose a loss the
+   * renderer has no other way to know about.
+   */
+  messagesUnread?: number;
 }
 
 export interface ResolvedExportOptions {
@@ -141,6 +147,13 @@ const PRESETS: Record<ExportDetail, Preset> = {
   },
 };
 
+/**
+ * Cap on error text inside a callout. A `> [!CAUTION]` block is one line, so
+ * an unbounded error would produce an unreadable wall — but the cut is now
+ * recorded like every other one rather than applied silently.
+ */
+const ERROR_CALLOUT_CHARS = 2_000;
+
 /** Hard ceiling on caller-supplied caps, including `full`'s uncapped prose. */
 const MAX_CAP = 5_000_000;
 
@@ -153,14 +166,31 @@ function clampCap(value: number | null | undefined, fallback: number | null): nu
 export function resolveExportOptions(options: ExportOptions = {}): ResolvedExportOptions {
   const detail = isExportDetail(options.detail) ? options.detail : "standard";
   const preset = PRESETS[detail];
+
+  const toolCalls = options.toolCalls ?? preset.toolCalls;
+  const toolResults = options.toolResults ?? preset.toolResults;
+
+  // `minimal` carries `maxToolChars: 0` to express "no tool I/O at all". But
+  // an explicit `results=1` (or `tools=1`) override on top of it then resolved
+  // to "yes, include tool output — capped at zero characters", so the toggle
+  // did nothing and the endpoint's documented override was a lie. When the
+  // caller explicitly asks for tool content and the preset's cap would erase
+  // it, fall back to `standard`'s cap rather than silently ignoring them.
+  let maxToolChars = clampCap(options.maxToolChars, preset.maxToolChars);
+  const explicitlyWantsToolContent =
+    (options.toolResults === true || options.toolCalls === true) && options.maxToolChars === undefined;
+  if (explicitlyWantsToolContent && maxToolChars === 0) {
+    maxToolChars = PRESETS.standard.maxToolChars;
+  }
+
   return {
     detail,
     thinking: options.thinking ?? preset.thinking,
-    toolCalls: options.toolCalls ?? preset.toolCalls,
-    toolResults: options.toolResults ?? preset.toolResults,
+    toolCalls,
+    toolResults,
     sidechains: options.sidechains ?? preset.sidechains,
     maxTextChars: clampCap(options.maxTextChars, preset.maxTextChars),
-    maxToolChars: clampCap(options.maxToolChars, preset.maxToolChars),
+    maxToolChars,
     exportedAt: options.exportedAt ?? null,
   };
 }
@@ -177,6 +207,13 @@ export interface ExportStats {
   blocksTruncated: number;
   /** Characters removed by truncation. */
   charsTruncated: number;
+  /**
+   * Messages the reader never loaded because it hit its own read cap. Set by
+   * the caller, not by the renderer — the renderer can only count what it was
+   * given, and a cap applied upstream is exactly the kind of loss that would
+   * otherwise make a partial export read as a complete one.
+   */
+  messagesUnread: number;
   bytes: number;
 }
 
@@ -291,6 +328,7 @@ class Writer {
     blocksOmitted: 0,
     blocksTruncated: 0,
     charsTruncated: 0,
+    messagesUnread: 0,
     bytes: 0,
   };
 
@@ -345,6 +383,22 @@ export function renderSessionMarkdown(
     return true;
   });
 
+  // Body first, header second.
+  //
+  // A message whose every block is filtered out by the detail level (a
+  // tool-only assistant turn under `minimal`, or a user turn carrying nothing
+  // but a tool result) is dropped by `renderMessage` — heading and all. The
+  // header used to report `visible.length`, the count BEFORE that filtering,
+  // so the front matter, the subtitle, the JSON stats and the download toast
+  // could all claim substantially more messages than the document contains.
+  // Rendering first makes the body the single source of truth for the count;
+  // the header is assembled from what actually happened and spliced in front.
+  const body = new Writer();
+  for (const message of visible) {
+    renderMessage(body, message, opts);
+  }
+  const rendered = body.stats.messages;
+
   w.push(
     frontMatter([
       ["session", meta.sessionId],
@@ -356,7 +410,7 @@ export function renderSessionMarkdown(
       ["ended", meta.endTime],
       ["duration", formatDuration(meta.durationMs)],
       ["models", meta.modelsUsed],
-      ["messages", visible.length],
+      ["messages", rendered],
       ["cost_usd", meta.costEstimate === undefined ? undefined : Number(meta.costEstimate.toFixed(4))],
       ["detail", opts.detail],
       ["fidelity", meta.fidelity],
@@ -374,7 +428,7 @@ export function renderSessionMarkdown(
   if (meta.startTime) facts.push(meta.startTime.slice(0, 10));
   const duration = formatDuration(meta.durationMs);
   if (duration) facts.push(duration);
-  facts.push(`${visible.length} message${visible.length === 1 ? "" : "s"}`);
+  facts.push(`${rendered} message${rendered === 1 ? "" : "s"}`);
   if (meta.costEstimate !== undefined) facts.push(`$${meta.costEstimate.toFixed(2)}`);
   if (facts.length) {
     w.push(`> ${facts.join(" · ")}`);
@@ -395,16 +449,21 @@ export function renderSessionMarkdown(
   w.push("---");
   w.blank();
 
-  for (const message of visible) {
-    renderMessage(w, message, opts);
-  }
+  w.lines.push(...body.lines);
 
-  renderFooter(w, opts);
+  // Adopt the body's tallies — they are what the document actually did.
+  const stats: ExportStats = {
+    ...body.stats,
+    messages: rendered,
+    sidechainsSkipped: w.stats.sidechainsSkipped,
+    messagesUnread: Math.max(0, options.messagesUnread ?? 0),
+  };
+
+  renderFooter(w, opts, stats, visible.length - rendered);
 
   const markdown = `${w.lines.join("\n").trimEnd()}\n`;
-  w.stats.messages = visible.length;
-  w.stats.bytes = Buffer.byteLength(markdown, "utf8");
-  return { markdown, stats: w.stats };
+  stats.bytes = Buffer.byteLength(markdown, "utf8");
+  return { markdown, stats };
 }
 
 function renderMessage(w: Writer, message: ExportMessage, opts: ResolvedExportOptions): void {
@@ -426,11 +485,13 @@ function renderMessage(w: Writer, message: ExportMessage, opts: ResolvedExportOp
 
   // A message whose every block was filtered out (an assistant turn that
   // only made tool calls, under `minimal`) would otherwise leave a bare
-  // heading. Drop the heading too rather than emit an empty section.
+  // heading. Drop the heading too rather than emit an empty section — and
+  // do not count it, because it is not in the document.
   if (w.lines.length === bodyStart + 2) {
     w.lines.length = before;
     return;
   }
+  w.stats.messages++;
   w.blank();
 }
 
@@ -448,8 +509,29 @@ function renderBlock(w: Writer, block: ExportBlock, opts: ResolvedExportOptions)
     case "error": {
       const text = (block.text ?? "").trim() || "API error";
       w.stats.blocks++;
+      // Routed through `truncate` rather than cut inline: an API error over
+      // 400 chars was previously shortened with no marker and no entry in
+      // `blocksTruncated`, so the footer claimed nothing was lost while the
+      // actionable half of a diagnostic had already been discarded. A
+      // callout can't hold newlines, so the text is flattened first and the
+      // cap is applied by the one function that records what it removed.
+      const flat = text.replace(/\s+/g, " ");
       w.push(`> [!CAUTION]`);
-      w.push(`> **Error** — ${inlineOneLine(text, 400)}`);
+      if (flat.length <= ERROR_CALLOUT_CHARS) {
+        w.push(`> **Error** — ${flat}`);
+      } else {
+        // Too long for a one-line callout. Previously this was cut at 400
+        // characters with no marker and no entry in `blocksTruncated`, so the
+        // footer claimed nothing was lost while the actionable half of a
+        // diagnostic had already gone. Summarize in the callout and put the
+        // whole thing in a fenced block below, so `full` still means full and
+        // any cut that does happen is the one `truncate` records.
+        w.push(
+          `> **Error** — ${flat.slice(0, 200)}… (${flat.length.toLocaleString("en-US")} characters, full text below)`,
+        );
+        w.blank();
+        w.push(codeBlock(w.truncate(text.trim(), opts.maxTextChars)));
+      }
       w.blank();
       return;
     }
@@ -538,21 +620,36 @@ function safeJson(value: unknown): string {
   }
 }
 
-function renderFooter(w: Writer, opts: ResolvedExportOptions): void {
+function renderFooter(
+  w: Writer,
+  opts: ResolvedExportOptions,
+  stats: ExportStats,
+  messagesDropped: number,
+): void {
   const notes: string[] = [];
-  if (w.stats.blocksOmitted > 0) {
+  if (stats.blocksOmitted > 0) {
     notes.push(
-      `${w.stats.blocksOmitted.toLocaleString("en-US")} block${w.stats.blocksOmitted === 1 ? "" : "s"} omitted by the \`${opts.detail}\` detail level`,
+      `${stats.blocksOmitted.toLocaleString("en-US")} block${stats.blocksOmitted === 1 ? "" : "s"} omitted by the \`${opts.detail}\` detail level`,
     );
   }
-  if (w.stats.sidechainsSkipped > 0) {
+  if (messagesDropped > 0) {
     notes.push(
-      `${w.stats.sidechainsSkipped.toLocaleString("en-US")} subagent message${w.stats.sidechainsSkipped === 1 ? "" : "s"} excluded`,
+      `${messagesDropped.toLocaleString("en-US")} message${messagesDropped === 1 ? "" : "s"} left nothing to show at this detail level`,
     );
   }
-  if (w.stats.blocksTruncated > 0) {
+  if (stats.sidechainsSkipped > 0) {
     notes.push(
-      `${w.stats.blocksTruncated.toLocaleString("en-US")} block${w.stats.blocksTruncated === 1 ? "" : "s"} truncated (${w.stats.charsTruncated.toLocaleString("en-US")} characters)`,
+      `${stats.sidechainsSkipped.toLocaleString("en-US")} subagent message${stats.sidechainsSkipped === 1 ? "" : "s"} excluded`,
+    );
+  }
+  if (stats.blocksTruncated > 0) {
+    notes.push(
+      `${stats.blocksTruncated.toLocaleString("en-US")} block${stats.blocksTruncated === 1 ? "" : "s"} truncated (${stats.charsTruncated.toLocaleString("en-US")} characters)`,
+    );
+  }
+  if (stats.messagesUnread > 0) {
+    notes.push(
+      `${stats.messagesUnread.toLocaleString("en-US")} message${stats.messagesUnread === 1 ? "" : "s"} beyond the read cap were not included`,
     );
   }
   if (notes.length === 0) return;

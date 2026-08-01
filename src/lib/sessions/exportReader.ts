@@ -1,5 +1,6 @@
 import { createReadStream } from "fs";
 import { promises as fs } from "fs";
+import path from "path";
 import readline from "readline";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import type { SessionDetail } from "@/lib/types";
@@ -36,6 +37,11 @@ export interface ExportSource {
   fidelity: ExportMeta["fidelity"];
   /** Set when the JSONL existed but could not be used. */
   degradedReason?: "too-large" | "unreadable" | "not-found";
+  /**
+   * Usable messages the read cap prevented from loading. Passed to the
+   * renderer so the footer and the stats can disclose the gap.
+   */
+  unread: number;
 }
 
 interface RawBlock {
@@ -56,7 +62,16 @@ interface RawEntry {
   isSidechain?: boolean;
   isMeta?: boolean;
   isApiErrorMessage?: boolean;
-  message?: { role?: string; model?: string; content?: unknown };
+  requestId?: string;
+  message?: { id?: string; role?: string; model?: string; content?: unknown };
+  /**
+   * Some user entries carry their blocks here rather than under
+   * `message.content` — a supported Claude JSONL shape that the existing
+   * scanner explicitly falls back to (`claudeConversations.ts`). Reading only
+   * `message.content` dropped those turns entirely while the export still
+   * claimed `fidelity: "full"`.
+   */
+  content?: unknown;
 }
 
 /**
@@ -95,7 +110,12 @@ export function entryToMessage(
   if (entry.type !== "user" && entry.type !== "assistant") return null;
   if (entry.isMeta) return null;
 
-  const content = entry.message?.content;
+  // Prefer `message.content`, but fall back to the top-level `content` when
+  // it is absent OR an empty array — an empty array is exactly how an entry
+  // that stores its blocks at the top level presents.
+  const inner = entry.message?.content;
+  const content =
+    inner === undefined || (Array.isArray(inner) && inner.length === 0) ? entry.content ?? inner : inner;
   const blocks: ExportBlock[] = [];
 
   if (typeof content === "string") {
@@ -144,6 +164,12 @@ export function entryToMessage(
           });
           break;
         }
+        case "image":
+          // A pasted screenshot has no markdown representation, but silently
+          // dropping it made part of a prompt disappear from a document
+          // labelled full fidelity. Name it instead.
+          blocks.push({ kind: "text", text: "_[image attachment omitted — not representable in markdown]_" });
+          break;
         default:
           break;
       }
@@ -160,10 +186,34 @@ export function entryToMessage(
   };
 }
 
-/** Read and parse a session JSONL into export messages. */
-export async function readJsonlMessages(filePath: string): Promise<ExportMessage[]> {
+export interface JsonlReadResult {
+  messages: ExportMessage[];
+  /**
+   * Usable entries the read cap prevented from loading. Non-zero means the
+   * export is incomplete, and the renderer discloses it — a cap that stopped
+   * silently made a truncated export read as a whole one.
+   */
+  unread: number;
+  /** Duplicate re-emissions of an assistant message that were collapsed. */
+  duplicates: number;
+}
+
+/**
+ * Read and parse a session JSONL into export messages.
+ *
+ * Assistant messages are deduplicated by `message.id` (falling back to
+ * `requestId`), which is the same identity rule `parseSessionTurns` applies:
+ * Claude Code re-logs an assistant message on a retry or a resumed-session
+ * re-emit, and without this the export repeats the reply and its tool calls,
+ * inflates its own message count, and burns through the read cap early.
+ */
+export async function readJsonlMessages(filePath: string): Promise<JsonlReadResult> {
   const messages: ExportMessage[] = [];
   const toolNames = new Map<string, string>();
+  const seenAssistant = new Set<string>();
+  let unread = 0;
+  let duplicates = 0;
+  let capped = false;
 
   const stream = createReadStream(filePath, { encoding: "utf-8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -177,16 +227,34 @@ export async function readJsonlMessages(filePath: string): Promise<ExportMessage
         // A torn final line is normal for a session still being written.
         continue;
       }
+
+      // Keep counting past the cap rather than breaking: the whole point is
+      // to be able to say HOW MANY messages were left out, and `break` threw
+      // that number away.
+      if (capped) {
+        if (entryToMessage(entry, toolNames)) unread++;
+        continue;
+      }
+
+      const identity = entry.type === "assistant" ? entry.message?.id ?? entry.requestId : undefined;
+      if (identity) {
+        if (seenAssistant.has(identity)) {
+          duplicates++;
+          continue;
+        }
+        seenAssistant.add(identity);
+      }
+
       const message = entryToMessage(entry, toolNames);
       if (!message) continue;
       messages.push(message);
-      if (messages.length >= MAX_MESSAGES) break;
+      if (messages.length >= MAX_MESSAGES) capped = true;
     }
   } finally {
     lines.close();
     stream.destroy();
   }
-  return messages;
+  return { messages, unread, duplicates };
 }
 
 /**
@@ -244,6 +312,7 @@ export function timelineToMessages(detail: SessionDetail): ExportMessage[] {
 export async function loadExportSource(
   sessionId: string,
   detail: SessionDetail,
+  options: { sidechains?: boolean } = {},
 ): Promise<ExportSource> {
   let located: { filePath: string } | null = null;
   try {
@@ -253,15 +322,25 @@ export async function loadExportSource(
   }
 
   if (!located) {
-    return { messages: timelineToMessages(detail), fidelity: "index", degradedReason: "not-found" };
+    return {
+      messages: timelineToMessages(detail),
+      fidelity: "index",
+      degradedReason: "not-found",
+      unread: 0,
+    };
   }
 
   try {
     const stat = await fs.stat(located.filePath);
     if (stat.size > MAX_SESSION_FILE_SIZE) {
-      return { messages: timelineToMessages(detail), fidelity: "index", degradedReason: "too-large" };
+      return {
+        messages: timelineToMessages(detail),
+        fidelity: "index",
+        degradedReason: "too-large",
+        unread: 0,
+      };
     }
-    const messages = await readJsonlMessages(located.filePath);
+    const { messages, unread } = await readJsonlMessages(located.filePath);
     // An empty parse means the file exists but yielded nothing usable
     // (all-meta, or a schema we don't recognize) — the index is strictly
     // better than an empty document.
@@ -270,12 +349,67 @@ export async function loadExportSource(
         messages: timelineToMessages(detail),
         fidelity: "index",
         degradedReason: "unreadable",
+        unread: 0,
       };
     }
-    return { messages, fidelity: "full" };
+
+    if (options.sidechains) {
+      const sub = await readSubagentMessages(located.filePath, sessionId);
+      if (sub.length > 0) {
+        // Appended rather than interleaved: subagent files carry their own
+        // timelines and merging them by timestamp would imply an ordering
+        // relationship across processes that the data doesn't support.
+        messages.push(...sub);
+      }
+    }
+
+    return { messages, fidelity: "full", unread };
   } catch {
-    return { messages: timelineToMessages(detail), fidelity: "index", degradedReason: "unreadable" };
+    return {
+      messages: timelineToMessages(detail),
+      fidelity: "index",
+      degradedReason: "unreadable",
+      unread: 0,
+    };
   }
+}
+
+/**
+ * Read modern subagent transcripts.
+ *
+ * As of Claude Code ~v2.1.150 subagent conversations no longer appear as
+ * `isSidechain` entries inside the parent session file (the scanner documents
+ * probing 0/214 sessions for them). They live in a sibling directory:
+ * `<project-dir>/<session-id>/subagents/agent-*.jsonl`. Without reading those,
+ * `detail=full` and `sidechains=1` promised subagent content and delivered
+ * none — and reported zero excluded messages while doing it.
+ *
+ * Best-effort throughout: a missing directory or an unreadable file yields
+ * fewer messages, never an error.
+ */
+async function readSubagentMessages(
+  parentFilePath: string,
+  sessionId: string,
+): Promise<ExportMessage[]> {
+  const dir = path.join(path.dirname(parentFilePath), sessionId, "subagents");
+  let entries: string[];
+  try {
+    entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();
+  } catch {
+    return [];
+  }
+
+  const out: ExportMessage[] = [];
+  for (const name of entries) {
+    if (out.length >= MAX_MESSAGES) break;
+    try {
+      const { messages } = await readJsonlMessages(path.join(dir, name));
+      for (const m of messages) out.push({ ...m, isSidechain: true });
+    } catch {
+      // One unreadable agent file must not lose the others.
+    }
+  }
+  return out;
 }
 
 /** Assemble the front-matter metadata from an already-loaded detail. */

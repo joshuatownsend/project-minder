@@ -160,7 +160,7 @@ describe("readJsonlMessages", () => {
         message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a.ts" }] },
       }),
     ]);
-    const messages = await readJsonlMessages(file);
+    const { messages } = await readJsonlMessages(file);
     expect(messages).toHaveLength(3); // the system entry is not a message
     expect(messages[2].blocks[0]).toMatchObject({ toolName: "Bash", text: "a.ts" });
   });
@@ -171,12 +171,12 @@ describe("readJsonlMessages", () => {
       JSON.stringify({ type: "user", message: { content: "go" } }),
       '{"type":"assistant","message":{"content":[{"type":"te',
     ]);
-    const messages = await readJsonlMessages(file);
+    const { messages } = await readJsonlMessages(file);
     expect(messages).toHaveLength(1);
   });
 
   it("returns nothing for an empty file", async () => {
-    expect(await readJsonlMessages(await writeJsonl([]))).toEqual([]);
+    expect((await readJsonlMessages(await writeJsonl([]))).messages).toEqual([]);
   });
 
   it("preserves full message text — the reason this path exists at all", async () => {
@@ -187,7 +187,7 @@ describe("readJsonlMessages", () => {
     const file = await writeJsonl([
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: long }] } }),
     ]);
-    const messages = await readJsonlMessages(file);
+    const { messages } = await readJsonlMessages(file);
     expect(messages[0].blocks[0].text).toHaveLength(5_000);
   });
 });
@@ -267,5 +267,99 @@ describe("toExportMeta", () => {
     expect(meta.fidelity).toBe("index");
     expect(meta.sessionId).toBe("s1");
     expect(meta.costEstimate).toBe(1.5);
+  });
+});
+
+// ─── PR #358 review fixes ────────────────────────────────────────────────────
+
+describe("entryToMessage — content shapes", () => {
+  it("reads blocks stored in top-level content, not just message.content", () => {
+    // A supported Claude JSONL shape the existing scanner explicitly falls
+    // back to. Reading only message.content dropped the whole turn while the
+    // export still stamped fidelity: "full".
+    const msg = entryToMessage(
+      { type: "user", content: [{ type: "text", text: "top-level prompt" }] },
+      new Map(),
+    );
+    expect(msg?.blocks[0]).toEqual({ kind: "text", text: "top-level prompt" });
+  });
+
+  it("falls back when message.content is an empty array", () => {
+    // Which is exactly how a top-level-content entry presents.
+    const msg = entryToMessage(
+      { type: "user", message: { content: [] }, content: [{ type: "text", text: "kept" }] },
+      new Map(),
+    );
+    expect(msg?.blocks[0].text).toBe("kept");
+  });
+
+  it("prefers message.content when it has blocks", () => {
+    const msg = entryToMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "text", text: "inner" }] },
+        content: [{ type: "text", text: "outer" }],
+      },
+      new Map(),
+    );
+    expect(msg?.blocks[0].text).toBe("inner");
+  });
+
+  it("names an image attachment instead of dropping it", () => {
+    // The text alone kept the message non-empty, so a pasted screenshot
+    // vanished from a document labelled full fidelity with nothing recorded.
+    const msg = entryToMessage(
+      {
+        type: "user",
+        message: { content: [{ type: "text", text: "look at this" }, { type: "image" }] },
+      },
+      new Map(),
+    );
+    expect(msg?.blocks).toHaveLength(2);
+    expect(msg?.blocks[1].text).toContain("image attachment omitted");
+  });
+});
+
+describe("readJsonlMessages — dedup and cap accounting", () => {
+  it("collapses a re-emitted assistant message by message.id", async () => {
+    // Claude Code re-logs an assistant message on a retry or a resumed-session
+    // re-emit; parseSessionTurns already dedupes this. Without it the export
+    // repeats the reply and its tool calls and inflates its own count.
+    const dup = JSON.stringify({
+      type: "assistant",
+      message: { id: "msg_1", content: [{ type: "text", text: "same reply" }] },
+    });
+    const file = await writeJsonl([dup, dup, dup]);
+    const result = await readJsonlMessages(file);
+    expect(result.messages).toHaveLength(1);
+    expect(result.duplicates).toBe(2);
+  });
+
+  it("falls back to requestId when message.id is absent", async () => {
+    const dup = JSON.stringify({
+      type: "assistant",
+      requestId: "req_1",
+      message: { content: [{ type: "text", text: "same reply" }] },
+    });
+    const result = await readJsonlMessages(await writeJsonl([dup, dup]));
+    expect(result.messages).toHaveLength(1);
+  });
+
+  it("keeps distinct assistant messages", async () => {
+    const file = await writeJsonl([
+      JSON.stringify({ type: "assistant", message: { id: "a", content: [{ type: "text", text: "one" }] } }),
+      JSON.stringify({ type: "assistant", message: { id: "b", content: [{ type: "text", text: "two" }] } }),
+    ]);
+    expect((await readJsonlMessages(file)).messages).toHaveLength(2);
+  });
+
+  it("does not dedupe user messages, which carry no id", async () => {
+    const same = JSON.stringify({ type: "user", message: { content: "run it" } });
+    expect((await readJsonlMessages(await writeJsonl([same, same]))).messages).toHaveLength(2);
+  });
+
+  it("reports zero unread when nothing was capped", async () => {
+    const file = await writeJsonl([JSON.stringify({ type: "user", message: { content: "hi" } })]);
+    expect((await readJsonlMessages(file)).unread).toBe(0);
   });
 });
