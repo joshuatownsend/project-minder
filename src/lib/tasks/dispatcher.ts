@@ -272,7 +272,11 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         if (stopped) break; // no new claims after stop
         let task: Task | null = null;
         try {
-          task = await claimPendingTask();
+          // While a quota hold is active, claim ONLY dry-run rows. Claiming
+          // a real task and requeueing it would loop: priority ordering hands
+          // back the same row every iteration, and dry-run tasks sitting
+          // behind it would never be reached.
+          task = await claimPendingTask({ dryRunOnly: quotaHold !== null });
         } catch (err) {
           console.error("[dispatcher] claimPendingTask error:", err);
           break;
@@ -296,16 +300,6 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
           await completeTask(task.id, { output_summary: "dry-run: spawn skipped" }).catch(console.error);
           continue;
-        }
-
-        // Real spawn ahead — this is where the quota hold applies. Requeue
-        // rather than fail: the task never started, so it belongs back in the
-        // queue for the tick after the window resets.
-        if (quotaHold) {
-          await requeueRunningTask(task.id).catch((err) =>
-            console.error(`[dispatcher] requeue on quota hold failed for task ${task.id}:`, err)
-          );
-          break;
         }
 
         const swarmId = task.swarm_id;
