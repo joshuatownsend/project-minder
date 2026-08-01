@@ -152,7 +152,7 @@ export async function listRules(dir: string): Promise<DriftItem[]> {
     // an instruction file and reported as missing from the other harnesses.
     if (!/\.(md|rules|txt)$/i.test(entry.name)) continue;
     const base = entry.name.replace(/\.(md|rules|txt)$/i, "");
-    items.push({ kind: "instruction", key: base.toLowerCase(), name: entry.name });
+    items.push({ kind: "rule", key: base.toLowerCase(), name: entry.name });
   }
   return items;
 }
@@ -187,6 +187,11 @@ export function redactSignature(value: string): string {
   // `--api-key VALUE` / `--token=VALUE` style arguments.
   out = out.replace(
     /((?:^|\s)--?(?:api[_-]?key|key|token|secret|password|auth)[= ])\S+/gi,
+    "$1***",
+  );
+  // `--header Authorization: Bearer xyz` and bare `Authorization: …` pairs.
+  out = out.replace(
+    /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:bearer|basic|token)?\s*\S+/gi,
     "$1***",
   );
   // Bare high-entropy secrets that announce themselves by prefix. Built via
@@ -274,7 +279,8 @@ async function claudeInventory(): Promise<HarnessInventory> {
       tryRead(() => rootInstruction(path.join(home, "CLAUDE.md"))),
     ]);
     if (!skills.ok) failed.add("skill");
-    if (!rules.ok || !root.ok) failed.add("instruction");
+    if (!rules.ok) failed.add("rule");
+    if (!root.ok) failed.add("instruction");
     items.push(...skills.items, ...rules.items, ...root.items);
   }
 
@@ -282,7 +288,7 @@ async function claudeInventory(): Promise<HarnessInventory> {
     harness: "claude",
     displayName: "Claude Code",
     present,
-    supports: supported(["mcp", "skill", "instruction"], failed),
+    supports: supported(["mcp", "skill", "instruction", "rule"], failed),
     items,
     home,
   };
@@ -336,7 +342,8 @@ async function codexInventory(): Promise<HarnessInventory> {
       tryRead(() => rootInstruction(path.join(home, "AGENTS.md"))),
     ]);
     if (!skills.ok) failed.add("skill");
-    if (!rules.ok || !root.ok) failed.add("instruction");
+    if (!rules.ok) failed.add("rule");
+    if (!root.ok) failed.add("instruction");
     items.push(...skills.items, ...rules.items, ...root.items);
   }
 
@@ -344,7 +351,7 @@ async function codexInventory(): Promise<HarnessInventory> {
     harness: "codex",
     displayName: "Codex",
     present,
-    supports: supported(["mcp", "skill", "instruction"], failed),
+    supports: supported(["mcp", "skill", "instruction", "rule"], failed),
     items,
     home,
   };
@@ -381,8 +388,13 @@ async function geminiInventory(): Promise<HarnessInventory> {
     try {
       const raw = await fs.readFile(path.join(home, "settings.json"), "utf-8");
       items.push(...geminiMcpItems(JSON.parse(raw)));
-    } catch {
-      // Absent or malformed settings — no MCP items, not an error.
+    } catch (err) {
+      // An ABSENT settings.json means Gemini has no MCP servers — a real
+      // comparison. A file that exists but cannot be read or parsed means we
+      // do not know, and treating that as "none configured" reported every
+      // Claude and Codex server as missing from Gemini. Drop the kind so it
+      // is excluded from the comparison instead.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") failed.add("mcp");
     }
 
     // Gemini CLI lets the global context file be renamed via
@@ -406,6 +418,8 @@ async function geminiInventory(): Promise<HarnessInventory> {
     present,
     // No `rules/` directory concept, but the root `GEMINI.md` is an
     // instruction file, so the kind still participates.
+    // No `rules/` concept, so `rule` is deliberately absent: including it
+    // made every Claude/Codex rule file read as missing from Gemini.
     supports: supported(["mcp", "skill", "instruction"], failed),
     items,
     home,

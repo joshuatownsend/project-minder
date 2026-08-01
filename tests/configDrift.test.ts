@@ -335,7 +335,7 @@ describe("listSkills / listRules", () => {
     await fs.writeFile(path.join(dir, "default.rules"), "x");
     const rules = await listRules(dir);
     expect(rules.map((r) => r.key).sort()).toEqual(["context7", "default"]);
-    expect(rules.every((r) => r.kind === "instruction")).toBe(true);
+    expect(rules.every((r) => r.kind === "rule")).toBe(true);
   });
 
   it("ignores dotfiles", async () => {
@@ -492,5 +492,64 @@ describe("an unreadable directory is not an empty one", () => {
   it("returns empty for a genuinely absent directory", async () => {
     const absent = path.join(os.tmpdir(), `minder-drift-absent-${Math.random().toString(36).slice(2)}`);
     expect(await listSkills(absent)).toEqual([]);
+  });
+});
+
+// ─── PR #359 round-three review fixes ────────────────────────────────────────
+
+describe("rule files are a separate kind from the root instruction", () => {
+  it("does not report Claude's rules as missing from Gemini", () => {
+    // Gemini has no `rules/` concept. Folded into one `instruction` kind, it
+    // participated on the strength of its root file alone and was then
+    // reported as missing every rule Claude and Codex had.
+    const findings = detectDrift([
+      inv({
+        harness: "claude",
+        displayName: "Claude Code",
+        supports: ["mcp", "skill", "instruction", "rule"],
+        items: [item("instruction", "(root)"), item("rule", "context7")],
+      }),
+      inv({
+        harness: "gemini",
+        displayName: "Gemini CLI",
+        supports: ["mcp", "skill", "instruction"],
+        items: [item("instruction", "(root)")],
+      }),
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it("still compares rules between two harnesses that have them", () => {
+    const findings = detectDrift([
+      inv({
+        harness: "claude",
+        displayName: "Claude Code",
+        supports: ["instruction", "rule"],
+        items: [item("rule", "context7")],
+      }),
+      inv({ harness: "codex", displayName: "Codex", supports: ["instruction", "rule"] }),
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].code).toBe("drift/rule-missing");
+    expect(findings[0].title).toContain("1 rule file");
+  });
+});
+
+describe("authorization-style arguments are redacted", () => {
+  it("masks a bearer token in a header argument", () => {
+    expect(redactSignature("npx s --header Authorization: Bearer abcdef123456")).toContain("***");
+    expect(redactSignature("npx s --header Authorization: Bearer abcdef123456")).not.toContain(
+      "abcdef123456",
+    );
+  });
+
+  it("masks a bare Authorization pair", () => {
+    expect(redactSignature("Authorization=Basic Zm9vOmJhcg==")).not.toContain("Zm9vOmJhcg");
+  });
+
+  it("leaves an unrelated --header alone", () => {
+    expect(redactSignature("npx s --header Accept: application/json")).toBe(
+      "npx s --header Accept: application/json",
+    );
   });
 });

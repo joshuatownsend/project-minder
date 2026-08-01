@@ -85,9 +85,16 @@ When you run more than one coding harness — Claude Code plus Codex and/or Gemi
 |---|---|---|---|
 | **MCP servers** | `mcpServers` in `~/.claude.json` / `settings.json` (user + managed scope) | `[mcp_servers.*]` in `config.toml` | `mcpServers` in `settings.json` |
 | **Skills** | `~/.claude/skills/` | `<CODEX_HOME>/skills/` | `<GEMINI_HOME>/skills/` |
-| **Instructions** | `CLAUDE.md` + `rules/` | `AGENTS.md` + `rules/` | `GEMINI.md` |
+| **Root instruction** | `CLAUDE.md` | `AGENTS.md` | `GEMINI.md` (or `context.fileName`) |
+| **Rule files** | `rules/` | `rules/` | *not supported* |
+
+Rule files are a **separate kind** from the root instruction, because Gemini has no `rules/` directory: folded together, Gemini participated in the shared comparison on the strength of its root file alone and was then reported as missing every rule Claude and Codex had.
 
 Root instruction files are compared as **one artifact under three names**. `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` play the same role, so matching them by filename would report each as permanently missing from the other two harnesses. Rules files match on basename, so `context7.md` and `context7.rules` are the same rule.
+
+MCP launch signatures are **redacted** before they leave the inventory — URL userinfo, credential query parameters, `--api-key`/`--token` arguments, `Authorization:` headers, and prefix-announced secrets like `sk-`/`ghp_`. A conflict finding prints both sides' signatures, so an endpoint carrying a token would otherwise appear on screen.
+
+A directory or settings file that **exists but can't be read** (permissions, a transient failure, malformed JSON) excludes that kind from the comparison rather than counting as "none configured" — otherwise a permissions problem reports everything the *other* harness has as missing.
 
 Symlinked entries are followed. On a machine where skills are stow-linked into a shared directory, a naive listing would drop every link — and an entry missing from an *inventory* gets reported as missing from that *harness*, which would tell you to install something you already have.
 

@@ -29,7 +29,8 @@ interface DriftResponse {
 const KIND_LABEL: Record<string, string> = {
   mcp: "MCP servers",
   skill: "Skills",
-  instruction: "Instruction files",
+  instruction: "Root instruction file",
+  rule: "Rule files",
   other: "Other",
 };
 

@@ -16,16 +16,22 @@ export type DriftHarness = "claude" | "codex" | "gemini";
  *
  * - `mcp`         — configured MCP servers
  * - `skill`       — user-scope skills
- * - `instruction` — root instruction file + `rules/` entries
+ * - `instruction` — the harness's root instruction file (CLAUDE.md /
+ *   AGENTS.md / GEMINI.md), compared as ONE artifact under three names
+ * - `rule` — entries under a `rules/` directory. Split from `instruction`
+ *   because Gemini has no `rules/` concept: folded together, Gemini
+ *   participated in the shared kind on the strength of its root file alone
+ *   and was then reported as missing every rule Claude and Codex had.
  */
-export type DriftKind = "mcp" | "skill" | "instruction";
+export type DriftKind = "mcp" | "skill" | "instruction" | "rule";
 
-export const DRIFT_KINDS: readonly DriftKind[] = ["mcp", "skill", "instruction"];
+export const DRIFT_KINDS: readonly DriftKind[] = ["mcp", "skill", "instruction", "rule"];
 
 export const DRIFT_KIND_LABEL: Record<DriftKind, { one: string; many: string }> = {
   mcp: { one: "MCP server", many: "MCP servers" },
   skill: { one: "skill", many: "skills" },
-  instruction: { one: "instruction file", many: "instruction files" },
+  instruction: { one: "root instruction file", many: "root instruction files" },
+  rule: { one: "rule file", many: "rule files" },
 };
 
 /** One comparable item in a harness's inventory. */
