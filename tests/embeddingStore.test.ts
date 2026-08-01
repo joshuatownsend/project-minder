@@ -284,3 +284,36 @@ d("table shape migration", () => {
     expect(countEmbedded(db, "m1")).toBe(0);
   });
 });
+
+d("stale sweep advances", () => {
+  let db: Db;
+  beforeEach(() => {
+    db = makeDb();
+    for (let i = 0; i < 6; i++) {
+      addChunk(db, `s${i}`, 0, 0, `text ${i}`, "2026-07-01T00:00:00Z");
+      putVectors(db, "m1", [
+        { key: { sessionId: `s${i}`, turnIndex: 0, chunkIndex: 0 }, vec: vec(i), hash: hashChunkText(`text ${i}`) },
+      ]);
+    }
+  });
+
+  it("eventually reaches a chunk outside the first window", () => {
+    // A bare LIMIT re-examined the same leading rows forever, so a chunk that
+    // changed outside that subset kept its stale vector indefinitely.
+    db.prepare("UPDATE prompts_fts SET text = 'changed' WHERE session_id = 's5'").run();
+
+    let found = 0;
+    for (let pass = 0; pass < 6 && found === 0; pass++) {
+      found = pruneInvalidVectors(db, "m1", 2).stale;
+    }
+    expect(found).toBe(1);
+    expect(countEmbedded(db, "m1")).toBe(5);
+  });
+
+  it("wraps rather than running off the end", () => {
+    for (let pass = 0; pass < 10; pass++) {
+      expect(() => pruneInvalidVectors(db, "m1", 2)).not.toThrow();
+    }
+    expect(countEmbedded(db, "m1")).toBe(6);
+  });
+});

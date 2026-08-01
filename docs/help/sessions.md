@@ -106,7 +106,7 @@ It is **off by default**, and turning it on is what consents to the setup cost:
 | Disk | ~**58 MB** of vectors (384 bytes each), a ~7% increase on the index |
 | Per query | ~**162 ms** for a full scan, with ~58 MB held in memory once the first semantic query runs |
 
-Run the backfill from Settings, or `POST /api/embeddings` with an optional `{ "chunks": N }` budget. Each call embeds a bounded batch and returns; it is resumable, and **newest chunks are embedded first** so recent sessions become searchable long before the pass completes. `GET /api/embeddings` reports coverage without triggering the download.
+Run the backfill with `POST /api/embeddings`, optionally with a `{ "chunks": N }` budget. **There is no Settings panel for it yet** — the flag toggle in Settings enables the feature but does not populate any vectors, so until the panel lands the backfill is driven from the endpoint. (Tracked as a follow-up in `TODO.md`; it is part of why the flag ships off.) Each call embeds a bounded batch and returns; it is resumable, and **newest chunks are embedded first** so recent sessions become searchable long before the pass completes. `GET /api/embeddings` reports coverage without triggering the download.
 
 **Native build scripts are intentionally skipped.** `@huggingface/transformers` pulls `onnxruntime-node`, whose install script is not in this repo's `pnpm.onlyBuiltDependencies` allowlist, so `pnpm install` prints an "Ignored build scripts" warning. That is deliberate — the shipped prebuilt binary is sufficient, verified by running a full embed-and-search pass on an install where those scripts never ran. Adding a native postinstall to every install for a default-off feature would be the worse trade.
 
