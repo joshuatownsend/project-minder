@@ -257,7 +257,11 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       if (quotaHold || previousHold) {
         writeHeartbeat(lastTickAt, inFlight.size, false, quotaHold);
       }
-      if (quotaHold) return;
+      // A quota hold blocks SPAWNING, not claiming. A dry_run task never
+      // starts Claude and never consumes quota — the branch below just marks
+      // it complete — so holding those too left safe rows pending for hours
+      // or days for no reason. The claim loop runs, and the hold is enforced
+      // at the one place it means something: immediately before a real spawn.
 
       // Don't claim/spawn any new work once shutdown has begun. Checked here
       // (a tick can reach this point after several awaits during which stop()
@@ -292,6 +296,16 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
           console.log(`[dispatcher] dry_run task ${task.id} "${task.title}" — skipping spawn`);
           await completeTask(task.id, { output_summary: "dry-run: spawn skipped" }).catch(console.error);
           continue;
+        }
+
+        // Real spawn ahead — this is where the quota hold applies. Requeue
+        // rather than fail: the task never started, so it belongs back in the
+        // queue for the tick after the window resets.
+        if (quotaHold) {
+          await requeueRunningTask(task.id).catch((err) =>
+            console.error(`[dispatcher] requeue on quota hold failed for task ${task.id}:`, err)
+          );
+          break;
         }
 
         const swarmId = task.swarm_id;
