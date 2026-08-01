@@ -1,5 +1,27 @@
 # Insights
 
+<!-- insight:7f54894ee5d3 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T12:02:51.836Z -->
+## ★ Insight
+- I collapsed blank lines with `.replace(/\n{3,}/g, "\n\n")` over the **finished document** — a cosmetic tidy that also rewrites the transcript itself. A tool result containing three consecutive newlines inside a fenced block would come out altered, which is exactly the silent infidelity this exporter exists to avoid.
+- The fix is structural rather than a smarter regex: make blank lines de-duplicate at *emit* time, so the writer can never stack two, and content strings are never post-processed at all.
+
+---
+
+<!-- insight:274e3a0e8e0a | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T11:42:02.041Z -->
+## ★ Insight
+- `SessionDetailView.tsx:308` has a `buildMarkdown()` that renders `data.timeline` — so #6 is not "build an exporter", it's "**replace a lossy one**". The existing version inherits the 300/500-char preview cap *and* emits no code fences at all, so a session containing ``` or raw tool output produces a document whose structure collapses partway through.
+- That reframes the UI work: keep the modal users already know, swap its body for the server route, and let it report fidelity honestly.
+
+---
+
+<!-- insight:10af0cdb7dea | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T11:32:01.234Z -->
+## ★ Insight
+- `SessionDetail.timeline` caps assistant text at **300 chars** (file path) / 500 (DB path), and `UsageTurn.assistantText` caps at 500. Every in-memory session abstraction in this repo is a *preview*, built for list rendering and search — none of them can back a faithful transcript export.
+- So a real exporter must go to the JSONL itself (`resolveSessionJsonl`), and the interesting design question becomes what to do when the JSONL is *gone* (pruned, or demo mode) but the index still has the session.
+- The answer that fits this repo's ethos: export anyway from the index, and stamp `fidelity: index` in the front matter — degrade visibly rather than 404 or lie.
+
+---
+
 <!-- insight:340aa16095b6 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-07-29T22:42:36.916Z -->
 ## ★ Insight
 The failing test was the interesting one. `"is idempotent — skips events already having managed entry"` used a fixture built by hand to look like an install, and it was *asserting the bug*: that a config with a managed `PreToolUse` entry gets no further writes.
