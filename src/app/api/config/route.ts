@@ -10,6 +10,7 @@ import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
 import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
+import { validateNotificationRules } from "@/lib/notifications/rules/validate";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -174,6 +175,18 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "terminal contains invalid characters" }, { status: 400 });
     }
     patches.push((c) => { c.terminal = body.terminal as string; });
+  }
+
+  if (body.notificationRules !== undefined) {
+    const result = validateNotificationRules(body.notificationRules);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    // Whole-array replace, not merge: the UI always sends the complete list,
+    // and a merge would make deleting a rule impossible.
+    patches.push((c) => {
+      c.notificationRules = result.rules;
+    });
   }
 
   if (body.notificationPrefs !== undefined) {
