@@ -1,9 +1,16 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
 import { detectDrift } from "@/lib/drift/compare";
-import { codexMcpItems, geminiMcpItems, listSkills, listRules } from "@/lib/drift/inventory";
+import {
+  codexMcpItems,
+  geminiMcpItems,
+  listSkills,
+  listRules,
+  redactSignature,
+  DirectoryUnreadableError,
+} from "@/lib/drift/inventory";
 import type { DriftItem, DriftKind, HarnessInventory } from "@/lib/drift/types";
 
 function item(kind: DriftKind, name: string, signature?: string): DriftItem {
@@ -389,5 +396,101 @@ describe("directory listings are stable", () => {
     const names = (await listSkills(dir)).map((s) => s.name);
     expect(names).toEqual(["alpha", "mid", "zeta"]);
     expect(names).toEqual([...names].sort());
+  });
+});
+
+// ─── PR #359 round-two review fixes ──────────────────────────────────────────
+
+describe("redactSignature", () => {
+  it("masks credentials in a URL query string", () => {
+    // A signature is interpolated into a conflict finding, returned by
+    // /api/drift, and rendered in Settings — so a token in an MCP endpoint
+    // would have been printed verbatim on screen.
+    expect(redactSignature("https://mcp.example.com/sse?api_key=abcdef123456")).toBe(
+      "https://mcp.example.com/sse?api_key=***",
+    );
+    expect(redactSignature("https://x.test/mcp?token=zzz&other=keep")).toContain("other=keep");
+    expect(redactSignature("https://x.test/mcp?token=zzz&other=keep")).toContain("token=***");
+  });
+
+  it("masks URL userinfo", () => {
+    expect(redactSignature("https://user:s3cret@host/mcp")).toBe("https://***:***@host/mcp");
+  });
+
+  it("masks credential-bearing CLI arguments", () => {
+    expect(redactSignature("npx server --api-key abcdef123456")).toBe("npx server --api-key ***");
+    expect(redactSignature("node s.js --token=abcdef123456")).toBe("node s.js --token=***");
+  });
+
+  it("masks bare secrets that announce themselves by prefix", () => {
+    expect(redactSignature("run sk-abcdefghijklmnop")).toBe("run sk-***");
+    expect(redactSignature("gh ghp_abcdefghijklmnop")).toBe("gh ghp_***");
+  });
+
+  it("leaves an ordinary command untouched", () => {
+    expect(redactSignature("npx -y @neon/mcp")).toBe("npx -y @neon/mcp");
+    expect(redactSignature("https://mcp.neon.tech/mcp")).toBe("https://mcp.neon.tech/mcp");
+  });
+});
+
+describe("codexMcpItems / geminiMcpItems redact", () => {
+  it("never returns a raw credential in a signature", () => {
+    const codex = codexMcpItems({ mcp_servers: { x: { url: "https://h/mcp?api_key=SECRETVALUE" } } });
+    expect(codex[0].signature).not.toContain("SECRETVALUE");
+    const gemini = geminiMcpItems({ mcpServers: { y: { command: "node", args: ["--token=SECRETVALUE"] } } });
+    expect(gemini[0].signature).not.toContain("SECRETVALUE");
+  });
+});
+
+describe("rules directories ignore unrelated files", () => {
+  const roots4: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots4.map((r) => fs.rm(r, { recursive: true, force: true })));
+  });
+
+  it("accepts only .md, .rules and .txt", async () => {
+    // The canonical Codex reader uses this allowlist; without it a notes.json
+    // or an editor backup was inventoried as an instruction file.
+    const dir = path.join(os.tmpdir(), `minder-drift4-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    roots4.push(dir);
+    for (const n of ["a.md", "b.rules", "c.txt", "notes.json", "d.md.bak"]) {
+      await fs.writeFile(path.join(dir, n), "x");
+    }
+    expect((await listRules(dir)).map((r) => r.name).sort()).toEqual(["a.md", "b.rules", "c.txt"]);
+  });
+});
+
+describe("an unreadable directory is not an empty one", () => {
+  it("throws DirectoryUnreadableError rather than reporting nothing", async () => {
+    // Returning [] made detectDrift report every item in the other harness as
+    // genuinely missing, so a permissions problem manufactured false findings.
+    // The failure is injected rather than staged on disk: Windows reports
+    // ENOENT (not ENOTDIR/EACCES) for most ways of faking an unreadable
+    // directory, so a filesystem fixture would silently test the wrong branch.
+    const spy = vi.spyOn(fs, "readdir").mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+    try {
+      await expect(listSkills("/anything")).rejects.toBeInstanceOf(DirectoryUnreadableError);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("treats a non-ENOENT failure as unknown, not as empty", async () => {
+    const spy = vi.spyOn(fs, "readdir").mockRejectedValueOnce(
+      Object.assign(new Error("io error"), { code: "EIO" }),
+    );
+    try {
+      await expect(listRules("/anything")).rejects.toBeInstanceOf(DirectoryUnreadableError);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns empty for a genuinely absent directory", async () => {
+    const absent = path.join(os.tmpdir(), `minder-drift-absent-${Math.random().toString(36).slice(2)}`);
+    expect(await listSkills(absent)).toEqual([]);
   });
 });

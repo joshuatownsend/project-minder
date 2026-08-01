@@ -35,20 +35,35 @@ const KIND_LABEL: Record<string, string> = {
 
 export function DriftSection() {
   const [data, setData] = useState<DriftResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // An unreachable endpoint, a non-2xx, or invalid JSON used to land in the
+  // same `null` as "loaded fine, found nothing", so a failed check rendered
+  // as "No divergence found — the compared harnesses agree." A failure has to
+  // read as a failure, not as a clean bill of health.
   const load = useCallback(() => {
     setLoading(true);
+    setError(null);
     fetch("/api/drift")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: DriftResponse | null) => setData(d))
-      .catch(() => setData(null))
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return (await r.json()) as DriftResponse;
+      })
+      .then((d) => {
+        setData(d);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        setData(null);
+        setError(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(load, [load]);
 
-  if (!loading && data && !data.enabled) return null;
+  if (!loading && !error && data && !data.enabled) return null;
 
   const byKind = new Map<string, DriftFinding[]>();
   for (const f of data?.findings ?? []) {
@@ -80,13 +95,19 @@ export function DriftSection() {
           </div>
         )}
 
-        {!loading && data?.reason && <div style={S.muted}>{data.reason}</div>}
+        {!loading && error && (
+          <div style={{ ...S.muted, color: "var(--error, var(--text-secondary))" }}>
+            Couldn&rsquo;t check for drift: {error}. This is not a clean result — nothing was compared.
+          </div>
+        )}
 
-        {!loading && !data?.reason && (data?.findings.length ?? 0) === 0 && (
+        {!loading && !error && data?.reason && <div style={S.muted}>{data.reason}</div>}
+
+        {!loading && !error && data && !data.reason && data.findings.length === 0 && (
           <div style={S.muted}>No divergence found — the compared harnesses agree.</div>
         )}
 
-        {!loading &&
+        {!loading && !error &&
           [...byKind.entries()].map(([kind, findings]) => (
             <div key={kind} style={{ marginBottom: "14px" }}>
               <div style={{ ...S.label, marginBottom: "6px" }}>{KIND_LABEL[kind] ?? kind}</div>
