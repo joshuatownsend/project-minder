@@ -52,19 +52,20 @@ export interface SessionSearchHit {
   score: number;
   /**
    * Which retriever contributed most to this hit's score. `'titles'`
-   * for sessions-column matches, `'prompts'` for FTS5 turn matches.
+   * for sessions-column matches, `'prompts'` for FTS5 turn matches,
+   * `'semantic'` for embedding-similarity matches.
    * Ties resolve to `'titles'` (it is fused first) — preserving the
    * long-standing intent that column-specific matches are more
    * user-meaningful than generic preview hits.
    */
-  source: "titles" | "prompts";
+  source: "titles" | "prompts" | "semantic";
   /**
    * 1-based rank within each retriever that found this session, absent
    * for retrievers that didn't. Purely diagnostic: it makes "why did
    * this outrank that?" answerable from an API response without
    * re-running the query. Additive — no existing consumer reads it.
    */
-  ranks: { titles?: number; prompts?: number };
+  ranks: { titles?: number; prompts?: number; semantic?: number };
   /**
    * Excerpt of the matched text, from FTS5's `snippet()` on the
    * best-ranked chunk. Present only for `prompts` hits — a `titles` hit
@@ -157,6 +158,15 @@ const MAX_CANDIDATES = 300;
  */
 const TITLE_WEIGHT = 1.5;
 const PROMPT_WEIGHT = 1.0;
+/**
+ * Semantic hits are weighted at parity with prompts rather than above them.
+ * Embeddings find what keywords miss (a query about "the migration is
+ * failing" matching a turn that says "database migration error"), but they
+ * also match loosely, and BM25 remains the more precise signal when the
+ * user's words actually appear. Parity lets each rescue the other, which is
+ * the whole point of fusing rather than choosing.
+ */
+const SEMANTIC_WEIGHT = 1.0;
 
 interface FtsRow {
   session_id: string;
@@ -171,7 +181,16 @@ export function searchSessionsInDb(
   db: DatabaseT.Database,
   query: string,
   scope: SessionSearchScope,
-  limit: number = DEFAULT_LIMIT
+  limit: number = DEFAULT_LIMIT,
+  /**
+   * Session ids from the embedding retriever, best-first. Passed IN rather
+   * than computed here because embedding a query is async (ONNX inference)
+   * and this function is deliberately synchronous — the caller awaits
+   * `semanticSessionKeys()` and hands the result down. An empty or absent
+   * list contributes nothing to the fusion, which is exactly how search
+   * degrades to BM25-only when no model is installed.
+   */
+  semanticKeys: string[] = []
 ): SessionSearchHit[] {
   const q = query.trim();
   if (!q) return [];
@@ -307,15 +326,17 @@ export function searchSessionsInDb(
   const fused = fuseRrf([
     { label: "titles", keys: titleKeys, weight: TITLE_WEIGHT },
     { label: "prompts", keys: promptKeys, weight: PROMPT_WEIGHT },
+    { label: "semantic", keys: semanticKeys, weight: SEMANTIC_WEIGHT },
   ]);
 
   return fused.slice(0, limit).map((f) => ({
     sessionId: f.key,
     score: f.score,
-    source: f.topSource as "titles" | "prompts",
+    source: f.topSource as "titles" | "prompts" | "semantic",
     ranks: {
       ...(f.ranks.titles !== undefined ? { titles: f.ranks.titles } : {}),
       ...(f.ranks.prompts !== undefined ? { prompts: f.ranks.prompts } : {}),
+      ...(f.ranks.semantic !== undefined ? { semantic: f.ranks.semantic } : {}),
     },
     // Only prompt hits carry one; a title hit matched a column the row
     // already renders.

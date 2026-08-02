@@ -22,6 +22,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "agentView",
   "claudeStatusAlerts",
   "configLint",
+  "semanticSearch",
   "quotaAwareDispatch",
   "configDrift",
   "scanBoard",
@@ -206,6 +207,20 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     group: "passive",
     appliesAt: "scan",
     wired: true,
+  },
+  {
+    key: "semanticSearch",
+    label: "Semantic session search",
+    description:
+      "Adds an embedding-similarity retriever to session search, fused with the existing keyword and title retrievers. Turning this on downloads a ~80 MB model on first use and embedding the existing corpus takes roughly 40 minutes of background CPU. Defaults off; search stays keyword-only until it is enabled.",
+    group: "passive",
+    appliesAt: "ingest",
+    wired: true,
+    // Explicit: the Settings toggle falls back to `f.defaultOn ?? true`, so
+    // omitting this rendered the switch ON for a fresh config while both the
+    // search path and the backfill endpoint gate on `getFlag(..., false)`.
+    // The feature looked enabled and could return nothing.
+    defaultOn: false,
   },
   {
     key: "quotaAwareDispatch",

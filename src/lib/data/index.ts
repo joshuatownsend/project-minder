@@ -26,6 +26,7 @@ import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
 import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 import { mapLocalPath } from "@/lib/pathMapping";
 import { demoSessionsList, demoSessionDetail } from "@/lib/demo/sessions";
 import { demoUsage, demoClaudeUsage, demoAgentUsage, demoSkillUsage } from "@/lib/demo/usage";
@@ -1058,7 +1059,25 @@ export async function searchSessions(
   // serve a 500 instead. Genuine SQLite failures bubble as raw
   // `SqliteError` and surface as 500s — the correct outcome for
   // "DB has a real problem."
-  const hits = searchSessionsInDb(db, query, scope, limit);
+  // Semantic retrieval is resolved HERE rather than inside
+  // `searchSessionsInDb`, which is synchronous by design; embedding a query
+  // is async ONNX inference. Flag-gated and default-off (the first run
+  // downloads ~80 MB), and every failure inside returns an empty list, so
+  // this reduces to exactly the previous behaviour when it isn't available.
+  let semanticKeys: string[] = [];
+  if (scope !== "titles") {
+    try {
+      const config = await readConfig();
+      if (getFlag(config.featureFlags, "semanticSearch", false)) {
+        const { semanticSessionKeys } = await import("@/lib/embeddings/search");
+        semanticKeys = await semanticSessionKeys(db, query, (limit ?? 20) * 3);
+      }
+    } catch {
+      // Search must never fail because the optional retriever did.
+    }
+  }
+
+  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys);
   return { hits, meta: { backend: "db" } };
 }
 

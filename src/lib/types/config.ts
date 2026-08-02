@@ -27,6 +27,7 @@ export type FeatureFlagKey =
   | "agentView"
   | "claudeStatusAlerts"
   | "configLint"
+  | "semanticSearch"
   | "quotaAwareDispatch"
   | "configDrift"
   | "scanBoard"
