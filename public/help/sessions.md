@@ -195,6 +195,42 @@ A copyable markdown brief for resuming the session, available at four verbosity 
 
 Use the **Copy** button to copy the markdown to your clipboard, or **Download .md** to save the file. Switching verbosity re-fetches the document immediately.
 
+### Export as Markdown
+
+The **Export** button in the session header renders the whole conversation as one self-contained markdown file — front matter, headings per message, collapsible thinking and tool results. A large session (tens of MB of JSONL) typically lands in the low hundreds of KB, which is small enough to paste into an issue, commit into a repo, or hand to another model.
+
+This is a different thing from **Generate handoff doc** above. The handoff doc is a *brief* — extracted facts plus a tail of turns, written for resuming work. The export is the *transcript*.
+
+Choose a detail level:
+
+| Level | Contents |
+|---|---|
+| **Minimal** | Prompts and replies only. No tool calls, no results, no thinking. |
+| **Standard** *(default)* | Adds tool calls and tool results, with results truncated to 1,500 characters each. |
+| **Full** | Everything: extended thinking, subagent messages, tool results up to 8,000 characters, and uncapped message text. |
+
+An **Include extended thinking** checkbox appears when the session has thinking blocks, so you can add them to a Standard export (or drop them from a Full one) without changing level.
+
+**Download .md** saves the file; **Copy** puts the markdown on your clipboard. Either way a toast reports what you got — message count, file size, and how many blocks were truncated.
+
+#### Where the text comes from
+
+The export reads the session's original JSONL, not Project Minder's index. That matters: the index stores each turn as a *preview* (a few hundred characters) because it exists to render lists and feed search. An export built from it would silently cut every long message mid-sentence.
+
+When the JSONL is unavailable — pruned by Claude Code's own retention, synced from another machine, over 50 MB, or in demo mode — the export still works, but falls back to the index and says so in two places: `fidelity: "index"` in the front matter, and a warning callout at the top of the document. Message bodies in that mode are cut off at the source, not by the detail level.
+
+#### Notes
+
+- Everything the detail level leaves out is counted in an **Export notes** line at the bottom of the document. Nothing is dropped silently — including messages that rendered nothing at the chosen level, subagent messages excluded, and anything beyond the reader's 20,000-message cap.
+- **Codex and Gemini sessions export from their own transcripts too.** The file is located through the session's adapter rather than Claude's `projects/<dir>/<id>.jsonl` layout, which those sessions never matched — so they used to fall back to index previews even though the raw transcript was on disk.
+- **Subagent transcripts are read from their own files.** Modern Claude Code keeps them at `<project>/<session-id>/subagents/agent-*.jsonl` rather than inline in the parent session, so `Full` (or `sidechains=1`) opens those too and appends them, tagged `(subagent)`. They are appended rather than interleaved: the files carry independent timelines, and merging by timestamp would imply an ordering across processes the data doesn't support.
+- **Re-emitted assistant messages are collapsed.** Claude Code re-logs a message on a retry or a resumed session; the export dedupes by `message.id` (falling back to `requestId`), the same rule the usage parser uses.
+- **Image attachments** are noted in place rather than dropped — markdown can't carry them, but a prompt shouldn't lose half its content invisibly.
+- An **API error longer than 2,000 characters** gets a short callout plus the full text in a fenced block below, so `Full` really is full.
+- Code fences in the transcript are handled: a tool result containing ` ``` ` is wrapped in a longer fence so the block doesn't close early and turn the rest of the file into prose.
+- Front matter values are quoted, so Windows paths and project names containing `:` or `#` stay valid YAML.
+- The endpoint is `GET /api/sessions/<id>/export`. Add `?format=json` for `{ markdown, stats, fidelity }`, or `?download=1` for an attachment `Content-Disposition`. Query params `detail`, `thinking`, `tools`, `results`, and `sidechains` mirror the modal's controls.
+
 ### Feedback
 
 Available when Claude Code has recorded a qualitative self-rating for the session (stored in `~/.claude/usage-data/facets/<sessionId>.json`). Shows:
