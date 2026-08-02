@@ -3,7 +3,7 @@ import { listTasks, createTask } from "@/lib/tasks/store";
 import { validateCreateTask } from "@/lib/tasks/validation";
 import { isTaskStatus, isTaskQuadrant } from "@/lib/tasks/validation";
 import type { TaskListFilter } from "@/lib/tasks/types";
-import { initDispatcher } from "@/lib/tasks/dispatcher";
+import { initDispatcher, getDispatcherStats } from "@/lib/tasks/dispatcher";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { scanAllProjects } from "@/lib/scanner";
 import { stat, realpath } from "node:fs/promises";
@@ -105,7 +105,14 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     const tasks = await listTasks(filter);
-    return NextResponse.json({ tasks });
+    // Dispatcher state rides along so a client about to queue work can say
+    // whether it will actually start now. `getDispatcherStats()` is an O(1)
+    // in-memory read and returns null when the dispatcher isn't running.
+    const stats = getDispatcherStats();
+    return NextResponse.json({
+      tasks,
+      dispatcher: { running: stats !== null, quotaHold: stats?.quotaHold ?? null },
+    });
   } catch (err) {
     console.error("[api/tasks GET]", err);
     return NextResponse.json({ error: "Failed to list tasks" }, { status: 500 });

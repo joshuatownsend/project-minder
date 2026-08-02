@@ -10,6 +10,9 @@ import { readConfig } from "../config";
 import { checkWslRoot, parseWslUncPath, WslUnavailableError } from "../wsl";
 import { onTaskCompleteToggleTodo } from "./todoDelegation";
 import { onTaskCompleteSyncBoard } from "./boardDelegation";
+import { loadQuota } from "../quota";
+import { getFlag } from "../featureFlags";
+import { evaluateQuotaGate, type QuotaGateDecision } from "./quotaGate";
 
 const HEARTBEAT_PATH = path.join(os.homedir(), ".minder", "dispatcher-heartbeat.json");
 const TICK_INTERVAL_MS = 30_000;
@@ -28,6 +31,8 @@ interface DispatcherStats {
   tickCount: number;
   lastTickAt: string | null;
   startedAt: string;
+  /** Set while dispatch is held waiting for a rate-limit window to reset. */
+  quotaHold: { until: string; windows: string[]; reason: string } | null;
 }
 
 const g = globalThis as unknown as { __minderDispatcher?: DispatcherHandle };
@@ -161,6 +166,9 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   // can't claim or spawn new task work while the shutdown disposers proceed
   // toward closing tasks.db.
   let stopped = false;
+  // Latest quota-gate decision, surfaced via getStats()/heartbeat so a held
+  // queue is visible rather than looking like an idle one.
+  let quotaHold: DispatcherStats["quotaHold"] = null;
   // The most recent tick's promise, so stop() can await an in-flight tick's
   // completion (bounded by the shutdown deadline the lifecycle registry caps).
   let currentTick: Promise<void> | null = null;
@@ -194,8 +202,18 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         // Config read failure is non-fatal — proceed without gate check
       }
       const paused = !!cfg?.emergencyStop;
-      writeHeartbeat(lastTickAt, inFlight.size, paused);
-      if (paused) return;
+      if (paused) {
+        // Recompute rather than publish the last known hold. An emergency
+        // stop used to return before `readQuotaHold()` ran, so a hold
+        // recorded just before the stop was frozen: `getDispatcherStats()`,
+        // the heartbeat and the task composer kept advertising an expired
+        // resume time indefinitely, even after the window reset or the flag
+        // was turned off.
+        quotaHold = await readQuotaHold(cfg);
+        writeHeartbeat(lastTickAt, inFlight.size, true, quotaHold);
+        return;
+      }
+      writeHeartbeat(lastTickAt, inFlight.size, false, quotaHold);
 
       // F15: periodic reconcile — resolve rows a previous instance left
       // 'running', including a boot-preserved alive child that has since
@@ -222,6 +240,29 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         console.error("[dispatcher] promoteApprovalTasks error:", err);
       }
 
+      // Quota gate — hold the queue while a rate-limit window is exhausted.
+      // Placed after the maintenance passes above (which write no new work) and
+      // before the claim loop, so schedules still materialize and approvals
+      // still promote while dispatch waits. Nothing is written to the tasks
+      // table: rows stay `pending` and the next tick claims them the moment the
+      // window resets, so there is no stamped deadline to un-stamp if the
+      // reading was wrong. Fails open on every unclear case — see quotaGate.ts.
+      const previousHold = quotaHold;
+      quotaHold = await readQuotaHold(cfg);
+      // Rewritten whenever the hold CHANGED, not only when one is active:
+      // the heartbeat above was written with the previous tick's value, so a
+      // hold that just cleared would otherwise keep being advertised for the
+      // rest of this tick (and longer if the tick runs long) while dispatch
+      // had already resumed.
+      if (quotaHold || previousHold) {
+        writeHeartbeat(lastTickAt, inFlight.size, false, quotaHold);
+      }
+      // A quota hold blocks SPAWNING, not claiming. A dry_run task never
+      // starts Claude and never consumes quota — the branch below just marks
+      // it complete — so holding those too left safe rows pending for hours
+      // or days for no reason. The claim loop runs, and the hold is enforced
+      // at the one place it means something: immediately before a real spawn.
+
       // Don't claim/spawn any new work once shutdown has begun. Checked here
       // (a tick can reach this point after several awaits during which stop()
       // may have flipped) and again below right after each claim.
@@ -231,7 +272,11 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
         if (stopped) break; // no new claims after stop
         let task: Task | null = null;
         try {
-          task = await claimPendingTask();
+          // While a quota hold is active, claim ONLY dry-run rows. Claiming
+          // a real task and requeueing it would loop: priority ordering hands
+          // back the same row every iteration, and dry-run tasks sitting
+          // behind it would never be reached.
+          task = await claimPendingTask({ dryRunOnly: quotaHold !== null });
         } catch (err) {
           console.error("[dispatcher] claimPendingTask error:", err);
           break;
@@ -378,16 +423,43 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
       return currentTick ?? Promise.resolve();
     },
     getStats() {
-      return { running: inFlight.size, tickCount, lastTickAt, startedAt };
+      return { running: inFlight.size, tickCount, lastTickAt, startedAt, quotaHold };
     },
   };
 }
 
-function writeHeartbeat(lastTickAt: string, running: number, paused = false) {
+/**
+ * Resolve the current quota hold, or null when dispatch may proceed.
+ *
+ * `loadQuota()` carries its own 5-minute cache and a 1-minute failure TTL, so
+ * calling it every ~30 s tick costs at most one probe per five minutes. Any
+ * throw resolves to "no hold": a gate that can't read quota must not be able
+ * to stall the queue.
+ */
+async function readQuotaHold(
+  cfg: Awaited<ReturnType<typeof readConfig>> | null,
+): Promise<DispatcherStats["quotaHold"]> {
+  if (!getFlag(cfg?.featureFlags, "quotaAwareDispatch", true)) return null;
+  let decision: QuotaGateDecision;
+  try {
+    decision = evaluateQuotaGate(await loadQuota());
+  } catch {
+    return null;
+  }
+  if (!decision.hold || !decision.until) return null;
+  return { until: decision.until, windows: decision.windows ?? [], reason: decision.reason };
+}
+
+function writeHeartbeat(
+  lastTickAt: string,
+  running: number,
+  paused = false,
+  quotaHold: DispatcherStats["quotaHold"] = null,
+) {
   try {
     fs.writeFileSync(
       HEARTBEAT_PATH,
-      JSON.stringify({ lastTickAt, running, pid: process.pid, paused }),
+      JSON.stringify({ lastTickAt, running, pid: process.pid, paused, quotaHold }),
       "utf8"
     );
   } catch {

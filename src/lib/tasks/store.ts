@@ -166,7 +166,18 @@ export async function deleteTask(id: number): Promise<boolean> {
  * Tasks with requires_approval=1 are promoted to awaiting_approval instead.
  * Returns the claimed (now running) task, or null if no eligible tasks exist.
  */
-export async function claimPendingTask(): Promise<Task | null> {
+/**
+ * Claim the next runnable task.
+ *
+ * `dryRunOnly` exists for the quota gate: while a rate-limit window is
+ * exhausted, real tasks must not spawn, but a dry_run row never starts Claude
+ * and never consumes quota. Filtering in SQL rather than claiming-then-
+ * requeueing avoids a loop — priority ordering would hand back the same held
+ * task on every iteration.
+ */
+export async function claimPendingTask(
+  opts: { dryRunOnly?: boolean } = {}
+): Promise<Task | null> {
   const db = await ensureReady();
   const row = prepTasksCached(
     db,
@@ -176,6 +187,7 @@ export async function claimPendingTask(): Promise<Task | null> {
        SELECT id FROM ops_tasks
        WHERE status = 'pending'
          AND requires_approval = 0
+         AND (:dryRunOnly = 0 OR dry_run = 1)
          AND (scheduled_for IS NULL OR scheduled_for <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          AND NOT EXISTS (
            SELECT 1 FROM task_dependencies td
@@ -192,7 +204,7 @@ export async function claimPendingTask(): Promise<Task | null> {
        LIMIT 1
      )
      RETURNING *`
-  ).get() as Task | undefined;
+  ).get({ dryRunOnly: opts.dryRunOnly ? 1 : 0 }) as Task | undefined;
   return row ?? null;
 }
 
