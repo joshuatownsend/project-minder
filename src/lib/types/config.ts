@@ -27,6 +27,7 @@ export type FeatureFlagKey =
   | "agentView"
   | "claudeStatusAlerts"
   | "configLint"
+  | "configDrift"
   | "scanBoard"
   | "scanOps"
   | "githubActivity"
