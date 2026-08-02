@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:0c381dc42510 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T19:36:51.384Z -->
+## ★ Insight
+**The pass is deliberately not awaited by the tick.** `tickInProgress` gates the *whole* tick, so awaiting a pass would hold task dispatch behind a background nicety — and the first pass is the worst case, since it includes loading the model off disk. Detaching it makes `selfHeal.running` the only thing preventing overlap, which is why `afterPass` clears `running` on every path *including a throw*: a stuck flag would disable self-heal for the life of the process, silently and permanently. There's a test for exactly that.
+
+---
+
+<!-- insight:60e59141a09a | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T18:36:24.556Z -->
+## ★ Insight
+**Termination is a property of the rule, not of a cap.** `shouldContinue` requires *strict forward progress* — a pass must have embedded something **and** left strictly fewer chunks remaining than the pass before. A `maxPasses = 200` backstop would have hidden a server reporting progress it didn't make; this halts on it instead. There's a test that runs the predicate to exhaustion to prove it converges.
+
+---
+
+<!-- insight:dfd50fa819a5 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T17:58:32.172Z -->
+## ★ Insight
+`POST /api/embeddings` returns `embedded` = *chunks this pass embedded*, but `remaining` and `total` = *corpus-wide* counts. Feeding `embedded` straight into a progress bar would peg it at 2,000/157,000 forever no matter how many passes ran. Corpus-wide progress has to be derived as `total - remaining`; `embedded` is only good for a per-run tally.
+
+---
+
+<!-- insight:ce4d2fe541c6 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T17:52:53.231Z -->
+## ★ Insight
+**The API's `available` flag is ambiguous, and a naive panel would slander a healthy install.** `GET /api/embeddings` reports `available: embedderReady()`, which is `state().kind === "ready"` — false until something has *loaded* the model in this process. On a fresh server boot that's false even when everything works. Only `reason` (set from `embedderFailure()`) distinguishes "never tried" from "broken", so rendering `!available` as an error would show a red state on every restart.
+
+---
+
 <!-- insight:bf46bdb2b98f | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-01T14:51:00.131Z -->
 ## ★ Insight
 - The displayed text comes from `SELECT text FROM prompts_fts WHERE session_id=? LIMIT 1` — the session's *first* chunk, not the chunk that actually matched. I nearly concluded "ranking is poor" from a display bug in my own diagnostic.

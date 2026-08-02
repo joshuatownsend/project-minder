@@ -23,6 +23,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "claudeStatusAlerts",
   "configLint",
   "semanticSearch",
+  "semanticAutoBackfill",
   "quotaAwareDispatch",
   "configDrift",
   "scanBoard",
@@ -220,6 +221,19 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     // omitting this rendered the switch ON for a fresh config while both the
     // search path and the backfill endpoint gate on `getFlag(..., false)`.
     // The feature looked enabled and could return nothing.
+    defaultOn: false,
+  },
+  {
+    key: "semanticAutoBackfill",
+    label: "Keep the embedding index current",
+    description:
+      "Tops up the semantic search index on the background dispatcher tick, so sessions indexed after the last build become searchable without pressing Build again. Runs only while no agent task is running, ~250 chunks per tick, and backs off for 10 minutes when there is nothing to do. Requires Semantic session search; does nothing on its own. Defaults off — it spends CPU unattended.",
+    group: "active",
+    appliesAt: "ingest",
+    wired: true,
+    // Off for the same reason `semanticSearch` is: this one spends background
+    // CPU with nobody watching, which is precisely what the manual Build
+    // button was designed to keep deliberate.
     defaultOn: false,
   },
   {
