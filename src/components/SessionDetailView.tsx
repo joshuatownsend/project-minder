@@ -278,131 +278,179 @@ function DistillButton({
 }
 
 // ── Export modal ──────────────────────────────────────────────────────────────
-type ExportSection = "timeline" | "files" | "subagents";
+//
+// The document is rendered server-side by `GET /api/sessions/<id>/export`,
+// not from `data.timeline`. The timeline is a preview: assistant text is
+// capped at 300 chars on the file path and 500 on the DB path, and thinking
+// is stored out-of-line entirely. Only the session's own JSONL holds the
+// transcript, so the export has to be read there — see
+// `src/lib/sessions/exportReader.ts`.
+type ExportDetailLevel = "minimal" | "standard" | "full";
+
+const DETAIL_BLURB: Record<ExportDetailLevel, string> = {
+  minimal: "Prompts and replies only — no tool calls.",
+  standard: "Prompts, replies, tool calls, and truncated tool results.",
+  full: "Everything, including extended thinking and subagent messages.",
+};
+
+interface ExportStats {
+  messages: number;
+  sidechainsSkipped: number;
+  blocks: number;
+  blocksOmitted: number;
+  blocksTruncated: number;
+  charsTruncated: number;
+  bytes: number;
+}
 
 function ExportModal({
   open,
   onClose,
   data,
-  generatedTitle,
 }: {
   open: boolean;
   onClose: () => void;
   data: import("@/lib/types").SessionDetail;
-  generatedTitle: string | undefined;
 }) {
-  const { currency, fxRate } = useCurrency();
-  const [sections, setSections] = useState<Set<ExportSection>>(
-    new Set(["timeline", "files", "subagents"])
-  );
-  const [turnLimit, setTurnLimit] = useState<string>("");
+  const { showToast } = useToast();
+  const [level, setLevel] = useState<ExportDetailLevel>("standard");
+  const [thinking, setThinking] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  function toggleSection(s: ExportSection) {
-    setSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) next.delete(s); else next.add(s);
-      return next;
-    });
+  // `null` means "inherit the level's default", which is what the API's
+  // absent-param behaviour already does — so an untouched checkbox sends
+  // nothing and the preset stays authoritative.
+  const thinkingChecked = thinking ?? level === "full";
+
+  function buildUrl(format: "md" | "json"): string {
+    const params = new URLSearchParams({ detail: level, format });
+    if (thinking !== null) params.set("thinking", thinking ? "1" : "0");
+    return `/api/sessions/${data.sessionId}/export?${params.toString()}`;
   }
 
-  function buildMarkdown(): string {
-    const title = generatedTitle ?? data.sessionId.slice(0, 16);
-    const date = data.startTime ? new Date(data.startTime).toLocaleString() : "Unknown date";
-    const lines: string[] = [
-      `# Session: ${title}`,
-      "",
-      `**Project:** ${data.projectName}`,
-      `**Date:** ${date}`,
-      data.gitBranch ? `**Branch:** ${data.gitBranch}` : "",
-      `**Duration:** ${data.durationMs ? formatDurationMs(data.durationMs) : "—"}`,
-      `**Cost:** ${formatCost(data.costEstimate, currency, fxRate)}`,
-      `**Session ID:** \`${data.sessionId}\``,
-      "",
-    ].filter(Boolean);
-
-    if (sections.has("timeline")) {
-      const limit = parseInt(turnLimit, 10);
-      const events = isNaN(limit) || limit <= 0 ? data.timeline : data.timeline.slice(0, limit);
-      lines.push("---", "", "## Conversation", "");
-      const roleLabels: Record<string, string> = { user: "User", assistant: "Assistant", error: "Error", thinking: "Thinking" };
-      for (const ev of events) {
-        const role = ev.type === "tool_use" ? `Tool: ${ev.toolName ?? "unknown"}` : (roleLabels[ev.type] ?? ev.type);
-        const ts = ev.timestamp ? ` _(${new Date(ev.timestamp).toLocaleTimeString()})_` : "";
-        lines.push(`### ${role}${ts}`, "", ev.content, "");
-      }
+  async function fetchExport(): Promise<{ markdown: string; stats: ExportStats; fidelity: string } | null> {
+    const res = await fetch(buildUrl("json"));
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast("Export failed", body?.error ?? `HTTP ${res.status}`);
+      return null;
     }
-
-    if (sections.has("files") && data.fileOperations.length > 0) {
-      lines.push("---", "", "## File Operations", "");
-      for (const op of data.fileOperations) {
-        lines.push(`- **${op.operation}**: \`${op.path}\``);
-      }
-      lines.push("");
-    }
-
-    if (sections.has("subagents") && data.subagents.length > 0) {
-      lines.push("---", "", "## Subagents", "");
-      for (const sub of data.subagents) {
-        lines.push(`- **${sub.type}** — ${sub.description ?? "—"}`);
-      }
-      lines.push("");
-    }
-
-    return lines.join("\n");
+    return res.json();
   }
 
-  function handleDownload() {
-    downloadBlob(buildMarkdown(), `session-${data.sessionId.slice(0, 8)}.md`, "text/markdown;charset=utf-8");
-    onClose();
+  /** Report what the export actually contains, including what it left out. */
+  function reportOutcome(stats: ExportStats, fidelity: string, verb: string): void {
+    const size = stats.bytes > 1024 ? `${Math.round(stats.bytes / 1024)} KB` : `${stats.bytes} B`;
+    const notes = [`${stats.messages} messages`, size];
+    if (stats.blocksTruncated > 0) notes.push(`${stats.blocksTruncated} truncated`);
+    showToast(
+      fidelity === "index" ? `${verb} — reduced fidelity` : verb,
+      fidelity === "index"
+        ? `${notes.join(" · ")}. Transcript file unavailable; text came from the index.`
+        : notes.join(" · ")
+    );
+  }
+
+  async function handleDownload() {
+    setBusy(true);
+    try {
+      const result = await fetchExport();
+      if (!result) return;
+      downloadBlob(
+        result.markdown,
+        `session-${data.sessionId.slice(0, 8)}.md`,
+        "text/markdown;charset=utf-8"
+      );
+      reportOutcome(result.stats, result.fidelity, "Downloaded");
+      onClose();
+    } catch {
+      showToast("Export failed", "Could not reach the export endpoint.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCopy() {
+    setBusy(true);
+    try {
+      const result = await fetchExport();
+      if (!result) return;
+      if (!navigator.clipboard) {
+        showToast("Copy unavailable", "This browser blocks clipboard access.");
+        return;
+      }
+      await navigator.clipboard.writeText(result.markdown);
+      reportOutcome(result.stats, result.fidelity, "Copied");
+      onClose();
+    } catch {
+      showToast("Export failed", "Could not reach the export endpoint.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <Modal open={open} onClose={onClose} title="Export session as Markdown" maxWidthClass="max-w-sm">
       <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
         <div>
-          <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Sections to include</div>
-          {(["timeline", "files", "subagents"] as ExportSection[]).map((s) => (
-            <label key={s} style={checkboxRowStyle}>
+          <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Detail level</div>
+          {(["minimal", "standard", "full"] as ExportDetailLevel[]).map((l) => (
+            <label key={l} style={{ ...checkboxRowStyle, alignItems: "flex-start" }}>
               <input
-                type="checkbox"
-                checked={sections.has(s)}
-                onChange={() => toggleSection(s)}
-                style={{ width: "14px", height: "14px", accentColor: "var(--accent)" }}
+                type="radio"
+                name="export-detail"
+                checked={level === l}
+                onChange={() => { setLevel(l); setThinking(null); }}
+                style={{ width: "14px", height: "14px", accentColor: "var(--accent)", marginTop: "2px" }}
               />
-              {s === "timeline" ? "Conversation timeline" : s === "files" ? "File operations" : "Subagents"}
+              <span>
+                <span style={{ textTransform: "capitalize" }}>{l}</span>
+                <span style={{ display: "block", fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                  {DETAIL_BLURB[l]}
+                </span>
+              </span>
             </label>
           ))}
         </div>
-        {sections.has("timeline") && (
-          <div>
-            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "6px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Turn limit</div>
+
+        {data.hasThinking && (
+          <label style={checkboxRowStyle}>
             <input
-              type="number"
-              min={1}
-              value={turnLimit}
-              onChange={(e) => setTurnLimit(e.target.value)}
-              placeholder={`All (${data.timeline.length} events)`}
-              style={{
-                width: "100%", boxSizing: "border-box", padding: "6px 10px",
-                borderRadius: "var(--radius)", border: "1px solid var(--border-default)",
-                background: "var(--surface-2, transparent)", color: "var(--text-primary)",
-                fontSize: "0.82rem", fontFamily: "var(--font-body)",
-              }}
+              type="checkbox"
+              checked={thinkingChecked}
+              onChange={(e) => setThinking(e.target.checked)}
+              style={{ width: "14px", height: "14px", accentColor: "var(--accent)" }}
             />
-          </div>
+            Include extended thinking
+          </label>
         )}
-        <button
-          onClick={handleDownload}
-          disabled={sections.size === 0}
-          style={{
-            padding: "8px 16px", fontSize: "0.8rem", fontWeight: 600,
-            background: sections.size === 0 ? "var(--surface-2)" : "var(--accent)",
-            color: sections.size === 0 ? "var(--text-muted)" : "#fff",
-            border: "none", borderRadius: "var(--radius)", cursor: sections.size === 0 ? "not-allowed" : "pointer",
-          }}
-        >
-          Download .md
-        </button>
+
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            onClick={handleDownload}
+            disabled={busy}
+            style={{
+              flex: 1, padding: "8px 16px", fontSize: "0.8rem", fontWeight: 600,
+              background: busy ? "var(--surface-2)" : "var(--accent)",
+              color: busy ? "var(--text-muted)" : "#fff",
+              border: "none", borderRadius: "var(--radius)", cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            {busy ? "Rendering…" : "Download .md"}
+          </button>
+          <button
+            onClick={handleCopy}
+            disabled={busy}
+            style={{
+              padding: "8px 16px", fontSize: "0.8rem", fontWeight: 600,
+              background: "transparent", color: "var(--text-secondary)",
+              border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)",
+              cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            Copy
+          </button>
+        </div>
       </div>
     </Modal>
   );
@@ -684,7 +732,6 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
         open={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
         data={data}
-        generatedTitle={generatedTitle}
       />
 
       {/* ── Header block ────────────────────────────────────────────────────── */}

@@ -30,11 +30,12 @@ const TARGET_LABEL: Record<LintTarget, string> = {
   plugin: "Plugins",
   "output-style": "Output Styles",
   lsp: "LSP Config",
+  drift: "Cross-harness Drift",
 };
 
 const TARGET_ORDER: LintTarget[] = [
   "claude-md", "skill", "agent", "command",
-  "settings", "hook", "mcp", "plugin", "output-style", "lsp",
+  "settings", "hook", "mcp", "plugin", "output-style", "lsp", "drift",
 ];
 
 const SEVERITY_ORDER: AuditFindingSeverity[] = ["P0", "P1", "P2"];

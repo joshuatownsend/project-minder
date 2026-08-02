@@ -15,6 +15,7 @@ import { AutoTitleSection } from "@/components/settings/AutoTitleSection";
 import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
 import { CostSection } from "@/components/settings/CostSection";
 import { AdaptersSection } from "@/components/settings/AdaptersSection";
+import { DriftSection } from "@/components/settings/DriftSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ScanRootsSection } from "@/components/settings/ScanRootsSection";
 import { ClaudeHomesSection } from "@/components/settings/ClaudeHomesSection";
@@ -334,7 +335,10 @@ export function SettingsPage() {
           <CostSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "adapters" && (
-          <AdaptersSection config={config} onConfigChange={patchConfig} />
+          <>
+            <AdaptersSection config={config} onConfigChange={patchConfig} />
+            <DriftSection />
+          </>
         )}
         {active === "appearance" && (
           <AppearanceSection config={config} onConfigChange={patchConfig} />

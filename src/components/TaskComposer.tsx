@@ -30,6 +30,7 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [blockerOptions, setBlockerOptions] = useState<Task[]>([]);
+  const [quotaHold, setQuotaHold] = useState<{ until: string; windows: string[] } | null>(null);
   const [selectedBlockerIds, setSelectedBlockerIds] = useState<number[]>([]);
 
   // Fetch active tasks that can serve as blockers.
@@ -38,7 +39,19 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
     fetch("/api/tasks")
       .then((r) => r.ok ? r.json() : [])
       .then((data: unknown) => {
-        const raw = data && typeof data === "object" && "tasks" in data ? (data as { tasks: unknown }).tasks : data;
+        const envelope = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+        // Surfaced at compose time on purpose: this is the moment the user is
+        // deciding to queue work, and a held dispatcher means it will sit in
+        // `pending` rather than start. The task is still worth creating — it
+        // runs itself when the window resets — so this informs, never blocks.
+        const dispatcher = envelope?.dispatcher as { quotaHold?: unknown } | undefined;
+        const hold = dispatcher?.quotaHold as { until?: unknown; windows?: unknown } | null | undefined;
+        setQuotaHold(
+          hold && typeof hold.until === "string"
+            ? { until: hold.until, windows: Array.isArray(hold.windows) ? (hold.windows as string[]) : [] }
+            : null
+        );
+        const raw = envelope && "tasks" in envelope ? envelope.tasks : data;
         if (!Array.isArray(raw)) return;
         const tasks = raw as Task[];
         const eligible = tasks.filter((t) => BLOCKER_ELIGIBLE.has(t.status));
@@ -256,6 +269,24 @@ export function TaskComposer({ open, onClose, onSuccess }: TaskComposerProps) {
         {error && (
           <div style={{ fontSize: "0.78rem", color: "var(--error)", padding: "8px 10px", background: "color-mix(in srgb, var(--error) 10%, transparent)", borderRadius: "4px" }}>
             {error}
+          </div>
+        )}
+
+        {quotaHold && (
+          <div
+            style={{
+              fontSize: "0.78rem",
+              color: "var(--text-secondary)",
+              padding: "8px 10px",
+              background: "color-mix(in srgb, var(--accent) 8%, transparent)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "4px",
+            }}
+          >
+            <strong>Dispatch paused</strong> — the{" "}
+            {quotaHold.windows.length > 0 ? quotaHold.windows.join(" and ") : "rate-limit"} quota window
+            {quotaHold.windows.length > 1 ? "s are" : " is"} exhausted. This task will queue and start
+            automatically at {new Date(quotaHold.until).toLocaleString()}.
           </div>
         )}
 

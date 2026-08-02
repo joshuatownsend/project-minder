@@ -23,6 +23,8 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "claudeStatusAlerts",
   "configLint",
   "semanticSearch",
+  "quotaAwareDispatch",
+  "configDrift",
   "scanBoard",
   "scanOps",
   "githubActivity",
@@ -219,6 +221,26 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     // search path and the backfill endpoint gate on `getFlag(..., false)`.
     // The feature looked enabled and could return nothing.
     defaultOn: false,
+  },
+  {
+    key: "quotaAwareDispatch",
+    label: "Quota-aware dispatch",
+    description:
+      "Holds the background task queue while a Claude rate-limit window is exhausted, resuming automatically at the window's reset. Without it a task spawned at the limit fails immediately and is not retried. Defaults on; fails open when quota is unreadable.",
+    group: "active",
+    appliesAt: "ingest",
+    wired: true,
+    defaultOn: true,
+  },
+  {
+    key: "configDrift",
+    label: "Cross-harness drift",
+    description:
+      "Reports MCP servers, skills, and instruction files present in one harness but not another. Read-only — Minder never writes harness config. Silent unless a second adapter (Codex/Gemini) is enabled.",
+    group: "passive",
+    appliesAt: "scan",
+    wired: true,
+    defaultOn: true,
   },
   {
     key: "scanBoard",

@@ -198,7 +198,7 @@ function isPlainFileName(name: string): boolean {
  * when a list is given, prefer an entry that equals the default `GEMINI.md`
  * (the global context file we surface) else take the first entry. Never throws.
  */
-async function resolveGeminiContextFileName(home: string): Promise<string> {
+export async function resolveGeminiContextFileName(home: string): Promise<string> {
   try {
     const raw = await fs.readFile(path.join(home, "settings.json"), "utf-8");
     const settings = JSON.parse(raw) as {

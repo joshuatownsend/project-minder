@@ -28,6 +28,8 @@ export type FeatureFlagKey =
   | "claudeStatusAlerts"
   | "configLint"
   | "semanticSearch"
+  | "quotaAwareDispatch"
+  | "configDrift"
   | "scanBoard"
   | "scanOps"
   | "githubActivity"
