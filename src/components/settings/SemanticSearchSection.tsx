@@ -14,6 +14,10 @@ import {
   shouldContinue,
   type BackfillPass,
 } from "@/lib/embeddings/progress";
+// Safe to import: `selfHeal.ts` is deliberately dependency-free, unlike
+// `backfill.ts` which is server-only. Importing the constant keeps this copy
+// from drifting away from what the dispatcher actually does.
+import { SELF_HEAL_CHUNKS } from "@/lib/embeddings/selfHeal";
 import { Toggle } from "./Toggle";
 import { S } from "./styles";
 
@@ -70,6 +74,7 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [runNote, setRunNote] = useState<string | null>(null);
   const [passes, setPasses] = useState(0);
   const [embeddedThisRun, setEmbeddedThisRun] = useState(0);
   const [rate, setRate] = useState<number | null>(null);
@@ -121,9 +126,15 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
     stopRequested.current = false;
     setRunning(true);
     setRunError(null);
+    setRunNote(null);
     setPasses(0);
     setEmbeddedThisRun(0);
 
+    // Tracked locally as well as in state: the note is written in `finally`,
+    // where a `setEmbeddedThisRun` from this same run has not necessarily been
+    // applied yet, so reading the state there could report zero after a
+    // productive run.
+    let embeddedTotal = 0;
     let previousRemaining: number | null = null;
     try {
       for (;;) {
@@ -146,6 +157,7 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
             : prev
         );
         setPasses((n) => n + 1);
+        embeddedTotal += body.embedded;
         setEmbeddedThisRun((n) => n + body.embedded);
         const observed = observedMsPerChunk(body);
         if (observed !== null) setRate(observed);
@@ -165,6 +177,15 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
     } finally {
       if (mounted.current) {
         setRunning(false);
+        setRunNote(
+          embeddedTotal > 0
+            ? `Embedded ${formatCount(embeddedTotal)} chunks.`
+            : // A backfill pass sweeps stale vectors before it embeds anything,
+              // so "nothing embedded" after a verify is the good outcome — and
+              // saying so is the difference between a button that reported a
+              // clean result and one that looked broken.
+              "Checked — no chunks needed embedding."
+        );
         // Re-read authoritative counts; the loop's were per-pass echoes.
         void refresh();
       }
@@ -175,9 +196,25 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
   const embedded = status?.embedded ?? 0;
   const remaining = status?.remaining ?? 0;
   const pct = coveragePercent(embedded, total);
-  const runtime = runtimeState(status?.available ?? false, status?.reason);
   const indexReady = status?.indexReady ?? false;
+  // `reason` carries BOTH runtime failures and index-not-ready messages, so
+  // passing it through unconditionally labelled a missing database or a
+  // pending migration as "Runtime unavailable" — blaming the model for
+  // something it had no part in. When the index isn't ready, nothing has
+  // asked the runtime to load, which is exactly "not-loaded".
+  const runtime = runtimeState(status?.available ?? false, indexReady ? status?.reason : null);
   const canBuild = flagOn && indexReady && !loadError && !running;
+  // Available at full coverage too. `countEmbedded` counts vector ROWS and
+  // `selectUnembedded` joins on chunk keys alone — neither checks `text_hash`
+  // — so a session re-ingested with changed text but the same chunk keys keeps
+  // its stale vectors and still reports `remaining === 0`. Only
+  // `pruneInvalidVectors` compares the hash, and it runs only inside a
+  // backfill pass, so disabling this button at 100% removed the sole way to
+  // reach it: stale vectors would stay bound to new text and return
+  // confidently wrong hits. Empty corpus is still excluded — there is nothing
+  // to verify, and a pass would load the model to discover that.
+  const verifyOnly = remaining === 0 && total > 0;
+  const buildEnabled = canBuild && total > 0;
 
   return (
     <div>
@@ -215,8 +252,8 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
                 <>
                   Tops up the index on the background task tick, so sessions indexed after the last
                   build become searchable without pressing Build again. Runs only while no agent
-                  task is running, about {formatCount(250)} chunks at a time, and stands down for ten
-                  minutes once there is nothing left to embed.
+                  task is running, about {formatCount(SELF_HEAL_CHUNKS)} chunks at a time, and stands
+                  down for ten minutes once there is nothing left to embed.
                 </>
               ) : (
                 <>Requires semantic search above — on its own it has nothing to keep current.</>
@@ -293,7 +330,9 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
                     Every chunk is embedded. New sessions add chunks as they&rsquo;re indexed
                     {autoOn && flagOn
                       ? " — those get picked up automatically on the background tick."
-                      : " — run a build again to cover them."}
+                      : " — run a build again to cover them."}{" "}
+                    <strong>Verify index</strong> re-checks stored vectors against the text they were
+                    built from and re-embeds any whose source has since changed.
                   </>
                 ) : (
                   <>
@@ -317,19 +356,25 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
                 </div>
               )}
 
+              {/* A verify pass that finds nothing stale is a real answer, and
+                  without this the button would appear to do nothing at all. */}
+              {!running && !runError && runNote && (
+                <div style={{ ...S.muted, marginTop: "6px" }}>{runNote}</div>
+              )}
+
               <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap" }}>
                 {!running ? (
                   <button
                     type="button"
                     onClick={() => void runBackfill()}
-                    disabled={!canBuild || remaining === 0}
+                    disabled={!buildEnabled}
                     style={{
                       ...S.btn,
-                      cursor: canBuild && remaining > 0 ? "pointer" : "not-allowed",
-                      opacity: canBuild && remaining > 0 ? 1 : 0.5,
+                      cursor: buildEnabled ? "pointer" : "not-allowed",
+                      opacity: buildEnabled ? 1 : 0.5,
                     }}
                   >
-                    {embedded > 0 ? "Resume build" : "Build index"}
+                    {verifyOnly ? "Verify index" : embedded > 0 ? "Resume build" : "Build index"}
                   </button>
                 ) : (
                   <button

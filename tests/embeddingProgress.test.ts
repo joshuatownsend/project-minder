@@ -60,6 +60,21 @@ describe("shouldContinue", () => {
   });
 });
 
+describe("shouldContinue after a verify pass", () => {
+  // A verify pass at full coverage sweeps stale vectors first, so it can find
+  // real work where `remaining` had said there was none. Both shapes must be
+  // handled: nothing stale (stop cleanly) and stale found (embed and stop).
+  it("stops cleanly when a verify pass finds nothing stale", () => {
+    expect(
+      shouldContinue({ embedded: 0, remaining: 0, total: 100_000, stoppedBecause: "nothing-to-do" }, null)
+    ).toBe(false);
+  });
+
+  it("stops once a verify pass has re-embedded what the sweep freed", () => {
+    expect(shouldContinue({ embedded: 12, remaining: 0, total: 100_000 }, null)).toBe(false);
+  });
+});
+
 describe("observedMsPerChunk", () => {
   it("derives the rate from a pass", () => {
     expect(observedMsPerChunk(pass({ embedded: 1000, durationMs: 15_000 }))).toBe(15);

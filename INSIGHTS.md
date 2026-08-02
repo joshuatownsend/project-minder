@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:99e5bec9e46a | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T21:07:04.863Z -->
+## ★ Insight
+`countEmbedded` is `COUNT(*) … WHERE model = ?` and `selectUnembedded` joins on **keys only** (`e.session_id IS NULL`) — neither consults `text_hash`. So a re-ingested session with changed text but identical chunk keys keeps its old vector rows, counts as embedded, and reports `remaining = 0`. My `disabled={remaining === 0}` then removed the only path to `pruneInvalidVectors`, which is the sole thing that checks the hash. Stale vectors would sit against new text and return confidently wrong hits — a worse failure than missing results, because it looks like it worked.
+
+---
+
 <!-- insight:0c381dc42510 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T19:36:51.384Z -->
 ## ★ Insight
 **The pass is deliberately not awaited by the tick.** `tickInProgress` gates the *whole* tick, so awaiting a pass would hold task dispatch behind a background nicety — and the first pass is the worst case, since it includes loading the model off disk. Detaching it makes `selfHeal.running` the only thing preventing overlap, which is why `afterPass` clears `running` on every path *including a throw*: a stuck flag would disable self-heal for the life of the process, silently and permanently. There's a test for exactly that.

@@ -114,6 +114,8 @@ Enabling the flag does **not** populate any vectors — it consents to the downl
 
 Because **newest chunks are embedded first**, recent sessions become searchable long before the pass completes — the coverage bar reaching 20% already means the last few weeks are covered.
 
+At full coverage the button becomes **Verify index**, and it stays available rather than greying out. That is not cosmetic. A vector is keyed on `(session, turn, chunk)`, and a session that gets re-ingested with edited text can keep the same keys — so its old vectors still count as "embedded" and coverage still reads 100%, while the vectors now describe text that no longer exists. The check that catches this compares each vector against a hash of its source text, and it only runs as part of a backfill pass. Leaving the button live at 100% is what keeps that check reachable; without it, stale vectors would sit against new text and return confidently wrong results, which is worse than returning nothing. A verify pass that finds nothing says so.
+
 #### Keeping the index current automatically
 
 A built index goes stale the moment new sessions are indexed: those chunks have no vectors, so they are invisible to semantic search until someone presses Build again. The second toggle, **Keep the index current automatically**, closes that gap by topping the index up on the background task dispatcher's tick.
