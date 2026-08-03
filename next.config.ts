@@ -19,7 +19,21 @@ const nextConfig: NextConfig = {
   // spawned CLI bin — if bundled, Turbopack rewrites that to a numeric
   // module ID and `path.dirname(<number>)` throws at runtime (prod only),
   // which would 500 every scan-backed route (/api/projects, /api/stats).
-  serverExternalPackages: ["better-sqlite3", "web-push", "claude-code-lint"],
+  // onnxruntime-node (transformers.js's local-embeddings backend) loads its
+  // native binary via a runtime-constructed `bin/napi-v6/<platform>/<arch>/`
+  // path — the same shape of problem as better-sqlite3 — so without this,
+  // Next's static tracer copies the JS but misses libonnxruntime.so.1 next
+  // to onnxruntime_binding.node. That didn't fail the Windows/macOS
+  // installer builds (NSIS/DMG don't walk ELF dependencies at package time),
+  // but broke the Linux AppImage build: linuxdeploy found the dangling
+  // native binary and couldn't resolve its dependency (v1.7.0 release).
+  serverExternalPackages: [
+    "better-sqlite3",
+    "web-push",
+    "claude-code-lint",
+    "@huggingface/transformers",
+    "onnxruntime-node",
+  ],
   // Move the Next.js dev indicator off the bottom-left, where it sits on top
   // of the Settings nav row in the new sidebar (was MEDIUM-7 in the
   // 2026-05-10 review). Production builds are unaffected.
