@@ -1067,52 +1067,71 @@ function findPnpmStoreEntry(pnpmDir, pkgName) {
   return match ? path.join(pnpmDir, match, "node_modules", pkgName) : null;
 }
 
-const onnxOutDir = findPnpmStoreEntry(pnpmStoreDir, "onnxruntime-node");
+// pnpm's virtual store can place MORE THAN ONE copy of onnxruntime-node under
+// distNmDir — a canonical `.pnpm/onnxruntime-node@<v>/node_modules/onnxruntime-node`
+// plus a version-less passthrough `.pnpm/node_modules/onnxruntime-node`
+// (observed on CI: onnxruntime-common's peer resolution creates it). The
+// first pass at this fix repaired only the ONE `.pnpm/onnxruntime-node@<v>`
+// entry findPnpmStoreEntry() finds — linuxdeploy still failed on the second,
+// untouched copy. Find and repair EVERY onnxruntime_binding.node under
+// distNmDir, matched back to the canonical repo copy by its bin/napi-v6/
+// <platform>/<arch> suffix (not by relative path from one resolved root,
+// which only works for a single copy).
+const repoPnpmDir = path.join(root, "node_modules", ".pnpm");
+const onnxRepoDir = findPnpmStoreEntry(repoPnpmDir, "onnxruntime-node");
+const packagedBindings = existsSync(distNmDir)
+  ? readdirSync(distNmDir, { recursive: true })
+      .filter((f) => f.endsWith("onnxruntime_binding.node"))
+      .map((f) => path.dirname(path.join(distNmDir, f)))
+  : [];
 
-if (!onnxOutDir) {
+if (packagedBindings.length === 0) {
   step("onnxruntime-node not present in this build (optional dependency) — skipping native-lib check");
-} else {
-  const bindingRel = readdirSync(onnxOutDir, { recursive: true }).find((f) =>
-    f.endsWith("onnxruntime_binding.node")
+} else if (!onnxRepoDir) {
+  fail(
+    `${packagedBindings.length} packaged onnxruntime_binding.node file(s) found but ` +
+      `onnxruntime-node isn't present in the repo's own node_modules/.pnpm — can't verify ` +
+      `or repair their sibling native libraries. Run "pnpm install" first.`
   );
-  if (!bindingRel) {
-    step("onnxruntime-node package present but no onnxruntime_binding.node found — skipping native-lib check");
-  } else {
-    const packagedBindingDir = path.dirname(path.join(onnxOutDir, bindingRel));
-    const repoPnpmDir = path.join(root, "node_modules", ".pnpm");
-    const onnxRepoDir = findPnpmStoreEntry(repoPnpmDir, "onnxruntime-node");
-    if (!onnxRepoDir) {
-      fail(
-        `Packaged onnxruntime_binding.node found at ${path.relative(outDir, packagedBindingDir)} ` +
-          `but onnxruntime-node isn't present in the repo's own node_modules/.pnpm — can't verify ` +
-          `or repair its sibling native libraries. Run "pnpm install" first.`
-      );
-    }
-    const repoBindingDir = path.join(
-      onnxRepoDir,
-      path.relative(onnxOutDir, packagedBindingDir)
-    );
+} else {
+  let totalCopied = 0;
+  for (const packagedBindingDir of packagedBindings) {
+    // Last two path segments of .../bin/napi-v6/<platform>/<arch>/ identify
+    // which platform build this binding is for.
+    const arch = path.basename(packagedBindingDir);
+    const platform = path.basename(path.dirname(packagedBindingDir));
+    const repoBindingDir = path.join(onnxRepoDir, "bin", "napi-v6", platform, arch);
     if (!existsSync(repoBindingDir)) {
       fail(
-        `Packaged onnxruntime_binding.node's source directory ${path.relative(root, repoBindingDir)} ` +
-          `doesn't exist in the repo's node_modules — the packaged binding may be stale or the ` +
-          `platform/arch layout changed upstream.`
+        `Packaged onnxruntime_binding.node at ${path.relative(outDir, packagedBindingDir)} ` +
+          `implies platform/arch "${platform}/${arch}", but ${path.relative(root, repoBindingDir)} ` +
+          `doesn't exist in the repo's node_modules — the platform/arch layout may have changed upstream.`
       );
     }
     const wanted = readdirSync(repoBindingDir);
     const missing = wanted.filter((f) => !existsSync(path.join(packagedBindingDir, f)));
     if (missing.length === 0) {
-      step(`Verified onnxruntime-node native libraries present (${wanted.length} file(s))`);
+      step(
+        `Verified onnxruntime-node native libraries present at ` +
+          `${path.relative(outDir, packagedBindingDir)} (${wanted.length} file(s))`
+      );
     } else {
       console.warn(
         `[package-standalone] WARNING: onnxruntime-node native sibling file(s) did NOT ` +
-          `auto-copy — copying explicitly from the repo's node_modules: ${missing.join(", ")}`
+          `auto-copy at ${path.relative(outDir, packagedBindingDir)} — copying explicitly ` +
+          `from the repo's node_modules: ${missing.join(", ")}`
       );
       for (const f of missing) {
         copyDereferenced(path.join(repoBindingDir, f), path.join(packagedBindingDir, f));
       }
-      step(`Copied ${missing.length} missing onnxruntime-node native file(s): ${missing.join(", ")}`);
+      totalCopied += missing.length;
     }
+  }
+  if (totalCopied > 0) {
+    step(
+      `Copied ${totalCopied} missing onnxruntime-node native file(s) across ` +
+        `${packagedBindings.length} packaged copy/copies`
+    );
   }
 }
 
