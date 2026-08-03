@@ -159,7 +159,38 @@ If port 4100 is already in use:
 - **With a Phase A service running:** Run `pnpm service:stop`, then relaunch the tray app. Or set `MINDER_TRAY_PORT=4200` and access the tray dashboard at `http://localhost:4200`.
 - **With an old tray instance:** Kill the old tray process, then relaunch.
 
-When the port is already bound, the tray **automatically enters attach mode** (if the server at that port is a Minder instance). The menu shows "Restart server (attached — n/a)" and the tray observes instead of spawning.
+When the port is already bound **and answering Minder's health check**, the tray **automatically enters attach mode**. The menu shows "Restart server (attached — n/a)" and the tray observes instead of spawning.
+
+If you see `port 4100 bound by a non-Minder process`, something is actively accepting TCP connections on the port without answering Minder's health check the way Minder does — a genuinely different local app, or (occasionally, on Windows) a virtualization networking component acting as a relay. This message requires an actual listener to connect to; it is not what a bind-blocked port looks like (see next paragraph).
+
+If instead nothing about "attach mode" appears at all, and you instead see the tray or server fail to start repeatedly — a crash/retry loop with no server ever coming up, and a permission-denied error visible in the tray's console output (launch it from a terminal to see `[minder-server]` lines; see [Tray icon doesn't appear](#tray-icon-doesnt-appear)) — that is the shape of the Windows-specific cause below: the OS refuses the *bind* itself, so there is no listener for a TCP connect to even reach.
+
+#### Windows: port reserved by Hyper-V/WSL2/Docker (WinNAT)
+
+Windows can reserve blocks of TCP ports for its own virtualization networking (Hyper-V, WSL2, Docker Desktop), independent of any app actually running. These reservations are created by the `winnat` service and can silently include port 4100, especially after a reboot — the exact range shifts depending on which virtualization services start and in what order.
+
+**To check if this is happening to you:**
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+If you see a row like `4100  4199  *` (the `*` marks an **administered** exclusion, not a per-boot dynamic one), Windows itself is blocking *new* binds to that port — including Minder's — at the OS level. This is not a conflicting app; nothing needs to be "killed." An instance that was already bound to the port *before* the exclusion appeared keeps running undisturbed (Windows doesn't evict existing listeners); it's the next fresh start that fails.
+
+**Workarounds:**
+
+- **Move Minder off the reserved range:** set `MINDER_TRAY_PORT` to a port outside the excluded ranges shown above (see [Environment Variables](#environment-variables)). For `pnpm dev`/`pnpm start`, pass `-p <port>` directly (e.g. `pnpm dev -- -p <port>`) or edit the `-p 4100` in `package.json` — the scripts hardcode `-p`, so setting `PORT` alone has no effect here.
+- **Reshuffle the reservation:** restart the WinNAT service, which recomputes its dynamic ranges and may free 4100 (requires an elevated prompt):
+  ```powershell
+  net stop winnat
+  net start winnat
+  ```
+  This is a systemwide networking service — restarting it briefly interrupts Hyper-V/WSL2/Docker networking, so avoid doing this while those are in active use.
+- **Preemptively claim the port for yourself:** reserve it as your own exclusion before Hyper-V/WSL does, so future boots skip over it:
+  ```powershell
+  netsh int ipv4 add excludedportrange protocol=tcp startport=4100 numberofports=1
+  ```
+  This only prevents *other* Windows components from claiming the port; it doesn't unbind an existing reservation, so combine it with a `winnat` restart the first time.
 
 ### SmartScreen warning on Windows
 

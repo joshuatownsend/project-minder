@@ -295,6 +295,29 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
+  if (body.port !== undefined) {
+    if (body.port === null) {
+      patches.push((c) => { c.port = undefined; });
+    } else if (
+      typeof body.port !== "number" ||
+      !Number.isInteger(body.port) ||
+      body.port < 1024 ||
+      body.port > 65535
+    ) {
+      // Floor of 1024, not 1: ports below that need elevated privileges on every
+      // OS this runs on, and nothing in this stack (dev CLI, service launcher,
+      // tray) runs elevated — accepting them would save a preference that can
+      // never actually work.
+      return NextResponse.json(
+        { error: "port must be an integer between 1024 and 65535, or null to clear" },
+        { status: 400 }
+      );
+    } else {
+      const port = body.port as number;
+      patches.push((c) => { c.port = port; });
+    }
+  }
+
   if (body.currency !== undefined) {
     if (typeof body.currency !== "string" || !VALID_CURRENCIES.has(body.currency)) {
       return NextResponse.json({ error: `currency must be a supported ISO 4217 code (e.g. "EUR", "JPY")` }, { status: 400 });

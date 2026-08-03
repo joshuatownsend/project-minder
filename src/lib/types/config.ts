@@ -168,6 +168,13 @@ export interface MinderConfig {
     /** OTLP base endpoint written into OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4100/api/otel). */
     endpoint?: string;
   };
+  /** Stored port preference only — NOT the live bound port. Nothing at server-boot
+   *  (dev CLI, service-install launcher generation, or the tray) reads this value;
+   *  it exists purely so the Settings UI can persist "what the user wants" and
+   *  render copy-paste commands for the run mode the user actually uses. The port
+   *  this page is being served on is read client-side from `window.location.port`.
+   *  Undefined/absent means DEFAULT_PORT (4100, see src/lib/boundPort.ts). */
+  port?: number;
   /** Per-model pricing overrides. Wave 8 (S) honors. */
   pricingRules?: PricingRule[];
   /** When true, the task dispatcher loop skips all spawning until cleared. Wave 9.2 (emergency stop). */
