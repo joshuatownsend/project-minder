@@ -161,6 +161,35 @@ If port 4100 is already in use:
 
 When the port is already bound, the tray **automatically enters attach mode** (if the server at that port is a Minder instance). The menu shows "Restart server (attached — n/a)" and the tray observes instead of spawning.
 
+If instead you see `port 4100 bound by a non-Minder process`, the tray probed `/api/health` on the port and got a response that isn't Minder's — see below for a common Windows-specific cause.
+
+#### Windows: port reserved by Hyper-V/WSL2/Docker (WinNAT)
+
+Windows can reserve blocks of TCP ports for its own virtualization networking (Hyper-V, WSL2, Docker Desktop), independent of any app actually running. These reservations are created by the `winnat` service and can silently include port 4100, especially after a reboot — the exact range shifts depending on which virtualization services start and in what order.
+
+**To check if this is happening to you:**
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+If you see a row like `4100  4199  *` (the `*` marks an **administered** exclusion, not a per-boot dynamic one), Windows itself is blocking anything — including Minder — from binding that port. This is not a conflicting app; nothing needs to be "killed."
+
+**Workarounds:**
+
+- **Move Minder off the reserved range:** set `MINDER_TRAY_PORT` to a port outside the excluded ranges shown above (see [Environment Variables](#environment-variables)), and for `pnpm dev`/`pnpm start` use `PORT=<port>` or `-p <port>`.
+- **Reshuffle the reservation:** restart the WinNAT service, which recomputes its dynamic ranges and may free 4100 (requires an elevated prompt):
+  ```powershell
+  net stop winnat
+  net start winnat
+  ```
+  This is a systemwide networking service — restarting it briefly interrupts Hyper-V/WSL2/Docker networking, so avoid doing this while those are in active use.
+- **Preemptively claim the port for yourself:** reserve it as your own exclusion before Hyper-V/WSL does, so future boots skip over it:
+  ```powershell
+  netsh int ipv4 add excludedportrange protocol=tcp startport=4100 numberofports=1
+  ```
+  This only prevents *other* Windows components from claiming the port; it doesn't unbind an existing reservation, so combine it with a `winnat` restart the first time.
+
 ### SmartScreen warning on Windows
 
 Unsigned installers trigger this warning. This is expected and normal.

@@ -17,6 +17,7 @@ import { CostSection } from "@/components/settings/CostSection";
 import { AdaptersSection } from "@/components/settings/AdaptersSection";
 import { DriftSection } from "@/components/settings/DriftSection";
 import { SemanticSearchSection } from "@/components/settings/SemanticSearchSection";
+import { ServerPortSection } from "@/components/settings/ServerPortSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ScanRootsSection } from "@/components/settings/ScanRootsSection";
 import { ClaudeHomesSection } from "@/components/settings/ClaudeHomesSection";
@@ -47,6 +48,7 @@ const DB_STATUS_COLOR: Record<InitStatus["state"], string> = {
 
 type SectionKey =
   | "features"
+  | "server-port"
   | "scan-roots"
   | "claude-homes"
   | "appearance"
@@ -69,6 +71,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
+  { key: "server-port",   label: "Server Port",    comingSoon: false, description: "Change the port Project Minder listens on (dev, service, and tray)." },
   { key: "scan-roots",    label: "Scan Roots",     comingSoon: false, description: "Directories scanned for projects — add extra drives or WSL locations." },
   { key: "claude-homes",  label: "Claude Homes",   comingSoon: false, description: "Extra .claude session sources (WSL) + cross-environment path mappings." },
   { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
@@ -312,6 +315,9 @@ export function SettingsPage() {
       <main style={{ flex: 1, minWidth: 0 }}>
         {active === "features" && (
           <FeaturesSection config={config} saving={saving} onToggle={toggleFlag} />
+        )}
+        {active === "server-port" && (
+          <ServerPortSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "scan-roots" && (
           <ScanRootsSection config={config} onConfigChange={patchConfig} />
