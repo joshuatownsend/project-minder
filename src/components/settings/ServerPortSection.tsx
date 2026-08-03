@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
+import { DEFAULT_PORT } from "@/lib/boundPort";
 import { S } from "./styles";
 import { useHelp } from "@/components/HelpProvider";
-
-const DEFAULT_PORT = 4100;
 
 function currentPort(): string {
   if (typeof window === "undefined") return "unknown";
@@ -23,6 +22,7 @@ export function ServerPortSection({
   const [running, setRunning] = useState("unknown");
   const [value, setValue] = useState(String(config?.port ?? DEFAULT_PORT));
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
@@ -50,7 +50,25 @@ export function ServerPortSection({
     }
   }
 
+  async function resetToDefault() {
+    setResetting(true);
+    setMsg(null);
+    try {
+      // `null` is the wire PATCH's clear-signal, distinct from the stored
+      // config shape where `port` is `number | undefined` and never `null`.
+      // The cast lives here at the call site rather than on `MinderConfig`.
+      await onConfigChange({ port: null } as unknown as Partial<MinderConfig>);
+      setValue(String(DEFAULT_PORT));
+      setMsg({ text: "Reset to default. This is a stored preference only — see below to actually apply it.", ok: true });
+    } catch {
+      // patchConfig already surfaced a toast; nothing more to show here.
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const effectivePort = config?.port ?? DEFAULT_PORT;
+  const canReset = config?.port !== undefined && config.port !== DEFAULT_PORT;
 
   return (
     <section>
@@ -87,6 +105,24 @@ export function ServerPortSection({
             <button style={S.btn} onClick={save} disabled={saving || !valid}>
               Save
             </button>
+            {canReset && (
+              <button
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "var(--info)",
+                  textDecoration: "underline",
+                  fontSize: "0.78rem",
+                  alignSelf: "center",
+                }}
+                onClick={resetToDefault}
+                disabled={resetting}
+              >
+                Reset to default
+              </button>
+            )}
           </div>
           {!valid && value.trim() !== "" && (
             <div style={{ ...S.muted, marginTop: "6px", color: "var(--status-error-text)" }}>
@@ -131,8 +167,15 @@ export function ServerPortSection({
             <li style={{ marginBottom: "6px" }}>
               <strong style={{ color: "var(--text-secondary)" }}>Windows Service:</strong> run{" "}
               <code style={{ fontFamily: "var(--font-mono)" }}>pnpm service:uninstall</code> if already
-              installed, then{" "}
-              <code style={{ fontFamily: "var(--font-mono)" }}>MINDER_PORT={effectivePort} pnpm service:install</code>.
+              installed, then (PowerShell){" "}
+              <code style={{ fontFamily: "var(--font-mono)" }}>
+                $env:MINDER_PORT={effectivePort}; pnpm service:install
+              </code>
+              {" "}— cmd.exe users:{" "}
+              <code style={{ fontFamily: "var(--font-mono)" }}>
+                set MINDER_PORT={effectivePort} &amp;&amp; pnpm service:install
+              </code>
+              .
             </li>
             <li>
               <strong style={{ color: "var(--text-secondary)" }}>Tray app:</strong> set{" "}

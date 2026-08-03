@@ -7,7 +7,7 @@ The Settings page (`/settings`) controls Project Minder's own behavior — what 
 | Section | Wave | What it controls |
 |---------|------|------------------|
 | **Features** | 1 | Subsystem on/off toggles. Decide which scanners and watchers run. |
-| **Server Port** | — | Change the port Project Minder listens on. Stores a preference in `.minder.json` — applying it still requires a manual restart per run mode (dev/start, Windows service, tray). |
+| **Server Port** | — | Store a preferred port in `.minder.json` and get copy-paste commands to apply it — nothing auto-restarts. Applying it still requires a manual restart per run mode (dev/start, Windows service, tray). |
 | **Scan Roots** | 1 | Directories scanned for projects — add extra drives or WSL locations. |
 | **Claude Homes** | 1 | Extra `.claude` session sources (WSL) + cross-environment path mappings. |
 | **Appearance** | 12 | View mode default, theme, keyboard shortcuts. |

@@ -71,7 +71,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { key: "features",      label: "Features",       comingSoon: false, description: "Subsystem on/off toggles." },
-  { key: "server-port",   label: "Server Port",    comingSoon: false, description: "Change the port Project Minder listens on (dev, service, and tray)." },
+  { key: "server-port",   label: "Server Port",    comingSoon: false, description: "Store a port preference and get copy-paste commands to apply it (dev, service, and tray) — no restart happens automatically." },
   { key: "scan-roots",    label: "Scan Roots",     comingSoon: false, description: "Directories scanned for projects — add extra drives or WSL locations." },
   { key: "claude-homes",  label: "Claude Homes",   comingSoon: false, description: "Extra .claude session sources (WSL) + cross-environment path mappings." },
   { key: "appearance",    label: "Appearance",     comingSoon: false, description: "View mode, theme, keyboard shortcuts." },
