@@ -27,9 +27,9 @@ jobs:
       # pnpm/action-setup must run before setup-node so the pnpm binary is
       # on PATH when setup-node computes the `cache: 'pnpm'` key. Version is
       # read from the `packageManager` field in package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.0.9
 
       # Node 22 (not 20) is deliberate on Windows: better-sqlite3@12.11.1 ships
       # a prebuilt win32-x64 binary for Node 22's ABI (node-v127) but NOT for
@@ -73,7 +73,7 @@ jobs:
       # on the current windows-latest image (issue #264) — so the native driver
       # never builds and every DB-backed suite fails. Node 22 gets the prebuilt
       # binary with zero compiler involvement. Node 20 stays covered on ubuntu.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
           cache: 'pnpm'

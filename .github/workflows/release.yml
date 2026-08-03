@@ -19,9 +19,9 @@ jobs:
         with:
           fetch-depth: 0  # full history so --generate-notes can reference PR titles
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.0.9
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '20.19.0'
           cache: 'pnpm'
