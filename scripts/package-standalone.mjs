@@ -1032,6 +1032,81 @@ try {
   );
 }
 
+// --- 4b. Verify (don't assume) onnxruntime-node's native sibling libraries copied ---
+//
+// Same failure shape as better-sqlite3 above, discovered the hard way: Next's
+// tracer statically follows onnxruntime-node's `require(join(__dirname,
+// 'bin/napi-v6', platform, arch, 'onnxruntime_binding.node'))` and correctly
+// copies just that one file for the CURRENT build platform — but the binding
+// itself dynamically links against a SIBLING shared library in the same
+// directory (libonnxruntime.so.1 on Linux, libonnxruntime.*.dylib on macOS,
+// onnxruntime.dll + DirectML.dll + dxcompiler.dll + dxil.dll on Windows) that
+// NFT's require-graph tracing has no way to see. NSIS and macOS DMG bundling
+// don't validate native dependencies at package time, so this shipped
+// silently broken on those platforms; Linux's AppImage bundler
+// (linuxdeploy) DOES walk ELF dependencies and failed outright on the
+// missing .so (v1.7.0 release). @huggingface/transformers is a genuinely
+// optional dependency (see src/lib/embeddings/model.ts), so its absence here
+// is a soft skip, not a failure — only a PARTIAL copy (binding present,
+// sibling libs missing) is treated as an error worth fixing.
+let onnxOutDir;
+try {
+  onnxOutDir = resolvePackageDir("onnxruntime-node", outDir);
+} catch {
+  onnxOutDir = null;
+}
+
+if (!onnxOutDir) {
+  step("onnxruntime-node not present in this build (optional dependency) — skipping native-lib check");
+} else {
+  const bindingRel = readdirSync(onnxOutDir, { recursive: true }).find((f) =>
+    f.endsWith("onnxruntime_binding.node")
+  );
+  if (!bindingRel) {
+    step("onnxruntime-node package present but no onnxruntime_binding.node found — skipping native-lib check");
+  } else {
+    const packagedBindingDir = path.dirname(path.join(onnxOutDir, bindingRel));
+    let onnxRepoDir;
+    try {
+      onnxRepoDir = resolvePackageDir("onnxruntime-node", root);
+    } catch {
+      onnxRepoDir = null;
+    }
+    if (!onnxRepoDir) {
+      fail(
+        `Packaged onnxruntime_binding.node found at ${path.relative(outDir, packagedBindingDir)} ` +
+          `but onnxruntime-node isn't resolvable from the repo's own node_modules — can't verify ` +
+          `or repair its sibling native libraries. Run "pnpm install" first.`
+      );
+    }
+    const repoBindingDir = path.join(
+      onnxRepoDir,
+      path.relative(onnxOutDir, packagedBindingDir)
+    );
+    if (!existsSync(repoBindingDir)) {
+      fail(
+        `Packaged onnxruntime_binding.node's source directory ${path.relative(root, repoBindingDir)} ` +
+          `doesn't exist in the repo's node_modules — the packaged binding may be stale or the ` +
+          `platform/arch layout changed upstream.`
+      );
+    }
+    const wanted = readdirSync(repoBindingDir);
+    const missing = wanted.filter((f) => !existsSync(path.join(packagedBindingDir, f)));
+    if (missing.length === 0) {
+      step(`Verified onnxruntime-node native libraries present (${wanted.length} file(s))`);
+    } else {
+      console.warn(
+        `[package-standalone] WARNING: onnxruntime-node native sibling file(s) did NOT ` +
+          `auto-copy — copying explicitly from the repo's node_modules: ${missing.join(", ")}`
+      );
+      for (const f of missing) {
+        copyDereferenced(path.join(repoBindingDir, f), path.join(packagedBindingDir, f));
+      }
+      step(`Copied ${missing.length} missing onnxruntime-node native file(s): ${missing.join(", ")}`);
+    }
+  }
+}
+
 // --- 5. Record + verify the Node version this bundle was built with ---
 //
 // This doesn't (and can't) guarantee the *runtime* host's Node major
