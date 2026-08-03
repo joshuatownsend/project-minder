@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:1bd758c3eb48 | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T21:35:55.564Z -->
+## ★ Insight
+`countEmbedded` is `COUNT(*) … WHERE model = ?`; `selectUnembedded` joins on `(session_id, turn_index, chunk_index)` and tests `e.session_id IS NULL`. **Neither consults `text_hash`.** So a session re-ingested with edited text under the same chunk keys keeps its old vector rows, still counts as embedded, and reports `remaining: 0`. The hash comparison lives only in `pruneInvalidVectors`, which runs only inside a backfill pass — and my `disabled={remaining === 0}` was the only door to it.
+
+---
+
 <!-- insight:99e5bec9e46a | session:6b66b051-7d79-40c6-a5f2-6441e678e756 | 2026-08-02T21:07:04.863Z -->
 ## ★ Insight
 `countEmbedded` is `COUNT(*) … WHERE model = ?` and `selectUnembedded` joins on **keys only** (`e.session_id IS NULL`) — neither consults `text_hash`. So a re-ingested session with changed text but identical chunk keys keeps its old vector rows, counts as embedded, and reports `remaining = 0`. My `disabled={remaining === 0}` then removed the only path to `pruneInvalidVectors`, which is the sole thing that checks the hash. Stale vectors would sit against new text and return confidently wrong hits — a worse failure than missing results, because it looks like it worked.
