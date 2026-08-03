@@ -1,4 +1,5 @@
 import "server-only";
+import fs from "fs";
 import path from "path";
 import os from "os";
 import { EMBEDDING_DIMS, isUnitish } from "./quantize";
@@ -38,6 +39,28 @@ export const EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
 /** Where the ONNX weights live. Sibling of `~/.minder/index.db`. */
 export function modelCacheDir(): string {
   return path.join(os.homedir(), ".minder", "models");
+}
+
+/**
+ * Are there cached model files on disk for {@link EMBEDDING_MODEL}?
+ *
+ * Answers one question and only that one: whether the first use will have to
+ * pull ~80 MB over the network. It deliberately does **not** claim the cache is
+ * complete or valid — an interrupted download leaves files behind too, and the
+ * only way to know for sure is to load the model, which is the very thing this
+ * check exists to let the user decide about. Callers must word it as "files
+ * found", not "ready".
+ *
+ * Never throws: an unreadable cache directory is reported as absent.
+ */
+export function modelCachePresent(): boolean {
+  try {
+    // transformers.js lays the cache out as `<cacheDir>/<org>/<model>/…`.
+    const dir = path.join(modelCacheDir(), ...EMBEDDING_MODEL.split("/"));
+    return fs.statSync(dir).isDirectory() && fs.readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export interface Embedder {

@@ -13,6 +13,17 @@ import { onTaskCompleteSyncBoard } from "./boardDelegation";
 import { loadQuota } from "../quota";
 import { getFlag } from "../featureFlags";
 import { evaluateQuotaGate, type QuotaGateDecision } from "./quotaGate";
+import { getDb } from "../db/connection";
+import { runEmbeddingBackfill } from "../embeddings/backfill";
+import {
+  SELF_HEAL_CHUNKS,
+  afterPass,
+  classifyPass,
+  initialSelfHealState,
+  shouldRunSelfHeal,
+  tickCooldown,
+  type SelfHealState,
+} from "../embeddings/selfHeal";
 
 const HEARTBEAT_PATH = path.join(os.homedir(), ".minder", "dispatcher-heartbeat.json");
 const TICK_INTERVAL_MS = 30_000;
@@ -172,6 +183,8 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
   // The most recent tick's promise, so stop() can await an in-flight tick's
   // completion (bounded by the shutdown deadline the lifecycle registry caps).
   let currentTick: Promise<void> | null = null;
+  // Embedding index top-up, run in the gaps between task work. See selfHeal.ts.
+  let selfHeal: SelfHealState = initialSelfHealState();
   const inFlight = new Map<number, Promise<void>>();
 
   async function handleDecision(taskId: number, event: DecisionEvent): Promise<void> {
@@ -389,8 +402,56 @@ export function initDispatcher(spawnFn?: SpawnFn): void {
 
         inFlight.set(task.id, promise);
       }
+
+      // Embedding index self-heal. Placed last, after every claim and spawn,
+      // so it can see the tasks this tick just started and stand down for them.
+      selfHeal = tickCooldown(selfHeal);
+      if (
+        shouldRunSelfHeal({
+          // Both flags: topping up an index nothing queries is pure waste, and
+          // `semanticAutoBackfill` is the separate consent for spending CPU
+          // unattended rather than on a button press.
+          enabled:
+            getFlag(cfg?.featureFlags, "semanticSearch", false) &&
+            getFlag(cfg?.featureFlags, "semanticAutoBackfill", false),
+          stopped,
+          inFlightTasks: inFlight.size,
+          state: selfHeal,
+        })
+      ) {
+        selfHeal = { ...selfHeal, running: true };
+        // Deliberately NOT awaited. `tickInProgress` stays true for the whole
+        // of an awaited tick, so waiting on a pass — seconds normally, far
+        // longer on the first load while the model comes off disk — would
+        // delay the next tick's task dispatch behind a background nicety.
+        // `selfHeal.running` is what prevents passes from overlapping.
+        void runSelfHealPass();
+      }
     } finally {
       tickInProgress = false;
+    }
+  }
+
+  /**
+   * One bounded embedding pass, run detached from the tick.
+   *
+   * Must settle `selfHeal` on every path: leaving `running` true would disable
+   * self-heal for the remaining life of the process, silently and permanently.
+   */
+  async function runSelfHealPass(): Promise<void> {
+    try {
+      const db = await getDb();
+      if (!db) {
+        // No index database — an install-level condition, not a transient one.
+        selfHeal = afterPass("blocked");
+        return;
+      }
+      selfHeal = afterPass(classifyPass(await runEmbeddingBackfill(db, SELF_HEAL_CHUNKS)));
+    } catch (err) {
+      // `runEmbeddingBackfill` swallows its own failures, but a database
+      // closed underneath it during shutdown can still reject here.
+      console.error("[dispatcher] embedding self-heal error:", err);
+      selfHeal = afterPass("error");
     }
   }
 

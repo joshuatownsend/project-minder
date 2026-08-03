@@ -3,7 +3,13 @@ import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { getDb } from "@/lib/db/connection";
-import { EMBEDDING_MODEL, embedderFailure, embedderReady, modelCacheDir } from "@/lib/embeddings/model";
+import {
+  EMBEDDING_MODEL,
+  embedderFailure,
+  embedderReady,
+  modelCacheDir,
+  modelCachePresent,
+} from "@/lib/embeddings/model";
 import { chunkCorpusReady, countChunks, countEmbedded } from "@/lib/embeddings/store";
 import { DEFAULT_PASS_CHUNKS, runEmbeddingBackfill } from "@/lib/embeddings/backfill";
 
@@ -28,13 +34,20 @@ export async function GET(): Promise<NextResponse> {
   const config = await readConfig();
   const enabled = getFlag(config.featureFlags, "semanticSearch", false);
 
+  // `indexReady` is reported separately from `available` because they fail for
+  // unrelated reasons and want different words in the UI: one is "the corpus to
+  // embed doesn't exist yet", the other is "the model can't run". Collapsing
+  // both into `available` made a missing migration read as a broken model.
   const db = await getDb();
   if (!db) {
     return NextResponse.json({
       enabled,
+      indexReady: false,
       available: false,
       reason: "SQLite index unavailable (better-sqlite3 not installed)",
       model: EMBEDDING_MODEL,
+      modelCacheDir: modelCacheDir(),
+      modelCachePresent: modelCachePresent(),
       total: 0,
       embedded: 0,
       remaining: 0,
@@ -44,11 +57,14 @@ export async function GET(): Promise<NextResponse> {
   if (!chunkCorpusReady(db)) {
     return NextResponse.json({
       enabled,
+      indexReady: false,
       available: false,
       reason:
         "The chunked full-body search index (schema v19) has not been built yet. " +
         "Restart Minder so the migration runs, then let the session reconcile finish.",
       model: EMBEDDING_MODEL,
+      modelCacheDir: modelCacheDir(),
+      modelCachePresent: modelCachePresent(),
       total: 0,
       embedded: 0,
       remaining: 0,
@@ -59,12 +75,18 @@ export async function GET(): Promise<NextResponse> {
   const embedded = countEmbedded(db, EMBEDDING_MODEL);
   return NextResponse.json({
     enabled,
+    indexReady: true,
     // Deliberately does NOT call loadEmbedder(): reading a progress bar must
-    // not be what triggers the model download.
+    // not be what triggers the model download. This is therefore false after
+    // every server restart until something actually embeds — the client tells
+    // that apart from a real failure by `reason` being null.
     available: embedderReady(),
     reason: embedderFailure(),
     model: EMBEDDING_MODEL,
     modelCacheDir: modelCacheDir(),
+    // Whether the first pass will need to download ~80 MB. Files present is
+    // not a completeness guarantee; see `modelCachePresent`.
+    modelCachePresent: modelCachePresent(),
     total,
     embedded,
     remaining: Math.max(0, total - embedded),

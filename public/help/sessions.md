@@ -106,7 +106,39 @@ It is **off by default**, and turning it on is what consents to the setup cost:
 | Disk | ~**58 MB** of vectors (384 bytes each), a ~7% increase on the index |
 | Per query | ~**162 ms** for a full scan, with ~58 MB held in memory once the first semantic query runs |
 
-Run the backfill with `POST /api/embeddings`, optionally with a `{ "chunks": N }` budget. **There is no Settings panel for it yet** — the flag toggle in Settings enables the feature but does not populate any vectors, so until the panel lands the backfill is driven from the endpoint. (Tracked as a follow-up in `TODO.md`; it is part of why the flag ships off.) Each call embeds a bounded batch and returns; it is resumable, and **newest chunks are embedded first** so recent sessions become searchable long before the pass completes. `GET /api/embeddings` reports coverage without triggering the download.
+#### Settings → Semantic Search
+
+**Settings → Semantic Search** is where this is turned on and where the index gets built. The panel holds the feature toggle, a coverage bar (`embedded / total` chunks), a remaining-time estimate, and the build control.
+
+Enabling the flag does **not** populate any vectors — it consents to the download, and the corpus still has to be embedded. Press **Build index** to start; the panel runs one bounded pass after another until the corpus is covered, showing passes completed and chunks embedded as it goes. **Stop after this pass** ends the run cleanly, and so does navigating away — the driver lives in the page, deliberately, so a forty-minute CPU spend is always something a visible window is doing rather than a background job you forgot about. It is fully resumable: everything embedded before a stop is kept, and the button becomes **Resume build**.
+
+Because **newest chunks are embedded first**, recent sessions become searchable long before the pass completes — the coverage bar reaching 20% already means the last few weeks are covered.
+
+At full coverage the button becomes **Verify index**, and it stays available rather than greying out. That is not cosmetic. A vector is keyed on `(session, turn, chunk)`, and a session that gets re-ingested with edited text can keep the same keys — so its old vectors still count as "embedded" and coverage still reads 100%, while the vectors now describe text that no longer exists. The check that catches this compares each vector against a hash of its source text, and it only runs as part of a backfill pass. Leaving the button live at 100% is what keeps that check reachable; without it, stale vectors would sit against new text and return confidently wrong results, which is worse than returning nothing. A verify pass that finds nothing says so.
+
+#### Keeping the index current automatically
+
+A built index goes stale the moment new sessions are indexed: those chunks have no vectors, so they are invisible to semantic search until someone presses Build again. The second toggle, **Keep the index current automatically**, closes that gap by topping the index up on the background task dispatcher's tick.
+
+It is a separate switch from semantic search itself, and also defaults off, because it is a different kind of consent — the Build button spends CPU because you pressed it, this spends CPU with nobody watching. It does nothing unless semantic search is on, and the toggle says so rather than pretending to work.
+
+What it does when enabled, on each ~30-second tick:
+
+- **Only while the dispatcher is idle.** If any agent task is running, self-heal stands down entirely. It must never compete for CPU with the work the dispatcher exists to do.
+- **About 250 chunks per pass** — roughly 3.8 seconds of CPU, a ~12% duty cycle. Sized for *drift*, not bulk: a few hundred chunks from newly indexed sessions clear in a tick or two. It would take hours to cover a cold corpus this way, which is the right speed for something nobody asked for in the moment — **Build index** remains the fast path.
+- **Backs off by how likely the situation is to change.** Nothing to embed: quiet for ~10 minutes. A pass failed: ~20 minutes. No model, or no chunk corpus: ~1 hour, because those need an install or a migration and will not fix themselves on a short timer.
+- **Never overlaps itself**, and never delays a tick — the pass runs detached, so task dispatch is not held up behind it.
+
+Failures do not stay hidden. A self-heal pass that cannot load the model records the reason, which the panel then shows in place of *Runtime not loaded yet*.
+
+Two states the panel is careful to distinguish, since both look like "unavailable" from the outside:
+
+- *Runtime not loaded yet* — nothing has asked the model to load since the server started. This is the normal state after every restart, not a fault.
+- *Runtime unavailable: …* — a real failure, with the reason attached (missing optional package, failed download, bad model output).
+
+Likewise, a missing chunk corpus (schema v19) is reported as an index problem with its own remedy — restart so the migration runs — rather than being blamed on the model.
+
+The same operations are available headlessly: `POST /api/embeddings`, optionally with a `{ "chunks": N }` budget, embeds one bounded batch and returns. `GET /api/embeddings` reports coverage, the model cache location, and whether the model is already on disk — all without triggering the download, so reading a progress bar can never be what starts an 80 MB fetch.
 
 **Native build scripts are intentionally skipped.** `@huggingface/transformers` pulls `onnxruntime-node`, whose install script is not in this repo's `pnpm.onlyBuiltDependencies` allowlist, so `pnpm install` prints an "Ignored build scripts" warning. That is deliberate — the shipped prebuilt binary is sufficient, verified by running a full embed-and-search pass on an install where those scripts never ran. Adding a native postinstall to every install for a default-off feature would be the worse trade.
 

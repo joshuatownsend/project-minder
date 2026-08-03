@@ -28,6 +28,7 @@ export type FeatureFlagKey =
   | "claudeStatusAlerts"
   | "configLint"
   | "semanticSearch"
+  | "semanticAutoBackfill"
   | "quotaAwareDispatch"
   | "configDrift"
   | "scanBoard"

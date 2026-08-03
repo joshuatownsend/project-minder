@@ -16,6 +16,7 @@ import { LiveActivitySection } from "@/components/settings/LiveActivitySection";
 import { CostSection } from "@/components/settings/CostSection";
 import { AdaptersSection } from "@/components/settings/AdaptersSection";
 import { DriftSection } from "@/components/settings/DriftSection";
+import { SemanticSearchSection } from "@/components/settings/SemanticSearchSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ScanRootsSection } from "@/components/settings/ScanRootsSection";
 import { ClaudeHomesSection } from "@/components/settings/ClaudeHomesSection";
@@ -56,7 +57,8 @@ type SectionKey =
   | "terminal"
   | "auto-title"
   | "live-activity"
-  | "adapters";
+  | "adapters"
+  | "search";
 
 interface SectionDef {
   key: SectionKey;
@@ -78,6 +80,7 @@ const SECTIONS: SectionDef[] = [
   { key: "auto-title",    label: "Auto-title",      comingSoon: false, description: "LLM endpoint for session-title generation." },
   { key: "live-activity", label: "Live Activity",   comingSoon: false, description: "Hook server install/remove + awaiting-permission alerts." },
   { key: "adapters",      label: "Adapters",        comingSoon: false, description: "Platform adapters: enable/disable session sources (Claude Code, Codex, Gemini)." },
+  { key: "search",        label: "Semantic Search",  comingSoon: false, description: "Local embedding index for meaning-based session search: coverage and backfill." },
 ];
 
 export function SettingsPage() {
@@ -339,6 +342,9 @@ export function SettingsPage() {
             <AdaptersSection config={config} onConfigChange={patchConfig} />
             <DriftSection />
           </>
+        )}
+        {active === "search" && (
+          <SemanticSearchSection config={config} saving={saving} onToggle={toggleFlag} />
         )}
         {active === "appearance" && (
           <AppearanceSection config={config} onConfigChange={patchConfig} />
