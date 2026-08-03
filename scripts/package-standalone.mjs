@@ -1049,12 +1049,25 @@ try {
 // optional dependency (see src/lib/embeddings/model.ts), so its absence here
 // is a soft skip, not a failure — only a PARTIAL copy (binding present,
 // sibling libs missing) is treated as an error worth fixing.
-let onnxOutDir;
-try {
-  onnxOutDir = resolvePackageDir("onnxruntime-node", outDir);
-} catch {
-  onnxOutDir = null;
+// Deliberately NOT resolvePackageDir()/require.resolve() here: onnxruntime-node
+// is a transitive dependency reachable only through the pnpm store subtree
+// (.pnpm/@huggingface+transformers@<v>/node_modules/onnxruntime-node), not
+// hoisted to a top-level node_modules/onnxruntime-node anywhere — and
+// @huggingface/transformers's own package.json `exports` map doesn't expose
+// `./package.json`, so even resolving THROUGH it that way throws
+// ERR_PACKAGE_PATH_NOT_EXPORTED. (First attempt at this fix used
+// resolvePackageDir and silently no-op'd on CI for exactly this reason — the
+// "optional dependency not present" skip path fired even though the binding
+// WAS in the payload, so linuxdeploy still failed on the missing .so.)
+// Scanning the .pnpm store directory names directly sidesteps both problems.
+function findPnpmStoreEntry(pnpmDir, pkgName) {
+  if (!existsSync(pnpmDir)) return null;
+  const prefix = `${pkgName.replace("/", "+")}@`;
+  const match = readdirSync(pnpmDir).find((k) => k.startsWith(prefix));
+  return match ? path.join(pnpmDir, match, "node_modules", pkgName) : null;
 }
+
+const onnxOutDir = findPnpmStoreEntry(pnpmStoreDir, "onnxruntime-node");
 
 if (!onnxOutDir) {
   step("onnxruntime-node not present in this build (optional dependency) — skipping native-lib check");
@@ -1066,16 +1079,12 @@ if (!onnxOutDir) {
     step("onnxruntime-node package present but no onnxruntime_binding.node found — skipping native-lib check");
   } else {
     const packagedBindingDir = path.dirname(path.join(onnxOutDir, bindingRel));
-    let onnxRepoDir;
-    try {
-      onnxRepoDir = resolvePackageDir("onnxruntime-node", root);
-    } catch {
-      onnxRepoDir = null;
-    }
+    const repoPnpmDir = path.join(root, "node_modules", ".pnpm");
+    const onnxRepoDir = findPnpmStoreEntry(repoPnpmDir, "onnxruntime-node");
     if (!onnxRepoDir) {
       fail(
         `Packaged onnxruntime_binding.node found at ${path.relative(outDir, packagedBindingDir)} ` +
-          `but onnxruntime-node isn't resolvable from the repo's own node_modules — can't verify ` +
+          `but onnxruntime-node isn't present in the repo's own node_modules/.pnpm — can't verify ` +
           `or repair its sibling native libraries. Run "pnpm install" first.`
       );
     }
