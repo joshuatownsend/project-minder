@@ -129,6 +129,61 @@ export interface SessionSummary {
    * Empty/absent for sessions that never mention a tracker URL.
    */
   tickets?: TicketLink[];
+
+  // ── A1: decoded from Claude Code's newer transcript entry types ───────────
+  // All optional and version-dependent. Absence means "this transcript predates
+  // the field", which is NOT the same as a default value — every consumer needs
+  // an explicit unknown bucket rather than assuming e.g. `medium` effort.
+
+  /**
+   * Session flavour from `attachment.sessionKind` — e.g. `bg` for a
+   * backgrounded session. Undefined for ordinary interactive sessions and for
+   * any transcript written before the field existed, so it cannot be used to
+   * prove a session *was* interactive.
+   */
+  sessionKind?: string;
+  /** How the session was launched, from `attachment.entrypoint`: `cli` | `sdk-cli`. */
+  entrypoint?: string;
+  /**
+   * Model-generated session title from a `type: "ai-title"` entry. Distinct
+   * from `generatedTitle`, which Minder produces itself (Wave 7.1) — this one
+   * comes from Claude Code. Last one wins: the title is re-emitted as a
+   * session's subject becomes clearer.
+   */
+  aiTitle?: string;
+  /**
+   * Permission-mode timeline from `type: "permission-mode"` entries, in file
+   * order. A session that never switched mode has none — absence is not `auto`.
+   */
+  permissionModes?: SessionPermissionMode[];
+  /**
+   * Count of assistant turns per reasoning effort, e.g. `{ high: 812, xhigh: 39 }`.
+   * Only turns that carried `effort` are counted, so the values need not sum to
+   * `assistantMessageCount`; the difference is turns from before the field
+   * existed. Empty/absent for a fully pre-`effort` session.
+   */
+  effortMix?: Record<string, number>;
+  /**
+   * Hook executions observed in this session, from assistant `hookInfos`.
+   * One-to-many per session, so this is a list rather than an aggregate;
+   * A6 turns it into latency analytics.
+   */
+  hookRuns?: SessionHookRun[];
+}
+
+/** One permission-mode change within a session. */
+export interface SessionPermissionMode {
+  /** ISO8601, or undefined — `permission-mode` entries carry no timestamp of their own. */
+  ts?: string;
+  /** e.g. `auto`, `plan`. Not an enum: Claude Code may add modes. */
+  mode: string;
+}
+
+/** One hook execution attributed to an assistant turn. */
+export interface SessionHookRun {
+  ts?: string;
+  command: string;
+  durationMs?: number;
 }
 
 /**

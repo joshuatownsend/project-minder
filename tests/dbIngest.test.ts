@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+// Imported rather than hardcoded: these assertions are about "ingest stamped
+// the CURRENT version", not about any particular number, and pinning the
+// literal made every DERIVED_VERSION bump fail two unrelated tests.
+import { DERIVED_VERSION } from "@/lib/db/derivationVersion";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { SessionFile } from "@/lib/adapters/types";
 import type { MinderConfig } from "@/lib/types";
@@ -205,7 +209,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(12);
+    expect(session.derived_version).toBe(DERIVED_VERSION);
     expect(session.source).toBe("claude");
 
     const turnRows = db
@@ -1574,7 +1578,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
       .get() as { slug: string | null; derived_version: number };
     expect(row.slug).toBe("graceful-pivoting-ferret");
-    expect(row.derived_version).toBe(12);
+    expect(row.derived_version).toBe(DERIVED_VERSION);
     reloaded.conn.closeDb();
   });
 

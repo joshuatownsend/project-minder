@@ -636,6 +636,54 @@ function toSummary(seed: SessionSeed, nowMs: number): SessionSummary {
     source: "claude",
     prs: seed.prs,
     tickets: seed.tickets,
+    ...a1DemoFields(seed.id),
+  };
+}
+
+/**
+ * A1 fields for demo mode. Deterministic from the session id so screenshots are
+ * reproducible.
+ *
+ * Deliberately covers **both** states: roughly a third of demo sessions carry
+ * none of these, standing in for transcripts written before Claude Code emitted
+ * them. That is the more useful fixture — the constraint on every A1 consumer is
+ * that it keeps an explicit unknown bucket rather than defaulting, and a demo
+ * corpus where every session has an effort would let a UI that quietly defaults
+ * to `medium` look perfectly correct.
+ */
+function a1DemoFields(sessionId: string): Partial<SessionSummary> {
+  let h = 0;
+  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) >>> 0;
+  if (h % 3 === 0) return {}; // legacy transcript — no A1 fields at all
+
+  const efforts: Array<Record<string, number>> = [
+    { high: 24, medium: 6 },
+    { high: 41, xhigh: 12, medium: 3 },
+    { medium: 18 },
+    { xhigh: 31, high: 9 },
+  ];
+  const titles = [
+    "Refactor the auth middleware",
+    "Trace a flaky integration test",
+    "Add pagination to the projects API",
+    "Investigate the slow dashboard query",
+  ];
+  return {
+    effortMix: efforts[h % efforts.length],
+    aiTitle: titles[h % titles.length],
+    sessionKind: h % 7 === 0 ? "bg" : undefined,
+    entrypoint: h % 11 === 0 ? "sdk-cli" : "cli",
+    permissionModes:
+      h % 4 === 0
+        ? [{ ts: undefined, mode: "plan" }, { ts: undefined, mode: "auto" }]
+        : undefined,
+    hookRuns:
+      h % 5 === 0
+        ? [
+            { command: "codegraph sync", durationMs: 1450 + (h % 900) },
+            { command: "pnpm typecheck", durationMs: 3200 + (h % 1500) },
+          ]
+        : undefined,
   };
 }
 
