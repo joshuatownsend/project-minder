@@ -13,7 +13,6 @@ import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
 import { classifyTurn } from "@/lib/usage/classifier";
 import {
-  detectOneShot,
   detectOneShotTasks,
   summarizeOneShotTasks,
   type OneShotTask,
@@ -2084,7 +2083,14 @@ function loadExistingTurnsAsUsage(
  * leave the stale verdict behind forever — a row claiming a first-pass success
  * for a task that no longer exists.
  *
- * Scoped to `is_sidechain = 0` to match the rows the detector was given.
+ * Scoped to `is_sidechain = 0` to match the rows the detector was given. BOTH
+ * statements carry the guard. Today `turnIndexes` can only contain primary
+ * indices — `loadExistingTurnsAsUsage` filters on the same clause — so the
+ * stamp could rely on its caller instead. It doesn't, because that is an
+ * invariant held three functions away from the write: a later change to how
+ * turns are selected would silently start stamping outcomes onto subagent
+ * rows, which are excluded from every one-shot read and would then be
+ * unreachable-but-wrong.
  */
 function rewriteTaskOutcomes(
   db: DatabaseT.Database,
@@ -2096,7 +2102,7 @@ function rewriteTaskOutcomes(
     "UPDATE turns SET task_outcome = NULL WHERE session_id = ? AND is_sidechain = 0 AND task_outcome IS NOT NULL"
   ).run(sessionId);
   const stamp = db.prepare(
-    "UPDATE turns SET task_outcome = ? WHERE session_id = ? AND turn_index = ?"
+    "UPDATE turns SET task_outcome = ? WHERE session_id = ? AND turn_index = ? AND is_sidechain = 0"
   );
   for (const task of tasks) {
     const turnIndex = turnIndexes[task.anchorIndex];
@@ -2953,7 +2959,24 @@ export function buildAdapterParsedSession(
   });
 
   const allUsageTurns = parsedTurns.map((t) => t.usageTurn);
-  const oneShot = detectOneShot(allUsageTurns);
+  // One walk feeds the session-level counts AND the per-turn stamp, exactly as
+  // the Claude path does.
+  const adapterTasks = detectOneShotTasks(allUsageTurns);
+  const oneShot = summarizeOneShotTasks(adapterTasks);
+  // A2: stamp each task's outcome onto its anchor turn. Without this an
+  // adapter session persists `task_outcome` NULL on every row, so the SQL
+  // backend reports `verifiedTasks: 0` for it while the file backend buckets
+  // the very same Edit -> test cycles live — a silent per-backend disagreement
+  // on exactly the metric A2 adds (Codex review, PR #378).
+  for (const task of adapterTasks) {
+    const anchor = parsedTurns[task.anchorIndex];
+    // Never stamp a subagent turn: byEffort's task columns are primary-only on
+    // both backends. No adapter emits sidechain turns today, so this guards a
+    // future one rather than filtering anything live.
+    if (anchor && anchor.isSidechain === 0) {
+      anchor.taskOutcome = task.oneShot ? "one_shot" : "retry";
+    }
+  }
   const workMode = aggregateWorkMode(parsedTurns.map((t) => ({ category: t.category })));
   // Same `cache_read / total` fallback the Claude path uses when the quality
   // detector doesn't supply a ratio.

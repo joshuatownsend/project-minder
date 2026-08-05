@@ -412,6 +412,85 @@ describe.skipIf(!driverAvailable)("task_outcome across a tail-append", () => {
   });
 });
 
+describe.skipIf(!driverAvailable)("byEffort — adapter (non-Claude) sessions", () => {
+  // The Claude parity test above ingests raw JSONL and so never exercises
+  // `buildAdapterParsedSession`, which is a separate constructor of
+  // `ParsedTurn[]` for Codex/Gemini sessions. It derived session-level one-shot
+  // counts but stamped no per-turn outcome, so an adapter session's Edit -> test
+  // cycles were counted in the headline rate and invisible to `byEffort` — but
+  // only on the SQL backend, since the file backend re-walks the turns live.
+  // Exactly the silent per-backend disagreement this slice must not introduce.
+  // (Codex review, PR #378.)
+  it("stamps task outcomes so the effort cross-tab sees adapter tasks too", async () => {
+    vi.resetModules();
+    delete (globalThis as { __minderDb?: unknown }).__minderDb;
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    process.env.MINDER_USE_DB = "1";
+
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = (await conn.getDb())!;
+    const ingest = await import("@/lib/db/ingest");
+
+    const adapterFile = path.join(tmpHome, ".codex", "sessions", "rollout-a2.jsonl");
+    await fs.mkdir(path.dirname(adapterFile), { recursive: true });
+    await fs.writeFile(adapterFile, "x"); // content irrelevant — the parse is mocked
+
+    const uTurn = (
+      ts: string,
+      role: "user" | "assistant",
+      extra: Partial<UsageTurn> = {}
+    ): UsageTurn => ({
+      timestamp: ts, sessionId: "cx-a2", projectSlug: "codexproj",
+      projectDirName: "codexproj", model: role === "assistant" ? "gpt-5" : "",
+      role, inputTokens: 200, outputTokens: 100,
+      cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [], ...extra,
+    });
+
+    await ingest.reconcileAllSessions(db, {
+      projectsDir: path.join(tmpHome, "no-claude-tree"),
+      config: { statuses: {}, hidden: [], portOverrides: {}, devRoot: tmpHome, enabledAdapters: ["claude", "codex"] },
+      adapterSessions: [{ source: "codex", filePath: adapterFile, projectDirName: "codexproj" }],
+      // A complete Edit -> verify -> passing-result -> no-re-edit cycle: one
+      // task, one-shot. Adapters record no `effort`, so it lands in `unknown`
+      // — which is precisely why the bucket has to be real rather than dropped.
+      parseAdapterFile: async () => [
+        uTurn("2026-05-01T10:00:00Z", "user", { userMessageText: "fix the parser" }),
+        uTurn("2026-05-01T10:00:01Z", "assistant", { toolCalls: [{ name: "Edit" }] }),
+        uTurn("2026-05-01T10:00:02Z", "assistant", {
+          toolCalls: [{ name: "Bash", arguments: { command: "pnpm test" } }],
+        }),
+        uTurn("2026-05-01T10:00:03Z", "user", { toolResultText: "Test Files 3 passed" }),
+        uTurn("2026-05-01T10:00:04Z", "assistant", { assistantText: "done" }),
+      ],
+    });
+
+    const stamped = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE task_outcome IS NOT NULL")
+      .all() as Array<{ n: number }>;
+    expect(stamped[0].n, "adapter turns must carry a persisted task outcome").toBe(1);
+
+    const data = await import("@/lib/data");
+    const { report, meta } = await data.getUsage("all", undefined, "codex");
+    expect(meta.backend).toBe("db");
+
+    const unknown = report.byEffort.find((r) => r.effort === UNKNOWN_EFFORT);
+    expect(unknown).toBeDefined();
+    // The claim that actually broke: the task is visible to the cross-tab, not
+    // merely to the session-level headline.
+    expect(unknown!.verifiedTasks).toBe(1);
+    expect(unknown!.oneShotTasks).toBe(1);
+    expect(unknown!.oneShotRate).toBe(1);
+
+    // And it agrees with the session-level total the headline uses, which is
+    // the invariant the missing stamp silently violated.
+    expect(report.oneShot.totalVerifiedTasks).toBe(unknown!.verifiedTasks);
+
+    conn.closeDb();
+  });
+});
+
 describe.skipIf(!driverAvailable)("byEffort — file-parse vs SQLite parity", () => {
   async function reportFrom(useDb: boolean): Promise<EffortBreakdown[]> {
     vi.resetModules();

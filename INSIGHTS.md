@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:541e9b19f48d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T13:49:13.731Z -->
+## ★ Insight
+The plan treated the effort × one-shot cross-tab as a join between two things that already existed. It wasn't one. One-shot is a property of a *sequence* (edit → verify → result), so no `GROUP BY` over `turns` can recover it, and the only persisted form was two session-level totals that cross with nothing finer than a whole session.
+
+---
+
 <!-- insight:f8a4c979f0d2 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T13:08:18.006Z -->
 ## ★ Insight
 The design question A2 turns on: the effort × one-shot cross-tab can't be a plain SQL `GROUP BY`, because "one-shot" isn't a property of a turn — it's a property of a *sequence* (edit → verify → result). The detector walks that window in JS.
