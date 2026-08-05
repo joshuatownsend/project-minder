@@ -4,7 +4,8 @@ import { computeToolTransitions } from "./toolTransitions";
 import { computeTurnCost, loadPricing } from "./costCalculator";
 import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
-import { detectOneShot } from "./oneShotDetector";
+import { detectOneShot, detectOneShotTasks } from "./oneShotDetector";
+import { effortBucket, compareEffort } from "./effort";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import { bucketByHourDay, toLocalDateStr, type ActivityData } from "./activityBuckets";
@@ -24,6 +25,7 @@ import type {
   ProjectDetail,
   CategoryBreakdown,
   CategoryType,
+  EffortBreakdown,
   DailyBucket,
   ToolCall,
   PortfolioYield,
@@ -223,6 +225,7 @@ export async function aggregateUsage(
   const projectMap = new Map<string, ProjectBreakdown>();
   const categoryMap = new Map<CategoryType, CategoryBreakdown>();
   const categoryTurnsMap = new Map<CategoryType, UsageTurn[]>();
+  const effortMap = new Map<string, EffortBreakdown>();
   const dailyMap = new Map<string, DailyBucket>();
   const allToolCalls: ToolCall[] = [];
   const bashCommands: string[] = [];
@@ -296,6 +299,20 @@ export async function aggregateUsage(
       const catTurns = categoryTurnsMap.get(category) ?? [];
       catTurns.push(turn);
       categoryTurnsMap.set(category, catTurns);
+    }
+
+    // Effort (A2) — spend side. Subagent turns are included, matching
+    // byModel/byProject/byCategory; the task side below is primary-only.
+    {
+      const key = effortBucket(turn.effort);
+      const eff = effortMap.get(key) ?? {
+        effort: key, turns: 0, tokens: 0, cost: 0,
+        verifiedTasks: 0, oneShotTasks: 0,
+      };
+      eff.turns++;
+      eff.tokens += tokens;
+      eff.cost += cost;
+      effortMap.set(key, eff);
     }
 
     // Daily — bucket by LOCAL date so the daily bars, the "today" period
@@ -409,9 +426,28 @@ export async function aggregateUsage(
     sessionGroups.set(t.sessionId, arr);
   }
   for (const sessionTurns of sessionGroups.values()) {
-    const stats = detectOneShot(sessionTurns);
-    totalVerified += stats.totalVerifiedTasks;
-    totalOneShot += stats.oneShotTasks;
+    // One walk feeds both the headline rate and the effort cross-tab (A2).
+    // Running the detector twice would let the two diverge the moment
+    // anything about task identification changes.
+    const tasks = detectOneShotTasks(sessionTurns);
+    totalVerified += tasks.length;
+    for (const task of tasks) {
+      if (task.oneShot) totalOneShot++;
+      // Attribute to the EDIT turn's effort, not the verification turn's —
+      // the outcome judges the edit. See `OneShotTask`.
+      const key = effortBucket(sessionTurns[task.anchorIndex]?.effort);
+      const eff = effortMap.get(key);
+      // Only counts an effort bucket the spend loop already created. An
+      // anchor turn is an assistant turn in this same filtered set, so a
+      // miss would mean the two loops disagree about which turns exist.
+      if (eff) {
+        eff.verifiedTasks++;
+        if (task.oneShot) eff.oneShotTasks++;
+      }
+    }
+  }
+  for (const eff of effortMap.values()) {
+    if (eff.verifiedTasks > 0) eff.oneShotRate = eff.oneShotTasks / eff.verifiedTasks;
   }
 
   // A7: cache-hit-rate denominator includes cache WRITE tokens so the rate
@@ -487,6 +523,7 @@ export async function aggregateUsage(
     byModel: [...modelMap.values()].sort((a, b) => b.cost - a.cost),
     byProject: [...projectMap.values()].sort((a, b) => b.cost - a.cost),
     byCategory: [...categoryMap.values()].sort((a, b) => b.cost - a.cost),
+    byEffort: [...effortMap.values()].sort((a, b) => compareEffort(a.effort, b.effort)),
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
     toolTransitions: toolTransitionData.transitions,
     toolSelfLoops: toolTransitionData.selfLoops,

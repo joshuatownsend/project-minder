@@ -1,5 +1,27 @@
 import type { UsageTurn, OneShotStats } from "@/lib/usage/types";
 
+/**
+ * One verified task located by the detector, reported against the turn that
+ * *started* it — the assistant turn carrying the Edit/Write.
+ *
+ * A task spans several turns (edit → verify → result), so attributing it to a
+ * single turn is a choice, not a fact. The anchor is the edit turn because
+ * that is the turn whose work the verification judges: it answers "when the
+ * model produced this change, did it pass first time?". The verification turn
+ * may carry a different `effort`, model, or skill; those are not what the
+ * outcome is measuring.
+ *
+ * Anchoring here rather than at each consumer is what keeps the file-parse and
+ * SQLite backends reporting the same number — `turns.task_outcome` is written
+ * from this index at ingest, and the aggregator buckets from the same one.
+ */
+export interface OneShotTask {
+  /** Index into the `turns` array passed to the detector. */
+  anchorIndex: number;
+  /** Verification passed and no re-edit followed. */
+  oneShot: boolean;
+}
+
 export const EDIT_WRITE_TOOLS = new Set([
   "Edit",
   "Write",
@@ -42,9 +64,13 @@ function hasErrorInResult(text: string | undefined): boolean {
   return ERROR_PATTERNS.some((re) => re.test(text));
 }
 
-export function detectOneShot(turns: UsageTurn[]): OneShotStats {
-  let totalVerifiedTasks = 0;
-  let oneShotTasks = 0;
+/**
+ * Locate every verified task in a turn sequence and report each one's outcome
+ * against its anchor turn. `detectOneShot` is a fold over this — the walk
+ * lives here once so the counts and the per-turn attribution can never drift.
+ */
+export function detectOneShotTasks(turns: UsageTurn[]): OneShotTask[] {
+  const tasks: OneShotTask[] = [];
 
   // Walk through the turns looking for: assistant(edit) → assistant(bash verify) → user(result) → assistant(next)
   // Turns can be interleaved: assistant turns may have multiple tool calls, user turns carry tool results.
@@ -54,6 +80,9 @@ export function detectOneShot(turns: UsageTurn[]): OneShotStats {
 
     // A task starts on an assistant turn containing an Edit/Write tool call
     if (turn.role !== "assistant" || !hasEditOrWrite(turn)) continue;
+
+    // Captured before the loop counter is advanced past the result turn below.
+    const anchorIndex = i;
 
     // Look forward for a verification step (Bash/PowerShell with test/build pattern)
     // The verification could be on the same assistant turn or a subsequent one,
@@ -99,7 +128,7 @@ export function detectOneShot(turns: UsageTurn[]): OneShotStats {
 
     if (verificationFailed) {
       // Not one-shot
-      totalVerifiedTasks++;
+      tasks.push({ anchorIndex, oneShot: false });
       // advance i to the result turn so outer loop continues from there
       i = resultUserIdx;
       continue;
@@ -117,15 +146,30 @@ export function detectOneShot(turns: UsageTurn[]): OneShotStats {
     const reEdited =
       nextAssistantIdx !== -1 && hasEditOrWrite(turns[nextAssistantIdx]);
 
-    totalVerifiedTasks++;
-    if (!reEdited) {
-      oneShotTasks++;
-    }
+    tasks.push({ anchorIndex, oneShot: !reEdited });
 
     // Advance past the result turn
     i = resultUserIdx;
   }
 
+  return tasks;
+}
+
+/**
+ * Fold located tasks into the headline counts. Exported so a caller that
+ * already ran `detectOneShotTasks` (ingest, which also needs the anchors) gets
+ * the same totals without a second walk.
+ */
+export function summarizeOneShotTasks(tasks: OneShotTask[]): OneShotStats {
+  const totalVerifiedTasks = tasks.length;
+  let oneShotTasks = 0;
+  for (const t of tasks) {
+    if (t.oneShot) oneShotTasks++;
+  }
   const rate = totalVerifiedTasks === 0 ? 0 : oneShotTasks / totalVerifiedTasks;
   return { totalVerifiedTasks, oneShotTasks, rate };
+}
+
+export function detectOneShot(turns: UsageTurn[]): OneShotStats {
+  return summarizeOneShotTasks(detectOneShotTasks(turns));
 }

@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:f8a4c979f0d2 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T13:08:18.006Z -->
+## ★ Insight
+The design question A2 turns on: the effort × one-shot cross-tab can't be a plain SQL `GROUP BY`, because "one-shot" isn't a property of a turn — it's a property of a *sequence* (edit → verify → result). The detector walks that window in JS.
+
+---
+
 <!-- insight:4cad982f432f | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T03:04:37.012Z -->
 ## ★ Insight
 The bug class here is **semantic drift across an abstraction boundary**. `applyPricing` inferred the pricing tier from `tokens.inputTokens > 200_000` — valid only because every caller passed *one request*. That precondition lived in a comment, not the type. When I made `computeCostFromPerModel` delegate to it, I handed it a *sum* of requests, and the inference silently became wrong in the expensive direction.

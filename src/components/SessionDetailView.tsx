@@ -57,6 +57,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { SourceBadge } from "@/components/SourceBadge";
 import { detectRetrySpans } from "@/lib/usage/retryDetector";
 import { pluralize } from "@/lib/utils";
+import { compareEffort } from "@/lib/usage/effort";
 
 const checkboxRowStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "8px",
@@ -671,6 +672,27 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       : []),
   ];
 
+  // A2: the session's reasoning-effort mix, reduced to one strip cell. The
+  // headline is the level that ran the most turns; the detail is the full
+  // histogram, which deliberately doesn't sum to `assistantMessageCount`
+  // (turns predating the field carry no effort). Ties resolve to the higher
+  // level via `compareEffort`, since "the session ran at xhigh" is the more
+  // useful reading of an even split than the reverse.
+  const effortSummary = (() => {
+    const entries = Object.entries(data.effortMix ?? {}).filter(([, n]) => n > 0);
+    if (entries.length === 0) return null;
+    const ranked = [...entries].sort(
+      ([aLevel, aN], [bLevel, bN]) => bN - aN || compareEffort(bLevel, aLevel)
+    );
+    return {
+      dominant: ranked[0][0],
+      detail: [...entries]
+        .sort(([a], [b]) => compareEffort(a, b))
+        .map(([level, n]) => `${n} ${level}`)
+        .join(" · "),
+    };
+  })();
+
   const statCells = [
     { label: "Duration",   value: formatDurationMs(data.durationMs) },
     { label: "Messages",   value: data.messageCount,  detail: `${data.userMessageCount}u · ${data.assistantMessageCount}a` },
@@ -683,6 +705,14 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       label: "1-shot rate",
       value: `${(data.oneShotRate * 100).toFixed(0)}%`,
       accent: (data.oneShotRate >= 0.8 ? undefined : data.oneShotRate >= 0.5 ? "warn" : "error") as "warn" | "error" | undefined,
+    }] : []),
+    // A2. Omitted entirely when the session recorded no effort — most of this
+    // corpus predates the field, and a cell reading "unknown" would occupy the
+    // strip on every older session while adding nothing.
+    ...(effortSummary ? [{
+      label: "Effort",
+      value: effortSummary.dominant,
+      detail: effortSummary.detail,
     }] : []),
   ];
 

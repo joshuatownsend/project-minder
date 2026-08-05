@@ -119,6 +119,35 @@ export interface CategoryBreakdown {
   oneShotRate?: number;
 }
 
+/**
+ * Spend and first-pass success rate for one reasoning-effort level (A2).
+ *
+ * The pairing is the point: cost alone says `xhigh` is expensive, and one-shot
+ * rate alone says nothing about what it cost to get there. Together they
+ * answer whether raising effort buys a better outcome or just a larger bill.
+ *
+ * `verifiedTasks` / `oneShotTasks` count *tasks* anchored on turns at this
+ * effort, not turns — see `OneShotTask`. They are unrelated to `turns` below
+ * and much smaller: most turns never start a verified task.
+ */
+export interface EffortBreakdown {
+  /** `high` | `medium` | `xhigh` | `low`, or `unknown` — see `UNKNOWN_EFFORT`. */
+  effort: string;
+  turns: number;
+  tokens: number;
+  cost: number;
+  /** Tasks anchored at this effort whose verification produced a verdict. */
+  verifiedTasks: number;
+  oneShotTasks: number;
+  /**
+   * `oneShotTasks / verifiedTasks`, or **undefined** when this effort level
+   * anchored no verified tasks. Not 0 — a level with no measured tasks has an
+   * unknown success rate, and rendering it as 0% ranks it below a level that
+   * genuinely failed every time.
+   */
+  oneShotRate?: number;
+}
+
 export interface ModelCost {
   model: string;
   inputTokens: number;
@@ -398,6 +427,12 @@ export interface UsageReport {
   byModel: ModelCost[];
   byProject: ProjectBreakdown[];
   byCategory: CategoryBreakdown[];
+  /**
+   * Spend and first-pass success by reasoning effort (A2). Sorted by the
+   * ordinal effort scale — NOT by cost — with the `unknown` bucket last.
+   * Empty on adapter sources that don't record effort. See `effort.ts`.
+   */
+  byEffort: EffortBreakdown[];
   topTools: [string, number][];
   toolTransitions: ToolTransition[];
   toolSelfLoops: ToolSelfLoop[];

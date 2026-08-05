@@ -27,6 +27,11 @@ Each session card shows:
 - **Errors** — API error count (if any)
 - **Git branch** — the branch active during the session
 - **Model badges** — which Claude models were used
+- **Effort mix** — the reasoning-effort histogram for the session
+  (e.g. `high×12 · xhigh×3`). Counts only turns that recorded an effort, so
+  it is deliberately smaller than the turn count on older sessions and absent
+  entirely on transcripts written before Claude Code ~2.1.212. See
+  [Usage](usage.md) for how effort is crossed with first-pass success.
 
 ### Work-mode strip
 

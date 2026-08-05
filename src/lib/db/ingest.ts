@@ -12,7 +12,12 @@ import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversation
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
 import { classifyTurn } from "@/lib/usage/classifier";
-import { detectOneShot } from "@/lib/usage/oneShotDetector";
+import {
+  detectOneShot,
+  detectOneShotTasks,
+  summarizeOneShotTasks,
+  type OneShotTask,
+} from "@/lib/usage/oneShotDetector";
 import { computeSessionQuality, turnContextFill, type SessionQualitySummary } from "@/lib/usage/sessionQuality";
 import { loadPricing, getModelPricing, applyPricing } from "@/lib/usage/costCalculator";
 import { extractCacheCreate1hTokens } from "@/lib/usage/cacheTtl";
@@ -296,6 +301,14 @@ interface ParsedTurn {
   attributionSkill?: string;
   attributionMcpServer?: string;
   attributionMcpTool?: string;
+  /**
+   * A2: outcome of the verified task this turn STARTED — `one_shot` or
+   * `retry`, `undefined` when it started none. Unlike every other field here
+   * it is not read off the turn: it is assigned after the fact by
+   * `detectOneShotTasks`, which needs the whole session's turn sequence, so
+   * it is stamped in the derive block below rather than during the parse walk.
+   */
+  taskOutcome?: string;
 }
 
 /**
@@ -1159,7 +1172,15 @@ async function readJsonlSession(
   // Derive: one-shot detection across the whole session.
   const allUsageTurns = turns.map((t) => t.usageTurn);
   const tOneShot = PROFILE ? performance.now() : 0;
-  const oneShot = detectOneShot(allUsageTurns);
+  const oneShotTasks = detectOneShotTasks(allUsageTurns);
+  const oneShot = summarizeOneShotTasks(oneShotTasks);
+  // A2: stamp each task's outcome onto its anchor turn. `allUsageTurns` is a
+  // 1:1 projection of `turns`, so the detector's index IS the array index here
+  // — but it is NOT `turnIndex`, which starts at `startTurnIndex` on a tail.
+  for (const task of oneShotTasks) {
+    const anchor = turns[task.anchorIndex];
+    if (anchor) anchor.taskOutcome = task.oneShot ? "one_shot" : "retry";
+  }
   if (PROFILE) tick("detectOneShot", performance.now() - tOneShot);
   const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
 
@@ -1688,6 +1709,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
        effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
+       task_outcome,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -1696,6 +1718,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
+       @task_outcome,
        @derived_version
      )`
   );
@@ -1774,6 +1797,9 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       attribution_skill: t.attributionSkill ?? null,
       attribution_mcp_server: t.attributionMcpServer ?? null,
       attribution_mcp_tool: t.attributionMcpTool ?? null,
+      // A2. NULL means "started no verified task" — the common case — not
+      // "failed"; see the schema.sql note on turns.task_outcome.
+      task_outcome: t.taskOutcome ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -1961,13 +1987,18 @@ export function refreshCategoryCosts(db: DatabaseT.Database, tuples: Set<string>
  * windows of turns — Edit → Bash(test) → re-edit — so a tail append can
  * change the verdict on prior turns. We have to feed it the union, not
  * just the new bytes.
+ *
+ * Returns the `turn_index` of each row alongside the projection. They are NOT
+ * interchangeable with array positions: this query filters `is_sidechain = 0`,
+ * so any subagent turn in the session punches a hole in the numbering. A2's
+ * `task_outcome` write-back needs the real index to target the right row.
  */
 function loadExistingTurnsAsUsage(
   db: DatabaseT.Database,
   sessionId: string,
   projectSlug: string,
   projectDirName: string
-): UsageTurn[] {
+): { usageTurns: UsageTurn[]; turnIndexes: number[] } {
   // `is_sidechain = 0`: one-shot / quality detectors run over primary turns
   // only (see the turns.is_sidechain schema note). This is the tail path's
   // only caller; the full-replace path runs the same detectors over its
@@ -1994,7 +2025,7 @@ function loadExistingTurnsAsUsage(
     tool_result_preview: string | null;
   }>;
 
-  if (turnRows.length === 0) return [];
+  if (turnRows.length === 0) return { usageTurns: [], turnIndexes: [] };
 
   // Pull tool calls in one query and group by turn_index for assembly
   // into the UsageTurn shape `detectOneShot` consumes.
@@ -2017,7 +2048,7 @@ function loadExistingTurnsAsUsage(
     toolsByTurn.set(r.turn_index, list);
   }
 
-  return turnRows.map((r): UsageTurn => ({
+  const usageTurns = turnRows.map((r): UsageTurn => ({
     timestamp: r.ts,
     sessionId,
     projectSlug,
@@ -2040,6 +2071,38 @@ function loadExistingTurnsAsUsage(
     toolResultText: r.role === "user" ? (r.tool_result_preview ?? undefined) : undefined,
     assistantText: r.role === "assistant" ? (r.text_preview ?? undefined) : undefined,
   }));
+
+  return { usageTurns, turnIndexes: turnRows.map((r) => r.turn_index) };
+}
+
+/**
+ * Rewrite `turns.task_outcome` for a whole session from a fresh detector run.
+ *
+ * Clears first, then stamps. The clear is the part that matters: after a tail
+ * append a turn that previously anchored a task may no longer anchor one (its
+ * verification moved, or a later edit absorbed it), and stamping alone would
+ * leave the stale verdict behind forever — a row claiming a first-pass success
+ * for a task that no longer exists.
+ *
+ * Scoped to `is_sidechain = 0` to match the rows the detector was given.
+ */
+function rewriteTaskOutcomes(
+  db: DatabaseT.Database,
+  sessionId: string,
+  tasks: OneShotTask[],
+  turnIndexes: number[]
+): void {
+  db.prepare(
+    "UPDATE turns SET task_outcome = NULL WHERE session_id = ? AND is_sidechain = 0 AND task_outcome IS NOT NULL"
+  ).run(sessionId);
+  const stamp = db.prepare(
+    "UPDATE turns SET task_outcome = ? WHERE session_id = ? AND turn_index = ?"
+  );
+  for (const task of tasks) {
+    const turnIndex = turnIndexes[task.anchorIndex];
+    if (turnIndex === undefined) continue;
+    stamp.run(task.oneShot ? "one_shot" : "retry", sessionId, turnIndex);
+  }
 }
 
 /**
@@ -2070,6 +2133,7 @@ function appendSessionTail(
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
        effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
+       task_outcome,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -2078,6 +2142,7 @@ function appendSessionTail(
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
+       @task_outcome,
        @derived_version
      )`
   );
@@ -2156,6 +2221,9 @@ function appendSessionTail(
       attribution_skill: t.attributionSkill ?? null,
       attribution_mcp_server: t.attributionMcpServer ?? null,
       attribution_mcp_tool: t.attributionMcpTool ?? null,
+      // A2. NULL means "started no verified task" — the common case — not
+      // "failed"; see the schema.sql note on turns.task_outcome.
+      task_outcome: t.taskOutcome ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -2270,14 +2338,21 @@ function appendSessionTail(
   }
 
   // One-shot detection over old + new combined.
-  const allUsageTurns = loadExistingTurnsAsUsage(
+  const { usageTurns: allUsageTurns, turnIndexes } = loadExistingTurnsAsUsage(
     db,
     sessionId,
     parsed.projectSlug,
     parsed.projectDirName
   );
-  const oneShot = detectOneShot(allUsageTurns);
+  const tailTasks = detectOneShotTasks(allUsageTurns);
+  const oneShot = summarizeOneShotTasks(tailTasks);
   const hasOneShot: 0 | 1 = oneShot.oneShotTasks > 0 ? 1 : 0;
+  // A2: re-stamp the whole session, not just the appended rows. The rows the
+  // tail INSERTed above carried outcomes computed from the tail window alone,
+  // which could not see the edit a straddling task started in earlier bytes —
+  // and a prior turn's verdict can flip when the tail adds the re-edit that
+  // makes it a retry. Only a rewrite over the union is correct.
+  rewriteTaskOutcomes(db, sessionId, tailTasks, turnIndexes);
 
   // Quality flags: re-run detectors over the union of old + new turns. New
   // turns are already inserted at this point so `allUsageTurns` covers them.

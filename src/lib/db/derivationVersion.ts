@@ -19,7 +19,7 @@
 //   writer-populated from full JSONL text that is never stored in `turns`,
 //   so nothing rebuilds it on an UPDATE and only a real re-parse can fill
 //   it. Changes to what goes into it DO require a bump.
-export const DERIVED_VERSION = 13;
+export const DERIVED_VERSION = 14;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -166,3 +166,27 @@ export const DERIVED_VERSION = 13;
 //     and it is also the reason every A1 field is optional: "not yet
 //     re-indexed" and "this transcript never had it" are indistinguishable by
 //     design, and neither may be rendered as a default value.
+// 14 — schema v21 (A2) added `turns.task_outcome`, which records against each
+//     task's anchor turn whether that task passed verification first time.
+//
+//     **Why the shared v13 re-parse was insufficient.** v13 reserved itself for
+//     the whole A wave and asked any later slice to justify bumping again. The
+//     justification is that `task_outcome` is not a decode — it is not present
+//     in the JSONL under any name. It is the output of `detectOneShotTasks`
+//     running over a session's full turn sequence, which only happens at
+//     ingest. A migration cannot backfill it (the sequence isn't in SQL) and a
+//     read-side query cannot recover it (that was the whole reason to persist
+//     it). Only a re-parse computes it.
+//
+//     **Cost.** At the time of writing this is free: the v13 re-parse had not
+//     yet run on the author's machine, so the corpus was already stale at 12
+//     and both bumps collapse into the single re-parse v13 planned for. If v13
+//     HAS already been reconciled by the time this lands, it costs one further
+//     full re-parse — the honest price, stated rather than hidden, because a
+//     cheaper alternative would have meant an approximate cross-tab.
+//
+//     No read-side gate. Pre-reconcile, `task_outcome` is NULL everywhere, so
+//     the effort cross-tab reports `verifiedTasks: 0` and `oneShotRate:
+//     undefined` for every bucket — which the UI already has to render for a
+//     genuinely task-free period. Degraded, never wrong: no bucket claims a 0%
+//     success rate it did not measure.

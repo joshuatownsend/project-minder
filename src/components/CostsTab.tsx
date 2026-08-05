@@ -7,6 +7,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { COST_PERIODS } from "@/lib/usage/constants";
 import { formatCost, formatTokens } from "@/lib/format";
 import { StatCell } from "@/components/ui/StatCell";
+import { EffortPanel } from "@/components/EffortPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const DEFAULT_PERIOD = "30d";
@@ -115,6 +116,12 @@ export function CostsTab({ usageSlug, usageHomeKey }: { usageSlug: string; usage
               />
             </section>
           )}
+
+          {/* By reasoning effort (A2) — spend crossed with first-pass success */}
+          <section>
+            <SectionHeader label="By effort" />
+            <EffortPanel rows={data.byEffort} currency={currency} fxRate={fxRate} />
+          </section>
         </>
       )}
     </div>

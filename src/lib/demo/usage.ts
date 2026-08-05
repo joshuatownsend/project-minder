@@ -5,6 +5,7 @@ import type {
   ModelCost,
   CategoryType,
   CategoryBreakdown,
+  EffortBreakdown,
   DailyBucket,
   ProjectBreakdown,
   ProjectDetail,
@@ -86,6 +87,28 @@ const CATS: { category: CategoryType; frac: number; osr: number }[] = [
   { category: "Brainstorming", frac: 0.015, osr: 0.55 },
   { category: "Conversation", frac: 0.01, osr: 0.88 },
   { category: "General", frac: 0.01, osr: 0.7 },
+];
+
+/**
+ * Effort mix for the demo report (A2).
+ *
+ * `unknown` carries the largest share on purpose. On a real corpus it is the
+ * majority — the field only exists from Claude Code ~2.1.212 — and a fixture
+ * that showed a tidy high/medium/xhigh split would misrepresent what the panel
+ * looks like on first run and hide the "unknown" bucket the design has to
+ * account for.
+ *
+ * `taskFrac` is the share of this bucket's turns that anchor a verified task —
+ * a small fraction, since most turns never start one. `osr` deliberately does
+ * NOT rise monotonically with effort: whether it does is the open question the
+ * panel exists to let the user answer, and baking a clean upward trend into
+ * the demo would answer it for them with fabricated data.
+ */
+const EFFORTS: { effort: string; frac: number; taskFrac: number; osr: number }[] = [
+  { effort: "medium", frac: 0.12, taskFrac: 0.09, osr: 0.66 },
+  { effort: "high", frac: 0.26, taskFrac: 0.12, osr: 0.73 },
+  { effort: "xhigh", frac: 0.09, taskFrac: 0.14, osr: 0.7 },
+  { effort: "unknown", frac: 0.53, taskFrac: 0.08, osr: 0.68 },
 ];
 
 const TOOLS: [string, number][] = [
@@ -270,6 +293,24 @@ function buildReport(
     oneShotRate: c.osr,
   })).sort((a, b) => b.cost - a.cost);
 
+  // Order follows EFFORTS (the ordinal scale, unknown last) rather than cost —
+  // the same rule both real backends apply. See `effort.ts` EFFORT_ORDER.
+  const byEffort: EffortBreakdown[] = EFFORTS.map((e) => {
+    const turns = atLeast1(Math.round(totalTurns * e.frac));
+    const verifiedTasks = Math.round(turns * e.taskFrac);
+    return {
+      effort: e.effort,
+      turns,
+      tokens: Math.round(totalTokens * e.frac),
+      cost: round2(totalCost * e.frac),
+      verifiedTasks,
+      oneShotTasks: Math.round(verifiedTasks * e.osr),
+      // Omitted when the bucket measured nothing, exactly as the real
+      // backends do — so the demo exercises the undefined branch too.
+      ...(verifiedTasks > 0 ? { oneShotRate: e.osr } : {}),
+    };
+  });
+
   const byProject: ProjectBreakdown[] = includedSlugs
     .map((slug) => {
       const frac =
@@ -436,6 +477,7 @@ function buildReport(
     byModel,
     byProject,
     byCategory,
+    byEffort,
     topTools,
     toolTransitions,
     toolSelfLoops,

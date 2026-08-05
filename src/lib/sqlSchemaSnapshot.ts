@@ -1,4 +1,4 @@
-// Last verified: schema version 20 (src/lib/db/schema.sql + migrations v1-v20)
+// Last verified: schema version 21 (src/lib/db/schema.sql + migrations v1-v21)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -50,6 +50,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "derived_version", "is_sidechain",
       // v20 (A1)
       "effort", "attribution_skill", "attribution_mcp_server", "attribution_mcp_tool",
+      // v21 (A2)
+      "task_outcome",
     ],
   },
   {
