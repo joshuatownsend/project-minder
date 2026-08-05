@@ -375,3 +375,73 @@ EOF
     expect(extractPrsFromEntries(entries)[0]?.number).toBe(55);
   });
 });
+
+/**
+ * A1: Claude Code records PRs itself via `type: "pr-link"`. These live in the
+ * SHARED extractor rather than in either reader, because the default DB backend
+ * persists PRs through this function — decoding them in the file scanner alone
+ * left `session_prs` empty for every PR the `gh` scraper couldn't see
+ * (Codex review, PR #377).
+ */
+describe("extractPrsFromEntries — authoritative pr-link entries", () => {
+  function prLinkEntry(number: number, url: string, repo?: string): ConversationEntry {
+    return {
+      type: "pr-link",
+      timestamp: "2026-08-01T12:00:00Z",
+      prNumber: number,
+      prUrl: url,
+      ...(repo === undefined ? {} : { prRepository: repo }),
+    } as ConversationEntry;
+  }
+
+  it("extracts a PR that no gh tool result ever mentioned", () => {
+    // The case the scraper structurally cannot cover: opened via the web UI,
+    // `gh pr create --web`, or a script.
+    const entries = [prLinkEntry(377, "https://github.com/owner/repo/pull/377", "owner/repo")];
+    expect(extractPrsFromEntries(entries)).toEqual([
+      { url: "https://github.com/owner/repo/pull/377", number: 377, repo: "owner/repo" },
+    ]);
+  });
+
+  it("does not double-count a PR both sources saw", () => {
+    const url = "https://github.com/foo/bar/pull/42";
+    const entries = [
+      assistantBashCall("toolu_01", "gh pr create --fill"),
+      userToolResult("toolu_01", url),
+      prLinkEntry(42, url, "foo/bar"),
+    ];
+    expect(extractPrsFromEntries(entries)).toHaveLength(1);
+  });
+
+  it("prefers the recorded repository over one parsed back out of the URL", () => {
+    // Contrived repo name to prove which source won: the entry's value is
+    // reported by Claude Code, the scraper's is re-derived from the URL.
+    const url = "https://github.com/foo/bar/pull/42";
+    const entries = [
+      assistantBashCall("toolu_01", "gh pr create --fill"),
+      userToolResult("toolu_01", url),
+      prLinkEntry(42, url, "canonical-owner/canonical-repo"),
+    ];
+    expect(extractPrsFromEntries(entries)[0].repo).toBe("canonical-owner/canonical-repo");
+  });
+
+  it("keeps the scraped repo when the entry reports none", () => {
+    const url = "https://github.com/foo/bar/pull/42";
+    const entries = [
+      assistantBashCall("toolu_01", "gh pr create --fill"),
+      userToolResult("toolu_01", url),
+      prLinkEntry(42, url),
+    ];
+    expect(extractPrsFromEntries(entries)[0].repo).toBe("foo/bar");
+  });
+
+  it("ignores a partial entry rather than emitting PR #0", () => {
+    // A missing number coerced to 0 would render as a `PR #0` chip linking
+    // nowhere — worse than showing no chip.
+    const entries = [
+      { type: "pr-link", prUrl: "https://github.com/o/r/pull/9" } as ConversationEntry,
+      { type: "pr-link", prNumber: 9 } as ConversationEntry,
+    ];
+    expect(extractPrsFromEntries(entries)).toEqual([]);
+  });
+});

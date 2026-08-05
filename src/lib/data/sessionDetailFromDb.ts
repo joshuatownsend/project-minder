@@ -17,6 +17,8 @@ import type {
   SessionStatus,
   PrLink,
   TicketLink,
+  SessionPermissionMode,
+  SessionHookRun,
 } from "@/lib/types";
 
 // SQL-backed session detail loader. Mirrors `scanSessionDetail`'s output
@@ -134,6 +136,10 @@ interface SessionRow {
   last_prompt: string | null;
   has_thinking: number;
   cli_version: string | null;
+  // A1 (schema v20).
+  session_kind: string | null;
+  ai_title: string | null;
+  entrypoint: string | null;
   generated_title: string | null;
   starred_at: string | null;
   distilled_at: string | null;
@@ -209,7 +215,8 @@ export async function loadSessionDetailFromDb(
               starred_at, distilled_at, distilled_text,
               source,
               work_mode_exploration_pct, work_mode_building_pct,
-              work_mode_testing_pct, work_mode_other_pct
+              work_mode_testing_pct, work_mode_other_pct,
+              session_kind, ai_title, entrypoint
        FROM sessions
        WHERE session_id = ?`
     )
@@ -258,6 +265,44 @@ export async function loadSessionDetailFromDb(
     number: r.pr_number,
     repo: r.repo,
   }));
+
+  // A1: permission-mode timeline and hook runs. Both are one-to-many and both
+  // are absent for every session ingested before schema v20 — an empty result
+  // means "not recorded", never "zero mode switches", so they collapse to
+  // `undefined` rather than to an empty array on the way out.
+  const permissionModeRows = prepCached(db,
+      `SELECT ts, mode FROM session_permission_modes
+       WHERE session_id = ?
+       ORDER BY rowid`
+    )
+    .all(sessionId) as { ts: string | null; mode: string }[];
+  const permissionModes: SessionPermissionMode[] = permissionModeRows.map((r) => ({
+    ts: r.ts ?? undefined,
+    mode: r.mode,
+  }));
+
+  const hookRunRows = prepCached(db,
+      `SELECT ts, command, duration_ms FROM session_hook_runs
+       WHERE session_id = ?
+       ORDER BY rowid`
+    )
+    .all(sessionId) as { ts: string | null; command: string; duration_ms: number | null }[];
+  const hookRuns: SessionHookRun[] = hookRunRows.map((r) => ({
+    ts: r.ts ?? undefined,
+    command: r.command,
+    durationMs: r.duration_ms ?? undefined,
+  }));
+
+  // Effort mix: counted in SQL rather than in JS because the partial index on
+  // `turns(effort)` makes this a scan of only the rows that have one.
+  const effortRows = prepCached(db,
+      `SELECT effort, COUNT(*) AS n FROM turns
+       WHERE session_id = ? AND effort IS NOT NULL
+       GROUP BY effort`
+    )
+    .all(sessionId) as { effort: string; n: number }[];
+  const effortMix: Record<string, number> = {};
+  for (const r of effortRows) effortMix[r.effort] = r.n;
 
   // Tickets referenced in this session (item 3). Surfaced on the detail
   // object for API/MCP parity with the list path; chips themselves render
@@ -340,6 +385,12 @@ export async function loadSessionDetailFromDb(
     searchableText: undefined,
     hasThinking: session.has_thinking === 1 || undefined,
     cliVersion: session.cli_version ?? undefined,
+    sessionKind: session.session_kind ?? undefined,
+    aiTitle: session.ai_title ?? undefined,
+    entrypoint: session.entrypoint ?? undefined,
+    permissionModes: permissionModes.length > 0 ? permissionModes : undefined,
+    hookRuns: hookRuns.length > 0 ? hookRuns : undefined,
+    effortMix: Object.keys(effortMix).length > 0 ? effortMix : undefined,
     generatedTitle: session.generated_title ?? undefined,
     starredAt: session.starred_at ?? undefined,
     distilledAt: session.distilled_at ?? undefined,

@@ -139,6 +139,10 @@ interface SessionRow {
   work_mode_testing_pct: number | null;
   work_mode_other_pct: number | null;
   source: string | null;
+  // A1 (schema v20). Null on any transcript predating the field.
+  session_kind: string | null;
+  ai_title: string | null;
+  entrypoint: string | null;
 }
 
 interface ToolCountRow {
@@ -195,7 +199,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             generated_title, starred_at, distilled_at, distilled_text,
             work_mode_exploration_pct, work_mode_building_pct,
             work_mode_testing_pct, work_mode_other_pct,
-            source
+            source,
+            session_kind, ai_title, entrypoint
      FROM sessions
      -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
      -- transcripts ingested from <session>/subagents/*.jsonl — needed so
@@ -361,6 +366,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       hasToolFailureStreak: h.has_tool_failure_streak === 1,
       hasThinking: h.has_thinking === 1 || undefined,
       cliVersion: h.cli_version ?? undefined,
+      sessionKind: h.session_kind ?? undefined,
+      aiTitle: h.ai_title ?? undefined,
+      entrypoint: h.entrypoint ?? undefined,
       hasResumeAnomaly: h.has_resume_anomaly === 1 || undefined,
       compactBoundaryCount: h.compact_boundary_count || undefined,
       generatedTitle: h.generated_title ?? undefined,

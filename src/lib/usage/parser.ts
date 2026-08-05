@@ -261,6 +261,15 @@ export async function parseSessionTurns(
         cacheCreateTokens,
         cacheCreate1hTokens,
         cacheReadTokens,
+        // A1: `effort` and the attribution fields are top-level on the entry,
+        // not inside `message`. `speed` is nullable in the transcript — null
+        // and absent both mean unknown, so normalise to undefined rather than
+        // letting null reach a consumer that would read it as a value.
+        effort: entry.effort,
+        speed: entry.message?.usage?.speed ?? undefined,
+        attributionSkill: entry.attributionSkill,
+        attributionMcpServer: entry.attributionMcpServer,
+        attributionMcpTool: entry.attributionMcpTool,
         toolCalls,
         assistantText,
         isError,
@@ -485,6 +494,15 @@ export async function parseSessionTurnsWithMeta(
         cacheCreateTokens,
         cacheCreate1hTokens,
         cacheReadTokens,
+        // A1: `effort` and the attribution fields are top-level on the entry,
+        // not inside `message`. `speed` is nullable in the transcript — null
+        // and absent both mean unknown, so normalise to undefined rather than
+        // letting null reach a consumer that would read it as a value.
+        effort: entry.effort,
+        speed: entry.message?.usage?.speed ?? undefined,
+        attributionSkill: entry.attributionSkill,
+        attributionMcpServer: entry.attributionMcpServer,
+        attributionMcpTool: entry.attributionMcpTool,
         toolCalls,
         assistantText,
         isError,

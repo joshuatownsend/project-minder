@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+// Imported rather than hardcoded: these assertions are about "ingest stamped
+// the CURRENT version", not about any particular number, and pinning the
+// literal made every DERIVED_VERSION bump fail two unrelated tests.
+import { DERIVED_VERSION } from "@/lib/db/derivationVersion";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { SessionFile } from "@/lib/adapters/types";
 import type { MinderConfig } from "@/lib/types";
@@ -205,7 +209,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     expect(session.cost_usd).toBeGreaterThan(0);
     expect(session.initial_prompt).toBe("fix the migration bug");
     expect(session.last_prompt).toBe("fix the migration bug");
-    expect(session.derived_version).toBe(12);
+    expect(session.derived_version).toBe(DERIVED_VERSION);
     expect(session.source).toBe("claude");
 
     const turnRows = db
@@ -696,6 +700,87 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT turn_count FROM sessions WHERE session_id = 's1'")
       .get() as { turn_count: number };
     expect(sess.turn_count).toBe(2);
+
+    reloaded.conn.closeDb();
+  });
+
+  it("persists A1 session metadata arriving in a tail window", async () => {
+    // Regression (Codex review, PR #377) — same failure class as the
+    // sidechain-only test above, and it has two distinct halves:
+    //
+    //  1. A tail containing ONLY metadata entries (an `ai-title`, a
+    //     `permission-mode` switch) produces no turns at all. The old guard
+    //     returned `parsed: null`, which advances byte_offset past the window —
+    //     so the title and mode change were lost permanently, not deferred.
+    //  2. The tail UPDATE never wrote session_kind/ai_title/entrypoint and
+    //     never inserted hook runs or mode changes, so even a tail WITH turns
+    //     dropped them.
+    //
+    // Live sessions are exactly where this hurts: they are the ones that
+    // tail-append, and they are the ones that get retitled mid-flight.
+    const { reloaded, projectsDir } = await setup();
+    const sessionFile = path.join(projectsDir, "C--dev-a1tail", "s-a1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-08-01T10:00:00Z", "start work"),
+      assistantTurn("2026-08-01T10:00:01Z", "claude-sonnet-4-5", "on it"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const before = db
+      .prepare("SELECT ai_title, session_kind FROM sessions WHERE session_id = 's-a1'")
+      .get() as { ai_title: string | null; session_kind: string | null };
+    expect(before.ai_title).toBeNull();
+
+    // Metadata-only tail: no turns whatsoever. Note ai-title and
+    // permission-mode entries carry no timestamp, which is what made them
+    // vulnerable to the reader's untimestamped-entry skip in the first place.
+    await fs.appendFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "ai-title", aiTitle: "What it became", sessionId: "s-a1" }),
+        JSON.stringify({ type: "permission-mode", permissionMode: "plan", sessionId: "s-a1" }),
+      ].join("\n") + "\n"
+    );
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(sessionFile, future, future);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const afterMeta = db
+      .prepare("SELECT ai_title FROM sessions WHERE session_id = 's-a1'")
+      .get() as { ai_title: string | null };
+    expect(afterMeta.ai_title).toBe("What it became");
+    const modes = db
+      .prepare("SELECT mode FROM session_permission_modes WHERE session_id = 's-a1' ORDER BY rowid")
+      .all() as Array<{ mode: string }>;
+    expect(modes.map((m) => m.mode)).toEqual(["plan"]);
+
+    // A second tail, this time with a turn carrying a hook run and a later
+    // title. The title must advance (newest wins) and the earlier mode change
+    // must SURVIVE — an append, not a delete-then-insert.
+    await fs.appendFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "permission-mode", permissionMode: "auto", sessionId: "s-a1" }),
+        JSON.stringify({
+          ...assistantTurn("2026-08-01T10:00:05Z", "claude-sonnet-4-5", "more work"),
+          hookInfos: [{ command: "codegraph sync", durationMs: 1200 }],
+        }),
+      ].join("\n") + "\n"
+    );
+    const later = new Date(Date.now() + 10000);
+    await fs.utimes(sessionFile, later, later);
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    const finalModes = db
+      .prepare("SELECT mode FROM session_permission_modes WHERE session_id = 's-a1' ORDER BY rowid")
+      .all() as Array<{ mode: string }>;
+    expect(finalModes.map((m) => m.mode)).toEqual(["plan", "auto"]);
+    const hooks = db
+      .prepare("SELECT command, duration_ms FROM session_hook_runs WHERE session_id = 's-a1'")
+      .all() as Array<{ command: string; duration_ms: number }>;
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0].command).toBe("codegraph sync");
 
     reloaded.conn.closeDb();
   });
@@ -1574,7 +1659,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
       .prepare("SELECT slug, derived_version FROM sessions WHERE session_id = 'abc'")
       .get() as { slug: string | null; derived_version: number };
     expect(row.slug).toBe("graceful-pivoting-ferret");
-    expect(row.derived_version).toBe(12);
+    expect(row.derived_version).toBe(DERIVED_VERSION);
     reloaded.conn.closeDb();
   });
 

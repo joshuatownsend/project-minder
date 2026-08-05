@@ -575,6 +575,86 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 20,
+    name: "A1: transcript schema decode — effort, causal attribution, session kind, hook runs, permission modes",
+    up: (db) => {
+      // Claude Code's transcript grew a set of fields Minder decoded none of.
+      // This migration only makes room for them; DERIVED_VERSION 13 in the same
+      // change is what actually re-reads the JSONL to fill them. Splitting those
+      // two would leave the columns permanently NULL on existing history.
+      //
+      // Every ALTER is guarded by a PRAGMA check so re-running is a no-op —
+      // the same idempotency contract migrations 17/18 established. Column adds
+      // in SQLite are non-rewriting metadata updates, so an abort mid-migration
+      // leaves earlier statements applied and the guards make the retry clean.
+      const hasCol = (table: string, col: string) =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+          .some((c) => c.name === col);
+      const addCol = (table: string, col: string, decl: string) => {
+        if (!hasCol(table, col)) {
+          db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`).run();
+        }
+      };
+
+      // Per-turn. `effort` drives A2's cost-by-reasoning-effort analytics.
+      addCol("turns", "effort", "TEXT");
+      // Causal cost attribution: which skill/MCP server made this turn's tokens
+      // exist. Deliberately NOT merged into the existing tool_uses.skill_name /
+      // mcp_server, which are inferred from the `mcp__server__tool` naming
+      // convention and answer a different question ("was this call a skill
+      // invocation?"). Conflating them attributes every turn after a tool
+      // result to that server instead of only the turns that consumed it.
+      addCol("turns", "attribution_skill", "TEXT");
+      addCol("turns", "attribution_mcp_server", "TEXT");
+      addCol("turns", "attribution_mcp_tool", "TEXT");
+
+      // Per-session.
+      addCol("sessions", "session_kind", "TEXT");
+      addCol("sessions", "ai_title", "TEXT");
+      addCol("sessions", "entrypoint", "TEXT");
+
+      // Why a tool call was refused: permission-rule | automode-blocked |
+      // user-rejected | automode-unavailable. Feeds A6's denial analytics.
+      addCol("tool_uses", "denial_kind", "TEXT");
+
+      // Hook runs and permission-mode changes are one-to-many per session, so
+      // they are tables rather than columns. No FK to sessions: ingest writes
+      // turns before the session row is finalised in some paths, and a
+      // constraint violation there would abort an otherwise good ingest.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_hook_runs (
+          session_id  TEXT NOT NULL,
+          ts          TEXT,
+          command     TEXT NOT NULL,
+          duration_ms INTEGER
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_session_hook_runs_session ON session_hook_runs(session_id)"
+      );
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_permission_modes (
+          session_id TEXT NOT NULL,
+          ts         TEXT,
+          mode       TEXT NOT NULL
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_session_permission_modes_session ON session_permission_modes(session_id)"
+      );
+
+      // Partial indexes: both columns are NULL on the large majority of
+      // historical rows, so indexing only the non-NULL ones keeps these small
+      // enough to be worth having.
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_turns_effort ON turns(effort) WHERE effort IS NOT NULL"
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_turns_attribution_mcp_server ON turns(attribution_mcp_server) WHERE attribution_mcp_server IS NOT NULL"
+      );
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

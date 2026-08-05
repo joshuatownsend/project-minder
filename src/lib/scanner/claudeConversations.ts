@@ -10,6 +10,8 @@ import {
   TimelineEvent,
   FileOperation,
   SubagentInfo,
+  SessionPermissionMode,
+  SessionHookRun,
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
@@ -58,6 +60,57 @@ export interface ConversationEntry {
   version?: string;
   /** On sidechain entries: the tool_use_id of the Task call that spawned this sidechain. */
   parentToolUseID?: string;
+
+  // ── Fields added by Claude Code ~2.1.212+ (A1) ────────────────────────────
+  // Every one is optional and version-dependent: transcripts written by older
+  // CLI versions simply lack them. Readers must map absence to `undefined`,
+  // never to a default — a turn with no `effort` is not a `medium` turn.
+
+  /**
+   * Reasoning effort for this assistant turn. Top-level on the entry, NOT
+   * inside `message`. Observed on 10,288 of 10,742 assistant turns in a
+   * 1,200-file sample: `high` | `medium` | `xhigh` (`low` is documented but
+   * unobserved locally). The turns lacking it are exactly those whose
+   * `message.usage.speed` is null.
+   */
+  effort?: string;
+  /**
+   * Which skill/MCP server caused this turn's tokens to exist — causal cost
+   * attribution, top-level on assistant entries. Semantically distinct from
+   * `tool_uses.skill_name`/`mcp_server`, which are *inferred* from the
+   * `mcp__server__tool` naming convention and answer "was this call a skill
+   * invocation?". Keep the inference for call counts; use these for cost.
+   */
+  attributionSkill?: string;
+  attributionMcpServer?: string;
+  attributionMcpTool?: string;
+  /** Hook executions attributed to this turn; one-to-many, hence a table not a column. */
+  hookInfos?: Array<{ command?: string; durationMs?: number }>;
+  /** How the prompt reaching this turn originated: typed | suggestion_accepted | system | queued | sdk. */
+  promptSource?: string;
+  /** Why a tool call was denied: permission-rule | automode-blocked | user-rejected | automode-unavailable. */
+  toolDenialKind?: string;
+
+  // ── Session-shaped fields, carried on `attachment` entries ────────────────
+  // These do NOT appear on assistant turns; the session-level readers pick
+  // them up from attachments.
+  /** Session flavour, e.g. `bg` for a backgrounded session. */
+  sessionKind?: string;
+  /** How the session was launched: `cli` | `sdk-cli`. */
+  entrypoint?: string;
+
+  // ── Payloads of the dedicated entry types (see NEW_ENTRY_TYPES) ───────────
+  /** `type: "ai-title"` — model-generated session title. */
+  aiTitle?: string;
+  /** `type: "permission-mode"` — a permission-mode change, e.g. `auto` | `plan`. */
+  permissionMode?: string;
+  /** `type: "pr-link"` — authoritative PR linkage, replacing text scraping (A5). */
+  prNumber?: number;
+  prUrl?: string;
+  prRepository?: string;
+  /** `type: "agent-name"` — the name assigned to a spawned agent. */
+  agentName?: string;
+
   message?: {
     model?: string;
     stop_reason?: string;
@@ -73,6 +126,13 @@ export interface ConversationEntry {
         ephemeral_5m_input_tokens?: number;
       };
       cache_read_input_tokens?: number;
+      /**
+       * `standard` | `fast` — fast mode bills at a different rate (Opus 5:
+       * $10/$50 vs $5/$25). Present on every assistant turn, but **nullable**:
+       * null on the same turns that lack `effort`.
+       */
+      speed?: string | null;
+      service_tier?: string;
     };
   };
   // For tool_result user messages and away_summary system entries
@@ -80,6 +140,21 @@ export interface ConversationEntry {
   /** Duration in ms from system.subtype:turn_duration entries. */
   durationMs?: number;
 }
+
+/**
+ * Entry `type` values that carry session metadata rather than conversation
+ * content. Claude Code emits nine of these that neither reader handled before
+ * A1; the four decoded here are the ones with analytic value. The rest —
+ * `last-prompt`, `mode`, `queue-operation`, `file-history-delta`,
+ * `file-history-snapshot` — are deliberately ignored, but are listed so a
+ * future reader knows they exist and were considered rather than missed.
+ */
+export const DECODED_META_TYPES = [
+  "ai-title",
+  "permission-mode",
+  "pr-link",
+  "agent-name",
+] as const;
 
 export function encodePath(projectPath: string): string {
   return projectPath.replace(/[:\\/]/g, "-");
@@ -167,6 +242,15 @@ async function scanSessionFile(
     const models = new Set<string>();
     let subagentCount = 0;
     let errorCount = 0;
+    // A1: fields from Claude Code's newer entry types. Each stays `undefined`
+    // rather than defaulting, so a pre-2.1.212 transcript is distinguishable
+    // from one that genuinely had no title / never switched permission mode.
+    let aiTitle: string | undefined;
+    let sessionKind: string | undefined;
+    let entrypoint: string | undefined;
+    const permissionModes: SessionPermissionMode[] = [];
+    const hookRuns: SessionHookRun[] = [];
+    const effortMix: Record<string, number> = {};
     // Per-model token accumulation for accurate cost (via LiteLLM pricing)
     const perModelTokens: PerModelTokens = new Map();
     const allEntries: ConversationEntry[] = [];
@@ -196,6 +280,34 @@ async function scanSessionFile(
           recaps.push({ content: entry.content, timestamp: entry.timestamp, slug: entry.slug });
         }
 
+        // A1: dedicated metadata entry types. These carry no `message` and were
+        // previously dropped on the floor by both readers' type switches.
+        switch (entry.type) {
+          case "ai-title":
+            // Re-emitted as the session's subject clarifies; last one wins.
+            if (typeof entry.aiTitle === "string" && entry.aiTitle) aiTitle = entry.aiTitle;
+            break;
+          case "permission-mode":
+            if (typeof entry.permissionMode === "string" && entry.permissionMode) {
+              permissionModes.push({ ts: entry.timestamp, mode: entry.permissionMode });
+            }
+            break;
+          // NOTE: `pr-link` is handled by `extractPrsFromEntries`, not here —
+          // it needs to merge with the `gh pr create` scraper's finds, and
+          // doing that in one shared place is what makes the DB path see it too.
+          case "attachment":
+            // Session-shaped metadata rides attachments, not assistant turns.
+            // First non-empty wins — these are constant for a session, and
+            // latching early avoids a late malformed entry overwriting them.
+            if (!sessionKind && typeof entry.sessionKind === "string" && entry.sessionKind) {
+              sessionKind = entry.sessionKind;
+            }
+            if (!entrypoint && typeof entry.entrypoint === "string" && entry.entrypoint) {
+              entrypoint = entry.entrypoint;
+            }
+            break;
+        }
+
         if (entry.type === "user" && !entry.isMeta) {
           userMessageCount++;
           messageCount++;
@@ -221,6 +333,25 @@ async function scanSessionFile(
           const msg = entry.message;
           const model = msg.model;
           if (model && model !== "<synthetic>") models.add(model);
+
+          // A1: only count turns that actually carried an effort. The mix
+          // deliberately does not sum to assistantMessageCount — the shortfall
+          // is turns from before the field existed, and inventing a bucket for
+          // them would make a pre-2.1.212 session look uniformly one effort.
+          if (typeof entry.effort === "string" && entry.effort) {
+            effortMix[entry.effort] = (effortMix[entry.effort] || 0) + 1;
+          }
+          if (Array.isArray(entry.hookInfos)) {
+            for (const h of entry.hookInfos) {
+              if (h && typeof h.command === "string" && h.command) {
+                hookRuns.push({
+                  ts: entry.timestamp,
+                  command: h.command,
+                  durationMs: typeof h.durationMs === "number" ? h.durationMs : undefined,
+                });
+              }
+            }
+          }
 
           const usage = msg.usage;
           if (usage) {
@@ -322,6 +453,15 @@ async function scanSessionFile(
             cacheCreateTokens: turnUsage?.cache_creation_input_tokens ?? 0,
             cacheCreate1hTokens: extractCacheCreate1hTokens(turnUsage),
             cacheReadTokens: turnUsage?.cache_read_input_tokens ?? 0,
+            // A1: `speed` is nullable in the transcript (null on the same turns
+            // that lack `effort`), and `UsageTurn.speed` is `string | undefined`
+            // — so normalise null to undefined rather than widening the type.
+            // Both mean "unknown"; neither means "standard".
+            effort: entry.effort,
+            speed: turnUsage?.speed ?? undefined,
+            attributionSkill: entry.attributionSkill,
+            attributionMcpServer: entry.attributionMcpServer,
+            attributionMcpTool: entry.attributionMcpTool,
             toolCalls: turnToolCalls,
             toolResultText: toolResultText.slice(0, 2000),
             isError: turnIsError,
@@ -376,6 +516,9 @@ async function scanSessionFile(
     // never poisons the rest of the SessionSummary.
     let prs: SessionSummary["prs"] | undefined;
     try {
+      // `extractPrsFromEntries` folds the authoritative `type: "pr-link"`
+      // entries in with the `gh pr create` scraper itself, so both this reader
+      // and the DB ingest path get them from one place.
       const found = extractPrsFromEntries(allEntries);
       if (found.length > 0) prs = found;
     } catch { /* non-critical */ }
@@ -451,6 +594,17 @@ async function scanSessionFile(
       source: "claude",
       prs,
       tickets,
+      // A1: empty collections collapse to `undefined` so "no permission-mode
+      // changes recorded" and "this transcript predates the entry type" stay
+      // indistinguishable at the type level — which they are, and pretending
+      // otherwise would let a UI report `0 mode switches` for a session that
+      // simply could not have reported any.
+      sessionKind,
+      entrypoint,
+      aiTitle,
+      permissionModes: permissionModes.length > 0 ? permissionModes : undefined,
+      effortMix: Object.keys(effortMix).length > 0 ? effortMix : undefined,
+      hookRuns: hookRuns.length > 0 ? hookRuns : undefined,
     };
   } catch {
     return null;

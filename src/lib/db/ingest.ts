@@ -195,6 +195,13 @@ interface ParsedToolUse {
   isError: 0 | 1;
   errorCategory: string | null;
   invocationSource: string | null;
+  /**
+   * A1: why this call was refused — `permission-rule`, `automode-blocked`,
+   * `user-rejected`, `automode-unavailable`. Null when it wasn't refused OR
+   * when the transcript predates the field; the two are indistinguishable, so
+   * readers must not treat NULL as "allowed".
+   */
+  denialKind: string | null;
 }
 
 interface ParsedTurn {
@@ -277,6 +284,18 @@ interface ParsedTurn {
    * activity / one-shot reads. Primary turns are 0.
    */
   isSidechain: 0 | 1;
+  /**
+   * A1 decode-layer fields, persisted as `turns` columns. Unlike
+   * `cacheCreate1hTokens` above — which is consumed by pricing and discarded —
+   * these are the raw signal itself, so there is nothing derived to store in
+   * their place and they earn their columns.
+   *
+   * `undefined` on every pre-2.1.212 transcript; the writer maps that to NULL.
+   */
+  effort?: string;
+  attributionSkill?: string;
+  attributionMcpServer?: string;
+  attributionMcpTool?: string;
 }
 
 /**
@@ -389,6 +408,23 @@ interface ParsedSession {
    * discriminate between configured homes with identical path layouts (#311).
    */
   homeKey: string | null;
+  /**
+   * A1 session-level decode. `sessionKind` and `entrypoint` are read off
+   * `attachment` entries (they do not appear on assistant turns); `aiTitle`
+   * comes from a dedicated `type: "ai-title"` entry, re-emitted as the
+   * session's subject clarifies, so the last one wins.
+   *
+   * Null on every transcript predating the fields — which is NOT the same as
+   * "interactive session with no title", and read-side code must not conflate
+   * the two.
+   */
+  sessionKind: string | null;
+  aiTitle: string | null;
+  entrypoint: string | null;
+  /** Permission-mode changes, in file order (`type: "permission-mode"`). */
+  permissionModes: Array<{ ts: string | null; mode: string }>;
+  /** Hook executions from assistant `hookInfos`. One-to-many, hence its own table. */
+  hookRuns: Array<{ ts: string | null; command: string; durationMs: number | null }>;
   /**
    * PRs harvested from `gh pr create` tool_result text (T2.2). Matched
    * by `tool_use_id` (not positional) so parallel Bash dispatches can't
@@ -524,6 +560,13 @@ async function readJsonlSession(
   let userTurnCount = 0;
   let assistantTurnCount = 0;
   let slug: string | null = null;
+  // A1 session-level decode. Null/empty means "this transcript predates the
+  // field", which the read side must keep distinct from a real value.
+  let aiTitle: string | null = null;
+  let sessionKind: string | null = null;
+  let entrypoint: string | null = null;
+  const permissionModes: Array<{ ts: string | null; mode: string }> = [];
+  const hookRuns: Array<{ ts: string | null; command: string; durationMs: number | null }> = [];
 
   // Parse JSONL lines once into an array so the pre-pass and main pass
   // both walk parsed objects — avoids a second JSON.parse per line.
@@ -538,14 +581,27 @@ async function readJsonlSession(
   });
 
   const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
+  // A1: why a tool call was refused (`permission-rule`, `automode-blocked`,
+  // `user-rejected`, `automode-unavailable`). Lives top-level on the USER entry
+  // that reports the tool_result, while the `tool_uses` row belongs to the
+  // assistant turn that made the call — so it has to be paired by
+  // `tool_use_id`, exactly like `errorByToolUseId` beside it. Without this the
+  // `denial_kind` column would exist and stay permanently NULL (Codex review,
+  // PR #377).
+  const denialByToolUseId = new Map<string, string>();
   const slashCommandsByTimestamp = new Map<string, Set<string>>();
   for (const { entry: preEntry } of parsedLines) {
     if (!preEntry || preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
     const msgContent = preEntry.message?.content ?? [];
     const topContent = (preEntry.content ?? []) as unknown[];
     const src = (msgContent as unknown[]).length > 0 ? msgContent : topContent;
+    const denialKind =
+      typeof preEntry.toolDenialKind === "string" && preEntry.toolDenialKind
+        ? preEntry.toolDenialKind
+        : null;
     for (const tr of extractToolResultEntries(src)) {
       if (tr.tool_use_id) errorByToolUseId.set(tr.tool_use_id, { isError: tr.isError, content: tr.content });
+      if (tr.tool_use_id && denialKind) denialByToolUseId.set(tr.tool_use_id, denialKind);
     }
     const names = extractCommandNames(src);
     if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
@@ -614,6 +670,14 @@ async function readJsonlSession(
     cacheCreateTokens: number;
     cacheCreate1hTokens?: number;
     cacheReadTokens: number;
+    // A1: subagent turns are assistant turns and carry the same signal. Their
+    // effort in particular is worth keeping — a subagent inherits or overrides
+    // the parent's effort, which is exactly what A2 wants to compare.
+    effort?: string;
+    speed?: string;
+    attributionSkill?: string;
+    attributionMcpServer?: string;
+    attributionMcpTool?: string;
     userIntentText?: string;
     // parentToolUseID of the spawning Task call, so DB-backed sidechain turns
     // can be grouped by their parent (parity with the file parser).
@@ -654,6 +718,48 @@ async function readJsonlSession(
       continue;
     }
 
+    // A1: dedicated metadata entry types, decoded BEFORE the `!entry.timestamp`
+    // guard below — `ai-title` and `permission-mode` entries carry no timestamp
+    // at all (`{type, aiTitle, sessionId}`), so handling them after that guard
+    // would silently drop every one of them.
+    if (entry.type === "ai-title") {
+      // Re-emitted as the session's subject clarifies; last one wins.
+      if (typeof entry.aiTitle === "string" && entry.aiTitle) aiTitle = entry.aiTitle;
+      continue;
+    }
+    if (entry.type === "permission-mode") {
+      if (typeof entry.permissionMode === "string" && entry.permissionMode) {
+        permissionModes.push({ ts: entry.timestamp ?? null, mode: entry.permissionMode });
+      }
+      continue;
+    }
+    if (entry.type === "attachment") {
+      // Session-shaped metadata rides attachments, not assistant turns. First
+      // non-empty wins: these are constant for a session, so latching early
+      // avoids a late malformed entry overwriting a good value.
+      if (!sessionKind && typeof entry.sessionKind === "string" && entry.sessionKind) {
+        sessionKind = entry.sessionKind;
+      }
+      if (!entrypoint && typeof entry.entrypoint === "string" && entry.entrypoint) {
+        entrypoint = entry.entrypoint;
+      }
+      // Fall through: attachments are otherwise handled by the existing logic.
+    }
+    // Hook runs ride assistant entries (including sidechain ones — a hook that
+    // ran during a subagent turn still ran), so collect before the sidechain
+    // branch below diverts those entries.
+    if (Array.isArray(entry.hookInfos)) {
+      for (const h of entry.hookInfos) {
+        if (h && typeof h.command === "string" && h.command) {
+          hookRuns.push({
+            ts: entry.timestamp ?? null,
+            command: h.command,
+            durationMs: typeof h.durationMs === "number" ? h.durationMs : null,
+          });
+        }
+      }
+    }
+
     if (entry.isMeta || !entry.timestamp) continue;
     // A1: subagent (sidechain) turns don't participate in status inference,
     // one-shot/quality detection, or tool_uses — but their assistant-turn
@@ -678,6 +784,11 @@ async function readJsonlSession(
               cacheCreateTokens: usage.cache_creation_input_tokens ?? 0,
               cacheCreate1hTokens: extractCacheCreate1hTokens(usage),
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+              effort: entry.effort,
+              speed: usage.speed ?? undefined,
+              attributionSkill: entry.attributionSkill,
+              attributionMcpServer: entry.attributionMcpServer,
+              attributionMcpTool: entry.attributionMcpTool,
               userIntentText: prevUserText,
               parentToolUseId: entry.parentToolUseID ?? undefined,
               searchText: extractProseAndThinking(entry.message?.content) || undefined,
@@ -811,6 +922,7 @@ async function readJsonlSession(
           isError,
           errorCategory,
           invocationSource,
+          denialKind: toolUseId ? denialByToolUseId.get(toolUseId) ?? null : null,
         };
       });
       toolCallCount += toolUses.length;
@@ -838,6 +950,15 @@ async function readJsonlSession(
         isError: !!isError,
         // A3: triggering user prompt, so classifyTurn can attribute intent.
         userIntentText: prevUserText,
+        // A1: mirrors the file-parse path so `MINDER_USE_DB=0/1` agree. `effort`
+        // and the attribution fields are top-level on the entry; `speed` lives
+        // under usage and is nullable, so null collapses to undefined — both
+        // mean unknown.
+        effort: entry.effort,
+        speed: usage.speed ?? undefined,
+        attributionSkill: entry.attributionSkill,
+        attributionMcpServer: entry.attributionMcpServer,
+        attributionMcpTool: entry.attributionMcpTool,
       };
 
       lastAssistantTurnIdx = turns.length;
@@ -865,6 +986,10 @@ async function readJsonlSession(
         hasThinking: hasTurnThinking ? 1 : 0,
         textOffset: fromOffset + thisLineOffset,
         isSidechain: 0,
+        effort: entry.effort,
+        attributionSkill: entry.attributionSkill,
+        attributionMcpServer: entry.attributionMcpServer,
+        attributionMcpTool: entry.attributionMcpTool,
       });
 
       // Status inference: this assistant turn becomes the new "last
@@ -995,7 +1120,17 @@ async function readJsonlSession(
   // (PR #250 re-review). So proceed whenever we collected any sidechain turns —
   // the derivations below no-op cleanly on empty primary turns, and the
   // sidechain rows are appended and priced afterward.
-  if (turns.length === 0 && sidechainCollected.length === 0) {
+  //
+  // A1 adds a third case with exactly the same shape: a tail window can contain
+  // ONLY metadata entries — an `ai-title`, or a `permission-mode` switch — which
+  // produce no turns at all. Returning null for those advances the cursor past
+  // them, so the title or mode change is lost permanently rather than merely
+  // deferred (Codex review, PR #377). `sessionKind`/`entrypoint` are excluded
+  // from this test on purpose: they ride attachments that always accompany
+  // turns, so they cannot be the sole content of a window.
+  const hasA1Metadata =
+    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0;
+  if (turns.length === 0 && sidechainCollected.length === 0 && !hasA1Metadata) {
     return { parsed: null, safeOffset, hasOrphanToolResults };
   }
 
@@ -1129,6 +1264,10 @@ async function readJsonlSession(
       hasThinking: 0,
       textOffset: null,
       isSidechain: 1,
+      effort: sc.effort,
+      attributionSkill: sc.attributionSkill,
+      attributionMcpServer: sc.attributionMcpServer,
+      attributionMcpTool: sc.attributionMcpTool,
     });
   }
 
@@ -1236,6 +1375,11 @@ async function readJsonlSession(
       workModeOtherPct: workMode.other,
       source: "claude",
       homeKey: sessionFileHomeKey(filePath),
+      sessionKind,
+      aiTitle,
+      entrypoint,
+      permissionModes,
+      hookRuns,
       // Run the PR extractor on the already-parsed entries. The walk is
       // cheap (no JSON.parse hit; reuses `parsedLines.entry`) and skips
       // sessions that never invoked `gh pr create`. A throw here would
@@ -1437,7 +1581,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        derived_version, indexed_at_ms,
        work_mode_exploration_pct, work_mode_building_pct,
        work_mode_testing_pct, work_mode_other_pct,
-       source, home_key
+       source, home_key,
+       session_kind, ai_title, entrypoint
      ) VALUES (
        @session_id, @project_slug, @project_dir_name, @file_path,
        @file_mtime_ms, @file_size, @byte_offset,
@@ -1453,7 +1598,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @derived_version, @indexed_at_ms,
        @work_mode_exploration_pct, @work_mode_building_pct,
        @work_mode_testing_pct, @work_mode_other_pct,
-       @source, @home_key
+       @source, @home_key,
+       @session_kind, @ai_title, @entrypoint
      )`
   ).run({
     session_id: s.sessionId,
@@ -1504,9 +1650,35 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     work_mode_other_pct: s.workModeOtherPct,
     source: s.source,
     home_key: s.homeKey,
+    session_kind: s.sessionKind,
+    ai_title: s.aiTitle,
+    entrypoint: s.entrypoint,
   });
   rows++;
   if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
+
+  // A1 one-to-many session metadata. DELETE-then-INSERT rather than INSERT OR
+  // IGNORE: these have no natural unique key (the same hook command runs many
+  // times, and a session can switch to `plan` more than once), so on a re-ingest
+  // of the same session an IGNORE would append duplicates instead of replacing.
+  // `writeSession` already owns the whole session row, so wiping its children
+  // first is consistent with that.
+  db.prepare("DELETE FROM session_hook_runs WHERE session_id = ?").run(s.sessionId);
+  const insertHookRun = db.prepare(
+    "INSERT INTO session_hook_runs (session_id, ts, command, duration_ms) VALUES (?, ?, ?, ?)"
+  );
+  for (const h of s.hookRuns) {
+    insertHookRun.run(s.sessionId, h.ts, h.command, h.durationMs);
+    rows++;
+  }
+  db.prepare("DELETE FROM session_permission_modes WHERE session_id = ?").run(s.sessionId);
+  const insertPermissionMode = db.prepare(
+    "INSERT INTO session_permission_modes (session_id, ts, mode) VALUES (?, ?, ?)"
+  );
+  for (const p of s.permissionModes) {
+    insertPermissionMode.run(s.sessionId, p.ts, p.mode);
+    rows++;
+  }
 
   const insertTurn = db.prepare(
     `INSERT INTO turns (
@@ -1515,6 +1687,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
+       effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -1522,6 +1695,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
+       @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
        @derived_version
      )`
   );
@@ -1531,12 +1705,12 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
        arguments_json, file_path, file_op, is_error,
-       error_category, invocation_source
+       error_category, invocation_source, denial_kind
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
        @arguments_json, @file_path, @file_op, @is_error,
-       @error_category, @invocation_source
+       @error_category, @invocation_source, @denial_kind
      )`
   );
   const insertFileEdit = db.prepare(
@@ -1593,6 +1767,13 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       has_thinking: t.hasThinking,
       text_offset: t.textOffset,
       is_sidechain: t.isSidechain,
+      // A1. `?? null` is required, not cosmetic: better-sqlite3 throws on an
+      // `undefined` named parameter rather than binding NULL, and every one of
+      // these is absent on pre-2.1.212 transcripts.
+      effort: t.effort ?? null,
+      attribution_skill: t.attributionSkill ?? null,
+      attribution_mcp_server: t.attributionMcpServer ?? null,
+      attribution_mcp_tool: t.attributionMcpTool ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -1616,6 +1797,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
         is_error: tu.isError,
         error_category: tu.errorCategory,
         invocation_source: tu.invocationSource,
+        denial_kind: tu.denialKind,
       });
       rows++;
 
@@ -1887,6 +2069,7 @@ function appendSessionTail(
        context_fill, is_error, parent_tool_use_id, text_preview, tool_result_preview,
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
+       effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -1894,6 +2077,7 @@ function appendSessionTail(
        @context_fill, @is_error, @parent_tool_use_id, @text_preview, @tool_result_preview,
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
+       @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
        @derived_version
      )`
   );
@@ -1903,12 +2087,12 @@ function appendSessionTail(
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
        arguments_json, file_path, file_op, is_error,
-       error_category, invocation_source
+       error_category, invocation_source, denial_kind
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
        @arguments_json, @file_path, @file_op, @is_error,
-       @error_category, @invocation_source
+       @error_category, @invocation_source, @denial_kind
      )`
   );
   const insertFileEdit = db.prepare(
@@ -1965,6 +2149,13 @@ function appendSessionTail(
       has_thinking: t.hasThinking,
       text_offset: t.textOffset,
       is_sidechain: t.isSidechain,
+      // A1. `?? null` is required, not cosmetic: better-sqlite3 throws on an
+      // `undefined` named parameter rather than binding NULL, and every one of
+      // these is absent on pre-2.1.212 transcripts.
+      effort: t.effort ?? null,
+      attribution_skill: t.attributionSkill ?? null,
+      attribution_mcp_server: t.attributionMcpServer ?? null,
+      attribution_mcp_tool: t.attributionMcpTool ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -1988,6 +2179,7 @@ function appendSessionTail(
         is_error: tu.isError,
         error_category: tu.errorCategory,
         invocation_source: tu.invocationSource,
+        denial_kind: tu.denialKind,
       });
       rows++;
 
@@ -2173,7 +2365,16 @@ function appendSessionTail(
        work_mode_building_pct = @work_mode_building_pct,
        work_mode_testing_pct  = @work_mode_testing_pct,
        work_mode_other_pct    = @work_mode_other_pct,
-       source                 = @source
+       source                 = @source,
+       -- A1. Two different merge rules, because the fields mean different things:
+       --   session_kind / entrypoint are CONSTANT for a session, so the stored
+       --     value wins and a tail that did not happen to include an attachment
+       --     cannot blank them (same shape as the slug clause above).
+       --   ai_title is RE-EMITTED as the session subject clarifies, so the
+       --     newest non-null wins -- note the reversed COALESCE argument order.
+       session_kind = COALESCE(session_kind, @session_kind),
+       entrypoint   = COALESCE(entrypoint, @entrypoint),
+       ai_title     = COALESCE(@ai_title, ai_title)
      WHERE session_id = @session_id`
   ).run({
     ...statusUpdateParam,
@@ -2212,8 +2413,36 @@ function appendSessionTail(
     work_mode_testing_pct: tailWorkMode.testing,
     work_mode_other_pct: tailWorkMode.other,
     source: parsed.source,
+    session_kind: parsed.sessionKind,
+    entrypoint: parsed.entrypoint,
+    ai_title: parsed.aiTitle,
   });
   rows++;
+
+  // A1 one-to-many metadata. APPEND, unlike `writeSession`'s delete-then-insert:
+  // a tail window holds only the newly-read bytes, so wiping first would discard
+  // every hook run and mode switch from earlier in the session. Rows already
+  // persisted stay put and the tail's are added after them, which is also why
+  // the read side orders by `rowid` — it is the only thing preserving file order
+  // across the append boundary.
+  if (parsed.hookRuns.length > 0) {
+    const insertHookRun = db.prepare(
+      "INSERT INTO session_hook_runs (session_id, ts, command, duration_ms) VALUES (?, ?, ?, ?)"
+    );
+    for (const h of parsed.hookRuns) {
+      insertHookRun.run(sessionId, h.ts, h.command, h.durationMs);
+      rows++;
+    }
+  }
+  if (parsed.permissionModes.length > 0) {
+    const insertPermissionMode = db.prepare(
+      "INSERT INTO session_permission_modes (session_id, ts, mode) VALUES (?, ?, ?)"
+    );
+    for (const p of parsed.permissionModes) {
+      insertPermissionMode.run(sessionId, p.ts, p.mode);
+      rows++;
+    }
+  }
 
   // Emit just the new turns' tuples. On a tail, prior days/categories
   // are unchanged in `turns`, so re-deriving their rollup rows would be
@@ -2578,6 +2807,10 @@ export function buildAdapterParsedSession(
           isError: tc.isError ? 1 : 0,
           errorCategory: tc.errorCategory ?? null,
           invocationSource: tc.invocationSource ?? "auto",
+          // Adapter path (Codex/Gemini): `ToolCall` carries no denial concept,
+          // so this is "not reported by this harness" — the same unknown bucket
+          // as a Claude transcript predating the field.
+          denialKind: null,
         };
       }
     );
@@ -2713,6 +2946,16 @@ export function buildAdapterParsedSession(
     // Non-Claude harness homes don't participate in the Claude-home
     // discriminator — their sessions are separable via `source` instead.
     homeKey: null,
+    // A1 fields are Claude-transcript-specific: the adapter path reaches ingest
+    // as `UsageTurn[]`, with no JSONL entry stream to decode these from. Null /
+    // empty here means "this harness does not report it", which lands in the
+    // same unknown bucket as "this transcript predates it" — both are honest,
+    // and neither invents a value.
+    sessionKind: null,
+    aiTitle: null,
+    entrypoint: null,
+    permissionModes: [],
+    hookRuns: [],
     prs: [],
     tickets: [],
     turns: parsedTurns,

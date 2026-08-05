@@ -125,7 +125,17 @@ CREATE TABLE sessions (
   -- session file (`sessionFileHomeKey(file_path)` — platform.ts). Lets
   -- per-project usage/cost reads discriminate between configured homes with
   -- identical path layouts. NULL for non-Claude adapter sessions.
-  home_key TEXT
+  home_key TEXT,
+  -- Schema v20 / DERIVED_VERSION 13 (A1). All nullable and version-dependent.
+  --   session_kind: `bg` for a backgrounded session (from attachment entries).
+  --     NULL does NOT prove a session was interactive — it also means the
+  --     transcript predates the field.
+  --   ai_title: Claude Code's own generated title (`type: "ai-title"`), as
+  --     distinct from `generated_title`, which Minder produces itself.
+  --   entrypoint: `cli` | `sdk-cli`.
+  session_kind TEXT,
+  ai_title     TEXT,
+  entrypoint   TEXT
 );
 
 CREATE INDEX idx_sessions_source          ON sessions(source);
@@ -135,6 +145,28 @@ CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);
 CREATE INDEX sessions_by_slug        ON sessions(slug) WHERE slug IS NOT NULL;
 CREATE INDEX sessions_by_generated_title ON sessions(generated_title) WHERE generated_title IS NOT NULL;
 CREATE INDEX sessions_starred ON sessions(starred_at) WHERE starred_at IS NOT NULL;
+
+-- ─── session_hook_runs / session_permission_modes ────────────────────────
+-- Schema v20 (A1). Both are one-to-many per session, hence tables rather than
+-- columns. No FK to sessions: some ingest paths write turn-derived rows before
+-- the session row is finalised, and a constraint violation there would abort an
+-- otherwise good ingest.
+
+CREATE TABLE IF NOT EXISTS session_hook_runs (
+  session_id  TEXT NOT NULL,
+  ts          TEXT,
+  command     TEXT NOT NULL,
+  duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_session_hook_runs_session ON session_hook_runs(session_id);
+
+CREATE TABLE IF NOT EXISTS session_permission_modes (
+  session_id TEXT NOT NULL,
+  ts         TEXT,
+  mode       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_permission_modes_session
+  ON session_permission_modes(session_id);
 
 -- ─── push_subscriptions ──────────────────────────────────────────────────
 -- Web push endpoint registrations. One row per browser subscription.
@@ -209,6 +241,19 @@ CREATE TABLE turns (
   -- carry no tool_uses and are excluded from session-detail, activity, and
   -- one-shot reads via `is_sidechain = 0` guards. Primary turns default to 0.
   is_sidechain         INTEGER NOT NULL DEFAULT 0 CHECK (is_sidechain IN (0,1)),
+  -- Schema v20 / DERIVED_VERSION 13 (A1). All nullable: they exist only on
+  -- transcripts written by Claude Code ~2.1.212+, and NULL means "this turn
+  -- predates the field", never a default value.
+  --   effort: high | medium | xhigh | low — reasoning effort for the turn.
+  effort               TEXT,
+  --   attribution_*: causal cost attribution — which skill/MCP server made
+  --   this turn's tokens exist. NOT the same as tool_uses.skill_name /
+  --   mcp_server, which are inferred from the `mcp__server__tool` naming
+  --   convention and answer "was this call a skill invocation?". Both are
+  --   kept: the inferred pair for call counts, these for cost.
+  attribution_skill    TEXT,
+  attribution_mcp_server TEXT,
+  attribution_mcp_tool TEXT,
   -- Same `derived_version` semantics as on sessions/agents/skills/commands:
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.
@@ -219,6 +264,10 @@ CREATE TABLE turns (
 
 CREATE INDEX turns_by_role_ts  ON turns(role, ts);
 CREATE INDEX turns_by_category ON turns(category) WHERE category IS NOT NULL;
+-- Partial: both columns are NULL on the large majority of historical rows.
+CREATE INDEX idx_turns_effort ON turns(effort) WHERE effort IS NOT NULL;
+CREATE INDEX idx_turns_attribution_mcp_server
+  ON turns(attribution_mcp_server) WHERE attribution_mcp_server IS NOT NULL;
 
 -- ─── tool_uses ───────────────────────────────────────────────────────────
 -- One row per tool call inside a turn. `sequence_in_turn` is a 0-indexed
@@ -245,6 +294,11 @@ CREATE TABLE tool_uses (
   -- Wave 8.3 columns (schema v10 / DERIVED_VERSION 7):
   error_category    TEXT,
   invocation_source TEXT CHECK (invocation_source IN ('slash_command','auto')),
+  -- Schema v20 (A1): why a tool call was refused — permission-rule |
+  -- automode-blocked | user-rejected | automode-unavailable. Deliberately
+  -- unconstrained: Claude Code may add kinds, and a CHECK would turn a new
+  -- one into an ingest failure rather than an unrecognised value.
+  denial_kind       TEXT,
   PRIMARY KEY (session_id, turn_index, sequence_in_turn),
   FOREIGN KEY (session_id, turn_index) REFERENCES turns(session_id, turn_index) ON DELETE CASCADE
 ) WITHOUT ROWID;

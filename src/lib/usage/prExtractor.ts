@@ -95,17 +95,50 @@ function toolResultText(content: unknown): string {
 }
 
 /**
- * Walk a session's `ConversationEntry[]` once and yield every PR link
- * that a `gh pr create` invocation produced. Multiple PRs per session
- * are returned sorted by PR number ascending — matches the DB read-side
- * `ORDER BY session_id, pr_number` so the chip order is stable across
- * both backends (file-parse and SQL).
+ * Walk a session's `ConversationEntry[]` once and yield every PR link the
+ * session produced, from two sources:
+ *
+ *   1. **`type: "pr-link"` entries (A1)** — Claude Code records these itself.
+ *      Authoritative: they survive truncated command output and catch PRs
+ *      opened by any route (the web UI, `gh pr create --web`, a script), not
+ *      just ones whose `gh` output was scrapeable.
+ *   2. **`gh pr create` tool results** — the original scraper, kept because
+ *      only it covers transcripts written before Claude Code emitted `pr-link`.
+ *
+ * The decode lives HERE rather than in either reader so both backends get it
+ * from one place. Putting it in the file scanner alone left the default DB
+ * path — which persists PRs through this function — reading only scraped
+ * results, so an authoritatively-recorded PR never reached `session_prs`
+ * (Codex review, PR #377).
+ *
+ * On a URL collision the `pr-link` entry wins: its `prRepository` is reported
+ * by Claude Code, whereas the scraper's `repo` is parsed back out of the URL.
+ *
+ * Multiple PRs per session are returned sorted by PR number ascending —
+ * matches the DB read-side `ORDER BY session_id, pr_number` so chip order is
+ * stable across both backends.
  */
 export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
   const bashPrCalls: ToolUseObservation[] = [];
   const resultsByToolUseId = new Map<string, string>();
+  const prLinkEntries: PrLink[] = [];
 
   for (const entry of entries) {
+    // A1: Claude Code's own record of a PR. Requires both a URL and a numeric
+    // number — a partial entry is not a usable link, and coercing a missing
+    // number to 0 would render as `PR #0`.
+    if (entry.type === "pr-link") {
+      const { prUrl, prNumber, prRepository } = entry;
+      if (typeof prUrl === "string" && prUrl && typeof prNumber === "number") {
+        prLinkEntries.push({
+          url: prUrl,
+          number: prNumber,
+          repo: typeof prRepository === "string" ? prRepository : "",
+        });
+      }
+      continue;
+    }
+
     if (entry.type === "assistant" && Array.isArray(entry.message?.content)) {
       for (const block of entry.message.content as Array<Record<string, unknown>>) {
         if (
@@ -156,6 +189,20 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
     if (seenUrls.has(link.url)) continue;
     seenUrls.add(link.url);
     links.push(link);
+  }
+
+  // Authoritative `pr-link` entries, folded in after the scraper so a recorded
+  // link REPLACES a scraped one for the same URL (better `repo`) rather than
+  // being dropped as a duplicate.
+  for (const entry of prLinkEntries) {
+    const existing = links.findIndex((l) => l.url === entry.url);
+    if (existing >= 0) {
+      // Keep the scraper's repo only if the entry didn't report one.
+      links[existing] = { ...entry, repo: entry.repo || links[existing].repo };
+    } else if (!seenUrls.has(entry.url)) {
+      seenUrls.add(entry.url);
+      links.push(entry);
+    }
   }
   // Sort by PR number ascending so DB-backed and file-parse backends agree
   // on chip order. The DB read path uses `ORDER BY session_id, pr_number`.

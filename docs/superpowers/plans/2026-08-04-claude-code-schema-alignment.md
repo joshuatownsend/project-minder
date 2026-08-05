@@ -85,7 +85,7 @@ after a tool result to that server, instead of only the turns that consumed it.
 | # | Slice | Wave | Depends on | Status |
 |---|---|---|---|---|
 | B1 | Pricing correctness: fallback refresh + cache-TTL split | B | — | **Done** (branch `b1-pricing-fallback-refresh`) |
-| A1 | Transcript schema decode + migration 20 + `DERIVED_VERSION` 13 | A | — | Not started |
+| A1 | Transcript schema decode + migration 20 + `DERIVED_VERSION` 13 | A | — | **Done** (branch `a1-transcript-decode`) — re-index wall-clock not yet measured |
 | A2 | Effort analytics (cost & one-shot rate by reasoning effort) | A | A1 | Not started |
 | A3 | `sessionKind` segmentation (interactive / bg / attached) | A | A1 | Not started |
 | A4 | Authoritative skill + MCP cost attribution | A | A1 | Not started |
@@ -171,7 +171,56 @@ newest-known rather than Opus 4; non-Claude ids still resolve to $0 (the existin
 
 # Wave A — transcript schema expansion
 
-## A1 — Decode layer + migration (critical path)
+## A1 — Decode layer + migration (critical path) — SHIPPED
+
+> **SHIPPED** on `a1-transcript-decode`. What the spec below got wrong, verified
+> against 1,200 real transcripts (78,270 lines, 10,742 assistant turns) before
+> any code was written:
+>
+> - **Nine unhandled entry types, not three.** Beyond `pr-link` / `ai-title` /
+>   `permission-mode` there are `last-prompt` (2,512), `mode` (1,731),
+>   `queue-operation` (1,015), `agent-name` (219), `file-history-delta` (411)
+>   and `file-history-snapshot` (211). A1 decodes four (the three planned plus
+>   `agent-name`'s shape) and documents the rest in `DECODED_META_TYPES` as
+>   considered-and-skipped rather than missed.
+> - **`sessionKind` / `entrypoint` ride `attachment` entries**, not assistant
+>   turns. The spec did not say where they lived; a reader that assumed
+>   assistant turns would have found nothing and reported `undefined` forever.
+>   Values: `sessionKind: "bg"`, `entrypoint: "cli" | "sdk-cli"`.
+> - **`ai-title` and `permission-mode` entries carry no `timestamp`.** Both
+>   readers `continue` on untimestamped entries, so the decode had to be placed
+>   *above* that guard. Below it, every one would be dropped without an error.
+> - **`effort` is top-level on the entry, not inside `message`** — 10,288 of
+>   10,742 assistant turns; `high` 8,138 / `medium` 1,758 / `xhigh` 392, no
+>   `low` observed locally.
+> - **`message.usage.speed` is nullable**, null on exactly the 454 turns that
+>   also lack `effort`. Null and absent both mean unknown; neither means
+>   `standard`. Normalised to `undefined` at both readers.
+> - **`toolDenialKind`** is real but rare (26 occurrences): `permission-rule`,
+>   `automode-blocked`, `user-rejected`, `automode-unavailable`. Column added;
+>   populating it is A6's job.
+>
+> Scope note: `pr-link` entries are merged into the existing `prs` list
+> (deduped by URL, authoritative repo winning) rather than left decoded-but-
+> unused. A5 removes the `gh pr create` scraper; until then both feed in, so a
+> PR either source saw still appears.
+>
+> **Migration verified on real data; the re-index itself is not yet run.**
+> Migration 20 was applied to a byte-copy of the live 1.19 GB `index.db` (the
+> plan assumed ~834 MB): **332 ms**, `quick_check: ok`, re-run idempotent at
+> 0 ms, `schema_version` 19 → 20, all 8 columns and both tables present. The
+> schema change is therefore cheap and safe — it is the `DERIVED_VERSION` 13
+> re-parse that costs, and that covers **4,998 sessions / 163,685 turns**, all
+> of which are stale at v13.
+>
+> The re-parse was deliberately left to the operator: a dev server was live on
+> port 4100 holding the real DB, so running it meant restarting a running
+> server, and a copy cannot measure it meaningfully (the reconcile writes back).
+> `tests/sqlSchemaSnapshot.test.ts` fails locally until the real DB migrates —
+> it compares against whatever `~/.minder/index.db` currently is, and skips on
+> CI where no live DB exists. That failure is environmental, not a defect, and
+> is the expected local state after *any* migration in this repo. Every other
+> gate is green.
 
 The plumbing slice. **No user-visible change** beyond fields becoming available;
 ships alone so the re-parse cost is paid once and in isolation.

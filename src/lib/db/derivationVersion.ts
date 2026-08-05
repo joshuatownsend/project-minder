@@ -19,7 +19,7 @@
 //   writer-populated from full JSONL text that is never stored in `turns`,
 //   so nothing rebuilds it on an UPDATE and only a real re-parse can fill
 //   it. Changes to what goes into it DO require a bump.
-export const DERIVED_VERSION = 12;
+export const DERIVED_VERSION = 13;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -141,3 +141,28 @@ export const DERIVED_VERSION = 12;
 //     No read-side gate — during catch-up, prompt search returns fewer hits
 //     than it will afterwards. Degraded, not wrong; a gate would make it
 //     return nothing, which is worse.
+// 13 — schema v20 (A1) added columns and tables for transcript fields Claude
+//     Code has been writing since ~2.1.212 that Minder decoded none of:
+//     `turns.{effort, attribution_skill, attribution_mcp_server,
+//     attribution_mcp_tool}`, `sessions.{session_kind, ai_title, entrypoint}`,
+//     `tool_uses.denial_kind`, and the `session_hook_runs` /
+//     `session_permission_modes` tables.
+//
+//     Standard "new columns need re-extraction" bump (rule 2 above): the
+//     values exist only in the JSONL, so without it every unchanged file
+//     skips re-parse and the new columns stay NULL on the whole corpus —
+//     only newly-modified sessions would ever populate them.
+//
+//     **This bump is shared.** It is the single re-parse for the entire A
+//     wave: A2 (effort analytics), A3 (sessionKind segmentation), A4
+//     (authoritative attribution), A5 (authoritative PR linkage) and A6 (hook
+//     + permission analytics) all read columns this decode fills, and all ride
+//     this one re-parse rather than bumping again. A later slice that needs
+//     its own re-parse should say why the shared one was insufficient.
+//
+//     No read-side gate. Pre-reconcile, the new fields read as NULL — which is
+//     exactly what a genuinely pre-2.1.212 transcript reports, so consumers
+//     already have to handle it. That equivalence is why no gate is needed,
+//     and it is also the reason every A1 field is optional: "not yet
+//     re-indexed" and "this transcript never had it" are indistinguishable by
+//     design, and neither may be rendered as a default value.

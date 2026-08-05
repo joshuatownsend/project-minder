@@ -1,5 +1,10 @@
-// Last verified: schema version 14 (src/lib/db/schema.sql + migrations v1-v14)
+// Last verified: schema version 20 (src/lib/db/schema.sql + migrations v1-v20)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
+//
+// Column ORDER here is not meaningful — the live check compares both
+// directions with `arrayContaining`, i.e. set equality. It has to: a column
+// added by `ALTER TABLE` lands at the end of a migrated table, while
+// `schema.sql` declares it wherever it reads best in a fresh one.
 
 export interface TableSchema {
   table: string;
@@ -31,6 +36,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "work_mode_exploration_pct", "work_mode_building_pct",
       "work_mode_testing_pct", "work_mode_other_pct",
       "source", "home_key",
+      // v20 (A1)
+      "session_kind", "ai_title", "entrypoint",
     ],
   },
   {
@@ -41,6 +48,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "is_error", "parent_tool_use_id", "text_offset", "text_preview", "cost_usd",
       "tool_result_preview", "category", "turn_duration_ms", "has_thinking",
       "derived_version", "is_sidechain",
+      // v20 (A1)
+      "effort", "attribution_skill", "attribution_mcp_server", "attribution_mcp_tool",
     ],
   },
   {
@@ -50,7 +59,17 @@ export const SQL_SCHEMA: TableSchema[] = [
       "tool_name", "mcp_server", "mcp_tool", "agent_name", "skill_name",
       "arguments_json", "file_path", "file_op", "duration_ms", "is_error",
       "error_category", "invocation_source",
+      // v20 (A1)
+      "denial_kind",
     ],
+  },
+  {
+    table: "session_hook_runs",
+    columns: ["session_id", "ts", "command", "duration_ms"],
+  },
+  {
+    table: "session_permission_modes",
+    columns: ["session_id", "ts", "mode"],
   },
   {
     table: "file_edits",

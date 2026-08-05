@@ -74,6 +74,26 @@ Clicking a `PR #N` chip filters the in-page session list to just sessions that c
 
 Extraction happens at session-ingest time and matches the `gh pr create` Bash call to its `tool_result` by `tool_use_id` (not positional ordering), so parallel Bash dispatches can't cross-link results to the wrong call. Sessions written before this feature shipped backfill on the next reconcile via a DERIVED_VERSION bump.
 
+Recent Claude Code versions also record PRs directly in the transcript, and Minder now reads those too, merging them with the scraped ones by URL. The recorded entry is more reliable: it survives truncated command output and catches PRs opened by any route — the GitHub web UI, `gh pr create --web`, or a script — not just ones whose `gh` output Minder could see.
+
+### What Minder reads from newer transcripts
+
+Claude Code 2.1.212 and later write extra detail into each session's transcript that Minder now decodes:
+
+| Field | What it is |
+|---|---|
+| **Reasoning effort** | The effort level (`low`/`medium`/`high`/`xhigh`) each assistant turn ran at |
+| **Fast mode** | Whether a turn used fast mode, which bills at a different rate |
+| **Skill / MCP attribution** | Which skill or MCP server *caused* a turn's tokens — as opposed to merely which tools the turn called |
+| **Session kind & entrypoint** | Whether a session ran in the background, and whether it was launched from the CLI or the SDK |
+| **Session title** | Claude Code's own generated title for the session |
+| **Permission modes** | Each switch between permission modes during the session |
+| **Hook runs** | Which hooks ran and how long each took |
+
+**These are absent on older sessions, and Minder keeps that distinction.** A session recorded before a field existed reads as *unknown*, never as a default — a session with no recorded effort is not a "medium effort" session, and one with no recorded permission-mode changes is not one that stayed in the default mode. Anywhere these appear, an unknown bucket is shown separately rather than folded into a real value.
+
+*After upgrading, your history is re-indexed in the background to pick these up. Until that finishes, recent sessions have the new detail and older ones don't — nothing shown is wrong, there's just less of it.*
+
 ### Ticket chips
 
 When a session **references** an issue tracker by a full URL — Linear (`linear.app/<workspace>/issue/<KEY>`), Jira (`<host>/browse/<KEY>`), or a GitHub issue (`github.com/<owner>/<repo>/issues/<N>`) — the session row shows a ticket chip per distinct ticket (e.g. `ENG-123`, `PROJ-45`, `owner/repo#42`). Clicking a chip filters the in-page list to sessions that reference that ticket, with the same banner + clear-filter affordance as the PR chips (selecting a ticket clears any active PR filter, and vice versa, so the two filters never combine into an empty list).

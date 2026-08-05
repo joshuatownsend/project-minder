@@ -29,6 +29,37 @@ export interface UsageTurn {
    */
   cacheCreate1hTokens?: number;
   cacheReadTokens: number;
+  /**
+   * Reasoning effort for this assistant turn (`high` | `medium` | `xhigh`, and
+   * `low` per the docs though unobserved locally). Read from the **top level**
+   * of the JSONL entry, not from `message`.
+   *
+   * Undefined on user turns, on transcripts written before the field existed,
+   * and on the ~4% of recent assistant turns that lack it. Consumers must keep
+   * an explicit unknown bucket: a turn with no `effort` is not a `medium` turn,
+   * and averaging over only the turns that have it silently changes the
+   * denominator.
+   */
+  effort?: string;
+  /**
+   * `standard` | `fast` from `message.usage.speed`. Fast mode bills at roughly
+   * double (Opus 5: $10/$50 vs $5/$25), so this is a pricing input, not just a
+   * label. Present on every recent assistant turn but **nullable** — null on
+   * exactly the turns that also lack `effort` — so null and absent both mean
+   * "unknown", never "standard".
+   */
+  speed?: string;
+  /**
+   * Causal cost attribution: which skill / MCP server is responsible for this
+   * turn's tokens existing. Distinct from `ToolCall`-level skill and MCP
+   * detection, which is *inferred* from the `mcp__server__tool` naming
+   * convention and answers "was this call a skill invocation?". Using the
+   * inferred value for cost attributes every turn after a tool result to that
+   * server, rather than only the turns that consumed it.
+   */
+  attributionSkill?: string;
+  attributionMcpServer?: string;
+  attributionMcpTool?: string;
   toolCalls: ToolCall[];
   userMessageText?: string;
   toolResultText?: string;
