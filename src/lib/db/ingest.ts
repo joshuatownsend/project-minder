@@ -15,6 +15,7 @@ import { classifyTurn } from "@/lib/usage/classifier";
 import { detectOneShot } from "@/lib/usage/oneShotDetector";
 import { computeSessionQuality, turnContextFill, type SessionQualitySummary } from "@/lib/usage/sessionQuality";
 import { loadPricing, getModelPricing, applyPricing } from "@/lib/usage/costCalculator";
+import { extractCacheCreate1hTokens } from "@/lib/usage/cacheTtl";
 import { parseMcpTool } from "@/lib/usage/mcpParser";
 import {
   extractText,
@@ -204,6 +205,14 @@ interface ParsedTurn {
   inputTokens: number;
   outputTokens: number;
   cacheCreateTokens: number;
+  /**
+   * Portion of `cacheCreateTokens` written at the 1-hour cache TTL, which bills
+   * at 2x base input instead of 1.25x. Read by `applyPricing` below and then
+   * discarded — deliberately NOT a `turns` column, because the derived
+   * `cost_usd` it produces is the thing worth persisting, and adding a column
+   * would mean a migration for a value nothing queries.
+   */
+  cacheCreate1hTokens?: number;
   cacheReadTokens: number;
   isError: 0 | 1;
   parentToolUseId: string | null;
@@ -603,6 +612,7 @@ async function readJsonlSession(
     inputTokens: number;
     outputTokens: number;
     cacheCreateTokens: number;
+    cacheCreate1hTokens?: number;
     cacheReadTokens: number;
     userIntentText?: string;
     // parentToolUseID of the spawning Task call, so DB-backed sidechain turns
@@ -666,6 +676,7 @@ async function readJsonlSession(
               inputTokens: usage.input_tokens ?? 0,
               outputTokens: usage.output_tokens ?? 0,
               cacheCreateTokens: usage.cache_creation_input_tokens ?? 0,
+              cacheCreate1hTokens: extractCacheCreate1hTokens(usage),
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
               userIntentText: prevUserText,
               parentToolUseId: entry.parentToolUseID ?? undefined,
@@ -710,6 +721,10 @@ async function readJsonlSession(
       const ti = usage.input_tokens ?? 0;
       const to = usage.output_tokens ?? 0;
       const tcc = usage.cache_creation_input_tokens ?? 0;
+      // Portion of `tcc` written at the 1-hour TTL (2x base) rather than the
+      // 5-minute default (1.25x). Carried on the in-memory turn only — it feeds
+      // `applyPricing` below, and the resulting `cost_usd` is what gets stored.
+      const tcc1h = extractCacheCreate1hTokens(usage);
       const tcr = usage.cache_read_input_tokens ?? 0;
       inputTokens += ti;
       outputTokens += to;
@@ -810,6 +825,7 @@ async function readJsonlSession(
         inputTokens: ti,
         outputTokens: to,
         cacheCreateTokens: tcc,
+        cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
         toolCalls: toolBlocks.map(
           (b: any): ToolCall => ({ name: b.name, arguments: b.input })
@@ -833,6 +849,7 @@ async function readJsonlSession(
         inputTokens: ti,
         outputTokens: to,
         cacheCreateTokens: tcc,
+        cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
         isError,
         parentToolUseId: null,
@@ -1072,6 +1089,7 @@ async function readJsonlSession(
       inputTokens: sc.inputTokens,
       outputTokens: sc.outputTokens,
       cacheCreateTokens: sc.cacheCreateTokens,
+      cacheCreate1hTokens: sc.cacheCreate1hTokens,
       cacheReadTokens: sc.cacheReadTokens,
       toolCalls: [],
       userIntentText: sc.userIntentText,
@@ -1083,6 +1101,7 @@ async function readJsonlSession(
       inputTokens: sc.inputTokens,
       outputTokens: sc.outputTokens,
       cacheCreateTokens: sc.cacheCreateTokens,
+      cacheCreate1hTokens: sc.cacheCreate1hTokens,
       cacheReadTokens: sc.cacheReadTokens,
     });
     turns.push({
@@ -1655,12 +1674,16 @@ export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): 
        AND substr(t.ts, 1, 10) = ?
      GROUP BY day, s.project_slug, t.model`
   );
-  // Cost can't be summed in pure SQL because pricing is held in JS. Compute
-  // it after the row exists, using the same per-turn formula as session-level
-  // cost. This is one extra small query per affected tuple; tuple cardinality
-  // is bounded by (active days × active projects × active models).
-  const fetchTurnsStmt = db.prepare(
-    `SELECT t.input_tokens, t.output_tokens, t.cache_create_tokens, t.cache_read_tokens
+  // Sum the per-turn `cost_usd` that ingest already stamped, rather than
+  // re-pricing from the token columns. Both `INSERT INTO turns` statements
+  // write that column and `sessions.cost_usd` is the same sum, so this is the
+  // authoritative figure — and re-deriving here would now *diverge* from it,
+  // because pricing needs the cache-TTL split (1-hour writes bill at 2x, not
+  // 1.25x) and that split is not persisted as a token column. The older note
+  // here said cost "can't be summed in pure SQL because pricing is held in
+  // JS"; that stopped being true when `turns.cost_usd` landed in schema v3.
+  const fetchCostStmt = db.prepare(
+    `SELECT COALESCE(SUM(t.cost_usd), 0) AS cost, COUNT(*) AS turnCount
      FROM turns t
      JOIN sessions s USING (session_id)
      WHERE t.role = 'assistant'
@@ -1682,24 +1705,12 @@ export function refreshDailyCosts(db: DatabaseT.Database, tuples: Set<string>): 
     const [day, projectSlug, model] = tuple.split("|");
     deleteStmt.run(day, projectSlug, model);
     insertStmt.run(model, projectSlug, day);
-    const pricing = getModelPricing(model);
-    let cost = 0;
-    const rows = fetchTurnsStmt.all(model, projectSlug, day) as Array<{
-      input_tokens: number;
-      output_tokens: number;
-      cache_create_tokens: number;
-      cache_read_tokens: number;
-    }>;
-    for (const r of rows) {
-      cost += applyPricing(pricing, {
-        inputTokens: r.input_tokens,
-        outputTokens: r.output_tokens,
-        cacheCreateTokens: r.cache_create_tokens,
-        cacheReadTokens: r.cache_read_tokens,
-      });
-    }
-    if (rows.length > 0) {
-      updateCostStmt.run(cost, day, projectSlug, model);
+    const row = fetchCostStmt.get(model, projectSlug, day) as {
+      cost: number;
+      turnCount: number;
+    };
+    if (row.turnCount > 0) {
+      updateCostStmt.run(row.cost, day, projectSlug, model);
     }
   }
 

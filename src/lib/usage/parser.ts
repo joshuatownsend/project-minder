@@ -13,6 +13,7 @@ import {
   extractCommandNames,
 } from "./contentBlocks";
 import { categorizeToolError } from "./toolErrorCategorizer";
+import { extractCacheCreate1hTokens } from "./cacheTtl";
 import { resolveSessionJsonl } from "./sessionPath";
 import { readConfig } from "@/lib/config";
 import { getReadableClaudeHomes } from "@/lib/claudeHome";
@@ -215,6 +216,7 @@ export async function parseSessionTurns(
       const inputTokens = usage.input_tokens ?? 0;
       const outputTokens = usage.output_tokens ?? 0;
       const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
+      const cacheCreate1hTokens = extractCacheCreate1hTokens(usage);
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
       const rawContent = entry.message?.content;
@@ -257,6 +259,7 @@ export async function parseSessionTurns(
         inputTokens,
         outputTokens,
         cacheCreateTokens,
+        cacheCreate1hTokens,
         cacheReadTokens,
         toolCalls,
         assistantText,
@@ -427,6 +430,7 @@ export async function parseSessionTurnsWithMeta(
       const inputTokens = usage.input_tokens ?? 0;
       const outputTokens = usage.output_tokens ?? 0;
       const cacheCreateTokens = usage.cache_creation_input_tokens ?? 0;
+      const cacheCreate1hTokens = extractCacheCreate1hTokens(usage);
       const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
       const rawContent = entry.message?.content;
@@ -479,6 +483,7 @@ export async function parseSessionTurnsWithMeta(
         inputTokens,
         outputTokens,
         cacheCreateTokens,
+        cacheCreate1hTokens,
         cacheReadTokens,
         toolCalls,
         assistantText,

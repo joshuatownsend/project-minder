@@ -87,4 +87,44 @@ describe("applyPricingOverlay", () => {
     expect(result.cacheReadCostPerToken).toBeCloseTo(0.0000015);
     expect(result.cacheWriteCostPerToken).toBeCloseTo(0.00001875);
   });
+
+  describe("optional rates a rule cannot express", () => {
+    // Regression: the overlay used to build a fresh 4-field object, so any user
+    // with a single pricing rule silently lost long-context (>200k) pricing.
+    const TIERED: ModelPricing = {
+      ...BASE,
+      cacheWrite1hCostPerToken: 0.000006,
+      inputCostPerTokenAbove200k: 0.000006,
+      outputCostPerTokenAbove200k: 0.0000225,
+    };
+
+    it("preserves the >200k tiered rates through an overlay", () => {
+      const rule: PricingRule = { pattern: "*", inputUsdPerMillion: 10 };
+      const result = applyPricingOverlay(TIERED, rule);
+      expect(result.inputCostPerTokenAbove200k).toBe(TIERED.inputCostPerTokenAbove200k);
+      expect(result.outputCostPerTokenAbove200k).toBe(TIERED.outputCostPerTokenAbove200k);
+    });
+
+    it("preserves the 1-hour cache-write rate when the rule does not touch cache writes", () => {
+      const rule: PricingRule = { pattern: "*", inputUsdPerMillion: 10 };
+      expect(applyPricingOverlay(TIERED, rule).cacheWrite1hCostPerToken).toBe(
+        TIERED.cacheWrite1hCostPerToken
+      );
+    });
+
+    it("scales the 1-hour rate with a cache-write override, keeping the 5m:1h ratio", () => {
+      // BASE 5m is 0.00000375 and 1h is 0.000006 — a 1.6x ratio. Overriding the
+      // write rate to $7.50/MTok should carry that ratio, not leave 1-hour
+      // writes at the provider's untouched price.
+      const rule: PricingRule = { pattern: "*", cacheCreateUsdPerMillion: 7.5 };
+      const result = applyPricingOverlay(TIERED, rule);
+      expect(result.cacheWriteCostPerToken).toBeCloseTo(0.0000075, 12);
+      expect(result.cacheWrite1hCostPerToken).toBeCloseTo(0.0000075 * 1.6, 12);
+    });
+
+    it("leaves the 1-hour rate absent when the base has none", () => {
+      const rule: PricingRule = { pattern: "*", cacheCreateUsdPerMillion: 7.5 };
+      expect(applyPricingOverlay(BASE, rule).cacheWrite1hCostPerToken).toBeUndefined();
+    });
+  });
 });
