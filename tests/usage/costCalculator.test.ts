@@ -338,6 +338,72 @@ describe("costCalculator", () => {
     });
   });
 
+  describe("long-context tier selection", () => {
+    // A model that publishes above-200k rates: 2x input, 1.5x output.
+    const tiered = {
+      inputCostPerToken: 0.000003,
+      outputCostPerToken: 0.000015,
+      cacheWriteCostPerToken: 0,
+      cacheReadCostPerToken: 0,
+      inputCostPerTokenAbove200k: 0.000006,
+      outputCostPerTokenAbove200k: 0.0000225,
+    };
+
+    const counts = (inputTokens: number, outputTokens = 1000): TokenCounts => ({
+      inputTokens,
+      outputTokens,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 0,
+    });
+
+    it("auto (the default) picks the tier from a single request's prompt size", () => {
+      const small = applyPricing(tiered, counts(100_000));
+      expect(small).toBeCloseTo(100_000 * 0.000003 + 1000 * 0.000015, 12);
+
+      const large = applyPricing(tiered, counts(250_000));
+      expect(large).toBeCloseTo(250_000 * 0.000006 + 1000 * 0.0000225, 12);
+    });
+
+    it("an explicit tier overrides what the token count would imply", () => {
+      // The regression this guards: a bucket that SUMS many ordinary turns has
+      // a huge combined input, but every request in it was billed base-tier.
+      // Inferring from the sum would silently upcharge the whole bucket.
+      const summed = counts(5_000_000, 200_000);
+      const asAggregate = applyPricing(tiered, summed, "base");
+      expect(asAggregate).toBeCloseTo(
+        5_000_000 * 0.000003 + 200_000 * 0.000015,
+        12
+      );
+      expect(asAggregate).toBeLessThan(applyPricing(tiered, summed));
+    });
+
+    it("forces the long tier even for a bucket below the boundary", () => {
+      // The mirror case: genuinely-long turns summed into a small-looking
+      // bucket must not fall back to base rates.
+      const cost = applyPricing(tiered, counts(10_000, 500), "long");
+      expect(cost).toBeCloseTo(10_000 * 0.000006 + 500 * 0.0000225, 12);
+    });
+
+    it("ignores a forced long tier when the model publishes no above-200k rates", () => {
+      const flat = {
+        inputCostPerToken: 0.000003,
+        outputCostPerToken: 0.000015,
+        cacheWriteCostPerToken: 0,
+        cacheReadCostPerToken: 0,
+      };
+      expect(applyPricing(flat, counts(10_000, 500), "long")).toBeCloseTo(
+        10_000 * 0.000003 + 500 * 0.000015,
+        12
+      );
+    });
+
+    it("prices an empty bucket at zero in every tier", () => {
+      for (const tier of ["auto", "base", "long"] as const) {
+        expect(applyPricing(tiered, counts(0, 0), tier)).toBe(0);
+      }
+    });
+  });
+
   describe("getModelMaxContextTokens", () => {
     it.each([
       ["claude-opus-5", 1_000_000],

@@ -22,7 +22,13 @@ import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
-import { loadPricing, getModelPricing, applyPricing } from "../usage/costCalculator";
+import {
+  loadPricing,
+  getModelPricing,
+  applyPricing,
+  TIER_BOUNDARY,
+  type TokenCounts,
+} from "../usage/costCalculator";
 import { extractCacheCreate1hTokens } from "../usage/cacheTtl";
 import {
   readDiskCache,
@@ -227,7 +233,7 @@ async function scanSessionFile(
             outputTokens += out;
             cacheCreateTokens += cc;
             cacheReadTokens += cr;
-            accumulateTokens(perModelTokens, model, inp, out, cc, cr, cc1h);
+            accumulateTurn(perModelTokens, model, inp, out, cc, cr, cc1h);
           }
 
           if (entry.isApiErrorMessage) errorCount++;
@@ -771,21 +777,72 @@ export async function scanSessionDetail(
 
 // `cc1h` is the slice of `cc` written at the 1-hour cache TTL, which bills at
 // 2x base input rather than 1.25x.
-type PerModelTokens = Map<
-  string,
-  { i: number; o: number; cc: number; cc1h: number; cr: number }
->;
+type TokenBucket = { i: number; o: number; cc: number; cc1h: number; cr: number };
 
-function accumulateTokens(
+/**
+ * Per-model token totals, **split by long-context pricing tier**.
+ *
+ * The above-200k tier is a per-*request* decision: a single turn whose prompt
+ * exceeds 200k bills its whole input and output at the higher rates. That
+ * decision cannot be made after summing — a session's combined input crosses
+ * 200k routinely without any individual turn coming close, and pricing the
+ * summed bucket would then bill every ordinary turn long-context. So each turn
+ * lands in `base` or `long` as it is read, and the two are priced separately.
+ */
+type PerModelTokens = Map<string, { base: TokenBucket; long: TokenBucket }>;
+
+function emptyBucket(): TokenBucket {
+  return { i: 0, o: 0, cc: 0, cc1h: 0, cr: 0 };
+}
+
+function tiersFor(map: PerModelTokens, model: string | undefined) {
+  const key = model && model !== "<synthetic>" ? model : "unknown";
+  let entry = map.get(key);
+  if (!entry) {
+    entry = { base: emptyBucket(), long: emptyBucket() };
+    map.set(key, entry);
+  }
+  return entry;
+}
+
+function addInto(dest: TokenBucket, src: TokenBucket): void {
+  dest.i += src.i; dest.o += src.o; dest.cc += src.cc;
+  dest.cc1h += src.cc1h; dest.cr += src.cr;
+}
+
+/** Accumulate ONE assistant turn, choosing its tier from its own prompt size. */
+function accumulateTurn(
   map: PerModelTokens,
   model: string | undefined,
   inp: number, out: number, cc: number, cr: number,
   cc1h = 0,
 ): void {
-  const key = model && model !== "<synthetic>" ? model : "unknown";
-  const ex = map.get(key) ?? { i: 0, o: 0, cc: 0, cc1h: 0, cr: 0 };
-  ex.i += inp; ex.o += out; ex.cc += cc; ex.cc1h += cc1h; ex.cr += cr;
-  map.set(key, ex);
+  const tiers = tiersFor(map, model);
+  const bucket = inp > TIER_BOUNDARY ? tiers.long : tiers.base;
+  addInto(bucket, { i: inp, o: out, cc, cc1h, cr });
+}
+
+/** Fold one already-tier-split map into another, preserving the split. */
+function mergePerModel(dest: PerModelTokens, src: PerModelTokens): void {
+  for (const [model, tiers] of src) {
+    const into = tiersFor(dest, model);
+    addInto(into.base, tiers.base);
+    addInto(into.long, tiers.long);
+  }
+}
+
+/**
+ * Fold in a pre-aggregated, tier-less file total — the disk-cache hit path,
+ * which stored only whole-file sums and no per-turn breakdown. Attributed to
+ * `base`: the individual turns behind it were overwhelmingly sub-200k, and
+ * assuming otherwise would overcharge the entire file.
+ */
+function accumulateCachedFileTotal(
+  map: PerModelTokens,
+  model: string | undefined,
+  inp: number, out: number, cc: number, cr: number,
+): void {
+  addInto(tiersFor(map, model).base, { i: inp, o: out, cc, cc1h: 0, cr });
 }
 
 async function scanConversationFile(filePath: string): Promise<{
@@ -835,7 +892,7 @@ async function scanConversationFile(filePath: string): Promise<{
             result.outputTokens += out;
             result.cacheCreateTokens += cc;
             result.cacheReadTokens += cr;
-            accumulateTokens(result.perModelTokens, model, inp, out, cc, cr, cc1h);
+            accumulateTurn(result.perModelTokens, model, inp, out, cc, cr, cc1h);
           }
           if (entry.isApiErrorMessage) result.errors++;
           if (Array.isArray(msg.content)) {
@@ -869,17 +926,24 @@ async function scanConversationFile(filePath: string): Promise<{
  */
 function computeCostFromPerModel(perModelTokens: PerModelTokens): number {
   let cost = 0;
-  for (const [model, toks] of perModelTokens) {
+  for (const [model, tiers] of perModelTokens) {
     const pricing = getModelPricing(model === "unknown" ? "" : model);
-    cost += applyPricing(pricing, {
-      inputTokens: toks.i,
-      outputTokens: toks.o,
-      cacheCreateTokens: toks.cc,
-      cacheCreate1hTokens: toks.cc1h,
-      cacheReadTokens: toks.cr,
-    });
+    // Each bucket is a sum of many requests, so the tier is passed explicitly
+    // rather than inferred from the summed prompt size.
+    cost += applyPricing(pricing, toCounts(tiers.base), "base");
+    cost += applyPricing(pricing, toCounts(tiers.long), "long");
   }
   return cost;
+}
+
+function toCounts(bucket: TokenBucket): TokenCounts {
+  return {
+    inputTokens: bucket.i,
+    outputTokens: bucket.o,
+    cacheCreateTokens: bucket.cc,
+    cacheCreate1hTokens: bucket.cc1h,
+    cacheReadTokens: bucket.cr,
+  };
 }
 
 export async function scanClaudeConversations(
@@ -923,9 +987,7 @@ export async function scanClaudeConversations(
       for (const [tool, count] of Object.entries(r.tools)) {
         stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count;
       }
-      for (const [model, toks] of r.perModelTokens) {
-        accumulateTokens(perModel, model, toks.i, toks.o, toks.cc, toks.cr, toks.cc1h);
-      }
+      mergePerModel(perModel, r.perModelTokens);
     }
   }
 
@@ -1073,12 +1135,10 @@ async function scanConversationDirs(
         }
 
         if (fileCostPerModel && fileCostPerModel.size > 0) {
-          for (const [model, toks] of fileCostPerModel) {
-            accumulateTokens(aggregatePerModel, model, toks.i, toks.o, toks.cc, toks.cr);
-          }
+          mergePerModel(aggregatePerModel, fileCostPerModel);
         } else {
           // Cache hit — no per-model breakdown; attribute to "unknown" (sonnet fallback pricing).
-          accumulateTokens(aggregatePerModel, "unknown",
+          accumulateCachedFileTotal(aggregatePerModel, "unknown",
             fileStats.inputTokens, fileStats.outputTokens,
             fileStats.cacheCreateTokens, fileStats.cacheReadTokens,
           );

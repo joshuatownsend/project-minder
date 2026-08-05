@@ -113,9 +113,10 @@ const CLAUDE_FAMILY_MATCHERS: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * Resolve any Claude model id to a canonical `FALLBACK_PRICING` key, or null
- * when the id is not recognisably Claude. Shared by `getModelPricing` and
- * `getModelMaxContextTokens` so the two never disagree about which generation
- * an id belongs to.
+ * when the id is not recognisably Claude. Used by `getModelPricing` only —
+ * `getModelMaxContextTokens` deliberately keeps its own table, because pricing
+ * and context windows group models differently (see
+ * `CLAUDE_MAX_CONTEXT_MATCHERS`).
  */
 function resolveClaudeFamily(model: string): string | null {
   const lower = model.toLowerCase();
@@ -401,6 +402,21 @@ export interface TokenCounts {
   cacheReadTokens: number;
 }
 
+/** Prompt-size threshold that selects the long-context pricing tier. */
+export const TIER_BOUNDARY = 200_000;
+
+/**
+ * Which long-context tier to bill a `TokenCounts` at.
+ *
+ * - `auto` (default) — infer from `tokens.inputTokens`. Correct **only** when
+ *   the tuple is a single request, which is what every per-turn caller passes.
+ * - `base` / `long` — force the tier. A caller holding a tuple that is a *sum*
+ *   of several requests must say which tier those requests were in, because
+ *   `auto` would read the summed input as one enormous prompt and bill the
+ *   whole bucket long-context once the running total crossed 200k.
+ */
+export type PricingTier = "auto" | "base" | "long";
+
 /**
  * Apply pricing to a token-count tuple. Sync — caller is responsible for
  * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
@@ -409,10 +425,11 @@ export interface TokenCounts {
  * and the SQLite ingest path. Both must produce identical numbers when
  * P2b switches the read side over.
  */
-/** Prompt-size threshold that selects the long-context pricing tier. */
-const TIER_BOUNDARY = 200_000;
-
-export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number {
+export function applyPricing(
+  pricing: ModelPricing,
+  tokens: TokenCounts,
+  tier: PricingTier = "auto"
+): number {
   // Long-context pricing is a per-request TIER selected by prompt size, NOT a
   // marginal per-bucket split. LiteLLM/Anthropic switch the rates based on the
   // request's input (prompt) size: once it exceeds 200k, the ENTIRE request's
@@ -421,10 +438,12 @@ export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number
   // undercharged a 250k-input/short-output call vs provider billing.
   // Cache tokens stay at their base rate — ModelPricing doesn't carry
   // cache above-200k rates today.
+  const publishesLongRates =
+    pricing.inputCostPerTokenAbove200k !== undefined ||
+    pricing.outputCostPerTokenAbove200k !== undefined;
   const longContext =
-    tokens.inputTokens > TIER_BOUNDARY &&
-    (pricing.inputCostPerTokenAbove200k !== undefined ||
-      pricing.outputCostPerTokenAbove200k !== undefined);
+    publishesLongRates &&
+    (tier === "long" || (tier === "auto" && tokens.inputTokens > TIER_BOUNDARY));
 
   const inputRate =
     longContext && pricing.inputCostPerTokenAbove200k !== undefined
