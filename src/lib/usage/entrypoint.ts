@@ -8,41 +8,48 @@
  * `sessionKind` present on **5 sessions (0.1%)** and only ever valued `bg`.
  * It is a marker emitted for background runs, not an enum.
  *
- * `entrypoint` is the axis with real discriminating power, and it is on
- * **100%** of sessions (zero lacking it), so unlike `effort` there is no
- * unknown bucket to design around:
+ * `entrypoint` is the axis with real discriminating power, and the numbers
+ * below are from the **index** (period=all, the panel's own population) rather
+ * than a file walk — see the caveat at the end for why that distinction cost a
+ * round of wrong documentation:
  *
- *     sdk-cli   3,244   88.0%
- *     sdk-py      274    7.4%
- *     cli         167    4.5%
+ *     cli       1,301 sessions  41.0%   $15,882.85   95.8% of spend
+ *     sdk-cli   1,535 sessions  48.3%      $428.50    2.6%
+ *     sdk-py      291 sessions   9.2%      $128.87    0.8%
+ *     unknown      50 sessions   1.6%      $139.19    0.8%
  *
- * That distribution is the finding: the overwhelming majority of sessions are
- * SDK-driven, so every unsegmented "per session" average this dashboard
- * reports is dominated by automated runs.
+ * The finding is the **inversion**: 57.5% of sessions are SDK-driven and they
+ * account for 3.4% of the bill, while interactive sessions are 41% of sessions
+ * and 95.8% of spend. Per session that is $12.21 against $0.28 — an
+ * interactive session costs roughly **44x** an automated one. Either share
+ * read alone produces a confident wrong answer about where the money goes,
+ * which is why the panel refuses to show one without the other.
  *
- * **Two caveats on those percentages.** They are *session counts*, and the
- * cost split inverts — measured on the index, an interactive session cost
- * ~33x an SDK one — which is exactly why the panel reports both shares rather
- * than either alone. And they come from a plain walk of the per-project
- * transcript files under `~/.claude/projects`, which does NOT include the
- * ~1,256 subagent transcripts under `<session>/subagents/` that the indexer
- * also ingests (a glob for those cannot be written literally here — the
- * `star-slash` in it would close this comment). The
- * panel's population is the index, so its shares will not match these figures.
- * Quote numbers from the DB, not from a file probe.
+ * `unknown` is NOT hypothetical padding: 50 real sessions land there. An
+ * earlier draft of this file asserted 100% coverage on the strength of a file
+ * probe and was wrong.
  *
- * A caution learned the expensive way: `sdk-py` appeared in **none** of a
- * newest-400-file sample and surfaced only on the full-corpus pass. Enumerate
- * this vocabulary over the whole corpus, never the recent head.
+ * Two cautions, both learned by getting it wrong first:
+ *
+ *   - `sdk-py` appeared in **none** of a newest-400-file sample and surfaced
+ *     only on the full-corpus pass. Enumerate this vocabulary over the whole
+ *     history, never the recent head.
+ *   - A walk of the per-project transcript files does NOT see the ~1,256
+ *     subagent transcripts under `<session>/subagents/` that the indexer also
+ *     ingests, and those are overwhelmingly `cli` (a subagent inherits its
+ *     parent's entrypoint). Measured that way the split reads as 88% sdk-cli /
+ *     4.5% cli — nearly the opposite of what the panel shows. **Quote figures
+ *     from the index, never from a file probe.**
  */
 
 /**
  * Bucket for a session with no recorded entrypoint.
  *
- * Unobserved in the current corpus (0 of 3,685) but kept for the same reason
- * `low` is kept in the effort scale: a value that cannot be rendered is worse
- * than one that is merely unused. It also covers the window before a re-index
- * populates `sessions.entrypoint`, when every row reads NULL.
+ * Real, not defensive: **50 indexed sessions** land here. A file probe had
+ * suggested 100% coverage, which is how this bucket came close to being
+ * written off as padding — the index disagreed. It also covers the window
+ * before a re-index populates `sessions.entrypoint`, when every row reads
+ * NULL and the panel's whole population is this bucket.
  */
 export const UNKNOWN_ENTRYPOINT = "unknown";
 

@@ -138,12 +138,14 @@ people expect:
 | `sdk-py` | SDK (Python) | Driven by a program through the Python SDK |
 
 The panel exists because pooling these makes every per-session average
-meaningless. On the reference machine SDK-driven runs outnumbered interactive
-ones by more than an order of magnitude while costing a small fraction as much
-per session — so an unsegmented "average cost per session" was really the
-average cost of an automated run, with the interactive work averaged away into
-it. Your own split is whatever the panel shows; the shape (many cheap
-automated runs, few expensive interactive ones) is the part that generalizes.
+meaningless. On the reference index, SDK-driven runs were **57.5% of sessions
+but 3.4% of spend**, while interactive sessions were 41% of sessions and
+**95.8% of spend** — $12.21 per session against $0.28, roughly a 44x
+difference. An unsegmented "average cost per session" blends those into a
+number that describes neither.
+
+Your own split is whatever the panel shows. The shape — many cheap automated
+runs, fewer expensive interactive ones — is the part that generalizes.
 
 ### Read the two percentages together
 
