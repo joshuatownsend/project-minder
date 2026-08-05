@@ -245,7 +245,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       db,
       `SELECT session_id, effort, COUNT(*) AS n
        FROM turns
-       WHERE role = 'assistant' AND is_sidechain = 0 AND effort IS NOT NULL
+       WHERE role = 'assistant' AND is_sidechain = 0
+         AND effort IS NOT NULL AND effort != ''
        GROUP BY session_id, effort`
     ).all() as EffortCountRow[],
     (r) => [r.session_id, r.effort, r.n]

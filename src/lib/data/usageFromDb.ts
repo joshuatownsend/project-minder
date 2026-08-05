@@ -411,7 +411,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
 function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown[] {
   const rows = prepCached(db,
       `SELECT
-         COALESCE(t.effort, @unknownEffort) AS effort,
+         COALESCE(NULLIF(t.effort, ''), @unknownEffort) AS effort,
          COUNT(*)                     AS turns,
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
@@ -424,7 +424,7 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY COALESCE(t.effort, @unknownEffort)`
+       GROUP BY COALESCE(NULLIF(t.effort, ''), @unknownEffort)`
     )
     .all({ ...f, unknownEffort: UNKNOWN_EFFORT }) as Array<{
       effort: string; turns: number; tokens: number; cost: number;

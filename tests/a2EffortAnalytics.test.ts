@@ -240,7 +240,11 @@ function jsonlAssistant(
     },
   };
   // Top-level on the entry, NOT inside `message` — see A1.
-  if (effort) e.effort = effort;
+  // `!== undefined`, not truthiness: `""` must reach the fixture as a real
+  // empty-string field so the empty-effort normalization test has something
+  // to normalize. Truthiness here would omit it and the test would pass
+  // against a legacy-shaped turn instead.
+  if (effort !== undefined) e.effort = effort;
   return e;
 }
 
@@ -570,6 +574,35 @@ describe.skipIf(!driverAvailable)("byEffort — file-parse vs SQLite parity", ()
     expect(rows.xhigh.turns).toBe(3);
     expect(rows.medium.turns).toBe(2);
     expect(rows[UNKNOWN_EFFORT].turns).toBe(3);
+  });
+
+  it("buckets an empty-string effort as unknown on both backends", async () => {
+    // `effortBucket("")` maps empty to `unknown`, but SQL `COALESCE` only
+    // catches NULL — so an `"effort": ""` turn would form its own empty-labelled
+    // bucket under MINDER_USE_DB=1 while the file backend folded it into
+    // `unknown`. Same class of silent per-backend divergence as the adapter gap,
+    // in a value neither reader filters out (both assign `entry.effort`
+    // verbatim). Found by Codex on PR #378.
+    const dir = path.join(tmpHome, ".claude", "projects", "C--dev-x");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "empty-effort.jsonl"),
+      [
+        { type: "user", timestamp: "2026-08-01T08:00:00Z", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+        jsonlAssistant("2026-08-01T08:00:01Z", "", [{ type: "text", text: "hello" }]),
+        jsonlAssistant("2026-08-01T08:00:02Z", "high", [{ type: "text", text: "still here" }]),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n"
+    );
+
+    for (const useDb of [false, true]) {
+      const rows = await reportFrom(useDb);
+      const labels = rows.map((r) => r.effort);
+      expect(labels, `backend useDb=${useDb}`).not.toContain("");
+      expect(labels.sort()).toEqual([UNKNOWN_EFFORT, "high"].sort());
+      expect(byKey(rows)[UNKNOWN_EFFORT].turns, `backend useDb=${useDb}`).toBe(1);
+    }
   });
 
   it("leaves oneShotRate undefined for a bucket that anchored no task", async () => {

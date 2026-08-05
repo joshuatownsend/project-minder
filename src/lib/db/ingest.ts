@@ -1792,7 +1792,12 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       // A1. `?? null` is required, not cosmetic: better-sqlite3 throws on an
       // `undefined` named parameter rather than binding NULL, and every one of
       // these is absent on pre-2.1.212 transcripts.
-      effort: t.effort ?? null,
+      // `|| null`, not `?? null`: an empty-string effort is not a reasoning
+      // level, and `effortBucket("")` maps it to `unknown` on the file
+      // backend. Storing `''` would make the two backends bucket the same
+      // turn differently (Codex review, PR #378). The read paths normalize
+      // too, so pre-existing `''` rows are handled without a re-parse.
+      effort: t.effort || null,
       attribution_skill: t.attributionSkill ?? null,
       attribution_mcp_server: t.attributionMcpServer ?? null,
       attribution_mcp_tool: t.attributionMcpTool ?? null,
@@ -2223,7 +2228,12 @@ function appendSessionTail(
       // A1. `?? null` is required, not cosmetic: better-sqlite3 throws on an
       // `undefined` named parameter rather than binding NULL, and every one of
       // these is absent on pre-2.1.212 transcripts.
-      effort: t.effort ?? null,
+      // `|| null`, not `?? null`: an empty-string effort is not a reasoning
+      // level, and `effortBucket("")` maps it to `unknown` on the file
+      // backend. Storing `''` would make the two backends bucket the same
+      // turn differently (Codex review, PR #378). The read paths normalize
+      // too, so pre-existing `''` rows are handled without a re-parse.
+      effort: t.effort || null,
       attribution_skill: t.attributionSkill ?? null,
       attribution_mcp_server: t.attributionMcpServer ?? null,
       attribution_mcp_tool: t.attributionMcpTool ?? null,
