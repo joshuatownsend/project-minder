@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:4cad982f432f | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T03:04:37.012Z -->
+## ★ Insight
+The bug class here is **semantic drift across an abstraction boundary**. `applyPricing` inferred the pricing tier from `tokens.inputTokens > 200_000` — valid only because every caller passed *one request*. That precondition lived in a comment, not the type. When I made `computeCostFromPerModel` delegate to it, I handed it a *sum* of requests, and the inference silently became wrong in the expensive direction.
+
+---
+
 <!-- insight:f46f2c9c7c3a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T02:16:01.662Z -->
 ## ★ Insight
 LiteLLM already publishes `cache_creation_input_token_cost_above_1hr` — `parseLiteLLMEntry` just never read it. So the online path needs a two-line fix, not new data.
