@@ -183,6 +183,47 @@ interface IngestStats {
   filesChanged: number;
   rowsWritten: number;
   errors: number;
+  /**
+   * Files left untouched because their stored rows were derived by a NEWER
+   * build than this one. Counted rather than ignored: this is the one skip
+   * that means "your index is ahead of your binary", and a silent version of
+   * it is why the 2026-08-05 downgrade was found only by chance, hours later,
+   * while investigating why a just-shipped panel rendered nothing.
+   */
+  newerDerivationSkips: number;
+}
+
+/**
+ * Would writing this session with the CURRENT build LOSE information?
+ *
+ * The staleness gates used to compare `stored === DERIVED_VERSION`, which is
+ * true-or-false in both directions: a build at version 12 reading rows stamped
+ * 14 concluded "stale" exactly as it would for rows stamped 11, re-derived
+ * them, and wrote 12 back — dropping every column the newer build had added.
+ *
+ * That is not hypothetical. On 2026-08-05 a v14 re-parse wrote 4,894 sessions
+ * carrying 22,682 `turns.effort` values and 1,141 `task_outcome` stamps; a tray
+ * packaged 2026-08-03 (`DERIVED_VERSION = 12`) started ~30 minutes later, and
+ * the index was subsequently observed holding 5,001 sessions all stamped 12
+ * with every one of those columns empty. The overwrite itself was not watched
+ * happening — but nothing else writes those columns, and a downgrade leaves no
+ * other trace, which is precisely the problem: it looks like ordinary work.
+ *
+ * Derivation versions only ever move forward, so a stored value ABOVE ours
+ * means those rows came from a build that knows strictly more than we do. We
+ * cannot improve them and must not touch them: leaving a newer row alone costs
+ * nothing (the newer build re-derives it on its next sweep), while rewriting
+ * one destroys data no re-parse at this version can reconstruct.
+ *
+ * Deliberately NOT applied under `force`. None of the three watcher call sites
+ * pass it — startup, unlink-triggered, and periodic sweeps are all automatic —
+ * so `force` is the explicit "rebuild it anyway" escape hatch, the one thing
+ * that lets a genuinely rolled-back install re-derive rather than being stuck
+ * with rows it can't rewrite. (The other exit is deleting `index.db`, which is
+ * always safe: the DB is a derived index, not the source of truth.)
+ */
+function isNewerDerivation(storedVersion: number): boolean {
+  return storedVersion > DERIVED_VERSION;
 }
 
 interface ParsedToolUse {
@@ -2580,6 +2621,14 @@ export interface FileReconcileResult {
   affectedDays: Set<string>;
   /** (day|project|category) tuples whose category_costs row needs recomputing. */
   affectedCategoryTuples: Set<string>;
+  /**
+   * Set when the file was left alone because its stored rows outrank this
+   * build ({@link isNewerDerivation}). Distinct from an ordinary no-op skip:
+   * that one means "already up to date", this one means "your binary is
+   * behind your index", which is worth surfacing rather than inferring from
+   * a `rowsWritten: 0` that looks identical to the healthy case.
+   */
+  skippedNewerDerivation?: boolean;
 }
 
 /**
@@ -2635,6 +2684,18 @@ export async function reconcileSessionFile(
         "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
       )
       .get(sessionId) as typeof existing;
+
+    // Newer-derivation guard, checked BEFORE the unchanged-file gate below
+    // and before the tail/full-replace decision that follows. Position is
+    // load-bearing: the unchanged-file gate only fires when mtime AND size
+    // both match, so a session that merely GREW slipped past it, failed
+    // `derived_version === DERIVED_VERSION`, and fell through to a
+    // full-replace — which is precisely the path that rewrote v14 rows as
+    // v12. Guarding only the no-op gate would have left that hole open.
+    if (existing && isNewerDerivation(existing.derived_version)) {
+      return { ...empty, skippedNewerDerivation: true };
+    }
+
     if (
       existing &&
       existing.file_path === filePath &&
@@ -3111,6 +3172,14 @@ async function reconcileAdapterSessionFile(
   }
   if (size > MAX_SESSION_FILE_SIZE) return empty;
 
+  // Same newer-derivation guard as the Claude path. Adapter files have no
+  // tail-append path — a changed file is always fully re-parsed and replaced
+  // — so an old build reaching here would rewrite the whole session at its
+  // own lower version, losing exactly as much as the Claude path did.
+  if (!force && existingMeta && isNewerDerivation(existingMeta.derived_version)) {
+    return { ...empty, skippedNewerDerivation: true };
+  }
+
   if (
     !force &&
     existingMeta &&
@@ -3173,7 +3242,13 @@ export async function reconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
-  const stats: IngestStats = { filesSeen: 0, filesChanged: 0, rowsWritten: 0, errors: 0 };
+  const stats: IngestStats = {
+    filesSeen: 0,
+    filesChanged: 0,
+    rowsWritten: 0,
+    errors: 0,
+    newerDerivationSkips: 0,
+  };
 
   await loadPricing();
 
@@ -3338,6 +3413,7 @@ export async function reconcileAllSessions(
       stats.filesSeen++;
       try {
         const result = await reconcileSessionFile(db, filePath, dirName, options);
+        if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
         if (result.rowsWritten > 0) {
           stats.filesChanged++;
           stats.rowsWritten += result.rowsWritten;
@@ -3367,6 +3443,7 @@ export async function reconcileAllSessions(
         existingAdapterMeta.get(file.filePath),
         options.force ?? false
       );
+      if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
       if (result.rowsWritten > 0) {
         stats.filesChanged++;
         stats.rowsWritten += result.rowsWritten;
@@ -3490,6 +3567,22 @@ export async function reconcileAllSessions(
   // tick re-tries the failed files; once they succeed, the gate clears.
   if (stats.errors === 0) {
     db.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
+  }
+
+  // Say it out loud. A newer-derivation skip is not an error — the index is
+  // intact and richer than this build can produce — but it does mean the
+  // running binary is older than whatever last wrote the index, and every
+  // surface that reads the newer columns will look empty here. That is a
+  // confusing state to debug from the UI alone (it presents as "the feature
+  // I just shipped renders nothing"), so name the cause once per pass.
+  if (stats.newerDerivationSkips > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[ingest] ${stats.newerDerivationSkips} session(s) left untouched: their rows were ` +
+        `derived by a newer build than this one (this build: DERIVED_VERSION=${DERIVED_VERSION}). ` +
+        `The index is intact — this build simply can't re-derive it. Update, or force a rebuild ` +
+        `to re-derive at this version.`
+    );
   }
 
   return stats;
