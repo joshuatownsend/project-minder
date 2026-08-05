@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:f46f2c9c7c3a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T02:16:01.662Z -->
+## ★ Insight
+LiteLLM already publishes `cache_creation_input_token_cost_above_1hr` — `parseLiteLLMEntry` just never read it. So the online path needs a two-line fix, not new data.
+
+---
+
+<!-- insight:3f0c36299cb6 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T01:59:24.429Z -->
+## ★ Insight
+The probe changed the design materially: `attributionSkill` / `attributionMcpServer` sit on **assistant** entries, not tool_use entries. That's *causal* attribution ("this turn's tokens exist because skill X ran"), which is semantically different from Minder's existing `tool_uses.skill_name` (*"this call was a skill invocation"*). They belong on `turns`, not `tool_uses` — and that distinction is precisely what fixes the MCP cost over-attribution bug.
+
+---
+
+<!-- insight:17df9ff6cd19 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T01:40:46.662Z -->
+## ★ Insight
+Minder's core premise is "the filesystem is the source of truth" — so its ceiling is set by how much of the JSONL schema it actually decodes. A changelog line like "record reasoning effort on each assistant message" reads as trivia, but for Minder it's a **new free analytics dimension** already sitting on disk in every session file, retroactively.
+
+---
+
 <!-- insight:7f2c9a4e1d63 | session:3bf07297-7ab9-49b8-8385-336abe2908e3 | 2026-08-03T23:05:00.000Z -->
 ## ★ Insight
 v1.7.0's Linux AppImage build failed three times in a row on the same `libonnxruntime.so.1` error before actually shipping — each fix was real progress, but the bug had more layers than it looked like. (1) `serverExternalPackages` alone doesn't make Next's tracer copy a native package's sibling files — it only stops Next from *rewriting* the package; NFT still only follows JS-level `require()` calls, so `onnxruntime_binding.node` (a real require target) got copied but `libonnxruntime.so.1` (only reachable via the binding's own OS-level dynamic link) didn't, matching `better-sqlite3`'s exact pre-existing problem. (2) `resolvePackageDir()`'s `require.resolve(name + "/package.json")` pattern — used successfully elsewhere in `package-standalone.mjs` — silently breaks on any package whose own `package.json` declares an `exports` map without a `./package.json` subpath (confirmed: `@huggingface/transformers` has exactly this), throwing `ERR_PACKAGE_PATH_NOT_EXPORTED` that looked identical to "package genuinely not installed." Scanning `.pnpm` store directory names directly (matching `<pkg>@<version>` string prefixes) sidesteps this entirely and matches how this script's own husk-backfill logic already works. (3) pnpm's virtual store doesn't produce one copy of a transitive native dependency — this build had **eleven** separate `onnxruntime_binding.node` copies across three different `.pnpm/*` locations (a version-less passthrough, nested under the requiring parent, and the "canonical" `<pkg>@<version>` entry), with inconsistent completeness depending on which internal mechanism (Next's trace vs. this script's husk-repair) touched each one. A fix that resolves and repairs *one* location isn't a fix — it has to find and repair every occurrence.
