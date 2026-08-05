@@ -26,6 +26,7 @@ import { HourlyDistributionChart } from "./HourlyDistributionChart";
 import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
 import { ShareButton } from "./ShareButton";
+import { EffortPanel } from "./EffortPanel";
 
 import { formatCost, formatCostCompact, formatTokens, formatPct } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -1081,6 +1082,11 @@ export function UsageDashboard() {
                       })()}
                     </div>
                   )}
+                </div>
+
+                <div>
+                  <SectionHeader label="By Effort" />
+                  <EffortPanel rows={data.byEffort} currency={currency} fxRate={fxRate} />
                 </div>
               </div>
 

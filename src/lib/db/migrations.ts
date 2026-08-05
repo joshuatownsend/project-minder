@@ -655,6 +655,39 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 21,
+    name: "A2: per-turn one-shot task outcome for cross-tab analytics",
+    up: (db) => {
+      // "One-shot" is a property of a SEQUENCE (edit -> verify -> result), not
+      // of a turn, so it cannot be recovered by a GROUP BY over `turns`. Until
+      // now it existed only as the two session-level totals
+      // (`sessions.verified_task_count` / `one_shot_task_count`), which can be
+      // crossed with nothing finer than a whole session.
+      //
+      // This column records the outcome against the turn that STARTED each
+      // task — the assistant turn carrying the Edit/Write — so any turn-level
+      // dimension can be crossed with first-pass success by grouping on it.
+      // A2 uses `effort`; A4 (attribution_skill) and A6 (denial_kind) join the
+      // same column rather than each growing a rollup of their own.
+      //
+      // NULL is the overwhelming majority: it means "this turn did not start a
+      // verified task", which covers every user turn, every assistant turn
+      // without an edit, and every edit whose verification never ran. It does
+      // NOT mean failure.
+      const hasCol = (table: string, col: string) =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+          .some((c) => c.name === col);
+      if (!hasCol("turns", "task_outcome")) {
+        db.prepare("ALTER TABLE turns ADD COLUMN task_outcome TEXT").run();
+      }
+      // Partial: non-NULL on a small fraction of rows, which is exactly the
+      // subset every query against this column wants.
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_turns_task_outcome ON turns(task_outcome) WHERE task_outcome IS NOT NULL"
+      );
+    },
+  },
 ];
 
 function resolveSchemaPath(): string {

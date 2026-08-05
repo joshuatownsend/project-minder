@@ -63,6 +63,11 @@ project's:
 - **Headline** — total cost, tokens, turns, and sessions for the period.
 - **By model** — cost per Claude model (e.g. Opus vs Sonnet vs Haiku).
 - **By category** — cost per activity category (Coding, Testing, Git Ops, …).
+- **By effort** — cost per reasoning effort (`low`/`medium`/`high`/`xhigh`),
+  each with the share of tasks started at that effort that passed verification
+  first time. `—` means no verified tasks at that level, which is not the same
+  as a 0% success rate. See [Usage](usage.md) for the full explanation and for
+  what the `unknown` bucket covers.
 
 For a WSL project mapped to a distro-local Claude home, the tab automatically
 scopes to sessions recorded by **that distro's** home, so a second distro with

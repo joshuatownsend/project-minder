@@ -6,6 +6,7 @@ import type {
   ProjectBreakdown,
   CategoryBreakdown,
   CategoryType,
+  EffortBreakdown,
   DailyBucket,
   ProjectDetail,
   McpServerStats,
@@ -17,6 +18,7 @@ import type {
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { periodSinceIso } from "@/lib/usage/period";
+import { UNKNOWN_EFFORT, compareEffort } from "@/lib/usage/effort";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
@@ -123,6 +125,7 @@ export function loadUsageReportFromSql(
   const byModel = queryByModel(db, filter);
   const byProject = queryByProject(db, filter);
   const byCategory = queryByCategory(db, filter);
+  const byEffort = queryByEffort(db, filter);
   const daily = queryDaily(db, filter);
   const topTools = queryTopTools(db, filter);
   const mcpStats = queryMcpStats(db, filter);
@@ -161,6 +164,7 @@ export function loadUsageReportFromSql(
     byModel,
     byProject,
     byCategory,
+    byEffort,
     topTools,
     toolTransitions: [],
     toolSelfLoops: [],
@@ -388,6 +392,60 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
     tokens: r.tokens,
     cost: r.cost,
   }));
+}
+
+/**
+ * A2: spend and first-pass success by reasoning effort.
+ *
+ * The one-shot half is only possible because `turns.task_outcome` (schema v21)
+ * records each task's verdict against the turn that started it. Without that
+ * column this would have to rehydrate every turn *and its tool arguments*
+ * through `detectOneShotTasks` — the read-time cost the SQL backend exists to
+ * avoid — or be dropped on this backend the way `byCategory.oneShotRate` is.
+ *
+ * Both halves come from one GROUP BY so the spend and task columns are always
+ * over the same row set. Subagent turns are included in the spend half
+ * (matching byModel/byProject/byCategory) but contribute no tasks: ingest
+ * never anchors an outcome on a sidechain turn.
+ */
+function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown[] {
+  const rows = prepCached(db,
+      `SELECT
+         COALESCE(NULLIF(t.effort, ''), @unknownEffort) AS effort,
+         COUNT(*)                     AS turns,
+         COALESCE(SUM(t.input_tokens + t.output_tokens
+                    + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)     AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END)    AS oneShotTasks
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY COALESCE(NULLIF(t.effort, ''), @unknownEffort)`
+    )
+    .all({ ...f, unknownEffort: UNKNOWN_EFFORT }) as Array<{
+      effort: string; turns: number; tokens: number; cost: number;
+      verifiedTasks: number; oneShotTasks: number;
+    }>;
+
+  return rows
+    .map((r) => ({
+      effort: r.effort,
+      turns: r.turns,
+      tokens: r.tokens,
+      cost: r.cost,
+      verifiedTasks: r.verifiedTasks,
+      oneShotTasks: r.oneShotTasks,
+      // Omitted rather than 0 when nothing was measured — matches the file
+      // backend, and keeps "no data" distinguishable from "failed every time".
+      ...(r.verifiedTasks > 0
+        ? { oneShotRate: r.oneShotTasks / r.verifiedTasks }
+        : {}),
+    }))
+    .sort((a, b) => compareEffort(a.effort, b.effort));
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {

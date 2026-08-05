@@ -254,6 +254,21 @@ CREATE TABLE turns (
   attribution_skill    TEXT,
   attribution_mcp_server TEXT,
   attribution_mcp_tool TEXT,
+  -- Schema v21 / DERIVED_VERSION 14 (A2). Outcome of the verified task this
+  -- turn STARTED: 'one_shot' (verification passed, no re-edit followed) or
+  -- 'retry'. NULL means this turn started no verified task — true of every
+  -- user turn, every assistant turn without an Edit/Write, and every edit
+  -- whose verification never ran. NULL is not failure.
+  --
+  -- Recorded per turn rather than per session so first-pass success can be
+  -- crossed with any turn-level dimension: `effort` (A2), `attribution_skill`
+  -- (A4), `denial_kind` (A6). `detectOneShotTasks` picks the anchor turn; see
+  -- `OneShotTask` for why it is the edit turn and not the verification turn.
+  --
+  -- No CHECK constraint: SQLite's ALTER TABLE cannot add one, so declaring it
+  -- here would make a fresh DB enforce a rule a migrated DB does not. The
+  -- values come from a single writer, which is where the invariant is kept.
+  task_outcome         TEXT,
   -- Same `derived_version` semantics as on sessions/agents/skills/commands:
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.

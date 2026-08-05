@@ -297,7 +297,7 @@ export async function loadSessionDetailFromDb(
   // `turns(effort)` makes this a scan of only the rows that have one.
   const effortRows = prepCached(db,
       `SELECT effort, COUNT(*) AS n FROM turns
-       WHERE session_id = ? AND effort IS NOT NULL
+       WHERE session_id = ? AND effort IS NOT NULL AND effort != ''
        GROUP BY effort`
     )
     .all(sessionId) as { effort: string; n: number }[];

@@ -47,10 +47,47 @@ A bar chart showing daily spending across the selected period. Hover over bars t
 
 ## Breakdown Charts
 
-Three side-by-side charts breaking down costs by:
+Charts breaking down costs by:
 - **Model** — which Claude models consumed the most tokens (e.g., Opus vs Sonnet vs Haiku)
 - **Project** — which projects cost the most (hidden when a project filter is active)
 - **Category** — cost by activity type (see Activity Categories below)
+- **Effort** — cost by reasoning effort, crossed with first-pass success (see below)
+
+## By Effort
+
+Claude Code records the reasoning effort of each assistant turn (`low`,
+`medium`, `high`, `xhigh`). This panel shows what each level cost **and** how
+often work started at that level passed verification first time — because
+neither number means much alone. Cost by itself makes `xhigh` look like waste;
+a success rate by itself ignores what the success cost. Side by side they
+answer the actual question: does raising effort buy a better outcome, or just a
+larger bill?
+
+The rows are ordered by the effort scale, not by cost, so the trend reads
+left-to-right and doesn't reshuffle when you change period.
+
+**The `1-shot` column** counts *tasks*, not turns. A task is an edit followed by
+a verification command (test, build, lint); it counts as one-shot when the
+verification passed and no follow-up edit followed. Each task is attributed to
+the effort of the turn that made the **edit** — the work being judged — not the
+turn that ran the verification, which may differ.
+
+**`—` is not `0%`.** An em-dash means that effort level started no verified
+tasks in this period, so there is nothing to measure. A genuine 0% would mean
+every attempt needed a retry — the opposite reading.
+
+### The `unknown` bucket
+
+Turns with no recorded effort are shown as `unknown`, greyed, and are never
+folded into `medium`. Three different things land there:
+
+- transcripts written before Claude Code ~2.1.212, when the field didn't exist;
+- the small share of recent turns where Claude Code omits it;
+- sessions indexed before Minder learned to read the field — these fill in
+  automatically on the next re-index.
+
+On a long history `unknown` is usually the largest bucket. If it is the *only*
+bucket, the panel says so instead of drawing a single meaningless bar.
 
 ## Activity Categories
 
@@ -155,3 +192,9 @@ The Sessions browser also shows one-shot rate badges on individual session cards
 - 🟢 Green (≥80%) — excellent first-attempt success
 - 🟡 Amber (50–79%) — moderate retry rate
 - 🔴 Red (<50%) — frequent retries
+
+Next to it, sessions that recorded reasoning effort show an **effort mix** chip
+(e.g. `high×12 · xhigh×3`). The counts cover only turns that carried an
+effort, so on an older session the chip's total is smaller than the session's
+turn count — or absent entirely. The session detail page shows the same mix as
+an **Effort** cell in its stat strip.

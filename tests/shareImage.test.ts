@@ -14,6 +14,7 @@ function makeReport(overrides: Partial<UsageReport> = {}): UsageReport {
     cacheHitRate: 0.65,
     oneShot: { rate: 0.75, totalVerifiedTasks: 20, oneShotTasks: 15 },
     daily: [],
+    byEffort: [],
     byModel: [
       { model: "claude-opus-4-7-20250514", inputTokens: 600_000, outputTokens: 200_000, cacheReadTokens: 0, cacheCreateTokens: 0, cost: 8.0, turns: 200 },
       { model: "claude-sonnet-4-6-20250514", inputTokens: 500_000, outputTokens: 200_000, cacheReadTokens: 0, cacheCreateTokens: 0, cost: 4.34, turns: 180 },

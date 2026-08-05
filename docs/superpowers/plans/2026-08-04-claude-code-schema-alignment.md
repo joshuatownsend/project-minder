@@ -86,14 +86,14 @@ after a tool result to that server, instead of only the turns that consumed it.
 |---|---|---|---|---|
 | B1 | Pricing correctness: fallback refresh + cache-TTL split | B | — | **Done** (branch `b1-pricing-fallback-refresh`) |
 | A1 | Transcript schema decode + migration 20 + `DERIVED_VERSION` 13 | A | — | **Done** (branch `a1-transcript-decode`) — re-index wall-clock not yet measured |
-| A2 | Effort analytics (cost & one-shot rate by reasoning effort) | A | A1 | Not started |
+| A2 | Effort analytics (cost & one-shot rate by reasoning effort) | A | A1 | **Done** (branch `a2-effort-analytics`) — needed migration 21 + `DERIVED_VERSION` 14 |
 | A3 | `sessionKind` segmentation (interactive / bg / attached) | A | A1 | Not started |
 | A4 | Authoritative skill + MCP cost attribution | A | A1 | Not started |
 | A5 | Authoritative PR linkage (`type:"pr-link"`) | A | A1 | Not started |
 | A6 | Hook performance + permission/denial analytics | A | A1 | Not started |
 | C1 | `.claude/workflows/` catalog | C | — | Not started |
 | C2 | Runaway-delegation guardrail badges | C | A1 | Not started |
-| C3 | OTEL `tool_source` / `message.uuid` correlation | C | — | Not started |
+| C3 | OTEL `tool_source` / `message.uuid` correlation | C | — | Not started (migration 22 — A2 took 21) |
 | C4 | `DirectoryAdded` hook + skill frontmatter parity | C | — | Not started |
 
 Suggested order: **B1 → A1 → (A2 ‖ A3 ‖ A4 ‖ A5 ‖ A6) → (C1 ‖ C2 ‖ C3 ‖ C4)**.
@@ -266,9 +266,34 @@ report the re-index wall-clock in the PR. Confirm the migration is idempotent an
 that a mid-migration abort leaves a recoverable DB (the quarantine path at
 `migrations.ts:848-875` should already cover this; verify, don't assume).
 
-## A2 — Effort analytics
+## A2 — Effort analytics — SHIPPED
 
 The headline. `effort` is on 6979 assistant turns already, retroactively.
+
+**What the plan missed.** The cross-tab below was written as though it were a
+join between two things that already existed. It wasn't. "One-shot" is a
+property of an edit→verify→result *sequence*, not of a turn, so it cannot be
+recovered by grouping `turns` — and the only persisted form was
+`sessions.{verified_task_count, one_shot_task_count}`, which crosses with
+nothing finer than a whole session. Recomputing at read time would have meant
+rehydrating every turn *and its tool arguments* through the detector, which is
+the exact cost the SQL backend exists to avoid.
+
+Resolved with schema **v21**: `turns.task_outcome` records each task's verdict
+against the turn that *started* it. Deliberately built as a general turn-level
+join key rather than an effort-shaped rollup — A4 crosses it with
+`attribution_skill`, A6 with `denial_kind`, and the long-standing
+`byCategory.oneShotRate` backend divergence becomes a one-line fix.
+
+This forced `DERIVED_VERSION` **14**, a second bump on top of A1's shared one.
+Justified because `task_outcome` is not in the JSONL under any name — it is
+detector output over a whole session, so no migration backfills it and no query
+recovers it. Free in practice: the v13 re-parse had not yet run, so both
+collapse into one pass.
+
+Attribution goes to the **edit** turn, not the verification turn. The
+verification may run at a different effort, but it is the edit's work being
+judged.
 
 - `/usage` and `/costs`: an **Effort** breakdown alongside by-model / by-category.
 - Cross-tab effort × one-shot rate — the question worth answering is *"does `high`

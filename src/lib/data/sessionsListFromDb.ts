@@ -151,6 +151,12 @@ interface ToolCountRow {
   n: number;
 }
 
+interface EffortCountRow {
+  session_id: string;
+  effort: string;
+  n: number;
+}
+
 interface SkillCountRow {
   session_id: string;
   skill_name: string;
@@ -224,6 +230,26 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
        GROUP BY session_id, tool_name`
     ).all() as ToolCountRow[],
     (r) => [r.session_id, r.tool_name, r.n]
+  );
+
+  // A2: per-session effort histogram. `is_sidechain = 0` matches the
+  // file-parse path, where a subagent's turns live in a separate transcript
+  // file and so never reach the parent session's mix.
+  //
+  // `effort IS NOT NULL` is what makes absence survive: a session with no
+  // effort-carrying turns gets no row here at all, so the assembly below
+  // reads `undefined` rather than `{}`. An empty object would render as a
+  // chip showing zero of every level for a session that predates the field.
+  const effortMixBySession = groupCounts(
+    prepCached(
+      db,
+      `SELECT session_id, effort, COUNT(*) AS n
+       FROM turns
+       WHERE role = 'assistant' AND is_sidechain = 0
+         AND effort IS NOT NULL AND effort != ''
+       GROUP BY session_id, effort`
+    ).all() as EffortCountRow[],
+    (r) => [r.session_id, r.effort, r.n]
   );
 
   const skillsBySession = groupCounts(
@@ -367,6 +393,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       hasThinking: h.has_thinking === 1 || undefined,
       cliVersion: h.cli_version ?? undefined,
       sessionKind: h.session_kind ?? undefined,
+      // Deliberately no `?? {}` — see the query comment.
+      effortMix: effortMixBySession.get(h.session_id),
       aiTitle: h.ai_title ?? undefined,
       entrypoint: h.entrypoint ?? undefined,
       hasResumeAnomaly: h.has_resume_anomaly === 1 || undefined,
