@@ -7,26 +7,123 @@ import { resolveStateDir } from "@/lib/serverRoot";
 
 // ── Hardcoded fallback pricing (per token) ──────────────────────────────────
 
+// Rates are per token = ($ per MTok) / 1e6, transcribed from
+// https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-08-04).
+// Every Claude family charges cache writes at 1.25x base for the 5-minute TTL
+// and 2x base for the 1-hour TTL, and cache reads at 0.1x base.
+//
+// This table is the OFFLINE path only — `loadPricing()` prefers LiteLLM and
+// falls back here when the network and the disk cache are both unavailable. It
+// still has to be right: the same map backs `getModelPricing` before
+// `loadPricing()` resolves, and a stale table silently misprices every model
+// rather than failing loudly.
+//
+// Deliberately using Claude Sonnet 5's STANDARD $3/$15 rather than the
+// introductory $2/$10 that runs through 2026-08-31. The intro rate would be
+// more accurate for a few more weeks and then wrong forever; LiteLLM tracks the
+// live rate on the online path, so the durable number belongs here.
 const FALLBACK_PRICING: Record<string, ModelPricing> = {
+  // Fable / Mythos tier — $10 / $50
+  "claude-fable-5": {
+    inputCostPerToken: 0.00001,
+    outputCostPerToken: 0.00005,
+    cacheWriteCostPerToken: 0.0000125,
+    cacheWrite1hCostPerToken: 0.00002,
+    cacheReadCostPerToken: 0.000001,
+  },
+  // Opus 4.5 and later — $5 / $25
+  "claude-opus-5": {
+    inputCostPerToken: 0.000005,
+    outputCostPerToken: 0.000025,
+    cacheWriteCostPerToken: 0.00000625,
+    cacheWrite1hCostPerToken: 0.00001,
+    cacheReadCostPerToken: 0.0000005,
+  },
+  // Opus 4 / 4.1 / Opus 3 — the older $15 / $75 generation. Kept under the bare
+  // `claude-opus-4` key it has always used so existing rules and tests still
+  // resolve; `resolveClaudeFamily` routes only genuinely-old ids here.
   "claude-opus-4": {
     inputCostPerToken: 0.000015,
     outputCostPerToken: 0.000075,
     cacheWriteCostPerToken: 0.00001875,
+    cacheWrite1hCostPerToken: 0.00003,
     cacheReadCostPerToken: 0.0000015,
   },
+  // Every Sonnet generation from 3.5 through 5 — $3 / $15
   "claude-sonnet-4": {
     inputCostPerToken: 0.000003,
     outputCostPerToken: 0.000015,
     cacheWriteCostPerToken: 0.00000375,
+    cacheWrite1hCostPerToken: 0.000006,
     cacheReadCostPerToken: 0.0000003,
+  },
+  "claude-haiku-4-5": {
+    inputCostPerToken: 0.000001,
+    outputCostPerToken: 0.000005,
+    cacheWriteCostPerToken: 0.00000125,
+    cacheWrite1hCostPerToken: 0.000002,
+    cacheReadCostPerToken: 0.0000001,
   },
   "claude-haiku-3.5": {
     inputCostPerToken: 0.0000008,
     outputCostPerToken: 0.000004,
     cacheWriteCostPerToken: 0.000001,
+    cacheWrite1hCostPerToken: 0.0000016,
     cacheReadCostPerToken: 0.00000008,
   },
 };
+
+/**
+ * Claude model id → canonical `FALLBACK_PRICING` key, matched by substring and
+ * evaluated **in order, most specific first**.
+ *
+ * Order is load-bearing, and it is the whole reason this table exists rather
+ * than a plain map. Model ids nest: `claude-opus-4-8` contains `opus-4`, so a
+ * naive scan (or the progressive-shortening loop in `getModelPricing` step 3)
+ * resolves an Opus 4.8 turn to the Opus 4 entry and bills it at $15/$75 instead
+ * of $5/$25 — a 3x overcharge on the current default model. Matching 4.8/4.7/
+ * 4.6/4.5 before the bare `opus-4` fixes that, and the trailing generic entries
+ * mean an id newer than this table (`claude-opus-6`, say) inherits the newest
+ * known rates instead of the oldest.
+ */
+const CLAUDE_FAMILY_MATCHERS: ReadonlyArray<readonly [string, string]> = [
+  // Fable / Mythos share a tier and a price.
+  ["fable-5", "claude-fable-5"],
+  ["mythos", "claude-fable-5"],
+  // Opus, newest first.
+  ["opus-5", "claude-opus-5"],
+  ["opus-4-8", "claude-opus-5"],
+  ["opus-4-7", "claude-opus-5"],
+  ["opus-4-6", "claude-opus-5"],
+  ["opus-4-5", "claude-opus-5"],
+  ["opus-4-1", "claude-opus-4"],
+  ["3-opus", "claude-opus-4"],
+  ["opus-4", "claude-opus-4"],
+  // Sonnet — one price across 3.5 → 5, so every id lands on the same entry.
+  ["sonnet", "claude-sonnet-4"],
+  // Haiku.
+  ["haiku-4-5", "claude-haiku-4-5"],
+  ["3-5-haiku", "claude-haiku-3.5"],
+  ["haiku-3", "claude-haiku-3.5"],
+  // Unversioned or future ids inherit the newest known rates for their family.
+  ["opus", "claude-opus-5"],
+  ["haiku", "claude-haiku-4-5"],
+  ["fable", "claude-fable-5"],
+];
+
+/**
+ * Resolve any Claude model id to a canonical `FALLBACK_PRICING` key, or null
+ * when the id is not recognisably Claude. Shared by `getModelPricing` and
+ * `getModelMaxContextTokens` so the two never disagree about which generation
+ * an id belongs to.
+ */
+function resolveClaudeFamily(model: string): string | null {
+  const lower = model.toLowerCase();
+  for (const [token, key] of CLAUDE_FAMILY_MATCHERS) {
+    if (lower.includes(token)) return key;
+  }
+  return null;
+}
 
 // Zero-cost pricing for an unknown NON-Claude model id. Returned instead of the
 // Claude Sonnet default so an unpriceable `gpt-*` / `gemini-*` id surfaces as a
@@ -73,6 +170,10 @@ function parseLiteLLMEntry(entry: Record<string, unknown>): ModelPricing {
     (entry["cache_read_input_token_cost"] as number) ?? input * 0.1;
   const cacheWrite =
     (entry["cache_creation_input_token_cost"] as number) ?? input * 1.25;
+  // 1-hour-TTL cache writes bill at 2x base where the provider offers the
+  // longer TTL. Carried through only when LiteLLM publishes it, so a model
+  // with a single write rate keeps flat cache-write pricing.
+  const cacheWrite1h = entry["cache_creation_input_token_cost_above_1hr"];
   // Tiered >200k pricing (Claude 1M-context / long-context surcharge). Only
   // carried through when LiteLLM actually publishes the field for this model,
   // so models without a tier keep flat pricing. See A4.
@@ -83,6 +184,7 @@ function parseLiteLLMEntry(entry: Record<string, unknown>): ModelPricing {
     outputCostPerToken: output,
     cacheWriteCostPerToken: cacheWrite,
     cacheReadCostPerToken: cacheRead,
+    ...(typeof cacheWrite1h === "number" ? { cacheWrite1hCostPerToken: cacheWrite1h } : {}),
     ...(typeof inputAbove === "number" ? { inputCostPerTokenAbove200k: inputAbove } : {}),
     ...(typeof outputAbove === "number" ? { outputCostPerTokenAbove200k: outputAbove } : {}),
   };
@@ -170,10 +272,29 @@ export function getModelPricing(model: string): ModelPricing {
   let base = map.get(model);
 
   if (!base) {
-    // 2. Fuzzy match: strip date suffix and progressively shorten
+    // 2. Strip a trailing date suffix and retry exactly. A bare
+    //    `claude-opus-4-8` is a real LiteLLM key, so this catches the dated
+    //    snapshots without any generation-guessing.
     const dateSuffixPattern = /-\d{8}$/;
-    let candidate = model.replace(dateSuffixPattern, "");
+    const undated = model.replace(dateSuffixPattern, "");
+    if (undated !== model) base = map.get(undated) ?? FALLBACK_PRICING[undated];
+  }
 
+  if (!base) {
+    // 3. Claude family match, most-specific-first. This runs BEFORE the
+    //    progressive-shortening loop below on purpose: shortening walks
+    //    `claude-opus-4-8` → `claude-opus-4`, which is a real key for the older
+    //    $15/$75 generation, so it would resolve a current Opus turn to triple
+    //    its true rate. `resolveClaudeFamily` pins the generation first.
+    const family = resolveClaudeFamily(model);
+    if (family) base = map.get(family) ?? FALLBACK_PRICING[family];
+  }
+
+  if (!base) {
+    // 4. Progressive shortening, for non-Claude ids (`gpt-4o-mini-2024-07-18`
+    //    → `gpt-4o-mini` → `gpt-4o`). Claude ids never reach here — step 3
+    //    matches every one of them, or they are not Claude at all.
+    let candidate = model.replace(/-\d{8}$/, "");
     while (candidate.length > 0) {
       const match = map.get(candidate);
       if (match) { base = match; break; }
@@ -186,24 +307,17 @@ export function getModelPricing(model: string): ModelPricing {
   }
 
   if (!base) {
-    // 3. Keyword match: opus, sonnet, haiku
     const lower = model.toLowerCase();
-    if (lower.includes("opus")) {
-      base = map.get("claude-opus-4") ?? FALLBACK_PRICING["claude-opus-4"];
-    } else if (lower.includes("haiku")) {
-      base = map.get("claude-haiku-3.5") ?? FALLBACK_PRICING["claude-haiku-3.5"];
-    } else if (lower.includes("sonnet")) {
-      base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
-    } else if (lower.includes("claude") || model.trim() === "") {
-      // 4a. Unrecognized Claude-family id (no opus/sonnet/haiku keyword, not in
-      // any map), OR the empty-string sentinel. The Claude file-parse path maps
+    if (lower.includes("claude") || model.trim() === "") {
+      // 5a. Unrecognized Claude-family id (no opus/sonnet/haiku/fable keyword,
+      // not in any map), OR the empty-string sentinel. The file-parse path maps
       // its per-model "unknown" bucket (cache-hit rows with no per-model token
       // attribution) to `getModelPricing("")` and documents it as the Sonnet
       // estimate (`claudeConversations.ts` computeCostFromPerModel / cache-hit
       // accumulation). So `""` is a Claude sentinel — keep Sonnet, never $0.
       base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
     } else {
-      // 4b. Unknown NON-Claude model. Pricing is genuinely unknown — return
+      // 5b. Unknown NON-Claude model. Pricing is genuinely unknown — return
       // zero rather than silently billing it at Claude Sonnet rates. A visible
       // $0 ("unknown") is honest; a fabricated Claude-rate cost is not. When
       // online, LiteLLM supplies real OpenAI/Google pricing via the exact/fuzzy
@@ -224,32 +338,66 @@ export function getModelPricing(model: string): ModelPricing {
   return base;
 }
 
-// Hardcoded context window sizes. All current Claude models are 200k.
-// Pattern matches the same keyword logic as getModelPricing for consistency.
-const FALLBACK_MAX_CONTEXT: Record<string, number> = {
-  "claude-opus-4": 200_000,
-  "claude-sonnet-4": 200_000,
-  "claude-haiku-3.5": 200_000,
-};
+/**
+ * Context window per Claude generation, matched by substring, **most specific
+ * first** for the same nesting reason as `CLAUDE_FAMILY_MATCHERS`.
+ *
+ * Deliberately a separate table rather than a lookup keyed off
+ * `resolveClaudeFamily`: the two group models differently. Opus 4.5 through
+ * Opus 5 all bill at $5/$25 and share one pricing entry, but 4.5 is a 200k
+ * model and 4.6-and-later are 1M. Sonnet is the same story across 4.5 → 4.6.
+ * Reusing the pricing grouping here would report 1M for an Opus 4.5 turn.
+ *
+ * Everything from Claude 4.6 onward ships the full 1M window at standard
+ * pricing (https://platform.claude.com/docs/en/about-claude/pricing).
+ */
+const CLAUDE_MAX_CONTEXT_MATCHERS: ReadonlyArray<readonly [string, number]> = [
+  ["fable-5", 1_000_000],
+  ["mythos", 1_000_000],
+  ["opus-5", 1_000_000],
+  ["opus-4-8", 1_000_000],
+  ["opus-4-7", 1_000_000],
+  ["opus-4-6", 1_000_000],
+  ["opus-4-5", 200_000],
+  ["opus-4", 200_000],
+  ["3-opus", 200_000],
+  ["sonnet-5", 1_000_000],
+  ["sonnet-4-6", 1_000_000],
+  ["sonnet-4-5", 200_000],
+  ["sonnet-4", 200_000],
+  ["sonnet", 200_000],
+  ["haiku", 200_000],
+  // Unversioned or future ids inherit the newest known window.
+  ["opus", 1_000_000],
+  ["fable", 1_000_000],
+];
 
 /**
  * Return the max input-token context window for a model.
- * Uses keyword matching so it works for versioned IDs like `claude-opus-4-7`.
+ * Uses substring matching so it works for versioned IDs like `claude-opus-4-7`.
  */
 export function getModelMaxContextTokens(model: string): number {
   const lower = model.toLowerCase();
-  // LiteLLM appends [1m] or :1m for 1M-context variants (e.g. claude-opus-4-5[1m]).
+  // LiteLLM appends [1m] or :1m for 1M-context variants (e.g. claude-sonnet-4-5[1m]),
+  // which opt a 200k-default model into the long-context tier.
   if (lower.includes("[1m]") || lower.includes(":1m")) return 1_000_000;
-  for (const [key, size] of Object.entries(FALLBACK_MAX_CONTEXT)) {
-    if (lower.includes(key.replace("claude-", ""))) return size;
+  for (const [token, size] of CLAUDE_MAX_CONTEXT_MATCHERS) {
+    if (lower.includes(token)) return size;
   }
-  return 200_000; // safe fallback for any unknown Claude model
+  return 200_000; // safe fallback for any unknown model
 }
 
 export interface TokenCounts {
   inputTokens: number;
   outputTokens: number;
   cacheCreateTokens: number;
+  /**
+   * Portion of `cacheCreateTokens` written at the 1-hour TTL (2x base) rather
+   * than the 5-minute default (1.25x). A subset of the total, not an addition
+   * to it. Optional so every existing caller keeps its current behaviour: when
+   * omitted, the whole total bills at the 5-minute rate as before.
+   */
+  cacheCreate1hTokens?: number;
   cacheReadTokens: number;
 }
 
@@ -287,10 +435,26 @@ export function applyPricing(pricing: ModelPricing, tokens: TokenCounts): number
       ? pricing.outputCostPerTokenAbove200k
       : pricing.outputCostPerToken;
 
+  // Cache writes have two rates, selected by the TTL the write was made with:
+  // 1.25x base for the 5-minute default, 2x for the 1-hour TTL. Claude Code
+  // writes at the 1-hour TTL, so on its transcripts `cacheCreate1hTokens` is
+  // effectively the whole total — billing it at the 5-minute rate understates
+  // cache-write cost by ~37%. Clamp to the total so a malformed breakdown can
+  // never bill more 1-hour tokens than were written.
+  const cacheCreate1h = Math.min(
+    Math.max(tokens.cacheCreate1hTokens ?? 0, 0),
+    tokens.cacheCreateTokens
+  );
+  const cacheCreate5m = tokens.cacheCreateTokens - cacheCreate1h;
+  // Providers that publish no separate 1-hour rate keep flat cache-write pricing.
+  const cacheWrite1hRate =
+    pricing.cacheWrite1hCostPerToken ?? pricing.cacheWriteCostPerToken;
+
   return (
     tokens.inputTokens * inputRate +
     tokens.outputTokens * outputRate +
-    tokens.cacheCreateTokens * pricing.cacheWriteCostPerToken +
+    cacheCreate5m * pricing.cacheWriteCostPerToken +
+    cacheCreate1h * cacheWrite1hRate +
     tokens.cacheReadTokens * pricing.cacheReadCostPerToken
   );
 }

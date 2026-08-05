@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   computeTurnCost,
   getModelPricing,
+  getModelMaxContextTokens,
+  applyPricing,
   _resetForTesting,
+  type TokenCounts,
 } from "@/lib/usage/costCalculator";
 import type { UsageTurn } from "@/lib/usage/types";
 
@@ -40,7 +43,9 @@ const SONNET_OUTPUT = 0.000015;
 const SONNET_CACHE_WRITE = 0.00000375;
 const SONNET_CACHE_READ = 0.0000003;
 
-const OPUS_INPUT = 0.000015;
+// Opus 4.5 and later — $5/MTok. Opus 4/4.1/3 — $15/MTok.
+const OPUS_MODERN_INPUT = 0.000005;
+const OPUS_LEGACY_INPUT = 0.000015;
 
 // Import fs promises once at module level for mocking in beforeEach
 import { promises as fsMock } from "fs";
@@ -93,9 +98,13 @@ describe("costCalculator", () => {
   });
 
   describe("getModelPricing fuzzy match", () => {
-    it("claude-opus-4-6-20250514 resolves to opus pricing", () => {
+    it("claude-opus-4-6-20250514 resolves to the modern $5 Opus rate", () => {
+      // Opus 4.5 and later cost $5/MTok, not the $15 the Opus 4/4.1 generation
+      // did. This assertion previously expected $15 — the progressive-shortening
+      // loop walked `claude-opus-4-6` down to the `claude-opus-4` key and billed
+      // a modern Opus turn at triple its real rate.
       const pricing = getModelPricing("claude-opus-4-6-20250514");
-      expect(pricing.inputCostPerToken).toBe(OPUS_INPUT);
+      expect(pricing.inputCostPerToken).toBe(OPUS_MODERN_INPUT);
     });
 
     it("claude-sonnet-4-5-20250514 resolves to sonnet pricing", () => {
@@ -104,21 +113,67 @@ describe("costCalculator", () => {
     });
 
     it("strips date suffix before trying prefix fallback", () => {
-      // "claude-sonnet-4-5-20250514" → strip date → "claude-sonnet-4-5" → "claude-sonnet-4" → match
+      // "claude-sonnet-4-5-20250514" → strip date → "claude-sonnet-4-5" → sonnet
       const pricing = getModelPricing("claude-sonnet-4-5-20250514");
       expect(pricing.outputCostPerToken).toBe(SONNET_OUTPUT);
     });
   });
 
-  describe("getModelPricing keyword match", () => {
-    it("some-new-opus-model matches opus pricing by keyword", () => {
-      const pricing = getModelPricing("some-new-opus-model");
-      expect(pricing.inputCostPerToken).toBe(OPUS_INPUT);
+  describe("getModelPricing generation resolution", () => {
+    // The nesting hazard this table exists to prevent: every modern Opus id
+    // CONTAINS the substring "opus-4", which is a real key for the older
+    // $15/$75 generation. Matching has to pin the specific generation first.
+    it.each([
+      ["claude-opus-5", OPUS_MODERN_INPUT],
+      ["claude-opus-4-8", OPUS_MODERN_INPUT],
+      ["claude-opus-4-7", OPUS_MODERN_INPUT],
+      ["claude-opus-4-6", OPUS_MODERN_INPUT],
+      ["claude-opus-4-5", OPUS_MODERN_INPUT],
+      ["claude-opus-4-5-20251101", OPUS_MODERN_INPUT],
+    ])("%s bills at the modern $5 Opus rate", (model, expected) => {
+      expect(getModelPricing(model).inputCostPerToken).toBe(expected);
     });
 
-    it("fancy-haiku-v2 matches haiku pricing by keyword", () => {
-      const pricing = getModelPricing("fancy-haiku-v2");
-      expect(pricing.inputCostPerToken).toBe(0.0000008);
+    it.each([
+      ["claude-opus-4-1-20250805", OPUS_LEGACY_INPUT],
+      ["claude-opus-4-20250514", OPUS_LEGACY_INPUT],
+      ["claude-3-opus-20240229", OPUS_LEGACY_INPUT],
+    ])("%s still bills at the legacy $15 Opus rate", (model, expected) => {
+      expect(getModelPricing(model).inputCostPerToken).toBe(expected);
+    });
+
+    it("claude-fable-5 bills at its own $10 tier, not an Opus rate", () => {
+      const pricing = getModelPricing("claude-fable-5");
+      expect(pricing.inputCostPerToken).toBe(0.00001);
+      expect(pricing.outputCostPerToken).toBe(0.00005);
+    });
+
+    it("every Sonnet generation shares the $3 rate", () => {
+      for (const id of [
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-3-7-sonnet-20250219",
+      ]) {
+        expect(getModelPricing(id).inputCostPerToken, id).toBe(SONNET_INPUT);
+      }
+    });
+
+    it("claude-haiku-4-5 bills at $1, distinct from Haiku 3.5's $0.80", () => {
+      expect(getModelPricing("claude-haiku-4-5").inputCostPerToken).toBe(0.000001);
+      expect(getModelPricing("claude-3-5-haiku-20241022").inputCostPerToken).toBe(0.0000008);
+    });
+  });
+
+  describe("getModelPricing keyword match", () => {
+    it("an unversioned opus id inherits the NEWEST known Opus rate", () => {
+      // Previously fell to the oldest ($15). A future `claude-opus-6` should
+      // inherit today's rates, not those of a retired generation.
+      expect(getModelPricing("some-new-opus-model").inputCostPerToken).toBe(OPUS_MODERN_INPUT);
+    });
+
+    it("fancy-haiku-v2 inherits the newest known Haiku rate", () => {
+      expect(getModelPricing("fancy-haiku-v2").inputCostPerToken).toBe(0.000001);
     });
 
     it("new-sonnet-experimental matches sonnet pricing by keyword", () => {
@@ -196,6 +251,123 @@ describe("costCalculator", () => {
       });
       const cost = await computeTurnCost(turn);
       expect(cost).toBe(0);
+    });
+  });
+
+  describe("cache-write TTL split", () => {
+    // Opus 5: base $5, 5-minute writes $6.25, 1-hour writes $10 per MTok.
+    const OPUS_WRITE_5M = 0.00000625;
+    const OPUS_WRITE_1H = 0.00001;
+
+    const tokens = (over: Partial<TokenCounts> = {}): TokenCounts => ({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 0,
+      ...over,
+    });
+
+    it("bills 1-hour writes at 2x base, not the 1.25x 5-minute rate", () => {
+      const pricing = getModelPricing("claude-opus-5");
+      const cost = applyPricing(
+        pricing,
+        tokens({ cacheCreateTokens: 1000, cacheCreate1hTokens: 1000 })
+      );
+      expect(cost).toBeCloseTo(1000 * OPUS_WRITE_1H, 12);
+      // The bug this fixes: the same tokens priced entirely at the 5m rate.
+      expect(cost).toBeGreaterThan(1000 * OPUS_WRITE_5M);
+    });
+
+    it("splits a mixed turn across both rates", () => {
+      const pricing = getModelPricing("claude-opus-5");
+      const cost = applyPricing(
+        pricing,
+        tokens({ cacheCreateTokens: 1000, cacheCreate1hTokens: 400 })
+      );
+      expect(cost).toBeCloseTo(600 * OPUS_WRITE_5M + 400 * OPUS_WRITE_1H, 12);
+    });
+
+    it("omitting the split prices the whole total at the 5-minute rate (pre-split behaviour)", () => {
+      const pricing = getModelPricing("claude-opus-5");
+      const cost = applyPricing(pricing, tokens({ cacheCreateTokens: 1000 }));
+      expect(cost).toBeCloseTo(1000 * OPUS_WRITE_5M, 12);
+    });
+
+    it("treats an explicit zero the same as no 1-hour writes", () => {
+      const pricing = getModelPricing("claude-opus-5");
+      const cost = applyPricing(
+        pricing,
+        tokens({ cacheCreateTokens: 1000, cacheCreate1hTokens: 0 })
+      );
+      expect(cost).toBeCloseTo(1000 * OPUS_WRITE_5M, 12);
+    });
+
+    it("clamps a 1-hour count that exceeds the total instead of overbilling", () => {
+      const pricing = getModelPricing("claude-opus-5");
+      const cost = applyPricing(
+        pricing,
+        tokens({ cacheCreateTokens: 100, cacheCreate1hTokens: 999_999 })
+      );
+      expect(cost).toBeCloseTo(100 * OPUS_WRITE_1H, 12);
+    });
+
+    it("falls back to the flat write rate for a model with no 1-hour rate", () => {
+      const flat = {
+        inputCostPerToken: 0,
+        outputCostPerToken: 0,
+        cacheWriteCostPerToken: 0.000002,
+        cacheReadCostPerToken: 0,
+      };
+      const cost = applyPricing(
+        flat,
+        tokens({ cacheCreateTokens: 1000, cacheCreate1hTokens: 1000 })
+      );
+      expect(cost).toBeCloseTo(1000 * 0.000002, 12);
+    });
+
+    it("computeTurnCost carries the split from a UsageTurn", async () => {
+      const turn = makeTurn({
+        model: "claude-opus-5",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreateTokens: 1000,
+        cacheCreate1hTokens: 1000,
+        cacheReadTokens: 0,
+      });
+      expect(await computeTurnCost(turn)).toBeCloseTo(1000 * OPUS_WRITE_1H, 12);
+    });
+  });
+
+  describe("getModelMaxContextTokens", () => {
+    it.each([
+      ["claude-opus-5", 1_000_000],
+      ["claude-opus-4-8", 1_000_000],
+      ["claude-opus-4-7", 1_000_000],
+      ["claude-opus-4-6", 1_000_000],
+      ["claude-sonnet-5", 1_000_000],
+      ["claude-sonnet-4-6", 1_000_000],
+      ["claude-fable-5", 1_000_000],
+    ])("%s reports the 1M window", (model, expected) => {
+      expect(getModelMaxContextTokens(model)).toBe(expected);
+    });
+
+    it.each([
+      // 4.6 is the cutoff: everything from Claude 4.6 on ships 1M by default.
+      ["claude-opus-4-5", 200_000],
+      ["claude-opus-4-20250514", 200_000],
+      ["claude-sonnet-4-5-20250929", 200_000],
+      ["claude-haiku-4-5", 200_000],
+    ])("%s reports the 200k window", (model, expected) => {
+      expect(getModelMaxContextTokens(model)).toBe(expected);
+    });
+
+    it("honours LiteLLM's explicit 1M-variant suffixes", () => {
+      expect(getModelMaxContextTokens("claude-sonnet-4-5[1m]")).toBe(1_000_000);
+      expect(getModelMaxContextTokens("claude-sonnet-4-5:1m")).toBe(1_000_000);
+    });
+
+    it("falls back to 200k for an unrecognised id", () => {
+      expect(getModelMaxContextTokens("totally-unknown-model")).toBe(200_000);
     });
   });
 });

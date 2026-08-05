@@ -22,7 +22,8 @@ import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
-import { loadPricing, getModelPricing } from "../usage/costCalculator";
+import { loadPricing, getModelPricing, applyPricing } from "../usage/costCalculator";
+import { extractCacheCreate1hTokens } from "../usage/cacheTtl";
 import {
   readDiskCache,
   writeDiskCache,
@@ -60,6 +61,11 @@ export interface ConversationEntry {
       input_tokens?: number;
       output_tokens?: number;
       cache_creation_input_tokens?: number;
+      /** Per-TTL split of `cache_creation_input_tokens`; see `usage/cacheTtl`. */
+      cache_creation?: {
+        ephemeral_1h_input_tokens?: number;
+        ephemeral_5m_input_tokens?: number;
+      };
       cache_read_input_tokens?: number;
     };
   };
@@ -156,7 +162,7 @@ async function scanSessionFile(
     let subagentCount = 0;
     let errorCount = 0;
     // Per-model token accumulation for accurate cost (via LiteLLM pricing)
-    const perModelTokens = new Map<string, { i: number; o: number; cc: number; cr: number }>();
+    const perModelTokens: PerModelTokens = new Map();
     const allEntries: ConversationEntry[] = [];
     const searchParts: string[] = [];
     let searchLen = 0;
@@ -215,12 +221,13 @@ async function scanSessionFile(
             const inp = usage.input_tokens || 0;
             const out = usage.output_tokens || 0;
             const cc  = usage.cache_creation_input_tokens || 0;
+            const cc1h = extractCacheCreate1hTokens(usage) ?? 0;
             const cr  = usage.cache_read_input_tokens || 0;
             inputTokens += inp;
             outputTokens += out;
             cacheCreateTokens += cc;
             cacheReadTokens += cr;
-            accumulateTokens(perModelTokens, model, inp, out, cc, cr);
+            accumulateTokens(perModelTokens, model, inp, out, cc, cr, cc1h);
           }
 
           if (entry.isApiErrorMessage) errorCount++;
@@ -307,6 +314,7 @@ async function scanSessionFile(
             inputTokens: turnUsage?.input_tokens ?? 0,
             outputTokens: turnUsage?.output_tokens ?? 0,
             cacheCreateTokens: turnUsage?.cache_creation_input_tokens ?? 0,
+            cacheCreate1hTokens: extractCacheCreate1hTokens(turnUsage),
             cacheReadTokens: turnUsage?.cache_read_input_tokens ?? 0,
             toolCalls: turnToolCalls,
             toolResultText: toolResultText.slice(0, 2000),
@@ -377,14 +385,7 @@ async function scanSessionFile(
 
     // Per-model cost calculation using LiteLLM pricing (unified with /usage)
     await loadPricing();
-    let costEstimate = 0;
-    for (const [model, toks] of perModelTokens) {
-      const p = getModelPricing(model === "unknown" ? "" : model);
-      costEstimate += toks.i * p.inputCostPerToken
-                   + toks.o * p.outputCostPerToken
-                   + toks.cc * p.cacheWriteCostPerToken
-                   + toks.cr * p.cacheReadCostPerToken;
-    }
+    const costEstimate = computeCostFromPerModel(perModelTokens);
 
     const status = inferSessionStatus(
       allEntries.length > 500 ? allEntries.slice(-500) : allEntries,
@@ -768,16 +769,22 @@ export async function scanSessionDetail(
 
 // ─── Aggregate stats (existing, used by stats page) ─────────────────
 
-type PerModelTokens = Map<string, { i: number; o: number; cc: number; cr: number }>;
+// `cc1h` is the slice of `cc` written at the 1-hour cache TTL, which bills at
+// 2x base input rather than 1.25x.
+type PerModelTokens = Map<
+  string,
+  { i: number; o: number; cc: number; cc1h: number; cr: number }
+>;
 
 function accumulateTokens(
   map: PerModelTokens,
   model: string | undefined,
   inp: number, out: number, cc: number, cr: number,
+  cc1h = 0,
 ): void {
   const key = model && model !== "<synthetic>" ? model : "unknown";
-  const ex = map.get(key) ?? { i: 0, o: 0, cc: 0, cr: 0 };
-  ex.i += inp; ex.o += out; ex.cc += cc; ex.cr += cr;
+  const ex = map.get(key) ?? { i: 0, o: 0, cc: 0, cc1h: 0, cr: 0 };
+  ex.i += inp; ex.o += out; ex.cc += cc; ex.cc1h += cc1h; ex.cr += cr;
   map.set(key, ex);
 }
 
@@ -822,12 +829,13 @@ async function scanConversationFile(filePath: string): Promise<{
             const inp = usage.input_tokens || 0;
             const out = usage.output_tokens || 0;
             const cc  = usage.cache_creation_input_tokens || 0;
+            const cc1h = extractCacheCreate1hTokens(usage) ?? 0;
             const cr  = usage.cache_read_input_tokens || 0;
             result.inputTokens += inp;
             result.outputTokens += out;
             result.cacheCreateTokens += cc;
             result.cacheReadTokens += cr;
-            accumulateTokens(result.perModelTokens, model, inp, out, cc, cr);
+            accumulateTokens(result.perModelTokens, model, inp, out, cc, cr, cc1h);
           }
           if (entry.isApiErrorMessage) result.errors++;
           if (Array.isArray(msg.content)) {
@@ -849,14 +857,27 @@ async function scanConversationFile(filePath: string): Promise<{
   return result;
 }
 
+/**
+ * Sum per-model token buckets into a dollar cost.
+ *
+ * Delegates to `applyPricing` rather than re-implementing the formula, which
+ * this (and its former duplicate in `scanSessionFile`) used to do by hand. That
+ * hand-rolled copy silently skipped every refinement the shared function
+ * gained — the >200k long-context tier, and now the 1-hour cache-write rate —
+ * so the session list and the usage dashboard priced the same tokens
+ * differently.
+ */
 function computeCostFromPerModel(perModelTokens: PerModelTokens): number {
   let cost = 0;
   for (const [model, toks] of perModelTokens) {
-    const p = getModelPricing(model === "unknown" ? "" : model);
-    cost += toks.i * p.inputCostPerToken
-          + toks.o * p.outputCostPerToken
-          + toks.cc * p.cacheWriteCostPerToken
-          + toks.cr * p.cacheReadCostPerToken;
+    const pricing = getModelPricing(model === "unknown" ? "" : model);
+    cost += applyPricing(pricing, {
+      inputTokens: toks.i,
+      outputTokens: toks.o,
+      cacheCreateTokens: toks.cc,
+      cacheCreate1hTokens: toks.cc1h,
+      cacheReadTokens: toks.cr,
+    });
   }
   return cost;
 }
@@ -903,7 +924,7 @@ export async function scanClaudeConversations(
         stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count;
       }
       for (const [model, toks] of r.perModelTokens) {
-        accumulateTokens(perModel, model, toks.i, toks.o, toks.cc, toks.cr);
+        accumulateTokens(perModel, model, toks.i, toks.o, toks.cc, toks.cr, toks.cc1h);
       }
     }
   }

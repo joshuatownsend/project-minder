@@ -17,6 +17,17 @@ export interface UsageTurn {
   inputTokens: number;
   outputTokens: number;
   cacheCreateTokens: number;
+  /**
+   * The portion of `cacheCreateTokens` written at the **1-hour** cache TTL,
+   * read from `usage.cache_creation.ephemeral_1h_input_tokens`. A subset of
+   * `cacheCreateTokens`, never an addition to it — `applyPricing` bills this
+   * slice at the 2x rate and the remainder at the 1.25x rate.
+   *
+   * Undefined when the source turn carries no `cache_creation` breakdown
+   * (older transcripts, non-Claude adapters), in which case pricing treats the
+   * whole total as 5-minute writes — exactly the pre-split behaviour.
+   */
+  cacheCreate1hTokens?: number;
   cacheReadTokens: number;
   toolCalls: ToolCall[];
   userMessageText?: string;
@@ -166,8 +177,23 @@ export interface SourceBreakdown {
 export interface ModelPricing {
   inputCostPerToken: number;
   outputCostPerToken: number;
+  /**
+   * Rate for cache writes made with the **5-minute** (default) TTL — 1.25x base
+   * input. Historically the only cache-write rate Minder modelled, so it keeps
+   * the name every existing caller and pricing rule already uses.
+   */
   cacheWriteCostPerToken: number;
   cacheReadCostPerToken: number;
+  /**
+   * Rate for cache writes made with the **1-hour** TTL — 2x base input, from
+   * LiteLLM's `cache_creation_input_token_cost_above_1hr`. Claude Code writes
+   * its prompt cache at the 1-hour TTL, so on a Claude Code transcript this is
+   * the rate that applies to essentially every cache-write token; billing them
+   * all at `cacheWriteCostPerToken` understates cache-write cost by ~37%.
+   * Absent → `applyPricing` falls back to the 5-minute rate (the pre-split
+   * behaviour), which is also correct for providers with a single write rate.
+   */
+  cacheWrite1hCostPerToken?: number;
   /**
    * Tiered (>200k-context) surcharge rates from LiteLLM's
    * `input_cost_per_token_above_200k_tokens` / `output_cost_per_token_above_200k_tokens`.

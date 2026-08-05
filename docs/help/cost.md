@@ -41,6 +41,25 @@ Each rule has four optional rate fields (USD per 1 million tokens). Leave a fiel
 - **Cache Read $/M** — tokens served from the prompt cache
 - **Cache Write $/M** — tokens written into the prompt cache
 
+### How cache writes are priced
+
+Anthropic charges two different rates for writing to the prompt cache, depending
+on the cache lifetime the request asked for:
+
+| Cache TTL | Rate | Example (Claude Opus 5, $5/M base) |
+| --- | --- | --- |
+| 5 minutes (default) | 1.25× base input | $6.25 / M |
+| 1 hour | 2× base input | $10 / M |
+
+Minder reads the split from each turn's `usage.cache_creation` breakdown and
+bills the two portions separately. **Claude Code writes its prompt cache at the
+1-hour TTL**, so on a Claude Code transcript almost every cache-write token is
+billed at the 2× rate. Transcripts old enough to predate that breakdown have no
+split to read, and their cache writes are priced entirely at the 5-minute rate.
+
+A **Cache Write $/M** override sets the 5-minute rate and scales the 1-hour rate
+by the same proportion, preserving the 1.6× relationship between them.
+
 ### Important notes
 
 - Rule changes apply to **new session ingest immediately** — no restart required.
