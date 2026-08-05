@@ -73,16 +73,22 @@ the effort of the turn that made the **edit** — the work being judged — not 
 turn that ran the verification, which may differ.
 
 **`—` is not `0%`.** An em-dash means no rate is being reported, for one of two
-reasons — hover it to see which:
+reasons. The **`n=` pill tells you which without hovering anything**:
 
-- **No verified tasks** at that effort in the period. Nothing to measure. A
-  genuine 0% would mean every attempt needed a retry — the opposite reading.
-- **Too few verified tasks** (fewer than 30) for a percentage to mean anything.
-  The row still shows its sample size as an amber `n=20` pill — the same
-  low-confidence marker the Stats page uses on its OTEL cards.
+- **No verified tasks** at that effort in the period — the row shows no pill at
+  all. Nothing was measured. A genuine 0% would mean every attempt needed a
+  retry, the opposite reading.
+- **Too few verified tasks** (fewer than 30) for a percentage to mean anything
+  — the row shows an amber pill such as `n=20`, the same low-confidence marker
+  the Stats page uses on its OTEL cards.
 
 Every row carries its `n=` sample count, suppressed or not, so the denominator
 behind a rate is always visible.
+
+Hovering a row's rate cell gives the same explanation in prose. That tooltip is
+supplementary rather than load-bearing — mouse hover is unavailable on touch
+and to keyboard users — so the distinction above is carried by the pill, and
+screen readers are given the full sentence directly.
 
 The threshold is a display rule only. `/api/usage`, the MCP tools and the CSV
 export always report the true ratio whenever at least one task was measured, so

@@ -173,9 +173,33 @@ function OneShotCell({ row }: { row: EffortBreakdown }) {
         color: showRate ? "var(--text-secondary)" : "var(--text-muted)",
       }}
     >
-      {showRate ? `${Math.round(row.oneShotRate! * 100)}% 1-shot` : "—"}
+      {/*
+        `title` alone is a mouse-only affordance: it is not exposed on keyboard
+        focus, and touch devices have no hover at all. That is tolerable for a
+        decorative hint but not here — for a suppressed row the tooltip is the
+        only place the reason is written, so an em-dash would otherwise be
+        unexplained for anyone not using a pointer.
+
+        The repo's `.sr-only` class (globals.css, as used by ProjectCard and
+        SparklineList) puts the same sentence in the accessibility tree as real
+        text. Preferred over `aria-label` because ARIA does not reliably name a
+        generic `<span>`, so some screen readers would drop it entirely.
+      */}
+      <span className="sr-only">{title}</span>
+      <span aria-hidden="true">
+        {showRate ? `${Math.round(row.oneShotRate! * 100)}% 1-shot` : "—"}
+      </span>
+      {/*
+        Hidden from the accessibility tree, like the figure above it: the
+        sr-only sentence already states the task count in prose, so exposing
+        the pill too would announce the same number twice ("…only 20 verified
+        tasks… n=20"). The pill's amber state is a visual encoding of the same
+        fact, which the sentence spells out.
+      */}
       {measured && (
-        <SampleBadge n={row.verifiedTasks} threshold={MIN_TASKS_FOR_RATE} />
+        <span aria-hidden="true">
+          <SampleBadge n={row.verifiedTasks} threshold={MIN_TASKS_FOR_RATE} />
+        </span>
       )}
     </span>
   );
