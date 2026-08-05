@@ -34,6 +34,28 @@ export const EFFORT_ORDER = ["low", "medium", "high", "xhigh", UNKNOWN_EFFORT] a
 const EFFORT_RANK = new Map<string, number>(EFFORT_ORDER.map((e, i) => [e, i]));
 
 /**
+ * Fewest verified tasks a bucket needs before its one-shot rate is worth
+ * showing as a percentage.
+ *
+ * Measured on the real corpus after the first full re-index: `high` anchored
+ * 497 tasks, but `medium` anchored 47 and `xhigh` just 20. At n=20 the 95%
+ * interval on a 70% rate spans roughly 48–86% — wide enough to overlap `high`
+ * entirely, so the two are statistically indistinguishable while the panel
+ * renders them as a confident 14-point gap. `medium` at 45/47 is two failures
+ * away from 100%.
+ *
+ * Deliberately enforced in the **presentation** layer, not in the aggregators.
+ * `EffortBreakdown.oneShotRate` stays populated whenever a task was measured,
+ * so the API, MCP tools and CSV export keep reporting the true ratio and
+ * `undefined` keeps its single meaning of "nothing measured". Only the chart
+ * declines to draw a conclusion its denominator can't support.
+ *
+ * 30 is a judgement call, not a derived constant — it is roughly where the
+ * interval narrows enough to distinguish adjacent buckets on this data.
+ */
+export const MIN_TASKS_FOR_RATE = 30;
+
+/**
  * Map a raw `turns.effort` value to its bucket key. Absent, null, and empty
  * all collapse to {@link UNKNOWN_EFFORT}; any unrecognized non-empty value is
  * passed through verbatim rather than swallowed, so a future Claude Code

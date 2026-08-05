@@ -1,7 +1,7 @@
 "use client";
 
 import { formatCost, formatTokens } from "@/lib/format";
-import { UNKNOWN_EFFORT } from "@/lib/usage/effort";
+import { UNKNOWN_EFFORT, MIN_TASKS_FOR_RATE } from "@/lib/usage/effort";
 import type { EffortBreakdown } from "@/lib/usage/types";
 
 /**
@@ -95,30 +95,78 @@ export function EffortPanel({ rows, currency, fxRate }: {
           </div>
         );
       })}
+      <CausalityNote />
     </div>
+  );
+}
+
+/**
+ * The caveat that keeps the panel honest.
+ *
+ * Read naively the table asserts a causal claim it cannot support: on the
+ * author's corpus `xhigh` shows a *lower* first-pass rate than `medium`, which
+ * invites the conclusion that raising effort makes things worse. The likelier
+ * explanation runs the other way — you reach for higher effort on the problems
+ * you already expect to be hard, so difficulty is confounded with the setting
+ * being measured.
+ *
+ * This sits under the table rather than in the docs because that is where the
+ * misreading happens. A caveat nobody encounters at the point of reading is
+ * not a caveat.
+ */
+function CausalityNote() {
+  return (
+    <p style={{
+      fontSize: "0.62rem", color: "var(--text-muted)",
+      fontFamily: "var(--font-body)", lineHeight: 1.5,
+      margin: "8px 0 0", maxWidth: "62ch",
+    }}>
+      Higher effort is usually chosen for harder work, so these rates describe
+      what happened at each setting — not what the setting caused. A lower rate
+      at higher effort more likely reflects harder problems than worse output.
+    </p>
   );
 }
 
 /**
  * First-pass success for one effort level.
  *
- * Renders an em-dash, not `0%`, when the level anchored no verified task. The
- * two are opposite readings of the same cell: 0% says "everything this level
- * touched needed a retry", absence says "nothing measurable happened here".
- * Showing 0% would also sort this level below one that genuinely failed
- * everything in any rate-ordered view.
+ * Renders an em-dash, not `0%`, in two distinct situations:
+ *
+ *   - the level anchored no verified task at all, and
+ *   - it anchored too few for a percentage to mean anything
+ *     ({@link MIN_TASKS_FOR_RATE}).
+ *
+ * The tooltips differ so the two stay distinguishable, and the task count is
+ * shown either way — a suppressed rate should read as "not enough data yet",
+ * never as a missing feature.
+ *
+ * `0%` is never rendered for absence. The two are opposite readings of the
+ * same cell: 0% says "everything this level touched needed a retry", absence
+ * says "nothing measurable happened here". Showing 0% would also sort this
+ * level below one that genuinely failed everything in any rate-ordered view.
  */
 function OneShotCell({ row }: { row: EffortBreakdown }) {
-  if (row.oneShotRate === undefined) {
+  const tooThin =
+    row.oneShotRate !== undefined && row.verifiedTasks < MIN_TASKS_FOR_RATE;
+
+  if (row.oneShotRate === undefined || tooThin) {
     return (
       <span
         style={{
           fontFamily: "var(--font-mono)", fontSize: "0.66rem",
           color: "var(--text-muted)", width: "112px", textAlign: "right", flexShrink: 0,
         }}
-        title="No verified tasks at this effort — nothing to measure, not a 0% success rate."
+        title={
+          tooThin
+            ? `Only ${row.verifiedTasks} verified task${row.verifiedTasks === 1 ? "" : "s"} at this effort — too few for a rate to mean anything (needs ${MIN_TASKS_FOR_RATE}). ${row.oneShotTasks} of them passed first time.`
+            : "No verified tasks at this effort — nothing to measure, not a 0% success rate."
+        }
       >
         —
+        {tooThin && (
+          <span style={{ color: "var(--text-muted)" }}> ({row.verifiedTasks})</span>
+        )}
       </span>
     );
   }

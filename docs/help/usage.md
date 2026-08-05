@@ -72,9 +72,36 @@ verification passed and no follow-up edit followed. Each task is attributed to
 the effort of the turn that made the **edit** — the work being judged — not the
 turn that ran the verification, which may differ.
 
-**`—` is not `0%`.** An em-dash means that effort level started no verified
-tasks in this period, so there is nothing to measure. A genuine 0% would mean
-every attempt needed a retry — the opposite reading.
+**`—` is not `0%`.** An em-dash means no rate is being reported, for one of two
+reasons — hover it to see which:
+
+- **No verified tasks** at that effort in the period. Nothing to measure. A
+  genuine 0% would mean every attempt needed a retry — the opposite reading.
+- **Too few verified tasks** (fewer than 30) for a percentage to mean anything.
+  The count is shown in brackets, e.g. `— (20 tasks)`.
+
+The threshold is a display rule only. `/api/usage`, the MCP tools and the CSV
+export always report the true ratio whenever at least one task was measured, so
+you can apply your own judgement to a thin bucket.
+
+### Why a rate can be suppressed
+
+On a real corpus the buckets are wildly uneven. In the author's history `high`
+anchored 497 verified tasks while `xhigh` anchored 20 and `medium` 47. At 20
+tasks, a 70% rate carries a 95% confidence interval of roughly 48–86% — wide
+enough to overlap `high` entirely, so the two are statistically
+indistinguishable even though the chart would draw them as a confident
+14-point gap. Suppressing below 30 stops the panel asserting a difference its
+sample can't support.
+
+### Correlation, not causation
+
+The panel says what happened at each effort level. It cannot say what the level
+*caused*, and the difference matters because the confounding runs the wrong
+way: higher effort is usually chosen for harder work. So a **lower** first-pass
+rate at higher effort more likely reflects harder problems than worse output,
+and reading the table as "xhigh is counterproductive" would be a mistake. A
+caveat to this effect sits under the panel itself.
 
 ### The `unknown` bucket
 
