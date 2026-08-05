@@ -1,3 +1,28 @@
+## 2026-08-05 19:30 | index-downgrade | Don't restart the v1.7.0 tray until a new build is packaged
+
+The installed tray (`%LOCALAPPDATA%\Project Minder Tray`, packaged 2026-08-03) ships
+`DERIVED_VERSION = 12`. On 2026-08-05 it reverted the whole index from v14 to v12,
+discarding 22,682 `turns.effort` values and 1,141 `task_outcome` stamps roughly 30 minutes
+after a 45-minute re-parse completed, reporting `errors: 0` throughout.
+
+The guard that prevents this (`fix(db): never let an older build downgrade a newer index`,
+`d6dc4bf`) is in the repo, **not in that packaged build** — a build can only refuse a
+downgrade if the guard is in the build doing the writing. So the installed tray will do it
+again if it starts.
+
+- [ ] Leave the tray stopped until a build carrying `d6dc4bf` is packaged and installed
+  It was stopped at 2026-08-05 ~18:10 (tray PID 54768 + node sidecar 19124, both confirmed down).
+  Restarting the current v1.7.0 build re-runs the downgrade on the freshly re-indexed DB.
+- [ ] Package and install a tray build from `main` once this branch merges
+  `pnpm package:standalone` then `pnpm tray:build` (see `docs/help/tray-app.md`)
+  Verify before trusting it: `node -e "..."` on `~/.minder/index.db` should show
+  `derived_version = 14` holding steady after the tray has been running a few minutes.
+- [ ] Confirm the guard fires rather than silently doing nothing
+  A build older than the index now logs `[ingest] N session(s) left untouched: their rows
+  were derived by a newer build than this one`. Seeing that line is the success case.
+
+---
+
 ## 2026-07-19 14:30 | signing-updater | Accounts + keys for signed installers and auto-updates
 
 Plan: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`.
