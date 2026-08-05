@@ -6,6 +6,7 @@ import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot, detectOneShotTasks } from "./oneShotDetector";
 import { effortBucket, compareEffort } from "./effort";
+import { entrypointBucket, compareEntrypoint, isBackgroundSession } from "./entrypoint";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import { bucketByHourDay, toLocalDateStr, type ActivityData } from "./activityBuckets";
@@ -226,6 +227,16 @@ export async function aggregateUsage(
   const categoryMap = new Map<CategoryType, CategoryBreakdown>();
   const categoryTurnsMap = new Map<CategoryType, UsageTurn[]>();
   const effortMap = new Map<string, EffortBreakdown>();
+  /**
+   * A3 entrypoint accumulator. Sets rather than counters because `sessions`
+   * is a DISTINCT count — a bucket's turns span many sessions, and summing
+   * turn counts would report a number several orders of magnitude too large
+   * under a session-shaped label.
+   */
+  const entrypointAccum = new Map<
+    string,
+    { turns: number; tokens: number; cost: number; sessions: Set<string>; bgSessions: Set<string> }
+  >();
   const dailyMap = new Map<string, DailyBucket>();
   const allToolCalls: ToolCall[] = [];
   const bashCommands: string[] = [];
@@ -313,6 +324,23 @@ export async function aggregateUsage(
       eff.tokens += tokens;
       eff.cost += cost;
       effortMap.set(key, eff);
+    }
+
+    // Entrypoint (A3). Session-scoped, but accumulated in this same
+    // assistant-turn loop so the cost sums match `byEffort`/`byModel` exactly
+    // and the DB backend's `t.role = 'assistant'` filter has a mirror.
+    {
+      const key = entrypointBucket(turn.entrypoint);
+      const ep = entrypointAccum.get(key) ?? {
+        turns: 0, tokens: 0, cost: 0,
+        sessions: new Set<string>(), bgSessions: new Set<string>(),
+      };
+      ep.turns++;
+      ep.tokens += tokens;
+      ep.cost += cost;
+      ep.sessions.add(turn.sessionId);
+      if (isBackgroundSession(turn.sessionKind)) ep.bgSessions.add(turn.sessionId);
+      entrypointAccum.set(key, ep);
     }
 
     // Daily — bucket by LOCAL date so the daily bars, the "today" period
@@ -524,6 +552,17 @@ export async function aggregateUsage(
     byProject: [...projectMap.values()].sort((a, b) => b.cost - a.cost),
     byCategory: [...categoryMap.values()].sort((a, b) => b.cost - a.cost),
     byEffort: [...effortMap.values()].sort((a, b) => compareEffort(a.effort, b.effort)),
+    byEntrypoint: [...entrypointAccum.entries()]
+      .map(([entrypoint, v]) => ({
+        entrypoint,
+        sessions: v.sessions.size,
+        turns: v.turns,
+        tokens: v.tokens,
+        cost: v.cost,
+        avgCostPerSession: v.sessions.size > 0 ? v.cost / v.sessions.size : 0,
+        backgroundSessions: v.bgSessions.size,
+      }))
+      .sort((a, b) => compareEntrypoint(a.entrypoint, b.entrypoint)),
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
     toolTransitions: toolTransitionData.transitions,
     toolSelfLoops: toolTransitionData.selfLoops,

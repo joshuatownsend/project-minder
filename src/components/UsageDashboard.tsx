@@ -27,6 +27,7 @@ import { Heatmap2D } from "./Heatmap2D";
 import { ContributionCalendar } from "./ContributionCalendar";
 import { ShareButton } from "./ShareButton";
 import { EffortPanel } from "./EffortPanel";
+import { EntrypointPanel } from "./EntrypointPanel";
 
 import { formatCost, formatCostCompact, formatTokens, formatPct } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -1087,6 +1088,11 @@ export function UsageDashboard() {
                 <div>
                   <SectionHeader label="By Effort" />
                   <EffortPanel rows={data.byEffort} currency={currency} fxRate={fxRate} />
+                </div>
+
+                <div>
+                  <SectionHeader label="By Entrypoint" />
+                  <EntrypointPanel rows={data.byEntrypoint} currency={currency} fxRate={fxRate} />
                 </div>
               </div>
 

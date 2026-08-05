@@ -32,6 +32,7 @@ import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 import { EffortMixChip } from "@/components/EffortMixChip";
+import { EntrypointChip } from "@/components/EntrypointChip";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
 
@@ -471,6 +472,7 @@ function SessionRow({
             <OneShotBadge rate={session.oneShotRate} />
           )}
           <EffortMixChip mix={session.effortMix} />
+          <EntrypointChip entrypoint={session.entrypoint} sessionKind={session.sessionKind} />
           <SourceBadge source={session.source} />
           {session.modelsUsed.slice(0, 1).map((m) => (
             <span

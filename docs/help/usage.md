@@ -126,6 +126,48 @@ folded into `medium`. Three different things land there:
 On a long history `unknown` is usually the largest bucket. If it is the *only*
 bucket, the panel says so instead of drawing a single meaningless bar.
 
+## By Entrypoint
+
+Every session records how it was started, and the split is sharper than most
+people expect:
+
+| Entrypoint | Shown as | What it is |
+|---|---|---|
+| `cli` | Interactive | Started from a terminal — a person was there |
+| `sdk-cli` | SDK (CLI) | Driven by a program through the CLI-based SDK |
+| `sdk-py` | SDK (Python) | Driven by a program through the Python SDK |
+
+The panel exists because pooling these makes every per-session average
+meaningless. On the reference machine SDK-driven runs outnumbered interactive
+ones by more than an order of magnitude while costing a small fraction as much
+per session — so an unsegmented "average cost per session" was really the
+average cost of an automated run, with the interactive work averaged away into
+it. Your own split is whatever the panel shows; the shape (many cheap
+automated runs, few expensive interactive ones) is the part that generalizes.
+
+### Read the two percentages together
+
+Each row shows its share of **sessions** and its share of **spend**, and they
+rarely match. Automated runs are numerous and short; interactive sessions are
+few and long. A bucket that is most of your sessions can be a minority of your
+bill, and the reverse. Either number alone supports a confident wrong
+conclusion, which is why the panel always shows both — along with the average
+cost per session, which is the figure that actually compares like with like.
+
+The rows keep a fixed order (interactive, then the SDK variants) rather than
+sorting by cost, so the comparison holds its shape between periods.
+
+### Background sessions
+
+Claude Code flags some runs with `sessionKind: bg`. Minder treats this as a
+**flag on top of** the entrypoint, not a separate row: a backgrounded
+interactive session is still counted under Interactive, with its background
+count noted in the row's tooltip. Folding it into the entrypoint axis would
+quietly change what the Interactive row means.
+
+This marker is rare — it appeared on 5 of 3,685 sessions in the reference
+corpus — so its absence means "not flagged as a background run", not "unknown".
+
 ## Activity Categories
 
 Each assistant turn is classified into one of 13 categories using deterministic rules:

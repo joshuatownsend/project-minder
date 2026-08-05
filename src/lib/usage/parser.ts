@@ -176,6 +176,10 @@ export async function parseSessionTurns(
   // A3: the most recent user prompt text, threaded onto following assistant
   // turns as `userIntentText` so intent-based categories can attribute their cost.
   let prevUserText: string | undefined;
+  // A3 session-scoped metadata, latched during the walk (see the attachment
+  // branch below) and stamped onto every turn once the file is fully read.
+  let sessionEntrypoint: string | undefined;
+  let sessionKindValue: string | undefined;
   // A6: dedup assistant usage by message.id (fallback requestId) within a
   // session. Claude Code can re-log a message (retry / resumed-session re-emit);
   // summing every line would double-count tokens/cost. Only guards ids that are
@@ -191,6 +195,22 @@ export async function parseSessionTurns(
       entry = JSON.parse(trimmed);
     } catch {
       continue;
+    }
+
+    // A3: `entrypoint` / `sessionKind` are session-scoped and ride
+    // `attachment` entries, which are not turns — so they must be read BEFORE
+    // the skip guards below, exactly as the DB ingest path does. Every one of
+    // 3,685 corpus sessions carries `entrypoint` on an attachment, so this is
+    // the load-bearing carrier, not a fallback. Latched first-non-empty and
+    // stamped onto the turns after the loop, because an attachment can appear
+    // after the turns it describes.
+    if (entry.type === "attachment") {
+      if (!sessionEntrypoint && typeof (entry as any).entrypoint === "string" && (entry as any).entrypoint) {
+        sessionEntrypoint = (entry as any).entrypoint;
+      }
+      if (!sessionKindValue && typeof (entry as any).sessionKind === "string" && (entry as any).sessionKind) {
+        sessionKindValue = (entry as any).sessionKind;
+      }
     }
 
     // Skip internal entries
@@ -325,6 +345,16 @@ export async function parseSessionTurns(
     }
   }
 
+  // Denormalize the session-constant values onto each turn. The aggregator
+  // works over a flat turn list with no session-level side table, so carrying
+  // them here is what lets the file backend produce `byEntrypoint` at all.
+  if (sessionEntrypoint || sessionKindValue) {
+    for (const t of turns) {
+      if (sessionEntrypoint) t.entrypoint = sessionEntrypoint;
+      if (sessionKindValue) t.sessionKind = sessionKindValue;
+    }
+  }
+
   return turns;
 }
 
@@ -385,6 +415,10 @@ export async function parseSessionTurnsWithMeta(
   }
   let prevUserTimestampMeta: string | null = null;
   let prevUserTextMeta: string | undefined;
+  // A3 session-scoped metadata, latched during the walk (see the attachment
+  // branch below) and stamped onto every turn once the file is fully read.
+  let sessionEntrypoint: string | undefined;
+  let sessionKindValue: string | undefined;
   const seenMessageIdsMeta = new Set<string>();
 
   for (const line of raw.split("\n")) {
@@ -415,6 +449,22 @@ export async function parseSessionTurnsWithMeta(
         turns[lastAssistantTurnIdx].turnDurationMs = (entry as any).duration;
       }
       continue;
+    }
+
+    // A3: `entrypoint` / `sessionKind` are session-scoped and ride
+    // `attachment` entries, which are not turns — so they must be read BEFORE
+    // the skip guards below, exactly as the DB ingest path does. Every one of
+    // 3,685 corpus sessions carries `entrypoint` on an attachment, so this is
+    // the load-bearing carrier, not a fallback. Latched first-non-empty and
+    // stamped onto the turns after the loop, because an attachment can appear
+    // after the turns it describes.
+    if (entry.type === "attachment") {
+      if (!sessionEntrypoint && typeof (entry as any).entrypoint === "string" && (entry as any).entrypoint) {
+        sessionEntrypoint = (entry as any).entrypoint;
+      }
+      if (!sessionKindValue && typeof (entry as any).sessionKind === "string" && (entry as any).sessionKind) {
+        sessionKindValue = (entry as any).sessionKind;
+      }
     }
 
     if (entry.isSidechain && !options.includeSidechains) continue;
@@ -549,6 +599,16 @@ export async function parseSessionTurnsWithMeta(
   }
 
   const cliVersion = mostFrequent(versionCounts);
+
+  // Denormalize the session-constant values onto each turn. The aggregator
+  // works over a flat turn list with no session-level side table, so carrying
+  // them here is what lets the file backend produce `byEntrypoint` at all.
+  if (sessionEntrypoint || sessionKindValue) {
+    for (const t of turns) {
+      if (sessionEntrypoint) t.entrypoint = sessionEntrypoint;
+      if (sessionKindValue) t.sessionKind = sessionKindValue;
+    }
+  }
 
   return { turns, meta: { compactBoundaries, cliVersion, hasThinking } };
 }

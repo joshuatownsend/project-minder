@@ -6,6 +6,7 @@ import type {
   CategoryType,
   CategoryBreakdown,
   EffortBreakdown,
+  EntrypointBreakdown,
   DailyBucket,
   ProjectBreakdown,
   ProjectDetail,
@@ -109,6 +110,21 @@ const EFFORTS: { effort: string; frac: number; taskFrac: number; osr: number }[]
   { effort: "high", frac: 0.26, taskFrac: 0.12, osr: 0.73 },
   { effort: "xhigh", frac: 0.09, taskFrac: 0.14, osr: 0.7 },
   { effort: "unknown", frac: 0.53, taskFrac: 0.08, osr: 0.68 },
+];
+
+/**
+ * A3 entrypoint mix. Session shares are modelled on the real corpus
+ * (sdk-cli 88%, sdk-py 7%, cli 4.5%) but the COST shares are deliberately
+ * inverted — interactive sessions are long and expensive, automated ones are
+ * short. A demo that made both distributions identical would hide the exact
+ * asymmetry the panel exists to show.
+ */
+const ENTRYPOINTS: {
+  entrypoint: string; sessionFrac: number; costFrac: number; bgFrac: number;
+}[] = [
+  { entrypoint: "cli", sessionFrac: 0.05, costFrac: 0.62, bgFrac: 0.03 },
+  { entrypoint: "sdk-cli", sessionFrac: 0.88, costFrac: 0.31, bgFrac: 0 },
+  { entrypoint: "sdk-py", sessionFrac: 0.07, costFrac: 0.07, bgFrac: 0 },
 ];
 
 const TOOLS: [string, number][] = [
@@ -295,6 +311,20 @@ function buildReport(
 
   // Order follows EFFORTS (the ordinal scale, unknown last) rather than cost —
   // the same rule both real backends apply. See `effort.ts` EFFORT_ORDER.
+  const byEntrypoint: EntrypointBreakdown[] = ENTRYPOINTS.map((e) => {
+    const sessions = atLeast1(Math.round(totalSessions * e.sessionFrac));
+    const cost = round2(totalCost * e.costFrac);
+    return {
+      entrypoint: e.entrypoint,
+      sessions,
+      turns: atLeast1(Math.round(totalTurns * e.costFrac)),
+      tokens: Math.round(totalTokens * e.costFrac),
+      cost,
+      avgCostPerSession: round2(cost / sessions),
+      backgroundSessions: Math.round(sessions * e.bgFrac),
+    };
+  });
+
   const byEffort: EffortBreakdown[] = EFFORTS.map((e) => {
     const turns = atLeast1(Math.round(totalTurns * e.frac));
     const verifiedTasks = Math.round(turns * e.taskFrac);
@@ -478,6 +508,7 @@ function buildReport(
     byProject,
     byCategory,
     byEffort,
+    byEntrypoint,
     topTools,
     toolTransitions,
     toolSelfLoops,
