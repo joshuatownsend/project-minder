@@ -21,7 +21,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
-import { UNKNOWN_EFFORT, compareEffort, effortBucket, computeEffortMix } from "@/lib/usage/effort";
+import {
+  UNKNOWN_EFFORT,
+  MIN_TASKS_FOR_RATE,
+  compareEffort,
+  effortBucket,
+  computeEffortMix,
+} from "@/lib/usage/effort";
 import { detectOneShot, detectOneShotTasks } from "@/lib/usage/oneShotDetector";
 import type { UsageTurn, EffortBreakdown } from "@/lib/usage/types";
 
@@ -58,6 +64,44 @@ describe("effort bucketing", () => {
   it("sorts unrecognized levels after unknown, stably", () => {
     const sorted = ["ultra", "high", "unknown", "abyssal"].sort(compareEffort);
     expect(sorted).toEqual(["high", "unknown", "abyssal", "ultra"]);
+  });
+});
+
+describe("MIN_TASKS_FOR_RATE", () => {
+  it("is a positive integer the UI can compare a task count against", () => {
+    expect(Number.isInteger(MIN_TASKS_FOR_RATE)).toBe(true);
+    expect(MIN_TASKS_FOR_RATE).toBeGreaterThan(1);
+  });
+
+  // The load-bearing property. The threshold governs what the CHART draws;
+  // moving it into the aggregators would overload `oneShotRate: undefined` with
+  // a second meaning ("measured, but not many") on top of "nothing measured",
+  // and would silently strip the true ratio from /api/usage, the MCP tools and
+  // the CSV export — consumers that have every reason to want the raw number
+  // and their own way of qualifying it.
+  it("does NOT suppress the rate in the data layer", async () => {
+    const { aggregateUsage } = await import("@/lib/usage/aggregator");
+    const { emptyActivity } = await import("@/lib/usage/activityBuckets");
+
+    // A single verified task at `xhigh` — far below the display threshold.
+    const report = await aggregateUsage(
+      [
+        turn("user"),
+        edit("xhigh"),
+        verify("xhigh"),
+        result("All tests passed"),
+        turn("assistant"),
+      ],
+      "all",
+      emptyActivity()
+    );
+
+    const xhigh = report.byEffort.find((r) => r.effort === "xhigh");
+    expect(xhigh?.verifiedTasks).toBe(1);
+    expect(xhigh!.verifiedTasks).toBeLessThan(MIN_TASKS_FOR_RATE);
+    // Still reported, precisely because the aggregator is not the layer that
+    // decides what is readable.
+    expect(xhigh?.oneShotRate).toBe(1);
   });
 });
 
