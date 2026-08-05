@@ -10,7 +10,6 @@ import {
   TimelineEvent,
   FileOperation,
   SubagentInfo,
-  PrLink,
   SessionPermissionMode,
   SessionHookRun,
 } from "../types";
@@ -252,10 +251,6 @@ async function scanSessionFile(
     const permissionModes: SessionPermissionMode[] = [];
     const hookRuns: SessionHookRun[] = [];
     const effortMix: Record<string, number> = {};
-    // Authoritative PR links from `type: "pr-link"` entries, keyed by URL so
-    // they can be merged with the `gh pr create` scraper's finds without
-    // double-counting. A5 removes the scraper; until then both feed in.
-    const prLinksByUrl = new Map<string, PrLink>();
     // Per-model token accumulation for accurate cost (via LiteLLM pricing)
     const perModelTokens: PerModelTokens = new Map();
     const allEntries: ConversationEntry[] = [];
@@ -297,20 +292,9 @@ async function scanSessionFile(
               permissionModes.push({ ts: entry.timestamp, mode: entry.permissionMode });
             }
             break;
-          case "pr-link": {
-            // Authoritative, unlike the `gh pr create` text scraper: emitted by
-            // Claude Code itself, so it survives output truncation and catches
-            // PRs opened by any route (web UI, `gh pr create --web`, a script).
-            const { prNumber, prUrl, prRepository } = entry;
-            if (typeof prUrl === "string" && prUrl && typeof prNumber === "number") {
-              prLinksByUrl.set(prUrl, {
-                url: prUrl,
-                number: prNumber,
-                repo: typeof prRepository === "string" ? prRepository : "",
-              });
-            }
-            break;
-          }
+          // NOTE: `pr-link` is handled by `extractPrsFromEntries`, not here —
+          // it needs to merge with the `gh pr create` scraper's finds, and
+          // doing that in one shared place is what makes the DB path see it too.
           case "attachment":
             // Session-shaped metadata rides attachments, not assistant turns.
             // First non-empty wins — these are constant for a session, and
@@ -532,18 +516,11 @@ async function scanSessionFile(
     // never poisons the rest of the SessionSummary.
     let prs: SessionSummary["prs"] | undefined;
     try {
+      // `extractPrsFromEntries` folds the authoritative `type: "pr-link"`
+      // entries in with the `gh pr create` scraper itself, so both this reader
+      // and the DB ingest path get them from one place.
       const found = extractPrsFromEntries(allEntries);
-      // A1: fold in the authoritative `pr-link` entries. Scraper results are
-      // seeded first so a `pr-link` for the same URL overwrites them — it has
-      // the real `prRepository` rather than one parsed back out of the URL.
-      // Union, not replacement: A5 removes the scraper, and until then a PR
-      // that only one source saw should still appear.
-      const merged = new Map<string, PrLink>();
-      for (const p of found) merged.set(p.url, p);
-      for (const [url, link] of prLinksByUrl) {
-        merged.set(url, { ...link, repo: link.repo || merged.get(url)?.repo || "" });
-      }
-      if (merged.size > 0) prs = [...merged.values()];
+      if (found.length > 0) prs = found;
     } catch { /* non-critical */ }
 
     // Ticket extraction (item 3). Scans all text blocks for full

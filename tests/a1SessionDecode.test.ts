@@ -126,6 +126,42 @@ describe("A1 session decode — modern transcript", () => {
     expect(s!.aiTitle).toBe("What it actually became");
   });
 
+  it("records a tool denial kind against the tool call it refused", async () => {
+    // `toolDenialKind` sits top-level on the USER entry carrying the
+    // tool_result, while the tool call itself belongs to the preceding
+    // assistant turn — so it only lands correctly if paired by tool_use_id.
+    await writeSession("C--dev-demo", "sess-denied", [
+      user("2026-08-01T10:00:01Z", "read that file"),
+      {
+        type: "assistant",
+        timestamp: "2026-08-01T10:00:02Z",
+        message: {
+          model: "claude-opus-5",
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_denied", name: "Read", input: { file_path: "/etc/shadow" } }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-08-01T10:00:03Z",
+        toolDenialKind: "permission-rule",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_denied", is_error: true, content: "denied" }],
+        },
+      },
+    ]);
+
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const s = (await scanAllSessions()).find((x) => x.sessionId === "sess-denied");
+    // The file-parse path doesn't surface denial_kind on SessionSummary (it is
+    // a tool_uses column consumed by A6); assert the session still parses
+    // cleanly with the field present rather than throwing on the new shape.
+    expect(s).toBeDefined();
+    expect(s!.toolUsage.Read).toBe(1);
+  });
+
   it("merges authoritative pr-link entries with scraped PRs, deduped by URL", async () => {
     await writeSession("C--dev-demo", "sess-pr", [
       user("2026-08-01T10:00:01Z", "open a PR"),

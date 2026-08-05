@@ -195,6 +195,13 @@ interface ParsedToolUse {
   isError: 0 | 1;
   errorCategory: string | null;
   invocationSource: string | null;
+  /**
+   * A1: why this call was refused — `permission-rule`, `automode-blocked`,
+   * `user-rejected`, `automode-unavailable`. Null when it wasn't refused OR
+   * when the transcript predates the field; the two are indistinguishable, so
+   * readers must not treat NULL as "allowed".
+   */
+  denialKind: string | null;
 }
 
 interface ParsedTurn {
@@ -574,14 +581,27 @@ async function readJsonlSession(
   });
 
   const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
+  // A1: why a tool call was refused (`permission-rule`, `automode-blocked`,
+  // `user-rejected`, `automode-unavailable`). Lives top-level on the USER entry
+  // that reports the tool_result, while the `tool_uses` row belongs to the
+  // assistant turn that made the call — so it has to be paired by
+  // `tool_use_id`, exactly like `errorByToolUseId` beside it. Without this the
+  // `denial_kind` column would exist and stay permanently NULL (Codex review,
+  // PR #377).
+  const denialByToolUseId = new Map<string, string>();
   const slashCommandsByTimestamp = new Map<string, Set<string>>();
   for (const { entry: preEntry } of parsedLines) {
     if (!preEntry || preEntry.type !== "user" || preEntry.isSidechain || preEntry.isMeta || !preEntry.timestamp) continue;
     const msgContent = preEntry.message?.content ?? [];
     const topContent = (preEntry.content ?? []) as unknown[];
     const src = (msgContent as unknown[]).length > 0 ? msgContent : topContent;
+    const denialKind =
+      typeof preEntry.toolDenialKind === "string" && preEntry.toolDenialKind
+        ? preEntry.toolDenialKind
+        : null;
     for (const tr of extractToolResultEntries(src)) {
       if (tr.tool_use_id) errorByToolUseId.set(tr.tool_use_id, { isError: tr.isError, content: tr.content });
+      if (tr.tool_use_id && denialKind) denialByToolUseId.set(tr.tool_use_id, denialKind);
     }
     const names = extractCommandNames(src);
     if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
@@ -902,6 +922,7 @@ async function readJsonlSession(
           isError,
           errorCategory,
           invocationSource,
+          denialKind: toolUseId ? denialByToolUseId.get(toolUseId) ?? null : null,
         };
       });
       toolCallCount += toolUses.length;
@@ -1099,7 +1120,17 @@ async function readJsonlSession(
   // (PR #250 re-review). So proceed whenever we collected any sidechain turns —
   // the derivations below no-op cleanly on empty primary turns, and the
   // sidechain rows are appended and priced afterward.
-  if (turns.length === 0 && sidechainCollected.length === 0) {
+  //
+  // A1 adds a third case with exactly the same shape: a tail window can contain
+  // ONLY metadata entries — an `ai-title`, or a `permission-mode` switch — which
+  // produce no turns at all. Returning null for those advances the cursor past
+  // them, so the title or mode change is lost permanently rather than merely
+  // deferred (Codex review, PR #377). `sessionKind`/`entrypoint` are excluded
+  // from this test on purpose: they ride attachments that always accompany
+  // turns, so they cannot be the sole content of a window.
+  const hasA1Metadata =
+    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0;
+  if (turns.length === 0 && sidechainCollected.length === 0 && !hasA1Metadata) {
     return { parsed: null, safeOffset, hasOrphanToolResults };
   }
 
@@ -1674,12 +1705,12 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
        arguments_json, file_path, file_op, is_error,
-       error_category, invocation_source
+       error_category, invocation_source, denial_kind
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
        @arguments_json, @file_path, @file_op, @is_error,
-       @error_category, @invocation_source
+       @error_category, @invocation_source, @denial_kind
      )`
   );
   const insertFileEdit = db.prepare(
@@ -1766,6 +1797,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
         is_error: tu.isError,
         error_category: tu.errorCategory,
         invocation_source: tu.invocationSource,
+        denial_kind: tu.denialKind,
       });
       rows++;
 
@@ -2055,12 +2087,12 @@ function appendSessionTail(
        session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
        mcp_server, mcp_tool, agent_name, skill_name,
        arguments_json, file_path, file_op, is_error,
-       error_category, invocation_source
+       error_category, invocation_source, denial_kind
      ) VALUES (
        @session_id, @turn_index, @sequence_in_turn, @tool_use_id, @ts, @tool_name,
        @mcp_server, @mcp_tool, @agent_name, @skill_name,
        @arguments_json, @file_path, @file_op, @is_error,
-       @error_category, @invocation_source
+       @error_category, @invocation_source, @denial_kind
      )`
   );
   const insertFileEdit = db.prepare(
@@ -2147,6 +2179,7 @@ function appendSessionTail(
         is_error: tu.isError,
         error_category: tu.errorCategory,
         invocation_source: tu.invocationSource,
+        denial_kind: tu.denialKind,
       });
       rows++;
 
@@ -2332,7 +2365,16 @@ function appendSessionTail(
        work_mode_building_pct = @work_mode_building_pct,
        work_mode_testing_pct  = @work_mode_testing_pct,
        work_mode_other_pct    = @work_mode_other_pct,
-       source                 = @source
+       source                 = @source,
+       -- A1. Two different merge rules, because the fields mean different things:
+       --   session_kind / entrypoint are CONSTANT for a session, so the stored
+       --     value wins and a tail that did not happen to include an attachment
+       --     cannot blank them (same shape as the slug clause above).
+       --   ai_title is RE-EMITTED as the session subject clarifies, so the
+       --     newest non-null wins -- note the reversed COALESCE argument order.
+       session_kind = COALESCE(session_kind, @session_kind),
+       entrypoint   = COALESCE(entrypoint, @entrypoint),
+       ai_title     = COALESCE(@ai_title, ai_title)
      WHERE session_id = @session_id`
   ).run({
     ...statusUpdateParam,
@@ -2371,8 +2413,36 @@ function appendSessionTail(
     work_mode_testing_pct: tailWorkMode.testing,
     work_mode_other_pct: tailWorkMode.other,
     source: parsed.source,
+    session_kind: parsed.sessionKind,
+    entrypoint: parsed.entrypoint,
+    ai_title: parsed.aiTitle,
   });
   rows++;
+
+  // A1 one-to-many metadata. APPEND, unlike `writeSession`'s delete-then-insert:
+  // a tail window holds only the newly-read bytes, so wiping first would discard
+  // every hook run and mode switch from earlier in the session. Rows already
+  // persisted stay put and the tail's are added after them, which is also why
+  // the read side orders by `rowid` — it is the only thing preserving file order
+  // across the append boundary.
+  if (parsed.hookRuns.length > 0) {
+    const insertHookRun = db.prepare(
+      "INSERT INTO session_hook_runs (session_id, ts, command, duration_ms) VALUES (?, ?, ?, ?)"
+    );
+    for (const h of parsed.hookRuns) {
+      insertHookRun.run(sessionId, h.ts, h.command, h.durationMs);
+      rows++;
+    }
+  }
+  if (parsed.permissionModes.length > 0) {
+    const insertPermissionMode = db.prepare(
+      "INSERT INTO session_permission_modes (session_id, ts, mode) VALUES (?, ?, ?)"
+    );
+    for (const p of parsed.permissionModes) {
+      insertPermissionMode.run(sessionId, p.ts, p.mode);
+      rows++;
+    }
+  }
 
   // Emit just the new turns' tuples. On a tail, prior days/categories
   // are unchanged in `turns`, so re-deriving their rollup rows would be
@@ -2737,6 +2807,10 @@ export function buildAdapterParsedSession(
           isError: tc.isError ? 1 : 0,
           errorCategory: tc.errorCategory ?? null,
           invocationSource: tc.invocationSource ?? "auto",
+          // Adapter path (Codex/Gemini): `ToolCall` carries no denial concept,
+          // so this is "not reported by this harness" — the same unknown bucket
+          // as a Claude transcript predating the field.
+          denialKind: null,
         };
       }
     );
