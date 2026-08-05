@@ -2,6 +2,7 @@
 
 import { formatCost, formatTokens } from "@/lib/format";
 import { UNKNOWN_EFFORT, MIN_TASKS_FOR_RATE } from "@/lib/usage/effort";
+import { SampleBadge } from "@/components/stats/SampleBadge";
 import type { EffortBreakdown } from "@/lib/usage/types";
 
 /**
@@ -137,9 +138,14 @@ function CausalityNote() {
  *   - it anchored too few for a percentage to mean anything
  *     ({@link MIN_TASKS_FOR_RATE}).
  *
- * The tooltips differ so the two stay distinguishable, and the task count is
- * shown either way — a suppressed rate should read as "not enough data yet",
- * never as a missing feature.
+ * The tooltips differ so the two stay distinguishable, and the denominator is
+ * shown either way via the shared {@link SampleBadge} — the same `n=…` pill
+ * the OTEL stats cards use for exactly this idea, so a thin sample looks the
+ * same everywhere in the app rather than inventing a second visual language
+ * for it. The badge turns amber below the threshold on its own, which is why
+ * a suppressed row reads as "not enough data yet" and not as a missing
+ * feature. A bucket with NO tasks gets no badge: `n=0` is absence, not a small
+ * sample, and the em-dash already says so.
  *
  * `0%` is never rendered for absence. The two are opposite readings of the
  * same cell: 0% says "everything this level touched needed a retry", absence
@@ -147,40 +153,30 @@ function CausalityNote() {
  * level below one that genuinely failed everything in any rate-ordered view.
  */
 function OneShotCell({ row }: { row: EffortBreakdown }) {
-  const tooThin =
-    row.oneShotRate !== undefined && row.verifiedTasks < MIN_TASKS_FOR_RATE;
+  const measured = row.oneShotRate !== undefined;
+  const tooThin = measured && row.verifiedTasks < MIN_TASKS_FOR_RATE;
+  const showRate = measured && !tooThin;
 
-  if (row.oneShotRate === undefined || tooThin) {
-    return (
-      <span
-        style={{
-          fontFamily: "var(--font-mono)", fontSize: "0.66rem",
-          color: "var(--text-muted)", width: "112px", textAlign: "right", flexShrink: 0,
-        }}
-        title={
-          tooThin
-            ? `Only ${row.verifiedTasks} verified task${row.verifiedTasks === 1 ? "" : "s"} at this effort — too few for a rate to mean anything (needs ${MIN_TASKS_FOR_RATE}). ${row.oneShotTasks} of them passed first time.`
-            : "No verified tasks at this effort — nothing to measure, not a 0% success rate."
-        }
-      >
-        —
-        {tooThin && (
-          <span style={{ color: "var(--text-muted)" }}> ({row.verifiedTasks})</span>
-        )}
-      </span>
-    );
-  }
-  const pct = Math.round(row.oneShotRate * 100);
+  const title = !measured
+    ? "No verified tasks at this effort — nothing to measure, not a 0% success rate."
+    : tooThin
+      ? `Only ${row.verifiedTasks} verified task${row.verifiedTasks === 1 ? "" : "s"} at this effort — too few for a rate to mean anything (needs ${MIN_TASKS_FOR_RATE}). ${row.oneShotTasks} of them passed first time.`
+      : `${row.oneShotTasks} of ${row.verifiedTasks} tasks started at this effort passed verification without a follow-up edit.`;
+
   return (
     <span
+      title={title}
       style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "flex-end",
+        gap: "5px", width: "148px", flexShrink: 0,
         fontFamily: "var(--font-mono)", fontSize: "0.66rem",
-        color: "var(--text-secondary)", width: "112px", textAlign: "right", flexShrink: 0,
+        color: showRate ? "var(--text-secondary)" : "var(--text-muted)",
       }}
-      title={`${row.oneShotTasks} of ${row.verifiedTasks} tasks started at this effort passed verification without a follow-up edit.`}
     >
-      {pct}% 1-shot
-      <span style={{ color: "var(--text-muted)" }}> ({row.verifiedTasks})</span>
+      {showRate ? `${Math.round(row.oneShotRate! * 100)}% 1-shot` : "—"}
+      {measured && (
+        <SampleBadge n={row.verifiedTasks} threshold={MIN_TASKS_FOR_RATE} />
+      )}
     </span>
   );
 }

@@ -78,7 +78,11 @@ reasons — hover it to see which:
 - **No verified tasks** at that effort in the period. Nothing to measure. A
   genuine 0% would mean every attempt needed a retry — the opposite reading.
 - **Too few verified tasks** (fewer than 30) for a percentage to mean anything.
-  The count is shown in brackets, e.g. `— (20 tasks)`.
+  The row still shows its sample size as an amber `n=20` pill — the same
+  low-confidence marker the Stats page uses on its OTEL cards.
+
+Every row carries its `n=` sample count, suppressed or not, so the denominator
+behind a rate is always visible.
 
 The threshold is a display rule only. `/api/usage`, the MCP tools and the CSV
 export always report the true ratio whenever at least one task was measured, so
