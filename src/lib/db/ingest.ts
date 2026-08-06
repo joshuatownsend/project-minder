@@ -350,6 +350,12 @@ interface ParsedTurn {
    * it is stamped in the derive block below rather than during the parse walk.
    */
   taskOutcome?: string;
+  /**
+   * C3: `requestId` from the assistant entry — the join key to OTEL's
+   * `attrs.request_id`. Present on 100% of sampled assistant turns; absent on
+   * user turns, which make no API request.
+   */
+  requestId?: string;
 }
 
 /**
@@ -771,6 +777,8 @@ async function readJsonlSession(
     // the parent's effort, which is exactly what A2 wants to compare.
     effort?: string;
     speed?: string;
+    /** C3: OTEL join key; subagent turns make API requests too. */
+    requestId?: string;
     attributionSkill?: string;
     attributionMcpServer?: string;
     attributionMcpTool?: string;
@@ -890,6 +898,7 @@ async function readJsonlSession(
               cacheCreate1hTokens: extractCacheCreate1hTokens(usage),
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
               effort: entry.effort,
+              requestId: (entry as { requestId?: string }).requestId,
               speed: usage.speed ?? undefined,
               attributionSkill: entry.attributionSkill,
               attributionMcpServer: entry.attributionMcpServer,
@@ -1092,6 +1101,7 @@ async function readJsonlSession(
         textOffset: fromOffset + thisLineOffset,
         isSidechain: 0,
         effort: entry.effort,
+        requestId: (entry as { requestId?: string }).requestId,
         attributionSkill: entry.attributionSkill,
         attributionMcpServer: entry.attributionMcpServer,
         attributionMcpTool: entry.attributionMcpTool,
@@ -1832,7 +1842,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
        effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
-       task_outcome,
+       task_outcome, request_id,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -1841,7 +1851,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
-       @task_outcome,
+       @task_outcome, @request_id,
        @derived_version
      )`
   );
@@ -1957,6 +1967,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
       // A2. NULL means "started no verified task" — the common case — not
       // "failed"; see the schema.sql note on turns.task_outcome.
       task_outcome: t.taskOutcome ?? null,
+      request_id: t.requestId ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;
@@ -2297,7 +2308,7 @@ function appendSessionTail(
        category, cost_usd,
        turn_duration_ms, has_thinking, text_offset, is_sidechain,
        effort, attribution_skill, attribution_mcp_server, attribution_mcp_tool,
-       task_outcome,
+       task_outcome, request_id,
        derived_version
      ) VALUES (
        @session_id, @turn_index, @ts, @role, @model,
@@ -2306,7 +2317,7 @@ function appendSessionTail(
        @category, @cost_usd,
        @turn_duration_ms, @has_thinking, @text_offset, @is_sidechain,
        @effort, @attribution_skill, @attribution_mcp_server, @attribution_mcp_tool,
-       @task_outcome,
+       @task_outcome, @request_id,
        @derived_version
      )`
   );
@@ -2399,6 +2410,7 @@ function appendSessionTail(
       // A2. NULL means "started no verified task" — the common case — not
       // "failed"; see the schema.sql note on turns.task_outcome.
       task_outcome: t.taskOutcome ?? null,
+      request_id: t.requestId ?? null,
       derived_version: DERIVED_VERSION,
     });
     rows++;

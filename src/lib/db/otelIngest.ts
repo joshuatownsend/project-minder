@@ -142,12 +142,21 @@ export async function ingestLog(
 
   const payloadJson = JSON.stringify({ ts, body: record.body?.stringValue, attrs: payloadAttrs });
 
+  // C3: lift the two correlation-critical attributes into real columns as we
+  // write, so reads are index probes rather than JSON scans of the whole table.
+  // They stay in `payload_json` too — that blob is the record of what arrived,
+  // and a column is a derived convenience over it, not a replacement.
+  const requestId = typeof payloadAttrs["request_id"] === "string" ? payloadAttrs["request_id"] : null;
+  const toolSource = typeof payloadAttrs["tool_source"] === "string" ? payloadAttrs["tool_source"] : null;
+
   const stmt = prepCached(
     db,
-    `INSERT INTO otel_events (ts, session_id, event_name, payload_json)
-     VALUES (?, ?, ?, ?)`,
+    `INSERT INTO otel_events (ts, session_id, event_name, payload_json, request_id, tool_source)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   );
-  await withBusyRetry(() => stmt.run(new Date(ts).toISOString(), sessionId, eventName, payloadJson));
+  await withBusyRetry(() =>
+    stmt.run(new Date(ts).toISOString(), sessionId, eventName, payloadJson, requestId, toolSource)
+  );
 }
 
 // ─── Metric data point ingest ─────────────────────────────────────────────
@@ -231,11 +240,14 @@ export async function ingestLogBatch(
   const defaultSessionId = sessionFromResource(resource);
   const stmt = prepCached(
     db,
-    `INSERT INTO otel_events (ts, session_id, event_name, payload_json)
-     VALUES (?, ?, ?, ?)`,
+    `INSERT INTO otel_events (ts, session_id, event_name, payload_json, request_id, tool_source)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   );
 
-  const rows: [string, string | null, string, string][] = [];
+  // Same two lifted columns as the single-record path (C3). The batch path is
+  // the one that actually runs in production — a divergence here would leave
+  // the columns populated only in tests.
+  const rows: [string, string | null, string, string, string | null, string | null][] = [];
   const errors: string[] = [];
 
   for (const record of records) {
@@ -254,7 +266,9 @@ export async function ingestLogBatch(
       for (const [k, v] of attrs) payloadAttrs[k] = v;
       const payloadJson = JSON.stringify({ ts, body: record.body?.stringValue, attrs: payloadAttrs });
 
-      rows.push([new Date(ts).toISOString(), sessionId, eventName, payloadJson]);
+      const requestId = typeof payloadAttrs["request_id"] === "string" ? payloadAttrs["request_id"] : null;
+      const toolSource = typeof payloadAttrs["tool_source"] === "string" ? payloadAttrs["tool_source"] : null;
+      rows.push([new Date(ts).toISOString(), sessionId, eventName, payloadJson, requestId, toolSource]);
     } catch (err) {
       errors.push((err as Error).message);
     }

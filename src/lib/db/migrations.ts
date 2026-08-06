@@ -756,6 +756,72 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 24,
+    name: "C3: OTEL correlation key + tool provenance as real columns",
+    up: (db) => {
+      const hasCol = (table: string, col: string) =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+          .some((c) => c.name === col);
+
+      // Both values already exist inside `payload_json`. Promoting them to
+      // columns is not denormalisation for its own sake — `JSON_EXTRACT` cannot
+      // use an index, so correlating by request id meant a full scan of a
+      // 641k-row table per lookup. Measured while writing this: 300 such
+      // lookups did not finish in ten minutes. As columns it is an index probe.
+      //
+      //   request_id  — the join key between OTEL and the transcript. Claude
+      //                 Code writes it as `requestId` on assistant entries and
+      //                 as `attrs.request_id` on `api_request` events. C3 was
+      //                 specified against `message.uuid`, which does not appear
+      //                 in this data under any spelling; `request_id` does, on
+      //                 100% of both sides.
+      //   tool_source — 'builtin' | 'mcp' (and presumably 'plugin', unobserved
+      //                 locally). Tool provenance stated outright instead of
+      //                 inferred from an `mcp__server__tool` name — the
+      //                 OTEL-side twin of A4's attribution.
+      if (!hasCol("otel_events", "request_id")) {
+        db.prepare("ALTER TABLE otel_events ADD COLUMN request_id TEXT").run();
+      }
+      if (!hasCol("otel_events", "tool_source")) {
+        db.prepare("ALTER TABLE otel_events ADD COLUMN tool_source TEXT").run();
+      }
+      // The other half of the join. Without a request id on `turns` the
+      // correlation can only count distinct ids within OTEL, which answers
+      // nothing — it would report 100% coverage by construction.
+      if (!hasCol("turns", "request_id")) {
+        db.prepare("ALTER TABLE turns ADD COLUMN request_id TEXT").run();
+      }
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_turns_request_id ON turns(request_id) WHERE request_id IS NOT NULL"
+      );
+
+      // Backfill. OTEL events are append-only telemetry — nothing ever
+      // re-ingests them — so without this the columns would only ever describe
+      // events recorded after the upgrade, and every existing row would look
+      // like it had no request id. That is the same "forward-only decode leaves
+      // history blank" trap the A wave rejected.
+      db.exec(`
+        UPDATE otel_events
+           SET request_id = JSON_EXTRACT(payload_json, '$.attrs.request_id')
+         WHERE request_id IS NULL
+           AND JSON_EXTRACT(payload_json, '$.attrs.request_id') IS NOT NULL;
+        UPDATE otel_events
+           SET tool_source = JSON_EXTRACT(payload_json, '$.attrs.tool_source')
+         WHERE tool_source IS NULL
+           AND JSON_EXTRACT(payload_json, '$.attrs.tool_source') IS NOT NULL;
+      `);
+
+      // Partial indexes: both columns are NULL on the majority of rows, and the
+      // non-NULL subset is exactly what every query against them wants.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_otel_events_request_id
+          ON otel_events(request_id) WHERE request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_otel_events_tool_source
+          ON otel_events(tool_source) WHERE tool_source IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 /**

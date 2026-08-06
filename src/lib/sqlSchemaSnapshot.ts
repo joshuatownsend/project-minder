@@ -1,4 +1,4 @@
-// Last verified: schema version 23 (src/lib/db/schema.sql + migrations v1-v23)
+// Last verified: schema version 24 (src/lib/db/schema.sql + migrations v1-v24)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -52,6 +52,8 @@ export const SQL_SCHEMA: TableSchema[] = [
       "effort", "attribution_skill", "attribution_mcp_server", "attribution_mcp_tool",
       // v21 (A2)
       "task_outcome",
+      // v24 (C3)
+      "request_id",
     ],
   },
   {
@@ -128,7 +130,11 @@ export const SQL_SCHEMA: TableSchema[] = [
   },
   {
     table: "otel_events",
-    columns: ["id", "ts", "session_id", "event_name", "payload_json"],
+    columns: [
+      "id", "ts", "session_id", "event_name", "payload_json",
+      // v24 (C3)
+      "request_id", "tool_source",
+    ],
   },
   {
     table: "indexer_runs",

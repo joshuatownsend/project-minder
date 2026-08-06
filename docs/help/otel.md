@@ -118,3 +118,31 @@ record is rejected without dropping the rest of the batch.
 Events land in the `otel_events` table in `~/.minder/index.db`. Metrics land
 in `otel_metrics`. The schema uses a generic `payload_json` column for events
 so detectors can be added in future waves without migrating existing rows.
+
+
+## Correlating telemetry with transcripts
+
+OTEL events and session transcripts describe the same work from two sides.
+Minder joins them on the request id — `requestId` on assistant transcript
+entries, `attrs.request_id` on OTEL events — which is promoted to a real column
+on both tables so a lookup is an index probe rather than a scan of the whole
+event table.
+
+**Coverage is reported, not assumed.** Telemetry is opt-in and retained for a
+window, so most historical turns have no matching event and never will. On the
+reference machine about a third of assistant turns join. A correlation that
+quietly dropped the unmatched ones would present a third of the data as all of
+it, so the coverage ratio is returned alongside every correlated figure.
+
+## Tool provenance
+
+`tool_source` states whether a call was a built-in tool, an MCP tool, or a
+plugin one. Minder otherwise infers this from the `mcp__server__tool` naming
+convention — a convention rather than a guarantee, and one that says nothing
+about plugin-provided tools. Where OTEL is available, the stated value is used.
+
+A period where no event carries the attribute reports **no data** rather than an
+empty breakdown: "OTEL cannot answer this" and "every tool was built-in" look
+identical otherwise, and only one of them is a finding.
+
+Available through the `get-tool-provenance` MCP tool.
