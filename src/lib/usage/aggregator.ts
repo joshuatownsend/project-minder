@@ -251,6 +251,9 @@ export async function aggregateUsage(
   const skillExplicit = new Map<string, CostAccum>();
   const skillInferred = new Map<string, CostAccum>();
   const mcpExplicit = new Map<string, CostAccum & { display: string }>();
+  // Per-tool split within each server, explicit path only — there is no
+  // inferred counterpart worth trusting at this granularity.
+  const mcpTools = new Map<string, Map<string, { turns: number; cost: number }>>();
   const mcpInferred = new Map<string, CostAccum & { display: string }>();
   // Task outcomes crossed with the skill that caused the work (A2's
   // `task_outcome` reused as the general join key it was built to be).
@@ -373,6 +376,13 @@ export async function aggregateUsage(
         const a = mcpExplicit.get(k) ?? { ...mkAccum(), display: turn.attributionMcpServer };
         a.turns++; a.tokens += tokens; a.cost += cost;
         mcpExplicit.set(k, a);
+        if (isAttributed(turn.attributionMcpTool)) {
+          const tools = mcpTools.get(k) ?? new Map<string, { turns: number; cost: number }>();
+          const t = tools.get(turn.attributionMcpTool) ?? { turns: 0, cost: 0 };
+          t.turns++; t.cost += cost;
+          tools.set(turn.attributionMcpTool, t);
+          mcpTools.set(k, tools);
+        }
       }
       // Inferred fallback, from the tool calls this turn ISSUED. Counted once
       // per (turn, target) so a turn calling the same server twice doesn't
@@ -653,9 +663,19 @@ export async function aggregateUsage(
       const src = useExplicit ? mcpExplicit : mcpInferred;
       const method = useExplicit ? ("explicit" as const) : ("inferred" as const);
       return [...src.entries()]
-        .map(([key, a]) => ({
-          server: a.display, key, turns: a.turns, tokens: a.tokens, cost: a.cost, method,
-        }))
+        .map(([key, a]) => {
+          const tools = useExplicit ? mcpTools.get(key) : undefined;
+          return {
+            server: a.display, key, turns: a.turns, tokens: a.tokens, cost: a.cost, method,
+            ...(tools && tools.size > 0
+              ? {
+                  tools: [...tools.entries()]
+                    .map(([tool, t]) => ({ tool, turns: t.turns, cost: t.cost }))
+                    .sort((x, y) => y.cost - x.cost),
+                }
+              : {}),
+          };
+        })
         .sort((a, b) => b.cost - a.cost);
     })(),
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),

@@ -211,11 +211,33 @@ panel. The same small-sample rule applies: below 30 verified tasks the rate is
 suppressed and only the `n=` count is shown, because a skill sitting at "100%"
 off two tasks is not evidence of anything.
 
+### Which call inside a server
+
+Each server row also names its costliest **tools**. A server total says
+"Playwright cost $634"; it does not say what to do about it. The split does —
+`browser_take_screenshot` returning an image costs far more per call than
+`browser_click` returning nothing, so the breakdown turns a number into a
+decision about which call to stop making. Shown only on attributed data:
+there is no call-site equivalent worth trusting at this granularity, so an
+estimated list omits it rather than guessing.
+
 ### The long tail
 
 Skills and servers below 1% of attributed spend are folded into a single
 "N more" row. The fold is shown rather than silently dropped, and its cost is
 included in the total.
+
+### On the Skills page
+
+The skills catalog shows attributed spend alongside the invocation count, and
+sorting by **Most expensive** is available there. The two columns answer
+different questions and can disagree sharply: a skill invoked once that then
+drives hours of work is expensive, and the invocation count alone says the
+opposite. A skill with attributed spend but no recorded invocation still gets a
+row — that combination is normal, not a glitch.
+
+The agents catalog already reports cost from its own subagent sessions, which
+is a more direct measure than attribution, so it is unchanged.
 
 ## Activity Categories
 

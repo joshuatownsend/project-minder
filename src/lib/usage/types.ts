@@ -248,6 +248,27 @@ export interface McpServerCost {
   tokens: number;
   cost: number;
   method: AttributionMethod;
+  /**
+   * Per-tool spend within this server, sorted by cost (A4 follow-up).
+   *
+   * Answers the question the server total cannot: a server is rarely
+   * uniformly expensive. `browser_take_screenshot` returning an image costs
+   * far more per call than `browser_click` returning nothing, so "Playwright
+   * is expensive" is only actionable once you know *which* call to stop
+   * making.
+   *
+   * Present only on the explicit path — `attribution_mcp_tool` is Claude
+   * Code's own field and has no inferred counterpart worth trusting at this
+   * granularity, so an inferred list omits it rather than fabricating one.
+   */
+  tools?: McpToolCost[];
+}
+
+/** One tool's share of an MCP server's attributed spend. */
+export interface McpToolCost {
+  tool: string;
+  turns: number;
+  cost: number;
 }
 
 export interface ModelCost {
@@ -408,6 +429,20 @@ export interface SkillStats {
   lastUsed?: string;
   projects: Record<string, number>;
   sessions: string[];
+  /**
+   * Spend Claude Code attributed to this skill (A4), and the turns behind it.
+   *
+   * **Not derivable from `invocations`.** That counts explicit `Skill`
+   * dispatches; this counts every turn whose tokens the skill is responsible
+   * for. On the reference index the two differ by ~373x in aggregate — a skill
+   * is invoked once and then drives the work that follows.
+   *
+   * Undefined when nothing was attributed, never 0, so "no attribution
+   * recorded" stays distinguishable from "attributed and free". Populated on
+   * the same pass as the rest of the stats; see `attachSkillAttribution`.
+   */
+  attributedCostUsd?: number;
+  attributedTurns?: number;
 }
 
 export interface ActivityBucket {

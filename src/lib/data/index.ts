@@ -930,11 +930,20 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
 
 async function runFileSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
   const { parseAllSessions } = await import("@/lib/usage/parser");
-  const { groupSkillCalls } = await import("@/lib/usage/skillParser");
-  const sessionMap = await parseAllSessions();
+  const { groupSkillCalls, attachSkillAttribution } = await import("@/lib/usage/skillParser");
+  const { loadPricing, computeTurnCostSync } = await import("@/lib/usage/costCalculator");
+  // Sidechain turns carry attribution too — a skill that delegates still caused
+  // the delegate's spend — so this asks for them explicitly rather than taking
+  // the default primary-only view.
+  const sessionMap = await parseAllSessions({ includeSidechains: true });
   const allTurns = Array.from(sessionMap.values()).flat();
   const sinceMs = getPeriodStart(period)?.getTime();
   const stats = groupSkillCalls(allTurns, sinceMs);
+  // Pricing is resolved once up front so the per-turn cost lookup can be
+  // synchronous — awaiting inside the accumulation loop would serialize tens
+  // of thousands of turns for no benefit.
+  await loadPricing();
+  attachSkillAttribution(stats, allTurns, computeTurnCostSync, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 

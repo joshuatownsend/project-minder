@@ -1,11 +1,13 @@
 "use client";
 
+import React from "react";
+
 import { formatCost } from "@/lib/format";
 import { MIN_TASKS_FOR_RATE } from "@/lib/usage/effort";
 import { ATTRIBUTION_TAIL_SHARE } from "@/lib/usage/attribution";
 import type { AttributionMethod } from "@/lib/usage/attribution";
 import { SampleBadge } from "@/components/stats/SampleBadge";
-import type { SkillCost, McpServerCost } from "@/lib/usage/types";
+import type { SkillCost, McpServerCost, McpToolCost } from "@/lib/usage/types";
 
 /**
  * Where spend actually comes from: which skills and MCP servers caused it (A4).
@@ -66,6 +68,7 @@ export function AttributionPanel({ skills, servers, currency, fxRate }: {
           currency={currency}
           fxRate={fxRate}
           label={(r) => r.server}
+          detail={(r) => <TopTools tools={r.tools} currency={currency} fxRate={fxRate} />}
         />
       )}
     </div>
@@ -104,7 +107,7 @@ function foldTail<T extends { cost: number; turns: number; tokens: number }>(
 }
 
 function Section<T extends { cost: number; turns: number }>({
-  title, method, rows, currency, fxRate, label, extra,
+  title, method, rows, currency, fxRate, label, extra, detail,
 }: {
   title: string;
   method: AttributionMethod;
@@ -113,6 +116,8 @@ function Section<T extends { cost: number; turns: number }>({
   fxRate: number;
   label: (r: T) => string;
   extra?: (r: T) => React.ReactNode;
+  /** Optional second line under a row — used for the per-tool split. */
+  detail?: (r: T) => React.ReactNode;
 }) {
   const max = rows.reduce((m, r) => Math.max(m, r.cost), 0);
   return (
@@ -127,7 +132,12 @@ function Section<T extends { cost: number; turns: number }>({
         <MethodBadge method={method} />
       </div>
       {rows.map((r, i) => (
-        <div key={`${label(r)}-${i}`} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        // Fragment per row so the optional detail line sits directly beneath
+        // ITS bar. Rendering all bars and then all details — which an earlier
+        // draft of this did — detaches every tool split from the server it
+        // describes and silently mis-labels the whole section.
+        <React.Fragment key={`${label(r)}-${i}`}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <span
             title={label(r)}
             style={{
@@ -164,6 +174,10 @@ function Section<T extends { cost: number; turns: number }>({
           </span>
           {extra?.(r)}
         </div>
+        {/* Its own row rather than nested inside the bar row, so the bar stays
+            a single flex line and the tool split can wrap freely when narrow. */}
+        {detail?.(r)}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -242,6 +256,38 @@ function OneShotCell({ row }: { row: SkillCost }) {
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * The costliest calls inside one server.
+ *
+ * A server total says "Playwright cost $634"; it does not say what to do about
+ * it. The split does: `browser_take_screenshot` returning an image is far more
+ * expensive per call than `browser_click` returning nothing, so naming the top
+ * few turns a number into a decision. Capped at three — a pointer to the
+ * expensive call, not an inventory.
+ */
+function TopTools({ tools, currency, fxRate }: {
+  tools?: McpToolCost[];
+  currency: string;
+  fxRate: number;
+}) {
+  if (!tools || tools.length === 0) return null;
+  const top = tools.slice(0, 3);
+  return (
+    <div style={{
+      display: "flex", flexWrap: "wrap", gap: "10px",
+      padding: "0 0 2px 178px",
+      fontFamily: "var(--font-mono)", fontSize: "0.58rem", color: "var(--text-muted)",
+    }}>
+      {top.map((t) => (
+        <span key={t.tool} title={`${t.tool}: ${t.turns} turns`}>
+          {t.tool} {formatCost(t.cost, currency, fxRate)}
+        </span>
+      ))}
+      {tools.length > top.length && <span>+{tools.length - top.length} more</span>}
+    </div>
   );
 }
 

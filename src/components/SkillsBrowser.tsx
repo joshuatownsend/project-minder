@@ -220,8 +220,30 @@ function SkillRowItem({
               <ExternalLink style={{ width: "9px", height: "9px" }} />
             </Link>
           )}
+          {/*
+            Attributed spend (A4). Placed BEFORE the invocation count on
+            purpose: a skill invoked twice that then drove $1,449 of work is
+            expensive, and the count alone actively understates it — the two
+            differ by ~373x in aggregate. Shown whenever attribution exists,
+            even for a skill with zero recorded invocations, since a skill can
+            cause spend without inference ever seeing a dispatch.
+          */}
+          {row.usage?.attributedCostUsd != null && row.usage.attributedCostUsd > 0 && (
+            <span
+              title={`${formatUsd(row.usage.attributedCostUsd)} of spend attributed to this skill across ${row.usage.attributedTurns ?? 0} turns. Attributed cost, not invocation count — a skill is invoked once and then drives the work that follows.`}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.65rem",
+                fontWeight: 600,
+                color: "var(--text-primary)",
+              }}
+            >
+              {formatUsd(row.usage.attributedCostUsd)}
+            </span>
+          )}
           {row.usage && row.usage.invocations > 0 && (
             <span
+              title={`${row.usage.invocations} explicit Skill invocation${row.usage.invocations === 1 ? "" : "s"}. This counts dispatches, not the cost of the work they caused.`}
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.65rem",
@@ -395,7 +417,13 @@ function SkillRowItem({
   );
 }
 
-type SortKey = "name" | "invocations" | "lastUsed";
+/** Same precision rule as the agents catalog: sub-cent costs need 4dp to
+ *  read as anything other than $0.00. */
+function formatUsd(v: number): string {
+  return `$${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
+}
+
+type SortKey = "name" | "invocations" | "lastUsed" | "cost";
 type SourceFilter = "all" | "user" | "plugin" | "project";
 
 export function SkillsBrowser() {
@@ -459,6 +487,19 @@ export function SkillsBrowser() {
 
     rows = [...rows].sort((a, b) => {
       if (sortBy === "name") {
+        const an = a.entry?.name ?? a.usage?.name ?? "";
+        const bn = b.entry?.name ?? b.usage?.name ?? "";
+        return an.localeCompare(bn);
+      }
+      if (sortBy === "cost") {
+        // Undefined sorts last rather than as 0 — "not attributed" is not
+        // "attributed nothing".
+        const av = a.usage?.attributedCostUsd ?? -1;
+        const bv = b.usage?.attributedCostUsd ?? -1;
+        if (av !== bv) return bv - av;
+        // Same name resolution as the "name" branch above — a row may carry an
+        // entry, usage, or (for an uncatalogued but attributed skill) only the
+        // latter.
         const an = a.entry?.name ?? a.usage?.name ?? "";
         const bn = b.entry?.name ?? b.usage?.name ?? "";
         return an.localeCompare(bn);
@@ -646,6 +687,7 @@ export function SkillsBrowser() {
           }}
         >
           <option value="invocations">Most invoked</option>
+          <option value="cost">Most expensive</option>
           <option value="lastUsed">Recently used</option>
           <option value="name">Name A–Z</option>
         </select>

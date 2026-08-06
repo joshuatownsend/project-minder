@@ -113,6 +113,14 @@ export interface SkillRow {
     lastUsed?: string;
     projects: Record<string, number>;
     sessions: string[];
+    /**
+     * A4 attributed spend — see `SkillStats` for the full contract. Distinct
+     * from `invocations`, which counts dispatches rather than the work they
+     * caused; the two differ by ~373x in aggregate. Undefined, never 0, when
+     * nothing was attributed.
+     */
+    attributedCostUsd?: number;
+    attributedTurns?: number;
   };
   catalogMissing?: boolean;
   slashCount?: number;

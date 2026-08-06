@@ -10,6 +10,7 @@ import type {
   EntrypointBreakdown,
   SkillCost,
   McpServerCost,
+  McpToolCost,
   DailyBucket,
   ProjectDetail,
   McpServerStats,
@@ -603,8 +604,12 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
  * the reference corpus, so without folding the same server lists twice.
  */
 function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[] {
-  const explicit = prepCached(db,
+  // Grouped by (server, tool) so the per-tool breakdown comes from the same
+  // scan as the server totals — a second query would risk the two disagreeing
+  // after any filter change.
+  const explicitRows = prepCached(db,
       `SELECT t.attribution_mcp_server AS server,
+              COALESCE(NULLIF(t.attribution_mcp_tool, ''), '') AS tool,
               COUNT(*)                     AS turns,
               COALESCE(SUM(t.input_tokens + t.output_tokens
                          + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
@@ -616,8 +621,25 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY 1`
-    ).all(f) as Array<{ server: string; turns: number; tokens: number; cost: number }>;
+       GROUP BY 1, 2`
+    ).all(f) as Array<{ server: string; tool: string; turns: number; tokens: number; cost: number }>;
+
+  // Collapse (server, tool) rows to server rows, keeping the tool split aside.
+  const toolsByServer = new Map<string, Map<string, McpToolCost>>();
+  const explicitByServer = new Map<string, { server: string; turns: number; tokens: number; cost: number }>();
+  for (const r of explicitRows) {
+    const agg = explicitByServer.get(r.server) ?? { server: r.server, turns: 0, tokens: 0, cost: 0 };
+    agg.turns += r.turns; agg.tokens += r.tokens; agg.cost += r.cost;
+    explicitByServer.set(r.server, agg);
+    if (!r.tool) continue;
+    const k = mcpServerKey(r.server);
+    const tools = toolsByServer.get(k) ?? new Map<string, McpToolCost>();
+    const t = tools.get(r.tool) ?? { tool: r.tool, turns: 0, cost: 0 };
+    t.turns += r.turns; t.cost += r.cost;
+    tools.set(r.tool, t);
+    toolsByServer.set(k, tools);
+  }
+  const explicit = [...explicitByServer.values()];
 
   const raw = explicit.length > 0
     ? explicit.map((r) => ({ ...r, method: "explicit" as const }))
@@ -662,6 +684,13 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
     // real server id (`plugin:playwright:playwright`), the one a user has
     // actually seen in their MCP config.
     if (prev.server === key && r.server !== key) prev.server = r.server;
+  }
+
+  for (const row of merged.values()) {
+    const tools = toolsByServer.get(row.key);
+    if (tools && tools.size > 0) {
+      row.tools = [...tools.values()].sort((a, b) => b.cost - a.cost);
+    }
   }
 
   return [...merged.values()].sort((a, b) => b.cost - a.cost);

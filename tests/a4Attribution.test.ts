@@ -188,7 +188,7 @@ async function writeExplicitFixture(): Promise<void> {
     }),
     assistant("2026-08-01T10:00:07Z", {
       attributionMcpServer: "plugin_playwright_playwright",
-      attributionMcpTool: "browser_click",
+      attributionMcpTool: "browser_take_screenshot",
     }),
   ];
   await fs.writeFile(
@@ -310,6 +310,35 @@ describe.skipIf(!driverAvailable)("A4 attribution — file-parse vs SQLite parit
   );
 
   it.each([true, false])(
+    "splits a server's spend per tool, folded across both spellings (useDb=%s)",
+    async (useDb) => {
+      await writeExplicitFixture();
+      const r = await reportFrom(useDb);
+      const pw = r.byMcpCost.find((m) => m.key === "plugin_playwright_playwright");
+      expect(pw).toBeDefined();
+      // The two turns used different tools AND different spellings of the
+      // server. Both tools must appear under the one folded server row —
+      // grouping on the raw name would split them across two rows.
+      expect(pw!.tools?.map((t) => t.tool).sort()).toEqual([
+        "browser_click", "browser_take_screenshot",
+      ]);
+      expect(pw!.tools?.reduce((s, t) => s + t.turns, 0)).toBe(pw!.turns);
+    }
+  );
+
+  it("omits the per-tool split on the inferred path rather than fabricating one", async () => {
+    await writeInferredOnlyFixture();
+    // `attribution_mcp_tool` is Claude Code's own field with no inferred
+    // counterpart worth trusting at this granularity, so an inferred list
+    // carries no tools at all — better than a plausible-looking guess.
+    for (const useDb of [false, true]) {
+      const r = await reportFrom(useDb);
+      expect(r.byMcpCost[0].method).toBe("inferred");
+      expect(r.byMcpCost[0].tools).toBeUndefined();
+    }
+  });
+
+  it.each([true, false])(
     "crosses task outcomes with the skill that caused the work (useDb=%s)",
     async (useDb) => {
       await writeExplicitFixture();
@@ -326,6 +355,75 @@ describe.skipIf(!driverAvailable)("A4 attribution — file-parse vs SQLite parit
       // distinguishable from "failed every time".
       expect(rows["simplify"].verifiedTasks).toBe(0);
       expect(rows["simplify"].oneShotRate).toBeUndefined();
+    }
+  );
+});
+
+describe.skipIf(!driverAvailable)("skill attribution on the /skills catalog", () => {
+  /**
+   * @param expectDbBackend assert the DB leg really ran. Only meaningful when
+   *   the fixture HAS data for it: with a genuinely empty corpus the facade
+   *   falls back to file-parse by design ("indexer warming up"), so demanding
+   *   `db` there would be asserting against intended behaviour.
+   */
+  async function skillUsageFrom(useDb: boolean, expectDbBackend = true) {
+    vi.resetModules();
+    delete (globalThis as { __minderDb?: unknown }).__minderDb;
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    process.env.MINDER_USE_DB = useDb ? "1" : "0";
+
+    if (useDb) {
+      const mig = await import("@/lib/db/migrations");
+      expect((await mig.initDb()).error).toBeNull();
+      const conn = await import("@/lib/db/connection");
+      const db = await conn.getDb();
+      const ingest = await import("@/lib/db/ingest");
+      await ingest.reconcileAllSessions(db!, {
+        projectsDir: path.join(tmpHome, ".claude", "projects"),
+      });
+    }
+    const data = await import("@/lib/data");
+    const result = await data.getSkillUsage("all");
+    // Load-bearing. The bug this suite caught was the DB path returning `[]`
+    // and the facade silently falling back to file-parse — which produced the
+    // right answer by the wrong route and would have hidden a dead DB query
+    // forever. Assert the backend actually under test ran.
+    if (!useDb || expectDbBackend) {
+      expect(result.meta.backend).toBe(useDb ? "db" : "file");
+    }
+    return result;
+  }
+
+  it.each([true, false])(
+    "reports attributed spend for a skill with no recorded invocation (useDb=%s)",
+    async (useDb) => {
+      await writeExplicitFixture();
+      const { stats } = await skillUsageFrom(useDb);
+      const pr = stats.find((s) => s.name === "pr-resolve");
+
+      // The fixture never dispatches the Skill tool, so invocation counting
+      // sees nothing. Attribution sees the two turns the skill caused — which
+      // is the entire point of A4, and why a catalog showing only invocation
+      // counts understates cost by orders of magnitude.
+      expect(pr).toBeDefined();
+      expect(pr!.invocations).toBe(0);
+      expect(pr!.attributedTurns).toBe(2);
+      expect(pr!.attributedCostUsd).toBeGreaterThan(0);
+    }
+  );
+
+  it.each([true, false])(
+    "leaves attribution undefined — not 0 — for an unattributed skill (useDb=%s)",
+    async (useDb) => {
+      await writeInferredOnlyFixture();
+      // No skills at all here, so the DB legitimately returns nothing and the
+      // facade falls back — the designed cold-indexer path, not a defect.
+      const { stats } = await skillUsageFrom(useDb, false);
+      // Nothing attributed anywhere in this fixture, so no skill should claim
+      // a zero cost it never measured.
+      for (const st of stats) {
+        expect(st.attributedCostUsd).toBeUndefined();
+      }
     }
   );
 });
