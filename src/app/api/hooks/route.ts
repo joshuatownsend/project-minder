@@ -16,19 +16,12 @@ import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaiting
 import { evaluateAndDispatchRules } from "@/lib/notifications/rules/engine";
 import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import { bridgeHookToEventBus } from "@/lib/agentView/eventBus";
-import type { HookEventName } from "@/lib/types";
+import { HOOK_EVENT_NAMES, type HookEventName } from "@/lib/types";
 
-const VALID_EVENTS = new Set<string>([
-  "PreToolUse",
-  "PostToolUse",
-  "UserPromptSubmit",
-  "Notification",
-  "Stop",
-  "SubagentStop",
-  "PreCompact",
-  "SessionStart",
-  "SessionEnd",
-]);
+// Derived, never hand-listed — see the note on HOOK_EVENT_NAMES. A copy here
+// that drifted from the validator's copy let a saved notification rule target an
+// event this route would reject.
+const VALID_EVENTS = new Set<string>(HOOK_EVENT_NAMES);
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Check feature flag before parsing the body

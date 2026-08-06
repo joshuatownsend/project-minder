@@ -19,6 +19,8 @@ interface PluginInstall {
 
 interface PluginManifest {
   repository?: string;
+  /** Where the plugin keeps its skills. String or array; `"."` means the plugin root (2.1.218). */
+  skills?: unknown;
 }
 
 function parseSemverParts(v: string): [number, number, number] {
@@ -51,6 +53,47 @@ async function readPluginRepoUrl(installPath: string): Promise<string | undefine
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Directories a plugin keeps its skills in, resolved absolute.
+ *
+ * Defaults to `<installPath>/skills`, which is all Minder used to look at. Since
+ * 2.1.218 a manifest may point elsewhere, and `"."` — the plugin root, for a
+ * repo that *is* one skill — is explicitly allowed. A plugin using either was
+ * invisible to the catalog: not mis-parsed, just never opened.
+ *
+ * Paths are resolved and then checked to be inside `installPath`, so a manifest
+ * saying `"../../.."` can't walk the reader out of the plugin directory.
+ */
+export async function resolvePluginSkillsRoots(installPath: string): Promise<string[]> {
+  let declared: unknown;
+  try {
+    const raw = await fs.readFile(
+      path.join(installPath, ".claude-plugin", "plugin.json"),
+      "utf-8"
+    );
+    declared = (JSON.parse(raw) as PluginManifest).skills;
+  } catch {
+    // No manifest, or unreadable — fall through to the default.
+  }
+
+  const candidates =
+    typeof declared === "string"
+      ? [declared]
+      : Array.isArray(declared)
+        ? declared.filter((p): p is string => typeof p === "string")
+        : [];
+  if (candidates.length === 0) candidates.push("skills");
+
+  const base = path.resolve(installPath);
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(base, candidate);
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) continue;
+    if (!roots.includes(resolved)) roots.push(resolved);
+  }
+  return roots;
 }
 
 export async function loadInstalledPlugins(): Promise<InstalledPlugin[]> {

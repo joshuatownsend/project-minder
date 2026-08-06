@@ -135,6 +135,30 @@ function SkillRowItem({
                 /{row.entry.argumentHint ?? row.entry.slug}
               </span>
             )}
+            {row.entry?.disableModelInvocation && (
+              // `disable-model-invocation` narrows WHO can invoke a skill
+              // rather than switching it off, so it earns a badge next to the
+              // slash-command chip: together they say "only you can start this".
+              // The explanation is duplicated into `.sr-only` rather than left
+              // in `title` alone, which is unreachable by keyboard and touch.
+              <span
+                title="Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6rem",
+                  color: "var(--text-muted)",
+                  background: "var(--bg-surface)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "3px",
+                  padding: "1px 5px",
+                }}
+              >
+                <span className="sr-only">
+                  Manual only: Claude cannot invoke this skill on its own — it runs only when you type it as a slash command.
+                </span>
+                <span aria-hidden="true">manual only</span>
+              </span>
+            )}
             {row.entry?.version && (
               <span
                 style={{
