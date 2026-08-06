@@ -57,6 +57,14 @@ describe("C2 — delegation caps", () => {
     expect(concurrent.ratio).toBeUndefined();
   });
 
+  it("keeps the web-search noun honest", () => {
+    // Codex + Copilot review of #388: the label says "web searches" because the
+    // documented cap counts searches. The caller passes only WebSearch — a
+    // session with 160 WebFetch calls and no searches is nowhere near this cap.
+    const a = assessDelegation({ webSearches: DELEGATION_CAPS.webSearches });
+    expect(delegationBadgeLabel(a)).toContain("web searches cap reached");
+  });
+
   it("says it has no data when nothing was measured", () => {
     const a = assessDelegation({});
     expect(a.hasData).toBe(false);

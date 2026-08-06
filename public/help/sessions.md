@@ -361,6 +361,10 @@ the caps are configurable (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,
 `--max-budget-usd`), so Minder can see the count but not the ceiling actually in
 force on your machine.
 
+**Only web *searches* count toward the search cap.** `WebFetch` is a different
+tool with no documented quota; counting it would label a session with 160
+fetches and no searches as nearing a cap it is nowhere near.
+
 **Concurrency and depth are not measured.** Concurrency is an instantaneous
 property a finished transcript cannot recover. Depth needs parent-to-child
 linkage between spawns, which the index does not currently populate. They are
