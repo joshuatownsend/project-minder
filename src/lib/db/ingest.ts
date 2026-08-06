@@ -3487,8 +3487,13 @@ export async function reconcileAllSessions(
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
   const allSessions = db
-    .prepare("SELECT session_id, project_slug, file_path FROM sessions")
-    .all() as Array<{ session_id: string; project_slug: string; file_path: string }>;
+    .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
+    .all() as Array<{
+      session_id: string;
+      project_slug: string;
+      file_path: string;
+      derived_version: number;
+    }>;
   const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
   const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
   const deletePrunedDailyByProject = db.prepare(
@@ -3499,11 +3504,34 @@ export async function reconcileAllSessions(
   );
   const stalePruned = new Set<string>();
   for (const r of allSessions) {
-    if (!liveFilePaths.has(r.file_path)) {
-      deleteFtsBySession.run(r.session_id);
-      deleteStale.run(r.session_id);
-      stalePruned.add(r.project_slug);
+    if (liveFilePaths.has(r.file_path)) continue;
+
+    // Same rule as the reconcile gates, applied to the other way a build can
+    // destroy newer data. The guard there stops an old build REWRITING newer
+    // rows; without this one it simply DELETES them instead, which is worse.
+    //
+    // The reachable path is an adapter this build doesn't have (Codex review,
+    // PR #381). `getEnabledAdapters` skips an unknown configured id with only
+    // a console.warn, so discovery *succeeds* having found none of that
+    // adapter's files — which means `adapterDiscoveryFailed` stays false and
+    // the shield above never engages. Its already-indexed sessions are then
+    // absent from `liveFilePaths` and look exactly like vanished files. Roll
+    // back across a build that added an adapter and the entire newer index for
+    // it is deleted, cascading to its turns.
+    //
+    // Deferring costs nothing: if the file really is gone, the newer build
+    // prunes it on its next sweep, when it can also tell the difference. A
+    // permanent rollback keeps rows it can no longer re-derive, which is the
+    // same trade the reconcile guard makes — stale-but-intact over destroyed.
+    // `force` still prunes, so an explicit rebuild is not blocked.
+    if (!options.force && isNewerDerivation(r.derived_version)) {
+      stats.newerDerivationSkips++;
+      continue;
     }
+
+    deleteFtsBySession.run(r.session_id);
+    deleteStale.run(r.session_id);
+    stalePruned.add(r.project_slug);
   }
 
   // Pruned sessions removed contributions on their days. Drop the affected

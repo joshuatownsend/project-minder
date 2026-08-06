@@ -295,4 +295,137 @@ describe.skipIf(!driverAvailable)("derived_version downgrade protection — adap
     expect(stats.newerDerivationSkips).toBe(1);
     reloaded.conn.closeDb();
   });
+
+  /**
+   * The prune pass is the OTHER way an old build destroys newer rows, and the
+   * reconcile guard does not cover it (Codex review, PR #381).
+   *
+   * Reachable path: roll back across a build that added an adapter.
+   * `getEnabledAdapters` skips an unknown configured id with only a
+   * `console.warn`, so discovery *succeeds* having found none of that
+   * adapter's files — `adapterDiscoveryFailed` stays false and the
+   * shield-on-failure never engages. Those already-indexed sessions are then
+   * missing from `liveFilePaths` and are indistinguishable from vanished
+   * files, so the prune deletes them outright. Deleting newer rows is strictly
+   * worse than the downgrade this PR set out to stop.
+   *
+   * Simulated by reconciling with the adapter session absent from discovery,
+   * which is exactly the state an unknown-adapter rollback produces.
+   */
+  it("does not PRUNE a newer-derived session that discovery no longer returns", async () => {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const init = await reloaded.mig.initDb();
+    expect(init.error).toBeNull();
+    const db = (await reloaded.conn.getDb())!;
+
+    const codexPath = path.join(tmpHome, ".codex", "sessions", "r2.jsonl");
+    await fs.mkdir(path.dirname(codexPath), { recursive: true });
+    await fs.writeFile(codexPath, "{}\n");
+
+    const parseAdapterFile = vi.fn(async (): Promise<UsageTurn[]> => [
+      {
+        timestamp: "2026-08-05T10:00:00Z", sessionId: "cx-2",
+        projectSlug: "codexproj", projectDirName: "codexproj",
+        model: "", role: "user", inputTokens: 0, outputTokens: 0,
+        cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [], userMessageText: "hello",
+      },
+      {
+        timestamp: "2026-08-05T10:00:01Z", sessionId: "cx-2",
+        projectSlug: "codexproj", projectDirName: "codexproj",
+        model: "gpt-5", role: "assistant", inputTokens: 200, outputTokens: 100,
+        cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [], assistantText: "hi",
+      },
+    ]);
+
+    const base = {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+      config: cfg(["claude", "codex"]),
+      parseAdapterFile,
+    };
+
+    // Index it while the adapter is known.
+    await reloaded.ingest.reconcileAllSessions(db, {
+      ...base,
+      adapterSessions: [
+        { source: "codex" as const, filePath: codexPath, projectDirName: "codexproj" },
+      ],
+    } as Parameters<typeof reloaded.ingest.reconcileAllSessions>[1]);
+
+    const seeded = db
+      .prepare("SELECT session_id FROM sessions WHERE source = 'codex'")
+      .get() as { session_id: string } | undefined;
+    expect(seeded).toBeDefined();
+
+    db.prepare("UPDATE sessions SET derived_version = ? WHERE session_id = ?").run(
+      DERIVED_VERSION + 1,
+      seeded!.session_id
+    );
+
+    // Now the older build: the adapter is unknown, so discovery returns an
+    // EMPTY list without failing. The file is still on disk.
+    const stats = await reloaded.ingest.reconcileAllSessions(db, {
+      ...base,
+      adapterSessions: [],
+    } as Parameters<typeof reloaded.ingest.reconcileAllSessions>[1]);
+
+    const survivor = db
+      .prepare("SELECT derived_version FROM sessions WHERE session_id = ?")
+      .get(seeded!.session_id) as { derived_version: number } | undefined;
+    expect(survivor).toBeDefined();
+    expect(survivor!.derived_version).toBe(DERIVED_VERSION + 1);
+    // Its turns must survive too — the delete cascades.
+    const turns = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = ?")
+      .get(seeded!.session_id) as { n: number };
+    expect(turns.n).toBeGreaterThan(0);
+    expect(stats.newerDerivationSkips).toBeGreaterThanOrEqual(1);
+    reloaded.conn.closeDb();
+  });
+
+  it("still prunes a vanished session derived at THIS version", async () => {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const init = await reloaded.mig.initDb();
+    expect(init.error).toBeNull();
+    const db = (await reloaded.conn.getDb())!;
+
+    const codexPath = path.join(tmpHome, ".codex", "sessions", "r3.jsonl");
+    await fs.mkdir(path.dirname(codexPath), { recursive: true });
+    await fs.writeFile(codexPath, "{}\n");
+
+    const parseAdapterFile = vi.fn(async (): Promise<UsageTurn[]> => [
+      {
+        timestamp: "2026-08-05T10:00:01Z", sessionId: "cx-3",
+        projectSlug: "codexproj", projectDirName: "codexproj",
+        model: "gpt-5", role: "assistant", inputTokens: 200, outputTokens: 100,
+        cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [], assistantText: "hi",
+      },
+    ]);
+    const base = {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+      config: cfg(["claude", "codex"]),
+      parseAdapterFile,
+    };
+
+    await reloaded.ingest.reconcileAllSessions(db, {
+      ...base,
+      adapterSessions: [
+        { source: "codex" as const, filePath: codexPath, projectDirName: "codexproj" },
+      ],
+    } as Parameters<typeof reloaded.ingest.reconcileAllSessions>[1]);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(1);
+
+    // Same-version rows must still be pruned, or the guard would freeze every
+    // deletion and the index would grow forever.
+    await reloaded.ingest.reconcileAllSessions(db, {
+      ...base,
+      adapterSessions: [],
+    } as Parameters<typeof reloaded.ingest.reconcileAllSessions>[1]);
+
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE source='codex'").get() as { n: number }).n
+    ).toBe(0);
+    reloaded.conn.closeDb();
+  });
 });
