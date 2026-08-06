@@ -257,7 +257,20 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
     })
   );
 
-  return all;
+  // Roots can overlap — a declared `"skills": "./skills/foo"` sits inside the
+  // always-included conventional `skills/`, so both walks find the same
+  // SKILL.md and the catalog shows it twice (Codex review of #384, on the
+  // additive-roots fix from the previous round). Dedupe on the file that
+  // produced the entry, which is the real identity; `id` is derived from the
+  // slug and would collide for genuinely distinct skills of the same name in
+  // different plugins.
+  const seenFiles = new Set<string>();
+  return all.filter((e) => {
+    const key = path.resolve(e.filePath);
+    if (seenFiles.has(key)) return false;
+    seenFiles.add(key);
+    return true;
+  });
 }
 
 export async function walkProjectSkills(

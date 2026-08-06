@@ -284,6 +284,30 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
     expect(entry?.background).toBeUndefined();
   });
 
+  it("does not list a skill twice when a declared root nests inside skills/", async () => {
+    // The additive-roots fix made `skills/` always a candidate, so a declared
+    // path underneath it is walked twice (Codex review of #384).
+    const pluginPath = path.join(tmpHome, "plugins", "nested-plugin");
+    await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ skills: "./skills/foo" })
+    );
+    await fs.mkdir(path.join(pluginPath, "skills", "foo"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, "skills", "foo", "SKILL.md"),
+      "---\nname: nested-skill\n---\n\nBody."
+    );
+
+    const pluginCtx = {
+      ...ctx,
+      installedPlugins: [{ pluginName: "nested-plugin", installPath: pluginPath }],
+    } as unknown as ProvenanceContext;
+
+    const skills = await walkPluginSkills(pluginCtx);
+    expect(skills.filter((s) => s.name === "nested-skill")).toHaveLength(1);
+  });
+
   it('finds a plugin whose manifest declares `"skills": "."`', async () => {
     const pluginPath = path.join(tmpHome, "plugins", "one-skill-plugin");
     await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
