@@ -323,4 +323,22 @@ describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round tri
     const filePrs = extractPrsFromEntries(parsed).map((p) => [p.number, p.source]);
     expect(filePrs).toEqual(dbPrs);
   });
+
+  it("schedules the re-parse that fills `source` on pre-upgrade rows", async () => {
+    // Migration v22 adds the column but cannot populate it: provenance is
+    // decoded from the transcript, not recoverable in SQL. The migration
+    // originally claimed the rows would "re-populate on the next reconcile",
+    // which is false for BOTH paths a session can take — an unchanged
+    // transcript hits the no-op gate, and a growing one appends from the tail
+    // and never revisits the indexed prefix. Only a DERIVED_VERSION bump
+    // re-reads them (Codex review, #385).
+    //
+    // Pinned as a pair so a later slice cannot add a migration that needs a
+    // re-parse and forget the bump — the failure is silent and permanent.
+    const { DERIVED_VERSION } = await import("@/lib/db/derivationVersion");
+    const { LATEST_MIGRATION_VERSION } = await import("@/lib/db/migrations");
+
+    expect(LATEST_MIGRATION_VERSION).toBeGreaterThanOrEqual(22);
+    expect(DERIVED_VERSION).toBeGreaterThanOrEqual(15);
+  });
 });

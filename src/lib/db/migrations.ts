@@ -710,8 +710,15 @@ const MIGRATIONS: Migration[] = [
       // NULL means "written before this column existed", not "scraped". Existing
       // rows are deliberately NOT backfilled to `scraped`: most of them are in
       // fact recorded, and guessing would put a wrong provenance on 652 rows
-      // that a re-parse then has to correct. They re-populate on the next
-      // reconcile like every other derived column.
+      // that a re-parse then has to correct.
+      //
+      // The re-parse is driven by `DERIVED_VERSION` 15, NOT by this migration.
+      // An earlier version of this comment claimed the rows would "re-populate
+      // on the next reconcile like every other derived column"; they would not.
+      // An unchanged transcript hits the no-op gate and is never re-read, and a
+      // growing one takes the tail path, which never revisits PR entries in the
+      // already-indexed prefix — so without the bump these rows stay NULL
+      // forever (Codex review, #385).
       const hasCol = (table: string, col: string) =>
         (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
           .some((c) => c.name === col);
