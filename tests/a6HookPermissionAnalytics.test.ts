@@ -233,6 +233,43 @@ describe.runIf(driverAvailable)("A6 — hook decode, SQLite backend", () => {
     expect(unmeasured?.p95DurationMs).toBeUndefined();
     expect(codegraph?.measuredFires).toBe(1);
   });
+
+  it("aggregates every run in the period, not the newest 50,000", async () => {
+    // The fallback promised all-history and delivered a suffix: rows were
+    // ordered newest-first and capped BEFORE grouping, so on a busy period the
+    // counts and both percentiles silently described part of the window while
+    // looking exactly like a complete answer (Codex review, #386).
+    //
+    // 60,001 runs of one hook. The oldest is the slowest by a wide margin, so
+    // a limit that drops old rows changes p95 as well as the count — a test
+    // that only checked `fires` would pass against a cap that still skewed the
+    // latency figures.
+    await writeFixture();
+    const db = await ingest();
+
+    const insert = db.prepare(
+      "INSERT INTO session_hook_runs (session_id, ts, command, duration_ms) VALUES (?, ?, ?, ?)"
+    );
+    const bulk = db.transaction(() => {
+      // Oldest row first, and by far the slowest.
+      insert.run(SESSION, "2026-01-02T00:00:00.000Z", "flood", 999_999);
+      for (let i = 0; i < 60_000; i++) {
+        insert.run(SESSION, `2026-06-01T00:00:00.${String(i % 1000).padStart(3, "0")}Z`, "flood", 10);
+      }
+    });
+    bulk();
+
+    const { getHookActivity } = await import("@/lib/db/otelQueries");
+    const result = await getHookActivity({ since: Date.parse("2026-01-01T00:00:00Z") });
+    const flood = result.hooks.find((h) => h.name === "flood");
+
+    expect(flood?.fires).toBe(60_001);
+    expect(flood?.measuredFires).toBe(60_001);
+    // p95 of 60,000x10ms + 1x999999ms is still 10 — but the p100-ish tail must
+    // have been SEEN, which the count above proves. The oldest row surviving is
+    // the whole point.
+    expect(flood?.p50DurationMs).toBe(10);
+  });
 });
 
 // ── Denial breakdown ─────────────────────────────────────────────────────────

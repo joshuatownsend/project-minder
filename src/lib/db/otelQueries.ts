@@ -84,6 +84,29 @@ function percentile(sorted: number[], p: number): number {
   return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
 }
 
+/**
+ * `percentile` over a value→count histogram instead of an expanded array.
+ *
+ * Identical nearest-rank rule: the value at 1-based rank `ceil(p/100 * total)`,
+ * which is exactly `percentile`'s 0-based `idx + 1`. Expressed this way so a
+ * caller can aggregate in SQL and stay bounded by *distinct* values rather than
+ * by row count, without changing any number it would otherwise report.
+ */
+function percentileFromHistogram(
+  sorted: { value: number; count: number }[],
+  total: number,
+  p: number
+): number {
+  if (total === 0 || sorted.length === 0) return 0;
+  const rank = Math.min(Math.max(1, Math.ceil((p / 100) * total)), total);
+  let seen = 0;
+  for (const { value, count } of sorted) {
+    seen += count;
+    if (seen >= rank) return value;
+  }
+  return sorted[sorted.length - 1].value;
+}
+
 // ── Edit Acceptance ───────────────────────────────────────────────────────────
 
 export interface ToolAcceptanceRow {
@@ -448,37 +471,56 @@ async function getHookActivityFromTranscripts(
   db: DatabaseT.Database,
   sinceIso: string
 ): Promise<HookActivityResult> {
+  // Grouped in SQL rather than read row-by-row.
+  //
+  // This used to `SELECT command, duration_ms … ORDER BY ts DESC LIMIT 50000`
+  // and aggregate the result in JS, which silently truncated: on an `all` or a
+  // busy 30-day window with more than 50,000 runs, the newest rows were kept
+  // and everything older was dropped BEFORE grouping — so `fires`, `totalFires`
+  // and both percentiles described a suffix of the period while the fallback's
+  // contract promises all of it. A partial answer shaped exactly like a
+  // complete one (Codex review, #386).
+  //
+  // A histogram rather than a raw list keeps the result bounded without
+  // capping: one row per distinct (command, duration) pair, which is small
+  // because durations are integer milliseconds and hooks are repetitive, while
+  // the counts still describe every run in the period.
   const rows = prepCached(
     db,
-    `SELECT command, duration_ms
+    `SELECT command, duration_ms, COUNT(*) AS n
        FROM session_hook_runs
       WHERE ts >= ?
-      ORDER BY ts DESC
-      LIMIT 50000`
-  ).all(sinceIso) as { command: string; duration_ms: number | null }[];
+      GROUP BY command, duration_ms`
+  ).all(sinceIso) as { command: string; duration_ms: number | null; n: number }[];
 
-  const byHook = new Map<string, { measured: number[]; fires: number }>();
+  const byHook = new Map<
+    string,
+    { measured: { value: number; count: number }[]; measuredFires: number; fires: number }
+  >();
   for (const row of rows) {
     if (!row.command) continue;
-    const cur = byHook.get(row.command) ?? { measured: [], fires: 0 };
-    cur.fires++;
-    if (Number.isFinite(row.duration_ms as number)) cur.measured.push(row.duration_ms as number);
+    const cur = byHook.get(row.command) ?? { measured: [], measuredFires: 0, fires: 0 };
+    cur.fires += row.n;
+    if (Number.isFinite(row.duration_ms as number)) {
+      cur.measured.push({ value: row.duration_ms as number, count: row.n });
+      cur.measuredFires += row.n;
+    }
     byHook.set(row.command, cur);
   }
 
   const hooks: HookRow[] = [];
   let totalFires = 0;
   for (const [name, v] of byHook) {
-    const sorted = v.measured.slice().sort((a, b) => a - b);
+    const sorted = v.measured.slice().sort((a, b) => a.value - b.value);
     hooks.push({
       name,
       fires: v.fires,
-      measuredFires: sorted.length,
+      measuredFires: v.measuredFires,
       // Omitted entirely when nothing was measured — see HookRow.
-      ...(sorted.length
+      ...(v.measuredFires
         ? {
-            p50DurationMs: Math.round(percentile(sorted, 50)),
-            p95DurationMs: Math.round(percentile(sorted, 95)),
+            p50DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 50)),
+            p95DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 95)),
           }
         : {}),
     });
