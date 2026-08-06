@@ -35,7 +35,9 @@ function makeEvent(
   receivedAtOffsetMs = 0,
 ): HookEvent {
   return {
-    hookEventName: payload.kind,
+    // `kind` and the event name coincide only for payloads Minder models in
+    // detail; a `Generic` payload keeps the real event in `event`.
+    hookEventName: payload.kind === "Generic" ? payload.event : payload.kind,
     sessionId: `s-${slug}`,
     cwd: `/repo/${slug}`,
     receivedAt: Date.now() + receivedAtOffsetMs,
