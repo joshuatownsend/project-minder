@@ -65,6 +65,7 @@ const slugTitles: Record<HelpSlug, string> = {
   commands: "Commands",
   projects: "Projects",
   swarms: "Swarms",
+  workflows: "Workflows",
   wsl: "WSL Integration",
 };
 

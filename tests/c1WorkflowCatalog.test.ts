@@ -137,6 +137,34 @@ describe("C1 — walking the session directories", () => {
     );
   }
 
+  it("walks every configured Claude home, not just the host's", async () => {
+    // `claudeHomes` is how Minder on Windows reads Claude data out of a WSL
+    // distro, and every other session consumer honours it. This walker read
+    // os.homedir() alone, so a workflow living only in a configured home was
+    // absent from both list and detail — invisible, not degraded (Codex, #389).
+    const otherHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-c1-alt-"));
+    try {
+      await writeRun({ project: "C--dev-a", session: "s1", name: "host-flow", runId: "wf_aaa1" });
+
+      const altWf = path.join(otherHome, "projects", "C--dev-b", "s2", "workflows");
+      await fs.mkdir(path.join(altWf, "scripts"), { recursive: true });
+      await fs.writeFile(
+        path.join(altWf, "scripts", "wsl-flow-wf_bbb2.js"),
+        ['export const meta = {', '  name: "wsl-flow",', '  description: "d",', '}'].join("\n")
+      );
+
+      const entries = await walkClaudeWorkflows({
+        projectsDirs: [
+          path.join(tmpHome, ".claude", "projects"),
+          path.join(otherHome, "projects"),
+        ],
+      });
+      expect(entries.map((e) => e.name).sort()).toEqual(["host-flow", "wsl-flow"]);
+    } finally {
+      await fs.rm(otherHome, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it("returns nothing when no session has workflows", async () => {
     await fs.mkdir(path.join(tmpHome, ".claude", "projects", "C--dev-x", "s1"), { recursive: true });
     expect(await walkClaudeWorkflows()).toEqual([]);
@@ -233,5 +261,42 @@ describe("C1 — walking the session directories", () => {
     // usable entry.
     expect(entries).toHaveLength(1);
     expect(entries[0].runCount).toBe(1);
+  });
+});
+
+describe("C1 — review findings", () => {
+  it("skips a commented-out field rather than cataloguing the stale name", () => {
+    // `// name: "old"` above the live key matched first, so the workflow was
+    // catalogued under an identity its author had deliberately retired — and a
+    // brace inside a comment corrupted the depth counter, silently hiding every
+    // later top-level field (Codex review, #389).
+    const meta = parseWorkflowMeta(
+      [
+        "export const meta = {",
+        '  // name: "old-name",',
+        '  /* was: { name: "ancient" } */',
+        '  name: "real-name",',
+        '  description: "d",',
+        "}",
+      ].join("\n")
+    );
+    expect(meta.name).toBe("real-name");
+    expect(meta.description).toBe("d");
+  });
+
+  it("keeps counting phases past a comment containing braces", () => {
+    const meta = parseWorkflowMeta(
+      [
+        "export const meta = {",
+        '  name: "n",',
+        "  phases: [",
+        '    { title: "Scan" },',
+        '    // { title: "Disabled" },',
+        '    { title: "Fix" },',
+        "  ],",
+        "}",
+      ].join("\n")
+    );
+    expect(meta.phases?.map((p) => p.title)).toEqual(["Scan", "Fix"]);
   });
 });

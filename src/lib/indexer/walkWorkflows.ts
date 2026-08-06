@@ -112,9 +112,48 @@ async function readRunRecords(workflowsDir: string): Promise<Map<string, RunReco
  * on a corpus of thousands of sessions reading every copy would dominate the
  * walk for no extra information.
  */
-export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): Promise<ClaudeWorkflowEntry[]> {
-  const projectsDir = opts.projectsDir ?? path.join(os.homedir(), ".claude", "projects");
+export async function walkClaudeWorkflows(
+  opts: { projectsDir?: string; projectsDirs?: string[] } = {}
+): Promise<ClaudeWorkflowEntry[]> {
+  // Every configured Claude home, not just the host's.
+  //
+  // `claudeHomes` exists so Minder on Windows can read Claude data out of a WSL
+  // distro, and every other session consumer already honours it. This walker
+  // defaulted to `os.homedir()` alone, so a workflow stored only in a configured
+  // home was absent from both the list and the detail response — invisible
+  // rather than degraded (Codex review, #389). Resolution goes through
+  // `getReadableClaudeHomes`, which skips a home inside a stopped distro rather
+  // than waking it: the never-wake invariant this repo holds elsewhere.
+  const roots =
+    opts.projectsDirs ??
+    (opts.projectsDir
+      ? [opts.projectsDir]
+      : await (async () => {
+          try {
+            const { readConfig } = await import("@/lib/config");
+            const { getReadableClaudeHomes } = await import("@/lib/claudeHome");
+            const homes = await getReadableClaudeHomes(await readConfig());
+            return homes.map((h) => path.join(h, "projects"));
+          } catch {
+            return [path.join(os.homedir(), ".claude", "projects")];
+          }
+        })());
 
+  const all: ClaudeWorkflowEntry[] = [];
+  for (const root of roots) {
+    all.push(...(await walkOneProjectsDir(root)));
+  }
+  return foldWorkflowEntries(all);
+}
+
+/** Run `fn` over `items` in fixed-size waves, so fan-out stays bounded. */
+async function batched<T>(items: T[], fn: (item: T) => Promise<void>, size = 8): Promise<void> {
+  for (let i = 0; i < items.length; i += size) {
+    await Promise.all(items.slice(i, i + size).map(fn));
+  }
+}
+
+async function walkOneProjectsDir(projectsDir: string): Promise<ClaudeWorkflowEntry[]> {
   let projectDirs: string[];
   try {
     projectDirs = (await fs.readdir(projectsDir, { withFileTypes: true }))
@@ -130,11 +169,11 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
   }
   const found: Found[] = [];
 
-  // Bounded fan-out. An unbounded nested Promise.all over projects x sessions
-  // can open thousands of concurrent readdir/readFile handles on a large corpus
-  // and hit the OS fd limit (EMFILE). The other indexers in this repo batch for
-  // the same reason (Copilot review of #389); matching them also makes the walk
-  // order reproducible.
+  // Bounded fan-out at BOTH levels. An unbounded nested Promise.all over
+  // projects x sessions can open thousands of concurrent readdir/readFile
+  // handles on a large corpus and hit the OS fd limit (EMFILE). The other
+  // indexers in this repo batch for the same reason (Copilot review of #389);
+  // matching them also makes the walk order reproducible.
   const BATCH = 8;
   for (let i = 0; i < projectDirs.length; i += BATCH) {
     await Promise.all(
@@ -148,8 +187,13 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
       } catch {
         return;
       }
-      await Promise.all(
-        sessionDirs.map(async (sessionId) => {
+      // The inner walk is batched too. Bounding only the outer loop left this
+      // `Promise.all` starting a filesystem walk for every session of a project
+      // at once — and one encoded project holding thousands of session
+      // directories is exactly the large-corpus case this walker exists for, so
+      // the outer bound of 8 does not constrain the real fan-out at all
+      // (Codex review, #389).
+      await batched(sessionDirs, async (sessionId) => {
           const workflowsDir = path.join(projectPath, sessionId, "workflows");
           const scriptsDir = path.join(workflowsDir, "scripts");
           let scriptNames: string[];
@@ -175,8 +219,7 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
               },
             });
           }
-        })
-      );
+      });
       })
     );
   }
@@ -237,9 +280,18 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
     });
   }
 
-  // Two different scripts can declare the same `meta.name` (a workflow renamed
-  // between runs, say). Merge them so the catalog holds one row per id, rather
-  // than two rows that look like duplicates.
+  return entries;
+}
+
+/**
+ * Merge entries that share an id into one catalog row.
+ *
+ * Two different scripts can declare the same `meta.name` (a workflow renamed
+ * between runs, say), and with several Claude homes the same workflow can also
+ * arrive once per home. Both collapse here, so the catalog holds one row per id
+ * rather than rows that look like duplicates.
+ */
+function foldWorkflowEntries(entries: ClaudeWorkflowEntry[]): ClaudeWorkflowEntry[] {
   const byId = new Map<string, ClaudeWorkflowEntry>();
   for (const e of entries) {
     const existing = byId.get(e.id);

@@ -141,6 +141,7 @@ export const helpSlugs = [
   'commands',
   'projects',
   'swarms',
+  'workflows',
   'wsl',
 ] as const
 

@@ -140,6 +140,27 @@ function findTopLevelValue(metaSrc: string, key: string): { start: number } | nu
       i++;
       continue;
     }
+
+    // Comments are skipped before anything else looks at the character.
+    //
+    // A commented-out field is ordinary in a script someone edited — `// name:
+    // "old"` above the live `name` — and without this the scan matched the
+    // stale key first and catalogued the workflow under a name its author had
+    // deliberately retired, merging it with whatever else shared that identity.
+    // Braces inside a comment were worse than a wrong name: they corrupted the
+    // tracked depth, so every later top-level key silently stopped matching
+    // (Codex review, #389).
+    if (ch === "/" && metaSrc[i + 1] === "/") {
+      const nl = metaSrc.indexOf("\n", i);
+      i = nl === -1 ? metaSrc.length : nl + 1;
+      continue;
+    }
+    if (ch === "/" && metaSrc[i + 1] === "*") {
+      const end = metaSrc.indexOf("*/", i + 2);
+      i = end === -1 ? metaSrc.length : end + 2;
+      continue;
+    }
+
     // The key test runs BEFORE the quote-opening branch on purpose. A
     // JSON-style key is itself quoted (`{"title":"Scope"}`), so opening the
     // string first consumes the key as a value and the match never fires —
@@ -190,6 +211,21 @@ function readPhases(metaSrc: string): { phases?: WorkflowPhase[]; warning?: stri
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
       else if (ch === quote) quote = null;
+      continue;
+    }
+    // Same comment skip as `findTopLevelValue`. A `{` or `[` inside a comment
+    // here would unbalance `depth` and either swallow the rest of the array or
+    // end it early, so the phase list would come back short with no warning.
+    // Indices are set one short because the `for` header's `i++` runs on
+    // `continue`.
+    if (ch === "/" && metaSrc[i + 1] === "/") {
+      const nl = metaSrc.indexOf("\n", i);
+      i = nl === -1 ? metaSrc.length : nl;
+      continue;
+    }
+    if (ch === "/" && metaSrc[i + 1] === "*") {
+      const end = metaSrc.indexOf("*/", i + 2);
+      i = (end === -1 ? metaSrc.length : end + 2) - 1;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
