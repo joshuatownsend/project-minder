@@ -78,13 +78,21 @@ export async function resolvePluginSkillsRoots(installPath: string): Promise<str
     // No manifest, or unreadable — fall through to the default.
   }
 
-  const candidates =
-    typeof declared === "string"
-      ? [declared]
-      : Array.isArray(declared)
-        ? declared.filter((p): p is string => typeof p === "string")
-        : [];
-  if (candidates.length === 0) candidates.push("skills");
+  // The conventional `skills/` directory is ALWAYS a candidate; declared paths
+  // are added to it rather than replacing it.
+  //
+  // Codex review of #384 caught the replacement version as a regression. A
+  // plugin with both `skills/foo/SKILL.md` and `"skills": "./extra"` would have
+  // had its standard skills silently dropped — skills the walk listed correctly
+  // *before* this feature existed. Whichever way Claude Code resolves the
+  // manifest, additive is the only version that cannot lose a skill Minder was
+  // already showing, and a catalog over-listing by one directory is a far
+  // cheaper error than one that quietly stops listing.
+  const candidates = ["skills"];
+  if (typeof declared === "string") candidates.push(declared);
+  else if (Array.isArray(declared)) {
+    for (const p of declared) if (typeof p === "string") candidates.push(p);
+  }
 
   const base = path.resolve(installPath);
   const roots: string[] = [];
