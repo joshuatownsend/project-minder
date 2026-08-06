@@ -286,9 +286,18 @@ function SessionRow({
   // fetches and no searches was labelled as nearing the search cap — and 200
   // fetches falsely reported the cap reached (Codex + Copilot review of #388).
   // Counting only what the cap actually counts.
+  //
+  // Claude sessions only. The DB loader is source-agnostic, so a Codex or
+  // Gemini session with a tool named `Agent` or `WebSearch` derives the same
+  // `subagentCount`/`toolUsage` fields — and would get a warning about Claude
+  // Code's caps on a harness where they do not exist. `cliVersion` gates the
+  // rest: a session recorded before its cap shipped was never constrained by
+  // it (Codex review, #388).
+  const isClaudeSession = (session.source ?? "claude") === "claude";
   const delegationAssessment = assessDelegation({
-    spawns: session.subagentCount,
-    webSearches: session.toolUsage["WebSearch"] ?? 0,
+    spawns: isClaudeSession ? session.subagentCount : undefined,
+    webSearches: isClaudeSession ? (session.toolUsage["WebSearch"] ?? 0) : undefined,
+    cliVersion: isClaudeSession ? session.cliVersion : undefined,
   });
   const delegationLabel = delegationBadgeLabel(delegationAssessment);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)

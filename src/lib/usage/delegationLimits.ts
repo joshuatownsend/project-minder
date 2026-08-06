@@ -42,6 +42,12 @@ export interface DelegationUsage {
   spawns?: number;
   /** Web searches/fetches observed. */
   webSearches?: number;
+  /**
+   * Claude Code version that recorded the session. Caps introduced after it are
+   * reported unmeasured rather than compared. Absent means "cannot tell", which
+   * suppresses every cap — see `capApplies`.
+   */
+  cliVersion?: string;
 }
 
 export interface DelegationLimitStatus {
@@ -60,6 +66,47 @@ export interface DelegationAssessment {
   worst: DelegationSeverity;
   /** True when at least one limit could be measured at all. */
   hasData: boolean;
+}
+
+/**
+ * Claude Code version that introduced each cap.
+ *
+ * A session recorded before its cap existed was not constrained by it, so
+ * comparing its counts against that cap invents a limit retroactively — and the
+ * badge does not merely mis-sort, it claims the session "may have been silently
+ * truncated", which for a 2026-era transcript with 160 spawns is a factual
+ * assertion about something that never happened (Codex review, #388).
+ */
+export const CAP_INTRODUCED_IN: Record<DelegationLimitKey, string> = {
+  spawns: "2.1.212",
+  webSearches: "2.1.217",
+  concurrent: "2.1.212",
+  depth: "2.1.212",
+};
+
+/** `a >= b` over dotted numeric versions. Missing segments read as 0. */
+function versionAtLeast(a: string, b: string): boolean {
+  const pa = a.split(".").map((n) => parseInt(n, 10));
+  const pb = b.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+/**
+ * Whether a cap can be assessed for a session recorded by `cliVersion`.
+ *
+ * An unknown version yields FALSE — the same "unmeasured is not zero" rule the
+ * rest of this module runs on. Minder cannot tell whether the cap applied, and
+ * asserting it did is the error that actually misleads; staying quiet only
+ * costs a badge on sessions whose version was never recorded.
+ */
+export function capApplies(key: DelegationLimitKey, cliVersion?: string): boolean {
+  if (!cliVersion) return false;
+  return versionAtLeast(cliVersion, CAP_INTRODUCED_IN[key]);
 }
 
 function severityFor(count: number, cap: number): DelegationSeverity {
@@ -89,9 +136,15 @@ const SEVERITY_ORDER: Record<DelegationSeverity, number> = {
 export function assessDelegation(usage: DelegationUsage): DelegationAssessment {
   const limits: DelegationLimitStatus[] = [];
 
+  // A cap that did not exist when the session ran is reported unmeasured, not
+  // compared — same treatment as a count Minder cannot recover, because the
+  // honest answer is identical: this limit says nothing about this session.
   const measured: Array<[DelegationLimitKey, number | undefined]> = [
-    ["spawns", usage.spawns],
-    ["webSearches", usage.webSearches],
+    ["spawns", capApplies("spawns", usage.cliVersion) ? usage.spawns : undefined],
+    [
+      "webSearches",
+      capApplies("webSearches", usage.cliVersion) ? usage.webSearches : undefined,
+    ],
     // Deliberately unmeasurable today — see the docstring.
     ["concurrent", undefined],
     ["depth", undefined],
