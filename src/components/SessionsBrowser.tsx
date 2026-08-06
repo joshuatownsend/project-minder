@@ -130,6 +130,14 @@ function QualityChip({
     //
     // Fixed here, in the shared component, rather than at each call site —
     // every quality chip in the app inherits it.
+    //
+    // KNOWN LIMIT, stated rather than papered over (Codex review of #380).
+    // `.sr-only` is visually clipped, so this reaches screen readers and does
+    // NOT help a sighted keyboard or touch user — two of the three audiences
+    // the issue names. Closing that needs a tooltip primitive that opens on
+    // focus and tap, which is a shared-UI change rather than a per-chip one.
+    // Tracked in #391. This is a real improvement for one audience, not the
+    // whole fix.
     <span
       title={title}
       style={{

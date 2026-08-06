@@ -40,7 +40,10 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // The shared chip renders `compaction loop`, `tool fail streak` and
     // `resume anomaly` — jargon whose entire meaning lived in `title`. Fixing
     // the shared component covers every call site at once.
-    expect(hasAccessiblePair(src, "function QualityChip", 2200)).toBe(true);
+    // Anchored on the attribute itself rather than the function declaration:
+    // the region between them is prose, and a comment growing there should not
+    // decide whether this test passes.
+    expect(hasAccessiblePair(src, "      title={title}", 900)).toBe(true);
   });
 
   it("the git 'status unavailable' caveat is not mouse-only", async () => {
