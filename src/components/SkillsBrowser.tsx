@@ -279,7 +279,14 @@ function SkillRowItem({
                 color: "var(--text-primary)",
               }}
             >
-              {formatUsd(row.usage.attributedCostUsd)}
+              {/* #380: two adjacent monospace numbers with no visible unit —
+                  one is dollars of attributed spend, the other a dispatch
+                  count. Which is which lives only in the tooltip, and they are
+                  precisely the pair this catalog exists to keep apart. */}
+              <span className="sr-only">
+                {`${formatUsd(row.usage.attributedCostUsd)} of spend attributed to this skill across ${row.usage.attributedTurns ?? 0} turns. Attributed cost, not invocation count.`}
+              </span>
+              <span aria-hidden="true">{formatUsd(row.usage.attributedCostUsd)}</span>
             </span>
           )}
           {row.usage && row.usage.invocations > 0 && (
@@ -292,7 +299,10 @@ function SkillRowItem({
                 color: "var(--info)",
               }}
             >
-              {row.usage.invocations}×
+              <span className="sr-only">
+                {`${row.usage.invocations} explicit Skill invocation${row.usage.invocations === 1 ? "" : "s"}. This counts dispatches, not the cost of the work they caused.`}
+              </span>
+              <span aria-hidden="true">{row.usage.invocations}×</span>
             </span>
           )}
           {(row.slashCount ?? 0) + (row.autoCount ?? 0) > 0 && (

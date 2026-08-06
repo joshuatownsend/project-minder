@@ -120,6 +120,16 @@ function QualityChip({
           ? { color: "var(--status-error-text)", bg: "var(--status-error-bg)", border: "var(--status-error-border)" }
           : { color: "var(--text-secondary)", bg: "var(--bg-elevated)", border: "var(--border-subtle)" };
   return (
+    // #380: the chip labels are jargon — `compaction loop`, `tool fail streak`,
+    // `resume anomaly` — and `title` was the only place they were explained.
+    // A tooltip is mouse-only: it does not appear on keyboard focus in any
+    // major browser, touch devices have no hover at all, and screen-reader
+    // support is inconsistent. Duplicating the explanation into `.sr-only` and
+    // hiding the terse label from assistive tech gives every user the same
+    // information; sighted mouse users still get the tooltip.
+    //
+    // Fixed here, in the shared component, rather than at each call site —
+    // every quality chip in the app inherits it.
     <span
       title={title}
       style={{
@@ -133,7 +143,8 @@ function QualityChip({
         flexShrink: 0,
       }}
     >
-      {children}
+      <span className="sr-only">{title}</span>
+      <span aria-hidden="true">{children}</span>
     </span>
   );
 }

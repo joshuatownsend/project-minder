@@ -15,12 +15,20 @@ export function GitStatus({ git }: { git: GitInfo }) {
           </span>
         )}
         {!git.isDirty && git.unknown && (
+          // #380: the highest-stakes tooltip in the app. "status unavailable"
+          // sits where "N uncommitted" would be, so a reader who cannot reach
+          // the tooltip sees no dirty count and concludes the repo is clean —
+          // the failure is indistinguishable from success. The caveat has to be
+          // readable without a mouse.
           <span
             className="flex items-center gap-1 text-[var(--muted-foreground)]"
             title="git status check failed (index.lock, timeout, or git missing) — not a confirmed-clean repo"
           >
-            <AlertCircle className="h-3 w-3" />
-            status unavailable
+            <AlertCircle className="h-3 w-3" aria-hidden="true" />
+            <span className="sr-only">
+              git status check failed (index.lock, timeout, or git missing) — this is not a confirmed-clean repo
+            </span>
+            <span aria-hidden="true">status unavailable</span>
           </span>
         )}
       </div>
