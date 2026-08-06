@@ -38,6 +38,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "liveEvents",
   "demoMode",
   "workflowLauncher",
+  "workflowCatalog",
   "notificationRules",
 ] as const;
 
@@ -380,6 +381,15 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
     appliesAt: "ui",
     wired: true,
     defaultOn: true,
+  },
+  {
+    key: "workflowCatalog",
+    label: "Workflow catalog",
+    description:
+      "Indexes the Workflow scripts Claude Code persists per session and lists them at /workflows, folded into one row per workflow with its run count, last run, and the phases declared in its `meta` block. Scripts are parsed statically — never executed. Distinct from the GitHub Actions workflows on a project's CI/CD panel. Defaults ON.",
+    group: "active",
+    appliesAt: "ui",
+    wired: true,
   },
   {
     key: "notificationRules",
