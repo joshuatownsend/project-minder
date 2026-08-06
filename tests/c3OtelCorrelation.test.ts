@@ -136,6 +136,49 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     expect(rows.map((r) => r.request_id)).toEqual([REQ_MATCHED, REQ_UNMATCHED]);
   });
 
+  it("stores requestId on subagent turns too", async () => {
+    // The collector captured it and the conversion to a persisted turn dropped
+    // it, so every subagent turn stored request_id = NULL and could never join
+    // to OTEL — subagents silently excluded from the correlation while the
+    // coverage figure reported success on everything else (Codex review of C3).
+    const file = path.join(tmpHome, ".claude", "projects", PROJECT_DIR, `${SESSION}.jsonl`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const entries = [
+      { type: "user", timestamp: "2026-08-01T12:00:00Z", message: { role: "user", content: [{ type: "text", text: "go" }] } },
+      assistant("m1", REQ_MATCHED, "2026-08-01T12:00:01Z"),
+      {
+        type: "assistant",
+        timestamp: "2026-08-01T12:00:02Z",
+        isSidechain: true,
+        requestId: "req_011SubagentCCCCCCCCCCC",
+        message: {
+          id: "m-sub",
+          role: "assistant",
+          model: "claude-opus-5",
+          usage: { input_tokens: 7, output_tokens: 3 },
+          content: [{ type: "text", text: "sub" }],
+        },
+      },
+    ];
+    await fs.writeFile(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+
+    vi.resetModules();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db!, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+
+    const sub = db!
+      .prepare("SELECT request_id FROM turns WHERE is_sidechain = 1")
+      .get() as { request_id: string | null } | undefined;
+    expect(sub?.request_id).toBe("req_011SubagentCCCCCCCCCCC");
+  });
+
   it("reports partial coverage rather than presenting a third of the data as all of it", async () => {
     const db = await setup();
     // Only one of the two turns has telemetry — the normal state, since OTEL is

@@ -1396,6 +1396,11 @@ async function readJsonlSession(
       textOffset: null,
       isSidechain: 1,
       effort: sc.effort,
+      // C3 + Codex review: the collector captured `requestId` and this
+      // conversion dropped it, so every subagent turn stored request_id = NULL
+      // and could never join to OTEL — silently excluding subagents from the
+      // correlation while the coverage figure reported success on the rest.
+      requestId: sc.requestId,
       attributionSkill: sc.attributionSkill,
       attributionMcpServer: sc.attributionMcpServer,
       attributionMcpTool: sc.attributionMcpTool,
