@@ -22,6 +22,7 @@ import {
   Check,
   Pencil,
   Star,
+  AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
@@ -32,6 +33,7 @@ import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 import { EffortMixChip } from "@/components/EffortMixChip";
+import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLimits";
 import { EntrypointChip } from "@/components/EntrypointChip";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
@@ -275,6 +277,14 @@ function SessionRow({
     [prefetch, session.sessionId],
   );
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+  // C2: web searches and fetches both count toward the same per-session cap.
+  const delegationLabel = delegationBadgeLabel(
+    assessDelegation({
+      spawns: session.subagentCount,
+      webSearches:
+        (session.toolUsage["WebSearch"] ?? 0) + (session.toolUsage["WebFetch"] ?? 0),
+    })
+  );
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))
     .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
@@ -430,6 +440,24 @@ function SessionRow({
             <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
               <Bot style={{ width: "10px", height: "10px" }} />
               {session.subagentCount}
+            </span>
+          )}
+          {/* C2: only rendered when a delegation cap is near or reached.
+              `delegationBadgeLabel` returns undefined below the threshold on
+              purpose — a badge on every session that used a few subagents is
+              noise, and noise is how a real one gets missed. */}
+          {delegationLabel && (
+            <span
+              title={`${delegationLabel}. Claude Code caps subagent spawns and web searches per session; a session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`}
+              style={{
+                display: "flex", alignItems: "center", gap: "3px",
+                fontSize: "0.68rem", fontFamily: "var(--font-mono)",
+                color: "var(--status-warning-text, var(--accent))",
+              }}
+            >
+              <AlertTriangle aria-hidden="true" style={{ width: "10px", height: "10px" }} />
+              <span className="sr-only">{delegationLabel}. </span>
+              <span aria-hidden="true">{delegationLabel}</span>
             </span>
           )}
           {session.errorCount > 0 && (
