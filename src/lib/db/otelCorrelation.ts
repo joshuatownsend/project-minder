@@ -117,9 +117,24 @@ export async function getOtelTurnCoverage(opts: { since?: string } = {}): Promis
       WHERE t.request_id IS NOT NULL
         AND (@since IS NULL OR t.ts >= @since)
         AND EXISTS (
-          SELECT 1 FROM otel_events e WHERE e.request_id = t.request_id
+          SELECT 1 FROM otel_events e
+           WHERE e.request_id = t.request_id
+             AND (@since IS NULL OR e.ts >= @since)
         )`
   ).get(params) as { n: number };
+
+  // `hasData` describes whether TELEMETRY exists to correlate against, not
+  // whether the transcript has joinable turns. Basing it on the turn count made
+  // a machine with OTEL switched off report `hasData: true, coverage: 0`, which
+  // reads as "telemetry exists and covers nothing" rather than "there is no
+  // telemetry" (Copilot review of #387).
+  const otelPresent = prepCached(
+    db,
+    `SELECT 1 FROM otel_events
+      WHERE request_id IS NOT NULL
+        AND (@since IS NULL OR ts >= @since)
+      LIMIT 1`
+  ).get(params) as { 1: number } | undefined;
 
   const turnsWithRequestId = total?.n ?? 0;
   const matchedCount = matched?.n ?? 0;
@@ -127,6 +142,6 @@ export async function getOtelTurnCoverage(opts: { since?: string } = {}): Promis
     turnsWithRequestId,
     matched: matchedCount,
     coverage: turnsWithRequestId > 0 ? matchedCount / turnsWithRequestId : undefined,
-    hasData: turnsWithRequestId > 0,
+    hasData: otelPresent !== undefined,
   };
 }

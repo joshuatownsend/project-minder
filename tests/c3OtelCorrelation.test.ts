@@ -164,6 +164,46 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     expect(result.coverage).toBeLessThanOrEqual(1);
   });
 
+  it("says there is no telemetry rather than reporting 0% coverage", async () => {
+    // Basing hasData on the turn count made a machine with OTEL switched off
+    // report `hasData: true, coverage: 0` — "telemetry exists and covers
+    // nothing" rather than "there is no telemetry" (Copilot review of #387).
+    await setup();
+    const { getOtelTurnCoverage } = await import("@/lib/db/otelCorrelation");
+    const result = await getOtelTurnCoverage();
+    expect(result.turnsWithRequestId).toBe(2);
+    expect(result.hasData).toBe(false);
+  });
+
+  it("does not count a turn as covered by an out-of-window OTEL event", async () => {
+    const db = await setup();
+    insertOtel(db, { eventName: "api_request", requestId: REQ_MATCHED, ts: "2020-01-01T00:00:00Z" });
+    const { getOtelTurnCoverage } = await import("@/lib/db/otelCorrelation");
+    const result = await getOtelTurnCoverage({ since: "2026-01-01T00:00:00Z" });
+    // The event exists but predates the window the caller asked about.
+    expect(result.matched).toBe(0);
+  });
+
+  it("creates a usable turns table from schema.sql alone", async () => {
+    // Codex review of #387: `turns.request_id` lived only in migration v24 and
+    // the snapshot, so a DB built by executing schema.sql directly — which
+    // several tests and utilities do — lacked the column and every session
+    // write failed. initDb masks it by running the migration afterwards.
+    const fsMod = await import("fs");
+    const pathMod = await import("path");
+    const schema = fsMod.readFileSync(
+      pathMod.resolve(__dirname, "..", "src", "lib", "db", "schema.sql"),
+      "utf-8"
+    );
+    const Database = (await import("better-sqlite3")).default;
+    const mem = new Database(":memory:");
+    mem.exec(schema);
+    const cols = (mem.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>)
+      .map((c) => c.name);
+    mem.close();
+    expect(cols).toContain("request_id");
+  });
+
   it("groups tool events by stated provenance", async () => {
     const db = await setup();
     insertOtel(db, { eventName: "tool_result", toolSource: "builtin" });

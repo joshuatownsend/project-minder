@@ -287,6 +287,13 @@ CREATE TABLE turns (
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.
   derived_version      INTEGER NOT NULL DEFAULT 0,
+  -- v24 (C3): the join key to OTEL's `attrs.request_id`. Declared HERE as well
+  -- as in migration v24 — a DB built by executing this file directly (several
+  -- tests and utilities do) would otherwise lack the column, and both
+  -- `writeSession` and `appendSessionTail` fail with "table turns has no column
+  -- named request_id". Normal startup masks it because initDb runs the
+  -- migration afterwards; direct fresh-schema consumers do not.
+  request_id            TEXT,
   PRIMARY KEY (session_id, turn_index),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;
