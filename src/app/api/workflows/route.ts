@@ -29,7 +29,17 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // The script excerpt is the largest field by far and no list view uses it, so
-  // it is dropped here rather than shipped to every client that only wanted names.
-  return jsonWithCacheControl(entries.map(({ scriptExcerpt, ...rest }) => rest));
+  // Strip the two fields no list view reads. `scriptExcerpt` is the obvious
+  // one; `runs` is the bigger problem in the case this feature explicitly
+  // supports — a workflow repeated across thousands of sessions carries a runs
+  // array far larger than the capped excerpt, and every element ships an
+  // absolute script path, a session id and a task id to a client that only
+  // wanted the count (Codex review of #389). The detail route keeps both.
+  return jsonWithCacheControl(
+    entries.map(({ scriptExcerpt, runs, ...rest }) => {
+      void scriptExcerpt;
+      void runs;
+      return rest;
+    })
+  );
 }

@@ -31,6 +31,7 @@ const NAV_COMMANDS: CommandItem[] = [
 
   { id: "nav-/agents",    label: "Agents",    sublabel: "Library", href: "/agents" },
   { id: "nav-/skills",    label: "Skills",    sublabel: "Library", href: "/skills" },
+  { id: "nav-/workflows", label: "Workflows", sublabel: "Library", href: "/workflows" },
   { id: "nav-/instructions", label: "Instructions", sublabel: "Library", href: "/instructions" },
   { id: "nav-/commands",  label: "Commands",  sublabel: "Library", href: "/commands" },
   { id: "nav-/plugins",   label: "Plugins",   sublabel: "Library", href: "/plugins" },

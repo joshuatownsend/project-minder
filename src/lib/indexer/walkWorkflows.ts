@@ -56,6 +56,16 @@ export interface ClaudeWorkflowEntry {
   parseWarnings?: string[];
 }
 
+/** Newest first; `runId` breaks ties so the order is stable across walks. */
+function sortRunsNewestFirst(a: ClaudeWorkflowRun, b: ClaudeWorkflowRun): number {
+  if (a.timestamp && b.timestamp) {
+    return b.timestamp.localeCompare(a.timestamp) || a.runId.localeCompare(b.runId);
+  }
+  if (a.timestamp) return -1;
+  if (b.timestamp) return 1;
+  return a.runId.localeCompare(b.runId);
+}
+
 /** `<name>-wf_<id>.js` → the run id, or null when the name doesn't match. */
 function runIdFromScriptName(fileName: string): string | null {
   const m = /-(wf_[A-Za-z0-9-]+)\.js$/.exec(fileName);
@@ -120,8 +130,15 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
   }
   const found: Found[] = [];
 
-  await Promise.all(
-    projectDirs.map(async (projectDirName) => {
+  // Bounded fan-out. An unbounded nested Promise.all over projects x sessions
+  // can open thousands of concurrent readdir/readFile handles on a large corpus
+  // and hit the OS fd limit (EMFILE). The other indexers in this repo batch for
+  // the same reason (Copilot review of #389); matching them also makes the walk
+  // order reproducible.
+  const BATCH = 8;
+  for (let i = 0; i < projectDirs.length; i += BATCH) {
+    await Promise.all(
+      projectDirs.slice(i, i + BATCH).map(async (projectDirName) => {
       const projectPath = path.join(projectsDir, projectDirName);
       let sessionDirs: string[];
       try {
@@ -160,8 +177,9 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
           }
         })
       );
-    })
-  );
+      })
+    );
+  }
 
   if (found.length === 0) return [];
 
@@ -183,10 +201,14 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
     // treated as epoch-zero, so a malformed record cannot become "the newest".
     runsForStem.sort((a, b) => {
       const at = a.run.timestamp, bt = b.run.timestamp;
-      if (at && bt) return bt.localeCompare(at);
+      if (at && bt) return bt.localeCompare(at) || a.run.runId.localeCompare(b.run.runId);
       if (at) return -1;
       if (bt) return 1;
-      return 0;
+      // Both undated. Returning 0 left the order to whatever the parallel
+      // directory walk happened to produce, which decides WHICH script is read
+      // for meta and excerpt — so the same corpus could yield different catalog
+      // text between runs (Copilot review of #389). runId is stable.
+      return a.run.runId.localeCompare(b.run.runId);
     });
 
     const newest = runsForStem[0];
@@ -222,12 +244,22 @@ export async function walkClaudeWorkflows(opts: { projectsDir?: string } = {}): 
   for (const e of entries) {
     const existing = byId.get(e.id);
     if (!existing) { byId.set(e.id, e); continue; }
-    existing.runs = [...existing.runs, ...e.runs];
+    existing.runs = [...existing.runs, ...e.runs].sort(sortRunsNewestFirst);
     existing.runCount += e.runCount;
     existing.projectDirNames = [...new Set([...existing.projectDirNames, ...e.projectDirNames])].sort();
     if (e.lastRunAt && (!existing.lastRunAt || e.lastRunAt > existing.lastRunAt)) {
+      // Take EVERY version-dependent field from the winner, not just the
+      // excerpt. Updating `scriptExcerpt` alone paired the newest script with
+      // whichever entry the parallel walk happened to insert first — so the
+      // detail view could show a new script beside a stale description
+      // (Codex + Copilot review of #389).
       existing.lastRunAt = e.lastRunAt;
       existing.scriptExcerpt = e.scriptExcerpt;
+      existing.description = e.description;
+      existing.whenToUse = e.whenToUse;
+      existing.phases = e.phases;
+      existing.fileBytes = e.fileBytes;
+      existing.parseWarnings = e.parseWarnings;
     }
   }
 

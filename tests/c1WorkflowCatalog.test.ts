@@ -171,6 +171,42 @@ describe("C1 — walking the session directories", () => {
     expect(entries[0].lastRunAt).toBe("2026-08-01T10:00:00Z");
   });
 
+  it("orders undated runs deterministically", async () => {
+    // Returning 0 for two undated runs left the order to whatever the parallel
+    // directory walk produced, and that order decides WHICH script is read for
+    // meta and excerpt — so the same corpus could yield different catalog text
+    // between runs (Copilot review of #389).
+    await writeRun({ project: "C--dev-x", session: "s1", name: "w", runId: "wf_bbb" });
+    await writeRun({ project: "C--dev-x", session: "s2", name: "w", runId: "wf_aaa" });
+    const first = (await walkClaudeWorkflows())[0].runs.map((r) => r.runId);
+    const second = (await walkClaudeWorkflows())[0].runs.map((r) => r.runId);
+    expect(first).toEqual(second);
+    expect(first).toEqual(["wf_aaa", "wf_bbb"]);
+  });
+
+  it("takes all metadata from the newest entry when two stems share a name", async () => {
+    // Updating only `scriptExcerpt` paired the newest script with whichever
+    // entry the parallel walk inserted first, so the detail view could show a
+    // new script beside a stale description (Codex + Copilot review of #389).
+    const meta = (name: string, desc: string) =>
+      `export const meta = {
+  name: "${name}",
+  description: "${desc}",
+}`;
+    await writeRun({
+      project: "C--dev-x", session: "s1", name: "old-stem", runId: "wf_old",
+      timestamp: "2026-08-01T10:00:00Z", script: meta("shared", "stale description"),
+    });
+    await writeRun({
+      project: "C--dev-x", session: "s2", name: "new-stem", runId: "wf_new",
+      timestamp: "2026-08-09T10:00:00Z", script: meta("shared", "current description"),
+    });
+    const entries = await walkClaudeWorkflows();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].description).toBe("current description");
+    expect(entries[0].runCount).toBe(2);
+  });
+
   it("still lists a workflow whose meta cannot be parsed", async () => {
     await writeRun({
       project: "C--dev-x", session: "s1", name: "broken", runId: "wf_x",

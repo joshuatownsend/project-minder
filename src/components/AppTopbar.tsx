@@ -28,6 +28,7 @@ const TITLE_MAP: Record<string, string> = {
   "/timeline":      "Timeline",
   "/agents":        "Agents",
   "/skills":        "Skills",
+  "/workflows":     "Workflows",
   "/instructions":  "Instructions",
   "/commands":      "Commands",
   "/plugins":       "Plugins",

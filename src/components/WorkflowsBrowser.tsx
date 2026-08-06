@@ -14,8 +14,11 @@ import type { ClaudeWorkflowEntry } from "@/lib/indexer/walkWorkflows";
  * workflows do I actually use, and how often".
  */
 
-// The list route strips `scriptExcerpt`; the detail route includes it.
-type WorkflowRow = Omit<ClaudeWorkflowEntry, "scriptExcerpt"> & { scriptExcerpt?: string };
+// The list route strips `scriptExcerpt` and `runs`; the detail route has both.
+type WorkflowRow = Omit<ClaudeWorkflowEntry, "scriptExcerpt" | "runs"> & {
+  scriptExcerpt?: string;
+  runs?: ClaudeWorkflowEntry["runs"];
+};
 
 type SortKey = "recent" | "runs" | "name";
 

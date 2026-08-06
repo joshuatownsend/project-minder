@@ -45,6 +45,11 @@ The parse is deliberately conservative and fails soft. It is JavaScript rather
 than frontmatter or JSON — bare identifier keys, single or double quotes,
 trailing commas — so it cannot delegate to `JSON.parse`.
 
+## Finding it
+
+**Library → Workflows** in the sidebar, or the command palette. The page is also
+at `/workflows` directly.
+
 ## Turning it off
 
 The **Workflow catalog** feature flag (Settings → Feature flags, default ON)

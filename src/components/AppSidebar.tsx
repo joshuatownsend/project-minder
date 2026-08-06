@@ -11,6 +11,7 @@ import {
   BarChart3, Wallet, Coins, HeartPulse, Webhook, Boxes, Database, Cpu,
   Sliders, Settings as SettingsIcon,
   ChevronRight, ChevronDown,
+  Workflow,
 } from "lucide-react";
 import { usePulse } from "./PulseProvider";
 import { useScope } from "./ScopeProvider";
@@ -97,6 +98,7 @@ const GROUPS: NavGroup[] = [
       { id: "plugins",   label: "Plugins",   href: "/plugins",   icon: ico(Plug) },
       { id: "templates", label: "Templates", href: "/templates", icon: ico(BookOpen) },
       { id: "swarms",    label: "Swarms",    href: "/swarms",    icon: ico(Network) },
+      { id: "workflows", label: "Workflows", href: "/workflows", icon: ico(Workflow) },
       { id: "library",   label: "Library",   href: "/library",   icon: ico(Library) },
     ],
   },
