@@ -8,6 +8,8 @@ import type {
   CategoryType,
   EffortBreakdown,
   EntrypointBreakdown,
+  SkillCost,
+  McpServerCost,
   DailyBucket,
   ProjectDetail,
   McpServerStats,
@@ -25,6 +27,7 @@ import {
   BACKGROUND_SESSION_KIND,
   compareEntrypoint,
 } from "@/lib/usage/entrypoint";
+import { mcpServerKey } from "@/lib/usage/attribution";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
@@ -133,6 +136,8 @@ export function loadUsageReportFromSql(
   const byCategory = queryByCategory(db, filter);
   const byEffort = queryByEffort(db, filter);
   const byEntrypoint = queryByEntrypoint(db, filter);
+  const bySkillCost = queryBySkillCost(db, filter);
+  const byMcpCost = queryByMcpCost(db, filter);
   const daily = queryDaily(db, filter);
   const topTools = queryTopTools(db, filter);
   const mcpStats = queryMcpStats(db, filter);
@@ -173,6 +178,8 @@ export function loadUsageReportFromSql(
     byCategory,
     byEffort,
     byEntrypoint,
+    bySkillCost,
+    byMcpCost,
     topTools,
     toolTransitions: [],
     toolSelfLoops: [],
@@ -516,6 +523,148 @@ function queryByEntrypoint(db: DatabaseT.Database, f: FilterParams): EntrypointB
       backgroundSessions: r.backgroundSessions,
     }))
     .sort((a, b) => compareEntrypoint(a.entrypoint, b.entrypoint));
+}
+
+/**
+ * A4: spend caused by each skill, crossed with first-pass success.
+ *
+ * **Fallback is all-or-nothing, deliberately.** If the period contains any
+ * explicitly-attributed turn the whole list is explicit; only a period with
+ * none falls back to inference. Per-row fallback would put explicit and
+ * inferred figures in one chart, and they differ by ~373x on real data — a
+ * blended series would be actively misleading in a way no label could rescue.
+ * `method` records which produced the list.
+ *
+ * The one-shot columns reuse `turns.task_outcome` (A2) rather than adding a
+ * rollup: that column was built as a general turn-level join key precisely so
+ * later slices could cross it. A task is anchored on the turn that made the
+ * edit, so this reads as "work started under this skill that passed
+ * verification first time".
+ */
+function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] {
+  const explicit = prepCached(db,
+      `SELECT t.attribution_skill AS skill,
+              COUNT(*)                     AS turns,
+              COALESCE(SUM(t.input_tokens + t.output_tokens
+                         + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+              COALESCE(SUM(t.cost_usd), 0) AS cost,
+              SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
+              SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.attribution_skill IS NOT NULL AND t.attribution_skill <> ''
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY 1`
+    ).all(f) as Array<Omit<SkillCost, "method" | "oneShotRate">>;
+
+  const rows = explicit.length > 0
+    ? explicit.map((r) => ({ ...r, method: "explicit" as const }))
+    : (prepCached(db,
+        `SELECT tu.skill_name AS skill,
+                COUNT(DISTINCT t.session_id || ':' || t.turn_index) AS turns,
+                COALESCE(SUM(t.input_tokens + t.output_tokens
+                           + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+                COALESCE(SUM(t.cost_usd), 0) AS cost,
+                0 AS verifiedTasks, 0 AS oneShotTasks
+         FROM tool_uses tu
+         JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
+         JOIN sessions s ON s.session_id = t.session_id
+         WHERE t.role = 'assistant'
+           AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
+           AND (@periodStart IS NULL OR t.ts >= @periodStart)
+           AND (@project IS NULL OR s.project_slug = @project)
+           AND (@source IS NULL OR s.source = @source)
+           AND (@home IS NULL OR s.home_key = @home)
+         GROUP BY 1`
+      ).all(f) as Array<Omit<SkillCost, "method" | "oneShotRate">>)
+        .map((r) => ({ ...r, method: "inferred" as const }));
+
+  return rows
+    .map((r) => ({
+      ...r,
+      // Omitted, never 0, when nothing was measured — same contract as
+      // `EffortBreakdown.oneShotRate`.
+      ...(r.verifiedTasks > 0 ? { oneShotRate: r.oneShotTasks / r.verifiedTasks } : {}),
+    }))
+    .sort((a, b) => b.cost - a.cost);
+}
+
+/**
+ * A4: spend caused by each MCP server. Same all-or-nothing fallback as
+ * {@link queryBySkillCost}.
+ *
+ * `key` folds the two spellings of a server onto one identity — the explicit
+ * field carries the real id (`plugin:playwright:playwright`) while the inferred
+ * name is recovered from an already-encoded tool name
+ * (`plugin_playwright_playwright`). Both forms co-occur within 35 sessions on
+ * the reference corpus, so without folding the same server lists twice.
+ */
+function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[] {
+  const explicit = prepCached(db,
+      `SELECT t.attribution_mcp_server AS server,
+              COUNT(*)                     AS turns,
+              COALESCE(SUM(t.input_tokens + t.output_tokens
+                         + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+              COALESCE(SUM(t.cost_usd), 0) AS cost
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.attribution_mcp_server IS NOT NULL AND t.attribution_mcp_server <> ''
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY 1`
+    ).all(f) as Array<{ server: string; turns: number; tokens: number; cost: number }>;
+
+  const raw = explicit.length > 0
+    ? explicit.map((r) => ({ ...r, method: "explicit" as const }))
+    : (prepCached(db,
+        `SELECT tu.mcp_server AS server,
+                COUNT(DISTINCT t.session_id || ':' || t.turn_index) AS turns,
+                COALESCE(SUM(t.input_tokens + t.output_tokens
+                           + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+                COALESCE(SUM(t.cost_usd), 0) AS cost
+         FROM tool_uses tu
+         JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
+         JOIN sessions s ON s.session_id = t.session_id
+         WHERE t.role = 'assistant'
+           AND tu.mcp_server IS NOT NULL AND tu.mcp_server <> ''
+           AND (@periodStart IS NULL OR t.ts >= @periodStart)
+           AND (@project IS NULL OR s.project_slug = @project)
+           AND (@source IS NULL OR s.source = @source)
+           AND (@home IS NULL OR s.home_key = @home)
+         GROUP BY 1`
+      ).all(f) as Array<{ server: string; turns: number; tokens: number; cost: number }>)
+        .map((r) => ({ ...r, method: "inferred" as const }));
+
+  // Fold by key AFTER grouping. SQLite has no regex-replace, so the GROUP BY
+  // above is on the raw name — which means the two spellings of one server
+  // arrive as two rows. Merging here is what makes this agree with the file
+  // aggregator, which groups on the folded key directly; without it the DB
+  // backend lists the same server twice and the parity test fails (it did).
+  const merged = new Map<string, McpServerCost>();
+  for (const r of raw) {
+    const key = mcpServerKey(r.server);
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, {
+        server: r.server, key, turns: r.turns, tokens: r.tokens, cost: r.cost, method: r.method,
+      });
+      continue;
+    }
+    prev.turns += r.turns;
+    prev.tokens += r.tokens;
+    prev.cost += r.cost;
+    // Prefer the spelling that is NOT already in folded form — that is the
+    // real server id (`plugin:playwright:playwright`), the one a user has
+    // actually seen in their MCP config.
+    if (prev.server === key && r.server !== key) prev.server = r.server;
+  }
+
+  return [...merged.values()].sort((a, b) => b.cost - a.cost);
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {

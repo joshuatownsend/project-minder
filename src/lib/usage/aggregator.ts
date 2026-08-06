@@ -7,6 +7,9 @@ import { groupMcpCalls } from "./mcpParser";
 import { detectOneShot, detectOneShotTasks } from "./oneShotDetector";
 import { effortBucket, compareEffort } from "./effort";
 import { entrypointBucket, compareEntrypoint, isBackgroundSession } from "./entrypoint";
+import { mcpServerKey, isAttributed } from "./attribution";
+import { parseMcpTool } from "./mcpParser";
+import { SKILL_DISPATCH_TOOL } from "./toolNames";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import { bucketByHourDay, toLocalDateStr, type ActivityData } from "./activityBuckets";
@@ -237,6 +240,21 @@ export async function aggregateUsage(
     string,
     { turns: number; tokens: number; cost: number; sessions: Set<string>; bgSessions: Set<string> }
   >();
+  /**
+   * A4 attribution accumulators. Explicit and inferred are collected in
+   * PARALLEL rather than one falling through to the other per row, because the
+   * emit step below picks one whole list: mixing them in a single chart would
+   * blend figures that differ by ~11x (MCP) and ~373x (skills).
+   */
+  type CostAccum = { turns: number; tokens: number; cost: number };
+  const mkAccum = (): CostAccum => ({ turns: 0, tokens: 0, cost: 0 });
+  const skillExplicit = new Map<string, CostAccum>();
+  const skillInferred = new Map<string, CostAccum>();
+  const mcpExplicit = new Map<string, CostAccum & { display: string }>();
+  const mcpInferred = new Map<string, CostAccum & { display: string }>();
+  // Task outcomes crossed with the skill that caused the work (A2's
+  // `task_outcome` reused as the general join key it was built to be).
+  const skillTasks = new Map<string, { verified: number; oneShot: number }>();
   const dailyMap = new Map<string, DailyBucket>();
   const allToolCalls: ToolCall[] = [];
   const bashCommands: string[] = [];
@@ -341,6 +359,44 @@ export async function aggregateUsage(
       ep.sessions.add(turn.sessionId);
       if (isBackgroundSession(turn.sessionKind)) ep.bgSessions.add(turn.sessionId);
       entrypointAccum.set(key, ep);
+    }
+
+    // Attribution (A4) — spend side.
+    {
+      if (isAttributed(turn.attributionSkill)) {
+        const a = skillExplicit.get(turn.attributionSkill) ?? mkAccum();
+        a.turns++; a.tokens += tokens; a.cost += cost;
+        skillExplicit.set(turn.attributionSkill, a);
+      }
+      if (isAttributed(turn.attributionMcpServer)) {
+        const k = mcpServerKey(turn.attributionMcpServer);
+        const a = mcpExplicit.get(k) ?? { ...mkAccum(), display: turn.attributionMcpServer };
+        a.turns++; a.tokens += tokens; a.cost += cost;
+        mcpExplicit.set(k, a);
+      }
+      // Inferred fallback, from the tool calls this turn ISSUED. Counted once
+      // per (turn, target) so a turn calling the same server twice doesn't
+      // double its cost.
+      const seenServers = new Set<string>();
+      const seenSkills = new Set<string>();
+      for (const tc of turn.toolCalls) {
+        const mcp = parseMcpTool(tc.name);
+        if (mcp && !seenServers.has(mcp.server)) {
+          seenServers.add(mcp.server);
+          const a = mcpInferred.get(mcp.server) ?? { ...mkAccum(), display: mcp.server };
+          a.turns++; a.tokens += tokens; a.cost += cost;
+          mcpInferred.set(mcp.server, a);
+        }
+        if (tc.name === SKILL_DISPATCH_TOOL) {
+          const skill = typeof tc.arguments?.skill === "string" ? tc.arguments.skill : null;
+          if (skill && !seenSkills.has(skill)) {
+            seenSkills.add(skill);
+            const a = skillInferred.get(skill) ?? mkAccum();
+            a.turns++; a.tokens += tokens; a.cost += cost;
+            skillInferred.set(skill, a);
+          }
+        }
+      }
     }
 
     // Daily — bucket by LOCAL date so the daily bars, the "today" period
@@ -472,6 +528,16 @@ export async function aggregateUsage(
         eff.verifiedTasks++;
         if (task.oneShot) eff.oneShotTasks++;
       }
+      // Same anchor turn, crossed with attribution (A4). Answers "which
+      // skills produce work that passes verification first time?" — the
+      // question `task_outcome` was made a turn-level column to allow.
+      const anchorSkill = sessionTurns[task.anchorIndex]?.attributionSkill;
+      if (isAttributed(anchorSkill)) {
+        const st = skillTasks.get(anchorSkill) ?? { verified: 0, oneShot: 0 };
+        st.verified++;
+        if (task.oneShot) st.oneShot++;
+        skillTasks.set(anchorSkill, st);
+      }
     }
   }
   for (const eff of effortMap.values()) {
@@ -563,6 +629,35 @@ export async function aggregateUsage(
         backgroundSessions: v.bgSessions.size,
       }))
       .sort((a, b) => compareEntrypoint(a.entrypoint, b.entrypoint)),
+    bySkillCost: (() => {
+      // All-or-nothing, matching `queryBySkillCost`: any explicit attribution
+      // in the period makes the whole list explicit.
+      const useExplicit = skillExplicit.size > 0;
+      const src = useExplicit ? skillExplicit : skillInferred;
+      const method = useExplicit ? ("explicit" as const) : ("inferred" as const);
+      return [...src.entries()]
+        .map(([skill, a]) => {
+          const t = useExplicit ? skillTasks.get(skill) : undefined;
+          const verifiedTasks = t?.verified ?? 0;
+          const oneShotTasks = t?.oneShot ?? 0;
+          return {
+            skill, turns: a.turns, tokens: a.tokens, cost: a.cost,
+            verifiedTasks, oneShotTasks, method,
+            ...(verifiedTasks > 0 ? { oneShotRate: oneShotTasks / verifiedTasks } : {}),
+          };
+        })
+        .sort((a, b) => b.cost - a.cost);
+    })(),
+    byMcpCost: (() => {
+      const useExplicit = mcpExplicit.size > 0;
+      const src = useExplicit ? mcpExplicit : mcpInferred;
+      const method = useExplicit ? ("explicit" as const) : ("inferred" as const);
+      return [...src.entries()]
+        .map(([key, a]) => ({
+          server: a.display, key, turns: a.turns, tokens: a.tokens, cost: a.cost, method,
+        }))
+        .sort((a, b) => b.cost - a.cost);
+    })(),
     topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
     toolTransitions: toolTransitionData.transitions,
     toolSelfLoops: toolTransitionData.selfLoops,

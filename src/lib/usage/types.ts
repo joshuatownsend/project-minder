@@ -1,3 +1,5 @@
+import type { AttributionMethod } from "./attribution";
+
 export interface ToolCall {
   name: string;
   id?: string;
@@ -173,11 +175,10 @@ export interface EffortBreakdown {
  * divides by it. Mixing the two scopes is the easy mistake: dividing this
  * bucket's cost by its *turn* count would answer a question nobody asked.
  *
- * The pairing that matters is `sessions` against `cost`. On the author's
- * corpus interactive work is 4.5% of sessions, and if it is a far larger share
- * of spend then the count distribution — which is what a naive "most of my
- * sessions are automated" reading sees — is actively misleading about where
- * the money goes.
+ * The pairing that matters is `sessions` against `cost`. Measured on the index,
+ * interactive work is 41% of sessions but 95.8% of spend — so the count
+ * distribution, which is what a naive "most of my sessions are automated"
+ * reading sees, is actively misleading about where the money goes.
  */
 export interface EntrypointBreakdown {
   /** `cli` | `sdk-cli` | `sdk-py`, or `unknown` — see `UNKNOWN_ENTRYPOINT`. */
@@ -198,6 +199,55 @@ export interface EntrypointBreakdown {
    * sub-bucket: these are already counted in `sessions` above.
    */
   backgroundSessions: number;
+}
+
+/**
+ * Spend caused by one skill (A4), optionally crossed with first-pass success.
+ *
+ * Deliberately separate from `tool_uses.skill_name` call counts rather than an
+ * extra column on them: the two differ by ~373x on real data and mean different
+ * things. See `attribution.ts`.
+ *
+ * The one-shot fields reuse `turns.task_outcome` (A2) rather than growing a
+ * rollup of their own — that column was built as a general turn-level join key
+ * for exactly this. It answers a question counts cannot: *which skills produce
+ * work that passes verification first time?*
+ */
+export interface SkillCost {
+  skill: string;
+  turns: number;
+  tokens: number;
+  cost: number;
+  /** Tasks anchored on turns attributed to this skill. */
+  verifiedTasks: number;
+  oneShotTasks: number;
+  /**
+   * `oneShotTasks / verifiedTasks`, or **undefined** when this skill anchored
+   * no verified task. Never 0 — see `EffortBreakdown.oneShotRate` for why the
+   * two must stay distinguishable.
+   */
+  oneShotRate?: number;
+  /** Which signal produced `cost`. Never mixed within one list. */
+  method: AttributionMethod;
+}
+
+/**
+ * Spend caused by one MCP server (A4).
+ *
+ * `server` is the display name (the id a user would recognize from their MCP
+ * config); `key` is the folded form both signals agree on. They differ because
+ * the inferred name is recovered from an already-encoded tool name — see
+ * `mcpServerKey`.
+ */
+export interface McpServerCost {
+  /** Display name — the explicit id where available. */
+  server: string;
+  /** Canonical join key; see `mcpServerKey`. */
+  key: string;
+  turns: number;
+  tokens: number;
+  cost: number;
+  method: AttributionMethod;
 }
 
 export interface ModelCost {
@@ -492,6 +542,19 @@ export interface UsageReport {
    * {@link EntrypointBreakdown}. See `entrypoint.ts`.
    */
   byEntrypoint: EntrypointBreakdown[];
+  /**
+   * Spend caused by each skill (A4), crossed with first-pass success. Sorted
+   * by cost. Uses Claude Code's explicit `attribution_skill` where present and
+   * falls back to inference; `method` says which, and the two are never mixed
+   * within one list. See `attribution.ts`.
+   */
+  bySkillCost: SkillCost[];
+  /**
+   * Spend caused by each MCP server (A4). Sorted by cost. Distinct from
+   * `mcpStats`, which counts CALLS — the two differ by ~11x and answer
+   * different questions.
+   */
+  byMcpCost: McpServerCost[];
   topTools: [string, number][];
   toolTransitions: ToolTransition[];
   toolSelfLoops: ToolSelfLoop[];

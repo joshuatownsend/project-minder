@@ -28,6 +28,7 @@ import { ContributionCalendar } from "./ContributionCalendar";
 import { ShareButton } from "./ShareButton";
 import { EffortPanel } from "./EffortPanel";
 import { EntrypointPanel } from "./EntrypointPanel";
+import { AttributionPanel } from "./AttributionPanel";
 
 import { formatCost, formatCostCompact, formatTokens, formatPct } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -1093,6 +1094,16 @@ export function UsageDashboard() {
                 <div>
                   <SectionHeader label="By Entrypoint" />
                   <EntrypointPanel rows={data.byEntrypoint} currency={currency} fxRate={fxRate} />
+                </div>
+
+                <div>
+                  <SectionHeader label="What Caused the Spend" />
+                  <AttributionPanel
+                    skills={data.bySkillCost}
+                    servers={data.byMcpCost}
+                    currency={currency}
+                    fxRate={fxRate}
+                  />
                 </div>
               </div>
 

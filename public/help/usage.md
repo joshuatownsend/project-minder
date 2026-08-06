@@ -170,6 +170,53 @@ quietly change what the Interactive row means.
 This marker is rare — it appeared on 5 of 3,685 sessions in the reference
 corpus — so its absence means "not flagged as a background run", not "unknown".
 
+## What Caused the Spend
+
+Claude Code records which **skill** and which **MCP server** is responsible for
+each assistant turn's tokens. That is a different question from how often each
+was *called*, and the gap is much larger than it sounds.
+
+Measured on the reference index:
+
+| | attributed cost | call-site estimate | ratio |
+|---|---|---|---|
+| MCP servers | $2,051.96 | $186.62 | **11x** |
+| Skills | $2,441.87 | $6.54 | **373x** |
+
+The reason is structural. The turn that *issues* a tool call is tiny — often a
+single `tool_use` block. The expensive turn is the **next** one, which pulls a
+large tool result into context and reasons over it. Counting call sites finds
+the cheap turn and misses the costly one it caused. Skills show it most
+starkly: call-site counting sees only the explicit `Skill` invocation, so a
+skill like `pr-resolve` that then drives thousands of turns is nearly invisible
+to it.
+
+The gap is not a naming artifact. Restricting the comparison to the 13 servers
+that appear under both signals still gives **10.6x**.
+
+### "estimated" badge
+
+Sessions recorded before Claude Code began emitting attribution have no
+explicit signal, so those periods fall back to call-site inference and the
+panel marks the list **estimated**. Treat an estimated figure as a floor rather
+than a total. A list is always wholly one method or the other — mixing figures
+that differ by 10x or more in one chart would be worse than showing either
+alone.
+
+### First-pass success per skill
+
+Each skill also shows how often work started under it passed verification
+without a follow-up edit, reusing the same task outcomes as the **By Effort**
+panel. The same small-sample rule applies: below 30 verified tasks the rate is
+suppressed and only the `n=` count is shown, because a skill sitting at "100%"
+off two tasks is not evidence of anything.
+
+### The long tail
+
+Skills and servers below 1% of attributed spend are folded into a single
+"N more" row. The fold is shown rather than silently dropped, and its cost is
+included in the total.
+
 ## Activity Categories
 
 Each assistant turn is classified into one of 13 categories using deterministic rules:
