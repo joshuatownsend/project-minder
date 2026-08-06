@@ -218,7 +218,10 @@ export async function walkUserSkills(ctx: ProvenanceContext): Promise<SkillEntry
 }
 
 export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {
-  const all: SkillEntry[] = [];
+  // Entries travel with the plugin root that produced them: an id collision
+  // below can only be resolved by knowing WHERE each skill came from, and that
+  // is lost once the walk returns a flat list.
+  const all: Array<{ entry: SkillEntry; installPath: string }> = [];
 
   await Promise.all(
     ctx.installedPlugins.map(async ({ pluginName, installPath }) => {
@@ -240,19 +243,22 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
             fs.readFile(rootSkillMd, "utf-8"),
             fs.stat(rootSkillMd),
           ]);
-          all.push(
-            makeSkillEntry(rootSkillMd, text, "plugin", "bundled", {
+          all.push({
+            entry: makeSkillEntry(rootSkillMd, text, "plugin", "bundled", {
               pluginName,
               ctx,
               mtime: stat.mtime,
               ctime: stat.ctime,
-            })
-          );
+            }),
+            installPath,
+          });
           continue;
         } catch {
           // Ordinary directory-of-skills layout.
         }
-        all.push(...(await walkSkillsRoot(skillsDir, "plugin", { pluginName, ctx })));
+        for (const entry of await walkSkillsRoot(skillsDir, "plugin", { pluginName, ctx })) {
+          all.push({ entry, installPath });
+        }
       }
     })
   );
@@ -265,11 +271,37 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
   // slug and would collide for genuinely distinct skills of the same name in
   // different plugins.
   const seenFiles = new Set<string>();
-  return all.filter((e) => {
-    const key = path.resolve(e.filePath);
+  const unique = all.filter(({ entry }) => {
+    const key = path.resolve(entry.filePath);
     if (seenFiles.has(key)) return false;
     seenFiles.add(key);
     return true;
+  });
+
+  // Distinct files can still land on the same id: `makeSkillEntry` derives it
+  // from plugin + layout + directory basename, so two declared roots each
+  // holding a `foo/SKILL.md` produce one id for two skills. Those survive the
+  // path dedupe above (different files) and then collide in every id-keyed
+  // consumer — `catalog.skills.find` opens whichever comes first, so the detail
+  // page can show a different skill than the row that was clicked (Codex
+  // review, #384).
+  //
+  // Only collisions are qualified. Rewriting every id would churn ids that are
+  // already stable and correct for the overwhelmingly common single-root
+  // plugin, and ids appear in URLs.
+  const idCounts = new Map<string, number>();
+  for (const { entry } of unique) {
+    idCounts.set(entry.id, (idCounts.get(entry.id) ?? 0) + 1);
+  }
+
+  return unique.map(({ entry, installPath }) => {
+    if ((idCounts.get(entry.id) ?? 0) < 2) return entry;
+    // The plugin-relative directory is what actually differs between the two,
+    // and it is stable: unlike an ordinal suffix, it does not renumber when an
+    // unrelated skill is added or removed.
+    const relDir = path.relative(installPath, path.dirname(entry.filePath));
+    const qualifier = relDir.split(/[\\/]/).filter(Boolean).join("-").toLowerCase();
+    return qualifier ? { ...entry, id: `${entry.id}@${qualifier}` } : entry;
   });
 }
 

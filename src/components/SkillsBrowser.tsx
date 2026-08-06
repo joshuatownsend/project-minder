@@ -141,8 +141,19 @@ function SkillRowItem({
               // slash-command chip: together they say "only you can start this".
               // The explanation is duplicated into `.sr-only` rather than left
               // in `title` alone, which is unreachable by keyboard and touch.
+              //
+              // Unless the skill is not user-invocable either — then both doors
+              // are shut and "manual only ... type it as a slash command" is
+              // advice for a command that does nothing (Codex review, #384).
+              // Note `userInvocable` defaults to FALSE when the frontmatter is
+              // silent, so this reads the effective capability rather than
+              // whether the author wrote the key.
               <span
-                title="Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                title={
+                  row.entry?.userInvocable
+                    ? "Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                    : "Nothing can currently invoke this skill: model invocation is disabled and it is not user-invocable."
+                }
                 style={{
                   fontFamily: "var(--font-mono)",
                   fontSize: "0.6rem",
@@ -154,9 +165,13 @@ function SkillRowItem({
                 }}
               >
                 <span className="sr-only">
-                  Manual only: Claude cannot invoke this skill on its own — it runs only when you type it as a slash command.
+                  {row.entry?.userInvocable
+                    ? "Manual only: Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                    : "Not invocable: this skill disables model invocation and is not user-invocable, so nothing can currently start it."}
                 </span>
-                <span aria-hidden="true">manual only</span>
+                <span aria-hidden="true">
+                  {row.entry?.userInvocable ? "manual only" : "not invocable"}
+                </span>
               </span>
             )}
             {row.entry?.version && (

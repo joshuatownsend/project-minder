@@ -67,11 +67,21 @@ export function countSubagentsInFlight(events: readonly HookEvent[]): number {
 
 const TOOL_FAILURE_WINDOW_MS = 120_000;
 
-/** Returns true if the most recent PostToolUse in the buffer failed within the last 2 minutes. */
+/**
+ * Returns true if the most recent tool completion in the buffer failed within
+ * the last 2 minutes.
+ *
+ * Both terminal events count. Claude Code emits `PostToolUseFailure` *instead
+ * of* `PostToolUse` when an invocation fails, so scanning only for the latter
+ * skipped past the failure to an older, successful call — reporting "no recent
+ * failure" from a buffer whose newest entry was one (Codex review, #384).
+ */
 export function hasRecentToolFailure(events: readonly HookEvent[], now: number): boolean {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
-    if (e.hookEventName !== "PostToolUse") continue;
+    if (e.hookEventName !== "PostToolUse" && e.hookEventName !== "PostToolUseFailure") {
+      continue;
+    }
     if (now - e.receivedAt > TOOL_FAILURE_WINDOW_MS) return false;
     return e.toolFailed === true;
   }

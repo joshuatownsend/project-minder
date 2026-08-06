@@ -329,4 +329,102 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
     expect(skills.map((s) => s.name)).toContain("root-skill");
     expect(skills.find((s) => s.name === "root-skill")?.userInvocable).toBe(true);
   });
+
+  it("gives distinct skills distinct ids when two roots share a directory name", async () => {
+    // The path dedupe added last round handles the same FILE found twice. This
+    // is two different files whose ids collide, because the id is derived from
+    // the directory basename — every id-keyed consumer would then resolve the
+    // wrong one (Codex review, #384).
+    const pluginPath = path.join(tmpHome, "plugins", "twin-plugin");
+    await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ skills: ["./extra"] })
+    );
+    for (const root of ["skills", "extra"]) {
+      await fs.mkdir(path.join(pluginPath, root, "helper"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginPath, root, "helper", "SKILL.md"),
+        `---\nname: ${root}-helper\n---\n\nBody.`
+      );
+    }
+
+    const pluginCtx = {
+      ...ctx,
+      installedPlugins: [{ pluginName: "twin-plugin", installPath: pluginPath }],
+    } as unknown as ProvenanceContext;
+
+    const skills = await walkPluginSkills(pluginCtx);
+    const helpers = skills.filter((s) => s.name.endsWith("-helper"));
+    expect(helpers).toHaveLength(2);
+    expect(new Set(helpers.map((s) => s.id)).size).toBe(2);
+  });
+
+  it("leaves ids alone when there is no collision", async () => {
+    // Qualifying unconditionally would churn ids that appear in URLs.
+    const pluginPath = path.join(tmpHome, "plugins", "plain-plugin");
+    await fs.mkdir(path.join(pluginPath, "skills", "solo"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, "skills", "solo", "SKILL.md"),
+      "---\nname: solo\n---\n\nBody."
+    );
+
+    const pluginCtx = {
+      ...ctx,
+      installedPlugins: [{ pluginName: "plain-plugin", installPath: pluginPath }],
+    } as unknown as ProvenanceContext;
+
+    const skills = await walkPluginSkills(pluginCtx);
+    expect(skills.find((s) => s.name === "solo")?.id).toBe(
+      "skill:plugin:plain-plugin:bundled:solo"
+    );
+  });
+});
+
+describe("C4 — hook events that resolve or fail a turn", () => {
+  it("treats PostToolUseFailure as a failure even with no failure fields", async () => {
+    // Claude Code emits this event INSTEAD of PostToolUse when a call fails, so
+    // the payload need not repeat is_error/return_code. Scanning only for
+    // PostToolUse walked past it to an older successful call and reported "no
+    // recent failure" from a buffer whose newest entry was one (Codex, #384).
+    const { hasRecentToolFailure } = await import("@/lib/agentView/aggregate");
+    const now = Date.now();
+    const events = [
+      { hookEventName: "PostToolUse", toolFailed: undefined, receivedAt: now - 5_000 },
+      { hookEventName: "PostToolUseFailure", toolFailed: true, receivedAt: now - 1_000 },
+    ] as unknown as Parameters<typeof hasRecentToolFailure>[0];
+
+    expect(hasRecentToolFailure(events, now)).toBe(true);
+  });
+
+  it("still reports no failure when the newest completion succeeded", async () => {
+    const { hasRecentToolFailure } = await import("@/lib/agentView/aggregate");
+    const now = Date.now();
+    const events = [
+      { hookEventName: "PostToolUseFailure", toolFailed: true, receivedAt: now - 5_000 },
+      { hookEventName: "PostToolUse", toolFailed: undefined, receivedAt: now - 1_000 },
+    ] as unknown as Parameters<typeof hasRecentToolFailure>[0];
+
+    expect(hasRecentToolFailure(events, now)).toBe(false);
+  });
+
+  it("counts PermissionDenied as a response to a prompt", async () => {
+    // A denial conclusively ends the prompt. Leaving it out kept the project
+    // pinned in the awaiting UI until the five-minute eviction, because the
+    // events that would clear it only arrive if the user does something ELSE
+    // afterwards (Codex review, #384).
+    const source = await fs.readFile(
+      path.join(process.cwd(), "src", "app", "api", "hooks", "route.ts"),
+      "utf-8"
+    );
+    const allowlist = source.slice(
+      source.indexOf("const RESPONSE_EVENTS"),
+      source.indexOf("]);", source.indexOf("const RESPONSE_EVENTS"))
+    );
+    expect(allowlist).toContain('"PermissionDenied"');
+    // The passive events must stay OUT — that was the original finding.
+    for (const passive of ["FileChanged", "TeammateIdle", "TaskCompleted", "ConfigChange"]) {
+      expect(allowlist).not.toContain(`"${passive}"`);
+    }
+  });
 });

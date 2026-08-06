@@ -45,6 +45,11 @@ const RESPONSE_EVENTS = new Set<string>([
   "UserPromptSubmit",
   "UserPromptExpansion",
   "PreToolUse",
+  // A denial is a response. Without it the prompt stays "awaiting" until the
+  // live session is evicted five minutes later, because the events that would
+  // normally clear it only arrive if the user goes on to do something else
+  // (Codex review, #384).
+  "PermissionDenied",
   "PostToolUse",
   "PostToolUseFailure",
   "PostToolBatch",
@@ -98,13 +103,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // Normalize failure signal from PostToolUse payloads.
   // Canonical: is_error (Anthropic tool_result flag). Bash-specific: non-zero return_code.
+  //
+  // `PostToolUseFailure` is failure by name: Claude Code emits it *instead of*
+  // PostToolUse for a failed invocation, and such a payload need not carry
+  // is_error/return_code at all. Reading only the payload would have left
+  // `toolFailed` undefined on precisely the events that are definitionally
+  // failures, hiding them from the Agent View badge and from any notification
+  // rule keyed on `tool.failed` (Codex review, #384).
   let toolFailed: boolean | undefined;
-  if (eventName === "PostToolUse") {
+  if (eventName === "PostToolUse" || eventName === "PostToolUseFailure") {
     const resp = body.tool_response as Record<string, unknown> | undefined;
     const isError = resp?.is_error === true;
     const badReturnCode =
       typeof resp?.return_code === "number" && resp.return_code !== 0;
-    toolFailed = isError || badReturnCode || undefined;
+    toolFailed =
+      eventName === "PostToolUseFailure" || isError || badReturnCode || undefined;
   }
 
   // T2.3a: typed payload parse alongside the existing envelope capture.
