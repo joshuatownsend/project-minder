@@ -1,4 +1,4 @@
-// Last verified: schema version 22 (src/lib/db/schema.sql + migrations v1-v22)
+// Last verified: schema version 23 (src/lib/db/schema.sql + migrations v1-v23)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -68,6 +68,10 @@ export const SQL_SCHEMA: TableSchema[] = [
   {
     table: "session_hook_runs",
     columns: ["session_id", "ts", "command", "duration_ms"],
+  },
+  {
+    table: "session_hook_errors",
+    columns: ["session_id", "ts", "message", "prevented_continuation"],
   },
   {
     table: "session_permission_modes",

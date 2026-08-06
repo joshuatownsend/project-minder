@@ -20,6 +20,7 @@ import type {
   TicketLink,
   SessionPermissionMode,
   SessionHookRun,
+  SessionHookError,
 } from "@/lib/types";
 
 // SQL-backed session detail loader. Mirrors `scanSessionDetail`'s output
@@ -295,7 +296,22 @@ export async function loadSessionDetailFromDb(
   const hookRuns: SessionHookRun[] = hookRunRows.map((r) => ({
     ts: r.ts ?? undefined,
     command: r.command,
+    // NULL duration means Claude Code did not measure this hook, not 0 ms.
     durationMs: r.duration_ms ?? undefined,
+  }));
+
+  const hookErrorRows = prepCached(db,
+      `SELECT ts, message, prevented_continuation FROM session_hook_errors
+       WHERE session_id = ?
+       ORDER BY rowid`
+    )
+    .all(sessionId) as {
+      ts: string | null; message: string; prevented_continuation: number;
+    }[];
+  const hookErrors: SessionHookError[] = hookErrorRows.map((r) => ({
+    ts: r.ts ?? undefined,
+    message: r.message,
+    preventedContinuation: r.prevented_continuation === 1,
   }));
 
   // Effort mix: counted in SQL rather than in JS because the partial index on
@@ -395,6 +411,7 @@ export async function loadSessionDetailFromDb(
     entrypoint: session.entrypoint ?? undefined,
     permissionModes: permissionModes.length > 0 ? permissionModes : undefined,
     hookRuns: hookRuns.length > 0 ? hookRuns : undefined,
+    hookErrors: hookErrors.length > 0 ? hookErrors : undefined,
     effortMix: Object.keys(effortMix).length > 0 ? effortMix : undefined,
     generatedTitle: session.generated_title ?? undefined,
     starredAt: session.starred_at ?? undefined,

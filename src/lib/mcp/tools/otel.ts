@@ -12,6 +12,7 @@ import {
   queryOtelMetrics,
   periodToMs,
 } from "@/lib/db/otelQueries";
+import { getDenialBreakdown } from "@/lib/data/denialAnalyticsFromDb";
 import { SessionIdSchema, OtelPeriodSchema } from "../schemas";
 import { jsonResult } from "../result";
 
@@ -154,8 +155,12 @@ export function registerOtelTools(server: McpServer): void {
     {
       title: "Hook invocation activity",
       description:
-        "Returns per-hook fire counts and duration percentiles (P50/P95) from " +
-        "`hook_execution_complete` events.",
+        "Returns per-hook fire counts and duration percentiles (P50/P95). Prefers " +
+        "OTEL `hook_execution_complete` events; when OTEL telemetry is not enabled " +
+        "(the default) it falls back to hook runs decoded from session transcripts, " +
+        "which need no setup and cover all history. The `source` field says which " +
+        "was used — the two name hooks differently (OTEL by hook name, transcripts " +
+        "by the command that ran), so they are never blended.",
       inputSchema: { period: OtelPeriodSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -163,6 +168,28 @@ export function registerOtelTools(server: McpServer): void {
       jsonResult({
         period,
         ...(await getHookActivity({ since: periodToMs(period) })),
+      })
+  );
+
+  server.registerTool(
+    "get-denial-breakdown",
+    {
+      title: "Permission denials by kind, crossed with first-pass success",
+      description:
+        "Groups denied tool calls by why they were refused (permission-rule, " +
+        "automode-blocked, automode-unavailable, user-rejected), with the tools most " +
+        "often refused each way, and crosses each kind with the first-pass success " +
+        "rate of tasks started on a denied turn. `user-rejected` is counted separately " +
+        "from rule denials on purpose: one is configuration, the other is a human " +
+        "disagreeing. Returns hasData=false when no denial was ever recorded, which " +
+        "is not the same as none having happened.",
+      inputSchema: { period: OtelPeriodSchema },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ period }) =>
+      jsonResult({
+        period,
+        ...(await getDenialBreakdown({ since: new Date(periodToMs(period)).toISOString() })),
       })
   );
 

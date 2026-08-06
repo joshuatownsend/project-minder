@@ -727,6 +727,35 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 23,
+    name: "A6: hook failures reported alongside hook runs",
+    up: (db) => {
+      // `hookErrors` is a sibling array of plain strings on the same system
+      // entry as `hookInfos` — NOT a field inside each hook record. So a failure
+      // cannot be attributed to a specific command, and adding an `error` column
+      // to `session_hook_runs` would have meant guessing which of the entry's
+      // hooks produced it. Its own table records what is actually known: when it
+      // happened, what it said, and whether it stopped the turn.
+      //
+      // 185 non-empty `hookErrors` arrays on the local corpus, all advisory
+      // (`preventedContinuation` was false on every one of 4,189 carriers). The
+      // flag is stored anyway: "no blocking failure has happened yet" and "we
+      // cannot see blocking failures" are different claims, and only the first
+      // is true.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_hook_errors (
+          session_id             TEXT NOT NULL,
+          ts                     TEXT,
+          message                TEXT NOT NULL,
+          prevented_continuation INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_hook_errors_session
+          ON session_hook_errors(session_id);
+      `);
+    },
+  },
 ];
 
 /**

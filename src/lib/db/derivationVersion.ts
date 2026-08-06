@@ -196,6 +196,33 @@ export const DERIVED_VERSION = 15;
 //     the effort cross-tab reports `verifiedTasks: 0` and `oneShotRate:
 //     undefined` for every bucket — which the UI already has to render for a
 //     genuinely task-free period. Degraded, never wrong: no bucket claims a 0%
+// 15 — A6: `session_hook_runs` had never received a row, on any machine.
+//
+//     Not a new column — the table shipped with v13/schema v20 and has been
+//     structurally impossible to populate ever since. Both readers looked for
+//     `hookInfos` on assistant entries; it rides `type:"system"` entries, on
+//     4,189 of 4,189 carriers across the local corpus and zero assistant ones.
+//     In `ingest.ts` the decode sat below `if (entry.type === "system") { …
+//     continue; }`, so the guard reached it first; in `claudeConversations.ts`
+//     it sat inside the assistant branch. A fully-reconciled 1.5 GB index held
+//     0 rows.
+//
+//     **Why a bump is unavoidable.** The data is in the JSONL and nowhere else,
+//     so this is rule 2 (new extraction needs re-parse) applied to a decode
+//     that was written but never ran. Without it every unchanged session keeps
+//     its v14 stamp, skips re-parse, and its hook history stays permanently
+//     invisible — only sessions modified after this ships would ever populate.
+//     No migration can backfill it: `session_hook_runs` has no source in SQL.
+//
+//     Also lands `session_hook_errors` (schema v23), decoded from the sibling
+//     `hookErrors` array on the same entries.
+//
+//     No read-side gate needed. Pre-reconcile the table is empty, which is
+//     exactly what it has always been, so nothing regresses during catch-up —
+//     and `getHookActivity` reports `hasData: false` rather than claiming a
+//     hook-free machine. That said, an empty result here is precisely the
+//     failure mode that hid this bug for a whole slice, so the result now
+//     carries a `source` field saying which pipeline answered.
 //     success rate it did not measure.
 // 15 — schema v22 (A5) added `session_prs.source`, recording whether a PR link
 //     was reported by Claude Code or scraped out of `gh pr create` output.

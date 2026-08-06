@@ -354,6 +354,19 @@ export interface HookActivityResult {
   hooks: HookRow[];
   totalFires: number;
   hasData: boolean;
+  /**
+   * Where the numbers came from.
+   *
+   * `otel` — `hook_execution_complete` events, which require OTEL telemetry to
+   * have been enabled and only cover the period since it was.
+   * `transcript` — `session_hook_runs`, decoded from `hookInfos` on system
+   * entries. Needs no setup and covers all history retroactively.
+   *
+   * Never blended: OTEL names a hook (`PreToolUse`), the transcript names the
+   * command it ran (`codegraph sync`), so the two key on different things and
+   * merging them would double-count under two different labels.
+   */
+  source?: "otel" | "transcript";
 }
 
 export async function getHookActivity(opts: {
@@ -399,7 +412,61 @@ export async function getHookActivity(opts: {
   }
   hooks.sort((a, b) => b.fires - a.fires);
 
-  return { hooks, totalFires, hasData: hooks.length > 0 };
+  if (hooks.length > 0) {
+    return { hooks, totalFires, hasData: true, source: "otel" };
+  }
+
+  // No OTEL hook events. That is the DEFAULT state, not an edge case: OTEL is
+  // opt-in, so for anyone who hasn't enabled it this tool returned an empty
+  // result that reads as "you have no hooks" rather than "I can't see them".
+  // The transcript carries the same measurement for free — and retroactively.
+  return getHookActivityFromTranscripts(db, sinceIso);
+}
+
+/**
+ * Hook latency from `session_hook_runs`, the transcript-derived table.
+ *
+ * Rows with a NULL `duration_ms` are counted as fires but excluded from the
+ * percentiles — Claude Code records a command with no duration for roughly a
+ * fifth of hook records, and treating "not measured" as 0 ms would drag every
+ * percentile toward zero and rank the unmeasured hooks fastest.
+ */
+async function getHookActivityFromTranscripts(
+  db: DatabaseT.Database,
+  sinceIso: string
+): Promise<HookActivityResult> {
+  const rows = prepCached(
+    db,
+    `SELECT command, duration_ms
+       FROM session_hook_runs
+      WHERE ts >= ?
+      ORDER BY ts DESC
+      LIMIT 50000`
+  ).all(sinceIso) as { command: string; duration_ms: number | null }[];
+
+  const byHook = new Map<string, { measured: number[]; fires: number }>();
+  for (const row of rows) {
+    if (!row.command) continue;
+    const cur = byHook.get(row.command) ?? { measured: [], fires: 0 };
+    cur.fires++;
+    if (Number.isFinite(row.duration_ms as number)) cur.measured.push(row.duration_ms as number);
+    byHook.set(row.command, cur);
+  }
+
+  const hooks: HookRow[] = [];
+  let totalFires = 0;
+  for (const [name, v] of byHook) {
+    const sorted = v.measured.slice().sort((a, b) => a - b);
+    hooks.push({
+      name,
+      fires: v.fires,
+      p50DurationMs: sorted.length ? Math.round(percentile(sorted, 50)) : 0,
+      p95DurationMs: sorted.length ? Math.round(percentile(sorted, 95)) : 0,
+    });
+    totalFires += v.fires;
+  }
+  hooks.sort((a, b) => b.fires - a.fires);
+  return { hooks, totalFires, hasData: hooks.length > 0, source: "transcript" };
 }
 
 // ── Pressure Snapshot ─────────────────────────────────────────────────────────

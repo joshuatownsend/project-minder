@@ -70,6 +70,55 @@ one shared constant. They used to be two hand-maintained copies, which could
 drift into a state where a rule could be saved for an event the route would
 reject — a rule that validates and can never fire.
 
+## Hook latency
+
+Claude Code records how long each hook took, and Minder reads it from two places:
+
+| Source | Needs | Covers | Names hooks by |
+| --- | --- | --- | --- |
+| OTEL | telemetry enabled | since you enabled it | hook name (`PreToolUse`) |
+| Transcript | nothing | all history, retroactively | the command that ran (`codegraph sync`) |
+
+OTEL is preferred when present. Otherwise the transcript path answers, and the
+result says which via a `source` field — the two are never blended, because they
+key on different things and merging them would count the same execution twice
+under two labels.
+
+**A hook with no recorded duration counts as a fire but contributes no
+percentile.** Claude Code records a command without a duration for roughly a
+fifth of hook executions. That is "not measured", not "instant" — treating it as
+0 ms would rank the unmeasured hooks as the fastest on the machine.
+
+Hook *failures* are recorded separately. They arrive as a plain list of messages
+alongside the run list rather than as a field on each hook, so a failure cannot
+be pinned to a specific command; Minder records what is actually known — when it
+happened, what it said, and whether it stopped the turn continuing.
+
+## Permission denials
+
+When a tool call is refused, Claude Code records *why*. Minder groups denials by
+kind and crosses each with first-pass success, so you can see whether being
+refused actually derails the work or the model simply routes around it:
+
+| Kind | Meaning |
+| --- | --- |
+| `permission-rule` | A configured rule refused it |
+| `automode-blocked` | The auto-mode classifier refused it |
+| `automode-unavailable` | Auto mode could not decide |
+| `user-rejected` | A person said no |
+
+**`user-rejected` is counted separately from the rule denials on purpose.** They
+mean opposite things — a rule denial is configuration you can change, a human
+rejection is you disagreeing with the model — and Claude Code 2.1.216 had to fix
+its own telemetry for miscounting one as the other. Collapsing them turns "I said
+no" into "your rules are too strict".
+
+A kind that has never occurred reports *no data* rather than zero. "Nothing was
+ever refused" and "this index predates the field" are different claims, and only
+one of them is a clean bill of health.
+
+Available through the MCP tools `get-hook-activity` and `get-denial-breakdown`.
+
 ## Background activity (T2.3)
 
 The **/background** page aggregates `background_tasks` and `session_crons` arrays emitted by Stop / SubagentStop hook events as of Claude Code v2.1.145. Use it to see what long-running shell commands or scheduled tasks are pending across your portfolio.
