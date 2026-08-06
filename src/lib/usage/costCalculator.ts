@@ -500,9 +500,18 @@ export function applyPricing(
   const publishesLongRates =
     pricing.inputCostPerTokenAbove200k !== undefined ||
     pricing.outputCostPerTokenAbove200k !== undefined;
+  // The tier is chosen by the size of the REQUEST'S PROMPT, and cached tokens
+  // are part of that prompt. Claude Code reports new uncached input separately
+  // from `cache_read_input_tokens`, so a real 225k-token request that hit the
+  // cache arrives as ~5k input + ~220k cache read — and testing `inputTokens`
+  // alone would never trip the tier on exactly the requests it exists for.
+  // `contextAttribution.ts` already treats the same sum as the request's
+  // context; this makes the pricing path agree with it.
+  const promptTokens =
+    tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
   const longContext =
     publishesLongRates &&
-    (tier === "long" || (tier === "auto" && tokens.inputTokens > TIER_BOUNDARY));
+    (tier === "long" || (tier === "auto" && promptTokens > TIER_BOUNDARY));
 
   const inputRate =
     longContext && pricing.inputCostPerTokenAbove200k !== undefined

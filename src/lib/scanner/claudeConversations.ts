@@ -972,7 +972,13 @@ function accumulateTurn(
   cc1h = 0,
 ): void {
   const tiers = tiersFor(map, model);
-  const bucket = inp > TIER_BOUNDARY ? tiers.long : tiers.base;
+  // Bucket by the size of the whole prompt, not just its uncached part —
+  // cached tokens still count toward the >200k boundary, and Claude Code
+  // reports them separately, so a cache-heavy long request would otherwise
+  // land in the base bucket. Must match `applyPricing`'s `auto` rule exactly:
+  // this function's whole job is to pre-decide the tier that function would
+  // have inferred, and a disagreement between the two is invisible.
+  const bucket = inp + cr + cc > TIER_BOUNDARY ? tiers.long : tiers.base;
   addInto(bucket, { i: inp, o: out, cc, cc1h, cr });
 }
 

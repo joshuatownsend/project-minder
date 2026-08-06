@@ -223,6 +223,37 @@ describe("#376 — scanner prices per-request tiers, not per-bucket sums", () =>
     expect(stats?.costEstimate).not.toBeCloseTo(450_000 * IN_LONG + 3_000 * OUT_LONG, 8);
   });
 
+  it("selects the tier on the whole prompt, including cached tokens", async () => {
+    // Codex review of #383. Claude Code reports new uncached input separately
+    // from cache reads, so a real 225k-token request that hit the cache looks
+    // like 5k input + 220k cache read. Testing `inputTokens` alone never trips
+    // the tier on exactly the requests the tier exists for.
+    const { getModelPricing, applyPricing, loadPricing } = await freshPricing();
+    await loadPricing();
+    const CACHE_READ = 0.0000003;
+    const cost = applyPricing(getModelPricing(TIERED_MODEL), {
+      inputTokens: 5_000,
+      outputTokens: 1_000,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 220_000,
+    });
+    expect(cost).toBeCloseTo(5_000 * IN_LONG + 1_000 * OUT_LONG + 220_000 * CACHE_READ, 10);
+    expect(cost).not.toBeCloseTo(5_000 * IN_BASE + 1_000 * OUT_BASE + 220_000 * CACHE_READ, 10);
+  });
+
+  it("still leaves a small cached request on the base tier", async () => {
+    const { getModelPricing, applyPricing, loadPricing } = await freshPricing();
+    await loadPricing();
+    const CACHE_READ = 0.0000003;
+    const cost = applyPricing(getModelPricing(TIERED_MODEL), {
+      inputTokens: 5_000,
+      outputTokens: 1_000,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 20_000,
+    });
+    expect(cost).toBeCloseTo(5_000 * IN_BASE + 1_000 * OUT_BASE + 20_000 * CACHE_READ, 10);
+  });
+
   it("a genuinely-long turn on the same model IS billed at the tier", async () => {
     // The mirror assertion. Without it the test above passes trivially if the
     // tier is broken end-to-end rather than merely bucketed correctly.
