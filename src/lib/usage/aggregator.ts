@@ -387,23 +387,34 @@ export async function aggregateUsage(
       // Inferred fallback, from the tool calls this turn ISSUED. Counted once
       // per (turn, target) so a turn calling the same server twice doesn't
       // double its cost.
-      const seenServers = new Set<string>();
-      const seenSkills = new Set<string>();
-      for (const tc of turn.toolCalls) {
-        const mcp = parseMcpTool(tc.name);
-        if (mcp && !seenServers.has(mcp.server)) {
-          seenServers.add(mcp.server);
-          const a = mcpInferred.get(mcp.server) ?? { ...mkAccum(), display: mcp.server };
-          a.turns++; a.tokens += tokens; a.cost += cost;
-          mcpInferred.set(mcp.server, a);
-        }
-        if (tc.name === SKILL_DISPATCH_TOOL) {
-          const skill = typeof tc.arguments?.skill === "string" ? tc.arguments.skill : null;
-          if (skill && !seenSkills.has(skill)) {
-            seenSkills.add(skill);
-            const a = skillInferred.get(skill) ?? mkAccum();
+      //
+      // Primary turns only, unlike the explicit half above. The split follows
+      // from where each signal lives: attribution is TURN-derived and the DB
+      // stores sidechain turns with their attribution intact, so a delegating
+      // skill rightly keeps its delegate's spend. Inference is TOOL-derived,
+      // and ingest deliberately writes no `tool_uses` for sidechain turns —
+      // so counting them here would make inferred spend depend on which
+      // backend answered. It's the same rule the tool/shell/mcp stats below
+      // already follow.
+      if (!isSub) {
+        const seenServers = new Set<string>();
+        const seenSkills = new Set<string>();
+        for (const tc of turn.toolCalls) {
+          const mcp = parseMcpTool(tc.name);
+          if (mcp && !seenServers.has(mcp.server)) {
+            seenServers.add(mcp.server);
+            const a = mcpInferred.get(mcp.server) ?? { ...mkAccum(), display: mcp.server };
             a.turns++; a.tokens += tokens; a.cost += cost;
-            skillInferred.set(skill, a);
+            mcpInferred.set(mcp.server, a);
+          }
+          if (tc.name === SKILL_DISPATCH_TOOL) {
+            const skill = typeof tc.arguments?.skill === "string" ? tc.arguments.skill : null;
+            if (skill && !seenSkills.has(skill)) {
+              seenSkills.add(skill);
+              const a = skillInferred.get(skill) ?? mkAccum();
+              a.turns++; a.tokens += tokens; a.cost += cost;
+              skillInferred.set(skill, a);
+            }
           }
         }
       }

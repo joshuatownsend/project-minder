@@ -564,21 +564,35 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
   const rows = explicit.length > 0
     ? explicit.map((r) => ({ ...r, method: "explicit" as const }))
     : (prepCached(db,
-        `SELECT tu.skill_name AS skill,
-                COUNT(DISTINCT t.session_id || ':' || t.turn_index) AS turns,
-                COALESCE(SUM(t.input_tokens + t.output_tokens
-                           + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
-                COALESCE(SUM(t.cost_usd), 0) AS cost,
+        // Collapse to one row per (skill, turn) BEFORE summing. The join
+        // fans a turn out once per matching tool_use, so a turn that
+        // dispatches the same skill twice arrives twice and its cost would
+        // be charged twice. `COUNT(DISTINCT …)` hides this — the turn count
+        // stays right while the money inflates. The inner GROUP BY is the
+        // SQL spelling of the aggregator's `seenSkills` set (aggregator.ts:
+        // "Counted once per (turn, target)"); MAX() over a column that is
+        // functionally dependent on the turn just picks its single value.
+        `SELECT skill,
+                COUNT(*)                AS turns,
+                COALESCE(SUM(tokens), 0) AS tokens,
+                COALESCE(SUM(cost), 0)   AS cost,
                 0 AS verifiedTasks, 0 AS oneShotTasks
-         FROM tool_uses tu
-         JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
-         JOIN sessions s ON s.session_id = t.session_id
-         WHERE t.role = 'assistant'
-           AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
-           AND (@periodStart IS NULL OR t.ts >= @periodStart)
-           AND (@project IS NULL OR s.project_slug = @project)
-           AND (@source IS NULL OR s.source = @source)
-           AND (@home IS NULL OR s.home_key = @home)
+         FROM (
+           SELECT tu.skill_name AS skill, t.session_id AS sid, t.turn_index AS ti,
+                  MAX(t.input_tokens + t.output_tokens
+                    + t.cache_create_tokens + t.cache_read_tokens) AS tokens,
+                  MAX(t.cost_usd) AS cost
+           FROM tool_uses tu
+           JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
+           JOIN sessions s ON s.session_id = t.session_id
+           WHERE t.role = 'assistant'
+             AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
+             AND (@periodStart IS NULL OR t.ts >= @periodStart)
+             AND (@project IS NULL OR s.project_slug = @project)
+             AND (@source IS NULL OR s.source = @source)
+             AND (@home IS NULL OR s.home_key = @home)
+           GROUP BY 1, 2, 3
+         )
          GROUP BY 1`
       ).all(f) as Array<Omit<SkillCost, "method" | "oneShotRate">>)
         .map((r) => ({ ...r, method: "inferred" as const }));
@@ -644,20 +658,30 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
   const raw = explicit.length > 0
     ? explicit.map((r) => ({ ...r, method: "explicit" as const }))
     : (prepCached(db,
-        `SELECT tu.mcp_server AS server,
-                COUNT(DISTINCT t.session_id || ':' || t.turn_index) AS turns,
-                COALESCE(SUM(t.input_tokens + t.output_tokens
-                           + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
-                COALESCE(SUM(t.cost_usd), 0) AS cost
-         FROM tool_uses tu
-         JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
-         JOIN sessions s ON s.session_id = t.session_id
-         WHERE t.role = 'assistant'
-           AND tu.mcp_server IS NOT NULL AND tu.mcp_server <> ''
-           AND (@periodStart IS NULL OR t.ts >= @periodStart)
-           AND (@project IS NULL OR s.project_slug = @project)
-           AND (@source IS NULL OR s.source = @source)
-           AND (@home IS NULL OR s.home_key = @home)
+        // One row per (server, turn) before summing — see the note on the
+        // skill fallback. This case is the more damaging of the two: parallel
+        // tool calls to one MCP server in a single turn are routine, so the
+        // undeduped form charged that turn once per call.
+        `SELECT server,
+                COUNT(*)                AS turns,
+                COALESCE(SUM(tokens), 0) AS tokens,
+                COALESCE(SUM(cost), 0)   AS cost
+         FROM (
+           SELECT tu.mcp_server AS server, t.session_id AS sid, t.turn_index AS ti,
+                  MAX(t.input_tokens + t.output_tokens
+                    + t.cache_create_tokens + t.cache_read_tokens) AS tokens,
+                  MAX(t.cost_usd) AS cost
+           FROM tool_uses tu
+           JOIN turns t ON t.session_id = tu.session_id AND t.turn_index = tu.turn_index
+           JOIN sessions s ON s.session_id = t.session_id
+           WHERE t.role = 'assistant'
+             AND tu.mcp_server IS NOT NULL AND tu.mcp_server <> ''
+             AND (@periodStart IS NULL OR t.ts >= @periodStart)
+             AND (@project IS NULL OR s.project_slug = @project)
+             AND (@source IS NULL OR s.source = @source)
+             AND (@home IS NULL OR s.home_key = @home)
+           GROUP BY 1, 2, 3
+         )
          GROUP BY 1`
       ).all(f) as Array<{ server: string; turns: number; tokens: number; cost: number }>)
         .map((r) => ({ ...r, method: "inferred" as const }));

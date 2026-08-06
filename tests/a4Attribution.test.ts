@@ -427,3 +427,186 @@ describe.skipIf(!driverAvailable)("skill attribution on the /skills catalog", ()
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// PR #382 review follow-ups. Three defects, two root causes.
+//
+//  1. JOIN MULTIPLICITY (Copilot + Codex P2). The inferred DB queries joined
+//     `tool_uses` to `turns` and summed cost per joined row, so a turn making
+//     N calls to one target was charged N times. `COUNT(DISTINCT ...)` kept the
+//     turn count honest, which is exactly why it read as correct. The original
+//     parity fixture had one call in one turn -- multiplicity of 1 -- so it
+//     could never have caught this. These fixtures repeat the call.
+//
+//  2. SIDECHAIN SCOPE (Codex P2 x2). Attribution is turn-derived and the DB
+//     stores sidechain turns, so explicit spend rightly includes them.
+//     Inference is tool-derived and ingest writes no `tool_uses` for
+//     sidechains, so inferred spend must exclude them or the two backends
+//     disagree. The rule was broken in both the aggregator and the catalog.
+//
+//  3. V3 GATE (Codex P2). A4 turned the skills catalog into a `cost_usd`
+//     reader without adding the readiness gate every other cost-backed read
+//     already has.
+// ---------------------------------------------------------------------------
+
+/** One turn, repeating the SAME MCP server and the SAME skill twice. */
+async function writeRepeatedCallsFixture(): Promise<void> {
+  const dir = path.join(tmpHome, ".claude", "projects", "C--dev-rep");
+  await fs.mkdir(dir, { recursive: true });
+  const entries = [
+    userTurn("2026-08-03T10:00:00Z", "go"),
+    assistant("2026-08-03T10:00:01Z", {}, [
+      { type: "tool_use", id: "r1", name: "mcp__plugin_playwright_playwright__browser_click", input: {} },
+      { type: "tool_use", id: "r2", name: "mcp__plugin_playwright_playwright__browser_navigate", input: {} },
+      { type: "tool_use", id: "r3", name: "Skill", input: { skill: "pr-resolve" } },
+      { type: "tool_use", id: "r4", name: "Skill", input: { skill: "pr-resolve" } },
+    ]),
+  ];
+  await fs.writeFile(
+    path.join(dir, "a4-repeat.jsonl"),
+    entries.map((e) => JSON.stringify(e)).join("\n") + "\n"
+  );
+}
+
+/** A subagent turn that dispatches a skill and calls an MCP server. */
+async function writeSidechainFixture(): Promise<void> {
+  const dir = path.join(tmpHome, ".claude", "projects", "C--dev-side");
+  await fs.mkdir(dir, { recursive: true });
+  const entries = [
+    userTurn("2026-08-04T10:00:00Z", "delegate"),
+    {
+      ...assistant("2026-08-04T10:00:01Z", {}, [
+        { type: "tool_use", id: "s1", name: "Skill", input: { skill: "pr-resolve" } },
+        { type: "tool_use", id: "s2", name: "mcp__plugin_playwright_playwright__browser_click", input: {} },
+      ]),
+      isSidechain: true,
+    },
+  ];
+  await fs.writeFile(
+    path.join(dir, "a4-side.jsonl"),
+    entries.map((e) => JSON.stringify(e)).join("\n") + "\n"
+  );
+}
+
+describe.skipIf(!driverAvailable)("A4 review follow-ups", () => {
+  async function bootDb() {
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    expect(db).not.toBeNull();
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db!, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+    return db!;
+  }
+
+  async function usageFrom(useDb: boolean) {
+    vi.resetModules();
+    delete (globalThis as { __minderDb?: unknown }).__minderDb;
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    process.env.MINDER_USE_DB = useDb ? "1" : "0";
+    if (useDb) await bootDb();
+    const data = await import("@/lib/data");
+    const { report, meta } = await data.getUsage("all", undefined);
+    expect(meta.backend).toBe(useDb ? "db" : "file");
+    return report;
+  }
+
+  it("charges a repeated MCP call once, not once per call", async () => {
+    await writeRepeatedCallsFixture();
+    const f = await usageFrom(false);
+    const d = await usageFrom(true);
+
+    const fRow = f.byMcpCost[0];
+    const dRow = d.byMcpCost[0];
+    expect(fRow?.method).toBe("inferred");
+    // Non-vacuity: without a priced turn the equality below proves nothing.
+    expect(fRow.cost).toBeGreaterThan(0);
+
+    // One turn made both calls. Before the fix the DB reported turns=1 (the
+    // DISTINCT held) with cost and tokens doubled.
+    expect(dRow.turns).toBe(1);
+    expect(fRow.turns).toBe(1);
+    expect(dRow.cost).toBeCloseTo(fRow.cost, 10);
+    expect(dRow.tokens).toBe(fRow.tokens);
+  });
+
+  it("charges a repeated skill dispatch once, not once per dispatch", async () => {
+    await writeRepeatedCallsFixture();
+    const f = await usageFrom(false);
+    const d = await usageFrom(true);
+
+    const fRow = bySkill(f.bySkillCost)["pr-resolve"];
+    const dRow = bySkill(d.bySkillCost)["pr-resolve"];
+    expect(fRow?.method).toBe("inferred");
+    expect(fRow.cost).toBeGreaterThan(0);
+
+    expect(dRow.turns).toBe(1);
+    expect(fRow.turns).toBe(1);
+    expect(dRow.cost).toBeCloseTo(fRow.cost, 10);
+    expect(dRow.tokens).toBe(fRow.tokens);
+  });
+
+  it("keeps sidechain turns out of INFERRED spend on both backends", async () => {
+    await writeSidechainFixture();
+    const f = await usageFrom(false);
+    const d = await usageFrom(true);
+
+    // The only turn in this fixture is a subagent turn. Inference is
+    // tool-derived and the DB has no tool_uses for it, so neither backend may
+    // report spend -- previously the file backend alone did.
+    expect(f.byMcpCost).toEqual([]);
+    expect(f.bySkillCost).toEqual([]);
+    expect(d.byMcpCost).toEqual([]);
+    expect(d.bySkillCost).toEqual([]);
+  });
+
+  it("keeps sidechain dispatches out of catalog invocation counts", async () => {
+    await writeSidechainFixture();
+
+    async function catalogFrom(useDb: boolean) {
+      vi.resetModules();
+      delete (globalThis as { __minderDb?: unknown }).__minderDb;
+      vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+      process.env.MINDER_USE_DB = useDb ? "1" : "0";
+      if (useDb) await bootDb();
+      const data = await import("@/lib/data");
+      return (await data.getSkillUsage("all")).stats;
+    }
+
+    const fileStats = await catalogFrom(false);
+    const dbStats = await catalogFrom(true);
+
+    // A subagent dispatching a skill must not inflate the catalog: ingest
+    // records no tool_use for it, so counting it file-side made the number
+    // depend on the backend.
+    expect(fileStats.find((s) => s.name === "pr-resolve")?.invocations ?? 0).toBe(0);
+    expect(dbStats.find((s) => s.name === "pr-resolve")?.invocations ?? 0).toBe(0);
+  });
+
+  it("falls back to file-parse while the v3 reconcile is still pending", async () => {
+    await writeExplicitFixture();
+    vi.resetModules();
+    delete (globalThis as { __minderDb?: unknown }).__minderDb;
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    process.env.MINDER_USE_DB = "1";
+    const db = await bootDb();
+
+    // Mid-catch-up: attribution columns are populated but cost_usd is not.
+    db.prepare(
+      "INSERT OR REPLACE INTO meta (key, value) VALUES ('needs_reconcile_after_v3', '1')"
+    ).run();
+
+    const data = await import("@/lib/data");
+    const result = await data.getSkillUsage("all");
+
+    // Without the gate this returns the DB rows with every cost at $0 --
+    // non-empty, so the empty-index fallback never fires, and the catalog
+    // shows zeroes as though they were measured.
+    expect(result.meta.backend).toBe("file");
+    expect(result.stats.find((s) => s.name === "pr-resolve")?.attributedCostUsd)
+      .toBeGreaterThan(0);
+  });
+});

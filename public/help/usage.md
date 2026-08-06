@@ -203,6 +203,13 @@ than a total. A list is always wholly one method or the other — mixing figures
 that differ by 10x or more in one chart would be worse than showing either
 alone.
 
+An estimated figure counts a turn **once per target, not once per call**, so a
+turn that calls the same server five times contributes its cost once. It also
+covers primary turns only: subagent turns are excluded, because the tool calls
+an estimate is built from are not indexed for them. Attributed figures are the
+other way round — they include subagent turns, since a skill that delegates
+still caused what the delegate spent.
+
 ### First-pass success per skill
 
 Each skill also shows how often work started under it passed verification
