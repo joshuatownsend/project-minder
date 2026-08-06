@@ -169,14 +169,24 @@ function userTurn(ts: string, text: string) {
 }
 
 /**
- * Three sessions:
- *   interactive-1  cli      2 assistant turns
- *   interactive-2  cli      1 assistant turn,  flagged `bg`
- *   batch-1        sdk-cli  3 assistant turns
+ * Four sessions:
+ *   interactive-1                    cli      2 assistant turns
+ *   interactive-2                    cli      1 assistant turn,  flagged `bg`
+ *   interactive-1/subagents/agent-1  cli      1 assistant turn
+ *   batch-1                          sdk-cli  3 assistant turns
  *
- * The two `cli` sessions are what make the distinct-session count meaningful:
- * that bucket has 3 turns across 2 sessions, so a `sessions` field reporting 3
- * is counting the wrong thing.
+ * The three `cli` sessions are what make the distinct-session count
+ * meaningful: that bucket has 4 turns across 3 sessions, so a `sessions` field
+ * reporting 4 is counting the wrong thing.
+ *
+ * **The nested subagent transcript is load-bearing.** Newer Claude Code writes
+ * subagent turns to `<session>/subagents/*.jsonl` rather than inlining them,
+ * and the SQLite reconciler walks one level down to find them while the
+ * file-backend reader originally did not — so the two backends disagreed on
+ * roughly a quarter of the real corpus. The first version of this fixture
+ * contained only top-level files, which is exactly why the parity test passed
+ * while the divergence was live (Codex review, PR #381). A fixture that cannot
+ * see the difference between the two readers does not test parity.
  */
 async function writeFixture(): Promise<void> {
   const dir = path.join(tmpHome, ".claude", "projects", "C--dev-x");
@@ -208,6 +218,22 @@ async function writeFixture(): Promise<void> {
     assistant("2026-08-01T12:00:03Z"),
     assistant("2026-08-01T12:00:04Z"),
   ]);
+
+  // Nested subagent transcript. Carries its parent's entrypoint, which is why
+  // omitting these understated `cli` specifically rather than every bucket
+  // evenly.
+  const subDir = path.join(dir, "interactive-1", "subagents");
+  await fs.mkdir(subDir, { recursive: true });
+  await fs.writeFile(
+    path.join(subDir, "agent-1.jsonl"),
+    [
+      userTurn("2026-08-01T10:10:00Z", "delegated task"),
+      attachment("2026-08-01T10:10:01Z", "cli"),
+      assistant("2026-08-01T10:10:02Z"),
+    ]
+      .map((e) => JSON.stringify(e))
+      .join("\n") + "\n"
+  );
 }
 
 function byKey(rows: EntrypointBreakdown[]): Record<string, EntrypointBreakdown> {
@@ -277,13 +303,30 @@ describe.skipIf(!driverAvailable)("byEntrypoint — file-parse vs SQLite parity"
     await writeFixture();
     const rows = byKey(await reportFrom(useDb));
 
-    // The whole point of the session-scoped shape: 3 cli turns, 2 cli sessions.
-    expect(rows.cli.turns).toBe(3);
-    expect(rows.cli.sessions).toBe(2);
+    // The whole point of the session-scoped shape: 4 cli turns, 3 cli sessions
+    // (two top-level plus the nested subagent transcript).
+    expect(rows.cli.turns).toBe(4);
+    expect(rows.cli.sessions).toBe(3);
 
     expect(rows["sdk-cli"].turns).toBe(3);
     expect(rows["sdk-cli"].sessions).toBe(1);
   });
+
+  it.each([true, false])(
+    "counts nested subagent transcripts on both backends (useDb=%s)",
+    async (useDb) => {
+      await writeFixture();
+      const rows = byKey(await reportFrom(useDb));
+
+      // Subagent transcripts live at `<session>/subagents/*.jsonl`. The
+      // reconciler always walked into them; the file reader did not, so the
+      // file backend silently dropped ~26% of the real corpus — and because
+      // those transcripts inherit their parent's entrypoint, the loss landed
+      // almost entirely on `cli`. Without the nested file this fixture cannot
+      // tell the two readers apart.
+      expect(rows.cli.sessions).toBe(3);
+    }
+  );
 
   it.each([true, false])(
     "flags background sessions without moving them out of their bucket (useDb=%s)",
@@ -294,7 +337,7 @@ describe.skipIf(!driverAvailable)("byEntrypoint — file-parse vs SQLite parity"
       // `bg` is a flag, not a peer bucket — the backgrounded session is still
       // counted in `cli`, and there is no separate `bg` row.
       expect(rows.bg).toBeUndefined();
-      expect(rows.cli.sessions).toBe(2);
+      expect(rows.cli.sessions).toBe(3);
       expect(rows.cli.backgroundSessions).toBe(1);
       expect(rows["sdk-cli"].backgroundSessions).toBe(0);
     }

@@ -12,12 +12,13 @@ import type { EntrypointBreakdown } from "@/lib/usage/types";
  * Spend and volume by session entrypoint (A3) — interactive versus SDK-driven.
  *
  * Share of **sessions** and share of **spend** sit on the same row on purpose.
- * On the author's corpus 95.5% of sessions are SDK-driven, which read alone
- * says "almost everything I run is automated" — a conclusion that is true
- * about counts and usually false about money, because an automated run is a
- * few dozen lines while an interactive one runs for hours. Showing one share
- * without the other invites exactly the wrong inference about where the cost
- * actually goes, so the panel refuses to show either alone.
+ * On the reference index 57.5% of sessions are SDK-driven, which read alone
+ * says "most of what I run is automated" — true about counts and badly wrong
+ * about money: those same sessions are 3.4% of spend, while interactive work
+ * is 41% of sessions and 95.8% of the bill. An automated run is a few dozen
+ * lines; an interactive one runs for hours. Showing one share without the
+ * other invites exactly the wrong inference about where the cost goes, so the
+ * panel refuses to show either alone.
  *
  * Presentational and props-driven, so `/usage` and the per-project Costs tab
  * render the identical thing from their own already-fetched report.

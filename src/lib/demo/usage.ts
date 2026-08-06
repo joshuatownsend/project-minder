@@ -113,18 +113,24 @@ const EFFORTS: { effort: string; frac: number; taskFrac: number; osr: number }[]
 ];
 
 /**
- * A3 entrypoint mix. Session shares are modelled on the real corpus
- * (sdk-cli 88%, sdk-py 7%, cli 4.5%) but the COST shares are deliberately
- * inverted — interactive sessions are long and expensive, automated ones are
- * short. A demo that made both distributions identical would hide the exact
- * asymmetry the panel exists to show.
+ * A3 entrypoint mix, matching the shape measured on the real index rather than
+ * the file-probe figures an earlier draft used (those missed subagent
+ * transcripts and understated `cli` badly — see `entrypoint.ts`).
+ *
+ * The session and cost shares are deliberately near-inverted, because that is
+ * what the real data does: automated runs dominate the session count and are a
+ * rounding error on the bill. A demo that made both distributions agree would
+ * hide the exact asymmetry the panel exists to show.
+ *
+ * `unknown` is included so demo mode exercises the muted-bucket rendering too.
  */
 const ENTRYPOINTS: {
   entrypoint: string; sessionFrac: number; costFrac: number; bgFrac: number;
 }[] = [
-  { entrypoint: "cli", sessionFrac: 0.05, costFrac: 0.62, bgFrac: 0.03 },
-  { entrypoint: "sdk-cli", sessionFrac: 0.88, costFrac: 0.31, bgFrac: 0 },
-  { entrypoint: "sdk-py", sessionFrac: 0.07, costFrac: 0.07, bgFrac: 0 },
+  { entrypoint: "cli", sessionFrac: 0.41, costFrac: 0.958, bgFrac: 0.004 },
+  { entrypoint: "sdk-cli", sessionFrac: 0.483, costFrac: 0.026, bgFrac: 0 },
+  { entrypoint: "sdk-py", sessionFrac: 0.092, costFrac: 0.008, bgFrac: 0 },
+  { entrypoint: "unknown", sessionFrac: 0.016, costFrac: 0.008, bgFrac: 0 },
 ];
 
 const TOOLS: [string, number][] = [

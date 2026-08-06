@@ -650,16 +650,49 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
     await Promise.all(
       batch.map(async ({ home, dirName }) => {
         const dirPath = path.join(home, "projects", dirName);
-        let files: string[];
+        const filePaths: string[] = [];
         try {
-          const entries = await fs.readdir(dirPath);
-          files = entries.filter((f) => f.endsWith(".jsonl"));
+          const entries = await fs.readdir(dirPath, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isFile() && e.name.endsWith(".jsonl")) {
+              filePaths.push(path.join(dirPath, e.name));
+            }
+          }
+
+          // Newer Claude Code writes subagent transcripts to
+          // `<project>/<session-id>/subagents/agent-*.jsonl` instead of
+          // inlining sidechain entries in the parent file. The SQLite
+          // reconciler walks one level down for exactly this; this reader did
+          // not, so on the file backend every one of those sessions — and its
+          // turns, tokens and cost — was simply absent.
+          //
+          // That is a whole-report divergence, not an A3 one: totals,
+          // byModel, byProject, byCategory and byEffort were all short by the
+          // same population. It surfaced through `byEntrypoint` only because
+          // subagent transcripts inherit their parent's entrypoint and are
+          // overwhelmingly `cli`, which made the shortfall legible as a
+          // lopsided bucket rather than a slightly small number (Codex review,
+          // PR #381).
+          //
+          // Attributed to the PROJECT dir name, not "subagents", matching the
+          // reconciler. Session id is the file's own basename, so a subagent
+          // transcript is its own session on both backends.
+          for (const e of entries) {
+            if (!e.isDirectory()) continue;
+            const subagentsDir = path.join(dirPath, e.name, "subagents");
+            try {
+              for (const f of await fs.readdir(subagentsDir)) {
+                if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
+              }
+            } catch {
+              /* no subagents dir for this session — the common case */
+            }
+          }
         } catch {
           return;
         }
 
-        for (const file of files) {
-          const filePath = path.join(dirPath, file);
+        for (const filePath of filePaths) {
           liveSet.add(filePath);
 
           // FileCache stat's the file, returns the cached parse if mtime+size
@@ -687,7 +720,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
           });
 
           if (turns && turns.length > 0) {
-            const sessionId = path.basename(file, ".jsonl");
+            const sessionId = path.basename(filePath, ".jsonl");
             result.set(sessionId, turns);
           }
         }

@@ -5,11 +5,12 @@ import { entrypointLabel, isAutomatedEntrypoint, isBackgroundSession } from "@/l
 /**
  * Marks a session that nobody was watching (A3).
  *
- * **Renders nothing for an ordinary interactive session, by design.** By
- * session count 95.5% of this corpus is SDK-driven, so a chip on every row
- * would be a chip on almost every row — which marks nothing and costs a column
- * of noise. The session list is a work log a person reads to find their *own*
- * work, and what makes that possible is flagging the runs that aren't theirs.
+ * **Renders nothing for an ordinary interactive session, by design.** Automated
+ * runs are the majority by session count on any machine that uses the SDK at
+ * all (57.5% on the reference index), so a chip on every row would be a chip on
+ * almost every row — which marks nothing and costs a column of noise. The
+ * session list is a work log a person reads to find their *own* work, and what
+ * makes that possible is flagging the runs that aren't theirs.
  *
  * Also renders nothing when the entrypoint is absent: a session indexed before
  * Minder read the field is not evidence of an automated run, and guessing
