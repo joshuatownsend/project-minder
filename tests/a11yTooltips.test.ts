@@ -38,6 +38,39 @@ function hasAccessiblePair(src: string, anchor: string, window = 1400): boolean 
   return /className="sr-only"/.test(region) && region.includes('aria-hidden="true"');
 }
 
+/**
+ * Offsets of `.sr-only` spans whose immediately following sibling element is
+ * not `aria-hidden`.
+ *
+ * Structural rather than statistical: it walks each `<span className="sr-only">`
+ * to its matching `</span>`, then requires the very next element to carry
+ * `aria-hidden="true"`. Comparing counts across a whole file cannot distinguish
+ * "the visible twin is hidden" from "some unrelated icon happens to be hidden".
+ */
+function findUnpairedSrOnly(src: string): number[] {
+  const unpaired: number[] = [];
+  const open = /<span className="sr-only">/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = open.exec(src)) !== null) {
+    // Walk to the matching close, tolerating nested spans in the sr-only text.
+    let depth = 1;
+    let i = m.index + m[0].length;
+    while (i < src.length && depth > 0) {
+      if (src.startsWith("</span>", i)) { depth--; i += 7; continue; }
+      if (/^<span[\s>]/.test(src.slice(i, i + 6))) { depth++; i += 5; continue; }
+      i++;
+    }
+    // The next element after the sr-only span is the visible twin.
+    const next = src.indexOf("<", i);
+    if (next === -1) { unpaired.push(m.index); continue; }
+    const tagEnd = src.indexOf(">", next);
+    const tag = tagEnd === -1 ? src.slice(next) : src.slice(next, tagEnd + 1);
+    if (!tag.includes('aria-hidden="true"')) unpaired.push(m.index);
+  }
+  return unpaired;
+}
+
 describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
   it("QualityChip exposes its explanation to assistive tech", async () => {
     const src = await read("SessionsBrowser.tsx");
@@ -79,17 +112,36 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     expect(hasAccessiblePair(src, "explicit Skill invocation")).toBe(true);
   });
 
+  it("announces the cache-hit value, not just its definition", async () => {
+    // The percentage lived only in `children`, which the #380 fix marked
+    // aria-hidden — so a screen reader heard "cache hit ratio, >70% is healthy"
+    // and never the session's actual ratio. The fix that made the chip
+    // accessible removed the one number it existed to report (Codex, #390).
+    const src = await read("SessionsBrowser.tsx");
+    const i = src.indexOf("function CacheHitBadge");
+    expect(i).toBeGreaterThan(-1);
+    const region = src.slice(i, i + 900);
+    // The accessible text must interpolate the value, not restate the label.
+    expect(region).toMatch(/srText=\{`\$\{pct\}% cache\./);
+  });
+
   it("uses .sr-only rather than aria-label on generic spans", async () => {
     // ARIA does not reliably name a generic element and some screen readers
     // drop it, which is why the issue prescribes `.sr-only` for spans. The
     // pattern is only correct when the visible half is hidden from AT — a
     // bare `.sr-only` beside unhidden text is read twice.
+    //
+    // Checked pair by pair, NOT by comparing file-wide totals. The counting
+    // version could not tell a real pairing from a coincidence: in GitStatus,
+    // deleting `aria-hidden` from the visible label left the alert icon's
+    // unrelated `aria-hidden` behind, so the totals still balanced and the test
+    // passed while a screen reader announced the terse label after the
+    // explanation (Codex review, #390).
     for (const file of ["SessionsBrowser.tsx", "EffortMixChip.tsx", "GitStatus.tsx"]) {
       const src = await read(file);
-      const srCount = (src.match(/className="sr-only"/g) ?? []).length;
-      const hiddenCount = (src.match(/aria-hidden="true"/g) ?? []).length;
-      expect(srCount, `${file}: every sr-only needs a matching aria-hidden sibling`)
-        .toBeLessThanOrEqual(hiddenCount);
+      const unpaired = findUnpairedSrOnly(src);
+      expect(unpaired, `${file}: sr-only at offset(s) ${unpaired.join(", ")} have no aria-hidden sibling`)
+        .toEqual([]);
     }
   });
 });

@@ -105,10 +105,20 @@ type QualityChipTone = "good" | "neutral" | "warn" | "error";
 function QualityChip({
   tone,
   title,
+  srText,
   children,
 }: {
   tone: QualityChipTone;
   title: string;
+  /**
+   * Accessible text, when the visible label carries information `title` does
+   * not. Defaults to `title`, which is right for a chip whose label is a fixed
+   * piece of jargon (`compaction loop`) — but wrong for one whose label is a
+   * measured VALUE. Hiding the children then dropped the number and announced
+   * only its definition: "cache hit ratio, >70% is healthy" with no ratio
+   * (Codex review, #390).
+   */
+  srText?: string;
   children: React.ReactNode;
 }) {
   const tokens =
@@ -151,7 +161,7 @@ function QualityChip({
         flexShrink: 0,
       }}
     >
-      <span className="sr-only">{title}</span>
+      <span className="sr-only">{srText ?? title}</span>
       <span aria-hidden="true">{children}</span>
     </span>
   );
@@ -161,9 +171,17 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
   // Per Clauditor's >70% benchmark: green at 0.7+ (cache paying back),
   // amber below 0.5 (rebuilds dominating), neutral in between.
   const tone: QualityChipTone = ratio >= 0.7 ? "good" : ratio >= 0.5 ? "neutral" : "warn";
+  const pct = (ratio * 100).toFixed(0);
+  const definition = "Cache hit ratio (cache_read / total cache traffic). >70% is healthy.";
   return (
-    <QualityChip tone={tone} title="Cache hit ratio (cache_read / total cache traffic). >70% is healthy.">
-      {(ratio * 100).toFixed(0)}% cache
+    <QualityChip
+      tone={tone}
+      title={definition}
+      // The value first, then what it means — the ratio is the fact this chip
+      // exists to report, and it is the one piece `title` never carried.
+      srText={`${pct}% cache. ${definition}`}
+    >
+      {pct}% cache
     </QualityChip>
   );
 }
