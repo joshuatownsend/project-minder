@@ -16,6 +16,8 @@ function makeReport(overrides: Partial<UsageReport> = {}): UsageReport {
     daily: [],
     byEffort: [],
     byEntrypoint: [],
+    bySkillCost: [],
+    byMcpCost: [],
     byModel: [
       { model: "claude-opus-4-7-20250514", inputTokens: 600_000, outputTokens: 200_000, cacheReadTokens: 0, cacheCreateTokens: 0, cost: 8.0, turns: 200 },
       { model: "claude-sonnet-4-6-20250514", inputTokens: 500_000, outputTokens: 200_000, cacheReadTokens: 0, cacheCreateTokens: 0, cost: 4.34, turns: 180 },

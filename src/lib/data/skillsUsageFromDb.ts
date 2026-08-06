@@ -63,8 +63,18 @@ export function loadSkillUsageFromDb(db: DatabaseT.Database, sinceIso?: string):
   );
   const rows = (sinceIso ? stmt.all(sinceIso) : stmt.all()) as Row[];
 
-  if (rows.length === 0) return [];
-
+  // NOTE: no early return on `rows.length === 0`.
+  //
+  // There used to be one, and it silently defeated A4. `rows` counts explicit
+  // `Skill` dispatches; attribution lives on `turns` and has a genuinely
+  // different population — a skill can drive thousands of turns of spend
+  // without inference ever recording an invocation, which is the entire reason
+  // A4 exists. Returning early on an empty invocation set skipped the
+  // attribution query below, handed the façade an empty list, and made it fall
+  // back to the file backend — so the DB path reported no attributed skills at
+  // all. The empty-result contract the façade relies on is preserved: if
+  // neither query finds anything, this still returns `[]`.
+  //
   // Per-skill aggregation — same shape as `groupSkillCalls`'s
   // sessionTimes map in `src/lib/usage/skillParser.ts`.
   const bySkill = new Map<string, SkillStats>();
@@ -107,6 +117,37 @@ export function loadSkillUsageFromDb(db: DatabaseT.Database, sinceIso?: string):
       .sort((a, b) => b[1].localeCompare(a[1]))
       .slice(0, 50)
       .map(([id]) => id);
+  }
+
+  // A4: attributed spend, from `turns.attribution_skill`. A separate query
+  // because it groups over `turns`, not `tool_uses` — and the populations
+  // genuinely differ: a skill can drive spend without inference ever recording
+  // an invocation, which is exactly the gap A4 exists to close.
+  const attrClause = sinceIso ? " AND t.ts >= ?" : "";
+  const attrStmt = prepCached(
+    db,
+    `SELECT t.attribution_skill AS skill_name,
+            COUNT(*) AS turns,
+            COALESCE(SUM(t.cost_usd), 0) AS cost
+     FROM turns t
+     WHERE t.role = 'assistant'
+       AND t.attribution_skill IS NOT NULL AND t.attribution_skill <> ''${attrClause}
+     GROUP BY 1`
+  );
+  const attrRows = (sinceIso ? attrStmt.all(sinceIso) : attrStmt.all()) as Array<{
+    skill_name: string; turns: number; cost: number;
+  }>;
+
+  for (const r of attrRows) {
+    let stat = bySkill.get(r.skill_name);
+    if (!stat) {
+      // Attributed but never invoked through the Skill tool — still a real
+      // skill with real spend, so it gets a row rather than being dropped.
+      stat = { name: r.skill_name, invocations: 0, projects: {}, sessions: [] };
+      bySkill.set(r.skill_name, stat);
+    }
+    stat.attributedCostUsd = r.cost;
+    stat.attributedTurns = r.turns;
   }
 
   return Array.from(bySkill.values()).sort((a, b) => b.invocations - a.invocations);

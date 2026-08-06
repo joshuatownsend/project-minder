@@ -489,6 +489,25 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
 }
 
 /**
+ * Same as {@link computeTurnCost} but synchronous, for callers that have
+ * already awaited {@link loadPricing} and need to price many turns in a tight
+ * loop.
+ *
+ * The async variant awaits `loadPricing()` on every call, which is a no-op
+ * once resolved but still forces the caller's loop to be async — serializing
+ * tens of thousands of turns through the microtask queue for no benefit. This
+ * exists so a bulk accumulation can stay a plain `for`.
+ *
+ * **Contract:** call `loadPricing()` first. If pricing has not loaded,
+ * `getModelPricing` still returns the hardcoded fallback table, so this
+ * degrades to offline rates rather than throwing or returning 0 — the same
+ * behaviour every other pre-`loadPricing` caller already gets.
+ */
+export function computeTurnCostSync(turn: UsageTurn): number {
+  return applyPricing(getModelPricing(turn.model), turn);
+}
+
+/**
  * Reset module state — for testing only.
  */
 export function _resetForTesting(): void {

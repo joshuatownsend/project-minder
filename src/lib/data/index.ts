@@ -906,9 +906,10 @@ export interface SkillUsageResult {
  * `tool_uses.skill_name`.
  *
  * - `MINDER_USE_DB=0`: file-parse.
- * - DB mode + healthy DB + non-empty Skill rows: SQL-backed. No v3
- *   gate — pure tool_uses aggregation, no cost columns.
- * - DB mode + zero Skill rows: file-parse fallback (UX).
+ * - DB mode + healthy DB + reconcile complete + non-empty rows: SQL-backed.
+ * - DB mode + v3-catch-up: file-parse (correctness — A4 made this a
+ *   `cost_usd` reader; see the gate below).
+ * - DB mode + zero rows: file-parse fallback (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
@@ -916,6 +917,20 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
   if (!dbModeRequested()) return runFileSkillUsage(period);
 
   const db = await getReadyDb();
+  // This docstring used to read "No v3 gate — pure tool_uses aggregation, no
+  // cost columns." That was accurate until A4 added the attribution query,
+  // which sums `turns.cost_usd`. During v3 catch-up `cost_usd` is 0 on every
+  // pre-existing row while `attribution_skill` is already populated, so the
+  // loader would return rows that are non-empty (no empty-index fallback) and
+  // priced at zero — the catalog would show every skill's spend as $0 and look
+  // authoritative doing it.
+  if (await checkV3Gate("getSkillUsage", db)) {
+    logIntentionalFallthrough(
+      "getSkillUsage",
+      "DB awaiting v3 reconcile (attributed cost_usd not yet populated)"
+    );
+    return runFileSkillUsage(period);
+  }
   const sinceIso = getPeriodStart(period)?.toISOString();
   const stats = await callDbLoader("getSkillUsage", () => loadSkillUsageFromDb(db, sinceIso));
   // Same cold-index fall-through guard as `getAgentUsage` — empty rows
@@ -930,11 +945,26 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
 
 async function runFileSkillUsage(period: Period = "all"): Promise<SkillUsageResult> {
   const { parseAllSessions } = await import("@/lib/usage/parser");
-  const { groupSkillCalls } = await import("@/lib/usage/skillParser");
-  const sessionMap = await parseAllSessions();
+  const { groupSkillCalls, attachSkillAttribution } = await import("@/lib/usage/skillParser");
+  const { loadPricing, computeTurnCostSync } = await import("@/lib/usage/costCalculator");
+  // Sidechain turns carry attribution too — a skill that delegates still caused
+  // the delegate's spend — so this asks for them explicitly rather than taking
+  // the default primary-only view.
+  const sessionMap = await parseAllSessions({ includeSidechains: true });
   const allTurns = Array.from(sessionMap.values()).flat();
+  // Invocation counts stay PRIMARY-ONLY. They're tool-derived, and the DB
+  // ingest writes no `tool_uses` for sidechain turns, so counting a subagent's
+  // Skill dispatch here would make the catalog's invocation number depend on
+  // which backend served the request — and would silently change a
+  // pre-existing figure that has nothing to do with attribution.
+  const primaryTurns = allTurns.filter((t) => t.isSidechain !== true);
   const sinceMs = getPeriodStart(period)?.getTime();
-  const stats = groupSkillCalls(allTurns, sinceMs);
+  const stats = groupSkillCalls(primaryTurns, sinceMs);
+  // Pricing is resolved once up front so the per-turn cost lookup can be
+  // synchronous — awaiting inside the accumulation loop would serialize tens
+  // of thousands of turns for no benefit.
+  await loadPricing();
+  attachSkillAttribution(stats, allTurns, computeTurnCostSync, sinceMs);
   return { stats, meta: { backend: "file" } };
 }
 

@@ -1,4 +1,5 @@
 import type { AggregatorPeriod } from "@/lib/usage/period";
+import { mcpServerKey } from "@/lib/usage/attribution";
 import type { Period } from "@/lib/usage/constants";
 import type {
   UsageReport,
@@ -7,6 +8,8 @@ import type {
   CategoryBreakdown,
   EffortBreakdown,
   EntrypointBreakdown,
+  SkillCost,
+  McpServerCost,
   DailyBucket,
   ProjectBreakdown,
   ProjectDetail,
@@ -131,6 +134,29 @@ const ENTRYPOINTS: {
   { entrypoint: "sdk-cli", sessionFrac: 0.483, costFrac: 0.026, bgFrac: 0 },
   { entrypoint: "sdk-py", sessionFrac: 0.092, costFrac: 0.008, bgFrac: 0 },
   { entrypoint: "unknown", sessionFrac: 0.016, costFrac: 0.008, bgFrac: 0 },
+];
+
+/**
+ * A4 attribution fixtures. Shares follow the real index: a couple of skills
+ * and MCP servers dominate and there is a long thin tail, which is what makes
+ * the panel's "other" fold worth having. `method: "explicit"` throughout —
+ * demo mode should show the surface users actually get, not the legacy
+ * inference fallback.
+ */
+const SKILL_COSTS: { skill: string; frac: number; taskFrac: number; osr: number }[] = [
+  { skill: "pr-resolve", frac: 0.42, taskFrac: 0.05, osr: 0.81 },
+  { skill: "simplify", frac: 0.20, taskFrac: 0.04, osr: 0.88 },
+  { skill: "improve", frac: 0.09, taskFrac: 0.03, osr: 0.74 },
+  { skill: "commit-push-pr", frac: 0.05, taskFrac: 0.02, osr: 0.93 },
+  { skill: "code-review", frac: 0.01, taskFrac: 0, osr: 0 },
+];
+
+const MCP_COSTS: { server: string; frac: number }[] = [
+  { server: "plugin:context-mode:context-mode", frac: 0.34 },
+  { server: "plugin:playwright:playwright", frac: 0.31 },
+  { server: "claude-in-chrome", frac: 0.09 },
+  { server: "plugin:github:github", frac: 0.05 },
+  { server: "codegraph", frac: 0.03 },
 ];
 
 const TOOLS: [string, number][] = [
@@ -317,6 +343,31 @@ function buildReport(
 
   // Order follows EFFORTS (the ordinal scale, unknown last) rather than cost —
   // the same rule both real backends apply. See `effort.ts` EFFORT_ORDER.
+  const bySkillCost: SkillCost[] = SKILL_COSTS.map((e) => {
+    const turns = atLeast1(Math.round(totalTurns * e.frac * 0.3));
+    const verifiedTasks = Math.round(turns * e.taskFrac);
+    return {
+      skill: e.skill,
+      turns,
+      tokens: Math.round(totalTokens * e.frac * 0.3),
+      cost: round2(totalCost * e.frac * 0.3),
+      verifiedTasks,
+      oneShotTasks: Math.round(verifiedTasks * e.osr),
+      // Omitted when nothing was measured, exactly as the real backends do.
+      ...(verifiedTasks > 0 ? { oneShotRate: e.osr } : {}),
+      method: "explicit" as const,
+    };
+  });
+
+  const byMcpCost: McpServerCost[] = MCP_COSTS.map((e) => ({
+    server: e.server,
+    key: mcpServerKey(e.server),
+    turns: atLeast1(Math.round(totalTurns * e.frac * 0.2)),
+    tokens: Math.round(totalTokens * e.frac * 0.2),
+    cost: round2(totalCost * e.frac * 0.2),
+    method: "explicit" as const,
+  }));
+
   const byEntrypoint: EntrypointBreakdown[] = ENTRYPOINTS.map((e) => {
     const sessions = atLeast1(Math.round(totalSessions * e.sessionFrac));
     const cost = round2(totalCost * e.costFrac);
@@ -515,6 +566,8 @@ function buildReport(
     byCategory,
     byEffort,
     byEntrypoint,
+    bySkillCost,
+    byMcpCost,
     topTools,
     toolTransitions,
     toolSelfLoops,

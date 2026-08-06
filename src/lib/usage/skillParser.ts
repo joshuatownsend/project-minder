@@ -58,3 +58,59 @@ export function groupSkillCalls(turns: UsageTurn[], sinceMs?: number): SkillStat
 
   return results.sort((a, b) => b.invocations - a.invocations);
 }
+
+/**
+ * Attach A4 attributed spend to skill stats (file backend).
+ *
+ * Separate from {@link groupSkillCalls} rather than folded into it, because
+ * cost needs pricing — an async, network-or-cache-backed lookup — while that
+ * function is a synchronous pass over turns used in several places that have
+ * no business awaiting anything. Keeping them apart means the counting path
+ * stays cheap and the cost path is opt-in.
+ *
+ * Mutates and returns `stats` so the caller's ordering is preserved. Skills
+ * with attribution but no recorded `Skill` invocation are appended, since a
+ * skill can drive spend without inference ever having seen it — that is the
+ * whole point of A4.
+ */
+export function attachSkillAttribution(
+  stats: SkillStats[],
+  turns: UsageTurn[],
+  costOf: (t: UsageTurn) => number,
+  sinceMs?: number
+): SkillStats[] {
+  const acc = new Map<string, { cost: number; turns: number }>();
+  for (const turn of turns) {
+    if (turn.role !== "assistant") continue;
+    const skill = turn.attributionSkill;
+    if (typeof skill !== "string" || skill.length === 0) continue;
+    if (sinceMs !== undefined) {
+      const t = turn.timestamp ? Date.parse(turn.timestamp) : NaN;
+      if (!Number.isFinite(t) || t < sinceMs) continue;
+    }
+    const a = acc.get(skill) ?? { cost: 0, turns: 0 };
+    a.cost += costOf(turn);
+    a.turns++;
+    acc.set(skill, a);
+  }
+  if (acc.size === 0) return stats;
+
+  const byName = new Map(stats.map((s) => [s.name, s]));
+  for (const [name, a] of acc) {
+    const existing = byName.get(name);
+    if (existing) {
+      existing.attributedCostUsd = a.cost;
+      existing.attributedTurns = a.turns;
+      continue;
+    }
+    stats.push({
+      name,
+      invocations: 0,
+      projects: {},
+      sessions: [],
+      attributedCostUsd: a.cost,
+      attributedTurns: a.turns,
+    });
+  }
+  return stats;
+}
