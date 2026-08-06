@@ -21,6 +21,11 @@ import type { SkillUpdateStatus } from "@/lib/skillUpdateCache";
 // can grow to several hundred px each, parent owns expanded/body cache so
 // scroll-away doesn't lose user intent.
 
+/** One source for the attributed-spend explanation, so tooltip and sr-only text cannot drift. */
+function attributedCostExplanation(costUsd: number, turns: number): string {
+  return `${formatUsd(costUsd)} of spend attributed to this skill across ${turns} turns. Attributed cost, not invocation count — a skill is invoked once and then drives the work that follows.`;
+}
+
 function rowKey(row: SkillRow, idx: number): string {
   return row.entry?.id ?? `usage:${row.usage?.name ?? idx}`;
 }
@@ -271,7 +276,7 @@ function SkillRowItem({
           */}
           {row.usage?.attributedCostUsd != null && row.usage.attributedCostUsd > 0 && (
             <span
-              title={`${formatUsd(row.usage.attributedCostUsd)} of spend attributed to this skill across ${row.usage.attributedTurns ?? 0} turns. Attributed cost, not invocation count — a skill is invoked once and then drives the work that follows.`}
+              title={attributedCostExplanation(row.usage.attributedCostUsd, row.usage.attributedTurns ?? 0)}
               style={{
                 fontFamily: "var(--font-mono)",
                 fontSize: "0.65rem",
@@ -283,8 +288,12 @@ function SkillRowItem({
                   one is dollars of attributed spend, the other a dispatch
                   count. Which is which lives only in the tooltip, and they are
                   precisely the pair this catalog exists to keep apart. */}
+              {/* Same string as the tooltip, from one source. They were near-
+                  identical but not equal — the sr-only copy dropped the clause
+                  explaining WHY cost and count differ, which is the whole point
+                  of showing both (Copilot review of #390). */}
               <span className="sr-only">
-                {`${formatUsd(row.usage.attributedCostUsd)} of spend attributed to this skill across ${row.usage.attributedTurns ?? 0} turns. Attributed cost, not invocation count.`}
+                {attributedCostExplanation(row.usage.attributedCostUsd, row.usage.attributedTurns ?? 0)}
               </span>
               <span aria-hidden="true">{formatUsd(row.usage.attributedCostUsd)}</span>
             </span>

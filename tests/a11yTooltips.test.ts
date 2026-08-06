@@ -31,7 +31,11 @@ function hasAccessiblePair(src: string, anchor: string, window = 1400): boolean 
   const i = src.indexOf(anchor);
   if (i === -1) return false;
   const region = src.slice(i, i + window);
-  return region.includes("sr-only") && region.includes('aria-hidden="true"');
+  // Match the rendered class attribute, not the bare substring: the word
+  // "sr-only" now appears in explanatory comments next to several of these
+  // chips, so a substring check would keep passing after the actual
+  // `<span className="sr-only">` was deleted (Copilot review of #390).
+  return /className="sr-only"/.test(region) && region.includes('aria-hidden="true"');
 }
 
 describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
@@ -69,7 +73,9 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     const src = await read("SkillsBrowser.tsx");
     // Two adjacent monospace numbers with no visible unit: one is dollars, the
     // other a dispatch count. Telling them apart is the point of the catalog.
-    expect(hasAccessiblePair(src, "of spend attributed to this skill")).toBe(true);
+    // Anchored on the call site, not the shared helper's definition — the
+    // helper now lives at the top of the file, far from the chip it feeds.
+    expect(hasAccessiblePair(src, "title={attributedCostExplanation(")).toBe(true);
     expect(hasAccessiblePair(src, "explicit Skill invocation")).toBe(true);
   });
 
