@@ -55,11 +55,18 @@ export function HookActivityCard({ since }: Props) {
                 {hook.fires}
               </span>
             </div>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "var(--text-muted)" }}>
-              {msLabel(hook.p50DurationMs)}
+            {/* An unmeasured hook shows "—", never "0ms". Claude Code records
+                a command without a duration for roughly a fifth of executions,
+                and 0ms would present the ones nobody timed as the fastest on
+                the machine. */}
+            <span
+              title={hook.p50DurationMs === undefined ? "No duration was recorded for this hook" : undefined}
+              style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "var(--text-muted)" }}
+            >
+              {hook.p50DurationMs === undefined ? "—" : msLabel(hook.p50DurationMs)}
             </span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.7rem", color: "var(--text-muted)" }}>
-              {msLabel(hook.p95DurationMs)}
+              {hook.p95DurationMs === undefined ? "—" : msLabel(hook.p95DurationMs)}
             </span>
           </div>
         </div>

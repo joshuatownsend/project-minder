@@ -222,10 +222,16 @@ describe.runIf(driverAvailable)("A6 — hook decode, SQLite backend", () => {
     const codegraph = result.hooks.find((h) => h.name === "codegraph sync");
     expect(codegraph?.fires).toBe(1);
     expect(codegraph?.p50DurationMs).toBe(4174);
-    // The unmeasured hook still counts as a fire, but contributes no duration.
+    // The unmeasured hook still counts as a fire and reports NO percentile.
+    // Codex + Copilot review of #386: returning 0 here contradicted this
+    // slice's own headline principle and would rank the hook nobody timed as
+    // the fastest on the machine.
     const unmeasured = result.hooks.find((h) => h.name.startsWith("bash "));
     expect(unmeasured?.fires).toBe(1);
-    expect(unmeasured?.p50DurationMs).toBe(0);
+    expect(unmeasured?.measuredFires).toBe(0);
+    expect(unmeasured?.p50DurationMs).toBeUndefined();
+    expect(unmeasured?.p95DurationMs).toBeUndefined();
+    expect(codegraph?.measuredFires).toBe(1);
   });
 });
 
@@ -251,6 +257,37 @@ describe.runIf(driverAvailable)("A6 — denial breakdown crossed with task outco
     // from "denials exist and all is well".
     expect(result.hasData).toBe(false);
     expect(result.kinds).toEqual([]);
+  });
+
+  it("reports hasData for a quiet period when denials exist elsewhere in the index", async () => {
+    // `hasData` answers "can this index speak about denials at all". Deriving
+    // it from period-filtered rows made an ordinary quiet week read as "denials
+    // were never recorded" — a claim about the schema, not the week (Copilot
+    // review of #386).
+    await writeFixture();
+    vi.resetModules();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    const ingestMod = await import("@/lib/db/ingest");
+    await ingestMod.reconcileAllSessions(db!, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+    const turn = db!
+      .prepare("SELECT turn_index FROM turns WHERE session_id = ? AND role = 'assistant' LIMIT 1")
+      .get(SESSION) as { turn_index: number };
+    db!.prepare(
+      `INSERT INTO tool_uses (session_id, turn_index, sequence_in_turn, tool_use_id, ts, tool_name, denial_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(SESSION, turn.turn_index, 95, "tu_old", "2020-01-01T00:00:00Z", "Bash", "permission-rule");
+
+    const { getDenialBreakdown } = await import("@/lib/data/denialAnalyticsFromDb");
+    const result = await getDenialBreakdown({ since: "2026-01-01T00:00:00Z" });
+    expect(result.kinds).toEqual([]);
+    // Empty window, but the index plainly can answer the question.
+    expect(result.hasData).toBe(true);
   });
 
   it("groups by kind and counts a multi-denial turn's task once", async () => {

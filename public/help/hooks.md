@@ -87,7 +87,9 @@ under two labels.
 **A hook with no recorded duration counts as a fire but contributes no
 percentile.** Claude Code records a command without a duration for roughly a
 fifth of hook executions. That is "not measured", not "instant" — treating it as
-0 ms would rank the unmeasured hooks as the fastest on the machine.
+0 ms would rank the unmeasured hooks as the fastest on the machine. Such a hook
+shows `—` rather than a number, and its row reports how many of its fires were
+actually timed.
 
 Hook *failures* are recorded separately. They arrive as a plain list of messages
 alongside the run list rather than as a field on each hook, so a failure cannot

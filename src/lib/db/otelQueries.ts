@@ -346,8 +346,18 @@ export async function getCacheEfficiency(opts: { period: Period }): Promise<Cach
 export interface HookRow {
   name: string;
   fires: number;
-  p50DurationMs: number;
-  p95DurationMs: number;
+  /**
+   * Undefined when NO occurrence of this hook carried a duration.
+   *
+   * Not zero. This slice's headline principle is that an unmeasured hook must
+   * not be rendered as an instant one, and returning `0` here broke it in the
+   * same PR that stated it — a completely unmeasured command would have sorted
+   * as the fastest on the machine (Codex + Copilot review of #386).
+   */
+  p50DurationMs?: number;
+  p95DurationMs?: number;
+  /** How many of `fires` actually carried a duration. `0` means the percentiles are absent. */
+  measuredFires?: number;
 }
 
 export interface HookActivityResult {
@@ -405,6 +415,9 @@ export async function getHookActivity(opts: {
     hooks.push({
       name,
       fires: sorted.length,
+      // OTEL rows without a finite duration are filtered out above, so every
+      // fire counted here is also a measured one.
+      measuredFires: sorted.length,
       p50DurationMs: Math.round(percentile(sorted, 50)),
       p95DurationMs: Math.round(percentile(sorted, 95)),
     });
@@ -460,8 +473,14 @@ async function getHookActivityFromTranscripts(
     hooks.push({
       name,
       fires: v.fires,
-      p50DurationMs: sorted.length ? Math.round(percentile(sorted, 50)) : 0,
-      p95DurationMs: sorted.length ? Math.round(percentile(sorted, 95)) : 0,
+      measuredFires: sorted.length,
+      // Omitted entirely when nothing was measured — see HookRow.
+      ...(sorted.length
+        ? {
+            p50DurationMs: Math.round(percentile(sorted, 50)),
+            p95DurationMs: Math.round(percentile(sorted, 95)),
+          }
+        : {}),
     });
     totalFires += v.fires;
   }

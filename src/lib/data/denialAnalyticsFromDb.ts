@@ -90,7 +90,24 @@ export async function getDenialBreakdown(opts: {
       ORDER BY denials DESC`
   ).all(params) as Array<{ kind: string; denials: number; sessions: number }>;
 
-  if (rows.length === 0) return { kinds: [], totalDenials: 0, hasData: false };
+  // `hasData` answers "can this index speak about denials at all", so it must
+  // NOT be derived from the period-filtered rows. With a `since` window — which
+  // is how the MCP tool always calls this — an ordinary quiet week would
+  // otherwise report `hasData: false` and read as "denials were never
+  // recorded", which is a claim about the schema, not about the week
+  // (Copilot review of #386). Respects `project` but ignores `since`.
+  const anyDenial = prepCached(
+    db,
+    `SELECT 1
+       FROM tool_uses tu
+       JOIN sessions s ON s.session_id = tu.session_id
+      WHERE tu.denial_kind IS NOT NULL AND tu.denial_kind <> ''
+        AND (@project IS NULL OR s.project_slug = @project)
+      LIMIT 1`
+  ).get({ project: params.project }) as { 1: number } | undefined;
+  const hasData = anyDenial !== undefined;
+
+  if (rows.length === 0) return { kinds: [], totalDenials: 0, hasData };
 
   const toolRows = prepCached(
     db,
@@ -159,6 +176,6 @@ export async function getDenialBreakdown(opts: {
   return {
     kinds,
     totalDenials: rows.reduce((sum, r) => sum + r.denials, 0),
-    hasData: true,
+    hasData,
   };
 }
