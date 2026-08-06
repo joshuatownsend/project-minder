@@ -195,6 +195,19 @@ export interface SessionHookRun {
 /** How Minder learned about a PR link. See {@link PrLink.source}. */
 export type PrLinkSource = "recorded" | "scraped";
 
+/**
+ * Narrow a DB `source` column to the enum, or `undefined`.
+ *
+ * The column is TEXT, so a hand-edited or future-typo value would otherwise be
+ * cast straight through and reach the UI as an invalid `PrLink.source` — where
+ * it renders as neither recorded nor scraped and looks like a rendering bug
+ * rather than a data one (Copilot review of #385). An unrecognised value is
+ * treated exactly like NULL: unknown provenance, which the UI already handles.
+ */
+export function toPrLinkSource(value: unknown): PrLinkSource | undefined {
+  return value === "recorded" || value === "scraped" ? value : undefined;
+}
+
 export interface PrLink {
   url: string;
   number: number;

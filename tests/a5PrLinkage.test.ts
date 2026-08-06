@@ -119,6 +119,21 @@ interface JsonlEntry {
   [k: string]: unknown;
 }
 
+describe("A5 — source value validation", () => {
+  it("treats an unrecognised DB value as unknown, not as a valid source", async () => {
+    // The column is TEXT, so a hand-edited or future-typo value would otherwise
+    // be cast straight through and reach the UI as an invalid PrLink.source,
+    // where it renders as neither recorded nor scraped and looks like a
+    // rendering bug rather than a data one (Copilot review of #385).
+    const { toPrLinkSource } = await import("@/lib/types/session");
+    expect(toPrLinkSource("recorded")).toBe("recorded");
+    expect(toPrLinkSource("scraped")).toBe("scraped");
+    for (const junk of [null, undefined, "", "RECORDED", "guessed", 1, {}]) {
+      expect(toPrLinkSource(junk)).toBeUndefined();
+    }
+  });
+});
+
 describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round trip", () => {
   let tmpHome: string;
   let originalHome: string | undefined;
@@ -193,6 +208,68 @@ describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round tri
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
+
+  it("promotes a scraped row to recorded when the pr-link entry arrives later", async () => {
+    // The P1 from the Codex review of #385, reproduced end to end. Live
+    // indexing persists the scraped `gh pr create` result the moment it is
+    // parsed; Claude Code appends its authoritative `pr-link` entry afterwards.
+    // With INSERT OR IGNORE the upgrade was discarded, so the DB backend
+    // reported the link as `scraped` forever while a file parse called it
+    // `recorded` — a silent divergence on the very field that says which
+    // source to trust.
+    const file = path.join(tmpHome, ".claude", "projects", PROJECT_DIR, `${SESSION}.jsonl`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+
+    const scrapedOnly = [
+      { type: "user", timestamp: "2026-08-01T12:00:00Z", message: { role: "user", content: [{ type: "text", text: "go" }] } },
+      {
+        type: "assistant",
+        timestamp: "2026-08-01T12:00:01Z",
+        message: {
+          id: "m1", role: "assistant", model: "claude-opus-5",
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "gh pr create --fill" } }],
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-08-01T12:00:02Z",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "https://github.com/foo/bar/pull/9" }] },
+      },
+    ];
+    await fs.writeFile(file, scrapedOnly.map((e) => JSON.stringify(e)).join("\n") + "\n");
+
+    vi.resetModules();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    const ingest = await import("@/lib/db/ingest");
+    const opts = { projectsDir: path.join(tmpHome, ".claude", "projects") };
+
+    await ingest.reconcileAllSessions(db!, opts);
+    expect(
+      (db!.prepare("SELECT source FROM session_prs WHERE pr_number = 9").get() as { source: string }).source
+    ).toBe("scraped");
+
+    // Claude Code appends its own record of the same PR.
+    await fs.appendFile(
+      file,
+      JSON.stringify({
+        type: "pr-link", timestamp: "2026-08-01T12:00:03Z",
+        prNumber: 9, prUrl: "https://github.com/foo/bar/pull/9", prRepository: "canonical/repo",
+      }) + "\n"
+    );
+    await ingest.reconcileAllSessions(db!, opts);
+
+    const row = db!
+      .prepare("SELECT source, repo FROM session_prs WHERE pr_number = 9")
+      .get() as { source: string; repo: string };
+    expect(row.source).toBe("recorded");
+    // The recorded repository wins too — it is reported, not parsed from a URL.
+    expect(row.repo).toBe("canonical/repo");
+  });
 
   it("stores and returns each link's source, and agrees with the file backend", async () => {
     await writeFixture();

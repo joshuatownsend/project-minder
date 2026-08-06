@@ -1,3 +1,4 @@
+import { toPrLinkSource } from "@/lib/types/session";
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
@@ -447,7 +448,7 @@ function groupPrs(rows: PrRow[]): Map<string, PrLink[]> {
       number: r.pr_number,
       repo: r.repo,
       // NULL = indexed before v22, which is NOT the same as "scraped".
-      source: (r.source as PrLink["source"]) ?? undefined,
+      source: toPrLinkSource(r.source),
     };
     if (list) list.push(link);
     else map.set(r.session_id, [link]);

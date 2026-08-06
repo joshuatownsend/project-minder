@@ -1,3 +1,4 @@
+import { toPrLinkSource } from "@/lib/types/session";
 import "server-only";
 import path from "path";
 import os from "os";
@@ -267,7 +268,7 @@ export async function loadSessionDetailFromDb(
     number: r.pr_number,
     repo: r.repo,
     // NULL = indexed before v22, which is NOT the same as "scraped".
-    source: (r.source as PrLink["source"]) ?? undefined,
+    source: toPrLinkSource(r.source),
   }));
 
   // A1: permission-mode timeline and hook runs. Both are one-to-many and both

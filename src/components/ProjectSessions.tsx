@@ -460,11 +460,20 @@ export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
                                     ? " — link recorded by Claude Code"
                                     : "")
                               }
+                              // `aria-label` supplies the accessible NAME and
+                              // overrides the visible text, so omitting the
+                              // recorded case left screen-reader users unable to
+                              // tell a recorded link from a legacy one of
+                              // unknown provenance — a distinction sighted users
+                              // got from the tooltip (Codex + Copilot, #385).
+                              // All three states are now named.
                               aria-label={
                                 `PR #${pr.number} in ${pr.repo}. Filter to sessions that created it.` +
                                 (pr.source === "scraped"
                                   ? " Link parsed from command output rather than recorded by Claude Code."
-                                  : "")
+                                  : pr.source === "recorded"
+                                    ? " Link recorded by Claude Code."
+                                    : " Link provenance unknown; indexed before it was recorded.")
                               }
                               style={{
                                 display: "flex",

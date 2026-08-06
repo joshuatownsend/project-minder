@@ -697,7 +697,10 @@ CREATE TABLE session_prs (
   -- recorded entries find 86 URLs the regex misses, and the regex still finds
   -- 5 the recorded entries miss, all from sessions that recorded their OTHER
   -- PRs. See `prExtractor.ts`.
-  source       TEXT,
+  -- CHECK applies to DBs created from this file. A migrated DB keeps the bare
+  -- TEXT column (SQLite cannot add a CHECK by ALTER), so readers still validate
+  -- rather than trusting the constraint — see `toPrLinkSource`.
+  source       TEXT CHECK (source IS NULL OR source IN ('recorded','scraped')),
   PRIMARY KEY (session_id, pr_url),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;

@@ -94,7 +94,12 @@ function migratedDbPresent(): boolean {
         .get() as { value?: string } | undefined;
       const live = Number(row?.value);
       if (!Number.isFinite(live)) return false;
-      return live >= LATEST_MIGRATION_VERSION;
+      // Equality, not `>=`. A live DB NEWER than this checkout has columns the
+      // snapshot cannot know about, and the check compares both directions —
+      // so it would fail for the wrong reason after switching branches
+      // (Copilot review of #385). Neither direction is a comparison worth
+      // making; both mean "not the schema this checkout describes".
+      return live === LATEST_MIGRATION_VERSION;
     } finally {
       db.close();
     }
