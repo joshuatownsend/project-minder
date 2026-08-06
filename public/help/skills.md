@@ -57,7 +57,7 @@ the keys Claude Code added in 2.1.218:
 
 | Key | Meaning |
 | --- | --- |
-| `user-invocable` | Reachable as `/<slug>` |
+| `user-invocable` | Reachable as `/<slug>`. **Defaults to `true`** — set it to `false` to hide a skill from the `/` menu |
 | `disable-model-invocation` | Claude may not select it; slash command only |
 | `background` | Runs as a background task rather than inline |
 | `context` | `fork` runs the skill in a forked context |
@@ -69,6 +69,14 @@ case-insensitively wherever it accepts `true` / `false`, and Minder now reads th
 the same way. Previously only `true` counted, so a skill written as
 `user-invocable: yes` was invocable in Claude Code and showed as *not* invocable
 here — and was left out of the workflow launcher chips.
+
+**The default was inverted, too.** Claude Code's rule is that both you and Claude
+can invoke any skill unless the frontmatter says otherwise; `user-invocable:
+false` is what *hides* one from the `/` menu. Minder read a missing key as
+`false`, so the great majority of skills — which never mention the key — were
+reported as not user-invocable and withheld from the workflow launcher chips.
+They now default to invocable, and only an explicit `user-invocable: false`
+removes them.
 
 A key the skill does not declare stays *undeclared* rather than defaulting to
 false, so "didn't say" and "said no" remain distinguishable and only the latter
