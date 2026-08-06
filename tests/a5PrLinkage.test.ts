@@ -324,6 +324,48 @@ describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round tri
     expect(filePrs).toEqual(dbPrs);
   });
 
+  it("does not count an unchanged upsert as a recovered row", async () => {
+    // `DO UPDATE` reports changes = 1 whenever it fires, and the old CASE form
+    // fired on every conflict — writing the stored value back to itself. A
+    // re-scan then counted every historical PR as newly written, and
+    // recoverStraddledPrs re-scans the whole transcript whenever a tail holds
+    // any orphan tool result (Codex review, #385).
+    await writeFixture();
+    vi.resetModules();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db!, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+
+    const stmt = db!.prepare(
+      `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(session_id, pr_url) DO UPDATE SET
+         source = 'recorded',
+         repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+       WHERE excluded.source = 'recorded'
+         AND (session_prs.source IS NOT 'recorded'
+              OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`
+    );
+
+    const url = "https://github.com/foo/bar/pull/77";
+    // First write.
+    expect(stmt.run(SESSION, url, 77, "foo/bar", "recorded").changes).toBe(1);
+    // Identical replay writes nothing.
+    expect(stmt.run(SESSION, url, 77, "foo/bar", "recorded").changes).toBe(0);
+    // A scraped duplicate must not demote, and must not count either.
+    expect(stmt.run(SESSION, url, 77, "foo/bar", "scraped").changes).toBe(0);
+    expect(
+      (db!.prepare("SELECT source FROM session_prs WHERE pr_number = 77").get() as { source: string })
+        .source
+    ).toBe("recorded");
+  });
+
   it("schedules the re-parse that fills `source` on pre-upgrade rows", async () => {
     // Migration v22 adds the column but cannot populate it: provenance is
     // decoded from the transcript, not recoverable in SQL. The migration

@@ -1513,8 +1513,11 @@ async function recoverStraddledPrs(
       `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(session_id, pr_url) DO UPDATE SET
-         source = CASE WHEN excluded.source = 'recorded' THEN excluded.source ELSE session_prs.source END,
-         repo   = CASE WHEN excluded.source = 'recorded' AND excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END`,
+         source = 'recorded',
+         repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+       WHERE excluded.source = 'recorded'
+         AND (session_prs.source IS NOT 'recorded'
+              OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`,
     );
     let recovered = 0;
     const txn = db.transaction(() => {
@@ -1826,8 +1829,11 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(session_id, pr_url) DO UPDATE SET
-       source = CASE WHEN excluded.source = 'recorded' THEN excluded.source ELSE session_prs.source END,
-       repo   = CASE WHEN excluded.source = 'recorded' AND excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END`
+       source = 'recorded',
+       repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+     WHERE excluded.source = 'recorded'
+       AND (session_prs.source IS NOT 'recorded'
+            OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
@@ -1842,6 +1848,15 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // preserved set fills the gap when extraction returned empty. Counter
   // uses `result.changes` so INSERT OR IGNORE NOOPs don't inflate the
   // soak-monitoring `rowsWritten` metric. Read review #2 and #6.
+  //
+  // The promote-only rule moved from the SET expressions into a conflict
+  // `WHERE` for that same metric. `DO UPDATE` reports `changes = 1` whenever it
+  // fires, and the old `CASE` form fired on every conflicting row — writing the
+  // existing value back to itself and counting it. Re-scanning a transcript
+  // then reported every historical PR as newly written, which matters most in
+  // `recoverStraddledPrs`: it upserts the whole file whenever a tail holds any
+  // orphan tool result (Codex review, #385). With the guard the statement is a
+  // genuine no-op when nothing would change, so the counters mean what they say.
   for (const pr of mergePrLinks(s.prs, preservedPrs)) {
     const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
     rows += Number(result.changes ?? 0);
@@ -2265,8 +2280,11 @@ function appendSessionTail(
     `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(session_id, pr_url) DO UPDATE SET
-       source = CASE WHEN excluded.source = 'recorded' THEN excluded.source ELSE session_prs.source END,
-       repo   = CASE WHEN excluded.source = 'recorded' AND excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END`
+       source = 'recorded',
+       repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+     WHERE excluded.source = 'recorded'
+       AND (session_prs.source IS NOT 'recorded'
+            OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
