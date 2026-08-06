@@ -270,6 +270,27 @@ describe.runIf(driverAvailable)("A6 — hook decode, SQLite backend", () => {
     // the whole point.
     expect(flood?.p50DurationMs).toBe(10);
   });
+
+  it("includes untimestamped runs in all-history, and only there", async () => {
+    // `ts` is optional on SessionHookRun and ingest stores `?? null`, so an
+    // undated run is a supported row. `ts >= ?` is false for NULL, which
+    // dropped it even from `all` — where the predicate is just `>= 1970`
+    // (Codex review, #386). A bounded period still excludes it: nothing places
+    // an undated run inside a window.
+    await writeFixture();
+    const db = await ingest();
+    db.prepare(
+      "INSERT INTO session_hook_runs (session_id, ts, command, duration_ms) VALUES (?, NULL, ?, ?)"
+    ).run(SESSION, "undated-hook", 42);
+
+    const { getHookActivity } = await import("@/lib/db/otelQueries");
+
+    const all = await getHookActivity({ since: 0 });
+    expect(all.hooks.find((h) => h.name === "undated-hook")?.fires).toBe(1);
+
+    const bounded = await getHookActivity({ since: Date.parse("2026-01-01T00:00:00Z") });
+    expect(bounded.hooks.find((h) => h.name === "undated-hook")).toBeUndefined();
+  });
 });
 
 // ── Denial breakdown ─────────────────────────────────────────────────────────

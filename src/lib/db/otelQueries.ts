@@ -456,7 +456,10 @@ export async function getHookActivity(opts: {
   // opt-in, so for anyone who hasn't enabled it this tool returned an empty
   // result that reads as "you have no hooks" rather than "I can't see them".
   // The transcript carries the same measurement for free — and retroactively.
-  return getHookActivityFromTranscripts(db, sinceIso);
+  // `since <= 0` is how the callers spell "all history" (the period switcher
+  // maps `all` to epoch 0). Passed through rather than re-derived from the ISO
+  // string, which would mean string-comparing against 1970.
+  return getHookActivityFromTranscripts(db, sinceIso, opts.since <= 0);
 }
 
 /**
@@ -469,7 +472,8 @@ export async function getHookActivity(opts: {
  */
 async function getHookActivityFromTranscripts(
   db: DatabaseT.Database,
-  sinceIso: string
+  sinceIso: string,
+  allHistory: boolean
 ): Promise<HookActivityResult> {
   // Grouped in SQL rather than read row-by-row.
   //
@@ -485,12 +489,28 @@ async function getHookActivityFromTranscripts(
   // capping: one row per distinct (command, duration) pair, which is small
   // because durations are integer milliseconds and hooks are repetitive, while
   // the counts still describe every run in the period.
+  // A run with no timestamp is a supported row, not a malformed one: ingest
+  // stores `entry.timestamp ?? null` and `SessionHookRun.ts` is optional. But
+  // `ts >= ?` is false for NULL, so every untimestamped run vanished from
+  // `fires`, `totalFires` and the percentiles — including on `all`, where the
+  // predicate degrades to `ts >= '1970-01-01…'` and excludes them anyway. The
+  // same all-history contract the row cap was breaking, broken a second way
+  // (Codex review, #386).
+  //
+  // Only all-history takes them. For a bounded period the honest answer is to
+  // leave them out: nothing places an undated run inside a window, and
+  // assigning it to one would be a guess reported as a measurement.
   const rows = prepCached(
     db,
-    `SELECT command, duration_ms, COUNT(*) AS n
-       FROM session_hook_runs
-      WHERE ts >= ?
-      GROUP BY command, duration_ms`
+    allHistory
+      ? `SELECT command, duration_ms, COUNT(*) AS n
+           FROM session_hook_runs
+          WHERE ts >= ? OR ts IS NULL
+          GROUP BY command, duration_ms`
+      : `SELECT command, duration_ms, COUNT(*) AS n
+           FROM session_hook_runs
+          WHERE ts >= ?
+          GROUP BY command, duration_ms`
   ).all(sinceIso) as { command: string; duration_ms: number | null; n: number }[];
 
   const byHook = new Map<
