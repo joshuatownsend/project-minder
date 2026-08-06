@@ -919,6 +919,69 @@ function setCurrentVersion(db: DatabaseT.Database, version: number): void {
  * `schema_version`. Each migration runs inside its own transaction so a
  * thrown migration leaves the previous version intact.
  */
+/**
+ * Lift `request_id` / `tool_source` out of `payload_json` for any OTEL rows
+ * that arrived without them. Idempotent, incremental, and run on every startup.
+ *
+ * Migration v24 backfills these columns once, which is enough for the upgrade
+ * it was written for and not enough in general: an older packaged Minder can
+ * run against a database that has *already* reached v24 — the repo documents
+ * that older trays do exactly this — and its four-column insert stays valid
+ * while leaving both columns NULL. Coming back to a current build repairs
+ * nothing, because `applyPendingMigrations` skips v24 once `schema_version` is
+ * 24. The attributes are still sitting in `payload_json`, so the telemetry is
+ * recoverable but permanently uncorrelated (Codex review, #387).
+ *
+ * A watermark keeps this cheap. `otel_events.id` is an INTEGER PRIMARY KEY, so
+ * rows written during a downgrade sort above everything already lifted, and the
+ * scan touches only what is new rather than re-JSON_EXTRACTing 641k rows on
+ * every boot. The watermark is deliberately advanced to `MAX(id)` even when the
+ * lift updated nothing: "examined" is the fact worth remembering, not "changed".
+ */
+export function liftOtelAttributeColumns(db: DatabaseT.Database): number {
+  const hasTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='otel_events'")
+    .get() as { name?: string } | undefined;
+  if (!hasTable) return 0;
+
+  const cols = db.prepare("PRAGMA table_info(otel_events)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "request_id")) return 0;
+
+  const stored = db.prepare("SELECT value FROM meta WHERE key = 'otel_lift_watermark'").get() as
+    | { value?: string }
+    | undefined;
+  const watermark = Number(stored?.value ?? 0) || 0;
+
+  const max = (db.prepare("SELECT MAX(id) AS m FROM otel_events").get() as { m: number | null }).m;
+  if (max === null || max <= watermark) return 0;
+
+  const lift = db.transaction(() => {
+    const a = db
+      .prepare(
+        `UPDATE otel_events
+            SET request_id = JSON_EXTRACT(payload_json, '$.attrs.request_id')
+          WHERE id > ? AND request_id IS NULL
+            AND JSON_EXTRACT(payload_json, '$.attrs.request_id') IS NOT NULL`
+      )
+      .run(watermark).changes;
+    const b = db
+      .prepare(
+        `UPDATE otel_events
+            SET tool_source = JSON_EXTRACT(payload_json, '$.attrs.tool_source')
+          WHERE id > ? AND tool_source IS NULL
+            AND JSON_EXTRACT(payload_json, '$.attrs.tool_source') IS NOT NULL`
+      )
+      .run(watermark).changes;
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('otel_lift_watermark', ?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    ).run(String(max));
+    return a + b;
+  });
+
+  return lift();
+}
+
 function applyPendingMigrations(db: DatabaseT.Database): { applied: number[]; current: number } {
   const current = getCurrentVersion(db);
   const pending = MIGRATIONS.filter((m) => m.version > current).sort(
@@ -1102,6 +1165,9 @@ export async function initDb(): Promise<InitResult> {
     result.available = true;
     result.appliedMigrations = applied;
     result.schemaVersion = current;
+    // After migrations, never inside one: this repairs rows a *downgrade* wrote,
+    // which by definition appear when no migration is pending.
+    liftOtelAttributeColumns(db);
     pruneNotificationLog(db);
     return result;
   } catch (err) {

@@ -306,4 +306,47 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     expect(row.request_id).toBe(REQ_UNMATCHED);
     expect(row.tool_source).toBe("mcp");
   });
+
+  it("repairs rows an older binary wrote after the DB already reached v24", async () => {
+    // The migration's backfill runs once. An older packaged Minder running
+    // against an already-v24 database inserts with its four-column statement —
+    // still valid — leaving both columns NULL, and returning to a current build
+    // repairs nothing because applyPendingMigrations skips v24. The attributes
+    // are right there in payload_json, so the telemetry is recoverable but
+    // permanently uncorrelated (Codex review, #387).
+    vi.resetModules();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+
+    // Exactly what an older binary writes: no request_id, no tool_source.
+    db!
+      .prepare(
+        "INSERT INTO otel_events (ts, session_id, event_name, payload_json) VALUES (?, ?, ?, ?)"
+      )
+      .run(
+        "2026-08-01T12:00:00.000Z",
+        SESSION,
+        "api_request",
+        JSON.stringify({ attrs: { request_id: "req_011DowngradeWriteAAAAA", tool_source: "mcp" } })
+      );
+
+    const before = db!
+      .prepare("SELECT request_id FROM otel_events WHERE session_id = ? ORDER BY id DESC LIMIT 1")
+      .get(SESSION) as { request_id: string | null };
+    expect(before.request_id).toBeNull();
+
+    expect(mig.liftOtelAttributeColumns(db!)).toBeGreaterThan(0);
+
+    const after = db!
+      .prepare("SELECT request_id, tool_source FROM otel_events WHERE session_id = ? ORDER BY id DESC LIMIT 1")
+      .get(SESSION) as { request_id: string | null; tool_source: string | null };
+    expect(after.request_id).toBe("req_011DowngradeWriteAAAAA");
+    expect(after.tool_source).toBe("mcp");
+
+    // Idempotent, and the watermark means a second call does no work.
+    expect(mig.liftOtelAttributeColumns(db!)).toBe(0);
+  });
 });
