@@ -1493,13 +1493,13 @@ async function recoverStraddledPrs(
     const allPrs = extractPrsFromEntries(entries);
     if (allPrs.length === 0) return 0;
     const insertSessionPr = db.prepare(
-      `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo, source)
+       VALUES (?, ?, ?, ?, ?)`,
     );
     let recovered = 0;
     const txn = db.transaction(() => {
       for (const pr of allPrs) {
-        const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+        const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
         recovered += Number(result.changes ?? 0);
       }
     });
@@ -1597,14 +1597,22 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     preservedPrs = (
       db
         .prepare(
-          "SELECT pr_url, pr_number, repo FROM session_prs WHERE session_id = ?",
+          "SELECT pr_url, pr_number, repo, source FROM session_prs WHERE session_id = ?",
         )
         .all(s.sessionId) as Array<{
         pr_url: string;
         pr_number: number;
         repo: string;
+        source: string | null;
       }>
-    ).map((r) => ({ url: r.pr_url, number: r.pr_number, repo: r.repo }));
+    ).map((r) => ({
+      url: r.pr_url,
+      number: r.pr_number,
+      repo: r.repo,
+      // NULL here means "indexed before the column existed", not "scraped" —
+      // preserve the absence rather than inventing a provenance for it.
+      source: (r.source as PrLink["source"]) ?? undefined,
+    }));
     preservedTickets = (
       db
         .prepare(
@@ -1781,8 +1789,8 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
      VALUES (?, ?, ?, ?, ?)`
   );
   const insertSessionPr = db.prepare(
-    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-     VALUES (?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo, source)
+     VALUES (?, ?, ?, ?, ?)`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
@@ -1798,7 +1806,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // uses `result.changes` so INSERT OR IGNORE NOOPs don't inflate the
   // soak-monitoring `rowsWritten` metric. Read review #2 and #6.
   for (const pr of mergePrLinks(s.prs, preservedPrs)) {
-    const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo);
+    const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
     rows += Number(result.changes ?? 0);
   }
   // Tickets: same preserve-then-merge as PRs (item 3).
@@ -2217,8 +2225,8 @@ function appendSessionTail(
      VALUES (?, ?, ?, ?, ?)`
   );
   const insertSessionPr = db.prepare(
-    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-     VALUES (?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo, source)
+     VALUES (?, ?, ?, ?, ?)`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
@@ -2232,7 +2240,7 @@ function appendSessionTail(
   // the prior writeSession) don't inflate the soak-monitoring metric.
   // Read review #1 and #6.
   for (const pr of parsed.prs) {
-    const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+    const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
     rows += Number(result.changes ?? 0);
   }
   // Tickets: no straddle case to recover — they come from a plain text

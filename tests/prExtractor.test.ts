@@ -153,6 +153,8 @@ describe("extractPrsFromEntries", () => {
       url: "https://github.com/foo/bar/pull/7",
       number: 7,
       repo: "foo/bar",
+      // A5: everything here was regexed out of command output.
+      source: "scraped",
     });
   });
 
@@ -180,7 +182,7 @@ describe("extractPrsFromEntries", () => {
     ];
     const prs = extractPrsFromEntries(entries);
     expect(prs).toEqual([
-      { url: "https://github.com/foo/bar/pull/12", number: 12, repo: "foo/bar" },
+      { url: "https://github.com/foo/bar/pull/12", number: 12, repo: "foo/bar", source: "scraped" },
     ]);
   });
 
@@ -225,7 +227,7 @@ describe("extractPrsFromEntries", () => {
       userToolResult("toolu_b", "https://github.com/foo/bar/pull/5"),
     ];
     expect(extractPrsFromEntries(entries)).toEqual([
-      { url: "https://github.com/foo/bar/pull/5", number: 5, repo: "foo/bar" },
+      { url: "https://github.com/foo/bar/pull/5", number: 5, repo: "foo/bar", source: "scraped" },
     ]);
   });
 
@@ -399,7 +401,7 @@ describe("extractPrsFromEntries — authoritative pr-link entries", () => {
     // `gh pr create --web`, or a script.
     const entries = [prLinkEntry(377, "https://github.com/owner/repo/pull/377", "owner/repo")];
     expect(extractPrsFromEntries(entries)).toEqual([
-      { url: "https://github.com/owner/repo/pull/377", number: 377, repo: "owner/repo" },
+      { url: "https://github.com/owner/repo/pull/377", number: 377, repo: "owner/repo", source: "recorded" },
     ]);
   });
 

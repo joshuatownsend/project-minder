@@ -444,7 +444,28 @@ export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
                                   activate(e);
                                 }
                               }}
-                              title={`Filter to sessions that created ${pr.repo}#${pr.number}`}
+                              // Provenance rides the existing tooltip rather
+                              // than earning its own badge: on this corpus 652
+                              // of 738 links are found by both sources, so a
+                              // visible marker would be noise on almost every
+                              // chip while saying nothing. It matters when a
+                              // link looks wrong — a scraped one is a regex
+                              // match on command output and can be a false
+                              // positive; a recorded one came from Claude Code.
+                              title={
+                                `Filter to sessions that created ${pr.repo}#${pr.number}` +
+                                (pr.source === "scraped"
+                                  ? " — link parsed from `gh pr create` output, not recorded by Claude Code"
+                                  : pr.source === "recorded"
+                                    ? " — link recorded by Claude Code"
+                                    : "")
+                              }
+                              aria-label={
+                                `PR #${pr.number} in ${pr.repo}. Filter to sessions that created it.` +
+                                (pr.source === "scraped"
+                                  ? " Link parsed from command output rather than recorded by Claude Code."
+                                  : "")
+                              }
                               style={{
                                 display: "flex",
                                 alignItems: "center",

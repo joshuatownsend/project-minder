@@ -102,8 +102,17 @@ function toolResultText(content: unknown): string {
  *      Authoritative: they survive truncated command output and catch PRs
  *      opened by any route (the web UI, `gh pr create --web`, a script), not
  *      just ones whose `gh` output was scrapeable.
- *   2. **`gh pr create` tool results** — the original scraper, kept because
- *      only it covers transcripts written before Claude Code emitted `pr-link`.
+ *   2. **`gh pr create` tool results** — the original scraper.
+ *
+ * **Both sources are permanent.** A5 was specified expecting the scraper to be
+ * retired once `pr-link` entries covered the corpus. Measured across 5,319 local
+ * transcripts, that is wrong: the recorded entries find 738 distinct PR URLs to
+ * the scraper's 657 — 86 that the regex never sees — but **5 URLs are found only
+ * by the scraper**, and every one of those came from a session that *did* emit
+ * `pr-link` entries for its other PRs. So the gap is not "old transcripts
+ * predate the feature", which would age out on its own; it is the CLI's own
+ * recording missing cases. Dropping the scraper would lose real links today and
+ * keep losing them.
  *
  * The decode lives HERE rather than in either reader so both backends get it
  * from one place. Putting it in the file scanner alone left the default DB
@@ -134,6 +143,7 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
           url: prUrl,
           number: prNumber,
           repo: typeof prRepository === "string" ? prRepository : "",
+          source: "recorded",
         });
       }
       continue;
@@ -188,7 +198,7 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
     if (!link) continue;
     if (seenUrls.has(link.url)) continue;
     seenUrls.add(link.url);
-    links.push(link);
+    links.push({ ...link, source: "scraped" });
   }
 
   // Authoritative `pr-link` entries, folded in after the scraper so a recorded
@@ -197,7 +207,9 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
   for (const entry of prLinkEntries) {
     const existing = links.findIndex((l) => l.url === entry.url);
     if (existing >= 0) {
-      // Keep the scraper's repo only if the entry didn't report one.
+      // Keep the scraper's repo only if the entry didn't report one. The row
+      // becomes `recorded`, which is the honest label: every field on it now
+      // comes from Claude Code unless the fallback below supplied `repo`.
       links[existing] = { ...entry, repo: entry.repo || links[existing].repo };
     } else if (!seenUrls.has(entry.url)) {
       seenUrls.add(entry.url);

@@ -302,7 +302,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
   const prsBySession = groupPrs(
     prepCached(
       db,
-      `SELECT session_id, pr_url, pr_number, repo
+      `SELECT session_id, pr_url, pr_number, repo, source
        FROM session_prs
        ORDER BY session_id, pr_number, repo, pr_url`
     ).all() as PrRow[]
@@ -435,13 +435,20 @@ interface PrRow {
   pr_url: string;
   pr_number: number;
   repo: string;
+  source: string | null;
 }
 
 function groupPrs(rows: PrRow[]): Map<string, PrLink[]> {
   const map = new Map<string, PrLink[]>();
   for (const r of rows) {
     const list = map.get(r.session_id);
-    const link: PrLink = { url: r.pr_url, number: r.pr_number, repo: r.repo };
+    const link: PrLink = {
+      url: r.pr_url,
+      number: r.pr_number,
+      repo: r.repo,
+      // NULL = indexed before v22, which is NOT the same as "scraped".
+      source: (r.source as PrLink["source"]) ?? undefined,
+    };
     if (list) list.push(link);
     else map.set(r.session_id, [link]);
   }

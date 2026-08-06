@@ -192,10 +192,27 @@ export interface SessionHookRun {
  * from the session's git remote — a session may open PRs against a fork
  * or a sibling repo.
  */
+/** How Minder learned about a PR link. See {@link PrLink.source}. */
+export type PrLinkSource = "recorded" | "scraped";
+
 export interface PrLink {
   url: string;
   number: number;
   repo: string;
+  /**
+   * `recorded` — Claude Code wrote a `type:"pr-link"` entry. URL, number and
+   * repository are reported by the CLI rather than parsed out of anything.
+   *
+   * `scraped` — a PR URL matched by regex in a `gh pr create` tool result.
+   * Everything is inferred from command output, including `repo`, which is
+   * recovered from the URL itself. A scraped link can be a false positive in a
+   * way a recorded one cannot: `gh pr create` answering "a pull request for
+   * branch X already exists: <url>" reads exactly like a successful create.
+   *
+   * `undefined` on rows indexed before the column existed — which does **not**
+   * mean scraped.
+   */
+  source?: PrLinkSource;
 }
 
 /** Issue-tracker providers we can recognize from a verbatim URL. */

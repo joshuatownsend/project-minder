@@ -1,4 +1,4 @@
-// Last verified: schema version 21 (src/lib/db/schema.sql + migrations v1-v21)
+// Last verified: schema version 22 (src/lib/db/schema.sql + migrations v1-v22)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -135,7 +135,11 @@ export const SQL_SCHEMA: TableSchema[] = [
   },
   {
     table: "session_prs",
-    columns: ["session_id", "pr_url", "pr_number", "repo"],
+    columns: [
+      "session_id", "pr_url", "pr_number", "repo",
+      // v22 (A5)
+      "source",
+    ],
   },
   {
     table: "session_tickets",

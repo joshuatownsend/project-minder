@@ -8,6 +8,7 @@ import { SQL_SCHEMA } from "@/lib/sqlSchemaSnapshot";
 // isolated per-file state dir, where no DB exists — so the live check skips, as
 // it always intended to when there is nothing to check.
 import { DB_PATH } from "@/lib/db/connection";
+import { LATEST_MIGRATION_VERSION } from "@/lib/db/migrations";
 
 let driverAvailable = false;
 try {
@@ -75,7 +76,25 @@ function migratedDbPresent(): boolean {
     const db = new Database(DB_PATH, { readonly: true });
     try {
       const cols = db.prepare(`PRAGMA table_info("meta")`).all() as unknown[];
-      return cols.length > 0;
+      if (cols.length === 0) return false;
+      // ...and has it finished migrating to the version this checkout
+      // describes? The snapshot is a picture of the schema AFTER every
+      // migration in `migrations.ts`. A live DB one version behind is not a
+      // mismatch to report, it is a comparison that cannot be made yet —
+      // the same "nothing to test" the file-exists guard above already meant.
+      //
+      // Without this, every migration in this repo makes the check fail
+      // locally until the developer next opens the app, and that failure was
+      // documented as expected-and-ignorable (see the A1 note in the schema
+      // alignment plan). A gate that is expected to be red is not a gate: the
+      // next real mismatch would have been read as the same environmental
+      // noise and waved through.
+      const row = db
+        .prepare("SELECT value FROM meta WHERE key='schema_version'")
+        .get() as { value?: string } | undefined;
+      const live = Number(row?.value);
+      if (!Number.isFinite(live)) return false;
+      return live >= LATEST_MIGRATION_VERSION;
     } finally {
       db.close();
     }

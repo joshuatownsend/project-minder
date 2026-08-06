@@ -691,6 +691,13 @@ CREATE TABLE session_prs (
   pr_url       TEXT NOT NULL,
   pr_number    INTEGER NOT NULL,
   repo         TEXT NOT NULL,
+  -- A5: 'recorded' (a `type:"pr-link"` entry Claude Code wrote) or 'scraped'
+  -- (a URL regexed out of `gh pr create` output). NULL means the row predates
+  -- this column — NOT that it was scraped. Both sources are permanent: the
+  -- recorded entries find 86 URLs the regex misses, and the regex still finds
+  -- 5 the recorded entries miss, all from sessions that recorded their OTHER
+  -- PRs. See `prExtractor.ts`.
+  source       TEXT,
   PRIMARY KEY (session_id, pr_url),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;

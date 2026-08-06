@@ -254,16 +254,20 @@ export async function loadSessionDetailFromDb(
   // collisions. Matches the list-loader's identical sort in
   // sessionsListFromDb.ts so chip order is the same across both surfaces.
   const prRows = prepCached(db,
-      `SELECT pr_url, pr_number, repo
+      `SELECT pr_url, pr_number, repo, source
        FROM session_prs
        WHERE session_id = ?
        ORDER BY pr_number, repo, pr_url`
     )
-    .all(sessionId) as { pr_url: string; pr_number: number; repo: string }[];
+    .all(sessionId) as {
+      pr_url: string; pr_number: number; repo: string; source: string | null;
+    }[];
   const prs: PrLink[] = prRows.map((r) => ({
     url: r.pr_url,
     number: r.pr_number,
     repo: r.repo,
+    // NULL = indexed before v22, which is NOT the same as "scraped".
+    source: (r.source as PrLink["source"]) ?? undefined,
   }));
 
   // A1: permission-mode timeline and hook runs. Both are one-to-many and both
