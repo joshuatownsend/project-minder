@@ -68,14 +68,41 @@ describe("C1 — static meta parsing", () => {
     expect(meta.description).toContain("{this}");
   });
 
-  it("ignores a real comment before the meta block", () => {
+  it("ignores a commented-out meta block before the live one", () => {
+    // This assertion used to read `expect(["real", "decoy"]).toContain(...)`,
+    // which passes whichever way the parser goes — a test that documents a bug
+    // instead of catching it, and green while the catalog read a workflow's
+    // retired identity (Codex review, #389). The declaration is now located
+    // with comment and string state tracked, so only the live block wins.
     const src = `// export const meta = { name: "decoy" }\nexport const meta = {\n  name: "real",\n  description: "d",\n}`;
-    // The decoy is inside a comment, but it comes first in the file — this is
-    // the one case where the simple "find the declaration" approach could pick
-    // the wrong block. Documented as a known limitation rather than claimed
-    // fixed: the parser takes the first match.
     const meta = parseWorkflowMeta(src);
-    expect(["real", "decoy"]).toContain(meta.name);
+    expect(meta.name).toBe("real");
+    expect(meta.description).toBe("d");
+  });
+
+  it("ignores a block-commented meta declaration too", () => {
+    const src = [
+      "/*",
+      'export const meta = { name: "old-decoy", description: "stale" }',
+      "*/",
+      "export const meta = {",
+      '  name: "live",',
+      '  description: "current",',
+      "}",
+    ].join("\n");
+    const meta = parseWorkflowMeta(src);
+    expect(meta.name).toBe("live");
+    expect(meta.description).toBe("current");
+  });
+
+  it("does not mistake the phrase inside a string for a declaration", () => {
+    const src = [
+      'const doc = "export const meta = { name: \\"quoted\\" }";',
+      "export const meta = {",
+      '  name: "actual",',
+      "}",
+    ].join("\n");
+    expect(parseWorkflowMeta(src).name).toBe("actual");
   });
 
   it("fails soft when there is no meta block", () => {
@@ -261,6 +288,34 @@ describe("C1 — walking the session directories", () => {
     // usable entry.
     expect(entries).toHaveLength(1);
     expect(entries[0].runCount).toBe(1);
+  });
+});
+
+describe("C1 — metadata merge is deterministic", () => {
+  it("picks the same winner regardless of walk order when timestamps tie", async () => {
+    // Strict `>` never fired on a tie, so metadata stayed with whichever entry
+    // the concurrent walk inserted first while `runs` was sorted with a run-id
+    // tie-break — the detail view could pair runs[0] with another script's
+    // description (Codex review, #389).
+    const mod = await import("@/lib/indexer/walkWorkflows");
+    const make = (runId: string, description: string) => ({
+      id: "workflow:tied",
+      name: "tied",
+      description,
+      runs: [{ runId, timestamp: "2026-08-01T00:00:00Z", scriptPath: "p", projectDirName: "d", sessionId: "s" }],
+      runCount: 1,
+      lastRunAt: "2026-08-01T00:00:00Z",
+      projectDirNames: ["d"],
+      scriptExcerpt: description,
+      fileBytes: 1,
+    });
+
+    const forward = mod.__foldForTest([make("wf_aaa", "from-a"), make("wf_bbb", "from-b")]);
+    const reverse = mod.__foldForTest([make("wf_bbb", "from-b"), make("wf_aaa", "from-a")]);
+
+    expect(forward[0].description).toBe(reverse[0].description);
+    // The newest run id wins, matching how `runs` itself is ordered.
+    expect(forward[0].description).toBe("from-b");
   });
 });
 

@@ -31,6 +31,62 @@ export interface WorkflowMeta {
 }
 
 /**
+ * Positions that are ordinary code — not inside a string, line comment or block
+ * comment. One pass, so a caller can test any offset in constant time.
+ */
+function buildCodeMask(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  let i = 0;
+  let quote: string | null = null;
+  let escaped = false;
+
+  while (i < text.length) {
+    const ch = text[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; i++; continue; }
+    mask[i] = 1;
+    i++;
+  }
+  return mask;
+}
+
+/**
+ * The first *live* `export const meta = {` declaration.
+ *
+ * A bare regex over the raw file picks whichever declaration comes first in
+ * byte order, including one that has been commented out — so a script keeping
+ * its previous meta block above the current one was catalogued from the dead
+ * copy, under a name and description its author had replaced. Comment and
+ * string handling inside the block could not help: by then the wrong block had
+ * already been chosen (Codex review, #389).
+ */
+function findMetaDeclaration(text: string): RegExpExecArray | null {
+  const re = /export\s+const\s+meta\s*(?::\s*[A-Za-z_$][\w$]*\s*)?=\s*\{/g;
+  const inCode = buildCodeMask(text);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (inCode[m.index]) return m;
+  }
+  return null;
+}
+
+/**
  * Find the balanced `{…}` that follows `export const meta =`.
  *
  * Brace counting has to ignore braces inside strings and comments, or the first
@@ -38,7 +94,7 @@ export interface WorkflowMeta {
  * literal's source text, or null when there is no meta block to read.
  */
 function extractMetaSource(text: string): string | null {
-  const decl = /export\s+const\s+meta\s*(?::\s*[A-Za-z_$][\w$]*\s*)?=\s*\{/.exec(text);
+  const decl = findMetaDeclaration(text);
   if (!decl) return null;
 
   const start = decl.index + decl[0].length - 1; // position of the opening brace

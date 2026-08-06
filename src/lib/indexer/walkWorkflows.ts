@@ -291,6 +291,34 @@ async function walkOneProjectsDir(projectsDir: string): Promise<ClaudeWorkflowEn
  * arrive once per home. Both collapse here, so the catalog holds one row per id
  * rather than rows that look like duplicates.
  */
+/**
+ * Should `candidate`'s metadata replace `current`'s?
+ *
+ * A strict `>` on `lastRunAt` left ties and undated pairs to whichever entry
+ * the concurrent walk inserted first, so the same corpus could describe a
+ * workflow differently between runs — the determinism bug already fixed for run
+ * ORDER, still live for the metadata attached to it (Codex review, #389).
+ *
+ * Ties fall through to the newest run id, the same tie-break
+ * `sortRunsNewestFirst` uses, so `runs[0]` and the displayed script agree.
+ */
+function metadataWinner(
+  candidate: ClaudeWorkflowEntry,
+  current: ClaudeWorkflowEntry
+): boolean {
+  const a = candidate.lastRunAt;
+  const b = current.lastRunAt;
+  if (a && b) {
+    if (a !== b) return a > b;
+  } else if (a || b) {
+    return !!a; // A dated entry always beats an undated one.
+  }
+  // Equal timestamps, or neither dated: decide on the newest run id present.
+  const aId = candidate.runs[0]?.runId ?? "";
+  const bId = current.runs[0]?.runId ?? "";
+  return aId > bId;
+}
+
 function foldWorkflowEntries(entries: ClaudeWorkflowEntry[]): ClaudeWorkflowEntry[] {
   const byId = new Map<string, ClaudeWorkflowEntry>();
   for (const e of entries) {
@@ -299,13 +327,13 @@ function foldWorkflowEntries(entries: ClaudeWorkflowEntry[]): ClaudeWorkflowEntr
     existing.runs = [...existing.runs, ...e.runs].sort(sortRunsNewestFirst);
     existing.runCount += e.runCount;
     existing.projectDirNames = [...new Set([...existing.projectDirNames, ...e.projectDirNames])].sort();
-    if (e.lastRunAt && (!existing.lastRunAt || e.lastRunAt > existing.lastRunAt)) {
+    if (metadataWinner(e, existing)) {
       // Take EVERY version-dependent field from the winner, not just the
       // excerpt. Updating `scriptExcerpt` alone paired the newest script with
       // whichever entry the parallel walk happened to insert first — so the
       // detail view could show a new script beside a stale description
       // (Codex + Copilot review of #389).
-      existing.lastRunAt = e.lastRunAt;
+      existing.lastRunAt = e.lastRunAt ?? existing.lastRunAt;
       existing.scriptExcerpt = e.scriptExcerpt;
       existing.description = e.description;
       existing.whenToUse = e.whenToUse;
@@ -322,3 +350,7 @@ function foldWorkflowEntries(entries: ClaudeWorkflowEntry[]): ClaudeWorkflowEntr
     return a.name.localeCompare(b.name);
   });
 }
+
+/** Test-only handle on the id-merge step, which is otherwise unreachable
+ *  without a filesystem fixture for every ordering permutation. */
+export const __foldForTest = foldWorkflowEntries;
