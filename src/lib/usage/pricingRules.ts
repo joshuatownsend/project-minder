@@ -65,5 +65,27 @@ export function applyPricingOverlay(
       : 1;
     overlaid.cacheWrite1hCostPerToken = overlaid.cacheWriteCostPerToken * ratio;
   }
+  // Same argument for the >200k tier. A rule overriding the input price is
+  // saying "this is what input costs me"; carrying the provider's above-200k
+  // rate through unscaled would apply the override to sub-200k prompts only and
+  // leave long prompts at list price — and, once a rule undercuts list, produce
+  // the incoherent card where the "discounted" long rate exceeds the base one.
+  // Scale by the same ratio so the tier's shape survives the override.
+  //
+  // Reachable only since the fallback table started publishing tier rates for
+  // the Sonnet 4.5 lineage (#376): before that, no offline model had these
+  // fields, so the preservation added in #375 had nothing to preserve.
+  if (rule.inputUsdPerMillion !== undefined && base.inputCostPerTokenAbove200k !== undefined) {
+    const ratio = base.inputCostPerToken > 0
+      ? base.inputCostPerTokenAbove200k / base.inputCostPerToken
+      : 1;
+    overlaid.inputCostPerTokenAbove200k = overlaid.inputCostPerToken * ratio;
+  }
+  if (rule.outputUsdPerMillion !== undefined && base.outputCostPerTokenAbove200k !== undefined) {
+    const ratio = base.outputCostPerToken > 0
+      ? base.outputCostPerTokenAbove200k / base.outputCostPerToken
+      : 1;
+    overlaid.outputCostPerTokenAbove200k = overlaid.outputCostPerToken * ratio;
+  }
   return overlaid;
 }

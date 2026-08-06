@@ -98,10 +98,33 @@ describe("applyPricingOverlay", () => {
       outputCostPerTokenAbove200k: 0.0000225,
     };
 
-    it("preserves the >200k tiered rates through an overlay", () => {
-      const rule: PricingRule = { pattern: "*", inputUsdPerMillion: 10 };
+    it("carries the >200k tiered rates through an overlay that does not touch them", () => {
+      // The #375 regression proper: a rule expressing only a cache-read price
+      // must not wipe rates it has no opinion about.
+      const rule: PricingRule = { pattern: "*", cacheReadUsdPerMillion: 0.5 };
       const result = applyPricingOverlay(TIERED, rule);
       expect(result.inputCostPerTokenAbove200k).toBe(TIERED.inputCostPerTokenAbove200k);
+      expect(result.outputCostPerTokenAbove200k).toBe(TIERED.outputCostPerTokenAbove200k);
+    });
+
+    it("scales the >200k input rate with an input override, keeping the tier's shape", () => {
+      // Supersedes the original "preserve verbatim" assertion from #375. That
+      // fixed the rates being DROPPED, which was the live bug; preserving them
+      // unchanged is wrong for a different reason. A rule setting $10/MTok on a
+      // $3/MTok model is saying "input costs me $10" — leaving the above-200k
+      // rate at the provider's $6 would apply the override to short prompts
+      // only, and leave the "override" costing less above 200k than below it.
+      //
+      // Same argument the 1-hour cache-write branch already makes. It only
+      // became reachable when #376 gave the fallback table its first model with
+      // tiered rates.
+      const rule: PricingRule = { pattern: "*", inputUsdPerMillion: 10 };
+      const result = applyPricingOverlay(TIERED, rule);
+      expect(result.inputCostPerToken).toBeCloseTo(0.00001, 12);
+      // 2x the base rate before the override; 2x after it.
+      expect(result.inputCostPerTokenAbove200k).toBeCloseTo(0.00002, 12);
+      expect(result.inputCostPerTokenAbove200k!).toBeGreaterThan(result.inputCostPerToken);
+      // Untouched by an input-only rule.
       expect(result.outputCostPerTokenAbove200k).toBe(TIERED.outputCostPerTokenAbove200k);
     });
 
