@@ -247,10 +247,25 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
     expect(skills.find((s) => s.slug === "yes-skill")?.userInvocable).toBe(true);
   });
 
-  it("still treats an absent flag as not invocable", async () => {
+  it("treats an absent flag as invocable, which is Claude Code's default", async () => {
+    // This test previously asserted the opposite and was pinning a bug. The
+    // skills reference is explicit: "By default, both users and Claude can
+    // invoke any skill", and `user-invocable: false` is what HIDES a skill from
+    // the `/` menu. Minder's `?? false` inverted that, so every skill silent on
+    // the key was withheld from the launcher chips (Codex review, #384).
+    //
+    // A test agreeing with the implementation is not evidence the
+    // implementation is right — both were written from the same wrong
+    // assumption.
     await writeSkill("quiet-skill", "description: nothing declared");
     const skills = await walkUserSkills(ctx);
-    expect(skills.find((s) => s.slug === "quiet-skill")?.userInvocable).toBe(false);
+    expect(skills.find((s) => s.slug === "quiet-skill")?.userInvocable).toBe(true);
+  });
+
+  it("still honours an explicit `user-invocable: false`", async () => {
+    await writeSkill("hidden-skill", "user-invocable: false");
+    const skills = await walkUserSkills(ctx);
+    expect(skills.find((s) => s.slug === "hidden-skill")?.userInvocable).toBe(false);
   });
 
   it("captures the 2.1.218 keys, including `on` as a boolean", async () => {
@@ -358,6 +373,42 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
     const helpers = skills.filter((s) => s.name.endsWith("-helper"));
     expect(helpers).toHaveLength(2);
     expect(new Set(helpers.map((s) => s.id)).size).toBe(2);
+  });
+
+  it("dedupes a symlinked skill reached through two roots", async () => {
+    // `skills/foo -> ../extra/foo` with `extra` also declared: two lexical
+    // paths, one real file. Keying the dedupe on filePath kept both and the
+    // catalog showed duplicate rows with inflated counts. The walker already
+    // records the canonical target as realPath (Codex review, #384).
+    const pluginPath = path.join(tmpHome, "plugins", "symlink-plugin");
+    await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ skills: ["./extra"] })
+    );
+    await fs.mkdir(path.join(pluginPath, "extra", "foo"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginPath, "extra", "foo", "SKILL.md"),
+      "---\nname: linked-skill\n---\n\nBody."
+    );
+    await fs.mkdir(path.join(pluginPath, "skills"), { recursive: true });
+    try {
+      await fs.symlink(
+        path.join(pluginPath, "extra", "foo"),
+        path.join(pluginPath, "skills", "foo"),
+        "junction"
+      );
+    } catch {
+      return; // No symlink privilege on this machine — nothing to assert.
+    }
+
+    const pluginCtx = {
+      ...ctx,
+      installedPlugins: [{ pluginName: "symlink-plugin", installPath: pluginPath }],
+    } as unknown as ProvenanceContext;
+
+    const skills = await walkPluginSkills(pluginCtx);
+    expect(skills.filter((s) => s.name === "linked-skill")).toHaveLength(1);
   });
 
   it("leaves ids alone when there is no collision", async () => {

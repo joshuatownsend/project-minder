@@ -39,13 +39,24 @@ function makeSkillEntry(
       ? `skill:${source}:${prefix}:bundled:${slug}`
       : `skill:${source}:${prefix}:${slug}`;
 
-  // `?? false` keeps the previous default for a skill that says nothing, while
-  // `coerceFrontmatterBoolean` finally honours the `yes`/`on`/`1` spellings
-  // Claude Code accepts. The camelCase alias stays supported.
+  // Defaults to TRUE, matching Claude Code: "By default, both users and Claude
+  // can invoke any skill", and `user-invocable: false` is what *hides* a skill
+  // from the `/` menu.
+  //
+  // Minder defaulted this to `false` and so inverted the documented behaviour
+  // (Codex review of #384, confirmed against the skills reference). It was not
+  // a cosmetic slip: `selectSkillChips` filters on `userInvocable === true`, so
+  // every skill that simply did not mention the key — the overwhelming majority
+  // — was withheld from the workflow-launcher chips, and the catalog reported
+  // it as not user-invocable when Claude Code would happily run it as a slash
+  // command.
+  //
+  // `coerceFrontmatterBoolean` honours the `yes`/`on`/`1` spellings Claude Code
+  // accepts. The camelCase alias stays supported.
   const userInvocable =
     coerceFrontmatterBoolean(fm["user-invocable"]) ??
     coerceFrontmatterBoolean(fm.userInvocable) ??
-    false;
+    true;
 
   // 2.1.218 frontmatter. `disable-model-invocation` is the one that changes how
   // a skill can be reached — it stays available as a slash command but Claude
@@ -272,7 +283,11 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
   // different plugins.
   const seenFiles = new Set<string>();
   const unique = all.filter(({ entry }) => {
-    const key = path.resolve(entry.filePath);
+    // `realPath` when the walk followed a symlink, so `skills/foo ->
+    // ../extra/foo` with `extra` also declared as a root resolves to ONE file
+    // rather than two lexically different paths. The walker already records the
+    // canonical target; this dedupe was ignoring it (Codex review, #384).
+    const key = path.resolve(entry.realPath ?? entry.filePath);
     if (seenFiles.has(key)) return false;
     seenFiles.add(key);
     return true;

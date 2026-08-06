@@ -145,9 +145,11 @@ function SkillRowItem({
               // Unless the skill is not user-invocable either — then both doors
               // are shut and "manual only ... type it as a slash command" is
               // advice for a command that does nothing (Codex review, #384).
-              // Note `userInvocable` defaults to FALSE when the frontmatter is
-              // silent, so this reads the effective capability rather than
-              // whether the author wrote the key.
+              // `userInvocable` defaults to TRUE (Claude Code's documented
+              // default), so this state is reached only when the author
+              // explicitly set `user-invocable: false` alongside
+              // `disable-model-invocation: true` — genuinely nothing can start
+              // it, rather than merely "the key was omitted".
               <span
                 title={
                   row.entry?.userInvocable
