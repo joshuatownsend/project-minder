@@ -2,6 +2,17 @@ import { GitInfo } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
 import { GitBranch, Clock, AlertCircle } from "lucide-react";
 
+/**
+ * One source for the "not confirmed clean" caveat, used by both variants.
+ *
+ * #380's highest-stakes case: a failed `git status` renders where a dirty count
+ * would be, so a reader who cannot reach the tooltip sees no uncommitted files
+ * and concludes the repo is clean. The failure is indistinguishable from
+ * success, which is why it must be readable without a mouse.
+ */
+const GIT_STATUS_UNKNOWN_EXPLANATION =
+  "git status check failed (index.lock, timeout, or git missing) — this is not a confirmed-clean repo";
+
 export function GitStatus({ git }: { git: GitInfo }) {
   return (
     <div className="space-y-2 text-sm">
@@ -15,19 +26,13 @@ export function GitStatus({ git }: { git: GitInfo }) {
           </span>
         )}
         {!git.isDirty && git.unknown && (
-          // #380: the highest-stakes tooltip in the app. "status unavailable"
-          // sits where "N uncommitted" would be, so a reader who cannot reach
-          // the tooltip sees no dirty count and concludes the repo is clean —
-          // the failure is indistinguishable from success. The caveat has to be
-          // readable without a mouse.
+          // See GIT_STATUS_UNKNOWN_EXPLANATION above for why this one matters.
           <span
             className="flex items-center gap-1 text-[var(--muted-foreground)]"
-            title="git status check failed (index.lock, timeout, or git missing) — not a confirmed-clean repo"
+            title={GIT_STATUS_UNKNOWN_EXPLANATION}
           >
             <AlertCircle className="h-3 w-3" aria-hidden="true" />
-            <span className="sr-only">
-              git status check failed (index.lock, timeout, or git missing) — this is not a confirmed-clean repo
-            </span>
+            <span className="sr-only">{GIT_STATUS_UNKNOWN_EXPLANATION}</span>
             <span aria-hidden="true">status unavailable</span>
           </span>
         )}
@@ -87,8 +92,16 @@ export function GitStatusCompact({ git }: { git: GitInfo }) {
         </span>
       )}
       {!git.isDirty && git.unknown && (
+        // THIS is the variant that ships. `ProjectCard` and `ProjectDetail`
+        // both render `GitStatusCompact`; nothing in the app renders
+        // `GitStatus`. The #380 fix went into the unrendered one, so for every
+        // real flow a screen-reader user still got a bare "?" — the caveat was
+        // repaired in a component no user reaches (Codex review, #390).
+        //
+        // And "?" is worse than "status unavailable": it carries no meaning at
+        // all without the tooltip.
         <span
-          title="git status unavailable (check failed) — not confirmed clean"
+          title={GIT_STATUS_UNKNOWN_EXPLANATION}
           style={{
             fontFamily: "var(--font-mono)",
             fontWeight: 600,
@@ -96,7 +109,8 @@ export function GitStatusCompact({ git }: { git: GitInfo }) {
             fontSize: "0.68rem",
           }}
         >
-          ?
+          <span className="sr-only">{GIT_STATUS_UNKNOWN_EXPLANATION}</span>
+          <span aria-hidden="true">?</span>
         </span>
       )}
       {git.lastCommitDate && (

@@ -88,7 +88,11 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // The highest-stakes one: "status unavailable" sits where "N uncommitted"
     // would be, so a reader who cannot reach the tooltip sees no dirty count
     // and concludes the repo is clean. The failure looks like success.
-    expect(hasAccessiblePair(src, "git status check failed", 900)).toBe(true);
+    //
+    // Anchored on the call site, not the message text: the explanation is now a
+    // shared constant declared at the top of the file, so matching the literal
+    // found the declaration and looked at the wrong 900 characters.
+    expect(hasAccessiblePair(src, "title={GIT_STATUS_UNKNOWN_EXPLANATION}", 900)).toBe(true);
   });
 
   it("the effort mix explains why it does not sum to the turn count", async () => {
@@ -110,6 +114,35 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // helper now lives at the top of the file, far from the chip it feeds.
     expect(hasAccessiblePair(src, "title={attributedCostExplanation(")).toBe(true);
     expect(hasAccessiblePair(src, "explicit Skill invocation")).toBe(true);
+  });
+
+  it("fixes the Git status variant the app actually renders", async () => {
+    // The original #380 fix went into `GitStatus`, which nothing renders:
+    // ProjectCard and ProjectDetail both import `GitStatusCompact`. A
+    // screen-reader user in every real flow still got a bare "?" (Codex
+    // review, #390).
+    //
+    // Pinned two ways, because the source-level check alone is what missed it:
+    // the compact variant must carry the explanation, AND the components that
+    // render Git status must be the variant that has it.
+    const src = await read("GitStatus.tsx");
+    const compactStart = src.indexOf("export function GitStatusCompact");
+    expect(compactStart).toBeGreaterThan(-1);
+    const compact = src.slice(compactStart);
+    expect(compact).toMatch(/className="sr-only"/);
+    expect(compact).toContain("GIT_STATUS_UNKNOWN_EXPLANATION");
+
+    for (const consumer of ["ProjectCard.tsx", "ProjectDetail.tsx"]) {
+      const c = await read(consumer);
+      const rendered = /<GitStatus(Compact)?\b/.exec(c);
+      if (!rendered) continue;
+      const variant = rendered[1] ? "GitStatusCompact" : "GitStatus";
+      const variantStart = src.indexOf(`export function ${variant}`);
+      const variantEnd = src.indexOf("\nexport function ", variantStart + 1);
+      const body = src.slice(variantStart, variantEnd === -1 ? undefined : variantEnd);
+      expect(body, `${consumer} renders ${variant}, which must carry the caveat`)
+        .toMatch(/className="sr-only"/);
+    }
   });
 
   it("announces the cache-hit value, not just its definition", async () => {
