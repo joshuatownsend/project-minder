@@ -23,6 +23,39 @@ import { HOOK_EVENT_NAMES, type HookEventName } from "@/lib/types";
 // event this route would reject.
 const VALID_EVENTS = new Set<string>(HOOK_EVENT_NAMES);
 
+/**
+ * Events that prove the turn actually advanced, and therefore that a pending
+ * permission prompt was answered.
+ *
+ * This used to be "anything that isn't a Notification", which was true while
+ * Minder accepted only nine events — every one of them sat in the main turn
+ * loop. Widening the accepted set to all 31 broke that premise: `FileChanged`,
+ * `TeammateIdle`, `TaskCompleted`, `ConfigChange`, `CwdChanged` and
+ * `InstructionsLoaded` are passive or asynchronous and can arrive while a
+ * *different* task in the same project is still showing a permission prompt.
+ * The project would then vanish from the awaiting UI with the prompt still on
+ * screen (Codex review, #384).
+ *
+ * Deliberately an allowlist rather than a denylist of the passive ones: a new
+ * event added upstream should default to "does not clear", because failing to
+ * clear self-corrects on the next real turn event, while clearing wrongly hides
+ * a prompt that is genuinely waiting for the user.
+ */
+const RESPONSE_EVENTS = new Set<string>([
+  "UserPromptSubmit",
+  "UserPromptExpansion",
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PostToolBatch",
+  "Stop",
+  "StopFailure",
+  "SubagentStop",
+  "PreCompact",
+  "SessionStart",
+  "SessionEnd",
+]);
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Check feature flag before parsing the body
   let config;
@@ -120,8 +153,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           console.warn("[hooks] dispatch failed:", err);
         });
       }
-    } else {
-      // Any non-Notification event clears the awaiting state (user responded)
+    } else if (RESPONSE_EVENTS.has(eventName)) {
       clearAwaiting(slug);
     }
   }

@@ -162,15 +162,31 @@ describe("C4 — plugin skills path resolution", () => {
 
   it('resolves "." to the plugin root', async () => {
     await writeManifest(".");
-    expect(await resolvePluginSkillsRoots(tmp)).toEqual([path.resolve(tmp)]);
+    // Additive: the plugin root joins the conventional `skills/` dir.
+    expect(await resolvePluginSkillsRoots(tmp)).toEqual([
+      path.resolve(tmp, "skills"),
+      path.resolve(tmp),
+    ]);
   });
 
   it("accepts an array of paths", async () => {
     await writeManifest(["skills", "extra/skills"]);
+    // `skills` is declared AND implicit — deduped to one entry.
     expect(await resolvePluginSkillsRoots(tmp)).toEqual([
       path.resolve(tmp, "skills"),
       path.resolve(tmp, "extra/skills"),
     ]);
+  });
+
+  it("keeps the default skills/ root when custom paths are declared", async () => {
+    // Codex review of #384: replacing the default was a regression. A plugin
+    // with both `skills/foo/SKILL.md` and a declared `extra` path would have
+    // had its standard skills silently dropped — skills the walk listed
+    // correctly before this feature existed.
+    await writeManifest("extra");
+    const roots = await resolvePluginSkillsRoots(tmp);
+    expect(roots).toContain(path.resolve(tmp, "skills"));
+    expect(roots).toContain(path.resolve(tmp, "extra"));
   });
 
   it("refuses a path that escapes the plugin directory", async () => {
