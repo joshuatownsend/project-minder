@@ -60,6 +60,25 @@ split to read, and their cache writes are priced entirely at the 5-minute rate.
 A **Cache Write $/M** override sets the 5-minute rate and scales the 1-hour rate
 by the same proportion, preserving the 1.6× relationship between them.
 
+### Long-context (>200K) pricing
+
+A few Claude models charge a premium for prompts over 200,000 tokens. Where that
+tier exists, the **whole request** — input *and* output — is billed at the higher
+rate, not just the tokens past the boundary. Minder selects the tier per request,
+so a session of many ordinary turns is never billed long-context just because its
+turns add up to more than 200K.
+
+**A 1M context window does not imply a long-context surcharge.** Anthropic's
+pricing page states that Claude 4.6 and later include the full 1M window at
+standard pricing, so Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6 and Fable 5 are
+billed flat no matter how long the prompt gets. The surcharge is real only for
+the Sonnet 3.5–4.5 lineage, whose 1M window shipped as a priced beta at 2× input
+and 1.5× output.
+
+An **Input $/M** or **Output $/M** override scales the matching above-200K rate by
+the same proportion, so the tier keeps its shape rather than leaving long prompts
+at the provider's list price.
+
 ### Important notes
 
 - Rule changes apply to **new session ingest immediately** — no restart required.

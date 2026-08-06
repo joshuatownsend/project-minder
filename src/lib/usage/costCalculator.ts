@@ -22,6 +22,28 @@ import { resolveStateDir } from "@/lib/serverRoot";
 // introductory $2/$10 that runs through 2026-08-31. The intro rate would be
 // more accurate for a few more weeks and then wrong forever; LiteLLM tracks the
 // live rate on the online path, so the durable number belongs here.
+//
+// ── The >200k tier: absent ON PURPOSE from every entry but `claude-sonnet-4` ──
+//
+// Do NOT "fix" the other entries by adding `inputCostPerTokenAbove200k` /
+// `outputCostPerTokenAbove200k`. Their absence is an assertion, not an
+// oversight. Anthropic's pricing page (checked 2026-08-06) states it directly:
+//
+//   "Claude 4.6 and later models and Claude Mythos Preview include the full
+//    1M token context window at standard pricing. (A 900k-token request is
+//    billed at the same per-token rate as a 9k-token request.)"
+//
+// So Opus 5/4.8/4.7/4.6, Sonnet 5/4.6 and Fable 5 have a 1M window and NO
+// surcharge; adding one would over-report every long turn. The tier is real
+// only for the Sonnet 3.5→4.5 lineage, whose 1M window shipped as a priced
+// beta. LiteLLM agrees: `claude-sonnet-4-5` publishes above-200k rates while
+// `claude-sonnet-4-6` and `claude-sonnet-5` do not.
+//
+// This is why issue #376 — "the fallback publishes no above-200k rates, so the
+// tier never applies" — was right about the symptom and wrong about the fix.
+// Its proposed remedy (add tiers to every model with a 1M window) would have
+// turned a safe under-report into an over-report on the models actually in use.
+// A 1M context window does not imply a long-context surcharge.
 const FALLBACK_PRICING: Record<string, ModelPricing> = {
   // Fable / Mythos tier — $10 / $50
   "claude-fable-5": {
@@ -49,13 +71,28 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
     cacheWrite1hCostPerToken: 0.00003,
     cacheReadCostPerToken: 0.0000015,
   },
-  // Every Sonnet generation from 3.5 through 5 — $3 / $15
+  // Sonnet 4.6 and 5 — $3 / $15, flat across the full 1M window. Split from the
+  // `claude-sonnet-4` entry below, which carries identical base rates: the two
+  // differ ONLY in whether the long-context tier exists. See the tier note above.
+  "claude-sonnet-5": {
+    inputCostPerToken: 0.000003,
+    outputCostPerToken: 0.000015,
+    cacheWriteCostPerToken: 0.00000375,
+    cacheWrite1hCostPerToken: 0.000006,
+    cacheReadCostPerToken: 0.0000003,
+  },
+  // Sonnet 3.5 / 3.7 / 4 / 4.5 — $3 / $15 base, and the ONLY Claude models in
+  // this table with a real >200k tier: their 1M window shipped as a beta opt-in
+  // priced at 2x input / 1.5x output ($6 / $22.50). Matches LiteLLM's own
+  // `claude-sonnet-4-5` entry exactly.
   "claude-sonnet-4": {
     inputCostPerToken: 0.000003,
     outputCostPerToken: 0.000015,
     cacheWriteCostPerToken: 0.00000375,
     cacheWrite1hCostPerToken: 0.000006,
     cacheReadCostPerToken: 0.0000003,
+    inputCostPerTokenAbove200k: 0.000006,
+    outputCostPerTokenAbove200k: 0.0000225,
   },
   "claude-haiku-4-5": {
     inputCostPerToken: 0.000001,
@@ -99,14 +136,25 @@ const CLAUDE_FAMILY_MATCHERS: ReadonlyArray<readonly [string, string]> = [
   ["opus-4-1", "claude-opus-4"],
   ["3-opus", "claude-opus-4"],
   ["opus-4", "claude-opus-4"],
-  // Sonnet — one price across 3.5 → 5, so every id lands on the same entry.
-  ["sonnet", "claude-sonnet-4"],
+  // Sonnet — one BASE price across 3.5 → 5, but the long-context tier splits
+  // the family on the same 4.6 boundary the pricing page draws: 4.6 and later
+  // are flat across the full 1M window, 4.5 and earlier carry the priced-beta
+  // surcharge. Generation-qualified ids therefore have to resolve before the
+  // bare `sonnet` catch-all, exactly as Opus does above — and `sonnet-4-6`
+  // before `sonnet-4`, since the former contains the latter.
+  ["sonnet-5", "claude-sonnet-5"],
+  ["sonnet-4-6", "claude-sonnet-5"],
+  ["sonnet-4-5", "claude-sonnet-4"],
+  ["sonnet-4", "claude-sonnet-4"],
+  ["3-7-sonnet", "claude-sonnet-4"],
+  ["3-5-sonnet", "claude-sonnet-4"],
   // Haiku.
   ["haiku-4-5", "claude-haiku-4-5"],
   ["3-5-haiku", "claude-haiku-3.5"],
   ["haiku-3", "claude-haiku-3.5"],
   // Unversioned or future ids inherit the newest known rates for their family.
   ["opus", "claude-opus-5"],
+  ["sonnet", "claude-sonnet-5"],
   ["haiku", "claude-haiku-4-5"],
   ["fable", "claude-fable-5"],
 ];
@@ -316,7 +364,18 @@ export function getModelPricing(model: string): ModelPricing {
       // attribution) to `getModelPricing("")` and documents it as the Sonnet
       // estimate (`claudeConversations.ts` computeCostFromPerModel / cache-hit
       // accumulation). So `""` is a Claude sentinel — keep Sonnet, never $0.
-      base = map.get("claude-sonnet-4") ?? FALLBACK_PRICING["claude-sonnet-4"];
+      //
+      // Resolves to the FLAT `claude-sonnet-5` entry, not the tiered
+      // `claude-sonnet-4` one, for two reasons. First, an unrecognized id should
+      // inherit the newest known rates, same principle as the trailing matchers
+      // above. Second — and this is the load-bearing one — the `""` sentinel
+      // prices an AGGREGATE bucket summed over many turns. Give that bucket a
+      // model that publishes a >200k tier and any caller reaching `tier:"auto"`
+      // reads the summed input as one enormous prompt and bills the whole bucket
+      // long-context. That is the precise regression the base/long bucket split
+      // in `computeCostFromPerModel` was added to fix; pointing this default at a
+      // tiered entry would re-arm it from the other side.
+      base = map.get("claude-sonnet-5") ?? FALLBACK_PRICING["claude-sonnet-5"];
     } else {
       // 5b. Unknown NON-Claude model. Pricing is genuinely unknown — return
       // zero rather than silently billing it at Claude Sonnet rates. A visible
@@ -441,9 +500,18 @@ export function applyPricing(
   const publishesLongRates =
     pricing.inputCostPerTokenAbove200k !== undefined ||
     pricing.outputCostPerTokenAbove200k !== undefined;
+  // The tier is chosen by the size of the REQUEST'S PROMPT, and cached tokens
+  // are part of that prompt. Claude Code reports new uncached input separately
+  // from `cache_read_input_tokens`, so a real 225k-token request that hit the
+  // cache arrives as ~5k input + ~220k cache read — and testing `inputTokens`
+  // alone would never trip the tier on exactly the requests it exists for.
+  // `contextAttribution.ts` already treats the same sum as the request's
+  // context; this makes the pricing path agree with it.
+  const promptTokens =
+    tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
   const longContext =
     publishesLongRates &&
-    (tier === "long" || (tier === "auto" && tokens.inputTokens > TIER_BOUNDARY));
+    (tier === "long" || (tier === "auto" && promptTokens > TIER_BOUNDARY));
 
   const inputRate =
     longContext && pricing.inputCostPerTokenAbove200k !== undefined
