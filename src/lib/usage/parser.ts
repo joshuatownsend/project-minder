@@ -176,6 +176,10 @@ export async function parseSessionTurns(
   // A3: the most recent user prompt text, threaded onto following assistant
   // turns as `userIntentText` so intent-based categories can attribute their cost.
   let prevUserText: string | undefined;
+  // A3 session-scoped metadata, latched during the walk (see the attachment
+  // branch below) and stamped onto every turn once the file is fully read.
+  let sessionEntrypoint: string | undefined;
+  let sessionKindValue: string | undefined;
   // A6: dedup assistant usage by message.id (fallback requestId) within a
   // session. Claude Code can re-log a message (retry / resumed-session re-emit);
   // summing every line would double-count tokens/cost. Only guards ids that are
@@ -191,6 +195,22 @@ export async function parseSessionTurns(
       entry = JSON.parse(trimmed);
     } catch {
       continue;
+    }
+
+    // A3: `entrypoint` / `sessionKind` are session-scoped and ride
+    // `attachment` entries, which are not turns — so they must be read BEFORE
+    // the skip guards below, exactly as the DB ingest path does. Every one of
+    // 3,685 corpus sessions carries `entrypoint` on an attachment, so this is
+    // the load-bearing carrier, not a fallback. Latched first-non-empty and
+    // stamped onto the turns after the loop, because an attachment can appear
+    // after the turns it describes.
+    if (entry.type === "attachment") {
+      if (!sessionEntrypoint && typeof (entry as any).entrypoint === "string" && (entry as any).entrypoint) {
+        sessionEntrypoint = (entry as any).entrypoint;
+      }
+      if (!sessionKindValue && typeof (entry as any).sessionKind === "string" && (entry as any).sessionKind) {
+        sessionKindValue = (entry as any).sessionKind;
+      }
     }
 
     // Skip internal entries
@@ -325,6 +345,16 @@ export async function parseSessionTurns(
     }
   }
 
+  // Denormalize the session-constant values onto each turn. The aggregator
+  // works over a flat turn list with no session-level side table, so carrying
+  // them here is what lets the file backend produce `byEntrypoint` at all.
+  if (sessionEntrypoint || sessionKindValue) {
+    for (const t of turns) {
+      if (sessionEntrypoint) t.entrypoint = sessionEntrypoint;
+      if (sessionKindValue) t.sessionKind = sessionKindValue;
+    }
+  }
+
   return turns;
 }
 
@@ -385,6 +415,10 @@ export async function parseSessionTurnsWithMeta(
   }
   let prevUserTimestampMeta: string | null = null;
   let prevUserTextMeta: string | undefined;
+  // A3 session-scoped metadata, latched during the walk (see the attachment
+  // branch below) and stamped onto every turn once the file is fully read.
+  let sessionEntrypoint: string | undefined;
+  let sessionKindValue: string | undefined;
   const seenMessageIdsMeta = new Set<string>();
 
   for (const line of raw.split("\n")) {
@@ -415,6 +449,22 @@ export async function parseSessionTurnsWithMeta(
         turns[lastAssistantTurnIdx].turnDurationMs = (entry as any).duration;
       }
       continue;
+    }
+
+    // A3: `entrypoint` / `sessionKind` are session-scoped and ride
+    // `attachment` entries, which are not turns — so they must be read BEFORE
+    // the skip guards below, exactly as the DB ingest path does. Every one of
+    // 3,685 corpus sessions carries `entrypoint` on an attachment, so this is
+    // the load-bearing carrier, not a fallback. Latched first-non-empty and
+    // stamped onto the turns after the loop, because an attachment can appear
+    // after the turns it describes.
+    if (entry.type === "attachment") {
+      if (!sessionEntrypoint && typeof (entry as any).entrypoint === "string" && (entry as any).entrypoint) {
+        sessionEntrypoint = (entry as any).entrypoint;
+      }
+      if (!sessionKindValue && typeof (entry as any).sessionKind === "string" && (entry as any).sessionKind) {
+        sessionKindValue = (entry as any).sessionKind;
+      }
     }
 
     if (entry.isSidechain && !options.includeSidechains) continue;
@@ -550,6 +600,16 @@ export async function parseSessionTurnsWithMeta(
 
   const cliVersion = mostFrequent(versionCounts);
 
+  // Denormalize the session-constant values onto each turn. The aggregator
+  // works over a flat turn list with no session-level side table, so carrying
+  // them here is what lets the file backend produce `byEntrypoint` at all.
+  if (sessionEntrypoint || sessionKindValue) {
+    for (const t of turns) {
+      if (sessionEntrypoint) t.entrypoint = sessionEntrypoint;
+      if (sessionKindValue) t.sessionKind = sessionKindValue;
+    }
+  }
+
   return { turns, meta: { compactBoundaries, cliVersion, hasThinking } };
 }
 
@@ -590,16 +650,49 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
     await Promise.all(
       batch.map(async ({ home, dirName }) => {
         const dirPath = path.join(home, "projects", dirName);
-        let files: string[];
+        const filePaths: string[] = [];
         try {
-          const entries = await fs.readdir(dirPath);
-          files = entries.filter((f) => f.endsWith(".jsonl"));
+          const entries = await fs.readdir(dirPath, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isFile() && e.name.endsWith(".jsonl")) {
+              filePaths.push(path.join(dirPath, e.name));
+            }
+          }
+
+          // Newer Claude Code writes subagent transcripts to
+          // `<project>/<session-id>/subagents/agent-*.jsonl` instead of
+          // inlining sidechain entries in the parent file. The SQLite
+          // reconciler walks one level down for exactly this; this reader did
+          // not, so on the file backend every one of those sessions — and its
+          // turns, tokens and cost — was simply absent.
+          //
+          // That is a whole-report divergence, not an A3 one: totals,
+          // byModel, byProject, byCategory and byEffort were all short by the
+          // same population. It surfaced through `byEntrypoint` only because
+          // subagent transcripts inherit their parent's entrypoint and are
+          // overwhelmingly `cli`, which made the shortfall legible as a
+          // lopsided bucket rather than a slightly small number (Codex review,
+          // PR #381).
+          //
+          // Attributed to the PROJECT dir name, not "subagents", matching the
+          // reconciler. Session id is the file's own basename, so a subagent
+          // transcript is its own session on both backends.
+          for (const e of entries) {
+            if (!e.isDirectory()) continue;
+            const subagentsDir = path.join(dirPath, e.name, "subagents");
+            try {
+              for (const f of await fs.readdir(subagentsDir)) {
+                if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
+              }
+            } catch {
+              /* no subagents dir for this session — the common case */
+            }
+          }
         } catch {
           return;
         }
 
-        for (const file of files) {
-          const filePath = path.join(dirPath, file);
+        for (const filePath of filePaths) {
           liveSet.add(filePath);
 
           // FileCache stat's the file, returns the cached parse if mtime+size
@@ -627,7 +720,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
           });
 
           if (turns && turns.length > 0) {
-            const sessionId = path.basename(file, ".jsonl");
+            const sessionId = path.basename(filePath, ".jsonl");
             result.set(sessionId, turns);
           }
         }

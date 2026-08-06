@@ -7,6 +7,7 @@ import type {
   CategoryBreakdown,
   CategoryType,
   EffortBreakdown,
+  EntrypointBreakdown,
   DailyBucket,
   ProjectDetail,
   McpServerStats,
@@ -19,6 +20,11 @@ import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { periodSinceIso } from "@/lib/usage/period";
 import { UNKNOWN_EFFORT, compareEffort } from "@/lib/usage/effort";
+import {
+  UNKNOWN_ENTRYPOINT,
+  BACKGROUND_SESSION_KIND,
+  compareEntrypoint,
+} from "@/lib/usage/entrypoint";
 import { groupByBinary } from "@/lib/usage/shellParser";
 import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
@@ -126,6 +132,7 @@ export function loadUsageReportFromSql(
   const byProject = queryByProject(db, filter);
   const byCategory = queryByCategory(db, filter);
   const byEffort = queryByEffort(db, filter);
+  const byEntrypoint = queryByEntrypoint(db, filter);
   const daily = queryDaily(db, filter);
   const topTools = queryTopTools(db, filter);
   const mcpStats = queryMcpStats(db, filter);
@@ -165,6 +172,7 @@ export function loadUsageReportFromSql(
     byProject,
     byCategory,
     byEffort,
+    byEntrypoint,
     topTools,
     toolTransitions: [],
     toolSelfLoops: [],
@@ -446,6 +454,68 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
         : {}),
     }))
     .sort((a, b) => compareEffort(a.effort, b.effort));
+}
+
+/**
+ * A3: spend and volume by session entrypoint.
+ *
+ * Session-scoped where the other breakdowns are turn-scoped, which forces two
+ * choices worth stating:
+ *
+ *  - **`COUNT(DISTINCT t.session_id)`, not `COUNT(*)`.** `entrypoint` lives on
+ *    `sessions`, so grouping turns by it would report turn counts under a
+ *    session-shaped label.
+ *  - **Only sessions with an assistant turn in the period are counted**, the
+ *    same rows the cost sums over. A session is attributed to the period it
+ *    *spent* in, so one straddling a boundary contributes its in-period turns
+ *    to that period rather than its lifetime total. Consequence: this column
+ *    need not sum to `report.totalSessions`, which counts every session with
+ *    any turn at all. The file backend applies the identical rule.
+ *
+ * `NULLIF(..., '')` mirrors `entrypointBucket`'s treatment of empty string.
+ * The equivalent asymmetry in the effort code shipped as a real backend
+ * divergence — SQL `COALESCE`d only NULL while the TS bucketed `""` too — so
+ * both sides normalize empty and NULL identically here.
+ */
+function queryByEntrypoint(db: DatabaseT.Database, f: FilterParams): EntrypointBreakdown[] {
+  const rows = prepCached(db,
+      `SELECT
+         COALESCE(NULLIF(s.entrypoint, ''), @unknownEntrypoint) AS entrypoint,
+         COUNT(DISTINCT t.session_id) AS sessions,
+         COUNT(*)                     AS turns,
+         COALESCE(SUM(t.input_tokens + t.output_tokens
+                    + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         COUNT(DISTINCT CASE WHEN s.session_kind = @bgKind THEN t.session_id END)
+                                      AS backgroundSessions
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY COALESCE(NULLIF(s.entrypoint, ''), @unknownEntrypoint)`
+    )
+    .all({
+      ...f,
+      unknownEntrypoint: UNKNOWN_ENTRYPOINT,
+      bgKind: BACKGROUND_SESSION_KIND,
+    }) as Array<{
+      entrypoint: string; sessions: number; turns: number;
+      tokens: number; cost: number; backgroundSessions: number;
+    }>;
+
+  return rows
+    .map((r) => ({
+      entrypoint: r.entrypoint,
+      sessions: r.sessions,
+      turns: r.turns,
+      tokens: r.tokens,
+      cost: r.cost,
+      avgCostPerSession: r.sessions > 0 ? r.cost / r.sessions : 0,
+      backgroundSessions: r.backgroundSessions,
+    }))
+    .sort((a, b) => compareEntrypoint(a.entrypoint, b.entrypoint));
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {

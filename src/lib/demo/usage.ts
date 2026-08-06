@@ -6,6 +6,7 @@ import type {
   CategoryType,
   CategoryBreakdown,
   EffortBreakdown,
+  EntrypointBreakdown,
   DailyBucket,
   ProjectBreakdown,
   ProjectDetail,
@@ -109,6 +110,27 @@ const EFFORTS: { effort: string; frac: number; taskFrac: number; osr: number }[]
   { effort: "high", frac: 0.26, taskFrac: 0.12, osr: 0.73 },
   { effort: "xhigh", frac: 0.09, taskFrac: 0.14, osr: 0.7 },
   { effort: "unknown", frac: 0.53, taskFrac: 0.08, osr: 0.68 },
+];
+
+/**
+ * A3 entrypoint mix, matching the shape measured on the real index rather than
+ * the file-probe figures an earlier draft used (those missed subagent
+ * transcripts and understated `cli` badly — see `entrypoint.ts`).
+ *
+ * The session and cost shares are deliberately near-inverted, because that is
+ * what the real data does: automated runs dominate the session count and are a
+ * rounding error on the bill. A demo that made both distributions agree would
+ * hide the exact asymmetry the panel exists to show.
+ *
+ * `unknown` is included so demo mode exercises the muted-bucket rendering too.
+ */
+const ENTRYPOINTS: {
+  entrypoint: string; sessionFrac: number; costFrac: number; bgFrac: number;
+}[] = [
+  { entrypoint: "cli", sessionFrac: 0.41, costFrac: 0.958, bgFrac: 0.004 },
+  { entrypoint: "sdk-cli", sessionFrac: 0.483, costFrac: 0.026, bgFrac: 0 },
+  { entrypoint: "sdk-py", sessionFrac: 0.092, costFrac: 0.008, bgFrac: 0 },
+  { entrypoint: "unknown", sessionFrac: 0.016, costFrac: 0.008, bgFrac: 0 },
 ];
 
 const TOOLS: [string, number][] = [
@@ -295,6 +317,20 @@ function buildReport(
 
   // Order follows EFFORTS (the ordinal scale, unknown last) rather than cost —
   // the same rule both real backends apply. See `effort.ts` EFFORT_ORDER.
+  const byEntrypoint: EntrypointBreakdown[] = ENTRYPOINTS.map((e) => {
+    const sessions = atLeast1(Math.round(totalSessions * e.sessionFrac));
+    const cost = round2(totalCost * e.costFrac);
+    return {
+      entrypoint: e.entrypoint,
+      sessions,
+      turns: atLeast1(Math.round(totalTurns * e.costFrac)),
+      tokens: Math.round(totalTokens * e.costFrac),
+      cost,
+      avgCostPerSession: round2(cost / sessions),
+      backgroundSessions: Math.round(sessions * e.bgFrac),
+    };
+  });
+
   const byEffort: EffortBreakdown[] = EFFORTS.map((e) => {
     const turns = atLeast1(Math.round(totalTurns * e.frac));
     const verifiedTasks = Math.round(turns * e.taskFrac);
@@ -478,6 +514,7 @@ function buildReport(
     byProject,
     byCategory,
     byEffort,
+    byEntrypoint,
     topTools,
     toolTransitions,
     toolSelfLoops,

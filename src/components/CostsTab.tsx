@@ -8,6 +8,7 @@ import { COST_PERIODS } from "@/lib/usage/constants";
 import { formatCost, formatTokens } from "@/lib/format";
 import { StatCell } from "@/components/ui/StatCell";
 import { EffortPanel } from "@/components/EffortPanel";
+import { EntrypointPanel } from "@/components/EntrypointPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const DEFAULT_PERIOD = "30d";
@@ -121,6 +122,12 @@ export function CostsTab({ usageSlug, usageHomeKey }: { usageSlug: string; usage
           <section>
             <SectionHeader label="By effort" />
             <EffortPanel rows={data.byEffort} currency={currency} fxRate={fxRate} />
+          </section>
+
+          {/* By session entrypoint (A3) — interactive vs SDK-driven */}
+          <section>
+            <SectionHeader label="By entrypoint" />
+            <EntrypointPanel rows={data.byEntrypoint} currency={currency} fxRate={fxRate} />
           </section>
         </>
       )}

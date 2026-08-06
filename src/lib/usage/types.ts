@@ -50,6 +50,22 @@ export interface UsageTurn {
    */
   speed?: string;
   /**
+   * Session entrypoint (`cli` | `sdk-cli` | `sdk-py`), denormalized onto every
+   * turn of the session (A3).
+   *
+   * Session-constant, so it is redundant per turn — carried here anyway
+   * because the file-backend aggregator receives a flat `UsageTurn[]` with no
+   * session-level side table, and `byEntrypoint` has to be computable from it.
+   * Readers latch it from `attachment` entries; see `entrypoint.ts`.
+   */
+  entrypoint?: string;
+  /**
+   * `sessions.session_kind`, in practice only ever `bg` (A3). Absent on 99.9%
+   * of sessions — absence means "not flagged as a background run", not
+   * "unknown", for any transcript recent enough to emit it at all.
+   */
+  sessionKind?: string;
+  /**
    * Causal cost attribution: which skill / MCP server is responsible for this
    * turn's tokens existing. Distinct from `ToolCall`-level skill and MCP
    * detection, which is *inferred* from the `mcp__server__tool` naming
@@ -146,6 +162,42 @@ export interface EffortBreakdown {
    * genuinely failed every time.
    */
   oneShotRate?: number;
+}
+
+/**
+ * Spend and volume for one session entrypoint (A3).
+ *
+ * **Session-scoped, unlike every other breakdown on the report.** `byModel`,
+ * `byCategory` and `byEffort` roll up turns; `entrypoint` is a property of the
+ * session, so `sessions` here is a distinct-session count and `avgCostPerSession`
+ * divides by it. Mixing the two scopes is the easy mistake: dividing this
+ * bucket's cost by its *turn* count would answer a question nobody asked.
+ *
+ * The pairing that matters is `sessions` against `cost`. On the author's
+ * corpus interactive work is 4.5% of sessions, and if it is a far larger share
+ * of spend then the count distribution — which is what a naive "most of my
+ * sessions are automated" reading sees — is actively misleading about where
+ * the money goes.
+ */
+export interface EntrypointBreakdown {
+  /** `cli` | `sdk-cli` | `sdk-py`, or `unknown` — see `UNKNOWN_ENTRYPOINT`. */
+  entrypoint: string;
+  /** Distinct sessions, NOT turns. */
+  sessions: number;
+  turns: number;
+  tokens: number;
+  cost: number;
+  /**
+   * `cost / sessions`. Precomputed rather than left to the caller because both
+   * backends must agree on the denominator, and a UI dividing by whichever
+   * count is nearest to hand is exactly how the two would drift.
+   */
+  avgCostPerSession: number;
+  /**
+   * Sessions in this bucket flagged `session_kind = 'bg'`. A flag, not a
+   * sub-bucket: these are already counted in `sessions` above.
+   */
+  backgroundSessions: number;
 }
 
 export interface ModelCost {
@@ -433,6 +485,13 @@ export interface UsageReport {
    * Empty on adapter sources that don't record effort. See `effort.ts`.
    */
   byEffort: EffortBreakdown[];
+  /**
+   * Spend and volume by session entrypoint (A3) — interactive versus
+   * SDK-driven. Sorted by {@link ENTRYPOINT_ORDER}, not by cost, so the rows
+   * hold their positions between periods. Session-scoped: see
+   * {@link EntrypointBreakdown}. See `entrypoint.ts`.
+   */
+  byEntrypoint: EntrypointBreakdown[];
   topTools: [string, number][];
   toolTransitions: ToolTransition[];
   toolSelfLoops: ToolSelfLoop[];

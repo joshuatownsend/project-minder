@@ -19,6 +19,13 @@
 //   writer-populated from full JSONL text that is never stored in `turns`,
 //   so nothing rebuilds it on an UPDATE and only a real re-parse can fill
 //   it. Changes to what goes into it DO require a bump.
+//
+// **The comparison is directional.** "Stale" means `stored < DERIVED_VERSION`,
+// never `stored !== DERIVED_VERSION`. Rows stamped ABOVE this constant were
+// written by a build that knows more than this one does, and re-deriving them
+// here would drop every column that build added. The gates in `ingest.ts`
+// enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
+// what it costs when they don't.
 export const DERIVED_VERSION = 14;
 // History:
 // 1 — initial.
@@ -190,3 +197,29 @@ export const DERIVED_VERSION = 14;
 //     undefined` for every bucket — which the UI already has to render for a
 //     genuinely task-free period. Degraded, never wrong: no bucket claims a 0%
 //     success rate it did not measure.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-08-05 — what a non-directional comparison cost, recorded here because
+// this is the file the next person changing these rules will open.
+//
+// The v14 re-parse ran to completion: 45.3 minutes, 4,894 files, 260,308 rows,
+// `errors: 0`, 22,682 `turns.effort` values and 1,141 `task_outcome` stamps
+// verified against the pre-existing session counters. About thirty minutes
+// later a tray packaged two days earlier — `DERIVED_VERSION = 12` — started up
+// and ran its ordinary background reconcile. The index was later found holding
+// 5,001 sessions, every one stamped 12, with all of those columns empty.
+//
+// Nothing failed. The gates asked `stored === DERIVED_VERSION`, which is false
+// for 14-vs-12 exactly as it is for 11-vs-12, so newer rows were indistinguishable
+// from stale ones and were "refreshed" downward. The pass reported `errors: 0`
+// because from its point of view it had done its job.
+//
+// Two details worth keeping. The destructive path was NOT the no-op skip gate —
+// that one requires mtime AND size to match, so only idle sessions reached it.
+// Active sessions GREW, missed the no-op gate, failed the version equality that
+// gates tail-append, and fell through to full-replace. A fix applied only to the
+// skip gate would have looked right and still lost the same data. And the loss
+// was silent in the UI: it presents as "the feature I shipped yesterday renders
+// nothing", which reads as a UI bug and sends you looking in the wrong layer.
+// Hence `newerDerivationSkips` and the warning line — the condition now names
+// itself rather than having to be inferred from an empty panel.
