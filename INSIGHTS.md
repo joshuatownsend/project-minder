@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:0afb9b9b056d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T12:56:54.780Z -->
+## ★ Insight
+The mutation `run.durationMs ?? 0` is precisely the bug A6 was written to prevent, and it broke 3 of 9 tests. Had it broken 0, the tests would have been documentation rather than verification — the same trap as the `user-invocable` test that *ratified* its bug earlier in this stack.
+
+---
+
+<!-- insight:de7381c7ec51 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T12:48:10.915Z -->
+## ★ Insight
+`import type { Period }` from a `server-only` module is safe because TypeScript erases it entirely — no runtime require survives bundling. `import { periodToMs }` from the same file would not be. That asymmetry is why the existing cards got away with it and why moving the *function* was necessary.
+
+---
+
 <!-- insight:6a5ee3d3545d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T11:41:58.349Z -->
 ## ★ Insight
 The `source?: "otel" | "transcript"` field exists on `HookActivityResult` precisely so the UI can tell you which of the two it's showing — but `HookActivityCard` never reads it. That's the small gap: the backend carefully preserves the provenance distinction, and the card renders identical-looking rows either way.
