@@ -212,8 +212,12 @@ Click a session to see the full detail view with tabs:
 The session row shows, in order:
 
 1. **What matched your search**, when searching — an excerpt of the matched
-   conversation text, or the matched title. A row in the results always
-   displays the text that put it there.
+   conversation text, or whichever of the title-slot fields matched (generated
+   title, Claude Code's title, first prompt, last prompt, branch). A match on
+   the **project name** or **branch** is shown by the row's own project and
+   branch elements rather than in this slot; a match on a session id, slug or
+   project path is not echoed back, since promoting an identifier or a file
+   path here would be less useful than what it replaced.
 2. **The latest recap**, if the session has one. A recap describes what
    happened while you were away, which is more useful on a row you're
    returning to than a title.

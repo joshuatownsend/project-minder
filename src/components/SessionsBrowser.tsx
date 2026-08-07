@@ -362,19 +362,33 @@ function SessionRow({
     : false;
   const snippetText = ftsSnippet ?? (localContentMatch ? session.searchableText : undefined);
 
-  // The title that matched the query, when one did.
+  // Everything the title slot can display, in preference order.
   //
-  // A content hit already shows what matched, via `snippetText` above. A title
-  // hit had no equivalent: it fell through to the recap branch, so searching
-  // for a title could return a row whose visible text does not contain the
-  // query — and, since titles became searchable, that is now reachable
-  // (Codex review of #403). Recaps still win when not searching; they describe
-  // what happened while you were away, which is more useful on a row you are
-  // returning to than a title is.
+  // Used twice — as the default text, and to decide which entry to promote
+  // when it matched the query. One list rather than two so they cannot drift:
+  // the first version checked only the two title fields, so a recapped session
+  // matching on its initial prompt still rendered the recap, and the row did
+  // not contain the query (Codex review of #403).
+  //
+  // The other fields `matchesTitleScope` accepts are deliberately absent.
+  // `projectName` and `gitBranch` have their own elements on this row, so a
+  // match there is already visible; `projectPath`, `sessionId` and `slug` are
+  // identifiers rather than description text, and promoting a file path into
+  // the title slot would be worse than the recap it replaced.
+  const titleCandidates = [
+    session.generatedTitle,
+    session.aiTitle,
+    session.initialPrompt,
+    session.lastPrompt,
+    session.gitBranch,
+  ];
+
+  // A content hit already shows what matched, via `snippetText` above. This is
+  // the equivalent for a title-slot hit. Recaps still win when not searching:
+  // they describe what happened while you were away, which is more useful on a
+  // row you are returning to than a title is.
   const matchedTitle = trimmedSearch
-    ? [session.generatedTitle, session.aiTitle].find(
-        (t) => t?.toLowerCase().includes(searchLower)
-      )
+    ? titleCandidates.find((t) => t?.toLowerCase().includes(searchLower))
     : undefined;
 
   return (
@@ -465,13 +479,13 @@ function SessionRow({
               ? <MatchSnippet text={matchedTitle} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
-              // `aiTitle` sits after `generatedTitle` deliberately: the latter
-              // is Minder's own, produced only when you press the button, so it
-              // wins. But Claude Code emits `aiTitle` for free on 503 of 5,028
-              // local sessions — until now the row ignored it and showed a raw
-              // prompt, while the detail page offered to generate a title the
-              // transcript already contained.
-              : session.generatedTitle ?? session.aiTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+              // Same ordered list the match lookup uses. `generatedTitle` wins
+              // because it is Minder's own and produced only when you press the
+              // button; `aiTitle` follows because Claude Code emits it for free
+              // on 503 of 5,028 local sessions — the row used to ignore it and
+              // show a raw prompt while the detail page offered to generate a
+              // title the transcript already contained.
+              : titleCandidates.find(Boolean) ?? (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
               )}
           </span>
