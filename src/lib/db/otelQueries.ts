@@ -421,13 +421,40 @@ export interface HookActivityResult {
   source?: "otel" | "transcript";
 }
 
+/**
+ * Which pipeline to read hook latency from.
+ *
+ * `auto` prefers OTEL and falls back to the transcript only when OTEL returns
+ * nothing — the long-standing behaviour, and still the default.
+ *
+ * The explicit values exist because `auto` makes the transcript source
+ * *unreachable* once OTEL has any data: `since` is a lower bound, so every
+ * window ending at now includes recent events, and no choice of period falls
+ * back. The two are not interchangeable views of one dataset — OTEL keys on the
+ * hook name, the transcript on the command that ran — so "show me the other
+ * one" has to be asked for directly rather than approximated with a date range
+ * (Codex review of #402, which caught documentation promising this was already
+ * possible).
+ */
+export type HookActivitySource = "auto" | "otel" | "transcript";
+
 export async function getHookActivity(opts: {
   since: number;
+  source?: HookActivitySource;
 }): Promise<HookActivityResult> {
   const db = await getDb();
   if (!db) return { hooks: [], totalFires: 0, hasData: false };
 
   const sinceIso = msToIso(opts.since);
+  const source = opts.source ?? "auto";
+
+  // Asked for the transcript explicitly: never consult OTEL, and never fall
+  // forward to it when the transcript is empty. An empty answer for the source
+  // the caller named is the truthful one; silently substituting the other
+  // pipeline would return rows keyed on something else entirely.
+  if (source === "transcript") {
+    return getHookActivityFromTranscripts(db, sinceIso, opts.since <= 0);
+  }
 
   // Grouped in SQL, for the same reason the transcript fallback below is.
   //
@@ -501,6 +528,11 @@ export async function getHookActivity(opts: {
 
   if (hooks.length > 0) {
     return { hooks, totalFires, hasData: true, source: "otel" };
+  }
+
+  // Asked for OTEL explicitly: report the empty result rather than falling back.
+  if (source === "otel") {
+    return { hooks: [], totalFires: 0, hasData: false, source: "otel" };
   }
 
   // No OTEL hook events. That is the DEFAULT state, not an edge case: OTEL is

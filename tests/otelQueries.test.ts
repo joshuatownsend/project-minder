@@ -390,6 +390,40 @@ describe.skipIf(!driverAvailable)("getHookActivity", () => {
     expect(session!.p50DurationMs).toBe(3000);
 
   });
+
+  // The point of the explicit source is that `auto` cannot reach the transcript
+  // pipeline once OTEL has any events — `since` is a lower bound, so no window
+  // excludes them and the fallback never fires. A forced source must therefore
+  // not fall through in either direction, or it is just `auto` with extra steps.
+  it("honours an explicit source instead of falling through to the other pipeline", async () => {
+    const { mig, ingest, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    await ingest.ingestLogBatch(
+      [eventRecord(BASE_NANO, "hook_execution_complete", { hook_name: "PreToolUse:Bash", total_duration_ms: "50", hook_event: "PreToolUse" })],
+      sessionResource("s1"),
+    );
+
+    // auto: OTEL present, so OTEL answers.
+    expect((await queries.getHookActivity({ since: 0 })).source).toBe("otel");
+    expect((await queries.getHookActivity({ since: 0, source: "auto" })).source).toBe("otel");
+
+    // transcript: no session_hook_runs rows were ingested here, so the honest
+    // answer is empty — NOT the OTEL rows that `auto` would have returned.
+    const forced = await queries.getHookActivity({ since: 0, source: "transcript" });
+    expect(forced.source).toBe("transcript");
+    expect(forced.hasData).toBe(false);
+    expect(forced.hooks).toEqual([]);
+  });
+
+  it("reports an empty otel result rather than falling back when otel is forced", async () => {
+    const { mig, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    const forced = await queries.getHookActivity({ since: 0, source: "otel" });
+    expect(forced.source).toBe("otel");
+    expect(forced.hasData).toBe(false);
+  });
 });
 
 // ── getPressureSnapshot ───────────────────────────────────────────────────────

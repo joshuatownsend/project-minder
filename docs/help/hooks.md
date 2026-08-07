@@ -102,7 +102,7 @@ happened, what it said, and whether it stopped the turn continuing.
 | --- | --- |
 | **Stats → Telemetry → Hook Activity** | Which hooks are slow across all my work? Ranked by fire count, with a badge naming the source. |
 | **Session detail → Hooks tab** | What did hooks cost *this* session? Ranked by total time. |
-| `get-hook-activity` (MCP) | Either, queried directly — including the transcript source on a machine where OTEL always wins the card. |
+| `get-hook-activity` (MCP) | Either pipeline, named explicitly — `source: "transcript"` is the only way to read transcript-derived runs on a machine where OTEL always wins the card. |
 
 The per-session **Hooks** tab appears on any session that recorded a hook run or
 a hook failure. It groups runs by command and ranks them by total measured time —

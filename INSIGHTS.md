@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:384fd653505b | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T13:58:40.359Z -->
+## ★ Insight
+Both findings are the same failure: I built a mechanism to distinguish two data sources, then left two places asserting they were interchangeable — one in docs, one in a table header. Adding a distinction doesn't propagate itself to everything that assumed there wasn't one.
+
+---
+
 <!-- insight:90d786309847 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T13:33:19.126Z -->
 ## ★ Insight
 `echo "X=$?" | tee -a log` still captures the *right* `$?` — but the shell reports **tee's** exit as the command's status, so the harness saw 0 while the build had returned 1. The value in the log was correct and the status around it was a lie. That's the same class as the truncation bugs this whole session has been about: a result shaped exactly like success.

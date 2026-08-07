@@ -14,7 +14,7 @@ import {
 } from "@/lib/db/otelQueries";
 import { getDenialBreakdown } from "@/lib/data/denialAnalyticsFromDb";
 import { getToolProvenance, getOtelTurnCoverage } from "@/lib/db/otelCorrelation";
-import { SessionIdSchema, OtelPeriodSchema } from "../schemas";
+import { SessionIdSchema, OtelPeriodSchema, HookActivitySourceSchema } from "../schemas";
 import { jsonResult } from "../result";
 
 export function registerOtelTools(server: McpServer): void {
@@ -161,14 +161,17 @@ export function registerOtelTools(server: McpServer): void {
         "(the default) it falls back to hook runs decoded from session transcripts, " +
         "which need no setup and cover all history. The `source` field says which " +
         "was used — the two name hooks differently (OTEL by hook name, transcripts " +
-        "by the command that ran), so they are never blended.",
-      inputSchema: { period: OtelPeriodSchema },
+        "by the command that ran), so they are never blended. Pass " +
+        "`source: \"transcript\"` to force the transcript pipeline: once OTEL has " +
+        "any events the automatic fallback never fires at any period, so that is " +
+        "the only way to reach it.",
+      inputSchema: { period: OtelPeriodSchema, source: HookActivitySourceSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ period }) =>
+    async ({ period, source }) =>
       jsonResult({
         period,
-        ...(await getHookActivity({ since: periodToMs(period) })),
+        ...(await getHookActivity({ since: periodToMs(period), source })),
       })
   );
 

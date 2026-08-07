@@ -95,9 +95,20 @@ each — so the card names the one it used:
 
 OTEL is preferred whenever any hook event exists. Because `since` is a lower
 bound, **no choice of period falls back to the transcript source once OTEL has
-data** — every window that ends at "now" includes recent events. On a machine
-with telemetry enabled the transcript view is reachable through the
-`get-hook-activity` MCP tool rather than this card.
+data** — every window that ends at "now" includes recent events.
+
+To read the transcript pipeline on a machine with telemetry enabled, ask for it
+by name via the MCP tool:
+
+```
+get-hook-activity(period: "all", source: "transcript")
+```
+
+`source` accepts `auto` (the default preference order), `otel`, or
+`transcript`. A forced source never falls through to the other one — an empty
+result for the pipeline you named is the honest answer, where substituting the
+other would return rows keyed on something else entirely. The card itself has no
+source control yet; that is tracked in `TODO.md`.
 
 ### Session detail — Tools tab
 

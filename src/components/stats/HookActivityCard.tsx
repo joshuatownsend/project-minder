@@ -21,19 +21,29 @@ interface Props {
  */
 const SOURCE_META: Record<
   NonNullable<HookActivityResult["source"]>,
-  { label: string; explanation: string }
+  { label: string; column: string; explanation: string }
 > = {
   otel: {
     label: "OTEL",
+    // The first column header follows the source, because the column holds a
+    // different thing in each. Labelling transcript rows "Hook" when they are
+    // `codegraph sync` would undercut the badge sitting directly above it —
+    // announcing that the semantics changed while still displaying the old
+    // ones (Copilot review of #402).
+    column: "Hook",
     explanation:
       "Rows are hook names, from OpenTelemetry hook_execution_complete events. Covers only the period since you enabled telemetry.",
   },
   transcript: {
     label: "transcript",
+    column: "Command",
     explanation:
       "Rows are the commands each hook ran, decoded from session transcripts. Needs no setup and covers all history.",
   },
 };
+
+/** Header when the payload predates the `source` field and cannot say which it is. */
+const UNKNOWN_SOURCE_COLUMN = "Hook";
 
 export function HookActivityCard({ since }: Props) {
   const sinceParam = since ?? defaultSince();
@@ -90,7 +100,7 @@ export function HookActivityCard({ since }: Props) {
       )}
       {/* Header */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 60px 60px", gap: "4px", paddingBottom: "6px", borderBottom: "1px solid var(--border-subtle)" }}>
-        {["Hook", "Fires", "p50", "p95"].map((h) => (
+        {[source?.column ?? UNKNOWN_SOURCE_COLUMN, "Fires", "p50", "p95"].map((h) => (
           <span key={h} style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             {h}
           </span>
