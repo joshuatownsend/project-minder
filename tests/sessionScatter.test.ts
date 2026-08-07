@@ -266,3 +266,36 @@ describe("prepareScatterData — exclusion reporting", () => {
     expect(d.plotted).toHaveLength(1);
   });
 });
+
+describe("prepareScatterData — nothing plottable", () => {
+  // Reachable with a non-empty session list: a corpus predating a measurement,
+  // or one where OTEL was never enabled, filters out entirely. The renderer
+  // then took Math.min/max of empty arrays — Infinity / -Infinity — and handed
+  // D3 an unrenderable scale domain (both bots, review of #403).
+  it("returns empty arrays rather than throwing when no point carries the measurement", () => {
+    const points = [point(), point(), point()];
+    for (const preset of ["complexity-cost", "context-pressure", "reliability"] as const) {
+      const d = prepareScatterData(points, preset);
+      expect(d.plotted).toHaveLength(0);
+      expect(d.excluded).toBe(3);
+      for (const arr of [d.x, d.y, d.size, d.color, d.tooltips]) {
+        expect(arr).toHaveLength(0);
+      }
+    }
+  });
+
+  it("still names the missing measurement so the empty state can be specific", () => {
+    // The empty state says which measurement is absent rather than "no data" —
+    // the other two presets may well have plenty.
+    expect(prepareScatterData([point()], "reliability").excludedMeasureLabel).toBe("1-shot rate");
+  });
+
+  it("distinguishes 'nothing plottable' from 'no sessions at all'", () => {
+    const noSessions = prepareScatterData([], "reliability");
+    const noneMeasured = prepareScatterData([point(), point()], "reliability");
+    expect(noSessions.excluded).toBe(0);      // nothing was dropped; there was nothing
+    expect(noneMeasured.excluded).toBe(2);    // two sessions exist and were dropped
+    expect(noSessions.plotted).toHaveLength(0);
+    expect(noneMeasured.plotted).toHaveLength(0);
+  });
+});

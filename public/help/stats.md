@@ -63,3 +63,8 @@ cloud on the floor with tooltips reading `0% fill` as though measured, and on
 Reliability it awarded the worst score on the chart to sessions nobody had
 scored. A session measured *at* zero still plots at zero; only the unmeasured
 ones are omitted.
+
+If **no** session carries the measurement a preset needs — an older corpus, or
+one where OTEL was never enabled — that preset says so instead of drawing an
+empty chart. The other two presets may still have plenty; they use different
+measurements.

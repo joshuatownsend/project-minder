@@ -41,8 +41,12 @@ import type {
 // 2. `searchableText`: returned as `undefined` (was: human prompts +
 //    assistant text snippets joined). Could be rebuilt from
 //    `prompts_fts` later if a UI feature actually consumes it.
-// 3. `subagents.messageCount` / per-agent `toolUsage`: zeroed (was:
-//    counted from sidechain assistant entries, which ingest skips).
+// 3. `subagents.messageCount`: **undefined** / per-agent `toolUsage`: empty
+//    (was: counted from sidechain assistant entries, which ingest skips).
+//    `messageCount` reported `0` until #403 — indistinguishable from a
+//    subagent that genuinely took no turns, so a consumer comparing it with
+//    Claude Code's own `metaTurnCount` read a backend limitation as a data
+//    disagreement. `undefined` makes "cannot count" representable.
 //    Type and description ARE preserved from `tool_uses.agent_name` +
 //    `arguments_json`. UI consequence: subagent tab shows the agent
 //    list without the per-agent tool histogram.
@@ -609,8 +613,11 @@ function aggregateTools(
     // Subagents — gated on `args.prompt` to mirror file-parse's
     // `if (toolName === "Agent" && input.prompt)` existence test, so
     // an Agent invocation without a prompt doesn't synthesize a
-    // subagent row. `messageCount` and `toolUsage` stay zero/empty
-    // because sidechain entries aren't indexed (documented divergence).
+    // subagent row. `toolUsage` stays empty and `messageCount` is
+    // **undefined, not 0**, because sidechain entries aren't indexed
+    // (documented divergence). Reporting 0 made "we cannot count this"
+    // indistinguishable from "this subagent took no turns", and any
+    // consumer comparing it to a real count saw a false disagreement.
     if (tu.tool_name === "Agent") {
       const args = parseStoredArgs(tu.arguments_json) ?? {};
       if (typeof args.prompt === "string") {
@@ -623,7 +630,7 @@ function aggregateTools(
           agentId: tu.tool_use_id ?? `tu_${tu.turn_index}_${tu.sequence_in_turn}`,
           type: meta?.agentType ?? (tu.agent_name ?? "general-purpose"),
           description: (meta?.description ?? fullDesc).slice(0, 200),
-          messageCount: 0,
+          messageCount: undefined,
           toolUsage: {},
           category: meta?.category,
           metaTurnCount: meta?.turnCount,

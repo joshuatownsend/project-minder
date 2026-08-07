@@ -12,7 +12,7 @@ import { promises as fs } from "fs";
 // `src/lib/data/sessionDetailFromDb.ts`):
 // 1. `recaps` undefined in DB path
 // 2. `searchableText` undefined in DB path
-// 3. `subagents.messageCount` and `toolUsage` zeroed in DB path
+// 3. `subagents.messageCount` undefined (not 0) and `toolUsage` empty in DB path
 // 4. `status` heuristic (working/idle from age) in DB path
 // 5. `bash` fileOperations from `tool_uses` not `file_edits`
 // 6. No `thinking` events; at most one `assistant` event per turn
@@ -269,8 +269,14 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
       // No .meta.json files in test fixture — both paths produce same meta fields.
       expect(dSub.metaSourced).toBe(fSub!.metaSourced);
       expect(dSub.category).toBe(fSub!.category);
-      // Documented divergence — DB path leaves these zeroed.
-      expect(dSub.messageCount).toBe(0);
+      // Documented divergence. `messageCount` is **undefined, not 0**: the DB
+      // path cannot count sidechain turns, and reporting 0 made that
+      // indistinguishable from a subagent that genuinely took none — a
+      // consumer comparing it with Claude Code's own `metaTurnCount` read the
+      // backend limitation as a data disagreement (#403). `toolUsage` stays an
+      // empty object because "no tools recorded" and "cannot record tools"
+      // both render as no chips; only the count was ever compared.
+      expect(dSub.messageCount).toBeUndefined();
       expect(dSub.toolUsage).toEqual({});
     }
 

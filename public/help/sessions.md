@@ -248,9 +248,14 @@ Cards for each spawned subagent showing type, description, and top tools used.
 
 A card whose details came from Claude Code's own `agent-*.meta.json` record —
 rather than being inferred from the parent transcript's Agent tool call — says
-so. When Claude Code's turn count for that subagent disagrees with the count
-derived from the transcript, the chip turns amber and shows both rather than
-picking one: the disagreement is information about the data.
+so, and shows the turn count from that record.
+
+A **disagreement** between that count and one derived from the transcript turns
+the chip amber and shows both, rather than picking one. This requires two real
+counts: with the SQLite index active (the default) subagent transcripts are not
+indexed, so there is no independent count and none is claimed. A card there
+reads `14 turns recorded`, not `14 turns recorded · 0 counted` — a backend that
+cannot count is not a backend that counted zero.
 
 ### Hooks
 What hooks cost this session. Runs are grouped by command and ranked by **total

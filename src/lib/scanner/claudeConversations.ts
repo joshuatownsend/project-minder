@@ -818,7 +818,11 @@ export async function scanSessionDetail(
           const parentId = (entry as any).parentToolUseID;
           if (parentId && subagentMap.has(parentId)) {
             const agent = subagentMap.get(parentId)!;
-            agent.messageCount++;
+            // `?? 0` is right *here* and wrong on the DB path: this backend
+            // walks the sidechain entries, so it starts at a real zero and
+            // counts up. The DB path cannot count at all and leaves the field
+            // undefined rather than claiming zero (see SubagentInfo).
+            agent.messageCount = (agent.messageCount ?? 0) + 1;
             if (Array.isArray(msg.content)) {
               for (const block of msg.content) {
                 if (block.type === "tool_use" && block.name) {

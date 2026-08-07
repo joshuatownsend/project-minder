@@ -78,13 +78,33 @@ export function SessionComplexityChart({ sessions }: Props) {
       {/* Says what is missing. A preset that quietly drops the unmeasured
           sessions renders a smaller cloud that reads as "you have fewer
           sessions" — a different false claim than the `0` it replaced. */}
-      {prepared.excluded > 0 && (
+      {prepared.excluded > 0 && prepared.plotted.length > 0 && (
         <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginBottom: "8px" }}>
           {prepared.excluded} of {sessions.length} sessions not plotted — no{" "}
           {prepared.excludedMeasureLabel} recorded for them.
         </div>
       )}
 
+      {/* Nothing plottable for this preset. Reachable even though `sessions`
+          is non-empty — a corpus predating the measurement (or one where OTEL
+          was never enabled) has every session filtered out. Without this,
+          `ScatterInner` runs `Math.min(...[])` / `Math.max(...[])`, which are
+          `Infinity` / `-Infinity`, and hands D3 a scale domain it cannot
+          render (both bots, review of #403). The empty state names the
+          measurement rather than claiming there are no sessions. */}
+      {prepared.plotted.length === 0 ? (
+        <div style={{
+          padding: "48px 24px", textAlign: "center",
+          color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.6,
+        }}>
+          None of these {sessions.length} sessions recorded a{" "}
+          {prepared.excludedMeasureLabel}, so there is nothing to plot for this view.
+          <br />
+          <span style={{ fontSize: "0.72rem" }}>
+            Try another preset — the three use different measurements.
+          </span>
+        </div>
+      ) : (
       <D3Container height={360} margin={margin}>
         {({ width, height, showTooltip, hideTooltip }) => (
           <ScatterInner
@@ -105,6 +125,7 @@ export function SessionComplexityChart({ sessions }: Props) {
           />
         )}
       </D3Container>
+      )}
 
     </div>
   );

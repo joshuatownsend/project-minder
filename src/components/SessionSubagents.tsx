@@ -1,4 +1,5 @@
 import { SubagentInfo } from "@/lib/types";
+import { describeSubagentProvenance } from "@/lib/sessions/subagentProvenance";
 import type { SubagentCategory } from "@/lib/types";
 import { Bot, Wrench, DollarSign, Clock, Cpu } from "lucide-react";
 import { formatCostCompact } from "@/lib/format";
@@ -64,16 +65,14 @@ function MetaProvenance({
 }: {
   metaSourced?: boolean;
   metaTurnCount?: number;
-  messageCount: number;
+  messageCount?: number;
 }) {
-  // Nothing to say for an inferred card with no independent count — absence of
-  // the meta file is the norm, not an anomaly worth a badge on every row.
-  if (!metaSourced) return null;
-
-  const disagrees = typeof metaTurnCount === "number" && metaTurnCount !== messageCount;
-  const explanation = disagrees
-    ? `Claude Code's own record for this subagent reports ${metaTurnCount} turns; ${messageCount} were counted from the transcript.`
-    : "Details for this subagent come from Claude Code's own record, not inferred from the parent transcript.";
+  // Decision logic lives in lib/sessions/subagentProvenance.ts, where it can be
+  // tested — the "a disagreement needs two real counts" rule is exactly the
+  // part that was wrong before review.
+  const provenance = describeSubagentProvenance({ metaSourced, metaTurnCount, messageCount });
+  if (!provenance) return null;
+  const { label, explanation, disagrees } = provenance;
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
@@ -87,7 +86,7 @@ function MetaProvenance({
           ...(disagrees ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}),
         }}
       >
-        {disagrees ? `${metaTurnCount} turns recorded · ${messageCount} counted` : "from Claude Code's record"}
+        {label}
       </span>
     </div>
   );

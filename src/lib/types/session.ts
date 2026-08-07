@@ -302,7 +302,20 @@ export interface SubagentInfo {
   agentId: string;
   type: string;
   description: string;
-  messageCount: number;
+  /**
+   * Turns counted from the transcript — **undefined when the backend cannot
+   * count them**, which is the default case.
+   *
+   * The SQLite path does not index sidechain entries, so it has no count to
+   * give (documented divergence #3 in `sessionDetailFromDb.ts`). It used to
+   * report `0` for that, which is indistinguishable from a subagent that
+   * genuinely took no turns — and comparing that `0` against Claude Code's own
+   * `metaTurnCount` presented a backend limitation as a data disagreement
+   * (Codex review of #403).
+   *
+   * The file backend counts for real and always supplies a number.
+   */
+  messageCount?: number;
   toolUsage: Record<string, number>;
   category?: SubagentCategory;
   metaTurnCount?: number;
