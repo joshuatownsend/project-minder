@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:90d786309847 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T13:33:19.126Z -->
+## ★ Insight
+`echo "X=$?" | tee -a log` still captures the *right* `$?` — but the shell reports **tee's** exit as the command's status, so the harness saw 0 while the build had returned 1. The value in the log was correct and the status around it was a lie. That's the same class as the truncation bugs this whole session has been about: a result shaped exactly like success.
+
+---
+
 <!-- insight:0afb9b9b056d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T12:56:54.780Z -->
 ## ★ Insight
 The mutation `run.durationMs ?? 0` is precisely the bug A6 was written to prevent, and it broke 3 of 9 tests. Had it broken 0, the tests would have been documentation rather than verification — the same trap as the `user-invocable` test that *ratified* its bug earlier in this stack.
