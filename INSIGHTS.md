@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:3c8b684df558 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:16:38.317Z -->
+## ★ Insight
+The mutation test here was worth more than usual. I first mutated *both* paths to unbucketed — 3 tests failed, but the cross-path "same instant" test passed, because both sides agreed on being wrong. Only reproducing Codex's exact shape (client buckets, server doesn't) made that test fail. A test suite can be green against a symmetric error and still catch the asymmetric one it was written for — worth checking which you actually reproduced.
+
+---
+
 <!-- insight:384fd653505b | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T13:58:40.359Z -->
 ## ★ Insight
 Both findings are the same failure: I built a mechanism to distinguish two data sources, then left two places asserting they were interchangeable — one in docs, one in a table header. Adding a distinction doesn't propagate itself to everything that assumed there wasn't one.

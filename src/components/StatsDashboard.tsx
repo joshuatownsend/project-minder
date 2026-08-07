@@ -123,8 +123,12 @@ export function StatsDashboard() {
   //
   // Two encodings of the one value because the routes differ — `?period=` for
   // the two that resolve the window server-side, `?since=` ISO for the four
-  // that take an explicit lower bound. `periodToSince` is hour-bucketed, so
-  // this is a stable string across renders and does not re-fire the fetches.
+  // that take an explicit lower bound. Both resolve through `periodToMs`,
+  // which buckets the rolling windows to the hour, so the six cards cover an
+  // identical window and the string is stable across renders. Bucketing only
+  // this client half would have left the two `?period=` cards resolving against
+  // a live `Date.now()` server-side — one toggle, two windows up to an hour
+  // apart, which is the defect the toggle exists to fix (Codex review, #402).
   const [telemetryPeriod, setTelemetryPeriod] = useState<Period>("7d");
   const telemetrySince = periodToSince(telemetryPeriod);
 

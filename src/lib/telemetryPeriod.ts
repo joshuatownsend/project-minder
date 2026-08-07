@@ -28,9 +28,25 @@ const DAY_MS = 24 * HOUR_MS;
 /**
  * Start of the window, as epoch ms.
  *
- * `now` is injectable so `periodToSince` can hand in a bucketed clock without
- * duplicating the mapping. Server callers omit it and get the live clock, which
- * is byte-for-byte the behaviour this function has always had.
+ * **The rolling windows resolve from an hour-bucketed clock, and every caller
+ * gets the same bucketing.** That is what makes one period name mean one
+ * cutoff no matter which path resolves it, and it is load-bearing twice over:
+ *
+ * 1. *Agreement across cards.* The Telemetry section drives six cards through
+ *    two encodings — four take a `since` computed here on the client, two send
+ *    the period name and let the route call this server-side. Bucketing only
+ *    the client half made those two groups cover windows up to an hour apart
+ *    under a single toggle, which is precisely the "cards disagree by
+ *    construction" defect the toggle was added to fix (Codex review of #402).
+ * 2. *No refetch loop.* `periodToSince` feeds fetch URLs directly. An
+ *    unbucketed clock mints a fresh millisecond per render, so the URL
+ *    changes, so the fetch re-fires — the loop `defaultSince` (format.ts) was
+ *    written to stop, on this same Stats page.
+ *
+ * `today` (local midnight) and `all` (epoch 0) are already stable; only `7d`
+ * and `30d` need it. `now` stays injectable for tests; bucketing is applied
+ * inside regardless of who supplies the clock, so the invariant cannot be
+ * bypassed by passing a raw timestamp.
  */
 export function periodToMs(period: Period, now: number = Date.now()): number {
   if (period === "today") {
@@ -38,24 +54,19 @@ export function periodToMs(period: Period, now: number = Date.now()): number {
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   }
-  if (period === "7d") return now - 7 * DAY_MS;
-  if (period === "30d") return now - 30 * DAY_MS;
   // "all" — 0 so the SQL `WHERE ts >= ?` matches every row, and so
   // `getHookActivity`'s `since <= 0` all-history check fires.
-  return 0;
+  if (period === "all") return 0;
+
+  const bucket = Math.floor(now / HOUR_MS) * HOUR_MS;
+  return bucket - (period === "7d" ? 7 : 30) * DAY_MS;
 }
 
 /**
- * Start of the window as an ISO-8601 string, bucketed to the current hour.
- *
- * The bucketing is load-bearing, not cosmetic. These strings go straight into
- * fetch URLs; without it every render of a `7d` or `30d` card mints a fresh
- * millisecond, so the URL changes, so the fetch re-fires, so the component
- * re-renders — the tight refetch loop that `defaultSince` (format.ts) was
- * written to stop, on this same Stats page. `today` and `all` are already
- * stable; only the two rolling windows need it.
+ * Start of the window as an ISO-8601 string — the same instant `periodToMs`
+ * returns, for callers whose endpoint takes an explicit lower bound rather
+ * than a period name. The two must never disagree; a test pins that.
  */
 export function periodToSince(period: Period): string {
-  const nowBucket = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
-  return new Date(periodToMs(period, nowBucket)).toISOString();
+  return new Date(periodToMs(period)).toISOString();
 }
