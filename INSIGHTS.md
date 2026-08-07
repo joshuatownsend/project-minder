@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:bae437f19d0a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:31:23.064Z -->
+## ★ Insight
+Six findings across two PRs have now come from prose asserting more than the code delivers — a doc promising an MCP workaround, a comment claiming hourly refresh, and now a guarantee about search results. In every case the prose described the *intent* and the code implemented a subset. Writing the guarantee down is what made it checkable; the failure isn't documenting, it's documenting the design instead of the implementation.
+
+---
+
 <!-- insight:6637e42e30a5 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:15:38.508Z -->
 ## ★ Insight
 This finding only exists because of the *previous* fix — titles weren't searchable, so a title-match-with-recap-display couldn't happen. Three rounds on this PR, and each new finding was created by the prior round's change. That's not a sign of thrash; it's what happens when you change what a field means and the consequences propagate outward one hop at a time.
