@@ -1,5 +1,85 @@
 # Insights
 
+<!-- insight:6a5ee3d3545d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T11:41:58.349Z -->
+## ★ Insight
+The `source?: "otel" | "transcript"` field exists on `HookActivityResult` precisely so the UI can tell you which of the two it's showing — but `HookActivityCard` never reads it. That's the small gap: the backend carefully preserves the provenance distinction, and the card renders identical-looking rows either way.
+
+---
+
+<!-- insight:379e3b054573 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T19:24:02.770Z -->
+## ★ Insight
+The `user-invocable` bug survived a whole slice *because* it had a test. `it("still treats an absent flag as not invocable")` read like a deliberate decision, so the boolean-spelling work passed right over it — a test written from the same wrong assumption as the code doesn't verify the code, it **ratifies** it. The only thing that could catch this was the external spec.
+
+---
+
+<!-- insight:954da031d90d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T16:16:19.027Z -->
+## ★ Insight
+The watermark makes the repair **incremental rather than idempotent-but-expensive**. Re-running the migration's `UPDATE … WHERE request_id IS NULL` would also be correct, but `JSON_EXTRACT` can't use an index, so it'd re-scan 641k rows on every boot. `otel_events.id` being an INTEGER PRIMARY KEY means downgrade-written rows always sort *above* the watermark — the cheap check is sound precisely because SQLite rowids are monotonic.
+
+---
+
+<!-- insight:4cf880a5b7af | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T15:50:42.575Z -->
+## ★ Insight
+`userInvocable` defaults to **false** when frontmatter is silent, so Codex's framing ("a skill *declaring* both flags") is narrower than the real bug — I gated on the effective capability instead, which also covers the silent-default case.
+Qualifying only *colliding* skill IDs keeps existing IDs stable; IDs appear in URLs, so a blanket rewrite would break every saved link to fix a rare collision.
+
+---
+
+<!-- insight:3eb2ed8fc151 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T15:40:35.759Z -->
+## ★ Insight
+**"Unresolved" on GitHub ≠ "unfixed in code."** 29 threads show open, but I never clicked *Resolve* — I only posted summary comments. A thread stays open until someone resolves it or the exact lines change, so fixed findings linger and inflate the count.
+**The reviewed-commit SHA is the real signal.** Comparing each review's `Reviewed commit` against the current `headRefOid` tells you whether a finding is live or a re-post against dead code — far more reliable than reading the finding text.
+
+---
+
+<!-- insight:d3829875213b | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T03:28:59.230Z -->
+## ★ Insight
+The stale docstring was the tell. It didn't just *fail* to mention the gate — it explicitly justified the gate's absence with a premise ("no cost columns") that my own change had falsified. A comment that states *why* an invariant holds turns into a tripwire when the invariant breaks; one that only states *what* the code does would have stayed silently true.
+
+---
+
+<!-- insight:568d29a62f63 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T03:28:02.804Z -->
+## ★ Insight
+`COUNT(DISTINCT …)` alongside a bare `SUM()` over a fanned-out join is a classic trap: the distinct count *looks* like it's handling the duplication, so the row reads as correct at a glance. But it only protects the column it wraps — the money keeps multiplying. Whenever a JOIN can fan rows out, the dedupe has to happen in a subquery *before* aggregation, not per-column inside it.
+
+---
+
+<!-- insight:68f05cb5093f | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T02:55:09.948Z -->
+## ★ Insight
+Three defects surfaced in my own work this turn, each by a different mechanism:
+
+---
+
+<!-- insight:8b5a4a9c80fa | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T02:22:22.635Z -->
+## ★ Insight
+The cause is structural, and it's why the plan's intuition failed. The turn that *issues* a tool call is tiny — frequently a lone `tool_use` block. The expensive turn is the **next** one, which ingests a large tool result into context and reasons over it. Counting call sites finds the cheap turn and misses the costly one it caused.
+
+---
+
+<!-- insight:34edf45e0778 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T02:08:41.760Z -->
+## ★ Insight
+The plan predicted inference **over**-attributes; the data shows it **under**-attributes by 11× (MCP) and 373× (skills). The reason is that the two signals answer different questions. `tool_uses.mcp_server` marks the turn that *issued* the call — typically a small turn containing just a tool_use block. The expensive turn is the *next* one, which ingests a large tool result into context and reasons over it. Claude Code's `attribution_*` field marks the turns whose cost the server actually *caused*.
+
+---
+
+<!-- insight:d641c97a1be0 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-06T01:39:22.116Z -->
+## ★ Insight
+The lesson here is about **completeness of an invariant, not correctness of a check**. My guard stopped an old build from *rewriting* newer rows. Codex spotted that the prune pass reaches the same rows by a different verb — `DELETE` — and the guard never looked there. The invariant "a build never destroys data derived by a newer build" has two enforcement points; I had implemented one and written a PR title claiming both.
+
+---
+
+<!-- insight:9eee54160d5e | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T23:08:18.975Z -->
+## ★ Insight
+Two failures this session shared a shape worth naming: **a check that runs, reports success, and proves nothing.** The v12 tray reported `errors: 0` while destroying the index. The scratchpad re-index driver exited 0 having indexed nothing, because a failed `require` degrades gracefully by design. Both are why the driver now asserts `rowsWritten > 0` rather than trusting its own exit code.
+
+---
+
+<!-- insight:8debdab51275 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T22:18:27.959Z -->
+## ★ Insight
+The guard's **position** is the whole fix. Putting it only on the unchanged-file gate would have looked correct and fixed nothing: that gate requires mtime *and* size to match, so a session that merely grew — the common case for an active session — sails past it and lands in the tail-vs-full-replace decision, where `!==` sends it to full-replace. The destructive path was never the skip gate; it was the fallthrough.
+
+---
+
 <!-- insight:541e9b19f48d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-05T13:49:13.731Z -->
 ## ★ Insight
 The plan treated the effort × one-shot cross-tab as a join between two things that already existed. It wasn't one. One-shot is a property of a *sequence* (edit → verify → result), so no `GROUP BY` over `turns` can recover it, and the only persisted form was two session-level totals that cross with nothing finer than a whole session.
