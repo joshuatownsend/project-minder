@@ -71,19 +71,20 @@ function msToIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
-}
-
 /**
- * `percentile` over a value→count histogram instead of an expanded array.
+ * Nearest-rank percentile over a value→count histogram: the value at 1-based
+ * rank `ceil(p/100 * total)`.
  *
- * Identical nearest-rank rule: the value at 1-based rank `ceil(p/100 * total)`,
- * which is exactly `percentile`'s 0-based `idx + 1`. Expressed this way so a
- * caller can aggregate in SQL and stay bounded by *distinct* values rather than
- * by row count, without changing any number it would otherwise report.
+ * Expressed over counts rather than an expanded array so a caller can aggregate
+ * in SQL and stay bounded by *distinct* values rather than by row count, without
+ * changing any number it would otherwise report. This is now the only percentile
+ * in this module — the array-based twin it was written to match became dead once
+ * `getToolLatency` and `getHookActivity` both stopped reading raw rows.
+ *
+ * The same rule is reimplemented in `lib/sessions/hookSummary.ts`, which cannot
+ * import from here (this module is `server-only` and that one renders on the
+ * client); the duplication is deliberate and noted in both places so a session's
+ * p50 and the Stats card's p50 keep meaning the same thing.
  */
 function percentileFromHistogram(
   sorted: { value: number; count: number }[],
@@ -197,38 +198,63 @@ export async function getToolLatency(opts: {
     params.push(opts.sessionId);
   }
 
-  // Fetch raw rows for JS-side percentile computation (SQLite lacks PERCENTILE_CONT).
-  // LIMIT 50000 caps memory on high-volume installs; accuracy loss is negligible at that scale.
+  // SQLite lacks PERCENTILE_CONT, so the percentiles are computed in JS — but
+  // over a histogram, not a raw row list.
+  //
+  // This used to `ORDER BY ts DESC LIMIT 50000` and aggregate the result,
+  // truncating before grouping exactly as `getHookActivity` did: past the cap
+  // the newest rows won and everything older vanished, so `n`, `errorRate` and
+  // both percentiles described a recent suffix while presenting themselves as
+  // the whole period. The old comment called the accuracy loss "negligible at
+  // that scale", which was never measured — it is not a sampling error, it is
+  // a different (recent) population, and `n` is reported to the user as the
+  // sample size.
+  //
+  // Left latent until the Telemetry period toggle made `30d` and `all`
+  // selectable from the UI. Measured on the reference index when fixed: 34,488
+  // rows all-history against a 50,000 cap — under it, but growing ~1,020/day,
+  // so roughly two weeks from silently truncating.
+  //
+  // Grouping by (tool, duration, success) compresses 2.61x here and, more to
+  // the point, is bounded by *distinct* values rather than by row count, so it
+  // cannot silently truncate at any corpus size.
   const rows = prepCached(
     db,
     `SELECT
        JSON_EXTRACT(payload_json, '$.attrs.tool_name') AS tool_name,
        CAST(JSON_EXTRACT(payload_json, '$.attrs.duration_ms') AS REAL) AS duration_ms,
-       JSON_EXTRACT(payload_json, '$.attrs.success') AS success
+       JSON_EXTRACT(payload_json, '$.attrs.success') AS success,
+       COUNT(*) AS n
      FROM otel_events
      WHERE ${conditions.join(" AND ")}
        AND JSON_EXTRACT(payload_json, '$.attrs.duration_ms') IS NOT NULL
-     ORDER BY ts DESC
-     LIMIT 50000`,
-  ).all(...params) as { tool_name: string; duration_ms: number; success: string }[];
-  const byTool = new Map<string, { durations: number[]; errors: number }>();
+     GROUP BY tool_name, duration_ms, success`,
+  ).all(...params) as { tool_name: string; duration_ms: number; success: string; n: number }[];
+
+  // Durations keyed by value so the success/failure split collapses back
+  // together for the percentiles — a 20ms success and a 20ms failure are two
+  // observations of 20ms, and grouping by all three columns had them arrive as
+  // separate rows.
+  const byTool = new Map<string, { durations: Map<number, number>; errors: number; n: number }>();
   for (const row of rows) {
     if (!row.tool_name || !Number.isFinite(row.duration_ms)) continue;
-    const entry = byTool.get(row.tool_name) ?? { durations: [], errors: 0 };
-    entry.durations.push(row.duration_ms);
-    if (row.success !== "true") entry.errors++;
+    const entry = byTool.get(row.tool_name) ?? { durations: new Map(), errors: 0, n: 0 };
+    entry.durations.set(row.duration_ms, (entry.durations.get(row.duration_ms) ?? 0) + row.n);
+    entry.n += row.n;
+    if (row.success !== "true") entry.errors += row.n;
     byTool.set(row.tool_name, entry);
   }
 
   const tools: ToolLatencyRow[] = [];
-  for (const [name, { durations, errors }] of byTool) {
-    const sorted = durations.slice().sort((a, b) => a - b);
-    const n = sorted.length;
+  for (const [name, { durations, errors, n }] of byTool) {
+    const sorted = [...durations.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value - b.value);
     tools.push({
       name,
-      p50: Math.round(percentile(sorted, 50)),
-      p95: Math.round(percentile(sorted, 95)),
-      max: Math.round(sorted[n - 1] ?? 0),
+      p50: Math.round(percentileFromHistogram(sorted, n, 50)),
+      p95: Math.round(percentileFromHistogram(sorted, n, 95)),
+      max: Math.round(sorted[sorted.length - 1]?.value ?? 0),
       n,
       errorRate: n > 0 ? errors / n : 0,
     });

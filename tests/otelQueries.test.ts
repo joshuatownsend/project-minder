@@ -243,6 +243,38 @@ describe.skipIf(!driverAvailable)("getToolLatency", () => {
     expect(bash!.errorRate).toBe(0);
 
   });
+
+  // The query groups by (tool, duration, success) to stay bounded by distinct
+  // values instead of capping rows. That splits one duration across two rows
+  // when the same timing occurs both successfully and not — they must collapse
+  // back into two observations of one value, or `n` under-counts and the
+  // percentiles shift toward whichever outcome is rarer.
+  it("counts repeated durations once per occurrence, not once per distinct value", async () => {
+    const { mig, ingest, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    await ingest.ingestLogBatch(
+      [
+        // 20ms four times — twice succeeding, twice failing.
+        eventRecord(BASE_NANO + 0, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "true" }),
+        eventRecord(BASE_NANO + 1, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "true" }),
+        eventRecord(BASE_NANO + 2, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "false" }),
+        eventRecord(BASE_NANO + 3, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "false" }),
+        eventRecord(BASE_NANO + 4, "tool_result", { tool_name: "Grep", duration_ms: "900", success: "true" }),
+      ],
+      sessionResource("s-dup"),
+    );
+
+    const grep = (await queries.getToolLatency({ since: 0 })).tools.find((t) => t.name === "Grep")!;
+
+    // 5 events, not 2 distinct (duration, success) pairs and not 2 durations.
+    expect(grep.n).toBe(5);
+    expect(grep.errorRate).toBeCloseTo(2 / 5);
+    // Nearest-rank over [20,20,20,20,900]: rank 3 -> 20. Would be 900 if the
+    // four 20ms observations had collapsed to a single one (rank 1 of [20,900]).
+    expect(grep.p50).toBe(20);
+    expect(grep.max).toBe(900);
+  });
 });
 
 // ── getTokenUsage ─────────────────────────────────────────────────────────────

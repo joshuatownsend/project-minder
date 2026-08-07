@@ -34,22 +34,27 @@ export function SessionHooksPanel({ hookRuns, hookErrors }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      {/* Headline */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: "16px", flexWrap: "wrap" }}>
-        <div>
-          <div style={{ ...mono("1.1rem", "var(--text-primary)"), fontWeight: 600 }}>
-            {formatDurationMs(summary.totalMs)}
+      {/* Headline. Suppressed when the session recorded only failures — the
+          tab opens on errors alone, and "0s in hooks · 0 runs" would be three
+          zeroes standing in for "no runs were recorded", which the empty table
+          already says by not being there. */}
+      {summary.totalFires > 0 && (
+        <div style={{ display: "flex", alignItems: "baseline", gap: "16px", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ ...mono("1.1rem", "var(--text-primary)"), fontWeight: 600 }}>
+              {summary.measuredFires > 0 ? formatDurationMs(summary.totalMs) : "—"}
+            </div>
+            <div style={mono("0.6rem", "var(--text-muted)")}>in hooks</div>
           </div>
-          <div style={mono("0.6rem", "var(--text-muted)")}>in hooks</div>
+          <div style={mono("0.68rem", "var(--text-secondary)")}>
+            {summary.totalFires} {summary.totalFires === 1 ? "run" : "runs"} ·{" "}
+            {summary.groups.length} {summary.groups.length === 1 ? "command" : "commands"}
+            {/* Stated up front, because it bounds every number above it: the
+                total is the sum of what was measured, and these were not. */}
+            {unmeasured > 0 && ` · ${unmeasured} not timed`}
+          </div>
         </div>
-        <div style={mono("0.68rem", "var(--text-secondary)")}>
-          {summary.totalFires} {summary.totalFires === 1 ? "run" : "runs"} ·{" "}
-          {summary.groups.length} {summary.groups.length === 1 ? "command" : "commands"}
-          {/* Stated up front, because it bounds every number above it: the
-              total is the sum of what was measured, and these were not. */}
-          {unmeasured > 0 && ` · ${unmeasured} not timed`}
-        </div>
-      </div>
+      )}
 
       {summary.groups.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
