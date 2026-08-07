@@ -96,6 +96,25 @@ alongside the run list rather than as a field on each hook, so a failure cannot
 be pinned to a specific command; Minder records what is actually known — when it
 happened, what it said, and whether it stopped the turn continuing.
 
+### Where to see it
+
+| Surface | Question it answers |
+| --- | --- |
+| **Stats → Telemetry → Hook Activity** | Which hooks are slow across all my work? Ranked by fire count, with a badge naming the source. |
+| **Session detail → Hooks tab** | What did hooks cost *this* session? Ranked by total time. |
+| `get-hook-activity` (MCP) | Either pipeline, named explicitly — `source: "transcript"` is the only way to read transcript-derived runs on a machine where OTEL always wins the card. |
+
+The per-session **Hooks** tab appears on any session that recorded a hook run or
+a hook failure. It groups runs by command and ranks them by total measured time —
+the session's actual time sinks, which is not the same ordering as fire count.
+Each row shows runs, total, p50 and max; when only some runs were timed, the row
+says so (`12 (9 timed)`) and the untimed ones are excluded from every statistic.
+
+Failures are listed below the table, with a **blocked the turn** row styled
+distinctly from an **advisory** one — they differ in consequence, so they differ
+in appearance. The rows carry no command, because the underlying data genuinely
+cannot attribute a failure to one.
+
 ## Permission denials
 
 When a tool call is refused, Claude Code records *why*. Minder groups denials by

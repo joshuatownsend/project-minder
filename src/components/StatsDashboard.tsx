@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useStats } from "@/hooks/useStats";
 import { BarChart } from "./stats/BarChart";
@@ -19,13 +20,17 @@ import { TokenUsageCard } from "./stats/TokenUsageCard";
 import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
 import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
+import { PeriodToggle } from "./stats/PeriodToggle";
 import { ContextOverheadPanel } from "./ContextOverheadPanel";
+import { type Period } from "@/lib/telemetryPeriod";
+import { useTelemetrySince } from "@/hooks/useTelemetrySince";
 
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import type { StatsCrossCheck } from "@/lib/scanner/claudeStats";
 
-function SectionHeader({ label }: { label: string }) {
+/** `control` renders after the rule, right-aligned — used for the section-level period toggle. */
+function SectionHeader({ label, control }: { label: string; control?: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
       <span style={{
@@ -40,6 +45,7 @@ function SectionHeader({ label }: { label: string }) {
         {label}
       </span>
       <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+      {control}
     </div>
   );
 }
@@ -111,6 +117,27 @@ function CrossCheckCard({ cc }: { cc: StatsCrossCheck }) {
 export function StatsDashboard() {
   const { data, loading } = useStats();
   const { currency, fxRate } = useCurrency();
+  // One period for the whole Telemetry section. The cards used to disagree by
+  // construction: two carried their own toggle, four were hard-wired to a
+  // 7-day `defaultSince()` with no control at all, so the grid mixed windows
+  // and never said so.
+  //
+  // All six cards take the same `?since=` cutoff. They used to split across two
+  // encodings — four `?since=`, two `?period=` resolved server-side — and that
+  // split produced two review findings in a row: first the two groups computing
+  // different cutoffs, then, once the cutoffs agreed, the `?period=` URLs never
+  // changing, so those two cards held cached results from the previous hour
+  // bucket while the other four moved on. A constant URL is a constant cache
+  // key. Sending one concrete cutoff removes the class rather than the symptom
+  // (Codex review, #402).
+  //
+  // The cutoff is hour-bucketed, so it is stable across renders — an unstable
+  // value would re-fire all six fetches on every render. `useTelemetrySince`
+  // then schedules a recompute at each hour boundary, because stability alone
+  // left a page mounted overnight holding its original URLs and data forever:
+  // React does not re-render on wall-clock time, and nothing here polls.
+  const [telemetryPeriod, setTelemetryPeriod] = useState<Period>("7d");
+  const telemetrySince = useTelemetrySince(telemetryPeriod);
 
   if (loading || !data) {
     return (
@@ -382,28 +409,31 @@ export function StatsDashboard() {
 
       {/* Telemetry */}
       <section id="telemetry">
-        <SectionHeader label="Telemetry" />
+        <SectionHeader
+          label="Telemetry"
+          control={<PeriodToggle value={telemetryPeriod} onChange={setTelemetryPeriod} />}
+        />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
           <ChartBlock title="Edit Acceptance">
-            <EditAcceptanceCard />
+            <EditAcceptanceCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Tool Latency">
-            <ToolLatencyCard />
+            <ToolLatencyCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Token Usage">
-            <TokenUsageCard />
+            <TokenUsageCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Cache Efficiency">
-            <CacheEfficiencyCard />
+            <CacheEfficiencyCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Hook Activity">
-            <HookActivityCard />
+            <HookActivityCard since={telemetrySince} />
           </ChartBlock>
           <div /> {/* spacer */}
         </div>
         <div style={{ marginTop: "16px" }}>
           <ChartBlock title="Pressure">
-            <PressurePanel />
+            <PressurePanel since={telemetrySince} />
           </ChartBlock>
         </div>
       </section>

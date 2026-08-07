@@ -1,6 +1,8 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { getDb, prepCached } from "./connection";
+import type { Period } from "../telemetryPeriod";
+import { periodToMs } from "../telemetryPeriod";
 
 // OTEL attribute schema — empirically verified 2026-05-07 against real Claude Code traffic.
 // Run scripts/probe-otel.mjs to re-verify after Claude Code updates.
@@ -58,39 +60,31 @@ import { getDb, prepCached } from "./connection";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-export type Period = "today" | "7d" | "30d" | "all";
-
-export function periodToMs(period: Period): number {
-  const now = Date.now();
-  if (period === "today") {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  }
-  if (period === "7d")  return now - 7 * 24 * 60 * 60 * 1000;
-  if (period === "30d") return now - 30 * 24 * 60 * 60 * 1000;
-  // "all" — return 0 so the SQL `WHERE timestamp >= ?` matches every row.
-  return 0;
-}
+// Re-exported from a client-safe module so client components can import
+// `periodToMs`/`periodToSince` as values without dragging `server-only` — and
+// better-sqlite3 behind it — into the browser bundle. See lib/telemetryPeriod.ts.
+export type { Period } from "../telemetryPeriod";
+export { periodToMs, periodToSince } from "../telemetryPeriod";
 
 // otel_events.ts is TEXT (ISO-8601); comparison with toISOString() strings is safe.
 function msToIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
-}
-
 /**
- * `percentile` over a value→count histogram instead of an expanded array.
+ * Nearest-rank percentile over a value→count histogram: the value at 1-based
+ * rank `ceil(p/100 * total)`.
  *
- * Identical nearest-rank rule: the value at 1-based rank `ceil(p/100 * total)`,
- * which is exactly `percentile`'s 0-based `idx + 1`. Expressed this way so a
- * caller can aggregate in SQL and stay bounded by *distinct* values rather than
- * by row count, without changing any number it would otherwise report.
+ * Expressed over counts rather than an expanded array so a caller can aggregate
+ * in SQL and stay bounded by *distinct* values rather than by row count, without
+ * changing any number it would otherwise report. This is now the only percentile
+ * in this module — the array-based twin it was written to match became dead once
+ * `getToolLatency` and `getHookActivity` both stopped reading raw rows.
+ *
+ * The same rule is reimplemented in `lib/sessions/hookSummary.ts`, which cannot
+ * import from here (this module is `server-only` and that one renders on the
+ * client); the duplication is deliberate and noted in both places so a session's
+ * p50 and the Stats card's p50 keep meaning the same thing.
  */
 function percentileFromHistogram(
   sorted: { value: number; count: number }[],
@@ -204,38 +198,63 @@ export async function getToolLatency(opts: {
     params.push(opts.sessionId);
   }
 
-  // Fetch raw rows for JS-side percentile computation (SQLite lacks PERCENTILE_CONT).
-  // LIMIT 50000 caps memory on high-volume installs; accuracy loss is negligible at that scale.
+  // SQLite lacks PERCENTILE_CONT, so the percentiles are computed in JS — but
+  // over a histogram, not a raw row list.
+  //
+  // This used to `ORDER BY ts DESC LIMIT 50000` and aggregate the result,
+  // truncating before grouping exactly as `getHookActivity` did: past the cap
+  // the newest rows won and everything older vanished, so `n`, `errorRate` and
+  // both percentiles described a recent suffix while presenting themselves as
+  // the whole period. The old comment called the accuracy loss "negligible at
+  // that scale", which was never measured — it is not a sampling error, it is
+  // a different (recent) population, and `n` is reported to the user as the
+  // sample size.
+  //
+  // Left latent until the Telemetry period toggle made `30d` and `all`
+  // selectable from the UI. Measured on the reference index when fixed: 34,488
+  // rows all-history against a 50,000 cap — under it, but growing ~1,020/day,
+  // so roughly two weeks from silently truncating.
+  //
+  // Grouping by (tool, duration, success) compresses 2.61x here and, more to
+  // the point, is bounded by *distinct* values rather than by row count, so it
+  // cannot silently truncate at any corpus size.
   const rows = prepCached(
     db,
     `SELECT
        JSON_EXTRACT(payload_json, '$.attrs.tool_name') AS tool_name,
        CAST(JSON_EXTRACT(payload_json, '$.attrs.duration_ms') AS REAL) AS duration_ms,
-       JSON_EXTRACT(payload_json, '$.attrs.success') AS success
+       JSON_EXTRACT(payload_json, '$.attrs.success') AS success,
+       COUNT(*) AS n
      FROM otel_events
      WHERE ${conditions.join(" AND ")}
        AND JSON_EXTRACT(payload_json, '$.attrs.duration_ms') IS NOT NULL
-     ORDER BY ts DESC
-     LIMIT 50000`,
-  ).all(...params) as { tool_name: string; duration_ms: number; success: string }[];
-  const byTool = new Map<string, { durations: number[]; errors: number }>();
+     GROUP BY tool_name, duration_ms, success`,
+  ).all(...params) as { tool_name: string; duration_ms: number; success: string; n: number }[];
+
+  // Durations keyed by value so the success/failure split collapses back
+  // together for the percentiles — a 20ms success and a 20ms failure are two
+  // observations of 20ms, and grouping by all three columns had them arrive as
+  // separate rows.
+  const byTool = new Map<string, { durations: Map<number, number>; errors: number; n: number }>();
   for (const row of rows) {
     if (!row.tool_name || !Number.isFinite(row.duration_ms)) continue;
-    const entry = byTool.get(row.tool_name) ?? { durations: [], errors: 0 };
-    entry.durations.push(row.duration_ms);
-    if (row.success !== "true") entry.errors++;
+    const entry = byTool.get(row.tool_name) ?? { durations: new Map(), errors: 0, n: 0 };
+    entry.durations.set(row.duration_ms, (entry.durations.get(row.duration_ms) ?? 0) + row.n);
+    entry.n += row.n;
+    if (row.success !== "true") entry.errors += row.n;
     byTool.set(row.tool_name, entry);
   }
 
   const tools: ToolLatencyRow[] = [];
-  for (const [name, { durations, errors }] of byTool) {
-    const sorted = durations.slice().sort((a, b) => a - b);
-    const n = sorted.length;
+  for (const [name, { durations, errors, n }] of byTool) {
+    const sorted = [...durations.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value - b.value);
     tools.push({
       name,
-      p50: Math.round(percentile(sorted, 50)),
-      p95: Math.round(percentile(sorted, 95)),
-      max: Math.round(sorted[n - 1] ?? 0),
+      p50: Math.round(percentileFromHistogram(sorted, n, 50)),
+      p95: Math.round(percentileFromHistogram(sorted, n, 95)),
+      max: Math.round(sorted[sorted.length - 1]?.value ?? 0),
       n,
       errorRate: n > 0 ? errors / n : 0,
     });
@@ -293,12 +312,25 @@ function pivotTokenRows(rows: RawTokenRow[]): TokenDay[] {
   return [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
-export async function getTokenUsage(opts: { period: Period }): Promise<TokenUsageResult> {
+/**
+ * Takes `since` rather than a period name, like every other query here.
+ *
+ * These two were the only ones resolving their own window, which meant the
+ * client could not name the cutoff it wanted — it could only send `?period=7d`
+ * and hope. That constant URL is also a constant cache key, so when the shared
+ * Telemetry toggle advanced its bucket at an hour boundary the four
+ * `since`-driven cards refetched and these two kept serving results computed
+ * against the *previous* cutoff. Aligning what the server computed was not
+ * enough; the client had to be able to ask (Codex review of #402, twice).
+ *
+ * Callers convert with `periodToMs` at the boundary.
+ */
+export async function getTokenUsage(opts: { since: number }): Promise<TokenUsageResult> {
   const db = await getDb();
   const empty = { daily: [], totals: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }, hasData: false };
   if (!db) return empty;
 
-  const rows = queryRawTokenDays(db, periodToMs(opts.period));
+  const rows = queryRawTokenDays(db, opts.since);
   if (rows.length === 0) return empty;
 
   const daily = pivotTokenRows(rows);
@@ -330,12 +362,13 @@ export interface CacheEfficiencyResult {
   hasData: boolean;
 }
 
-export async function getCacheEfficiency(opts: { period: Period }): Promise<CacheEfficiencyResult> {
+/** Takes `since` rather than a period name — see `getTokenUsage`. */
+export async function getCacheEfficiency(opts: { since: number }): Promise<CacheEfficiencyResult> {
   const db = await getDb();
   const empty = { hitRate: 0, daily: [], totalBillable: 0, hasData: false };
   if (!db) return empty;
 
-  const rows = queryRawTokenDays(db, periodToMs(opts.period));
+  const rows = queryRawTokenDays(db, opts.since);
   if (rows.length === 0) return empty;
 
   const daily: CacheDay[] = [];
@@ -402,54 +435,118 @@ export interface HookActivityResult {
   source?: "otel" | "transcript";
 }
 
+/**
+ * Which pipeline to read hook latency from.
+ *
+ * `auto` prefers OTEL and falls back to the transcript only when OTEL returns
+ * nothing — the long-standing behaviour, and still the default.
+ *
+ * The explicit values exist because `auto` makes the transcript source
+ * *unreachable* once OTEL has any data: `since` is a lower bound, so every
+ * window ending at now includes recent events, and no choice of period falls
+ * back. The two are not interchangeable views of one dataset — OTEL keys on the
+ * hook name, the transcript on the command that ran — so "show me the other
+ * one" has to be asked for directly rather than approximated with a date range
+ * (Codex review of #402, which caught documentation promising this was already
+ * possible).
+ */
+export type HookActivitySource = "auto" | "otel" | "transcript";
+
 export async function getHookActivity(opts: {
   since: number;
+  source?: HookActivitySource;
 }): Promise<HookActivityResult> {
   const db = await getDb();
   if (!db) return { hooks: [], totalFires: 0, hasData: false };
 
   const sinceIso = msToIso(opts.since);
+  const source = opts.source ?? "auto";
 
+  // Asked for the transcript explicitly: never consult OTEL, and never fall
+  // forward to it when the transcript is empty. An empty answer for the source
+  // the caller named is the truthful one; silently substituting the other
+  // pipeline would return rows keyed on something else entirely.
+  if (source === "transcript") {
+    return getHookActivityFromTranscripts(db, sinceIso, opts.since <= 0);
+  }
+
+  // Grouped in SQL, for the same reason the transcript fallback below is.
+  //
+  // This used to `SELECT hook_name, duration_ms … ORDER BY ts DESC LIMIT 10000`
+  // and aggregate in JS, which truncated exactly the way the fallback's old
+  // `LIMIT 50000` did — the newest 10,000 rows survived and everything older
+  // was dropped BEFORE grouping. On the local corpus that is 10,000 of 80,824
+  // rows (12%) and 104 of 193 hook names, reported as if it were the whole
+  // period: `totalFires` read a suspiciously round 10000 for `7d`, `30d` and
+  // `all` alike, because the cap — not the window — decided the answer.
+  //
+  // A6 fixed this in the fallback and left the identical defect in the primary
+  // path, where it mattered more: OTEL wins whenever any hook event exists, so
+  // this is the branch nearly every machine with telemetry actually renders.
+  //
+  // The histogram keeps the result bounded without capping: one row per
+  // distinct (hook_name, duration) pair — 46,102 here against 80,824 rows —
+  // while the counts still describe every fire in the period.
   const rows = prepCached(
     db,
     `SELECT
        JSON_EXTRACT(payload_json, '$.attrs.hook_name') AS hook_name,
-       CAST(JSON_EXTRACT(payload_json, '$.attrs.total_duration_ms') AS REAL) AS duration_ms
+       CAST(JSON_EXTRACT(payload_json, '$.attrs.total_duration_ms') AS REAL) AS duration_ms,
+       COUNT(*) AS n
      FROM otel_events
      WHERE event_name = 'hook_execution_complete'
        AND ts >= ?
        AND JSON_EXTRACT(payload_json, '$.attrs.hook_name') IS NOT NULL
-     ORDER BY ts DESC
-     LIMIT 10000`,
-  ).all(sinceIso) as { hook_name: string; duration_ms: number }[];
+     GROUP BY hook_name, duration_ms`,
+  ).all(sinceIso) as { hook_name: string; duration_ms: number | null; n: number }[];
 
-  const byHook = new Map<string, number[]>();
+  const byHook = new Map<
+    string,
+    { measured: { value: number; count: number }[]; measuredFires: number; fires: number }
+  >();
   for (const row of rows) {
-    if (!row.hook_name || !Number.isFinite(row.duration_ms)) continue;
-    const arr = byHook.get(row.hook_name) ?? [];
-    arr.push(row.duration_ms);
-    byHook.set(row.hook_name, arr);
+    if (!row.hook_name) continue;
+    const cur = byHook.get(row.hook_name) ?? { measured: [], measuredFires: 0, fires: 0 };
+    // A fire with no usable duration still happened. It used to be dropped from
+    // `fires` entirely, so a hook OTEL timed inconsistently under-reported its
+    // own frequency; `measuredFires` is what carries the distinction. Every
+    // `hook_execution_complete` row on this corpus does carry the attribute, so
+    // this costs nothing today and stops lying if that ever changes.
+    cur.fires += row.n;
+    if (Number.isFinite(row.duration_ms as number)) {
+      cur.measured.push({ value: row.duration_ms as number, count: row.n });
+      cur.measuredFires += row.n;
+    }
+    byHook.set(row.hook_name, cur);
   }
 
   const hooks: HookRow[] = [];
   let totalFires = 0;
-  for (const [name, durations] of byHook) {
-    const sorted = durations.slice().sort((a, b) => a - b);
+  for (const [name, v] of byHook) {
+    const sorted = v.measured.slice().sort((a, b) => a.value - b.value);
     hooks.push({
       name,
-      fires: sorted.length,
-      // OTEL rows without a finite duration are filtered out above, so every
-      // fire counted here is also a measured one.
-      measuredFires: sorted.length,
-      p50DurationMs: Math.round(percentile(sorted, 50)),
-      p95DurationMs: Math.round(percentile(sorted, 95)),
+      fires: v.fires,
+      measuredFires: v.measuredFires,
+      // Omitted entirely when nothing was measured — see HookRow.
+      ...(v.measuredFires
+        ? {
+            p50DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 50)),
+            p95DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 95)),
+          }
+        : {}),
     });
-    totalFires += sorted.length;
+    totalFires += v.fires;
   }
   hooks.sort((a, b) => b.fires - a.fires);
 
   if (hooks.length > 0) {
     return { hooks, totalFires, hasData: true, source: "otel" };
+  }
+
+  // Asked for OTEL explicitly: report the empty result rather than falling back.
+  if (source === "otel") {
+    return { hooks: [], totalFires: 0, hasData: false, source: "otel" };
   }
 
   // No OTEL hook events. That is the DEFAULT state, not an edge case: OTEL is

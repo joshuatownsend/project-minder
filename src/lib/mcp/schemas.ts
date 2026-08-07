@@ -33,6 +33,21 @@ export const OtelPeriodSchema = z
   .default("7d")
   .describe("OTEL time window: today, 7d, 30d, or all-time");
 
+// Named explicitly because `auto` cannot reach the transcript pipeline once
+// OTEL has data — `since` is a lower bound, so no time window excludes recent
+// events and the fallback never fires. Asking for the other source is a
+// separate question from asking for a different date range.
+export const HookActivitySourceSchema = z
+  .enum(["auto", "otel", "transcript"])
+  .default("auto")
+  .describe(
+    "Which pipeline to read hook latency from. 'auto' prefers OTEL and falls " +
+      "back to transcripts only when OTEL is empty. 'transcript' forces the " +
+      "transcript-derived runs, which cover all history and key rows by the " +
+      "command that ran rather than the hook name — the only way to see them " +
+      "on a machine where OTEL telemetry is enabled.",
+  );
+
 export const AgentUsagePeriodSchema = z
   .enum(["today", "7d", "30d", "all"])
   .default("all")

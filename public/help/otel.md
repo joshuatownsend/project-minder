@@ -67,14 +67,48 @@ Navigate to **Stats → Telemetry** (or scroll to the bottom of `/stats`).
 |---|---|---|
 | **Edit Acceptance** | Per-tool accept/reject rates with color-coded progress bars (green ≥ 80%, amber ≥ 50%, red otherwise). SampleBadge turns amber when fewer than 10 decisions are recorded. | `tool_decision` events |
 | **Tool Latency** | p50 / p95 / max latency table per tool. Rows turn red when p95 ≥ 10 s; a green dot appears when p50 < 500 ms. | `tool_result` events with `duration_ms` |
-| **Token Usage** | Today / 7d / 30d toggle. Shows daily input, output, cache-read, and cache-creation totals as stacked mini-bars. | `claude_code.token.usage` metrics |
+| **Token Usage** | Daily input, output, cache-read, and cache-creation totals as stacked mini-bars. | `claude_code.token.usage` metrics |
 | **Cache Efficiency** | Large hit-rate percentage with a daily sparkline and a dashed 70% target line. Hit rate = cacheRead ÷ (input + output + cacheCreation). | `claude_code.token.usage` metrics |
-| **Hook Activity** | Fire counts per hook with proportional bars, plus p50 / p95 execution durations. | `hook_execution_complete` events |
+| **Hook Activity** | Fire counts per hook with proportional bars, plus p50 / p95 execution durations, and a badge naming the data source. | `hook_execution_complete` events |
 | **Pressure** | API error count, retry-exhaustion count, and context-compaction count. Expands to a list of the 10 most recent errors with timestamp, retry attempt, and message preview. | `api_error`, `api_retries_exhausted`, `compaction` events |
 
-All cards default to the last 7 days. The window is not yet configurable in
-the UI; use the `/api/telemetry/*` endpoints directly if you need a custom
-range.
+### Choosing the window
+
+One **today / 7d / 30d / all** toggle sits in the `Telemetry` section header and
+governs every card beneath it. It defaults to 7 days.
+
+Previously the cards disagreed by construction: Token Usage and Cache Efficiency
+each carried their own toggle, while the other four were hard-wired to a 7-day
+window with no control at all — so the grid could show two periods at once and
+never said which was which.
+
+### What the Hook Activity source badge means
+
+Hook latency has two possible sources, and a row means something different in
+each — so the card names the one it used:
+
+- **OTEL** — rows are hook *names* (`PreToolUse:Bash`), from
+  `hook_execution_complete` events. Only covers the period since you enabled
+  telemetry.
+- **transcript** — rows are the *commands* each hook ran (`codegraph sync`),
+  decoded from session transcripts. Needs no setup and covers all history.
+
+OTEL is preferred whenever any hook event exists. Because `since` is a lower
+bound, **no choice of period falls back to the transcript source once OTEL has
+data** — every window that ends at "now" includes recent events.
+
+To read the transcript pipeline on a machine with telemetry enabled, ask for it
+by name via the MCP tool:
+
+```
+get-hook-activity(period: "all", source: "transcript")
+```
+
+`source` accepts `auto` (the default preference order), `otel`, or
+`transcript`. A forced source never falls through to the other one — an empty
+result for the pipeline you named is the honest answer, where substituting the
+other would return rows keyed on something else entirely. The card itself has no
+source control yet; that is tracked in `TODO.md`.
 
 ### Session detail — Tools tab
 

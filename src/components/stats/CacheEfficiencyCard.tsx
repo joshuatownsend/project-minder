@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { SampleBadge } from "./SampleBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CacheEfficiencyResult, Period } from "@/lib/db/otelQueries";
-import { PeriodToggle } from "./PeriodToggle";
+import type { CacheEfficiencyResult } from "@/lib/db/otelQueries";
 
 const TARGET_HIT_RATE = 0.7;
 
@@ -15,16 +13,14 @@ function hitRateColor(rate: number): string {
   return "var(--status-error-text)";
 }
 
-export function CacheEfficiencyCard() {
-  const [period, setPeriod] = useState<Period>("7d");
+/** Fully controlled by the Telemetry section — see TokenUsageCard. */
+export function CacheEfficiencyCard({ since }: { since: string }) {
   const { data, loading, error } = useReportFetch<CacheEfficiencyResult>(
-    `/api/telemetry/cache-efficiency?period=${period}`,
+    `/api/telemetry/cache-efficiency?since=${encodeURIComponent(since)}`,
   );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      <PeriodToggle value={period} onChange={setPeriod} />
-
       {loading && <Skeleton className="h-24" />}
 
       {!loading && (error || !data?.hasData) && (

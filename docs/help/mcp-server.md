@@ -81,7 +81,7 @@ The server registers ~39 tools and ~12 resources covering every major Project Mi
 | `get-tool-latency` | Per-tool P50/P95/max + error rate |
 | `get-edit-acceptance` | Per-tool Edit/Write acceptance rate |
 | `get-cache-efficiency` | Daily prompt-cache hit-rate trend |
-| `get-hook-activity` | Hook fire counts + duration percentiles |
+| `get-hook-activity` | Hook fire counts + duration percentiles. `source: auto \| otel \| transcript` — `transcript` is the only way to read the transcript pipeline once OTEL has data |
 | `get-context-pressure` | api_error / compaction / retry-exhaustion counts |
 | `get-token-usage-telemetry` | Daily token series from OTEL metrics |
 

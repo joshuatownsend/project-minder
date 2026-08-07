@@ -243,6 +243,38 @@ describe.skipIf(!driverAvailable)("getToolLatency", () => {
     expect(bash!.errorRate).toBe(0);
 
   });
+
+  // The query groups by (tool, duration, success) to stay bounded by distinct
+  // values instead of capping rows. That splits one duration across two rows
+  // when the same timing occurs both successfully and not — they must collapse
+  // back into two observations of one value, or `n` under-counts and the
+  // percentiles shift toward whichever outcome is rarer.
+  it("counts repeated durations once per occurrence, not once per distinct value", async () => {
+    const { mig, ingest, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    await ingest.ingestLogBatch(
+      [
+        // 20ms four times — twice succeeding, twice failing.
+        eventRecord(BASE_NANO + 0, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "true" }),
+        eventRecord(BASE_NANO + 1, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "true" }),
+        eventRecord(BASE_NANO + 2, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "false" }),
+        eventRecord(BASE_NANO + 3, "tool_result", { tool_name: "Grep", duration_ms: "20", success: "false" }),
+        eventRecord(BASE_NANO + 4, "tool_result", { tool_name: "Grep", duration_ms: "900", success: "true" }),
+      ],
+      sessionResource("s-dup"),
+    );
+
+    const grep = (await queries.getToolLatency({ since: 0 })).tools.find((t) => t.name === "Grep")!;
+
+    // 5 events, not 2 distinct (duration, success) pairs and not 2 durations.
+    expect(grep.n).toBe(5);
+    expect(grep.errorRate).toBeCloseTo(2 / 5);
+    // Nearest-rank over [20,20,20,20,900]: rank 3 -> 20. Would be 900 if the
+    // four 20ms observations had collapsed to a single one (rank 1 of [20,900]).
+    expect(grep.p50).toBe(20);
+    expect(grep.max).toBe(900);
+  });
 });
 
 // ── getTokenUsage ─────────────────────────────────────────────────────────────
@@ -251,7 +283,7 @@ describe.skipIf(!driverAvailable)("getTokenUsage", () => {
   it("returns empty result when no token metrics exist", async () => {
     const { mig, queries } = await reloadModules(tmpHome);
     await mig.initDb();
-    const result = await queries.getTokenUsage({ period: "7d" });
+    const result = await queries.getTokenUsage({ since: queries.periodToMs("7d") });
     expect(result.hasData).toBe(false);
   });
 
@@ -269,7 +301,7 @@ describe.skipIf(!driverAvailable)("getTokenUsage", () => {
         );
       }
 
-      const result = await queries.getTokenUsage({ period: "7d" });
+      const result = await queries.getTokenUsage({ since: queries.periodToMs("7d") });
       expect(result.hasData).toBe(true);
       expect(result.totals.input).toBe(1000);
       expect(result.totals.output).toBe(500);
@@ -289,7 +321,7 @@ describe.skipIf(!driverAvailable)("getCacheEfficiency", () => {
   it("returns empty result when no token metrics exist", async () => {
     const { mig, queries } = await reloadModules(tmpHome);
     await mig.initDb();
-    const result = await queries.getCacheEfficiency({ period: "7d" });
+    const result = await queries.getCacheEfficiency({ since: queries.periodToMs("7d") });
     expect(result.hasData).toBe(false);
   });
 
@@ -307,7 +339,7 @@ describe.skipIf(!driverAvailable)("getCacheEfficiency", () => {
         );
       }
 
-      const result = await queries.getCacheEfficiency({ period: "7d" });
+      const result = await queries.getCacheEfficiency({ since: queries.periodToMs("7d") });
       expect(result.hasData).toBe(true);
       // hitRate = cacheRead / (cacheRead + input + output + cacheCreation)
       //         = 400 / (400 + 800 + 200 + 100)
@@ -357,6 +389,40 @@ describe.skipIf(!driverAvailable)("getHookActivity", () => {
     expect(session!.fires).toBe(1);
     expect(session!.p50DurationMs).toBe(3000);
 
+  });
+
+  // The point of the explicit source is that `auto` cannot reach the transcript
+  // pipeline once OTEL has any events — `since` is a lower bound, so no window
+  // excludes them and the fallback never fires. A forced source must therefore
+  // not fall through in either direction, or it is just `auto` with extra steps.
+  it("honours an explicit source instead of falling through to the other pipeline", async () => {
+    const { mig, ingest, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    await ingest.ingestLogBatch(
+      [eventRecord(BASE_NANO, "hook_execution_complete", { hook_name: "PreToolUse:Bash", total_duration_ms: "50", hook_event: "PreToolUse" })],
+      sessionResource("s1"),
+    );
+
+    // auto: OTEL present, so OTEL answers.
+    expect((await queries.getHookActivity({ since: 0 })).source).toBe("otel");
+    expect((await queries.getHookActivity({ since: 0, source: "auto" })).source).toBe("otel");
+
+    // transcript: no session_hook_runs rows were ingested here, so the honest
+    // answer is empty — NOT the OTEL rows that `auto` would have returned.
+    const forced = await queries.getHookActivity({ since: 0, source: "transcript" });
+    expect(forced.source).toBe("transcript");
+    expect(forced.hasData).toBe(false);
+    expect(forced.hooks).toEqual([]);
+  });
+
+  it("reports an empty otel result rather than falling back when otel is forced", async () => {
+    const { mig, queries } = await reloadModules(tmpHome);
+    await mig.initDb();
+
+    const forced = await queries.getHookActivity({ since: 0, source: "otel" });
+    expect(forced.source).toBe("otel");
+    expect(forced.hasData).toBe(false);
   });
 });
 

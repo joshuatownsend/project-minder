@@ -29,6 +29,7 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { SessionTimeline } from "./SessionTimeline";
 import { SessionFileOps } from "./SessionFileOps";
 import { SessionSubagents } from "./SessionSubagents";
+import { SessionHooksPanel } from "./SessionHooksPanel";
 import { DiagnosisPanel } from "./DiagnosisPanel";
 import { ContextAttributionPanel } from "./ContextAttributionPanel";
 import { SessionMetaPanel } from "./SessionMetaPanel";
@@ -513,7 +514,7 @@ function GenerateTitleButton({
 // Stats-strip cell now uses the shared primitive — see src/components/ui/StatCell.tsx.
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
-type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "context" | "diagnosis" | "feedback";
+type TabKey = "timeline" | "tools" | "files" | "skills" | "subagents" | "orchestration" | "concurrency" | "delegation" | "network" | "handoff" | "context" | "diagnosis" | "feedback" | "hooks";
 
 function TabBar({
   tabs, active, onChange,
@@ -637,6 +638,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
   }
 
   const totalTools = Object.values(data.toolUsage).reduce((s, c) => s + c, 0);
+  const hookRunCount = data.hookRuns?.length ?? 0;
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "timeline",  label: `Timeline (${data.timeline.length})` },
@@ -647,6 +649,13 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
       : []),
     ...(data.subagents.length > 0
       ? [{ key: "subagents" as TabKey, label: `Subagents (${data.subagents.length})` }]
+      : []),
+    // Presence-gated only — deliberately NOT behind `!isDemoSession`. That
+    // guard exists for tabs that fetch id-keyed secondary endpoints, which
+    // 404 for synthetic ids; this panel derives from the detail payload
+    // already in hand, and the demo fixtures carry `hookRuns` too.
+    ...(hookRunCount > 0 || (data.hookErrors?.length ?? 0) > 0
+      ? [{ key: "hooks" as TabKey, label: `Hooks (${hookRunCount})` }]
       : []),
     ...(data.subagentCount > 0 && !isDemoSession
       ? [{ key: "orchestration" as TabKey, label: "Orchestration" }]
@@ -1079,6 +1088,10 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
           {activeTab === "subagents" && (
             <SessionSubagents subagents={data.subagents} />
+          )}
+
+          {activeTab === "hooks" && (
+            <SessionHooksPanel hookRuns={data.hookRuns} hookErrors={data.hookErrors} />
           )}
 
           {activeTab === "orchestration" && (

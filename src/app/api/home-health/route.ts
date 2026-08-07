@@ -45,7 +45,12 @@ export async function GET(request: Request): Promise<NextResponse> {
   // (PR #103 codex P1).
   const mcpRun = await safeAwait(getLatestRun(), null);
   const [cache, mcpFindings, pressure, edit] = await Promise.all([
-    safeAwait(getCacheEfficiency({ period: "7d" }), null),
+    // The route's own `since`, shared with Pressure and Edit Acceptance below.
+    // Resolving this one through `periodToMs("7d")` instead rounded it down to
+    // the hour while the other two stayed at exactly now−7d, so up to 59 extra
+    // minutes of metrics fed one of three inputs to a single score that claims
+    // to describe one seven-day window (Codex review of #402).
+    safeAwait(getCacheEfficiency({ since }), null),
     safeAwait(
       mcpRun ? getAllFindings(undefined, mcpRun.id) : Promise.resolve([]),
       [] as Awaited<ReturnType<typeof getAllFindings>>,
