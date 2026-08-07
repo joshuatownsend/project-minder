@@ -88,6 +88,45 @@ export function msUntilNextHourBoundary(now: number = Date.now()): number {
   return HOUR_MS - (now % HOUR_MS);
 }
 
+/**
+ * Milliseconds until the start of the next local day.
+ *
+ * `setHours(24, …)` rather than arithmetic on the date, so the browser's own
+ * calendar decides — a DST transition makes the day 23 or 25 hours long and
+ * `+ 86_400_000` would land an hour off on those two days a year.
+ *
+ * Never returns 0: called exactly at midnight, the *next* midnight is a day
+ * away.
+ */
+export function msUntilNextLocalMidnight(now: number = Date.now()): number {
+  const d = new Date(now);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime() - now;
+}
+
+/**
+ * When the cutoff for `period` next changes, or `null` if it never does.
+ *
+ * The two rolling windows move on the epoch hour, but `today` moves at *local
+ * midnight*, and the two are not the same instant in a fractional-offset zone
+ * — Asia/Kolkata (+5:30), Asia/Kathmandu (+5:45), America/St_Johns (−3:30).
+ * Scheduling `today` on the hour left a page open across midnight showing the
+ * previous day's window for up to 45 minutes there (Codex review of #402).
+ *
+ * The mismatch is not only fractional-zone, which is what makes it worth
+ * routing per period rather than taking the minimum of both: an hourly fire at
+ * 22:00 recomputes the same midnight and changes nothing, so before this the
+ * `today` refresh landed only when a fire happened to coincide with midnight.
+ *
+ * `all` is epoch 0 forever — `null` says "do not arm a timer" rather than
+ * inventing a wake-up that cannot change anything.
+ */
+export function msUntilCutoffChange(period: Period, now: number = Date.now()): number | null {
+  if (period === "all") return null;
+  if (period === "today") return msUntilNextLocalMidnight(now);
+  return msUntilNextHourBoundary(now);
+}
+
 export const PERIODS: readonly Period[] = ["today", "7d", "30d", "all"];
 
 /**

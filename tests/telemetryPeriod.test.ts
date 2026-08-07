@@ -4,6 +4,7 @@ import {
   periodToSince,
   resolveSinceParam,
   msUntilNextHourBoundary,
+  msUntilCutoffChange,
   type Period,
 } from "@/lib/telemetryPeriod";
 
@@ -94,6 +95,64 @@ describe("msUntilNextHourBoundary", () => {
     const before = periodToMs("7d", MESSY_NOW);
     const after = periodToMs("7d", MESSY_NOW + msUntilNextHourBoundary(MESSY_NOW));
     expect(after).toBe(before + HOUR_MS);
+  });
+});
+
+describe("msUntilCutoffChange", () => {
+  /**
+   * 21:30 *local* on a fixed date. Chosen so the next local midnight (2h30m
+   * away) is strictly further off than the next epoch-hour boundary (≤1h) in
+   * every time zone — which is what makes the `today` assertion below fail
+   * under the old hour-only scheduling on any CI machine, not merely on one
+   * with a fractional UTC offset.
+   */
+  const LOCAL_2130 = (() => {
+    const d = new Date("2026-08-07T12:00:00Z");
+    d.setHours(21, 30, 0, 0);
+    return d.getTime();
+  })();
+
+  function nextLocalMidnight(from: number): number {
+    const d = new Date(from);
+    d.setHours(24, 0, 0, 0);
+    return d.getTime();
+  }
+
+  it("schedules 'today' at local midnight, not on the epoch hour", () => {
+    const delay = msUntilCutoffChange("today", LOCAL_2130)!;
+    expect(LOCAL_2130 + delay).toBe(nextLocalMidnight(LOCAL_2130));
+    // The discriminator: an hour-boundary delay is strictly shorter here, and
+    // waiting only that long leaves `today` pointing at the same midnight.
+    expect(delay).toBeGreaterThan(msUntilNextHourBoundary(LOCAL_2130));
+    expect(periodToMs("today", LOCAL_2130 + msUntilNextHourBoundary(LOCAL_2130)))
+      .toBe(periodToMs("today", LOCAL_2130));
+  });
+
+  it("waiting the scheduled delay actually rolls the 'today' window", () => {
+    const delay = msUntilCutoffChange("today", LOCAL_2130)!;
+    expect(periodToMs("today", LOCAL_2130 + delay))
+      .toBeGreaterThan(periodToMs("today", LOCAL_2130));
+  });
+
+  it("schedules the rolling windows on the epoch hour", () => {
+    for (const period of ["7d", "30d"] as Period[]) {
+      expect(msUntilCutoffChange(period, MESSY_NOW)).toBe(msUntilNextHourBoundary(MESSY_NOW));
+    }
+  });
+
+  it("returns null for 'all', whose cutoff never moves", () => {
+    // Not a large number: setTimeout coerces anything past 2^31-1 to ~1ms and
+    // would spin. `null` tells the caller not to arm a timer at all.
+    expect(msUntilCutoffChange("all", MESSY_NOW)).toBeNull();
+  });
+
+  it("never schedules a zero or negative delay for any period", () => {
+    const midnight = nextLocalMidnight(LOCAL_2130);
+    for (const at of [midnight, midnight + 1, LOCAL_2130, MESSY_NOW]) {
+      for (const period of ["today", "7d", "30d"] as Period[]) {
+        expect(msUntilCutoffChange(period, at)!).toBeGreaterThan(0);
+      }
+    }
   });
 });
 

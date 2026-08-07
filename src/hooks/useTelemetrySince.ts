@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { periodToSince, msUntilNextHourBoundary, type Period } from "@/lib/telemetryPeriod";
+import { periodToSince, msUntilCutoffChange, type Period } from "@/lib/telemetryPeriod";
 
 /**
  * Fire just *after* the boundary. A timer that lands a millisecond early would
- * recompute the same bucket it already had, produce an identical string, and
- * skip the refetch entirely until the following hour.
+ * recompute the same cutoff it already had, produce an identical string, and
+ * skip the refetch entirely until the next one.
  */
 const BOUNDARY_MARGIN_MS = 1_000;
 
@@ -38,16 +38,20 @@ export function useTelemetrySince(period: Period): string {
     // already holds is a no-op — React bails out on Object.is equality.
     setSince(periodToSince(period));
 
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
+      // Per period, because the cutoffs move on different clocks: the rolling
+      // windows on the epoch hour, `today` at local midnight, `all` never.
+      const delay = msUntilCutoffChange(period);
+      if (delay === null) return; // `all` — epoch 0 forever, nothing to wake for.
       timer = setTimeout(() => {
         setSince(periodToSince(period));
         schedule();
-      }, msUntilNextHourBoundary() + BOUNDARY_MARGIN_MS);
+      }, delay + BOUNDARY_MARGIN_MS);
     };
     schedule();
 
-    return () => clearTimeout(timer);
+    return () => { if (timer !== undefined) clearTimeout(timer); };
   }, [period]);
 
   return since;

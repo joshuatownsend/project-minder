@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:b6a8967f9610 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T15:21:07.880Z -->
+## ★ Insight
+The test picks **21:30 local** deliberately: at that hour the next local midnight is strictly further off than the next epoch-hour boundary in *every* timezone. So the assertion fails under the old scheduling on any CI machine — I didn't have to manipulate `TZ` to catch a timezone bug, which would have been flaky across the Linux and Windows runners.
+
+---
+
 <!-- insight:3a9f89b7f3d3 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T15:04:28.597Z -->
 ## ★ Insight
 Both of my last two self-inflicted findings were *comments that claimed more than the code did* — "advances hourly," and before that a doc promising an MCP workaround. In each case the prose described the intended design and the code implemented something narrower. Comments asserting behaviour are load-bearing claims; this reviewer has now caught three of mine.
