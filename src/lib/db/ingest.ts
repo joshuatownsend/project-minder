@@ -477,8 +477,10 @@ interface ParsedSession {
   entrypoint: string | null;
   /** Permission-mode changes, in file order (`type: "permission-mode"`). */
   permissionModes: Array<{ ts: string | null; mode: string }>;
-  /** Hook executions from assistant `hookInfos`. One-to-many, hence its own table. */
+  /** Hook executions from `hookInfos` on SYSTEM entries. One-to-many, hence its own table. */
   hookRuns: Array<{ ts: string | null; command: string; durationMs: number | null }>;
+  /** Hook failures from the sibling `hookErrors` array. Not attributable to a specific command. */
+  hookErrors: Array<{ ts: string | null; message: string; preventedContinuation: boolean }>;
   /**
    * PRs harvested from `gh pr create` tool_result text (T2.2). Matched
    * by `tool_use_id` (not positional) so parallel Bash dispatches can't
@@ -622,6 +624,45 @@ async function readJsonlSession(
   const permissionModes: Array<{ ts: string | null; mode: string }> = [];
   const hookRuns: Array<{ ts: string | null; command: string; durationMs: number | null }> = [];
   let sawPrLink = false;
+  const hookErrors: Array<{ ts: string | null; message: string; preventedContinuation: boolean }> = [];
+
+  /**
+   * Pull hook telemetry off one entry.
+   *
+   * `durationMs` is genuinely optional — 4,189 of the 20,284 hook records on the
+   * local corpus carry a command and no duration. That is "not measured", so it
+   * stays NULL; rendering it as 0 ms would make an unmeasured hook look like the
+   * fastest one in the list.
+   *
+   * `hookErrors` is a sibling array of plain strings, NOT a field inside each
+   * `hookInfos` entry, so an error cannot be attributed to a specific hook —
+   * they are recorded per entry instead of guessed onto a command.
+   */
+  function collectHookInfo(entry: ConversationEntry): void {
+    if (Array.isArray(entry.hookInfos)) {
+      for (const h of entry.hookInfos) {
+        if (h && typeof h.command === "string" && h.command) {
+          hookRuns.push({
+            ts: entry.timestamp ?? null,
+            command: h.command,
+            durationMs: typeof h.durationMs === "number" ? h.durationMs : null,
+          });
+        }
+      }
+    }
+    if (Array.isArray(entry.hookErrors)) {
+      const blocked = entry.preventedContinuation === true;
+      for (const msg of entry.hookErrors) {
+        if (typeof msg === "string" && msg) {
+          hookErrors.push({
+            ts: entry.timestamp ?? null,
+            message: msg,
+            preventedContinuation: blocked,
+          });
+        }
+      }
+    }
+  }
 
   // Parse JSONL lines once into an array so the pre-pass and main pass
   // both walk parsed objects — avoids a second JSON.parse per line.
@@ -761,6 +802,16 @@ async function readJsonlSession(
 
     // Handle system entries for meta extraction before the role-gated block.
     if (entry.type === "system") {
+      // A6: hook runs ride SYSTEM entries — measured at 4,189 of 4,189 carriers
+      // across the local corpus, and zero on assistant entries. The decode used
+      // to sit ~40 lines below this branch, under a comment asserting it rode
+      // assistant entries, so this unconditional `continue` reached it first and
+      // `session_hook_runs` was structurally guaranteed to stay empty. It did:
+      // 0 rows on a fully-reconciled 1.5 GB index.
+      //
+      // Nothing errored, which is why it survived — an empty latency table reads
+      // exactly like "no hooks configured".
+      collectHookInfo(entry);
       if (entry.subtype === "compact_boundary" && entry.timestamp) {
         compactBoundaries.push(entry.timestamp);
       } else if (
@@ -808,20 +859,11 @@ async function readJsonlSession(
       }
       // Fall through: attachments are otherwise handled by the existing logic.
     }
-    // Hook runs ride assistant entries (including sidechain ones — a hook that
-    // ran during a subagent turn still ran), so collect before the sidechain
-    // branch below diverts those entries.
-    if (Array.isArray(entry.hookInfos)) {
-      for (const h of entry.hookInfos) {
-        if (h && typeof h.command === "string" && h.command) {
-          hookRuns.push({
-            ts: entry.timestamp ?? null,
-            command: h.command,
-            durationMs: typeof h.durationMs === "number" ? h.durationMs : null,
-          });
-        }
-      }
-    }
+    // Hook info is collected in the `system` branch above, which is where it
+    // actually lives. Kept here as a safety net in case a future release moves
+    // it onto another entry type — `collectHookInfo` dedupes nothing, but the
+    // `system` branch `continue`s, so no entry can reach both calls.
+    collectHookInfo(entry);
 
     if (entry.isMeta || !entry.timestamp) continue;
     // A1: subagent (sidechain) turns don't participate in status inference,
@@ -1199,7 +1241,8 @@ async function readJsonlSession(
   // promoted" symptom reported in review: the promoting write never ran at all,
   // because the whole window was discarded.
   const hasA1Metadata =
-    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0 || sawPrLink;
+    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0 ||
+    hookErrors.length > 0 || sawPrLink;
   if (turns.length === 0 && sidechainCollected.length === 0 && !hasA1Metadata) {
     return { parsed: null, safeOffset, hasOrphanToolResults };
   }
@@ -1458,6 +1501,7 @@ async function readJsonlSession(
       entrypoint,
       permissionModes,
       hookRuns,
+      hookErrors,
       // Run the PR extractor on the already-parsed entries. The walk is
       // cheap (no JSON.parse hit; reuses `parsedLines.entry`) and skips
       // sessions that never invoked `gh pr create`. A throw here would
@@ -1761,6 +1805,14 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   );
   for (const h of s.hookRuns) {
     insertHookRun.run(s.sessionId, h.ts, h.command, h.durationMs);
+    rows++;
+  }
+  db.prepare("DELETE FROM session_hook_errors WHERE session_id = ?").run(s.sessionId);
+  const insertHookError = db.prepare(
+    "INSERT INTO session_hook_errors (session_id, ts, message, prevented_continuation) VALUES (?, ?, ?, ?)"
+  );
+  for (const h of s.hookErrors) {
+    insertHookError.run(s.sessionId, h.ts, h.message, h.preventedContinuation ? 1 : 0);
     rows++;
   }
   db.prepare("DELETE FROM session_permission_modes WHERE session_id = ?").run(s.sessionId);
@@ -2632,6 +2684,15 @@ function appendSessionTail(
       rows++;
     }
   }
+  if (parsed.hookErrors.length > 0) {
+    const insertHookError = db.prepare(
+      "INSERT INTO session_hook_errors (session_id, ts, message, prevented_continuation) VALUES (?, ?, ?, ?)"
+    );
+    for (const h of parsed.hookErrors) {
+      insertHookError.run(sessionId, h.ts, h.message, h.preventedContinuation ? 1 : 0);
+      rows++;
+    }
+  }
   if (parsed.permissionModes.length > 0) {
     const insertPermissionMode = db.prepare(
       "INSERT INTO session_permission_modes (session_id, ts, mode) VALUES (?, ?, ?)"
@@ -3191,6 +3252,7 @@ export function buildAdapterParsedSession(
     entrypoint: null,
     permissionModes: [],
     hookRuns: [],
+    hookErrors: [],
     prs: [],
     tickets: [],
     turns: parsedTurns,

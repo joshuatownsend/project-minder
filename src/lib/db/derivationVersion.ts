@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 15;
+export const DERIVED_VERSION = 16;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -214,6 +214,33 @@ export const DERIVED_VERSION = 15;
 //     that were in fact recorded, and provenance exists precisely to say which
 //     source to trust. NULL means "written before this column existed", which
 //     is the truth until the re-parse supplies the real answer.
+// 16 — A6: `session_hook_runs` had never received a row, on any machine.
+//
+//     Not a new column — the table shipped with v13/schema v20 and has been
+//     structurally impossible to populate ever since. Both readers looked for
+//     `hookInfos` on assistant entries; it rides `type:"system"` entries, on
+//     4,189 of 4,189 carriers across the local corpus and zero assistant ones.
+//     In `ingest.ts` the decode sat below `if (entry.type === "system") { …
+//     continue; }`, so the guard reached it first; in `claudeConversations.ts`
+//     it sat inside the assistant branch. A fully-reconciled 1.5 GB index held
+//     0 rows.
+//
+//     **Why a bump is unavoidable.** The data is in the JSONL and nowhere else,
+//     so this is rule 2 (new extraction needs re-parse) applied to a decode
+//     that was written but never ran. Without it every unchanged session keeps
+//     its v14 stamp, skips re-parse, and its hook history stays permanently
+//     invisible — only sessions modified after this ships would ever populate.
+//     No migration can backfill it: `session_hook_runs` has no source in SQL.
+//
+//     Also lands `session_hook_errors` (schema v23), decoded from the sibling
+//     `hookErrors` array on the same entries.
+//
+//     No read-side gate needed. Pre-reconcile the table is empty, which is
+//     exactly what it has always been, so nothing regresses during catch-up —
+//     and `getHookActivity` reports `hasData: false` rather than claiming a
+//     hook-free machine. That said, an empty result here is precisely the
+//     failure mode that hid this bug for a whole slice, so the result now
+//     carries a `source` field saying which pipeline answered.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

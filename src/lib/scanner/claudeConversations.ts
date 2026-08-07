@@ -12,6 +12,7 @@ import {
   SubagentInfo,
   SessionPermissionMode,
   SessionHookRun,
+  SessionHookError,
 } from "../types";
 import { detectOneShot } from "../usage/oneShotDetector";
 import { computeSessionQuality } from "../usage/sessionQuality";
@@ -86,6 +87,10 @@ export interface ConversationEntry {
   attributionMcpTool?: string;
   /** Hook executions attributed to this turn; one-to-many, hence a table not a column. */
   hookInfos?: Array<{ command?: string; durationMs?: number }>;
+  /** Sibling of `hookInfos` on the same system entry: plain error strings, not per-hook. */
+  hookErrors?: unknown[];
+  /** True when a hook blocked the turn from continuing. Present on every hook-carrying entry. */
+  preventedContinuation?: boolean;
   /** How the prompt reaching this turn originated: typed | suggestion_accepted | system | queued | sdk. */
   promptSource?: string;
   /** Why a tool call was denied: permission-rule | automode-blocked | user-rejected | automode-unavailable. */
@@ -250,6 +255,7 @@ async function scanSessionFile(
     let entrypoint: string | undefined;
     const permissionModes: SessionPermissionMode[] = [];
     const hookRuns: SessionHookRun[] = [];
+    const hookErrors: SessionHookError[] = [];
     const effortMix: Record<string, number> = {};
     // Per-model token accumulation for accurate cost (via LiteLLM pricing)
     const perModelTokens: PerModelTokens = new Map();
@@ -278,6 +284,37 @@ async function scanSessionFile(
 
         if (entry.type === "system" && entry.subtype === "away_summary" && typeof entry.content === "string" && entry.timestamp) {
           recaps.push({ content: entry.content, timestamp: entry.timestamp, slug: entry.slug });
+        }
+
+        // A6: hook telemetry rides SYSTEM entries — 4,189 of 4,189 carriers on
+        // the local corpus, none on assistant. This decode used to live inside
+        // the `entry.type === "assistant"` branch below, next to `effort` and
+        // `message.usage`, so it never saw a single one. Both readers had the
+        // same wrong idea about where the field lives, which is why the DB
+        // backend's `session_hook_runs` and the file backend's `hookRuns` were
+        // *consistently* empty — parity held, at zero.
+        //
+        // `durationMs` stays undefined when unmeasured (4,189 of 20,284
+        // records) rather than collapsing to 0, which would rank an unmeasured
+        // hook as the fastest.
+        if (Array.isArray(entry.hookInfos)) {
+          for (const h of entry.hookInfos) {
+            if (h && typeof h.command === "string" && h.command) {
+              hookRuns.push({
+                ts: entry.timestamp,
+                command: h.command,
+                durationMs: typeof h.durationMs === "number" ? h.durationMs : undefined,
+              });
+            }
+          }
+        }
+        if (Array.isArray(entry.hookErrors)) {
+          const blocked = entry.preventedContinuation === true;
+          for (const msg of entry.hookErrors) {
+            if (typeof msg === "string" && msg) {
+              hookErrors.push({ ts: entry.timestamp, message: msg, preventedContinuation: blocked });
+            }
+          }
         }
 
         // A1: dedicated metadata entry types. These carry no `message` and were
@@ -341,18 +378,6 @@ async function scanSessionFile(
           if (typeof entry.effort === "string" && entry.effort) {
             effortMix[entry.effort] = (effortMix[entry.effort] || 0) + 1;
           }
-          if (Array.isArray(entry.hookInfos)) {
-            for (const h of entry.hookInfos) {
-              if (h && typeof h.command === "string" && h.command) {
-                hookRuns.push({
-                  ts: entry.timestamp,
-                  command: h.command,
-                  durationMs: typeof h.durationMs === "number" ? h.durationMs : undefined,
-                });
-              }
-            }
-          }
-
           const usage = msg.usage;
           if (usage) {
             const inp = usage.input_tokens || 0;
@@ -605,6 +630,7 @@ async function scanSessionFile(
       permissionModes: permissionModes.length > 0 ? permissionModes : undefined,
       effortMix: Object.keys(effortMix).length > 0 ? effortMix : undefined,
       hookRuns: hookRuns.length > 0 ? hookRuns : undefined,
+      hookErrors: hookErrors.length > 0 ? hookErrors : undefined,
     };
   } catch {
     return null;

@@ -164,11 +164,13 @@ export interface SessionSummary {
    */
   effortMix?: Record<string, number>;
   /**
-   * Hook executions observed in this session, from assistant `hookInfos`.
-   * One-to-many per session, so this is a list rather than an aggregate;
-   * A6 turns it into latency analytics.
+   * Hook executions observed in this session, from `hookInfos` on **system**
+   * entries. One-to-many per session, so this is a list rather than an
+   * aggregate; A6 turns it into latency analytics.
    */
   hookRuns?: SessionHookRun[];
+  /** Hook failures reported in this session, from `hookErrors`. */
+  hookErrors?: SessionHookError[];
 }
 
 /** One permission-mode change within a session. */
@@ -179,11 +181,31 @@ export interface SessionPermissionMode {
   mode: string;
 }
 
-/** One hook execution attributed to an assistant turn. */
+/** One hook execution, from a `hookInfos` record on a system entry. */
 export interface SessionHookRun {
   ts?: string;
   command: string;
+  /**
+   * Wall-clock the hook took, when Claude Code measured it.
+   *
+   * Genuinely optional: 4,189 of 20,284 hook records on the local corpus carry
+   * a command and no duration. `undefined` means **not measured**, which must
+   * not be rendered as `0` — an unmeasured hook would sort as the fastest one.
+   */
   durationMs?: number;
+}
+
+/**
+ * One hook failure. `hookErrors` is a sibling array of plain strings on the
+ * same system entry as `hookInfos`, NOT a field inside each hook record, so an
+ * error cannot be attributed to a specific command — recording it per entry is
+ * the honest shape rather than guessing which hook produced it.
+ */
+export interface SessionHookError {
+  ts?: string;
+  message: string;
+  /** True when the failure stopped the turn continuing, rather than being advisory. */
+  preventedContinuation: boolean;
 }
 
 /**

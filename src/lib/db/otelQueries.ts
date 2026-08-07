@@ -84,6 +84,29 @@ function percentile(sorted: number[], p: number): number {
   return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
 }
 
+/**
+ * `percentile` over a value→count histogram instead of an expanded array.
+ *
+ * Identical nearest-rank rule: the value at 1-based rank `ceil(p/100 * total)`,
+ * which is exactly `percentile`'s 0-based `idx + 1`. Expressed this way so a
+ * caller can aggregate in SQL and stay bounded by *distinct* values rather than
+ * by row count, without changing any number it would otherwise report.
+ */
+function percentileFromHistogram(
+  sorted: { value: number; count: number }[],
+  total: number,
+  p: number
+): number {
+  if (total === 0 || sorted.length === 0) return 0;
+  const rank = Math.min(Math.max(1, Math.ceil((p / 100) * total)), total);
+  let seen = 0;
+  for (const { value, count } of sorted) {
+    seen += count;
+    if (seen >= rank) return value;
+  }
+  return sorted[sorted.length - 1].value;
+}
+
 // ── Edit Acceptance ───────────────────────────────────────────────────────────
 
 export interface ToolAcceptanceRow {
@@ -346,14 +369,37 @@ export async function getCacheEfficiency(opts: { period: Period }): Promise<Cach
 export interface HookRow {
   name: string;
   fires: number;
-  p50DurationMs: number;
-  p95DurationMs: number;
+  /**
+   * Undefined when NO occurrence of this hook carried a duration.
+   *
+   * Not zero. This slice's headline principle is that an unmeasured hook must
+   * not be rendered as an instant one, and returning `0` here broke it in the
+   * same PR that stated it — a completely unmeasured command would have sorted
+   * as the fastest on the machine (Codex + Copilot review of #386).
+   */
+  p50DurationMs?: number;
+  p95DurationMs?: number;
+  /** How many of `fires` actually carried a duration. `0` means the percentiles are absent. */
+  measuredFires?: number;
 }
 
 export interface HookActivityResult {
   hooks: HookRow[];
   totalFires: number;
   hasData: boolean;
+  /**
+   * Where the numbers came from.
+   *
+   * `otel` — `hook_execution_complete` events, which require OTEL telemetry to
+   * have been enabled and only cover the period since it was.
+   * `transcript` — `session_hook_runs`, decoded from `hookInfos` on system
+   * entries. Needs no setup and covers all history retroactively.
+   *
+   * Never blended: OTEL names a hook (`PreToolUse`), the transcript names the
+   * command it ran (`codegraph sync`), so the two key on different things and
+   * merging them would double-count under two different labels.
+   */
+  source?: "otel" | "transcript";
 }
 
 export async function getHookActivity(opts: {
@@ -392,6 +438,9 @@ export async function getHookActivity(opts: {
     hooks.push({
       name,
       fires: sorted.length,
+      // OTEL rows without a finite duration are filtered out above, so every
+      // fire counted here is also a measured one.
+      measuredFires: sorted.length,
       p50DurationMs: Math.round(percentile(sorted, 50)),
       p95DurationMs: Math.round(percentile(sorted, 95)),
     });
@@ -399,7 +448,106 @@ export async function getHookActivity(opts: {
   }
   hooks.sort((a, b) => b.fires - a.fires);
 
-  return { hooks, totalFires, hasData: hooks.length > 0 };
+  if (hooks.length > 0) {
+    return { hooks, totalFires, hasData: true, source: "otel" };
+  }
+
+  // No OTEL hook events. That is the DEFAULT state, not an edge case: OTEL is
+  // opt-in, so for anyone who hasn't enabled it this tool returned an empty
+  // result that reads as "you have no hooks" rather than "I can't see them".
+  // The transcript carries the same measurement for free — and retroactively.
+  // `since <= 0` is how the callers spell "all history" (the period switcher
+  // maps `all` to epoch 0). Passed through rather than re-derived from the ISO
+  // string, which would mean string-comparing against 1970.
+  return getHookActivityFromTranscripts(db, sinceIso, opts.since <= 0);
+}
+
+/**
+ * Hook latency from `session_hook_runs`, the transcript-derived table.
+ *
+ * Rows with a NULL `duration_ms` are counted as fires but excluded from the
+ * percentiles — Claude Code records a command with no duration for roughly a
+ * fifth of hook records, and treating "not measured" as 0 ms would drag every
+ * percentile toward zero and rank the unmeasured hooks fastest.
+ */
+async function getHookActivityFromTranscripts(
+  db: DatabaseT.Database,
+  sinceIso: string,
+  allHistory: boolean
+): Promise<HookActivityResult> {
+  // Grouped in SQL rather than read row-by-row.
+  //
+  // This used to `SELECT command, duration_ms … ORDER BY ts DESC LIMIT 50000`
+  // and aggregate the result in JS, which silently truncated: on an `all` or a
+  // busy 30-day window with more than 50,000 runs, the newest rows were kept
+  // and everything older was dropped BEFORE grouping — so `fires`, `totalFires`
+  // and both percentiles described a suffix of the period while the fallback's
+  // contract promises all of it. A partial answer shaped exactly like a
+  // complete one (Codex review, #386).
+  //
+  // A histogram rather than a raw list keeps the result bounded without
+  // capping: one row per distinct (command, duration) pair, which is small
+  // because durations are integer milliseconds and hooks are repetitive, while
+  // the counts still describe every run in the period.
+  // A run with no timestamp is a supported row, not a malformed one: ingest
+  // stores `entry.timestamp ?? null` and `SessionHookRun.ts` is optional. But
+  // `ts >= ?` is false for NULL, so every untimestamped run vanished from
+  // `fires`, `totalFires` and the percentiles — including on `all`, where the
+  // predicate degrades to `ts >= '1970-01-01…'` and excludes them anyway. The
+  // same all-history contract the row cap was breaking, broken a second way
+  // (Codex review, #386).
+  //
+  // Only all-history takes them. For a bounded period the honest answer is to
+  // leave them out: nothing places an undated run inside a window, and
+  // assigning it to one would be a guess reported as a measurement.
+  const rows = prepCached(
+    db,
+    allHistory
+      ? `SELECT command, duration_ms, COUNT(*) AS n
+           FROM session_hook_runs
+          WHERE ts >= ? OR ts IS NULL
+          GROUP BY command, duration_ms`
+      : `SELECT command, duration_ms, COUNT(*) AS n
+           FROM session_hook_runs
+          WHERE ts >= ?
+          GROUP BY command, duration_ms`
+  ).all(sinceIso) as { command: string; duration_ms: number | null; n: number }[];
+
+  const byHook = new Map<
+    string,
+    { measured: { value: number; count: number }[]; measuredFires: number; fires: number }
+  >();
+  for (const row of rows) {
+    if (!row.command) continue;
+    const cur = byHook.get(row.command) ?? { measured: [], measuredFires: 0, fires: 0 };
+    cur.fires += row.n;
+    if (Number.isFinite(row.duration_ms as number)) {
+      cur.measured.push({ value: row.duration_ms as number, count: row.n });
+      cur.measuredFires += row.n;
+    }
+    byHook.set(row.command, cur);
+  }
+
+  const hooks: HookRow[] = [];
+  let totalFires = 0;
+  for (const [name, v] of byHook) {
+    const sorted = v.measured.slice().sort((a, b) => a.value - b.value);
+    hooks.push({
+      name,
+      fires: v.fires,
+      measuredFires: v.measuredFires,
+      // Omitted entirely when nothing was measured — see HookRow.
+      ...(v.measuredFires
+        ? {
+            p50DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 50)),
+            p95DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 95)),
+          }
+        : {}),
+    });
+    totalFires += v.fires;
+  }
+  hooks.sort((a, b) => b.fires - a.fires);
+  return { hooks, totalFires, hasData: hooks.length > 0, source: "transcript" };
 }
 
 // ── Pressure Snapshot ─────────────────────────────────────────────────────────

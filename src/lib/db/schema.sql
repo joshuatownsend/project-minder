@@ -160,6 +160,20 @@ CREATE TABLE IF NOT EXISTS session_hook_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_session_hook_runs_session ON session_hook_runs(session_id);
 
+-- A6: hook failures. `hookErrors` is a sibling array of plain strings on the
+-- same system entry as `hookInfos`, not a field inside each hook record, so a
+-- failure cannot be attributed to a specific command — this records what is
+-- actually known rather than guessing which hook produced it.
+CREATE TABLE IF NOT EXISTS session_hook_errors (
+  session_id             TEXT NOT NULL,
+  ts                     TEXT,
+  message                TEXT NOT NULL,
+  prevented_continuation INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_session_hook_errors_session
+  ON session_hook_errors(session_id);
+
 CREATE TABLE IF NOT EXISTS session_permission_modes (
   session_id TEXT NOT NULL,
   ts         TEXT,
