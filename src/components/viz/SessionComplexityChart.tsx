@@ -75,11 +75,25 @@ export function SessionComplexityChart({ sessions }: Props) {
         </label>
       </div>
 
+      {/* Says what is missing. A preset that quietly drops the unmeasured
+          sessions renders a smaller cloud that reads as "you have fewer
+          sessions" — a different false claim than the `0` it replaced. */}
+      {prepared.excluded > 0 && (
+        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginBottom: "8px" }}>
+          {prepared.excluded} of {sessions.length} sessions not plotted — no{" "}
+          {prepared.excludedMeasureLabel} recorded for them.
+        </div>
+      )}
+
       <D3Container height={360} margin={margin}>
         {({ width, height, showTooltip, hideTooltip }) => (
           <ScatterInner
             prepared={prepared}
-            sessions={sessions}
+            // The plotted subset, not the full list: the renderer pairs
+            // `sessions[i]` with `prepared.x[i]`, so passing everything would
+            // offset every dot's identity once anything is excluded — clicking
+            // one would open a different session.
+            sessions={prepared.plotted}
             width={width}
             height={height}
             logX={logX}

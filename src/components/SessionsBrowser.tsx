@@ -435,7 +435,13 @@ function SessionRow({
               ? <MatchSnippet text={snippetText} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
-              : session.generatedTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+              // `aiTitle` sits between the two deliberately. `generatedTitle`
+              // is Minder's own, produced only when you press the button, so it
+              // wins. But Claude Code emits `aiTitle` for free on 503 of 5,028
+              // local sessions — until now the row ignored it and showed a raw
+              // prompt, while the detail page offered to generate a title the
+              // transcript already contained.
+              : session.generatedTitle ?? session.aiTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
               )}
           </span>

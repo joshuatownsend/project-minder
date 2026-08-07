@@ -44,6 +44,55 @@ const CATEGORY_COLORS: Record<SubagentCategory, { bg: string; text: string }> = 
   other:    { bg: "var(--bg-elevated)",       text: "var(--text-muted)"         },
 };
 
+/**
+ * Where this card's numbers came from, and whether the two sources agree.
+ *
+ * `metaSourced` marks a subagent whose record was read from Claude Code's own
+ * `agent-*.meta.json` rather than inferred from the parent transcript's Agent
+ * tool call. Both were parsed and neither was ever shown, so every card looked
+ * equally authoritative — the same gap the Hook Activity source badge closed.
+ *
+ * When Claude Code's own turn count disagrees with the count derived from the
+ * transcript, both are shown rather than one being picked: a disagreement is
+ * information about the data, and silently preferring either would hide it.
+ * (This mirrors the Stats page's cross-check against `stats-cache.json`.)
+ */
+function MetaProvenance({
+  metaSourced,
+  metaTurnCount,
+  messageCount,
+}: {
+  metaSourced?: boolean;
+  metaTurnCount?: number;
+  messageCount: number;
+}) {
+  // Nothing to say for an inferred card with no independent count — absence of
+  // the meta file is the norm, not an anomaly worth a badge on every row.
+  if (!metaSourced) return null;
+
+  const disagrees = typeof metaTurnCount === "number" && metaTurnCount !== messageCount;
+  const explanation = disagrees
+    ? `Claude Code's own record for this subagent reports ${metaTurnCount} turns; ${messageCount} were counted from the transcript.`
+    : "Details for this subagent come from Claude Code's own record, not inferred from the parent transcript.";
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+      <span className="sr-only">{explanation}</span>
+      <span
+        aria-hidden="true"
+        title={explanation}
+        style={{
+          ...CHIP_STYLE,
+          cursor: "help",
+          ...(disagrees ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}),
+        }}
+      >
+        {disagrees ? `${metaTurnCount} turns recorded · ${messageCount} counted` : "from Claude Code's record"}
+      </span>
+    </div>
+  );
+}
+
 export function SessionSubagents({ subagents }: { subagents: SubagentInfo[] }) {
   if (subagents.length === 0) {
     return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", textAlign: "center", padding: "32px 0" }}>No subagents spawned in this session.</p>;
@@ -125,6 +174,11 @@ export function SessionSubagents({ subagents }: { subagents: SubagentInfo[] }) {
                 </div>
               );
             })()}
+            <MetaProvenance
+              metaSourced={agent.metaSourced}
+              metaTurnCount={agent.metaTurnCount}
+              messageCount={agent.messageCount}
+            />
             {topTools.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
                 {topTools.map(([tool, count]) => (

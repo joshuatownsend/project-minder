@@ -207,6 +207,19 @@ Note: a session created seconds before you visit `/sessions/<slug>` may 404 unti
 
 Click a session to see the full detail view with tabs:
 
+### Titles and permission mode
+
+The session row and detail header prefer, in order: a title you asked Minder to
+generate, then Claude Code's own `ai-title` (labelled **from Claude Code** so
+the two aren't confused), then the first prompt. Claude Code emits its title for
+free on about one session in ten; until now that was read, stored, and never
+shown, so the page offered to generate a title while one sat unused.
+
+Sessions that switched permission mode carry a chip showing the path taken
+(e.g. `plan → auto`), with consecutive repeats collapsed. A session that never
+switched records no entry at all, so the chip is **absent rather than showing a
+default** — no entry does not mean `auto`.
+
 ### Session metadata panel
 
 When Claude Code has recorded a per-session metadata file (`~/.claude/usage-data/session-meta/<id>.json`), a **Session metadata** panel appears below the stats strip. It surfaces Claude's own bookkeeping for the session that we don't otherwise compute: **git activity** (commits, pushes, lines added/removed, files modified), **interruptions**, the **capabilities** the session used (Task agent, MCP, web search, web fetch), and a breakdown of **tool errors by category**. Read-only; the panel is hidden when no record exists.
@@ -232,6 +245,12 @@ Table of file operations (read, write, edit, glob, grep) with file paths and too
 
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
+
+A card whose details came from Claude Code's own `agent-*.meta.json` record —
+rather than being inferred from the parent transcript's Agent tool call — says
+so. When Claude Code's turn count for that subagent disagrees with the count
+derived from the transcript, the chip turns amber and shows both rather than
+picking one: the disagreement is information about the data.
 
 ### Hooks
 What hooks cost this session. Runs are grouped by command and ranked by **total
