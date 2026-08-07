@@ -209,11 +209,23 @@ Click a session to see the full detail view with tabs:
 
 ### Titles and permission mode
 
-The session row and detail header prefer, in order: a title you asked Minder to
-generate, then Claude Code's own `ai-title` (labelled **from Claude Code** so
-the two aren't confused), then the first prompt. Claude Code emits its title for
-free on about one session in ten; until now that was read, stored, and never
-shown, so the page offered to generate a title while one sat unused.
+The session row shows, in order:
+
+1. **What matched your search**, when searching — an excerpt of the matched
+   conversation text, or the matched title. A row in the results always
+   displays the text that put it there.
+2. **The latest recap**, if the session has one. A recap describes what
+   happened while you were away, which is more useful on a row you're
+   returning to than a title.
+3. **A title** — one you asked Minder to generate, then Claude Code's own
+   `ai-title`.
+4. **The first prompt**, then the last prompt, then the git branch.
+
+The detail header uses the same title preference (generated, then Claude
+Code's, labelled **from Claude Code** so the two aren't confused). Claude Code
+emits its title for free on about one session in ten; until recently that was
+read, stored, and never shown, so the page offered to generate a title while
+one sat unused.
 
 **Both titles are searchable** under the `titles` scope. Neither used to be —
 searching for the title displayed on a row returned nothing unless the same

@@ -362,6 +362,21 @@ function SessionRow({
     : false;
   const snippetText = ftsSnippet ?? (localContentMatch ? session.searchableText : undefined);
 
+  // The title that matched the query, when one did.
+  //
+  // A content hit already shows what matched, via `snippetText` above. A title
+  // hit had no equivalent: it fell through to the recap branch, so searching
+  // for a title could return a row whose visible text does not contain the
+  // query — and, since titles became searchable, that is now reachable
+  // (Codex review of #403). Recaps still win when not searching; they describe
+  // what happened while you were away, which is more useful on a row you are
+  // returning to than a title is.
+  const matchedTitle = trimmedSearch
+    ? [session.generatedTitle, session.aiTitle].find(
+        (t) => t?.toLowerCase().includes(searchLower)
+      )
+    : undefined;
+
   return (
     <Link
       href={`/sessions/${session.sessionId}`}
@@ -439,11 +454,18 @@ function SessionRow({
               whiteSpace: "nowrap",
             }}
           >
+            {/* Order: what matched (content, then title) → recap → title →
+                prompt. The two search-only branches come first so a row always
+                shows the text that put it in the results; below them, a recap
+                outranks a title because it describes what happened while you
+                were away. `docs/help/sessions.md` documents this order. */}
             {trimmedSearch && snippetText
               ? <MatchSnippet text={snippetText} query={trimmedSearch} />
+              : trimmedSearch && matchedTitle
+              ? <MatchSnippet text={matchedTitle} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
-              // `aiTitle` sits between the two deliberately. `generatedTitle`
+              // `aiTitle` sits after `generatedTitle` deliberately: the latter
               // is Minder's own, produced only when you press the button, so it
               // wins. But Claude Code emits `aiTitle` for free on 503 of 5,028
               // local sessions — until now the row ignored it and showed a raw
