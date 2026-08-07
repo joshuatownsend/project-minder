@@ -22,6 +22,7 @@ import {
   Check,
   Pencil,
   Star,
+  AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
 import { StatusDot } from "./ui/StatusDot";
@@ -32,6 +33,11 @@ import { StackedStrip } from "@/components/stats/StackedStrip";
 import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 import { EffortMixChip } from "@/components/EffortMixChip";
+import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLimits";
+
+/** Shared by the tooltip and the screen-reader text so the two cannot drift. */
+const DELEGATION_BADGE_EXPLANATION = (label: string) =>
+  `${label}. Claude Code caps subagent spawns and web searches per session; a session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
@@ -275,6 +281,25 @@ function SessionRow({
     [prefetch, session.sessionId],
   );
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
+  // C2: the documented cap is 200 web SEARCHES. `WebFetch` is a different tool
+  // with no documented quota, and folding it in meant a session with 160
+  // fetches and no searches was labelled as nearing the search cap — and 200
+  // fetches falsely reported the cap reached (Codex + Copilot review of #388).
+  // Counting only what the cap actually counts.
+  //
+  // Claude sessions only. The DB loader is source-agnostic, so a Codex or
+  // Gemini session with a tool named `Agent` or `WebSearch` derives the same
+  // `subagentCount`/`toolUsage` fields — and would get a warning about Claude
+  // Code's caps on a harness where they do not exist. `cliVersion` gates the
+  // rest: a session recorded before its cap shipped was never constrained by
+  // it (Codex review, #388).
+  const isClaudeSession = (session.source ?? "claude") === "claude";
+  const delegationAssessment = assessDelegation({
+    spawns: isClaudeSession ? session.subagentCount : undefined,
+    webSearches: isClaudeSession ? (session.toolUsage["WebSearch"] ?? 0) : undefined,
+    cliVersion: isClaudeSession ? session.cliVersion : undefined,
+  });
+  const delegationLabel = delegationBadgeLabel(delegationAssessment);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))
     .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
@@ -430,6 +455,28 @@ function SessionRow({
             <span style={{ display: "flex", alignItems: "center", gap: "3px", fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
               <Bot style={{ width: "10px", height: "10px" }} />
               {session.subagentCount}
+            </span>
+          )}
+          {/* C2: only rendered when a delegation cap is near or reached.
+              `delegationBadgeLabel` returns undefined below the threshold on
+              purpose — a badge on every session that used a few subagents is
+              noise, and noise is how a real one gets missed. */}
+          {delegationLabel && (
+            <span
+              title={DELEGATION_BADGE_EXPLANATION(delegationLabel)}
+              style={{
+                display: "flex", alignItems: "center", gap: "3px",
+                fontSize: "0.68rem", fontFamily: "var(--font-mono)",
+                color: "var(--status-warning-text, var(--accent))",
+              }}
+            >
+              <AlertTriangle aria-hidden="true" style={{ width: "10px", height: "10px" }} />
+              {/* The FULL explanation, not just the short label — the tooltip
+                  carried the part that actually matters (silent truncation) and
+                  a screen-reader user got only the terse chip text
+                  (Copilot review of #388). */}
+              <span className="sr-only">{DELEGATION_BADGE_EXPLANATION(delegationLabel)}</span>
+              <span aria-hidden="true">{delegationLabel}</span>
             </span>
           )}
           {session.errorCount > 0 && (

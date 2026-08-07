@@ -341,3 +341,32 @@ Available when Claude Code has recorded a qualitative self-rating for the sessio
 - **Summary** — one-sentence narrative summary
 
 Not all sessions have feedback data. When absent, the Feedback tab shows "No feedback recorded for this session."
+
+
+## Delegation cap warnings
+
+Claude Code enforces hard per-session limits on delegation — 200 subagent
+spawns, 200 web searches, 20 concurrent subagents, and a spawn depth of 3. These
+are a genuinely new failure mode: a session that hits one is **silently
+truncated** rather than finishing. Nothing in the transcript says "I stopped
+because I ran out of subagents"; the work just stops, and the session reads like
+one that chose to finish.
+
+A session at or near a cap gets a warning chip on its row. Sessions comfortably
+inside the limits get nothing — a badge on every session that used a handful of
+subagents is noise, and noise is how a real one gets missed.
+
+The chip says a cap was **reached**, never that anything was *blocked*. Two of
+the caps are configurable (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,
+`--max-budget-usd`), so Minder can see the count but not the ceiling actually in
+force on your machine.
+
+**Only web *searches* count toward the search cap.** `WebFetch` is a different
+tool with no documented quota; counting it would label a session with 160
+fetches and no searches as nearing a cap it is nowhere near.
+
+**Concurrency and depth are not measured.** Concurrency is an instantaneous
+property a finished transcript cannot recover. Depth needs parent-to-child
+linkage between spawns, which the index does not currently populate. They are
+reported as unmeasured rather than as zero — showing `0` would render a session
+nested five deep as comfortably inside a cap of three.
