@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatTokens } from "@/lib/format";
 import type { Period, TokenUsageResult } from "@/lib/db/otelQueries";
-import { PeriodToggle } from "./PeriodToggle";
 
 const SEGMENT_COLORS: Record<string, string> = {
   input:         "var(--info)",
@@ -18,8 +16,13 @@ const SEGMENT_LABELS: Record<string, string> = {
   input: "Input", output: "Output", cacheRead: "Cache hit", cacheCreation: "Cache write",
 };
 
-export function TokenUsageCard() {
-  const [period, setPeriod] = useState<Period>("7d");
+/**
+ * Fully controlled: the Telemetry section owns one period for every card in it,
+ * so this card no longer holds its own state or renders its own toggle. Two
+ * toggles for one grid — a section-level one and a per-card one — would fight,
+ * and the card's own state would silently disagree with its neighbours.
+ */
+export function TokenUsageCard({ period }: { period: Period }) {
   const { data, loading, error } = useReportFetch<TokenUsageResult>(
     `/api/telemetry/token-usage?period=${period}`,
   );
@@ -28,8 +31,6 @@ export function TokenUsageCard() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      <PeriodToggle value={period} onChange={setPeriod} />
-
       {loading && <Skeleton className="h-24" />}
 
       {!loading && (error || !data?.hasData) && (

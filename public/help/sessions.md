@@ -233,6 +233,24 @@ Table of file operations (read, write, edit, glob, grep) with file paths and too
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
 
+### Hooks
+What hooks cost this session. Runs are grouped by command and ranked by **total
+measured time** — not by how often each fired, since the question here is where
+the session's wall-clock actually went. Each row shows runs, total, p50 and max.
+
+A run Claude Code did not time counts toward the run count but is excluded from
+every duration: the row reads `12 (9 timed)` and shows `—` rather than `0ms`,
+because an untimed hook is not an instant one. The header states the session
+total and how many runs went untimed.
+
+Hook **failures** are listed below the table when present, with a blocking
+failure (it stopped the turn) styled distinctly from an advisory one. Failures
+carry no command — the underlying data cannot attribute them to a specific hook.
+
+The tab appears only for sessions that recorded at least one hook run or
+failure, and works on both storage backends. See [Hooks](hooks.md) for the
+cross-session view.
+
 ### Orchestration
 D3-powered DAG (directed acyclic graph) showing how subagents were spawned during the session. Each node is a spawned agent; edges show parent→child delegation. Node colors identify the agent type; hover for a tooltip with agent name and depth. Only appears when the session spawned at least one subagent (`subagentCount > 0`). Deep nesting beyond level 6 is collapsed into a `+N more` placeholder. Computed on demand from the original JSONL.
 

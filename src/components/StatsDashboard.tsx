@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useStats } from "@/hooks/useStats";
 import { BarChart } from "./stats/BarChart";
@@ -19,13 +20,16 @@ import { TokenUsageCard } from "./stats/TokenUsageCard";
 import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
 import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
+import { PeriodToggle } from "./stats/PeriodToggle";
 import { ContextOverheadPanel } from "./ContextOverheadPanel";
+import { periodToSince, type Period } from "@/lib/telemetryPeriod";
 
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
 import type { StatsCrossCheck } from "@/lib/scanner/claudeStats";
 
-function SectionHeader({ label }: { label: string }) {
+/** `control` renders after the rule, right-aligned — used for the section-level period toggle. */
+function SectionHeader({ label, control }: { label: string; control?: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
       <span style={{
@@ -40,6 +44,7 @@ function SectionHeader({ label }: { label: string }) {
         {label}
       </span>
       <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
+      {control}
     </div>
   );
 }
@@ -111,6 +116,17 @@ function CrossCheckCard({ cc }: { cc: StatsCrossCheck }) {
 export function StatsDashboard() {
   const { data, loading } = useStats();
   const { currency, fxRate } = useCurrency();
+  // One period for the whole Telemetry section. The cards used to disagree by
+  // construction: two carried their own toggle, four were hard-wired to a
+  // 7-day `defaultSince()` with no control at all, so the grid mixed windows
+  // and never said so.
+  //
+  // Two encodings of the one value because the routes differ — `?period=` for
+  // the two that resolve the window server-side, `?since=` ISO for the four
+  // that take an explicit lower bound. `periodToSince` is hour-bucketed, so
+  // this is a stable string across renders and does not re-fire the fetches.
+  const [telemetryPeriod, setTelemetryPeriod] = useState<Period>("7d");
+  const telemetrySince = periodToSince(telemetryPeriod);
 
   if (loading || !data) {
     return (
@@ -382,28 +398,31 @@ export function StatsDashboard() {
 
       {/* Telemetry */}
       <section id="telemetry">
-        <SectionHeader label="Telemetry" />
+        <SectionHeader
+          label="Telemetry"
+          control={<PeriodToggle value={telemetryPeriod} onChange={setTelemetryPeriod} />}
+        />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
           <ChartBlock title="Edit Acceptance">
-            <EditAcceptanceCard />
+            <EditAcceptanceCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Tool Latency">
-            <ToolLatencyCard />
+            <ToolLatencyCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Token Usage">
-            <TokenUsageCard />
+            <TokenUsageCard period={telemetryPeriod} />
           </ChartBlock>
           <ChartBlock title="Cache Efficiency">
-            <CacheEfficiencyCard />
+            <CacheEfficiencyCard period={telemetryPeriod} />
           </ChartBlock>
           <ChartBlock title="Hook Activity">
-            <HookActivityCard />
+            <HookActivityCard since={telemetrySince} />
           </ChartBlock>
           <div /> {/* spacer */}
         </div>
         <div style={{ marginTop: "16px" }}>
           <ChartBlock title="Pressure">
-            <PressurePanel />
+            <PressurePanel since={telemetrySince} />
           </ChartBlock>
         </div>
       </section>

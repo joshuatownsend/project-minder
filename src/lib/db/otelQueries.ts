@@ -1,6 +1,8 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { getDb, prepCached } from "./connection";
+import type { Period } from "../telemetryPeriod";
+import { periodToMs } from "../telemetryPeriod";
 
 // OTEL attribute schema — empirically verified 2026-05-07 against real Claude Code traffic.
 // Run scripts/probe-otel.mjs to re-verify after Claude Code updates.
@@ -58,20 +60,11 @@ import { getDb, prepCached } from "./connection";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-export type Period = "today" | "7d" | "30d" | "all";
-
-export function periodToMs(period: Period): number {
-  const now = Date.now();
-  if (period === "today") {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  }
-  if (period === "7d")  return now - 7 * 24 * 60 * 60 * 1000;
-  if (period === "30d") return now - 30 * 24 * 60 * 60 * 1000;
-  // "all" — return 0 so the SQL `WHERE timestamp >= ?` matches every row.
-  return 0;
-}
+// Re-exported from a client-safe module so client components can import
+// `periodToMs`/`periodToSince` as values without dragging `server-only` — and
+// better-sqlite3 behind it — into the browser bundle. See lib/telemetryPeriod.ts.
+export type { Period } from "../telemetryPeriod";
+export { periodToMs, periodToSince } from "../telemetryPeriod";
 
 // otel_events.ts is TEXT (ISO-8601); comparison with toISOString() strings is safe.
 function msToIso(ms: number): string {
@@ -410,41 +403,73 @@ export async function getHookActivity(opts: {
 
   const sinceIso = msToIso(opts.since);
 
+  // Grouped in SQL, for the same reason the transcript fallback below is.
+  //
+  // This used to `SELECT hook_name, duration_ms … ORDER BY ts DESC LIMIT 10000`
+  // and aggregate in JS, which truncated exactly the way the fallback's old
+  // `LIMIT 50000` did — the newest 10,000 rows survived and everything older
+  // was dropped BEFORE grouping. On the local corpus that is 10,000 of 80,824
+  // rows (12%) and 104 of 193 hook names, reported as if it were the whole
+  // period: `totalFires` read a suspiciously round 10000 for `7d`, `30d` and
+  // `all` alike, because the cap — not the window — decided the answer.
+  //
+  // A6 fixed this in the fallback and left the identical defect in the primary
+  // path, where it mattered more: OTEL wins whenever any hook event exists, so
+  // this is the branch nearly every machine with telemetry actually renders.
+  //
+  // The histogram keeps the result bounded without capping: one row per
+  // distinct (hook_name, duration) pair — 46,102 here against 80,824 rows —
+  // while the counts still describe every fire in the period.
   const rows = prepCached(
     db,
     `SELECT
        JSON_EXTRACT(payload_json, '$.attrs.hook_name') AS hook_name,
-       CAST(JSON_EXTRACT(payload_json, '$.attrs.total_duration_ms') AS REAL) AS duration_ms
+       CAST(JSON_EXTRACT(payload_json, '$.attrs.total_duration_ms') AS REAL) AS duration_ms,
+       COUNT(*) AS n
      FROM otel_events
      WHERE event_name = 'hook_execution_complete'
        AND ts >= ?
        AND JSON_EXTRACT(payload_json, '$.attrs.hook_name') IS NOT NULL
-     ORDER BY ts DESC
-     LIMIT 10000`,
-  ).all(sinceIso) as { hook_name: string; duration_ms: number }[];
+     GROUP BY hook_name, duration_ms`,
+  ).all(sinceIso) as { hook_name: string; duration_ms: number | null; n: number }[];
 
-  const byHook = new Map<string, number[]>();
+  const byHook = new Map<
+    string,
+    { measured: { value: number; count: number }[]; measuredFires: number; fires: number }
+  >();
   for (const row of rows) {
-    if (!row.hook_name || !Number.isFinite(row.duration_ms)) continue;
-    const arr = byHook.get(row.hook_name) ?? [];
-    arr.push(row.duration_ms);
-    byHook.set(row.hook_name, arr);
+    if (!row.hook_name) continue;
+    const cur = byHook.get(row.hook_name) ?? { measured: [], measuredFires: 0, fires: 0 };
+    // A fire with no usable duration still happened. It used to be dropped from
+    // `fires` entirely, so a hook OTEL timed inconsistently under-reported its
+    // own frequency; `measuredFires` is what carries the distinction. Every
+    // `hook_execution_complete` row on this corpus does carry the attribute, so
+    // this costs nothing today and stops lying if that ever changes.
+    cur.fires += row.n;
+    if (Number.isFinite(row.duration_ms as number)) {
+      cur.measured.push({ value: row.duration_ms as number, count: row.n });
+      cur.measuredFires += row.n;
+    }
+    byHook.set(row.hook_name, cur);
   }
 
   const hooks: HookRow[] = [];
   let totalFires = 0;
-  for (const [name, durations] of byHook) {
-    const sorted = durations.slice().sort((a, b) => a - b);
+  for (const [name, v] of byHook) {
+    const sorted = v.measured.slice().sort((a, b) => a.value - b.value);
     hooks.push({
       name,
-      fires: sorted.length,
-      // OTEL rows without a finite duration are filtered out above, so every
-      // fire counted here is also a measured one.
-      measuredFires: sorted.length,
-      p50DurationMs: Math.round(percentile(sorted, 50)),
-      p95DurationMs: Math.round(percentile(sorted, 95)),
+      fires: v.fires,
+      measuredFires: v.measuredFires,
+      // Omitted entirely when nothing was measured — see HookRow.
+      ...(v.measuredFires
+        ? {
+            p50DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 50)),
+            p95DurationMs: Math.round(percentileFromHistogram(sorted, v.measuredFires, 95)),
+          }
+        : {}),
     });
-    totalFires += sorted.length;
+    totalFires += v.fires;
   }
   hooks.sort((a, b) => b.fires - a.fires);
 
