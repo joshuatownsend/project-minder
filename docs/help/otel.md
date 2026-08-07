@@ -71,6 +71,16 @@ Navigate to **Stats → Telemetry** (or scroll to the bottom of `/stats`).
 | **Cache Efficiency** | Large hit-rate percentage with a daily sparkline and a dashed 70% target line. Hit rate = cacheRead ÷ (input + output + cacheCreation). | `claude_code.token.usage` metrics |
 | **Hook Activity** | Fire counts per hook with proportional bars, plus p50 / p95 execution durations, and a badge naming the data source. | `hook_execution_complete` events |
 | **Pressure** | API error count, retry-exhaustion count, and context-compaction count. Expands to a list of the 10 most recent errors with timestamp, retry attempt, and message preview. | `api_error`, `api_retries_exhausted`, `compaction` events |
+| **Permission Denials** | Refused calls grouped by kind, with the top tools per kind and — where measurable — first-pass success for tasks that started on a denied turn. | `tool_uses.denial_kind` — **transcript ingest, not OTEL** |
+| **Tool Provenance** | Proportional split of tool calls by stated source (built-in / MCP / plugin), with event and session counts. | `otel_events.tool_source` |
+
+**Two cards here work without OTEL.** *Permission Denials* reads `denial_kind`
+from the transcript-ingest tables, so it never needed telemetry at all — it sits
+in this section because that is where the rest of the tool-call analytics live,
+not because it shares their source. *Hook Activity* prefers OTEL but falls back
+to decoding session transcripts, so it degrades rather than going dark (see the
+source badge below). Every other card in the table has no non-OTEL source and
+shows its empty state until telemetry is enabled.
 
 ### Choosing the window
 
@@ -129,6 +139,13 @@ Each card shows an explanatory message when no data is available:
   in the selected time window.
 - **"No pressure events in this period."** — no API errors, retries, or
   compactions occurred.
+- **"No denials recorded in this window."** — deliberately *not* phrased as "all
+  clear". Nothing refused and an index predating the `denial_kind` column are
+  indistinguishable from here, and only one of them is good news.
+- **"No tool source recorded in this window."** — no event carries
+  `tool_source`. That is a statement about instrumentation, not about your
+  tools; an empty breakdown would read as "every tool was built-in", which is a
+  different and unsupported claim.
 
 ## Wire format
 
@@ -179,4 +196,10 @@ A period where no event carries the attribute reports **no data** rather than an
 empty breakdown: "OTEL cannot answer this" and "every tool was built-in" look
 identical otherwise, and only one of them is a finding.
 
-Available through the `get-tool-provenance` MCP tool.
+For the same reason the card lists **only the sources actually observed**. A
+fixed built-in / MCP / plugin legend would imply plugin tools were measured and
+found to be zero; on a machine where no plugin tool ever ran, the honest reading
+is that none were seen.
+
+Shown as the **Tool Provenance** card in `Stats → Telemetry`, and available
+through the `get-tool-provenance` MCP tool.

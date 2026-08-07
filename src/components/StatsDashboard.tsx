@@ -20,6 +20,8 @@ import { TokenUsageCard } from "./stats/TokenUsageCard";
 import { CacheEfficiencyCard } from "./stats/CacheEfficiencyCard";
 import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
+import { DenialBreakdownCard } from "./stats/DenialBreakdownCard";
+import { ToolProvenanceCard } from "./stats/ToolProvenanceCard";
 import { PeriodToggle } from "./stats/PeriodToggle";
 import { ContextOverheadPanel } from "./ContextOverheadPanel";
 import { type Period } from "@/lib/telemetryPeriod";
@@ -428,6 +430,12 @@ export function StatsDashboard() {
           </ChartBlock>
           <ChartBlock title="Hook Activity">
             <HookActivityCard since={telemetrySince} />
+          </ChartBlock>
+          <ChartBlock title="Permission Denials">
+            <DenialBreakdownCard since={telemetrySince} />
+          </ChartBlock>
+          <ChartBlock title="Tool Provenance">
+            <ToolProvenanceCard since={telemetrySince} />
           </ChartBlock>
           <div /> {/* spacer */}
         </div>
