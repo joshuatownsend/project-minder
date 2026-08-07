@@ -287,6 +287,13 @@ CREATE TABLE turns (
   -- bump the code's version constant to invalidate just this column's
   -- derivation. Named identically across tables on purpose.
   derived_version      INTEGER NOT NULL DEFAULT 0,
+  -- v24 (C3): the join key to OTEL's `attrs.request_id`. Declared HERE as well
+  -- as in migration v24 — a DB built by executing this file directly (several
+  -- tests and utilities do) would otherwise lack the column, and both
+  -- `writeSession` and `appendSessionTail` fail with "table turns has no column
+  -- named request_id". Normal startup masks it because initDb runs the
+  -- migration afterwards; direct fresh-schema consumers do not.
+  request_id            TEXT,
   PRIMARY KEY (session_id, turn_index),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;
@@ -503,12 +510,19 @@ CREATE TABLE mcp_servers (
 -- every event row. Detectors that need fast filters denormalize the
 -- relevant fields into top-level columns later.
 
+-- C3 note: `request_id` and `tool_source` are lifted out of `payload_json` into
+-- real columns. JSON_EXTRACT cannot use an index, so correlating by request id
+-- meant a full scan of a 641k-row table per lookup (measured: 300 lookups did
+-- not finish in ten minutes). The blob remains the record of what arrived.
 CREATE TABLE otel_events (
   id            INTEGER PRIMARY KEY,
   ts            TEXT NOT NULL,
   session_id    TEXT,
   event_name    TEXT NOT NULL,
-  payload_json  TEXT NOT NULL
+  payload_json  TEXT NOT NULL,
+  -- C3 (v24), both backfilled from payload_json by the migration.
+  request_id    TEXT,
+  tool_source   TEXT
 );
 
 CREATE INDEX otel_events_by_session ON otel_events(session_id, ts);

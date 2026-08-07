@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 16;
+export const DERIVED_VERSION = 17;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -241,6 +241,25 @@ export const DERIVED_VERSION = 16;
 //     hook-free machine. That said, an empty result here is precisely the
 //     failure mode that hid this bug for a whole slice, so the result now
 //     carries a `source` field saying which pipeline answered.
+// 17 — C3: `turns.request_id`, the join key between the transcript and OTEL.
+//
+//     C3 was specified against `message.uuid`. That field does not appear in
+//     this data under any spelling — an enumeration of every attribute key on
+//     4,000 tool/api events turned up `user.account_uuid` and `request_id`, and
+//     nothing else uuid-shaped. `requestId` is the key that works, and it was
+//     already on both sides: on assistant transcript entries, and as
+//     `attrs.request_id` on `api_request` events. Verified by intersection over
+//     the full corpus: 71,466 of 205,137 assistant turns (34.8%) match an OTEL
+//     event, with all 39,139 `api_request` events carrying a distinct value.
+//
+//     Needs a bump for the usual reason — the value is in the JSONL and nowhere
+//     else, so unchanged sessions would keep a NULL column forever.
+//
+//     **Free in practice.** This lands stacked on A5's v15 and A6's v16, neither
+//     of which has been reconciled anywhere yet, so all three collapse into one
+//     re-parse — the same accounting A2 made against A1's v13. If v16 has
+//     already run by the time this merges, it costs one further pass; stated
+//     rather than hidden.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

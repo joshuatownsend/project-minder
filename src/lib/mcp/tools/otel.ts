@@ -13,6 +13,7 @@ import {
   periodToMs,
 } from "@/lib/db/otelQueries";
 import { getDenialBreakdown } from "@/lib/data/denialAnalyticsFromDb";
+import { getToolProvenance, getOtelTurnCoverage } from "@/lib/db/otelCorrelation";
 import { SessionIdSchema, OtelPeriodSchema } from "../schemas";
 import { jsonResult } from "../result";
 
@@ -191,6 +192,30 @@ export function registerOtelTools(server: McpServer): void {
         period,
         ...(await getDenialBreakdown({ since: new Date(periodToMs(period)).toISOString() })),
       })
+  );
+
+  server.registerTool(
+    "get-tool-provenance",
+    {
+      title: "Tool provenance from OTEL (builtin vs MCP vs plugin)",
+      description:
+        "Counts tool events by `tool_source`, which Claude Code states outright " +
+        "instead of Minder inferring it from the `mcp__server__tool` naming " +
+        "convention. Also reports how much of the transcript OTEL can speak about " +
+        "at all: telemetry is opt-in and retained for a window, so most historical " +
+        "turns have no matching event and never will. Returns hasData=false when no " +
+        "event carries the attribute, which is different from every tool being builtin.",
+      inputSchema: { period: OtelPeriodSchema },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ period }) => {
+      const since = new Date(periodToMs(period)).toISOString();
+      const [provenance, coverage] = await Promise.all([
+        getToolProvenance({ since }),
+        getOtelTurnCoverage({ since }),
+      ]);
+      return jsonResult({ period, ...provenance, coverage });
+    }
   );
 
   server.registerTool(
