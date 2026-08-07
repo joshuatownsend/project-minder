@@ -29,7 +29,7 @@ jobs:
       # read from the `packageManager` field in package.json.
       - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
@@ -73,7 +73,7 @@ jobs:
       # on the current windows-latest image (issue #264) — so the native driver
       # never builds and every DB-backed suite fails. Node 22 gets the prebuilt
       # binary with zero compiler involvement. Node 20 stays covered on ubuntu.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
           cache: 'pnpm'
