@@ -688,7 +688,57 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 22,
+    name: "A5: record which source produced each PR link",
+    up: (db) => {
+      // Minder learns about a session's PRs two ways, and they are not equally
+      // trustworthy:
+      //
+      //   recorded — a `type:"pr-link"` entry Claude Code wrote itself. The URL,
+      //              number and repository are reported, not parsed.
+      //   scraped  — a GitHub PR URL pulled out of a `gh pr create` tool result
+      //              by regex. Everything about it is inferred from command
+      //              output, including the repo, which is recovered from the URL.
+      //
+      // Both stay (measured: the recorded entries alone would lose 5 real links
+      // on this corpus). Recording WHICH produced a row keeps them from being
+      // silently interchangeable — a scraped link can be a false positive in a
+      // way a recorded one cannot, e.g. `gh pr create` replying "a pull request
+      // already exists: <url>" reads exactly like a successful create.
+      //
+      // NULL means "written before this column existed", not "scraped". Existing
+      // rows are deliberately NOT backfilled to `scraped`: most of them are in
+      // fact recorded, and guessing would put a wrong provenance on 652 rows
+      // that a re-parse then has to correct.
+      //
+      // The re-parse is driven by `DERIVED_VERSION` 15, NOT by this migration.
+      // An earlier version of this comment claimed the rows would "re-populate
+      // on the next reconcile like every other derived column"; they would not.
+      // An unchanged transcript hits the no-op gate and is never re-read, and a
+      // growing one takes the tail path, which never revisits PR entries in the
+      // already-indexed prefix — so without the bump these rows stay NULL
+      // forever (Codex review, #385).
+      const hasCol = (table: string, col: string) =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+          .some((c) => c.name === col);
+      if (!hasCol("session_prs", "source")) {
+        db.prepare("ALTER TABLE session_prs ADD COLUMN source TEXT").run();
+      }
+    },
+  },
 ];
+
+/**
+ * Highest migration this checkout knows how to apply — i.e. the schema version
+ * a fully-migrated DB ends up at, and the version `sqlSchemaSnapshot.ts`
+ * describes. Derived rather than written down so it cannot fall behind the
+ * array it summarises.
+ */
+export const LATEST_MIGRATION_VERSION = MIGRATIONS.reduce(
+  (max, m) => (m.version > max ? m.version : max),
+  0
+);
 
 function resolveSchemaPath(): string {
   // The compiled output of this module lives next to schema.sql, so

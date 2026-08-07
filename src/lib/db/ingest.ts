@@ -1,3 +1,4 @@
+import { toPrLinkSource } from "@/lib/types/session";
 import "server-only";
 import path from "path";
 import os from "os";
@@ -620,6 +621,7 @@ async function readJsonlSession(
   let entrypoint: string | null = null;
   const permissionModes: Array<{ ts: string | null; mode: string }> = [];
   const hookRuns: Array<{ ts: string | null; command: string; durationMs: number | null }> = [];
+  let sawPrLink = false;
 
   // Parse JSONL lines once into an array so the pre-pass and main pass
   // both walk parsed objects — avoids a second JSON.parse per line.
@@ -778,6 +780,14 @@ async function readJsonlSession(
     if (entry.type === "ai-title") {
       // Re-emitted as the session's subject clarifies; last one wins.
       if (typeof entry.aiTitle === "string" && entry.aiTitle) aiTitle = entry.aiTitle;
+      continue;
+    }
+    if (entry.type === "pr-link") {
+      // Only a flag here — the actual extraction runs later over `entries`,
+      // which is not built yet at this point in the walk. The flag exists so
+      // the "nothing to persist" guard below can see that this window carries
+      // a PR link even though it produces no turns.
+      sawPrLink = true;
       continue;
     }
     if (entry.type === "permission-mode") {
@@ -1181,8 +1191,15 @@ async function readJsonlSession(
   // deferred (Codex review, PR #377). `sessionKind`/`entrypoint` are excluded
   // from this test on purpose: they ride attachments that always accompany
   // turns, so they cannot be the sole content of a window.
+  // `pr-link` belongs in this list for exactly the same reason as `ai-title`
+  // and `permission-mode`, and A5 missed it. A tail window holding only a
+  // `pr-link` entry produced no turns and no A1 metadata, so the guard returned
+  // null and the cursor advanced PAST it — the link was lost permanently, not
+  // deferred. That is the real failure behind the "scraped row never gets
+  // promoted" symptom reported in review: the promoting write never ran at all,
+  // because the whole window was discarded.
   const hasA1Metadata =
-    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0;
+    aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0 || sawPrLink;
   if (turns.length === 0 && sidechainCollected.length === 0 && !hasA1Metadata) {
     return { parsed: null, safeOffset, hasOrphanToolResults };
   }
@@ -1493,13 +1510,19 @@ async function recoverStraddledPrs(
     const allPrs = extractPrsFromEntries(entries);
     if (allPrs.length === 0) return 0;
     const insertSessionPr = db.prepare(
-      `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(session_id, pr_url) DO UPDATE SET
+         source = 'recorded',
+         repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+       WHERE excluded.source = 'recorded'
+         AND (session_prs.source IS NOT 'recorded'
+              OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`,
     );
     let recovered = 0;
     const txn = db.transaction(() => {
       for (const pr of allPrs) {
-        const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+        const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
         recovered += Number(result.changes ?? 0);
       }
     });
@@ -1597,14 +1620,22 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     preservedPrs = (
       db
         .prepare(
-          "SELECT pr_url, pr_number, repo FROM session_prs WHERE session_id = ?",
+          "SELECT pr_url, pr_number, repo, source FROM session_prs WHERE session_id = ?",
         )
         .all(s.sessionId) as Array<{
         pr_url: string;
         pr_number: number;
         repo: string;
+        source: string | null;
       }>
-    ).map((r) => ({ url: r.pr_url, number: r.pr_number, repo: r.repo }));
+    ).map((r) => ({
+      url: r.pr_url,
+      number: r.pr_number,
+      repo: r.repo,
+      // NULL here means "indexed before the column existed", not "scraped" —
+      // preserve the absence rather than inventing a provenance for it.
+      source: toPrLinkSource(r.source),
+    }));
     preservedTickets = (
       db
         .prepare(
@@ -1780,9 +1811,29 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
     `INSERT OR IGNORE INTO file_edits (session_id, turn_index, file_path, op, ts)
      VALUES (?, ?, ?, ?, ?)`
   );
+  // A5 + Codex review: PROMOTE-ONLY upsert, not INSERT OR IGNORE.
+  //
+  // Live indexing persists the scraped `gh pr create` result the moment it is
+  // parsed. Claude Code appends its authoritative `pr-link` entry afterwards,
+  // so on the next tail the row already exists — and `INSERT OR IGNORE`
+  // discarded the upgrade, leaving the DB backend reporting the link as
+  // `scraped` forever while a full file parse called it `recorded`. A silent
+  // backend divergence, on a field whose entire purpose is to say which source
+  // to trust.
+  //
+  // The CASE guards make it promote-only: a later scraped row can never demote
+  // a recorded one, which matters because both readers emit both sources on
+  // every pass and their order is not guaranteed. `pr_number` is never updated
+  // — it is part of the identity, not a mutable attribute.
   const insertSessionPr = db.prepare(
-    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-     VALUES (?, ?, ?, ?)`
+    `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, pr_url) DO UPDATE SET
+       source = 'recorded',
+       repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+     WHERE excluded.source = 'recorded'
+       AND (session_prs.source IS NOT 'recorded'
+            OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
@@ -1797,8 +1848,17 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // preserved set fills the gap when extraction returned empty. Counter
   // uses `result.changes` so INSERT OR IGNORE NOOPs don't inflate the
   // soak-monitoring `rowsWritten` metric. Read review #2 and #6.
+  //
+  // The promote-only rule moved from the SET expressions into a conflict
+  // `WHERE` for that same metric. `DO UPDATE` reports `changes = 1` whenever it
+  // fires, and the old `CASE` form fired on every conflicting row — writing the
+  // existing value back to itself and counting it. Re-scanning a transcript
+  // then reported every historical PR as newly written, which matters most in
+  // `recoverStraddledPrs`: it upserts the whole file whenever a tail holds any
+  // orphan tool result (Codex review, #385). With the guard the statement is a
+  // genuine no-op when nothing would change, so the counters mean what they say.
   for (const pr of mergePrLinks(s.prs, preservedPrs)) {
-    const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo);
+    const result = insertSessionPr.run(s.sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
     rows += Number(result.changes ?? 0);
   }
   // Tickets: same preserve-then-merge as PRs (item 3).
@@ -2217,8 +2277,14 @@ function appendSessionTail(
      VALUES (?, ?, ?, ?, ?)`
   );
   const insertSessionPr = db.prepare(
-    `INSERT OR IGNORE INTO session_prs (session_id, pr_url, pr_number, repo)
-     VALUES (?, ?, ?, ?)`
+    `INSERT INTO session_prs (session_id, pr_url, pr_number, repo, source)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, pr_url) DO UPDATE SET
+       source = 'recorded',
+       repo   = CASE WHEN excluded.repo <> '' THEN excluded.repo ELSE session_prs.repo END
+     WHERE excluded.source = 'recorded'
+       AND (session_prs.source IS NOT 'recorded'
+            OR (excluded.repo <> '' AND session_prs.repo IS NOT excluded.repo))`
   );
   const insertSessionTicket = db.prepare(
     `INSERT OR IGNORE INTO session_tickets (session_id, url, provider, ticket_key)
@@ -2232,7 +2298,7 @@ function appendSessionTail(
   // the prior writeSession) don't inflate the soak-monitoring metric.
   // Read review #1 and #6.
   for (const pr of parsed.prs) {
-    const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo);
+    const result = insertSessionPr.run(sessionId, pr.url, pr.number, pr.repo, pr.source ?? null);
     rows += Number(result.changes ?? 0);
   }
   // Tickets: no straddle case to recover — they come from a plain text

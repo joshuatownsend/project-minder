@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 14;
+export const DERIVED_VERSION = 15;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -197,6 +197,23 @@ export const DERIVED_VERSION = 14;
 //     undefined` for every bucket — which the UI already has to render for a
 //     genuinely task-free period. Degraded, never wrong: no bucket claims a 0%
 //     success rate it did not measure.
+// 15 — schema v22 (A5) added `session_prs.source`, recording whether a PR link
+//     was reported by Claude Code or scraped out of `gh pr create` output.
+//
+//     **The migration comment promised a re-parse that nothing scheduled.** It
+//     said existing rows "re-populate on the next reconcile like every other
+//     derived column", and that was wrong in both directions a session can
+//     take: an unchanged transcript hits the no-op gate in `reconcileSessionFile`
+//     and is never re-read, while a growing one takes the tail path, which
+//     appends from the end and never revisits PR entries already indexed in the
+//     prefix. Without a bump, every pre-upgrade PR chip would keep unknown
+//     provenance permanently (Codex review, #385).
+//
+//     Deliberately not a backfill. The obvious migration — stamp every existing
+//     row `scraped` — would put a wrong provenance on the majority of 652 rows
+//     that were in fact recorded, and provenance exists precisely to say which
+//     source to trust. NULL means "written before this column existed", which
+//     is the truth until the re-parse supplies the real answer.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

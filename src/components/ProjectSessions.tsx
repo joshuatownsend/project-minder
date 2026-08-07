@@ -444,7 +444,37 @@ export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
                                   activate(e);
                                 }
                               }}
-                              title={`Filter to sessions that created ${pr.repo}#${pr.number}`}
+                              // Provenance rides the existing tooltip rather
+                              // than earning its own badge: on this corpus 652
+                              // of 738 links are found by both sources, so a
+                              // visible marker would be noise on almost every
+                              // chip while saying nothing. It matters when a
+                              // link looks wrong — a scraped one is a regex
+                              // match on command output and can be a false
+                              // positive; a recorded one came from Claude Code.
+                              title={
+                                `Filter to sessions that created ${pr.repo}#${pr.number}` +
+                                (pr.source === "scraped"
+                                  ? " — link parsed from `gh pr create` output, not recorded by Claude Code"
+                                  : pr.source === "recorded"
+                                    ? " — link recorded by Claude Code"
+                                    : "")
+                              }
+                              // `aria-label` supplies the accessible NAME and
+                              // overrides the visible text, so omitting the
+                              // recorded case left screen-reader users unable to
+                              // tell a recorded link from a legacy one of
+                              // unknown provenance — a distinction sighted users
+                              // got from the tooltip (Codex + Copilot, #385).
+                              // All three states are now named.
+                              aria-label={
+                                `PR #${pr.number} in ${pr.repo}. Filter to sessions that created it.` +
+                                (pr.source === "scraped"
+                                  ? " Link parsed from command output rather than recorded by Claude Code."
+                                  : pr.source === "recorded"
+                                    ? " Link recorded by Claude Code."
+                                    : " Link provenance unknown; indexed before it was recorded.")
+                              }
                               style={{
                                 display: "flex",
                                 alignItems: "center",

@@ -183,6 +183,8 @@ describe("A1 session decode — modern transcript", () => {
       url: "https://github.com/owner/repo/pull/375",
       number: 375,
       repo: "owner/repo",
+      // A5: recorded wins over the scraped duplicate, and says so.
+      source: "recorded",
     });
   });
 });

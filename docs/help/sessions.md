@@ -73,7 +73,20 @@ This is the retrospective counterpart to the context-overhead estimate on **Stat
 
 ### PR chips
 
-When a session ran `gh pr create` and the resulting PR URL appeared in the tool result, the session row on a project's **Sessions** tab shows a `PR #N` chip per PR (multiple if the session opened several). Chips are ordered by PR number ascending; the repo is derived from the URL itself (so PRs against a fork or sibling repo are attributed correctly, not against the session's git remote).
+The session row on a project's **Sessions** tab shows a `PR #N` chip for every PR the session opened (multiple if it opened several), ordered by PR number ascending.
+
+Minder learns about a PR two different ways, and the chip's tooltip says which one it was:
+
+| Source | How it's found | Reliability |
+| --- | --- | --- |
+| **recorded** | Claude Code writes a `pr-link` entry into the transcript | Authoritative — URL, number and repository are reported by the CLI |
+| **scraped** | A PR URL matched by regex in `gh pr create` output | Inferred, including the repository, which is recovered from the URL |
+
+**Both sources stay.** Recorded entries catch PRs opened by any route — the web UI, `gh pr create --web`, a script, or the GitHub API — which the scraper structurally cannot see, since no PR URL ever reaches the transcript text. But the scraper still catches PRs the CLI misses: measured across 5,319 local transcripts, recorded entries found 738 distinct PR URLs to the scraper's 657, and **5 URLs were found only by the scraper** — every one from a session that *did* record `pr-link` entries for its other PRs. That is a gap in the CLI's own recording rather than an artifact of old transcripts, so it will not disappear on its own.
+
+When both sources see the same PR it appears once, labelled `recorded`, and the recorded repository wins over the one parsed back out of the URL.
+
+Sessions indexed before this distinction existed show no source in the tooltip. That means "not recorded", **not** "scraped" — they re-populate on the next reconcile.
 
 Clicking a `PR #N` chip filters the in-page session list to just sessions that created that PR — useful for "what other work touched this PR's slug-chain?" A filter banner appears above the list with an "open on GitHub" link and a clear-filter button. The filter is in-page only and does not change the URL.
 

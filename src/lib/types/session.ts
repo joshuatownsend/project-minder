@@ -192,10 +192,40 @@ export interface SessionHookRun {
  * from the session's git remote — a session may open PRs against a fork
  * or a sibling repo.
  */
+/** How Minder learned about a PR link. See {@link PrLink.source}. */
+export type PrLinkSource = "recorded" | "scraped";
+
+/**
+ * Narrow a DB `source` column to the enum, or `undefined`.
+ *
+ * The column is TEXT, so a hand-edited or future-typo value would otherwise be
+ * cast straight through and reach the UI as an invalid `PrLink.source` — where
+ * it renders as neither recorded nor scraped and looks like a rendering bug
+ * rather than a data one (Copilot review of #385). An unrecognised value is
+ * treated exactly like NULL: unknown provenance, which the UI already handles.
+ */
+export function toPrLinkSource(value: unknown): PrLinkSource | undefined {
+  return value === "recorded" || value === "scraped" ? value : undefined;
+}
+
 export interface PrLink {
   url: string;
   number: number;
   repo: string;
+  /**
+   * `recorded` — Claude Code wrote a `type:"pr-link"` entry. URL, number and
+   * repository are reported by the CLI rather than parsed out of anything.
+   *
+   * `scraped` — a PR URL matched by regex in a `gh pr create` tool result.
+   * Everything is inferred from command output, including `repo`, which is
+   * recovered from the URL itself. A scraped link can be a false positive in a
+   * way a recorded one cannot: `gh pr create` answering "a pull request for
+   * branch X already exists: <url>" reads exactly like a successful create.
+   *
+   * `undefined` on rows indexed before the column existed — which does **not**
+   * mean scraped.
+   */
+  source?: PrLinkSource;
 }
 
 /** Issue-tracker providers we can recognize from a verbatim URL. */
