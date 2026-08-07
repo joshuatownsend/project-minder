@@ -48,3 +48,23 @@ Interactive scatter plot showing all Claude Code sessions across three configura
 - **Reliability** — message count vs 1-shot rate; dot size = cost; color = tool failure streak indicator
 
 Switch presets with the segmented control. Toggle **log x / log y** for long-tail distributions. Hover a dot for a tooltip; click to navigate to the full session detail page.
+
+### Sessions that aren't plotted
+
+Each preset needs one measurement to place a dot: duration for Complexity vs
+Cost, peak context fill for Context Pressure, 1-shot rate for Reliability. A
+session that never recorded it **is left off the chart**, and a line above the
+plot says how many and which measurement they lack.
+
+This matters more than it sounds. Those measurements are genuinely optional —
+on the reference index 59% of sessions carry no peak context fill — and they
+used to be substituted with `0`. That put a majority of the Context Pressure
+cloud on the floor with tooltips reading `0% fill` as though measured, and on
+Reliability it awarded the worst score on the chart to sessions nobody had
+scored. A session measured *at* zero still plots at zero; only the unmeasured
+ones are omitted.
+
+If **no** session carries the measurement a preset needs — an older corpus, or
+one where OTEL was never enabled — that preset says so instead of drawing an
+empty chart. The other two presets may still have plenty; they use different
+measurements.

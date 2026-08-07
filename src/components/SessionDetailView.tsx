@@ -49,8 +49,10 @@ import {
   Star,
   FileDown,
   BookOpen,
+  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
+import type { SessionPermissionMode } from "@/lib/types/session";
 import { Modal } from "@/components/ui/modal";
 import { downloadBlob } from "@/lib/downloadBlob";
 import { formatCost, formatDurationMs, formatTokens } from "@/lib/format";
@@ -511,6 +513,52 @@ function GenerateTitleButton({
   );
 }
 
+/**
+ * The session's permission-mode timeline, collapsed to the path it took.
+ *
+ * `permissionModes` was parsed by both backends and rendered by nothing. Only
+ * 193 of 5,028 local sessions record one — a session that never switched mode
+ * emits no entry at all, so **absence is not `auto`** and the chip is omitted
+ * rather than defaulted (see SessionPermissionMode).
+ *
+ * Consecutive duplicates are collapsed: the entries are a log, so a session
+ * that re-asserted the same mode five times took one path, not five.
+ */
+function PermissionModeChip({ modes }: { modes?: SessionPermissionMode[] }) {
+  if (!modes || modes.length === 0) return null;
+
+  const path = modes.reduce<string[]>((acc, m) => {
+    if (acc[acc.length - 1] !== m.mode) acc.push(m.mode);
+    return acc;
+  }, []);
+
+  const label = path.join(" → ");
+  const explanation =
+    path.length > 1
+      ? `Permission mode changed during this session: ${label}`
+      : `Permission mode for this session: ${label}`;
+
+  return (
+    <>
+      <span className="sr-only">{explanation}</span>
+      <span
+        aria-hidden="true"
+        title={explanation}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: "4px",
+          fontFamily: "var(--font-mono)", fontSize: "0.65rem",
+          color: "var(--text-secondary)", background: "var(--bg-elevated)",
+          border: "1px solid var(--border-subtle)", borderRadius: "3px",
+          padding: "2px 7px", cursor: "help",
+        }}
+      >
+        <ShieldCheck style={{ width: "10px", height: "10px" }} />
+        {label}
+      </span>
+    </>
+  );
+}
+
 // Stats-strip cell now uses the shared primitive — see src/components/ui/StatCell.tsx.
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
@@ -809,16 +857,32 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
               {m}
             </span>
           ))}
+          <PermissionModeChip modes={data.permissionModes} />
         </div>
 
-        {/* Generated title — shown as a subtitle when present */}
-        {generatedTitle && (
+        {/* Title subtitle. Minder's own generated title wins when present;
+            otherwise Claude Code's `aiTitle`, which arrives in the transcript
+            for free and was previously read, typed, and dropped — the page
+            offered to generate a title while one sat unused in the payload.
+            Attributed rather than blended, because a title you asked Minder to
+            write and one Claude Code emitted are different provenance. */}
+        {(generatedTitle || data.aiTitle) && (
           <p style={{
             fontSize: "0.82rem", color: "var(--accent)",
             margin: 0, lineHeight: 1.4,
             fontFamily: "var(--font-body)", fontWeight: 500,
+            display: "flex", alignItems: "baseline", gap: "7px",
           }}>
-            {generatedTitle}
+            {generatedTitle ?? data.aiTitle}
+            {!generatedTitle && data.aiTitle && (
+              <span style={{
+                fontFamily: "var(--font-mono)", fontSize: "0.58rem",
+                textTransform: "uppercase", letterSpacing: "0.06em",
+                color: "var(--text-muted)", fontWeight: 400,
+              }}>
+                from Claude Code
+              </span>
+            )}
           </p>
         )}
 

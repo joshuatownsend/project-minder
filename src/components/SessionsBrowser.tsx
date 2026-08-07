@@ -286,6 +286,14 @@ function MatchSnippet({ text, query }: { text: string; query: string }) {
 // were drifting (slug was added to one but not the other).
 function matchesTitleScope(s: SessionSummary, q: string): boolean {
   return (
+    // The two title fields come first because they are what the row displays.
+    // Neither was searchable: `generatedTitle` was missed when the title slot
+    // was introduced, and `aiTitle` joined it in this PR — so searching for
+    // the title you are looking at returned nothing unless the same words
+    // happened to appear in a prompt (Codex review, #403). Kept in sync with
+    // the SQLite `titles` retriever in `data/sessionSearch.ts`.
+    s.generatedTitle?.toLowerCase().includes(q) === true ||
+    s.aiTitle?.toLowerCase().includes(q) === true ||
     s.initialPrompt?.toLowerCase().includes(q) === true ||
     s.lastPrompt?.toLowerCase().includes(q) === true ||
     s.projectName.toLowerCase().includes(q) ||
@@ -353,6 +361,35 @@ function SessionRow({
       !matchesTitleScope(session, searchLower)
     : false;
   const snippetText = ftsSnippet ?? (localContentMatch ? session.searchableText : undefined);
+
+  // Everything the title slot can display, in preference order.
+  //
+  // Used twice — as the default text, and to decide which entry to promote
+  // when it matched the query. One list rather than two so they cannot drift:
+  // the first version checked only the two title fields, so a recapped session
+  // matching on its initial prompt still rendered the recap, and the row did
+  // not contain the query (Codex review of #403).
+  //
+  // The other fields `matchesTitleScope` accepts are deliberately absent.
+  // `projectName` and `gitBranch` have their own elements on this row, so a
+  // match there is already visible; `projectPath`, `sessionId` and `slug` are
+  // identifiers rather than description text, and promoting a file path into
+  // the title slot would be worse than the recap it replaced.
+  const titleCandidates = [
+    session.generatedTitle,
+    session.aiTitle,
+    session.initialPrompt,
+    session.lastPrompt,
+    session.gitBranch,
+  ];
+
+  // A content hit already shows what matched, via `snippetText` above. This is
+  // the equivalent for a title-slot hit. Recaps still win when not searching:
+  // they describe what happened while you were away, which is more useful on a
+  // row you are returning to than a title is.
+  const matchedTitle = trimmedSearch
+    ? titleCandidates.find((t) => t?.toLowerCase().includes(searchLower))
+    : undefined;
 
   return (
     <Link
@@ -431,11 +468,24 @@ function SessionRow({
               whiteSpace: "nowrap",
             }}
           >
+            {/* Order: what matched (content, then title) → recap → title →
+                prompt. The two search-only branches come first so a row always
+                shows the text that put it in the results; below them, a recap
+                outranks a title because it describes what happened while you
+                were away. `docs/help/sessions.md` documents this order. */}
             {trimmedSearch && snippetText
               ? <MatchSnippet text={snippetText} query={trimmedSearch} />
+              : trimmedSearch && matchedTitle
+              ? <MatchSnippet text={matchedTitle} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
               ? session.recaps[session.recaps.length - 1].content
-              : session.generatedTitle ?? session.initialPrompt ?? session.lastPrompt ?? session.gitBranch ?? (
+              // Same ordered list the match lookup uses. `generatedTitle` wins
+              // because it is Minder's own and produced only when you press the
+              // button; `aiTitle` follows because Claude Code emits it for free
+              // on 503 of 5,028 local sessions — the row used to ignore it and
+              // show a raw prompt while the detail page offered to generate a
+              // title the transcript already contained.
+              : titleCandidates.find(Boolean) ?? (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>no prompt recorded</span>
               )}
           </span>

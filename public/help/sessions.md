@@ -207,6 +207,42 @@ Note: a session created seconds before you visit `/sessions/<slug>` may 404 unti
 
 Click a session to see the full detail view with tabs:
 
+### Titles and permission mode
+
+The session row shows, in order:
+
+1. **What matched your search**, when searching — an excerpt of the matched
+   conversation text, or whichever of the title-slot fields matched (generated
+   title, Claude Code's title, first prompt, last prompt, branch). A match on
+   the **project name** or **branch** is shown by the row's own project and
+   branch elements rather than in this slot; a match on a session id, slug or
+   project path is not echoed back, since promoting an identifier or a file
+   path here would be less useful than what it replaced.
+2. **The latest recap**, if the session has one. A recap describes what
+   happened while you were away, which is more useful on a row you're
+   returning to than a title.
+3. **A title** — one you asked Minder to generate, then Claude Code's own
+   `ai-title`.
+4. **The first prompt**, then the last prompt, then the git branch.
+
+The detail header uses the same title preference (generated, then Claude
+Code's, labelled **from Claude Code** so the two aren't confused). Claude Code
+emits its title for free on about one session in ten; until recently that was
+read, stored, and never shown, so the page offered to generate a title while
+one sat unused.
+
+**Both titles are searchable** under the `titles` scope. Neither used to be —
+searching for the title displayed on a row returned nothing unless the same
+words happened to appear in a prompt. Titles are session metadata rather than
+turn text, so they are not in the full-text index and have to be matched
+directly; on the reference corpus, 126 of 400 sampled sessions with a Claude
+Code title are findable *only* by that field.
+
+Sessions that switched permission mode carry a chip showing the path taken
+(e.g. `plan → auto`), with consecutive repeats collapsed. A session that never
+switched records no entry at all, so the chip is **absent rather than showing a
+default** — no entry does not mean `auto`.
+
 ### Session metadata panel
 
 When Claude Code has recorded a per-session metadata file (`~/.claude/usage-data/session-meta/<id>.json`), a **Session metadata** panel appears below the stats strip. It surfaces Claude's own bookkeeping for the session that we don't otherwise compute: **git activity** (commits, pushes, lines added/removed, files modified), **interruptions**, the **capabilities** the session used (Task agent, MCP, web search, web fetch), and a breakdown of **tool errors by category**. Read-only; the panel is hidden when no record exists.
@@ -232,6 +268,17 @@ Table of file operations (read, write, edit, glob, grep) with file paths and too
 
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
+
+A card whose details came from Claude Code's own `agent-*.meta.json` record —
+rather than being inferred from the parent transcript's Agent tool call — says
+so, and shows the turn count from that record.
+
+A **disagreement** between that count and one derived from the transcript turns
+the chip amber and shows both, rather than picking one. This requires two real
+counts: with the SQLite index active (the default) subagent transcripts are not
+indexed, so there is no independent count and none is claimed. A card there
+reads `14 turns recorded`, not `14 turns recorded · 0 counted` — a backend that
+cannot count is not a backend that counted zero.
 
 ### Hooks
 What hooks cost this session. Runs are grouped by command and ranked by **total

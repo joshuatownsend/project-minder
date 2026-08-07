@@ -24,10 +24,16 @@ let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
 interface JsonlEntry {
-  type: "user" | "assistant";
-  timestamp: string;
+  type: "user" | "assistant" | "ai-title";
+  /**
+   * Optional because metadata entries carry none: `ai-title` is
+   * `{type, aiTitle, sessionId}` with no timestamp at all, which is why
+   * ingest handles it *before* its timestamp guard.
+   */
+  timestamp?: string;
   message?: any;
   slug?: string;
+  aiTitle?: string;
 }
 
 async function writeJsonl(filePath: string, entries: JsonlEntry[]): Promise<void> {
@@ -219,6 +225,34 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     expect(hits.length).toBe(1);
     expect(hits[0].sessionId).toBe("title-a");
     expect(hits[0].source).toBe("titles");
+    conn.closeDb();
+  });
+
+  // Both title columns are what the session row actually displays, and neither
+  // was searchable: `generated_title` was missed when the title slot was added,
+  // `ai_title` when it joined the fallback chain in #403. Searching for the
+  // title in front of you returned nothing unless the same words happened to
+  // appear in a prompt. Neither is reachable via `prompts_fts` — an `ai-title`
+  // entry is session metadata, not turn text.
+  it("titles scope matches against ai_title, which no other retriever indexes", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "ai-title-a.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "do the thing"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      // Deliberately a word that appears in NO prompt or assistant text, so a
+      // hit can only have come from the ai_title column.
+      { type: "ai-title", aiTitle: "Refactor the zygomorphic parser" },
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const hits = search.searchSessionsInDb(db, "zygomorphic", "titles");
+    expect(hits.map((h) => h.sessionId)).toContain("ai-title-a");
+    expect(hits.find((h) => h.sessionId === "ai-title-a")!.source).toBe("titles");
+
+    // And it is genuinely absent from the prompt index — proving the titles
+    // retriever is the only path to it.
+    expect(search.searchSessionsInDb(db, "zygomorphic", "prompts")).toHaveLength(0);
     conn.closeDb();
   });
 

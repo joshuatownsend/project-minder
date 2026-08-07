@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:6637e42e30a5 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:15:38.508Z -->
+## ★ Insight
+This finding only exists because of the *previous* fix — titles weren't searchable, so a title-match-with-recap-display couldn't happen. Three rounds on this PR, and each new finding was created by the prior round's change. That's not a sign of thrash; it's what happens when you change what a field means and the consequences propagate outward one hop at a time.
+
+---
+
+<!-- insight:2e00915ded7a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:08:31.398Z -->
+## ★ Insight
+The new search test **passed while typecheck failed**. Vitest doesn't typecheck fixtures, so `type: "ai-title"` ran happily against a `"user" | "assistant"` union. The green test proved the query worked; it said nothing about the fixture being well-formed. Two gates, two genuinely different questions — which is why the project requires both.
+
+---
+
+<!-- insight:bdfab721845c | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T20:57:16.368Z -->
+## ★ Insight
+The new search test **passed while typecheck failed** — Vitest doesn't typecheck fixtures, so `type: "ai-title"` ran fine at runtime against a `"user" | "assistant"` union. A green test run said nothing about whether the fixture was well-formed. Two gates, two different questions.
+
+---
+
+<!-- insight:729700dd4695 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T20:42:06.182Z -->
+## ★ Insight
+The cross-backend parity test failed on the type change and had to be amended — it asserted `messageCount === 0` as divergence #3. Typecheck accepted the change silently; only the test that compares the two backends against each other noticed the behaviour moved. That's the second time in this stack a parity check caught what a type system couldn't.
+
+---
+
 <!-- insight:b6a8967f9610 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T15:21:07.880Z -->
 ## ★ Insight
 The test picks **21:30 local** deliberately: at that hour the next local midnight is strictly further off than the next epoch-hour boundary in *every* timezone. So the assertion fails under the old scheduling on any CI machine — I didn't have to manipulate `TZ` to catch a timezone bug, which would have been flaky across the Linux and Windows runners.

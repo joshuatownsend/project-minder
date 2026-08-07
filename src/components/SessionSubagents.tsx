@@ -1,4 +1,5 @@
 import { SubagentInfo } from "@/lib/types";
+import { describeSubagentProvenance } from "@/lib/sessions/subagentProvenance";
 import type { SubagentCategory } from "@/lib/types";
 import { Bot, Wrench, DollarSign, Clock, Cpu } from "lucide-react";
 import { formatCostCompact } from "@/lib/format";
@@ -43,6 +44,53 @@ const CATEGORY_COLORS: Record<SubagentCategory, { bg: string; text: string }> = 
   create:   { bg: "var(--status-active-bg)",  text: "var(--status-active-text)" },
   other:    { bg: "var(--bg-elevated)",       text: "var(--text-muted)"         },
 };
+
+/**
+ * Where this card's numbers came from, and whether the two sources agree.
+ *
+ * `metaSourced` marks a subagent whose record was read from Claude Code's own
+ * `agent-*.meta.json` rather than inferred from the parent transcript's Agent
+ * tool call. Both were parsed and neither was ever shown, so every card looked
+ * equally authoritative — the same gap the Hook Activity source badge closed.
+ *
+ * When Claude Code's own turn count disagrees with the count derived from the
+ * transcript, both are shown rather than one being picked: a disagreement is
+ * information about the data, and silently preferring either would hide it.
+ * (This mirrors the Stats page's cross-check against `stats-cache.json`.)
+ */
+function MetaProvenance({
+  metaSourced,
+  metaTurnCount,
+  messageCount,
+}: {
+  metaSourced?: boolean;
+  metaTurnCount?: number;
+  messageCount?: number;
+}) {
+  // Decision logic lives in lib/sessions/subagentProvenance.ts, where it can be
+  // tested — the "a disagreement needs two real counts" rule is exactly the
+  // part that was wrong before review.
+  const provenance = describeSubagentProvenance({ metaSourced, metaTurnCount, messageCount });
+  if (!provenance) return null;
+  const { label, explanation, disagrees } = provenance;
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+      <span className="sr-only">{explanation}</span>
+      <span
+        aria-hidden="true"
+        title={explanation}
+        style={{
+          ...CHIP_STYLE,
+          cursor: "help",
+          ...(disagrees ? { color: "var(--accent)", borderColor: "var(--accent)" } : {}),
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
 
 export function SessionSubagents({ subagents }: { subagents: SubagentInfo[] }) {
   if (subagents.length === 0) {
@@ -125,6 +173,11 @@ export function SessionSubagents({ subagents }: { subagents: SubagentInfo[] }) {
                 </div>
               );
             })()}
+            <MetaProvenance
+              metaSourced={agent.metaSourced}
+              metaTurnCount={agent.metaTurnCount}
+              messageCount={agent.messageCount}
+            />
             {topTools.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
                 {topTools.map(([tool, count]) => (

@@ -14,11 +14,14 @@ import { fuseRrf } from "./rrf";
 //     any session?" Prompt hits also carry a `snippet` excerpt, because
 //     the row renderer has no other access to that text.
 //   - `titles`  → `LIKE` over `sessions` columns (`slug`,
-//     `initial_prompt`, `last_prompt`, `project_dir_name`,
-//     `git_branch`). Best for slug-grouped lookup and project-name
-//     prefix scans. Deliberately NOT routed through `prompts_fts`: those
-//     columns are session metadata, not turn text, and are not indexed
-//     there at all.
+//     `initial_prompt`, `last_prompt`, `project_dir_name`, `git_branch`,
+//     `generated_title`, `ai_title`). Best for slug-grouped lookup and
+//     project-name prefix scans. Deliberately NOT routed through
+//     `prompts_fts`: those columns are session metadata, not turn text,
+//     and are not indexed there at all — which is exactly why the two
+//     title columns have to be listed here. They are what the row
+//     displays, so a title search that misses them fails on the most
+//     obvious query a user can type.
 //   - `both`    → both retrievers run, and their two RANKED LISTS are
 //     merged by Reciprocal Rank Fusion (`./rrf.ts`) rather than by
 //     comparing scores. bm25 magnitudes and `LIKE` matches live on
@@ -305,15 +308,22 @@ export function searchSessionsInDb(
     const pat = `%${q.toLowerCase()}%`;
     const rows = prepCached(
       db,
+      // `generated_title` and `ai_title` are here because they are what the
+      // session row actually *displays*. Searching for the title in front of
+      // you and getting nothing back is the worst kind of miss — and neither
+      // is reachable through `prompts_fts`, which indexes turn text, while an
+      // `ai-title` metadata entry is not turn text at all (Codex review, #403).
       `SELECT session_id FROM sessions
          WHERE slug IS NOT NULL AND lower(slug) LIKE ?
             OR initial_prompt IS NOT NULL AND lower(initial_prompt) LIKE ?
             OR last_prompt IS NOT NULL AND lower(last_prompt) LIKE ?
             OR project_dir_name IS NOT NULL AND lower(project_dir_name) LIKE ?
             OR git_branch IS NOT NULL AND lower(git_branch) LIKE ?
+            OR generated_title IS NOT NULL AND lower(generated_title) LIKE ?
+            OR ai_title IS NOT NULL AND lower(ai_title) LIKE ?
          ORDER BY end_ts DESC
          LIMIT ?`
-    ).all(pat, pat, pat, pat, pat, candidateLimit) as TitleRow[];
+    ).all(pat, pat, pat, pat, pat, pat, pat, candidateLimit) as TitleRow[];
 
     // `LIKE` yields no relevance score at all, so recency (`end_ts DESC`)
     // is the only ordering signal available. RRF's k=60 damping is what
