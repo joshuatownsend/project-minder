@@ -45,6 +45,31 @@ The `/config?type=hooks` tab on the Config page mirrors the toggle behavior abov
 | Source dropdown | Filter to `project`, `local`, or `user` scope |
 | Sort | By event name (A–Z) or by project name |
 
+## Which hook events Minder accepts
+
+`POST /api/hooks` accepts every lifecycle event Claude Code documents — all 31,
+from `SessionStart` through `SessionEnd`. Minder previously knew only 9, and an
+event outside that set was rejected with a 400, so a hook wired to
+`PostCompact`, `SubagentStart`, `PermissionDenied`, `FileChanged`,
+`DirectoryAdded` or any of the other newer events sent its payload and had it
+thrown away.
+
+Accepting an event and modelling its payload in detail are separate things:
+
+- **Modelled in detail** — `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
+  `Notification`, `Stop`, `SubagentStop`, `PreCompact`, `SessionStart`,
+  `SessionEnd`, `DirectoryAdded`. Their known fields are parsed into typed
+  values that the background-activity and notification surfaces read.
+- **Captured generically** — every other event. Timing, session and event name
+  are recorded along with the raw body, which is enough for a notification rule
+  or an activity trace. Fields are kept raw rather than projected into invented
+  names, so nothing looks like a populated column that is always empty.
+
+Notification rules and the ingest route derive their accepted-event lists from
+one shared constant. They used to be two hand-maintained copies, which could
+drift into a state where a rule could be saved for an event the route would
+reject — a rule that validates and can never fire.
+
 ## Background activity (T2.3)
 
 The **/background** page aggregates `background_tasks` and `session_crons` arrays emitted by Stop / SubagentStop hook events as of Claude Code v2.1.145. Use it to see what long-running shell commands or scheduled tasks are pending across your portfolio.

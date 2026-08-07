@@ -14,6 +14,7 @@
  */
 
 import { describePattern } from "./matcher";
+import { HOOK_EVENT_NAMES } from "@/lib/types";
 import {
   MAX_COOLDOWN_SEC,
   MAX_PATTERN_LENGTH,
@@ -30,17 +31,9 @@ import {
   type RuleSeverity,
 } from "./types";
 
-const VALID_EVENT_NAMES = new Set([
-  "PreToolUse",
-  "PostToolUse",
-  "UserPromptSubmit",
-  "Notification",
-  "Stop",
-  "SubagentStop",
-  "PreCompact",
-  "SessionStart",
-  "SessionEnd",
-]);
+// Derived from the shared list so a rule can never target an event that
+// `/api/hooks` would reject on arrival — see the note on HOOK_EVENT_NAMES.
+const VALID_EVENT_NAMES = new Set<string>(HOOK_EVENT_NAMES);
 
 const MAX_ID_LENGTH = 64;
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;

@@ -45,17 +45,59 @@ export type FeatureFlagKey =
   | "workflowLauncher"
   | "notificationRules";
 
+/**
+ * Every Claude Code lifecycle hook event, in rough lifecycle order.
+ *
+ * **Single source of truth.** This list previously existed three times over —
+ * here as a union, and as hand-maintained `Set`s in `/api/hooks` and in the
+ * notification-rule validator. They were identical by luck rather than by
+ * construction, and the failure mode of a drift is quiet: the route rejects an
+ * event the rule validator happily accepts, so a rule targeting it can be saved
+ * and can never fire. Both now derive from this array.
+ *
+ * Transcribed from the hooks reference (checked 2026-08-06). Minder had 9 of
+ * the 31 documented events, so a hook wired to any of the other 22 — `PostCompact`,
+ * `SubagentStart`, `PermissionDenied`, `FileChanged` — was rejected with a 400 at
+ * the ingest route. Accepting an event is cheap and independent of modelling its
+ * payload in detail: see `HookPayload` for which ones get typed fields and which
+ * are captured generically.
+ */
+export const HOOK_EVENT_NAMES = [
+  "SessionStart",
+  "Setup",
+  "UserPromptSubmit",
+  "UserPromptExpansion",
+  "PreToolUse",
+  "PermissionRequest",
+  "PermissionDenied",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PostToolBatch",
+  "Notification",
+  "MessageDisplay",
+  "SubagentStart",
+  "SubagentStop",
+  "TaskCreated",
+  "TaskCompleted",
+  "Stop",
+  "StopFailure",
+  "TeammateIdle",
+  "InstructionsLoaded",
+  "ConfigChange",
+  "CwdChanged",
+  "DirectoryAdded",
+  "FileChanged",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "PreCompact",
+  "PostCompact",
+  "Elicitation",
+  "ElicitationResult",
+  "SessionEnd",
+] as const;
+
 /** Claude Code lifecycle hook event names sent in the hook stdin payload. */
-export type HookEventName =
-  | "PreToolUse"
-  | "PostToolUse"
-  | "UserPromptSubmit"
-  | "Notification"
-  | "Stop"
-  | "SubagentStop"
-  | "PreCompact"
-  | "SessionStart"
-  | "SessionEnd";
+export type HookEventName = (typeof HOOK_EVENT_NAMES)[number];
 
 export type ScheduleMode = "weekdays" | "vibe-coder" | "24x7" | "custom";
 

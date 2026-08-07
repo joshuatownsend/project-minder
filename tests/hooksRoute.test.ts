@@ -203,3 +203,33 @@ describe("POST /api/hooks — awaiting-permission flow", () => {
     expect(setAwaiting).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/hooks — awaiting state is cleared only by real turn events", () => {
+  // Codex review of #384. The route used to clear the awaiting state on ANY
+  // non-Notification event, which was true while only nine events were
+  // accepted — all of them in the main turn loop. Accepting all 31 broke that
+  // premise: a passive event can now arrive while a different task in the same
+  // project is still showing a permission prompt.
+  it("clears on an event that proves the turn advanced", async () => {
+    (getFlag as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (clearAwaiting as ReturnType<typeof vi.fn>).mockClear();
+    await POST(makeRequest({ ...baseBody, hook_event_name: "PostToolUse", tool_name: "Bash" }));
+    expect(clearAwaiting).toHaveBeenCalled();
+  });
+
+  it("does NOT clear on a passive event", async () => {
+    (getFlag as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    for (const evt of ["FileChanged", "TeammateIdle", "TaskCompleted", "ConfigChange", "CwdChanged"]) {
+      (clearAwaiting as ReturnType<typeof vi.fn>).mockClear();
+      await POST(makeRequest({ ...baseBody, hook_event_name: evt }));
+      expect(clearAwaiting, `${evt} must not clear the awaiting state`).not.toHaveBeenCalled();
+    }
+  });
+
+  it("still accepts the passive event rather than rejecting it", async () => {
+    (getFlag as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const res = await POST(makeRequest({ ...baseBody, hook_event_name: "FileChanged" }));
+    // Not clearing must not mean not recording — the event is still ingested.
+    expect(res.status).toBe(200);
+  });
+});

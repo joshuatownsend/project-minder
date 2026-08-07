@@ -106,6 +106,42 @@ export interface SessionEndPayload extends BasePayload {
   reason?: string;
 }
 
+/**
+ * Fires after a working directory is added mid-session via `/add-dir` or the
+ * SDK `register_repo_root` control request. Notably NOT fired for directories
+ * passed with the `--add-dir` startup flag — `SessionStart` covers those — so
+ * this is strictly a mid-session signal.
+ */
+export interface DirectoryAddedPayload extends BasePayload {
+  kind: "DirectoryAdded";
+  /** Absolute path of the directory that was added. */
+  directory?: string;
+  /** `slash_command` for `/add-dir`, `register_repo_root` for the SDK request. */
+  source?: "slash_command" | "register_repo_root";
+}
+
+/**
+ * Catch-all for hook events Minder **accepts and records** but does not model
+ * field-by-field.
+ *
+ * The alternative was to reject them, which is what happened before: 22 of the
+ * 31 documented events 400'd at `/api/hooks`. Rejecting loses the event
+ * entirely; capturing it generically keeps the timing, the session and the
+ * event name — enough for a notification rule or an activity trace — and leaves
+ * the door open to promoting any of them to a typed variant later.
+ *
+ * `raw` deliberately holds the unrecognised body rather than a guessed
+ * projection of it. Inventing field names for an event whose schema hasn't been
+ * read is how you get a column that is always `undefined` and looks like a bug
+ * in the producer.
+ */
+export interface GenericHookPayload extends BasePayload {
+  kind: "Generic";
+  /** The event this actually was — the discriminant is `"Generic"` for all of them. */
+  event: HookEventName;
+  raw: Record<string, unknown>;
+}
+
 export type HookPayload =
   | PreToolUsePayload
   | PostToolUsePayload
@@ -115,7 +151,9 @@ export type HookPayload =
   | SubagentStopPayload
   | PreCompactPayload
   | SessionStartPayload
-  | SessionEndPayload;
+  | SessionEndPayload
+  | DirectoryAddedPayload
+  | GenericHookPayload;
 
 // Field-extraction helpers (`str`/`bool`/`num`/`arr`) live in `@/lib/coerce` —
 // they return `undefined` (not throw) on type mismatch so a single bad field
@@ -230,5 +268,25 @@ export function parseHookPayload(
         ...base,
         reason: str(body.reason),
       };
+
+    case "DirectoryAdded": {
+      const how = str(body.source);
+      return {
+        kind: "DirectoryAdded",
+        ...base,
+        directory: str(body.directory),
+        source:
+          how === "slash_command" || how === "register_repo_root"
+            ? how
+            : undefined,
+      };
+    }
+
+    default:
+      // Every other documented event. Recorded rather than dropped; see
+      // `GenericHookPayload`. No `return null` here — unlike the typed variants
+      // above there is no required field to be missing, so there is nothing to
+      // reject on.
+      return { kind: "Generic", ...base, event: eventName, raw: body };
   }
 }

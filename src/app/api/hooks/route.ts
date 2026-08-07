@@ -16,14 +16,45 @@ import { dispatchAwaitingPermission } from "@/lib/notifications/dispatchAwaiting
 import { evaluateAndDispatchRules } from "@/lib/notifications/rules/engine";
 import { SENTINEL_UA } from "@/lib/hooks/curlCommand";
 import { bridgeHookToEventBus } from "@/lib/agentView/eventBus";
-import type { HookEventName } from "@/lib/types";
+import { HOOK_EVENT_NAMES, type HookEventName } from "@/lib/types";
 
-const VALID_EVENTS = new Set<string>([
-  "PreToolUse",
-  "PostToolUse",
+// Derived, never hand-listed — see the note on HOOK_EVENT_NAMES. A copy here
+// that drifted from the validator's copy let a saved notification rule target an
+// event this route would reject.
+const VALID_EVENTS = new Set<string>(HOOK_EVENT_NAMES);
+
+/**
+ * Events that prove the turn actually advanced, and therefore that a pending
+ * permission prompt was answered.
+ *
+ * This used to be "anything that isn't a Notification", which was true while
+ * Minder accepted only nine events — every one of them sat in the main turn
+ * loop. Widening the accepted set to all 31 broke that premise: `FileChanged`,
+ * `TeammateIdle`, `TaskCompleted`, `ConfigChange`, `CwdChanged` and
+ * `InstructionsLoaded` are passive or asynchronous and can arrive while a
+ * *different* task in the same project is still showing a permission prompt.
+ * The project would then vanish from the awaiting UI with the prompt still on
+ * screen (Codex review, #384).
+ *
+ * Deliberately an allowlist rather than a denylist of the passive ones: a new
+ * event added upstream should default to "does not clear", because failing to
+ * clear self-corrects on the next real turn event, while clearing wrongly hides
+ * a prompt that is genuinely waiting for the user.
+ */
+const RESPONSE_EVENTS = new Set<string>([
   "UserPromptSubmit",
-  "Notification",
+  "UserPromptExpansion",
+  "PreToolUse",
+  // A denial is a response. Without it the prompt stays "awaiting" until the
+  // live session is evicted five minutes later, because the events that would
+  // normally clear it only arrive if the user goes on to do something else
+  // (Codex review, #384).
+  "PermissionDenied",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PostToolBatch",
   "Stop",
+  "StopFailure",
   "SubagentStop",
   "PreCompact",
   "SessionStart",
@@ -72,13 +103,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // Normalize failure signal from PostToolUse payloads.
   // Canonical: is_error (Anthropic tool_result flag). Bash-specific: non-zero return_code.
+  //
+  // `PostToolUseFailure` is failure by name: Claude Code emits it *instead of*
+  // PostToolUse for a failed invocation, and such a payload need not carry
+  // is_error/return_code at all. Reading only the payload would have left
+  // `toolFailed` undefined on precisely the events that are definitionally
+  // failures, hiding them from the Agent View badge and from any notification
+  // rule keyed on `tool.failed` (Codex review, #384).
   let toolFailed: boolean | undefined;
-  if (eventName === "PostToolUse") {
+  if (eventName === "PostToolUse" || eventName === "PostToolUseFailure") {
     const resp = body.tool_response as Record<string, unknown> | undefined;
     const isError = resp?.is_error === true;
     const badReturnCode =
       typeof resp?.return_code === "number" && resp.return_code !== 0;
-    toolFailed = isError || badReturnCode || undefined;
+    toolFailed =
+      eventName === "PostToolUseFailure" || isError || badReturnCode || undefined;
   }
 
   // T2.3a: typed payload parse alongside the existing envelope capture.
@@ -127,8 +166,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           console.warn("[hooks] dispatch failed:", err);
         });
       }
-    } else {
-      // Any non-Notification event clears the awaiting state (user responded)
+    } else if (RESPONSE_EVENTS.has(eventName)) {
       clearAwaiting(slug);
     }
   }

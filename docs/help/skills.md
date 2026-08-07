@@ -44,10 +44,43 @@ An **amber dot** on the provenance badge indicates an update is available. The e
 - **Source filter** — narrow to user / plugin / project skills
 - **Updates filter** — show only skills with detected updates; `…` appears while the background check is still running
 - **Sort** — by most invoked, recently used, or name A–Z
-- **Row chips** — version badge, slash-command hint (for user-invocable skills), `standalone` layout indicator, amber `!` lint chip (on parse warnings — hover to see the error), and the projected-context-cost chip (e.g. `~1.2k · 0.6%`)
+- **Row chips** — version badge, slash-command hint (for user-invocable skills), `manual only` (see below), `standalone` layout indicator, amber `!` lint chip (on parse warnings — hover to see the error), and the projected-context-cost chip (e.g. `~1.2k · 0.6%`)
+- **`manual only` chip** — the skill declares `disable-model-invocation`, so Claude cannot choose it on its own; it runs only when you type it as a slash command. Distinct from a *disabled* skill, which is removed from Claude Code altogether: this one narrows **who** can invoke it, not whether it exists.
 - **Projected-context-cost chip (`~Nk · X%`)** — token estimate of injecting this skill's body into the Claude Code context window. Uses a `bytes / 4` heuristic against the `SKILL.md` (or standalone `.md`) file size; percent is against a fixed 200,000-token window. **Treats the body as a ceiling** — Claude Code only injects skill frontmatter into the system prompt at startup, with the full body loaded on invocation. So the chip reads "worst case when invoked," matching the model used by the `/stats` portfolio overhead estimator. Hover for the precise breakdown.
 - **Copy button** — copies the invocation string to clipboard: `/<name>` for user-invocable skills, `Skill: <name>` for programmatic-only skills
 - **Expand row** — shows provenance details, action buttons, body excerpt, and recent sessions
+
+## Frontmatter Minder reads
+
+Beyond `name`, `description`, `version` and `argument-hint`, the catalog decodes
+the keys Claude Code added in 2.1.218:
+
+| Key | Meaning |
+| --- | --- |
+| `user-invocable` | Reachable as `/<slug>`. **Defaults to `true`** — set it to `false` to hide a skill from the `/` menu |
+| `disable-model-invocation` | Claude may not select it; slash command only |
+| `background` | Runs as a background task rather than inline |
+| `context` | `fork` runs the skill in a forked context |
+| `effort` | Reasoning effort the skill requests |
+| `model` | Model override the skill requests |
+
+**Boolean spellings.** Claude Code accepts `yes` / `no` / `on` / `off` / `1` / `0`
+case-insensitively wherever it accepts `true` / `false`, and Minder now reads them
+the same way. Previously only `true` counted, so a skill written as
+`user-invocable: yes` was invocable in Claude Code and showed as *not* invocable
+here — and was left out of the workflow launcher chips.
+
+**The default was inverted, too.** Claude Code's rule is that both you and Claude
+can invoke any skill unless the frontmatter says otherwise; `user-invocable:
+false` is what *hides* one from the `/` menu. Minder read a missing key as
+`false`, so the great majority of skills — which never mention the key — were
+reported as not user-invocable and withheld from the workflow launcher chips.
+They now default to invocable, and only an explicit `user-invocable: false`
+removes them.
+
+A key the skill does not declare stays *undeclared* rather than defaulting to
+false, so "didn't say" and "said no" remain distinguishable and only the latter
+earns a chip.
 
 ## Per-Row Actions (Expanded View)
 

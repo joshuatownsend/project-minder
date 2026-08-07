@@ -107,6 +107,23 @@ export interface SkillEntry extends CatalogEntryBase {
   description?: string;
   /** True when the skill lives in ~/.claude/skills-disabled/ and is excluded from Claude Code. */
   disabled?: boolean;
+  /**
+   * `disable-model-invocation: true` — the skill stays reachable as a slash
+   * command but Claude may no longer select it on its own. Distinct from
+   * `disabled`, which removes it entirely: this one narrows *who* can invoke it.
+   *
+   * `undefined` means the skill did not declare the key, which is not the same
+   * as declaring it false — only the former is safe to omit from the UI.
+   */
+  disableModelInvocation?: boolean;
+  /** `background: true` — the skill runs as a background task rather than inline. */
+  background?: boolean;
+  /** `context: fork` runs the skill in a forked context. Kept as a raw string; the vocabulary is not fixed. */
+  context?: string;
+  /** Reasoning effort the skill requests (`low`/`medium`/`high`/`xhigh`/`max`). */
+  effort?: string;
+  /** Model override the skill requests. */
+  model?: string;
 }
 
 /**

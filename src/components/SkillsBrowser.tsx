@@ -135,6 +135,47 @@ function SkillRowItem({
                 /{row.entry.argumentHint ?? row.entry.slug}
               </span>
             )}
+            {row.entry?.disableModelInvocation && (
+              // `disable-model-invocation` narrows WHO can invoke a skill
+              // rather than switching it off, so it earns a badge next to the
+              // slash-command chip: together they say "only you can start this".
+              // The explanation is duplicated into `.sr-only` rather than left
+              // in `title` alone, which is unreachable by keyboard and touch.
+              //
+              // Unless the skill is not user-invocable either — then both doors
+              // are shut and "manual only ... type it as a slash command" is
+              // advice for a command that does nothing (Codex review, #384).
+              // `userInvocable` defaults to TRUE (Claude Code's documented
+              // default), so this state is reached only when the author
+              // explicitly set `user-invocable: false` alongside
+              // `disable-model-invocation: true` — genuinely nothing can start
+              // it, rather than merely "the key was omitted".
+              <span
+                title={
+                  row.entry?.userInvocable
+                    ? "Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                    : "Nothing can currently invoke this skill: model invocation is disabled and it is not user-invocable."
+                }
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "0.6rem",
+                  color: "var(--text-muted)",
+                  background: "var(--bg-surface)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "3px",
+                  padding: "1px 5px",
+                }}
+              >
+                <span className="sr-only">
+                  {row.entry?.userInvocable
+                    ? "Manual only: Claude cannot invoke this skill on its own — it runs only when you type it as a slash command."
+                    : "Not invocable: this skill disables model invocation and is not user-invocable, so nothing can currently start it."}
+                </span>
+                <span aria-hidden="true">
+                  {row.entry?.userInvocable ? "manual only" : "not invocable"}
+                </span>
+              </span>
+            )}
             {row.entry?.version && (
               <span
                 style={{

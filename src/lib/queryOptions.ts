@@ -32,7 +32,7 @@ import type {
   ManualStepsInfo,
 } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
-import type { Provenance } from "@/lib/indexer/types";
+import type { Provenance, SkillEntry } from "@/lib/indexer/types";
 // Type-only import (erased at runtime, so no client/server boundary or import
 // cycle): the config catalog payload shape is defined alongside the useConfig hook.
 import type { ConfigPayload } from "@/hooks/useConfig";
@@ -78,32 +78,23 @@ export interface AgentRow {
   catalogMissing?: boolean;
 }
 
-/** One row of the `/api/skills` catalog (entry metadata joined with usage). */
+/**
+ * One row of the `/api/skills` catalog (entry metadata joined with usage).
+ *
+ * `entry` is `SkillEntry` itself rather than a structural copy of it. It used to
+ * be a hand-maintained duplicate, which drifted the moment `SkillEntry` gained a
+ * field: the server sent it, the client's type didn't know about it, and reading
+ * it was a compile error in a component — caught only by the Next build's type
+ * pass, since the duplicate was internally consistent and `pnpm typecheck` had
+ * nothing to compare it against.
+ *
+ * There is no client/server boundary reason for the copy: `@/lib/indexer/types`
+ * is a pure type module with no imports at all, and this file already pulls
+ * `Provenance` from it.
+ */
 export interface SkillRow {
-  entry?: {
-    id: string;
-    slug: string;
-    name: string;
-    description?: string;
-    source: "user" | "plugin" | "project";
-    pluginName?: string;
-    projectSlug?: string;
-    category?: string;
-    filePath: string;
-    bodyExcerpt: string;
-    frontmatter: Record<string, unknown>;
-    mtime: string;
-    ctime: string;
-    layout: "bundled" | "standalone";
-    version?: string;
-    userInvocable?: boolean;
-    argumentHint?: string;
-    provenance: Provenance;
-    isSymlink?: boolean;
-    realPath?: string;
-    parseWarnings?: string[];
-    disabled?: boolean;
-    fileBytes?: number;
+  entry?: SkillEntry & {
+    /** Added by `withProjectedContextCost` at the route, not by the walker. */
     projectedContextCost?: { tokenEstimate: number; contextWindowPercent: number };
   };
   usage?: {
