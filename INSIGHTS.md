@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:d953425d5767 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:47:03.436Z -->
+## ★ Insight
+I spent three rounds eliminating "two ways to express one window" in the Telemetry section, then immediately created a fresh instance of it in a different file — because `periodToMs("7d")` *looked* like the right way to say "seven days" while sitting next to a `since` that already meant exactly that. Removing a duplication in one place doesn't make you alert to introducing it in another; the reviewer caught what the pattern-matching didn't.
+
+---
+
 <!-- insight:bb8b641d517a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:35:47.771Z -->
 ## ★ Insight
 Three rounds, three findings, all traceable to one root: the section had *two* ways to express its window. Each fix corrected one consequence of that duplication and left the duplication itself — so the next consequence surfaced. Removing the second encoding is the first fix that addresses the cause rather than a symptom.
