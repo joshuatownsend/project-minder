@@ -14,6 +14,7 @@ export const helpMapping: Record<string, string> = {
   '/board': 'board',
   '/agents': 'agents',
   '/skills': 'skills',
+  '/workflows': 'workflows',
   '/instructions': 'instructions',
   '/usage': 'usage',
   '/costs': 'cost-report',
@@ -68,6 +69,7 @@ export const tabHelpMapping: Record<string, string> = {
   ops: 'operations',
   agents: 'agents',
   skills: 'skills',
+  workflows: 'workflows',
   memory: 'memory',
   planning: 'gsd-planning',
   efficiency: 'project-details',
@@ -139,6 +141,7 @@ export const helpSlugs = [
   'commands',
   'projects',
   'swarms',
+  'workflows',
   'wsl',
 ] as const
 

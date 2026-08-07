@@ -43,6 +43,7 @@ export type FeatureFlagKey =
   | "liveEvents"
   | "demoMode"
   | "workflowLauncher"
+  | "workflowCatalog"
   | "notificationRules";
 
 /**
