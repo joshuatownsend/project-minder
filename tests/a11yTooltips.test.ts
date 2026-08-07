@@ -1,0 +1,180 @@
+import { describe, it, expect } from "vitest";
+import { promises as fs } from "fs";
+import path from "path";
+
+/**
+ * Issue #380 — tooltip-only information.
+ *
+ * `title` is a mouse-only affordance: it is not shown on keyboard focus in any
+ * major browser, touch devices have no hover, and screen-reader support is
+ * inconsistent. Where the tooltip is the **only** place a piece of information
+ * exists, that information is unreachable for keyboard, touch and screen-reader
+ * users.
+ *
+ * The issue is explicit that this is not a sweep of all 269 `title=` usages —
+ * most restate visible text and are harmless. These tests pin the load-bearing
+ * subset: chips whose tooltip defines a jargon term or supplies a missing unit.
+ *
+ * Source-level assertions rather than DOM tests because the repo has no
+ * component-render harness, and the invariant is genuinely textual: the
+ * explanation must appear somewhere other than the `title` attribute.
+ */
+
+const COMPONENTS = path.resolve(__dirname, "..", "src", "components");
+
+async function read(rel: string): Promise<string> {
+  return fs.readFile(path.join(COMPONENTS, rel), "utf-8");
+}
+
+/** Does the region following `anchor` pair `.sr-only` with `aria-hidden`? */
+function hasAccessiblePair(src: string, anchor: string, window = 1400): boolean {
+  const i = src.indexOf(anchor);
+  if (i === -1) return false;
+  const region = src.slice(i, i + window);
+  // Match the rendered class attribute, not the bare substring: the word
+  // "sr-only" now appears in explanatory comments next to several of these
+  // chips, so a substring check would keep passing after the actual
+  // `<span className="sr-only">` was deleted (Copilot review of #390).
+  return /className="sr-only"/.test(region) && region.includes('aria-hidden="true"');
+}
+
+/**
+ * Offsets of `.sr-only` spans whose immediately following sibling element is
+ * not `aria-hidden`.
+ *
+ * Structural rather than statistical: it walks each `<span className="sr-only">`
+ * to its matching `</span>`, then requires the very next element to carry
+ * `aria-hidden="true"`. Comparing counts across a whole file cannot distinguish
+ * "the visible twin is hidden" from "some unrelated icon happens to be hidden".
+ */
+function findUnpairedSrOnly(src: string): number[] {
+  const unpaired: number[] = [];
+  const open = /<span className="sr-only">/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = open.exec(src)) !== null) {
+    // Walk to the matching close, tolerating nested spans in the sr-only text.
+    let depth = 1;
+    let i = m.index + m[0].length;
+    while (i < src.length && depth > 0) {
+      if (src.startsWith("</span>", i)) { depth--; i += 7; continue; }
+      if (/^<span[\s>]/.test(src.slice(i, i + 6))) { depth++; i += 5; continue; }
+      i++;
+    }
+    // The next element after the sr-only span is the visible twin.
+    const next = src.indexOf("<", i);
+    if (next === -1) { unpaired.push(m.index); continue; }
+    const tagEnd = src.indexOf(">", next);
+    const tag = tagEnd === -1 ? src.slice(next) : src.slice(next, tagEnd + 1);
+    if (!tag.includes('aria-hidden="true"')) unpaired.push(m.index);
+  }
+  return unpaired;
+}
+
+describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
+  it("QualityChip exposes its explanation to assistive tech", async () => {
+    const src = await read("SessionsBrowser.tsx");
+    // The shared chip renders `compaction loop`, `tool fail streak` and
+    // `resume anomaly` — jargon whose entire meaning lived in `title`. Fixing
+    // the shared component covers every call site at once.
+    // Anchored on the attribute itself rather than the function declaration:
+    // the region between them is prose, and a comment growing there should not
+    // decide whether this test passes.
+    expect(hasAccessiblePair(src, "      title={title}", 900)).toBe(true);
+  });
+
+  it("the git 'status unavailable' caveat is not mouse-only", async () => {
+    const src = await read("GitStatus.tsx");
+    // The highest-stakes one: "status unavailable" sits where "N uncommitted"
+    // would be, so a reader who cannot reach the tooltip sees no dirty count
+    // and concludes the repo is clean. The failure looks like success.
+    //
+    // Anchored on the call site, not the message text: the explanation is now a
+    // shared constant declared at the top of the file, so matching the literal
+    // found the declaration and looked at the wrong 900 characters.
+    expect(hasAccessiblePair(src, "title={GIT_STATUS_UNKNOWN_EXPLANATION}", 900)).toBe(true);
+  });
+
+  it("the effort mix explains why it does not sum to the turn count", async () => {
+    const src = await read("EffortMixChip.tsx");
+    expect(hasAccessiblePair(src, "Reasoning effort across")).toBe(true);
+  });
+
+  it("the project 'live?' badge says what is uncertain", async () => {
+    const src = await read("ProjectCard.tsx");
+    // "live?" is a question mark and nothing else.
+    expect(hasAccessiblePair(src, "Hook events suggest this project was live")).toBe(true);
+  });
+
+  it("the skills catalog distinguishes attributed spend from invocation count", async () => {
+    const src = await read("SkillsBrowser.tsx");
+    // Two adjacent monospace numbers with no visible unit: one is dollars, the
+    // other a dispatch count. Telling them apart is the point of the catalog.
+    // Anchored on the call site, not the shared helper's definition — the
+    // helper now lives at the top of the file, far from the chip it feeds.
+    expect(hasAccessiblePair(src, "title={attributedCostExplanation(")).toBe(true);
+    expect(hasAccessiblePair(src, "explicit Skill invocation")).toBe(true);
+  });
+
+  it("fixes the Git status variant the app actually renders", async () => {
+    // The original #380 fix went into `GitStatus`, which nothing renders:
+    // ProjectCard and ProjectDetail both import `GitStatusCompact`. A
+    // screen-reader user in every real flow still got a bare "?" (Codex
+    // review, #390).
+    //
+    // Pinned two ways, because the source-level check alone is what missed it:
+    // the compact variant must carry the explanation, AND the components that
+    // render Git status must be the variant that has it.
+    const src = await read("GitStatus.tsx");
+    const compactStart = src.indexOf("export function GitStatusCompact");
+    expect(compactStart).toBeGreaterThan(-1);
+    const compact = src.slice(compactStart);
+    expect(compact).toMatch(/className="sr-only"/);
+    expect(compact).toContain("GIT_STATUS_UNKNOWN_EXPLANATION");
+
+    for (const consumer of ["ProjectCard.tsx", "ProjectDetail.tsx"]) {
+      const c = await read(consumer);
+      const rendered = /<GitStatus(Compact)?\b/.exec(c);
+      if (!rendered) continue;
+      const variant = rendered[1] ? "GitStatusCompact" : "GitStatus";
+      const variantStart = src.indexOf(`export function ${variant}`);
+      const variantEnd = src.indexOf("\nexport function ", variantStart + 1);
+      const body = src.slice(variantStart, variantEnd === -1 ? undefined : variantEnd);
+      expect(body, `${consumer} renders ${variant}, which must carry the caveat`)
+        .toMatch(/className="sr-only"/);
+    }
+  });
+
+  it("announces the cache-hit value, not just its definition", async () => {
+    // The percentage lived only in `children`, which the #380 fix marked
+    // aria-hidden — so a screen reader heard "cache hit ratio, >70% is healthy"
+    // and never the session's actual ratio. The fix that made the chip
+    // accessible removed the one number it existed to report (Codex, #390).
+    const src = await read("SessionsBrowser.tsx");
+    const i = src.indexOf("function CacheHitBadge");
+    expect(i).toBeGreaterThan(-1);
+    const region = src.slice(i, i + 900);
+    // The accessible text must interpolate the value, not restate the label.
+    expect(region).toMatch(/srText=\{`\$\{pct\}% cache\./);
+  });
+
+  it("uses .sr-only rather than aria-label on generic spans", async () => {
+    // ARIA does not reliably name a generic element and some screen readers
+    // drop it, which is why the issue prescribes `.sr-only` for spans. The
+    // pattern is only correct when the visible half is hidden from AT — a
+    // bare `.sr-only` beside unhidden text is read twice.
+    //
+    // Checked pair by pair, NOT by comparing file-wide totals. The counting
+    // version could not tell a real pairing from a coincidence: in GitStatus,
+    // deleting `aria-hidden` from the visible label left the alert icon's
+    // unrelated `aria-hidden` behind, so the totals still balanced and the test
+    // passed while a screen reader announced the terse label after the
+    // explanation (Codex review, #390).
+    for (const file of ["SessionsBrowser.tsx", "EffortMixChip.tsx", "GitStatus.tsx"]) {
+      const src = await read(file);
+      const unpaired = findUnpairedSrOnly(src);
+      expect(unpaired, `${file}: sr-only at offset(s) ${unpaired.join(", ")} have no aria-hidden sibling`)
+        .toEqual([]);
+    }
+  });
+});

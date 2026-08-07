@@ -38,7 +38,14 @@ export function EffortMixChip({ mix }: { mix?: Record<string, number> }) {
       }}
       title={`Reasoning effort across ${counted} turn${counted === 1 ? "" : "s"} that recorded it. Turns written before Claude Code ~2.1.212 have no effort and are not counted here, so this can be fewer than the session's total turns.`}
     >
-      {entries.map(([level, n]) => `${level}×${n}`).join(" · ")}
+      {/* #380: without this, "why doesn't the mix add up to the turn count?"
+          is answerable only with a mouse. The issue lists this chip as already
+          fixed by #379 — that fix landed on the effort PANEL, not here. */}
+      <span className="sr-only">
+        {`Reasoning effort across ${counted} turn${counted === 1 ? "" : "s"} that recorded it. Turns written before Claude Code ~2.1.212 have no effort and are not counted here, so this can be fewer than the session's total turns. Mix: `}
+        {entries.map(([level, n]) => `${level} ${n}`).join(", ")}
+      </span>
+      <span aria-hidden="true">{entries.map(([level, n]) => `${level}×${n}`).join(" · ")}</span>
     </span>
   );
 }

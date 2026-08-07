@@ -105,10 +105,20 @@ type QualityChipTone = "good" | "neutral" | "warn" | "error";
 function QualityChip({
   tone,
   title,
+  srText,
   children,
 }: {
   tone: QualityChipTone;
   title: string;
+  /**
+   * Accessible text, when the visible label carries information `title` does
+   * not. Defaults to `title`, which is right for a chip whose label is a fixed
+   * piece of jargon (`compaction loop`) — but wrong for one whose label is a
+   * measured VALUE. Hiding the children then dropped the number and announced
+   * only its definition: "cache hit ratio, >70% is healthy" with no ratio
+   * (Codex review, #390).
+   */
+  srText?: string;
   children: React.ReactNode;
 }) {
   const tokens =
@@ -120,6 +130,24 @@ function QualityChip({
           ? { color: "var(--status-error-text)", bg: "var(--status-error-bg)", border: "var(--status-error-border)" }
           : { color: "var(--text-secondary)", bg: "var(--bg-elevated)", border: "var(--border-subtle)" };
   return (
+    // #380: the chip labels are jargon — `compaction loop`, `tool fail streak`,
+    // `resume anomaly` — and `title` was the only place they were explained.
+    // A tooltip is mouse-only: it does not appear on keyboard focus in any
+    // major browser, touch devices have no hover at all, and screen-reader
+    // support is inconsistent. Duplicating the explanation into `.sr-only` and
+    // hiding the terse label from assistive tech gives every user the same
+    // information; sighted mouse users still get the tooltip.
+    //
+    // Fixed here, in the shared component, rather than at each call site —
+    // every quality chip in the app inherits it.
+    //
+    // KNOWN LIMIT, stated rather than papered over (Codex review of #380).
+    // `.sr-only` is visually clipped, so this reaches screen readers and does
+    // NOT help a sighted keyboard or touch user — two of the three audiences
+    // the issue names. Closing that needs a tooltip primitive that opens on
+    // focus and tap, which is a shared-UI change rather than a per-chip one.
+    // Tracked in #391. This is a real improvement for one audience, not the
+    // whole fix.
     <span
       title={title}
       style={{
@@ -133,7 +161,8 @@ function QualityChip({
         flexShrink: 0,
       }}
     >
-      {children}
+      <span className="sr-only">{srText ?? title}</span>
+      <span aria-hidden="true">{children}</span>
     </span>
   );
 }
@@ -142,9 +171,17 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
   // Per Clauditor's >70% benchmark: green at 0.7+ (cache paying back),
   // amber below 0.5 (rebuilds dominating), neutral in between.
   const tone: QualityChipTone = ratio >= 0.7 ? "good" : ratio >= 0.5 ? "neutral" : "warn";
+  const pct = (ratio * 100).toFixed(0);
+  const definition = "Cache hit ratio (cache_read / total cache traffic). >70% is healthy.";
   return (
-    <QualityChip tone={tone} title="Cache hit ratio (cache_read / total cache traffic). >70% is healthy.">
-      {(ratio * 100).toFixed(0)}% cache
+    <QualityChip
+      tone={tone}
+      title={definition}
+      // The value first, then what it means — the ratio is the fact this chip
+      // exists to report, and it is the one piece `title` never carried.
+      srText={`${pct}% cache. ${definition}`}
+    >
+      {pct}% cache
     </QualityChip>
   );
 }

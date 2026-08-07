@@ -86,7 +86,13 @@ function LiveStatusBadge({
         border: "1px solid var(--text-muted)", background: "transparent",
         flexShrink: 0,
       }} />
-      live?
+      {/* #380: "live?" is a question mark and nothing else — the entire
+          explanation of what is uncertain lives in the tooltip. */}
+      <span className="sr-only">
+        Possibly live: hook events suggest this project was live, but no live Claude Code
+        process was found. The session may have exited.
+      </span>
+      <span aria-hidden="true">live?</span>
     </span>
   );
   return null;
