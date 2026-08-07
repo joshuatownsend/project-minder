@@ -215,6 +215,13 @@ the two aren't confused), then the first prompt. Claude Code emits its title for
 free on about one session in ten; until now that was read, stored, and never
 shown, so the page offered to generate a title while one sat unused.
 
+**Both titles are searchable** under the `titles` scope. Neither used to be —
+searching for the title displayed on a row returned nothing unless the same
+words happened to appear in a prompt. Titles are session metadata rather than
+turn text, so they are not in the full-text index and have to be matched
+directly; on the reference corpus, 126 of 400 sampled sessions with a Claude
+Code title are findable *only* by that field.
+
 Sessions that switched permission mode carry a chip showing the path taken
 (e.g. `plan → auto`), with consecutive repeats collapsed. A session that never
 switched records no entry at all, so the chip is **absent rather than showing a

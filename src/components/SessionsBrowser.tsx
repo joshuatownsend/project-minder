@@ -286,6 +286,14 @@ function MatchSnippet({ text, query }: { text: string; query: string }) {
 // were drifting (slug was added to one but not the other).
 function matchesTitleScope(s: SessionSummary, q: string): boolean {
   return (
+    // The two title fields come first because they are what the row displays.
+    // Neither was searchable: `generatedTitle` was missed when the title slot
+    // was introduced, and `aiTitle` joined it in this PR — so searching for
+    // the title you are looking at returned nothing unless the same words
+    // happened to appear in a prompt (Codex review, #403). Kept in sync with
+    // the SQLite `titles` retriever in `data/sessionSearch.ts`.
+    s.generatedTitle?.toLowerCase().includes(q) === true ||
+    s.aiTitle?.toLowerCase().includes(q) === true ||
     s.initialPrompt?.toLowerCase().includes(q) === true ||
     s.lastPrompt?.toLowerCase().includes(q) === true ||
     s.projectName.toLowerCase().includes(q) ||

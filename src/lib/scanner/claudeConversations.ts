@@ -918,7 +918,16 @@ export async function scanSessionDetail(
                     agentId,
                     type: meta?.agentType ?? String(input.subagent_type || "general-purpose"),
                     description: (meta?.description ?? fullDesc).slice(0, 200),
-                    messageCount: 0,
+                    // Undefined, not 0 — the count materialises only if the
+                    // sidechain loop below actually counts something. Current
+                    // Claude Code transcripts carry no sidechain assistant
+                    // entries at all (see the comment on that loop), so
+                    // initialising to 0 manufactured an "authoritative zero"
+                    // for every subagent on this backend too, and any consumer
+                    // comparing it against Claude Code's own `metaTurnCount`
+                    // saw a false disagreement — the identical defect fixed on
+                    // the DB path, left standing here (Codex review of #403).
+                    messageCount: undefined,
                     toolUsage: {},
                     category: meta?.category,
                     metaTurnCount: meta?.turnCount,
