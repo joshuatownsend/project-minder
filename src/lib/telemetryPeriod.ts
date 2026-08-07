@@ -71,6 +71,23 @@ export function periodToSince(period: Period): string {
   return new Date(periodToMs(period)).toISOString();
 }
 
+/**
+ * Milliseconds until the next hour boundary — when `periodToSince` will next
+ * return a different string.
+ *
+ * Exists because bucketing alone does not refresh anything. `periodToSince` is
+ * evaluated during render, and React does not re-render on wall-clock time, so
+ * a Stats page left mounted across a boundary kept its old URLs and its old
+ * data indefinitely while the code claimed the cutoff advanced hourly (Codex
+ * review of #402). `useTelemetrySince` schedules on this.
+ *
+ * Never returns 0: exactly on a boundary the next one is a full hour away, and
+ * a 0 here would spin a self-rescheduling timer.
+ */
+export function msUntilNextHourBoundary(now: number = Date.now()): number {
+  return HOUR_MS - (now % HOUR_MS);
+}
+
 export const PERIODS: readonly Period[] = ["today", "7d", "30d", "all"];
 
 /**

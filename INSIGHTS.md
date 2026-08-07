@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:3a9f89b7f3d3 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T15:04:28.597Z -->
+## ★ Insight
+Both of my last two self-inflicted findings were *comments that claimed more than the code did* — "advances hourly," and before that a doc promising an MCP workaround. In each case the prose described the intended design and the code implemented something narrower. Comments asserting behaviour are load-bearing claims; this reviewer has now caught three of mine.
+
+---
+
 <!-- insight:d953425d5767 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:47:03.436Z -->
 ## ★ Insight
 I spent three rounds eliminating "two ways to express one window" in the Telemetry section, then immediately created a fresh instance of it in a different file — because `periodToMs("7d")` *looked* like the right way to say "seven days" while sitting next to a `since` that already meant exactly that. Removing a duplication in one place doesn't make you alert to introducing it in another; the reviewer caught what the pattern-matching didn't.

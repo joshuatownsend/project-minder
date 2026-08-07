@@ -22,7 +22,8 @@ import { HookActivityCard } from "./stats/HookActivityCard";
 import { PressurePanel } from "./stats/PressurePanel";
 import { PeriodToggle } from "./stats/PeriodToggle";
 import { ContextOverheadPanel } from "./ContextOverheadPanel";
-import { periodToSince, type Period } from "@/lib/telemetryPeriod";
+import { type Period } from "@/lib/telemetryPeriod";
+import { useTelemetrySince } from "@/hooks/useTelemetrySince";
 
 import { formatCost, formatTokens } from "@/lib/format";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -130,10 +131,13 @@ export function StatsDashboard() {
   // key. Sending one concrete cutoff removes the class rather than the symptom
   // (Codex review, #402).
   //
-  // `periodToSince` is hour-bucketed, so this is a stable string across renders
-  // and advances exactly once an hour, when every card should refetch together.
+  // The cutoff is hour-bucketed, so it is stable across renders — an unstable
+  // value would re-fire all six fetches on every render. `useTelemetrySince`
+  // then schedules a recompute at each hour boundary, because stability alone
+  // left a page mounted overnight holding its original URLs and data forever:
+  // React does not re-render on wall-clock time, and nothing here polls.
   const [telemetryPeriod, setTelemetryPeriod] = useState<Period>("7d");
-  const telemetrySince = periodToSince(telemetryPeriod);
+  const telemetrySince = useTelemetrySince(telemetryPeriod);
 
   if (loading || !data) {
     return (

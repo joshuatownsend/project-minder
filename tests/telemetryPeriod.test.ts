@@ -1,5 +1,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { periodToMs, periodToSince, resolveSinceParam, type Period } from "@/lib/telemetryPeriod";
+import {
+  periodToMs,
+  periodToSince,
+  resolveSinceParam,
+  msUntilNextHourBoundary,
+  type Period,
+} from "@/lib/telemetryPeriod";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -60,6 +66,34 @@ describe("telemetryPeriod", () => {
     const midnight = new Date(MESSY_NOW);
     midnight.setHours(0, 0, 0, 0);
     expect(periodToMs("today", MESSY_NOW)).toBe(midnight.getTime());
+  });
+});
+
+describe("msUntilNextHourBoundary", () => {
+  it("returns the remainder of the current hour", () => {
+    // 10:59:59.123 -> 877ms to 11:00.
+    expect(msUntilNextHourBoundary(MESSY_NOW)).toBe(877);
+  });
+
+  it("never returns 0, so a self-rescheduling timer cannot spin", () => {
+    // Exactly on a boundary the *next* one is a full hour away. A 0 here would
+    // fire a setTimeout(…, 0) that immediately reschedules itself the same way.
+    const onBoundary = Math.floor(MESSY_NOW / HOUR_MS) * HOUR_MS;
+    expect(msUntilNextHourBoundary(onBoundary)).toBe(HOUR_MS);
+
+    for (const offset of [0, 1, HOUR_MS - 1, HOUR_MS, HOUR_MS + 1]) {
+      const ms = msUntilNextHourBoundary(onBoundary + offset);
+      expect(ms).toBeGreaterThan(0);
+      expect(ms).toBeLessThanOrEqual(HOUR_MS);
+    }
+  });
+
+  it("lands on the instant periodToSince starts returning a new value", () => {
+    // The contract the scheduler depends on: waiting this long (plus a margin)
+    // must be enough for the bucket to actually move.
+    const before = periodToMs("7d", MESSY_NOW);
+    const after = periodToMs("7d", MESSY_NOW + msUntilNextHourBoundary(MESSY_NOW));
+    expect(after).toBe(before + HOUR_MS);
   });
 });
 
