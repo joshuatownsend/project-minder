@@ -3,7 +3,7 @@
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { SampleBadge } from "./SampleBadge";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CacheEfficiencyResult, Period } from "@/lib/db/otelQueries";
+import type { CacheEfficiencyResult } from "@/lib/db/otelQueries";
 
 const TARGET_HIT_RATE = 0.7;
 
@@ -14,9 +14,9 @@ function hitRateColor(rate: number): string {
 }
 
 /** Fully controlled by the Telemetry section — see TokenUsageCard. */
-export function CacheEfficiencyCard({ period }: { period: Period }) {
+export function CacheEfficiencyCard({ since }: { since: string }) {
   const { data, loading, error } = useReportFetch<CacheEfficiencyResult>(
-    `/api/telemetry/cache-efficiency?period=${period}`,
+    `/api/telemetry/cache-efficiency?since=${encodeURIComponent(since)}`,
   );
 
   return (

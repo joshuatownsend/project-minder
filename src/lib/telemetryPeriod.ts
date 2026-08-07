@@ -70,3 +70,28 @@ export function periodToMs(period: Period, now: number = Date.now()): number {
 export function periodToSince(period: Period): string {
   return new Date(periodToMs(period)).toISOString();
 }
+
+export const PERIODS: readonly Period[] = ["today", "7d", "30d", "all"];
+
+/**
+ * Resolve a telemetry window from query params, preferring an explicit `since`.
+ *
+ * Shared by the routes that accept both spellings rather than copied into each,
+ * because two copies of a cutoff rule is how this PR produced two review
+ * findings in a row.
+ *
+ * Returns `{ since }` or `{ error }` — the caller turns the latter into a 400.
+ */
+export function resolveSinceParam(
+  params: URLSearchParams
+): { since: number; error?: undefined } | { since?: undefined; error: string } {
+  const sinceParam = params.get("since");
+  if (sinceParam !== null) {
+    const since = new Date(sinceParam).getTime();
+    return Number.isFinite(since) ? { since } : { error: "Invalid since parameter" };
+  }
+  const period = (params.get("period") ?? "7d") as Period;
+  return PERIODS.includes(period)
+    ? { since: periodToMs(period) }
+    : { error: "period must be today|7d|30d|all" };
+}

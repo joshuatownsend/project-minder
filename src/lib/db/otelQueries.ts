@@ -312,12 +312,25 @@ function pivotTokenRows(rows: RawTokenRow[]): TokenDay[] {
   return [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
-export async function getTokenUsage(opts: { period: Period }): Promise<TokenUsageResult> {
+/**
+ * Takes `since` rather than a period name, like every other query here.
+ *
+ * These two were the only ones resolving their own window, which meant the
+ * client could not name the cutoff it wanted — it could only send `?period=7d`
+ * and hope. That constant URL is also a constant cache key, so when the shared
+ * Telemetry toggle advanced its bucket at an hour boundary the four
+ * `since`-driven cards refetched and these two kept serving results computed
+ * against the *previous* cutoff. Aligning what the server computed was not
+ * enough; the client had to be able to ask (Codex review of #402, twice).
+ *
+ * Callers convert with `periodToMs` at the boundary.
+ */
+export async function getTokenUsage(opts: { since: number }): Promise<TokenUsageResult> {
   const db = await getDb();
   const empty = { daily: [], totals: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 }, hasData: false };
   if (!db) return empty;
 
-  const rows = queryRawTokenDays(db, periodToMs(opts.period));
+  const rows = queryRawTokenDays(db, opts.since);
   if (rows.length === 0) return empty;
 
   const daily = pivotTokenRows(rows);
@@ -349,12 +362,13 @@ export interface CacheEfficiencyResult {
   hasData: boolean;
 }
 
-export async function getCacheEfficiency(opts: { period: Period }): Promise<CacheEfficiencyResult> {
+/** Takes `since` rather than a period name — see `getTokenUsage`. */
+export async function getCacheEfficiency(opts: { since: number }): Promise<CacheEfficiencyResult> {
   const db = await getDb();
   const empty = { hitRate: 0, daily: [], totalBillable: 0, hasData: false };
   if (!db) return empty;
 
-  const rows = queryRawTokenDays(db, periodToMs(opts.period));
+  const rows = queryRawTokenDays(db, opts.since);
   if (rows.length === 0) return empty;
 
   const daily: CacheDay[] = [];

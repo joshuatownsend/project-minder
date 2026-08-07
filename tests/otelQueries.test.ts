@@ -283,7 +283,7 @@ describe.skipIf(!driverAvailable)("getTokenUsage", () => {
   it("returns empty result when no token metrics exist", async () => {
     const { mig, queries } = await reloadModules(tmpHome);
     await mig.initDb();
-    const result = await queries.getTokenUsage({ period: "7d" });
+    const result = await queries.getTokenUsage({ since: queries.periodToMs("7d") });
     expect(result.hasData).toBe(false);
   });
 
@@ -301,7 +301,7 @@ describe.skipIf(!driverAvailable)("getTokenUsage", () => {
         );
       }
 
-      const result = await queries.getTokenUsage({ period: "7d" });
+      const result = await queries.getTokenUsage({ since: queries.periodToMs("7d") });
       expect(result.hasData).toBe(true);
       expect(result.totals.input).toBe(1000);
       expect(result.totals.output).toBe(500);
@@ -321,7 +321,7 @@ describe.skipIf(!driverAvailable)("getCacheEfficiency", () => {
   it("returns empty result when no token metrics exist", async () => {
     const { mig, queries } = await reloadModules(tmpHome);
     await mig.initDb();
-    const result = await queries.getCacheEfficiency({ period: "7d" });
+    const result = await queries.getCacheEfficiency({ since: queries.periodToMs("7d") });
     expect(result.hasData).toBe(false);
   });
 
@@ -339,7 +339,7 @@ describe.skipIf(!driverAvailable)("getCacheEfficiency", () => {
         );
       }
 
-      const result = await queries.getCacheEfficiency({ period: "7d" });
+      const result = await queries.getCacheEfficiency({ since: queries.periodToMs("7d") });
       expect(result.hasData).toBe(true);
       // hitRate = cacheRead / (cacheRead + input + output + cacheCreation)
       //         = 400 / (400 + 800 + 200 + 100)

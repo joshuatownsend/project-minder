@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { periodToMs, periodToSince, type Period } from "@/lib/telemetryPeriod";
+import { periodToMs, periodToSince, resolveSinceParam, type Period } from "@/lib/telemetryPeriod";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -60,5 +60,33 @@ describe("telemetryPeriod", () => {
     const midnight = new Date(MESSY_NOW);
     midnight.setHours(0, 0, 0, 0);
     expect(periodToMs("today", MESSY_NOW)).toBe(midnight.getTime());
+  });
+});
+
+describe("resolveSinceParam", () => {
+  const q = (s: string) => new URLSearchParams(s);
+
+  it("prefers an explicit since over period", () => {
+    vi.useFakeTimers({ now: MESSY_NOW });
+    const iso = "2026-01-02T03:00:00.000Z";
+    // Both present: `since` wins, so the cutoff in the URL is the cutoff used.
+    expect(resolveSinceParam(q(`since=${encodeURIComponent(iso)}&period=30d`)).since)
+      .toBe(Date.parse(iso));
+  });
+
+  it("falls back to period, and to 7d when neither is given", () => {
+    vi.useFakeTimers({ now: MESSY_NOW });
+    // The compatibility path for hand-written URLs — must still agree with the
+    // client's own resolution of the same period.
+    expect(resolveSinceParam(q("period=30d")).since).toBe(periodToMs("30d"));
+    expect(resolveSinceParam(q("")).since).toBe(periodToMs("7d"));
+  });
+
+  it("rejects an unparseable since and an unknown period", () => {
+    expect(resolveSinceParam(q("since=not-a-date")).error).toBeDefined();
+    expect(resolveSinceParam(q("period=lastTuesday")).error).toBeDefined();
+    // A rejected input must not also carry a usable cutoff — a caller that
+    // ignored the error would otherwise silently query some default window.
+    expect(resolveSinceParam(q("period=lastTuesday")).since).toBeUndefined();
   });
 });

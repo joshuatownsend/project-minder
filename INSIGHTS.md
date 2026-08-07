@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:bb8b641d517a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:35:47.771Z -->
+## ★ Insight
+Three rounds, three findings, all traceable to one root: the section had *two* ways to express its window. Each fix corrected one consequence of that duplication and left the duplication itself — so the next consequence surfaced. Removing the second encoding is the first fix that addresses the cause rather than a symptom.
+
+---
+
 <!-- insight:3c8b684df558 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T14:16:38.317Z -->
 ## ★ Insight
 The mutation test here was worth more than usual. I first mutated *both* paths to unbucketed — 3 tests failed, but the cross-path "same instant" test passed, because both sides agreed on being wrong. Only reproducing Codex's exact shape (client buckets, server doesn't) made that test fail. A test suite can be green against a symmetric error and still catch the asymmetric one it was written for — worth checking which you actually reproduced.

@@ -133,7 +133,7 @@ export function registerOtelTools(server: McpServer): void {
       inputSchema: { period: OtelPeriodSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ period }) => jsonResult({ period, ...(await getTokenUsage({ period })) })
+    async ({ period }) => jsonResult({ period, ...(await getTokenUsage({ since: periodToMs(period) })) })
   );
 
   server.registerTool(
@@ -148,7 +148,7 @@ export function registerOtelTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ period }) =>
-      jsonResult({ period, ...(await getCacheEfficiency({ period })) })
+      jsonResult({ period, ...(await getCacheEfficiency({ since: periodToMs(period) })) })
   );
 
   server.registerTool(

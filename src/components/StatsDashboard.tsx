@@ -121,14 +121,17 @@ export function StatsDashboard() {
   // 7-day `defaultSince()` with no control at all, so the grid mixed windows
   // and never said so.
   //
-  // Two encodings of the one value because the routes differ — `?period=` for
-  // the two that resolve the window server-side, `?since=` ISO for the four
-  // that take an explicit lower bound. Both resolve through `periodToMs`,
-  // which buckets the rolling windows to the hour, so the six cards cover an
-  // identical window and the string is stable across renders. Bucketing only
-  // this client half would have left the two `?period=` cards resolving against
-  // a live `Date.now()` server-side — one toggle, two windows up to an hour
-  // apart, which is the defect the toggle exists to fix (Codex review, #402).
+  // All six cards take the same `?since=` cutoff. They used to split across two
+  // encodings — four `?since=`, two `?period=` resolved server-side — and that
+  // split produced two review findings in a row: first the two groups computing
+  // different cutoffs, then, once the cutoffs agreed, the `?period=` URLs never
+  // changing, so those two cards held cached results from the previous hour
+  // bucket while the other four moved on. A constant URL is a constant cache
+  // key. Sending one concrete cutoff removes the class rather than the symptom
+  // (Codex review, #402).
+  //
+  // `periodToSince` is hour-bucketed, so this is a stable string across renders
+  // and advances exactly once an hour, when every card should refetch together.
   const [telemetryPeriod, setTelemetryPeriod] = useState<Period>("7d");
   const telemetrySince = periodToSince(telemetryPeriod);
 
@@ -414,10 +417,10 @@ export function StatsDashboard() {
             <ToolLatencyCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Token Usage">
-            <TokenUsageCard period={telemetryPeriod} />
+            <TokenUsageCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Cache Efficiency">
-            <CacheEfficiencyCard period={telemetryPeriod} />
+            <CacheEfficiencyCard since={telemetrySince} />
           </ChartBlock>
           <ChartBlock title="Hook Activity">
             <HookActivityCard since={telemetrySince} />

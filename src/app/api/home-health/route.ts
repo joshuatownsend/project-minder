@@ -5,6 +5,7 @@ import {
   getCacheEfficiency,
   getEditAcceptance,
   getPressureSnapshot,
+  periodToMs,
 } from "@/lib/db/otelQueries";
 import { getAllFindings, getLatestRun } from "@/lib/scanner/mcp-security/store";
 import { computeHealthScore, type HealthInputs } from "@/lib/healthScore";
@@ -45,7 +46,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   // (PR #103 codex P1).
   const mcpRun = await safeAwait(getLatestRun(), null);
   const [cache, mcpFindings, pressure, edit] = await Promise.all([
-    safeAwait(getCacheEfficiency({ period: "7d" }), null),
+    safeAwait(getCacheEfficiency({ since: periodToMs("7d") }), null),
     safeAwait(
       mcpRun ? getAllFindings(undefined, mcpRun.id) : Promise.resolve([]),
       [] as Awaited<ReturnType<typeof getAllFindings>>,
