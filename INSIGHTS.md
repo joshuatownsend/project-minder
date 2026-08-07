@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:6c560622de39 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T22:37:12.112Z -->
+## ★ Insight
+- The guard is split in two deliberately: `typeof verifiedTasks !== "number"` catches *absence*, `<= 0` catches an impossible denominator. Collapsing both into `if (!verifiedTasks)` would work today but silently conflates "no sample" with "zero sample" — the exact conflation this whole session has been chasing.
+- `oneShotTasks` missing while `verifiedTasks` exists returns `null` rather than `0%`. Reporting missing data as the worst possible reading is how a gap becomes a false alarm.
+- `SUM(CASE WHEN …)` in SQL returns `NULL` for an empty group, but `GROUP BY` can't emit a group with `COUNT(*) = 0` — so the zero-denominator branch is unreachable-by-invariant, defended anyway because the invariant lives in a different file.
+
+---
+
 <!-- insight:bae437f19d0a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:31:23.064Z -->
 ## ★ Insight
 Six findings across two PRs have now come from prose asserting more than the code delivers — a doc promising an MCP workaround, a comment claiming hourly refresh, and now a guarantee about search results. In every case the prose described the *intent* and the code implemented a subset. Writing the guarantee down is what made it checkable; the failure isn't documenting, it's documenting the design instead of the implementation.
