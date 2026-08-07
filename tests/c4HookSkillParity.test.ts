@@ -375,7 +375,9 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
     expect(new Set(helpers.map((s) => s.id)).size).toBe(2);
   });
 
-  it("dedupes a symlinked skill reached through two roots", async () => {
+  // `t`, not `ctx` — the provenance context in this describe is already named
+  // `ctx`, and shadowing it makes `...ctx` spread the Vitest test context.
+  it("dedupes a symlinked skill reached through two roots", async (t) => {
     // `skills/foo -> ../extra/foo` with `extra` also declared: two lexical
     // paths, one real file. Keying the dedupe on filePath kept both and the
     // catalog showed duplicate rows with inflated counts. The walker already
@@ -399,7 +401,12 @@ describe("C4 — skill frontmatter reaches the catalog entry", () => {
         "junction"
       );
     } catch {
-      return; // No symlink privilege on this machine — nothing to assert.
+      // No symlink privilege here. Report SKIPPED, never passed: the earlier
+      // `return` made this test vacuously green on the author's machine while
+      // the fix it covers was broken, and only CI's Windows runner — which can
+      // create the junction — found out (#392).
+      t.skip();
+      return;
     }
 
     const pluginCtx = {

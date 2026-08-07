@@ -281,15 +281,32 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
   // produced the entry, which is the real identity; `id` is derived from the
   // slug and would collide for genuinely distinct skills of the same name in
   // different plugins.
+  // Resolved on the filesystem, not inferred from how the walk classified the
+  // entry. `skills/foo -> ../extra/foo` with `extra` also declared as a root is
+  // one file reached by two lexical paths, and it must collapse to one row.
+  //
+  // `entry.realPath` alone is not enough: it is populated only in the
+  // `isSymbolicLink()` branch, and **Windows junctions land in the
+  // `isDirectory()` branch instead**, so on the platform this project primarily
+  // targets the field stays undefined and both copies survive. CI caught that
+  // on verify-windows while Linux passed, because the same fixture is a true
+  // symlink there (Codex review of #384, then #392's CI).
+  //
+  // One `realpath` per plugin skill, which is the same order as the file reads
+  // already done, and it falls back to the lexical path when resolution fails.
+  const keys = await Promise.all(
+    all.map(({ entry }) =>
+      fs
+        .realpath(entry.filePath)
+        .catch(() => entry.realPath ?? entry.filePath)
+        .then((p) => path.resolve(p))
+    )
+  );
+
   const seenFiles = new Set<string>();
-  const unique = all.filter(({ entry }) => {
-    // `realPath` when the walk followed a symlink, so `skills/foo ->
-    // ../extra/foo` with `extra` also declared as a root resolves to ONE file
-    // rather than two lexically different paths. The walker already records the
-    // canonical target; this dedupe was ignoring it (Codex review, #384).
-    const key = path.resolve(entry.realPath ?? entry.filePath);
-    if (seenFiles.has(key)) return false;
-    seenFiles.add(key);
+  const unique = all.filter((_, i) => {
+    if (seenFiles.has(keys[i])) return false;
+    seenFiles.add(keys[i]);
     return true;
   });
 
