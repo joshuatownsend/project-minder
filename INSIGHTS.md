@@ -1,5 +1,37 @@
 # Insights
 
+<!-- insight:7532b8543076 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T20:42:02.838Z -->
+## ★ Insight
+Both findings share a root cause worth naming: **an assertion that no procedure can contradict.** "22 items, all dispositioned" was a claim with no check behind it, so it drifted silently. "Trusted Signing" was a fact copied forward without re-verification, so it went stale silently. The fixes aren't the corrected values — they're the grep command and the naming note, each of which makes the *next* drift detectable. Same principle as the piped-gate rule in CLAUDE.md: the danger isn't being wrong, it's being wrong in a way nothing can notice.
+
+---
+
+<!-- insight:6d0eec7585ee | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:39:03.438Z -->
+## ★ Insight
+Worth noting what the pre-commit hook just proved and what it didn't. 4,741 tests passing on a markdown-only diff is a *tautology* — no test reads `TODO.md`. The hook is doing regression insurance against accidental staging, not validating this change. The actual verification for W0 was the coverage ledger: counting that all 34 issue numbers appear exactly once across the wave table. A green suite that can't fail on your change is the same shape as the piped-gate trap in CLAUDE.md — it executes, reports success, and proves nothing about the thing you changed.
+
+---
+
+<!-- insight:a4a7bbf2debc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:34:05.142Z -->
+## ★ Insight
+The archive entry for code signing is labelled *converted, not completed* deliberately. `TODO.archive.md` is where finished work goes, so an unqualified `- [x]` there would read as "we signed the installers" to anyone skimming six months from now. The living-checklist convention gets you a clean active list, but only if the archive stays honest about *why* each item left — otherwise you've traded clutter for a false record.
+
+---
+
+<!-- insight:3dae8f7f7bb0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:21:19.503Z -->
+## ★ Insight
+The dependency structure here rewards ordering over parallelism. #331 is the clearest example: it's not itself a flaky test, but seven flaky-test issues may close or shrink once the shared helper lands — because they share one root cause (fragile isolation under load) that each issue describes as a separate symptom. Fixing symptoms in the listed order would cost 7× the effort and leave the cause intact.
+
+---
+
+<!-- insight:544e75a10c3c | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:19:11.633Z -->
+## ★ Insight
+Two structural facts shape this plan more than any individual issue:
+- **The Next.js 16.3 upgrade is the tightest dependency node in the graph.** It's the only thing that can close 4 of #396's Dependabot alerts, and it's the precondition for the *real* #284 fix (whose method is already written up and verified-not-to-work on 16.2.x). Everything standalone-build-shaped queues behind it.
+- **Roughly a quarter of this backlog isn't engineering at all** — it's decisions you haven't made (rename, cert spend, two integration proposals, four feature parking lots). A burn-down that only sequences code silently leaves those open forever.
+
+---
+
 <!-- insight:214f67a7ed9d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T17:36:39.770Z -->
 ## ★ Insight
 - Mutation testing earned its keep: "keep whichever came last" passed **all 14 tests**, because keep-last coincidentally agrees with precedence when the user copy is listed second. The test now runs both input orders.
