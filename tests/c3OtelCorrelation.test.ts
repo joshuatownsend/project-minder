@@ -291,6 +291,32 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     expect(result.sources.reduce((n, s) => n + s.events, 0)).toBe(2);
   });
 
+  // Codex round 3 on #406: the numerator matched `tool_source IS NOT NULL` on
+  // any event while the denominator counted `tool_decision` only. Ingestion
+  // lifts `tool_source` without checking `event_name`, so a source-bearing
+  // event of another type landed in the numerator alone and pushed coverage
+  // above 1 — which the card renders as *full* coverage, masking the fault as
+  // good news. Both halves now draw from the same population.
+  it("keeps numerator and denominator on the same event population", async () => {
+    const db = await setup();
+    insertOtel(db, { eventName: "tool_decision", toolSource: "builtin" });
+    // Same attribute on a different event type — the shape that inverted the
+    // ratio. Excluded from both halves rather than counted in one.
+    insertOtel(db, { eventName: "tool_result", toolSource: "builtin" });
+    insertOtel(db, { eventName: "tool_result", toolSource: "mcp" });
+
+    const { getToolProvenance } = await import("@/lib/db/otelCorrelation");
+    const result = await getToolProvenance();
+    expect(result.total).toBe(1);
+    expect(result.callsInWindow).toBe(1);
+    expect(result.sourceCoverage).toBe(1);
+    // Coverage can no longer exceed 1 by construction, so the card cannot be
+    // handed a ratio it would have to render as a reassuring "100%".
+    expect(result.sourceCoverage).toBeLessThanOrEqual(1);
+    // `mcp` came only from the excluded event, so it must not appear at all.
+    expect(result.sources.map((s) => s.source)).toEqual(["builtin"]);
+  });
+
   it("says it has no data rather than implying every tool was builtin", async () => {
     await setup();
     const { getToolProvenance } = await import("@/lib/db/otelCorrelation");

@@ -225,5 +225,11 @@ your history looks exactly like one describing all of it. Narrow the period for
 a fully covered view. The percentage is truncated rather than rounded, so it can
 never show `100%` beside a partial-window warning.
 
+Both halves of that ratio are counted over the same event type, so coverage
+cannot exceed 100%. If a future Claude Code release moves `tool_source` to a
+different event, the card reports **no tool source recorded** until Minder
+follows — a visible gap rather than a ratio quietly passing itself off as full
+coverage.
+
 Shown as the **Tool Provenance** card in `Stats → Telemetry`, and available
 through the `get-tool-provenance` MCP tool.

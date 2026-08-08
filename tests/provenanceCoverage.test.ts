@@ -44,10 +44,11 @@ describe("describeSourceCoverage", () => {
     expect(r.pctLabel).toBe("<1");
   });
 
-  // Guards the denominator assumption rather than the arithmetic: `tool_source`
-  // is only counted against `tool_decision`. If Claude Code starts emitting it
-  // on another event type, coverage exceeds 1 — and "nothing missing" is a
-  // better reading than a percentage above 100.
+  // Defence in depth, not a live risk. After Codex round 3 on #406 the query
+  // draws numerator and denominator from the same event population, so it can
+  // no longer hand this function a ratio above 1. The guard stays because the
+  // function is exported and pure: any caller can pass anything, and a
+  // percentage above 100 is never the right thing to print.
   it("does not report above 100 when the denominator is too narrow", () => {
     const r = describeSourceCoverage({ total: 120, callsInWindow: 100, sourceCoverage: 1.2 })!;
     expect(r.partial).toBe(false);

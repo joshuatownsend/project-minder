@@ -58,14 +58,20 @@ export interface ToolProvenanceResult {
 }
 
 /**
- * The event that carries `tool_source`, and therefore the coverage denominator.
+ * The event that carries `tool_source` — the population *both* halves of the
+ * coverage ratio are drawn from.
  *
  * Empirically the only one: across 200k+ events on the reference index the
  * attribute appears on `tool_decision` and nowhere else, and `tool_decision`
  * fires about once per tool call (35,423 against 35,189 `tool_result`), which
- * makes it a fair stand-in for "tool calls in the window". If Claude Code
- * starts emitting `tool_source` on another event type this must widen with it,
- * or coverage will read above 100%.
+ * makes it a fair stand-in for "tool calls in the window". Decisions are the
+ * better denominator on the merits too — a denied call produces a decision but
+ * no result, and a denied call is still a call.
+ *
+ * Numerator and denominator must keep matching predicates. Should Claude Code
+ * move the attribute to another event, the honest outcome is `hasData: false`
+ * ("no tool source recorded") until this widens — a visible failure rather
+ * than a ratio quietly exceeding 1 and being rendered as full coverage.
  */
 const TOOL_SOURCE_EVENT = "tool_decision";
 
@@ -83,6 +89,12 @@ export async function getToolProvenance(opts: { since?: string } = {}): Promise<
 
   const params = { since: opts.since ?? null };
 
+  // Both halves of the ratio are restricted to the same event type. Ingestion
+  // lifts `tool_source` without checking `event_name` (`otelIngest.ts`), so a
+  // Claude Code change that put the attribute on another event would otherwise
+  // count it in the numerator but not the denominator — pushing coverage above
+  // 1, which the card would then present as full coverage. A mismatch that
+  // cannot arise needs no guard downstream.
   const rows = prepCached(
     db,
     `SELECT tool_source AS source,
@@ -90,10 +102,11 @@ export async function getToolProvenance(opts: { since?: string } = {}): Promise<
             COUNT(DISTINCT session_id) AS sessions
        FROM otel_events
       WHERE tool_source IS NOT NULL
+        AND event_name = @event
         AND (@since IS NULL OR ts >= @since)
       GROUP BY 1
       ORDER BY events DESC`
-  ).all(params) as ToolProvenanceRow[];
+  ).all({ ...params, event: TOOL_SOURCE_EVENT }) as ToolProvenanceRow[];
 
   // Counted independently rather than derived from the split, so coverage of 1
   // means every call stated a source — not that the query agreed with itself.
