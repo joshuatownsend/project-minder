@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-08-08
+
+*One fix, found by checking the browser console while verifying something else. Worth noting how it was mis-filed: the issue diagnosed it as a user-scope-versus-plugin-scope collision, and that was a guess — the duplicate does not exist in user scope at all. Measuring the cache instead of trusting the guess changed both the fix and the estimate of its impact, from a cosmetic React warning to most of the launcher strip's capacity being silently consumed.*
+
 ### Fixed
 - **Skill launcher chips were mostly duplicates, and the cap was spent on them.** `selectSkillChips` never deduplicated by slug, so every cached copy of a plugin became its own chip: identical label, identical `skill:<slug>` React key, and a console error whose documented consequence is children being duplicated or omitted. The scale is the part worth stating — the catalog indexes each cached plugin version *and* the same plugin mirrored across marketplaces, so on the reference machine **1,122 plugin skill directories reduce to 201 distinct slugs**, with `ai-gateway` present 3 times and `neon` **57**. With `MAX_SKILL_CHIPS = 8` applied after sorting by slug, repeats of a couple of skills consumed the whole strip and every distinct skill below them never rendered.
 
