@@ -204,10 +204,15 @@ export function registerOtelTools(server: McpServer): void {
       description:
         "Counts tool events by `tool_source`, which Claude Code states outright " +
         "instead of Minder inferring it from the `mcp__server__tool` naming " +
-        "convention. Also reports how much of the transcript OTEL can speak about " +
-        "at all: telemetry is opt-in and retained for a window, so most historical " +
-        "turns have no matching event and never will. Returns hasData=false when no " +
-        "event carries the attribute, which is different from every tool being builtin.",
+        "convention. Returns two different coverage figures, both needed to read " +
+        "the split honestly: `sourceCoverage` is the share of tool calls in the " +
+        "period that state a source at all (`total` of `callsInWindow`) — the " +
+        "attribute shipped partway through most indexes, so a wide period " +
+        "describes only an instrumented subset. `coverage` is the unrelated " +
+        "transcript-side figure: how many assistant turns OTEL can speak about, " +
+        "since telemetry is opt-in and retained for a window. Returns " +
+        "hasData=false when no event carries the attribute, which is different " +
+        "from every tool being builtin.",
       inputSchema: { period: OtelPeriodSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

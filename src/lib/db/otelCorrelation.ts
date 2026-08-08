@@ -29,7 +29,26 @@ export interface ToolProvenanceRow {
 
 export interface ToolProvenanceResult {
   sources: ToolProvenanceRow[];
+  /** Events in the window that state a source — the denominator of the split. */
   total: number;
+  /**
+   * Tool calls in the window, whether or not they stated a source.
+   *
+   * The split is computed only over events carrying `tool_source`, so without
+   * this the percentages describe an instrumented subset while looking like
+   * they describe the window. `tool_source` shipped partway through most
+   * indexes: on the reference machine the attribute starts 2026-07-19 while
+   * events go back to 2023-11-14, so an `all` window states a source for 57.6%
+   * of its calls and a `30d` window for 73.2%.
+   */
+  callsInWindow: number;
+  /**
+   * `total / callsInWindow`, or undefined when there is nothing to divide.
+   *
+   * Undefined rather than 1 for an empty window: "everything was measured" and
+   * "there was nothing to measure" are different claims.
+   */
+  sourceCoverage?: number;
   /**
    * False when no event carries `tool_source`, i.e. OTEL is off or predates the
    * attribute. Distinct from "every tool was builtin", which is what a bare
@@ -37,6 +56,24 @@ export interface ToolProvenanceResult {
    */
   hasData: boolean;
 }
+
+/**
+ * The event that carries `tool_source` — the population *both* halves of the
+ * coverage ratio are drawn from.
+ *
+ * Empirically the only one: across 200k+ events on the reference index the
+ * attribute appears on `tool_decision` and nowhere else, and `tool_decision`
+ * fires about once per tool call (35,423 against 35,189 `tool_result`), which
+ * makes it a fair stand-in for "tool calls in the window". Decisions are the
+ * better denominator on the merits too — a denied call produces a decision but
+ * no result, and a denied call is still a call.
+ *
+ * Numerator and denominator must keep matching predicates. Should Claude Code
+ * move the attribute to another event, the honest outcome is `hasData: false`
+ * ("no tool source recorded") until this widens — a visible failure rather
+ * than a ratio quietly exceeding 1 and being rendered as full coverage.
+ */
+const TOOL_SOURCE_EVENT = "tool_decision";
 
 /**
  * Tool provenance straight from `tool_source`.
@@ -48,8 +85,16 @@ export interface ToolProvenanceResult {
  */
 export async function getToolProvenance(opts: { since?: string } = {}): Promise<ToolProvenanceResult> {
   const db = await getDb();
-  if (!db) return { sources: [], total: 0, hasData: false };
+  if (!db) return { sources: [], total: 0, callsInWindow: 0, hasData: false };
 
+  const params = { since: opts.since ?? null };
+
+  // Both halves of the ratio are restricted to the same event type. Ingestion
+  // lifts `tool_source` without checking `event_name` (`otelIngest.ts`), so a
+  // Claude Code change that put the attribute on another event would otherwise
+  // count it in the numerator but not the denominator — pushing coverage above
+  // 1, which the card would then present as full coverage. A mismatch that
+  // cannot arise needs no guard downstream.
   const rows = prepCached(
     db,
     `SELECT tool_source AS source,
@@ -57,14 +102,29 @@ export async function getToolProvenance(opts: { since?: string } = {}): Promise<
             COUNT(DISTINCT session_id) AS sessions
        FROM otel_events
       WHERE tool_source IS NOT NULL
+        AND event_name = @event
         AND (@since IS NULL OR ts >= @since)
       GROUP BY 1
       ORDER BY events DESC`
-  ).all({ since: opts.since ?? null }) as ToolProvenanceRow[];
+  ).all({ ...params, event: TOOL_SOURCE_EVENT }) as ToolProvenanceRow[];
+
+  // Counted independently rather than derived from the split, so coverage of 1
+  // means every call stated a source — not that the query agreed with itself.
+  const { calls } = prepCached(
+    db,
+    `SELECT COUNT(*) AS calls
+       FROM otel_events
+      WHERE event_name = @event
+        AND (@since IS NULL OR ts >= @since)`
+  ).get({ ...params, event: TOOL_SOURCE_EVENT }) as { calls: number };
+
+  const total = rows.reduce((n, r) => n + r.events, 0);
 
   return {
     sources: rows,
-    total: rows.reduce((n, r) => n + r.events, 0),
+    total,
+    callsInWindow: calls,
+    sourceCoverage: calls > 0 ? total / calls : undefined,
     hasData: rows.length > 0,
   };
 }

@@ -118,8 +118,9 @@ cannot attribute a failure to one.
 ## Permission denials
 
 When a tool call is refused, Claude Code records *why*. Minder groups denials by
-kind and crosses each with first-pass success, so you can see whether being
-refused actually derails the work or the model simply routes around it:
+kind and, where the data allows, crosses each with first-pass success — so you
+can see whether being refused actually derails the work or the model simply
+routes around it:
 
 | Kind | Meaning |
 | --- | --- |
@@ -138,7 +139,33 @@ A kind that has never occurred reports *no data* rather than zero. "Nothing was
 ever refused" and "this index predates the field" are different claims, and only
 one of them is a clean bill of health.
 
-Available through the MCP tools `get-hook-activity` and `get-denial-breakdown`.
+**A quiet window is a third state, and it reads differently.** Whether the index
+has ever recorded a denial is asked without a time filter, while the breakdown
+itself honours the selected period — so "this index has no denial data" and
+"this period had no denials" stay distinguishable. The second is the one case
+where the card says plainly that nothing was refused, because by then the field
+is known to be populated and the absence is a real result.
+
+### Expect the first-pass column to be absent
+
+The cross needs a turn that both had a call denied *and* recorded a task
+outcome. Task outcomes are written for well under 1% of turns and denials are
+rare, so on a typical index the two never coincide and **no kind has a
+first-pass figure at all** — on the reference machine, zero of 43 denials
+overlapped.
+
+When that happens the column is dropped entirely and the card says so once at
+the foot, rather than printing a placeholder on every row: a dash per kind reads
+as a measurement still in progress, when the truth is that this particular cross
+has nothing to join against. A kind that *does* have a sample shows its real
+rate, including a genuine **0%** — a kind whose denied turns always went on to
+need a retry is exactly the signal worth surfacing, and it must not be swallowed
+by the same branch that handles missing data.
+
+Shown as the **Permission Denials** card in `Stats → Telemetry` — one of the two
+cards there that needs no OTEL, since `denial_kind` comes from transcript
+ingest. Also available through the MCP tools `get-hook-activity` and
+`get-denial-breakdown`.
 
 ## Background activity (T2.3)
 

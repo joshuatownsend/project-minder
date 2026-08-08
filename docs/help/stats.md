@@ -68,3 +68,14 @@ If **no** session carries the measurement a preset needs — an older corpus, or
 one where OTEL was never enabled — that preset says so instead of drawing an
 empty chart. The other two presets may still have plenty; they use different
 measurements.
+
+## Telemetry
+
+The section at the foot of the page — Edit Acceptance, Tool Latency, Token
+Usage, Cache Efficiency, Hook Activity, Pressure, Permission Denials and Tool
+Provenance — is documented under [OTEL telemetry](otel.md), along with the one
+`today` / `7d` / `30d` / `all` toggle that governs all of them.
+
+Two of those cards work with no telemetry configured at all: **Permission
+Denials** reads transcript-ingest data, and **Hook Activity** falls back to
+decoding session transcripts. The rest need OTEL enabled.

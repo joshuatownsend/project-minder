@@ -1,5 +1,36 @@
 # Insights
 
+<!-- insight:2e5774a58377 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T12:25:10.086Z -->
+## ★ Insight
+- My numerator (`tool_source IS NOT NULL`, any event) and denominator (`event_name='tool_decision'`) draw from **different populations**. I recognized the risk and *defended* it downstream with a `>= 1` guard plus a test. The bot's point is better: eliminate the mismatch instead, so the impossible state can't arise rather than being caught.
+- The failure mode I'd built is the worse kind — a coverage of 2.0 would render as a confident "100%", masking a double-count as full coverage. A guard that turns wrong data into reassuring output is worse than no guard.
+- `otelIngest.ts` lifts `tool_source` without validating `event_name`, so this isn't hypothetical: one Claude Code change to where the attribute rides would trigger it.
+
+---
+
+<!-- insight:d3b60b106d99 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T11:47:28.757Z -->
+## ★ Insight
+- `TaskStop` kills the wrapper shell, not the detached child. That bit twice today: once leaving a `next dev` holding port 4141, once leaving a `next build` mid-type-check.
+- Next 16 detects "another build is running" from `.next/diagnostics/build-diagnostics.json` recording an unfinished `buildStage` — not from a live process. So a killed build leaves a lock with no owner, and the recovery is deleting that one file, not the directory.
+- The harness reported that failed build as "exit code 0" — that's the compound command's status (the trailing `echo`), not the build's. `BUILD_EXIT=1` inside the log was the only truthful signal, which is exactly why CLAUDE.md insists on writing it there.
+
+---
+
+<!-- insight:0c68abc3e596 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T00:46:46.955Z -->
+## ★ Insight
+- The root cause is a *deliberate* asymmetry I relied on but didn't finish reasoning through: `hasData` ignores `since` (index-wide) while `kinds` honors it. That's correct design — it's what lets the card distinguish "predates the field" from "nothing refused" — but it creates a third state I collapsed into the second.
+- That third state is the one place this card *can* honestly say "all clear": `hasData: true` proves the column is populated, so an empty window really does mean nothing was refused. The distinction I fought to preserve everywhere else is what earns the right to say it here.
+
+---
+
+<!-- insight:6c560622de39 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T22:37:12.112Z -->
+## ★ Insight
+- The guard is split in two deliberately: `typeof verifiedTasks !== "number"` catches *absence*, `<= 0` catches an impossible denominator. Collapsing both into `if (!verifiedTasks)` would work today but silently conflates "no sample" with "zero sample" — the exact conflation this whole session has been chasing.
+- `oneShotTasks` missing while `verifiedTasks` exists returns `null` rather than `0%`. Reporting missing data as the worst possible reading is how a gap becomes a false alarm.
+- `SUM(CASE WHEN …)` in SQL returns `NULL` for an empty group, but `GROUP BY` can't emit a group with `COUNT(*) = 0` — so the zero-denominator branch is unreachable-by-invariant, defended anyway because the invariant lives in a different file.
+
+---
+
 <!-- insight:bae437f19d0a | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T21:31:23.064Z -->
 ## ★ Insight
 Six findings across two PRs have now come from prose asserting more than the code delivers — a doc promising an MCP workaround, a comment claiming hourly refresh, and now a guarantee about search results. In every case the prose described the *intent* and the code implemented a subset. Writing the guarantee down is what made it checkable; the failure isn't documenting, it's documenting the design instead of the implementation.
