@@ -1,5 +1,12 @@
 # Insights
 
+<!-- insight:0c68abc3e596 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T00:46:46.955Z -->
+## ★ Insight
+- The root cause is a *deliberate* asymmetry I relied on but didn't finish reasoning through: `hasData` ignores `since` (index-wide) while `kinds` honors it. That's correct design — it's what lets the card distinguish "predates the field" from "nothing refused" — but it creates a third state I collapsed into the second.
+- That third state is the one place this card *can* honestly say "all clear": `hasData: true` proves the column is populated, so an empty window really does mean nothing was refused. The distinction I fought to preserve everywhere else is what earns the right to say it here.
+
+---
+
 <!-- insight:6c560622de39 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-07T22:37:12.112Z -->
 ## ★ Insight
 - The guard is split in two deliberately: `typeof verifiedTasks !== "number"` catches *absence*, `<= 0` catches an impossible denominator. Collapsing both into `if (!verifiedTasks)` would work today but silently conflates "no sample" with "zero sample" — the exact conflation this whole session has been chasing.
