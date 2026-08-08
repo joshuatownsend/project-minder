@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:2e5774a58377 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T12:25:10.086Z -->
+## ★ Insight
+- My numerator (`tool_source IS NOT NULL`, any event) and denominator (`event_name='tool_decision'`) draw from **different populations**. I recognized the risk and *defended* it downstream with a `>= 1` guard plus a test. The bot's point is better: eliminate the mismatch instead, so the impossible state can't arise rather than being caught.
+- The failure mode I'd built is the worse kind — a coverage of 2.0 would render as a confident "100%", masking a double-count as full coverage. A guard that turns wrong data into reassuring output is worse than no guard.
+- `otelIngest.ts` lifts `tool_source` without validating `event_name`, so this isn't hypothetical: one Claude Code change to where the attribute rides would trigger it.
+
+---
+
 <!-- insight:d3b60b106d99 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T11:47:28.757Z -->
 ## ★ Insight
 - `TaskStop` kills the wrapper shell, not the detached child. That bit twice today: once leaving a `next dev` holding port 4141, once leaving a `next build` mid-type-check.
