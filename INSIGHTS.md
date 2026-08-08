@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:43f33d061f2b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T23:03:40.623Z -->
+## ★ Insight
+The stderr detail is the quiet lesson. The CLI has been printing `Update available: 0.5.0 -> 0.7.1` on every single invocation for months — `runLibraryCli` captures stdout and never reads stderr, so the notice went to a stream nobody listens to. The information needed to catch this existed, was emitted continuously, and was free. Worth remembering when wiring a subprocess: choosing not to read stderr is choosing not to hear a class of message you haven't enumerated yet.
+
+---
+
 <!-- insight:1b4062c16bef | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T22:04:08.822Z -->
 ## ★ Insight
 The `fable` gap is a nice illustration of why a stale linter is worse than no linter. A linter's model of "valid" is a snapshot of the ecosystem at publish time — so as Claude Code ships new models, tools, and config fields, a frozen linter doesn't degrade into silence, it degrades into *confident wrongness*. It flags the newest, most correct configs hardest. And because the default `^0.x` range makes Dependabot correctly report nothing to do, the drift is invisible to exactly the tooling you'd expect to catch it.

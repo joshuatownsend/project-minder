@@ -90,8 +90,9 @@ const outDir = path.join(root, "dist", "minder-server");
 // packaged server under a Node major that doesn't match the one this
 // script records below will crash on `require("better-sqlite3")`
 // with an "was compiled against a different Node.js version" error.
-// Repo CI targets Node 20 and 22; both satisfy this range.
-const EXPECTED_NODE_ENGINES = "^20.19.0 || >=22.12.0";
+// Repo CI targets Node 22. Node 20 was dropped 2026-08-08 (EOL
+// 2026-04-30, and claude-code-lint's markdownlint needs >=22).
+const EXPECTED_NODE_ENGINES = ">=22.12.0";
 
 function fail(message) {
   console.error(`[package-standalone] ERROR: ${message}`);
@@ -1150,8 +1151,9 @@ const pkgJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")
 const enginesRange = pkgJson.engines?.node ?? EXPECTED_NODE_ENGINES;
 
 function satisfiesEngines(version, range) {
-  // Minimal semver-range check for the two OR'd clauses this repo
-  // actually uses ("^20.19.0 || >=22.12.0") — not a general semver
+  // Minimal semver-range check for the clause shapes this repo
+  // actually uses (">=22.12.0"; historically "^20.19.0 || >=22.12.0",
+  // hence the retained caret + OR handling) — not a general semver
   // parser. Falls back to a warning (not a hard failure) for any
   // range shape it doesn't recognize, since this is a best-effort
   // sanity check, not the source of truth (npm/pnpm already enforce
@@ -1194,7 +1196,7 @@ if (enginesSatisfied === false) {
   fail(
     `This script is running under Node ${buildNodeVersion}, which does not satisfy ` +
       `package.json engines "${enginesRange}". Rebuild with a supported Node major ` +
-      `(repo CI uses Node 20 and 22) — the better-sqlite3 prebuilt bundled here is ` +
+      `(repo CI uses Node 22) — the better-sqlite3 prebuilt bundled here is ` +
       `ABI-tied to whichever Node compiled it, and a mismatched runtime major will ` +
       `crash on require("better-sqlite3").`
   );
@@ -1221,8 +1223,9 @@ const buildInfo = {
     "The bundled better-sqlite3 .node prebuilt's ABI (builtWithNodeModuleVersion, " +
     "i.e. NODE_MODULE_VERSION) must match the Node major that RUNS server.js, not " +
     "just the one that satisfies expectedNodeEngines at build/package time. Repo CI " +
-    "uses Node 20 and 22, which do NOT share a NODE_MODULE_VERSION (Node 20 = ABI " +
-    "115, Node 22 = ABI 127) — verify with `node -p process.versions.modules` on " +
+    "uses Node 22 (ABI 127) since Node 20 was dropped on 2026-08-08; Node majors do " +
+    "NOT share a NODE_MODULE_VERSION (Node 20 = ABI 115, Node 22 = ABI 127, Node 24 " +
+    "= ABI 137) — verify with `node -p process.versions.modules` on " +
     "both the build machine and the runtime host before deploying across a Node " +
     "major boundary. A mismatch surfaces as \"was compiled against a different " +
     "Node.js version\" the first time an OTel or DB-backed route touches " +
