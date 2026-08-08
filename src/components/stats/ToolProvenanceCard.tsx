@@ -3,6 +3,7 @@
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { defaultSince } from "@/lib/format";
+import { describeSourceCoverage } from "@/lib/telemetry/provenanceCoverage";
 import type { ToolProvenanceResult } from "@/lib/db/otelCorrelation";
 
 interface Props {
@@ -69,6 +70,8 @@ export function ToolProvenanceCard({ since }: Props) {
     );
   }
 
+  const coverage = describeSourceCoverage(data);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
       {/* Proportional bar. Only the sources actually observed appear — a fixed
@@ -115,8 +118,29 @@ export function ToolProvenanceCard({ since }: Props) {
         );
       })}
 
-      <div style={{ ...MONO, fontSize: "0.6rem", color: "var(--text-muted)" }}>
-        {data.total.toLocaleString()} tool events · source stated by Claude Code, not inferred from tool names
+      {/* Coverage, not just the total. The split is computed over events that
+          state a source, so on a window predating `tool_source` the
+          percentages describe an instrumented subset — a partial answer shaped
+          exactly like a complete one. Stated whenever it is not everything. */}
+      <div style={{ ...MONO, fontSize: "0.6rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
+        {/* The "N of M" form is only meaningful while N ≤ M. If `tool_source`
+            ever appears outside the coverage denominator the ratio inverts,
+            and "120 of 100 tool calls" is visibly impossible arithmetic — the
+            same self-contradiction the truncated percentage avoids. Fall back
+            to the bare total there. */}
+        {coverage && data.total <= data.callsInWindow
+          ? `${data.total.toLocaleString()} of ${data.callsInWindow.toLocaleString()} tool calls state a source`
+          : `${data.total.toLocaleString()} tool calls state a source`}
+        {coverage?.partial && (
+          <>
+            {" "}
+            (<span style={{ color: "var(--accent)" }}>{coverage.pctLabel}%</span> of this window) — the
+            split above describes those, not the rest. Claude Code began reporting tool source partway
+            through most indexes; narrow the period for a fully covered view.
+          </>
+        )}
+        <br />
+        Source is stated by Claude Code, not inferred from tool names.
       </div>
     </div>
   );

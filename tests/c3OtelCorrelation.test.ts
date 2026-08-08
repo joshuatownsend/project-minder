@@ -249,9 +249,13 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
 
   it("groups tool events by stated provenance", async () => {
     const db = await setup();
-    insertOtel(db, { eventName: "tool_result", toolSource: "builtin" });
-    insertOtel(db, { eventName: "tool_result", toolSource: "builtin" });
-    insertOtel(db, { eventName: "tool_result", toolSource: "mcp" });
+    // `tool_decision`, not `tool_result`: across 200k+ events on the reference
+    // index `tool_source` appears on `tool_decision` and nowhere else, and the
+    // coverage denominator added below counts that event. The fixture used
+    // `tool_result`, which cannot occur — the assertions are unchanged.
+    insertOtel(db, { eventName: "tool_decision", toolSource: "builtin" });
+    insertOtel(db, { eventName: "tool_decision", toolSource: "builtin" });
+    insertOtel(db, { eventName: "tool_decision", toolSource: "mcp" });
 
     const { getToolProvenance } = await import("@/lib/db/otelCorrelation");
     const result = await getToolProvenance();
@@ -261,6 +265,30 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
       { source: "builtin", events: 2, sessions: 1 },
       { source: "mcp", events: 1, sessions: 1 },
     ]);
+    // Every call stated a source, so the split speaks for the whole window.
+    expect(result.callsInWindow).toBe(3);
+    expect(result.sourceCoverage).toBe(1);
+  });
+
+  // Codex review of #406: the split is computed only over events carrying
+  // `tool_source`, so a window spanning the attribute's introduction described
+  // an instrumented subset while presenting as the whole window. Measured on
+  // the reference index: 73.2% coverage at 30d, 57.6% at all-time.
+  it("reports coverage when only some calls state a source", async () => {
+    const db = await setup();
+    insertOtel(db, { eventName: "tool_decision", toolSource: "builtin" });
+    insertOtel(db, { eventName: "tool_decision", toolSource: "mcp" });
+    // Two calls from before Claude Code emitted the attribute.
+    insertOtel(db, { eventName: "tool_decision" });
+    insertOtel(db, { eventName: "tool_decision" });
+
+    const { getToolProvenance } = await import("@/lib/db/otelCorrelation");
+    const result = await getToolProvenance();
+    expect(result.total).toBe(2);
+    expect(result.callsInWindow).toBe(4);
+    expect(result.sourceCoverage).toBe(0.5);
+    // The split itself still only describes the sourced half.
+    expect(result.sources.reduce((n, s) => n + s.events, 0)).toBe(2);
   });
 
   it("says it has no data rather than implying every tool was builtin", async () => {

@@ -205,5 +205,25 @@ fixed built-in / MCP / plugin legend would imply plugin tools were measured and
 found to be zero; on a machine where no plugin tool ever ran, the honest reading
 is that none were seen.
 
+### Coverage is stated, because the split is usually partial
+
+The percentages are computed over calls that *state* a source, and Claude Code
+began emitting `tool_source` partway through most indexes. On the reference
+machine the attribute starts 2026-07-19 while events go back to 2023-11-14, so
+a wide window covers only part of its calls:
+
+| Window | Tool calls | Stating a source | Coverage |
+|---|---|---|---|
+| `today` | 5 | 5 | 100% |
+| `7d` | 5,849 | 5,849 | 100% |
+| `30d` | 27,866 | 20,392 | **73%** |
+| `all` | 35,423 | 20,392 | **57%** |
+
+The card therefore reads `20,392 of 27,866 tool calls state a source (73% of
+this window)` rather than a bare total — otherwise a split describing 57% of
+your history looks exactly like one describing all of it. Narrow the period for
+a fully covered view. The percentage is truncated rather than rounded, so it can
+never show `100%` beside a partial-window warning.
+
 Shown as the **Tool Provenance** card in `Stats → Telemetry`, and available
 through the `get-tool-provenance` MCP tool.
