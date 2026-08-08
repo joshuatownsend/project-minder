@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-08
+
+*A release almost entirely about data Minder already had. **Six of the eight additions surface fields that were already parsed, typed, stored by both backends — and rendered nowhere**: per-session hook runs, Claude Code's own session title, permission-mode switches, subagent provenance, the hook-activity source, and two analytics that existed only as MCP tools. Nothing new was collected for them; the work was noticing they had no surface.*
+
+*The fixes share one shape, and it is worth naming because it recurred five times: **a partial answer shaped exactly like a complete one**. Hook Activity reported 12% of its data as the whole of it. Tool Latency was ~15 days from doing the same. The scatter plot placed 59% of sessions at zero on axes they had never been measured on. A subagent that could not be counted reported `0` turns. A title you could see could not be searched. In every case the display was confident and the number was wrong — and in every case the fix was to let the absence show rather than substitute a plausible value.*
+
+*Three PR review rounds on the final change each found that same error in a new disguise, twice in states where wrong data would have rendered as reassurance. Every figure below is measured on the reference index.*
+
 ### Fixed
 - **The session scatter plot was placing unmeasured sessions on the axis at zero.** `projectScatter` coerced `durationMs`, `oneShotRate` and `maxContextFill` with `?? 0`, so a session that never recorded a measurement was drawn as though it had been measured at the bottom of the scale. On the reference index that is **2,974 of 5,028 sessions (59.1%)** with no peak context fill — a majority of the Context Pressure cloud sitting on the floor, each tooltip stating `0% fill` as a fact. Worse on Reliability, where the same coercion reads as a 0% first-pass success rate: the worst score on the chart, awarded for not having been measured.
 
