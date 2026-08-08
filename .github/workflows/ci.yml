@@ -20,7 +20,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['20.19.0', '22.12.0']
+        # Node 20 dropped 2026-08-08: it reached EOL 2026-04-30, and the
+        # config-lint dependency chain (claude-code-lint -> markdownlint
+        # >=0.41) now requires Node >=22. See PR #412.
+        node-version: ['22.12.0']
     steps:
       - uses: actions/checkout@v7
 
@@ -66,13 +69,14 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
-      # Node 22 (not 20) is deliberate on Windows: better-sqlite3@12.11.1 ships
-      # a prebuilt win32-x64 binary for Node 22's ABI (node-v127) but NOT for
-      # Node 20's (ABI 115). On Node 20 `prebuild-install` finds no prebuilt and
-      # falls back to `node-gyp`, which cannot detect Visual Studio 2026 (v18)
+      # Node 22 is now the only supported major (Node 20 dropped 2026-08-08).
+      # It was already forced here before that: better-sqlite3@12.11.1 ships a
+      # prebuilt win32-x64 binary for Node 22's ABI (node-v127) but NOT for
+      # Node 20's (ABI 115). On Node 20 `prebuild-install` found no prebuilt and
+      # fell back to `node-gyp`, which cannot detect Visual Studio 2026 (v18)
       # on the current windows-latest image (issue #264) — so the native driver
-      # never builds and every DB-backed suite fails. Node 22 gets the prebuilt
-      # binary with zero compiler involvement. Node 20 stays covered on ubuntu.
+      # never built and every DB-backed suite failed. Node 22 gets the prebuilt
+      # binary with zero compiler involvement.
       - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'

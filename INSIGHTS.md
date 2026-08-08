@@ -1,5 +1,35 @@
 # Insights
 
+<!-- insight:43f33d061f2b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T23:03:40.623Z -->
+## ★ Insight
+The stderr detail is the quiet lesson. The CLI has been printing `Update available: 0.5.0 -> 0.7.1` on every single invocation for months — `runLibraryCli` captures stdout and never reads stderr, so the notice went to a stream nobody listens to. The information needed to catch this existed, was emitted continuously, and was free. Worth remembering when wiring a subprocess: choosing not to read stderr is choosing not to hear a class of message you haven't enumerated yet.
+
+---
+
+<!-- insight:1b4062c16bef | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T22:04:08.822Z -->
+## ★ Insight
+The `fable` gap is a nice illustration of why a stale linter is worse than no linter. A linter's model of "valid" is a snapshot of the ecosystem at publish time — so as Claude Code ships new models, tools, and config fields, a frozen linter doesn't degrade into silence, it degrades into *confident wrongness*. It flags the newest, most correct configs hardest. And because the default `^0.x` range makes Dependabot correctly report nothing to do, the drift is invisible to exactly the tooling you'd expect to catch it.
+
+---
+
+<!-- insight:75446cfc1dd0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T21:19:36.210Z -->
+## ★ Insight
+This is a quietly common failure mode: for pre-1.0 dependencies, the default caret range silently becomes a freeze, and every automated signal agrees there's nothing to do. Dependabot is *correct* to stay silent — `0.5.0` genuinely satisfies `^0.5.0`. So the package can go stale indefinitely without a single warning, and the staleness reads as stability. Anything you depend on below 1.0 needs a human review cadence, because tooling will never prompt you.
+
+---
+
+<!-- insight:0d11f96d210c | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T21:12:10.854Z -->
+## ★ Insight
+The sharpest detail: that stale memory file *already recorded* #152/#153/#156/#157 shipping in PR #180 back in May. The evidence that six issues were dead was sitting in two places — the CHANGELOG and my own memory — and I read neither before building a plan around them. Codex didn't know something I couldn't; it checked something I didn't. Worth remembering that "what does the repo already say about this?" is a cheaper first move than reasoning from the issue list.
+
+---
+
+<!-- insight:8221421b3706 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T20:51:43.935Z -->
+## ★ Insight
+This is a failure mode worth naming, because it defeated the fix I made one round earlier. The coverage ledger I added verifies that every *listed* issue is scheduled exactly once — it has no way to notice a listed issue isn't real anymore. Run that check twice and it comes back green both times on a baseline made of stale entries. A consistency check validates the *relationship* between two artifacts; it says nothing about whether either one still corresponds to the world. The plan now carries the standing correction: GitHub's open/closed flag is a claim about bookkeeping, not about the codebase.
+
+---
+
 <!-- insight:7532b8543076 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T20:42:02.838Z -->
 ## ★ Insight
 Both findings share a root cause worth naming: **an assertion that no procedure can contradict.** "22 items, all dispositioned" was a claim with no check behind it, so it drifted silently. "Trusted Signing" was a fact copied forward without re-verification, so it went stale silently. The fixes aren't the corrected values — they're the grep command and the naming note, each of which makes the *next* drift detectable. Same principle as the piped-gate rule in CLAUDE.md: the danger isn't being wrong, it's being wrong in a way nothing can notice.
