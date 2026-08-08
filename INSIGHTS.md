@@ -1,5 +1,25 @@
 # Insights
 
+<!-- insight:a4a7bbf2debc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:34:05.142Z -->
+## ★ Insight
+The archive entry for code signing is labelled *converted, not completed* deliberately. `TODO.archive.md` is where finished work goes, so an unqualified `- [x]` there would read as "we signed the installers" to anyone skimming six months from now. The living-checklist convention gets you a clean active list, but only if the archive stays honest about *why* each item left — otherwise you've traded clutter for a false record.
+
+---
+
+<!-- insight:3dae8f7f7bb0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:21:19.503Z -->
+## ★ Insight
+The dependency structure here rewards ordering over parallelism. #331 is the clearest example: it's not itself a flaky test, but seven flaky-test issues may close or shrink once the shared helper lands — because they share one root cause (fragile isolation under load) that each issue describes as a separate symptom. Fixing symptoms in the listed order would cost 7× the effort and leave the cause intact.
+
+---
+
+<!-- insight:544e75a10c3c | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:19:11.633Z -->
+## ★ Insight
+Two structural facts shape this plan more than any individual issue:
+- **The Next.js 16.3 upgrade is the tightest dependency node in the graph.** It's the only thing that can close 4 of #396's Dependabot alerts, and it's the precondition for the *real* #284 fix (whose method is already written up and verified-not-to-work on 16.2.x). Everything standalone-build-shaped queues behind it.
+- **Roughly a quarter of this backlog isn't engineering at all** — it's decisions you haven't made (rename, cert spend, two integration proposals, four feature parking lots). A burn-down that only sequences code silently leaves those open forever.
+
+---
+
 <!-- insight:214f67a7ed9d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T17:36:39.770Z -->
 ## ★ Insight
 - Mutation testing earned its keep: "keep whichever came last" passed **all 14 tests**, because keep-last coincidentally agrees with precedence when the user copy is listed second. The test now runs both input orders.
