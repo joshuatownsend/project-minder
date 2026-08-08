@@ -139,6 +139,13 @@ A kind that has never occurred reports *no data* rather than zero. "Nothing was
 ever refused" and "this index predates the field" are different claims, and only
 one of them is a clean bill of health.
 
+**A quiet window is a third state, and it reads differently.** Whether the index
+has ever recorded a denial is asked without a time filter, while the breakdown
+itself honours the selected period — so "this index has no denial data" and
+"this period had no denials" stay distinguishable. The second is the one case
+where the card says plainly that nothing was refused, because by then the field
+is known to be populated and the absence is a real result.
+
 ### Expect the first-pass column to be absent
 
 The cross needs a turn that both had a call denied *and* recorded a task

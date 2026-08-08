@@ -7,7 +7,9 @@ import { defaultSince } from "@/lib/format";
 import {
   describeDenialRate,
   anyDenialOutcomeMeasured,
+  selectDenialCardState,
   NO_OUTCOME_FOOTNOTE,
+  NO_DENIALS_IN_WINDOW,
 } from "@/lib/telemetry/denialDisplay";
 import type { DenialBreakdown } from "@/lib/data/denialAnalyticsFromDb";
 
@@ -59,19 +61,34 @@ export function DenialBreakdownCard({ since }: Props) {
     );
   }
 
+  const state = data ? selectDenialCardState(data) : "never-recorded";
+
   // Deliberately NOT phrased as "no denials — all clear". `hasData: false`
   // cannot distinguish "nothing was ever refused" from "this index predates
   // the `denial_kind` column", and the type says so explicitly. Reporting the
   // absence as a clean bill of health would be a claim the data cannot support.
-  if (!data?.hasData) {
+  // `!data` is unreachable once state is not "never-recorded" — it is here so
+  // TypeScript narrows `data` for everything below.
+  if (state === "never-recorded" || !data) {
     return (
       <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.6 }}>
-        No denials recorded in this window.
+        No denials recorded at all.
         <br />
         <span style={{ fontSize: "0.72rem" }}>
-          That may mean nothing was refused, or that these sessions predate the
-          field — the two are indistinguishable here.
+          That may mean nothing was ever refused, or that these sessions predate
+          the field — the two are indistinguishable here.
         </span>
+      </div>
+    );
+  }
+
+  // The quiet window: denials exist in this index, just not since the cutoff.
+  // The only state in this card where "nothing was refused" is a supportable
+  // claim rather than an ambiguous absence.
+  if (state === "none-in-window") {
+    return (
+      <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.6 }}>
+        {NO_DENIALS_IN_WINDOW}
       </div>
     );
   }

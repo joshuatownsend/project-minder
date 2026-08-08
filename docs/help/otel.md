@@ -139,9 +139,13 @@ Each card shows an explanatory message when no data is available:
   in the selected time window.
 - **"No pressure events in this period."** — no API errors, retries, or
   compactions occurred.
-- **"No denials recorded in this window."** — deliberately *not* phrased as "all
-  clear". Nothing refused and an index predating the `denial_kind` column are
+- **"No denials recorded at all."** — deliberately *not* phrased as "all clear".
+  Nothing ever refused and an index predating the `denial_kind` column are
   indistinguishable from here, and only one of them is good news.
+- **"Nothing was refused in this window."** — a *different* state, and the one
+  place this card can report good news plainly. Denials exist in the index, just
+  none since the cutoff, so the absence is a real result rather than missing
+  data. Widen the period to see earlier ones.
 - **"No tool source recorded in this window."** — no event carries
   `tool_source`. That is a statement about instrumentation, not about your
   tools; an empty breakdown would read as "every tool was built-in", which is a

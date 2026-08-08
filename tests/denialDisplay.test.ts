@@ -2,7 +2,37 @@ import { describe, it, expect } from "vitest";
 import {
   describeDenialRate,
   anyDenialOutcomeMeasured,
+  selectDenialCardState,
 } from "@/lib/telemetry/denialDisplay";
+
+describe("selectDenialCardState", () => {
+  it("reports never-recorded when the index has no denials at all", () => {
+    expect(selectDenialCardState({ hasData: false, kinds: [] })).toBe("never-recorded");
+    // A absent `hasData` is not a reason to claim anything stronger.
+    expect(selectDenialCardState({})).toBe("never-recorded");
+  });
+
+  // The bug both PR reviewers found on #406, reachable on the reference index
+  // the moment "today" is selected: `hasData` deliberately ignores `since`
+  // (it asks whether the column was ever populated), while `kinds` honours it.
+  // Collapsing the two rendered "0 denied calls · First-pass success is unknown
+  // for every kind here — none of these denied turns also recorded a task
+  // outcome" for a window that contained no denied turns at all.
+  it("distinguishes a quiet window from an index that never recorded denials", () => {
+    expect(selectDenialCardState({ hasData: true, kinds: [] })).toBe("none-in-window");
+  });
+
+  it("reports rows when the window has denials", () => {
+    expect(selectDenialCardState({ hasData: true, kinds: [{ verifiedTasks: 2, oneShotTasks: 1 }] })).toBe("rows");
+  });
+
+  // `hasData: false` with rows should not happen, but if the two ever disagree
+  // the honest reading is the weaker one — do not upgrade to "rows" on the
+  // strength of data whose provenance the backend just disclaimed.
+  it("prefers the weaker claim when hasData and kinds disagree", () => {
+    expect(selectDenialCardState({ hasData: false, kinds: [{ verifiedTasks: 1, oneShotTasks: 1 }] })).toBe("never-recorded");
+  });
+});
 
 describe("describeDenialRate", () => {
   // The case the whole module exists for. On the reference index all four

@@ -71,6 +71,40 @@ export function anyDenialOutcomeMeasured(rows: readonly DenialOutcomeCounts[]): 
 }
 
 /**
+ * Which of three things the card has to say.
+ *
+ * `hasData` deliberately ignores `since` — it asks whether the index has *ever*
+ * recorded a denial, which is what separates "your sessions predate the
+ * `denial_kind` column" from "nothing was refused". `kinds` honours `since`.
+ * That asymmetry is the point, and it produces a third state that is easy to
+ * miss: a window with no denials on an index that has plenty.
+ *
+ * `none-in-window` is the one state in this card that can honestly report good
+ * news. Everywhere else an absence is ambiguous; here `hasData` has already
+ * proved the field is populated, so an empty window really does mean nothing
+ * was refused in it.
+ */
+export type DenialCardState = "never-recorded" | "none-in-window" | "rows";
+
+export function selectDenialCardState(data: {
+  hasData?: boolean;
+  kinds?: readonly unknown[];
+}): DenialCardState {
+  if (!data.hasData) return "never-recorded";
+  return (data.kinds?.length ?? 0) === 0 ? "none-in-window" : "rows";
+}
+
+/**
+ * Copy for the quiet-window state.
+ *
+ * Says plainly that nothing was refused, because in this state that claim is
+ * supported. It must not reuse `NO_OUTCOME_FOOTNOTE`, which is about denied
+ * turns lacking a task outcome — meaningless when there were no denied turns.
+ */
+export const NO_DENIALS_IN_WINDOW =
+  "Nothing was refused in this window. Denials are recorded for this index, so this is a real result rather than missing data — widen the period to see earlier ones.";
+
+/**
  * Why the column is missing, in terms a reader can act on.
  *
  * Deliberately qualitative: the exact coverage ratio lives in SQL and is not
