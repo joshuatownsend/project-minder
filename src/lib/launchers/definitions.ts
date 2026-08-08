@@ -161,11 +161,33 @@ export function buildSkillDispatch(
 export const MAX_SKILL_CHIPS = 8;
 
 /**
+ * Which copy wins when the same slug appears more than once.
+ *
+ * A user-scope skill is the one the developer installed themselves, so it
+ * outranks a plugin's. Ties keep the first occurrence — see the dedupe note in
+ * `selectSkillChips` for why that is safe.
+ */
+const SOURCE_PRECEDENCE: Record<string, number> = { user: 0, plugin: 1 };
+const UNRANKED_SOURCE = 2;
+
+/**
  * Pick which catalog skills become chips: user-invocable, not disabled,
- * **globally available** (user/plugin scope — not project-local), sorted by
- * slug, capped. Project-local skills are excluded because a launcher dispatches
- * a fresh `claude -p` in the chosen project's cwd, where another project's local
- * `/deploy` can't resolve. Pure so the selection is unit-testable without fetch.
+ * **globally available** (user/plugin scope — not project-local), deduplicated
+ * by slug, sorted by slug, capped. Project-local skills are excluded because a
+ * launcher dispatches a fresh `claude -p` in the chosen project's cwd, where
+ * another project's local `/deploy` can't resolve. Pure so the selection is
+ * unit-testable without fetch.
+ *
+ * **Deduplication is not cosmetic.** The catalog indexes every cached copy of a
+ * plugin, and the cache keeps old versions and mirrors the same plugin across
+ * marketplaces: on the reference machine 1,122 plugin skill directories reduce
+ * to 201 distinct slugs, with `neon` present 57 times. Undeduplicated, the cap
+ * was spent on repeats of a handful of skills — and identical `skill:<slug>`
+ * keys made React warn about duplicate children, whose documented behaviour is
+ * duplication and/or omission.
+ *
+ * Which copy survives only affects the tooltip: every chip dispatches the bare
+ * `/<slug>`, which resolves the same way whichever record we kept.
  */
 export function selectSkillChips(
   rows: Array<{
@@ -180,18 +202,36 @@ export function selectSkillChips(
   }>,
   limit: number = MAX_SKILL_CHIPS,
 ): SkillChip[] {
-  return rows
-    .map((r) => r.entry)
-    .filter(
-      (e): e is NonNullable<typeof e> =>
-        !!e &&
-        e.userInvocable === true &&
-        e.disabled !== true &&
-        e.source !== "project" &&
-        !!e.name &&
-        !!e.slug,
-    )
-    .map((e) => ({ slug: e.slug!, name: e.name!, description: e.description }))
+  const bySlug = new Map<string, { chip: SkillChip; rank: number }>();
+
+  for (const e of rows.map((r) => r.entry)) {
+    if (
+      !e ||
+      e.userInvocable !== true ||
+      e.disabled === true ||
+      e.source === "project" ||
+      !e.name ||
+      !e.slug
+    ) {
+      continue;
+    }
+
+    const rank = SOURCE_PRECEDENCE[e.source ?? ""] ?? UNRANKED_SOURCE;
+    const existing = bySlug.get(e.slug);
+    // Strictly-less keeps the first of an equal-ranked pair, which is the whole
+    // of the real-world case: repeated cache entries for one plugin, identical
+    // but for the version in their path.
+    if (existing === undefined || rank < existing.rank) {
+      bySlug.set(e.slug, {
+        rank,
+        chip: { slug: e.slug, name: e.name, description: e.description },
+      });
+    }
+  }
+
+  // Dedupe before the cap, or duplicates spend slots that distinct skills need.
+  return [...bySlug.values()]
+    .map((v) => v.chip)
     .sort((a, b) => a.slug.localeCompare(b.slug))
     .slice(0, limit);
 }
