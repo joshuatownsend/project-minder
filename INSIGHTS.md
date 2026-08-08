@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:d3b60b106d99 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T11:47:28.757Z -->
+## ★ Insight
+- `TaskStop` kills the wrapper shell, not the detached child. That bit twice today: once leaving a `next dev` holding port 4141, once leaving a `next build` mid-type-check.
+- Next 16 detects "another build is running" from `.next/diagnostics/build-diagnostics.json` recording an unfinished `buildStage` — not from a live process. So a killed build leaves a lock with no owner, and the recovery is deleting that one file, not the directory.
+- The harness reported that failed build as "exit code 0" — that's the compound command's status (the trailing `echo`), not the build's. `BUILD_EXIT=1` inside the log was the only truthful signal, which is exactly why CLAUDE.md insists on writing it there.
+
+---
+
 <!-- insight:0c68abc3e596 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T00:46:46.955Z -->
 ## ★ Insight
 - The root cause is a *deliberate* asymmetry I relied on but didn't finish reasoning through: `hasData` ignores `since` (index-wide) while `kinds` honors it. That's correct design — it's what lets the card distinguish "predates the field" from "nothing refused" — but it creates a third state I collapsed into the second.
