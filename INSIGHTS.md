@@ -1,5 +1,26 @@
 # Insights
 
+<!-- insight:214f67a7ed9d | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T17:36:39.770Z -->
+## ★ Insight
+- Mutation testing earned its keep: "keep whichever came last" passed **all 14 tests**, because keep-last coincidentally agrees with precedence when the user copy is listed second. The test now runs both input orders.
+- That's the same class as the defect-ratifying tests found earlier in this session — a test that looks like it pins behaviour but only pins one arrangement of the inputs.
+
+---
+
+<!-- insight:3beb6f51ba0b | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T17:19:04.103Z -->
+## ★ Insight
+- My issue guessed "user vs plugin scope" — wrong. The real collision is *same plugin, many cached versions*: `vercel/0.45.1`, `vercel/19606ac163fe`, and a second marketplace all ship `ai-gateway`. Precedence between scopes wouldn't have discriminated at all.
+- Because the dispatch is `/<slug>` regardless of which copy wins, the choice only affects the tooltip — so "first wins within a rank" is safe, while cross-scope precedence still matters for the case that *can* differ.
+
+---
+
+<!-- insight:fd8e744975b5 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T13:31:12.036Z -->
+## ★ Insight
+- `package.json` in this repo is stored **minified on a single line**, so `npm version` / `pnpm version` would silently reformat the whole file into a large diff. Bumped via targeted string replace instead.
+- Reading the previous release's diff first was what surfaced that — the 1.8.0 commit's `package.json` change shows as one enormous `-`/`+` line pair.
+
+---
+
 <!-- insight:2e5774a58377 | session:be121c19-1380-435d-98f4-139e86b7f88a | 2026-08-08T12:25:10.086Z -->
 ## ★ Insight
 - My numerator (`tool_source IS NOT NULL`, any event) and denominator (`event_name='tool_decision'`) draw from **different populations**. I recognized the risk and *defended* it downstream with a `>= 1` guard plus a test. The bot's point is better: eliminate the mismatch instead, so the impossible state can't arise rather than being caught.

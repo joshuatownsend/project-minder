@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Skill launcher chips were mostly duplicates, and the cap was spent on them.** `selectSkillChips` never deduplicated by slug, so every cached copy of a plugin became its own chip: identical label, identical `skill:<slug>` React key, and a console error whose documented consequence is children being duplicated or omitted. The scale is the part worth stating — the catalog indexes each cached plugin version *and* the same plugin mirrored across marketplaces, so on the reference machine **1,122 plugin skill directories reduce to 201 distinct slugs**, with `ai-gateway` present 3 times and `neon` **57**. With `MAX_SKILL_CHIPS = 8` applied after sorting by slug, repeats of a couple of skills consumed the whole strip and every distinct skill below them never rendered.
+
+  Deduplication happens before the cap, so freed slots go to real skills. Where the same slug exists in more than one scope the user-scope copy wins — it is the one the developer installed themselves — and equal-ranked copies keep the first, which is the entire real-world case: cache entries identical but for the version in their path. Which copy survives only affects the tooltip; every chip dispatches the bare `/<slug>`, which resolves the same way regardless. Fixes #405.
+
 ## [1.9.0] - 2026-08-08
 
 *A release almost entirely about data Minder already had. **Six of the eight additions surface fields that were already parsed, typed, stored by both backends — and rendered nowhere**: per-session hook runs, Claude Code's own session title, permission-mode switches, subagent provenance, the hook-activity source, and two analytics that existed only as MCP tools. Nothing new was collected for them; the work was noticing they had no surface.*

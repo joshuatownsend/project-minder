@@ -136,4 +136,73 @@ describe("selectSkillChips", () => {
   it("returns an empty array when nothing qualifies (curated chips still render)", () => {
     expect(selectSkillChips([{ entry: { slug: "x", name: "x", userInvocable: false } }])).toEqual([]);
   });
+
+  // Issue #405. The catalog indexes every cached copy of a plugin, and the
+  // cache retains old versions and mirrors the same plugin across
+  // marketplaces. Measured on the reference machine: 1,122 plugin skill
+  // directories, 201 distinct slugs — `ai-gateway` three times, `neon` 57.
+  // Undeduplicated they render as identical chips with identical
+  // `skill:<slug>` React keys.
+  it("collapses a slug cached under several plugin versions to one chip", () => {
+    const chips = selectSkillChips([
+      { entry: { slug: "ai-gateway", name: "AI Gateway", userInvocable: true, source: "plugin" } },
+      { entry: { slug: "ai-gateway", name: "AI Gateway", userInvocable: true, source: "plugin" } },
+      { entry: { slug: "ai-gateway", name: "AI Gateway", userInvocable: true, source: "plugin" } },
+    ]);
+    expect(chips.map((c) => c.slug)).toEqual(["ai-gateway"]);
+  });
+
+  // The only collision where the surviving record differs in substance: the
+  // dispatch is `/<slug>` either way, but the tooltip should come from the
+  // skill the developer installed themselves.
+  //
+  // Asserted in BOTH input orders on purpose. With only the plugin-first case,
+  // a "keep whichever came last" implementation passes — mutation-testing this
+  // file caught exactly that, since keep-last happens to agree with precedence
+  // when the user copy is second.
+  it.each([
+    ["plugin first", ["plugin", "user"]],
+    ["user first", ["user", "plugin"]],
+  ] as const)("prefers the user-scope copy over a plugin's (%s)", (_label, order) => {
+    const chips = selectSkillChips(
+      order.map((source) => ({
+        entry: {
+          slug: "remember",
+          name: source === "user" ? "User copy" : "Plugin copy",
+          description: `from ${source}`,
+          userInvocable: true,
+          source,
+        },
+      })),
+    );
+    expect(chips).toHaveLength(1);
+    expect(chips[0].name).toBe("User copy");
+    expect(chips[0].description).toBe("from user");
+  });
+
+  it("deduplicates before applying the cap, so repeats cannot spend slots", () => {
+    // The user-visible harm: with the cap consumed by copies of one skill, the
+    // distinct skills below it never render at all.
+    const dupes = Array.from({ length: 20 }, () => ({
+      entry: { slug: "aaa-dup", name: "aaa-dup", userInvocable: true, source: "plugin" },
+    }));
+    const distinct = Array.from({ length: 5 }, (_, i) => ({
+      entry: { slug: `zz-${i}`, name: `zz-${i}`, userInvocable: true, source: "plugin" },
+    }));
+    const chips = selectSkillChips([...dupes, ...distinct], 4);
+    expect(chips.map((c) => c.slug)).toEqual(["aaa-dup", "zz-0", "zz-1", "zz-2"]);
+  });
+
+  it("gives every chip a unique React key", () => {
+    // The reported symptom, asserted directly: `LauncherChips` keys on
+    // `skill:${slug}`, and React's documented behaviour for duplicate keys is
+    // duplication and/or omission of children.
+    const chips = selectSkillChips([
+      { entry: { slug: "dup", name: "dup", userInvocable: true, source: "plugin" } },
+      { entry: { slug: "dup", name: "dup", userInvocable: true, source: "plugin" } },
+      { entry: { slug: "other", name: "other", userInvocable: true, source: "user" } },
+    ]);
+    const keys = chips.map((c) => `skill:${c.slug}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
