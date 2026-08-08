@@ -15,8 +15,9 @@ All 34 open issues appear in exactly one wave below:
 | Wave | Issues |
 |---|---|
 | W0 — Decisions | #30, #169, #170, #228, #229, #230, #231, #396 |
-| W1 — Next 16.3 + standalone | #284, #287, #288, #283 |
-| W2 — Quick wins | #186, #188, #190, #236, #152, #153, #156, #157 |
+| W0b — **Already shipped, never closed** | #283, #288, #152, #153, #156, #157 |
+| W1 — Next 16.3 + standalone | #284, #287 |
+| W2 — Quick wins | #186, #188, #190, #236 |
 | W3 — Test infrastructure | #331, #345, #355, #362, #273, #282, #220, #175 |
 | W4 — Pricing correctness | #393, #394 |
 | W5 — Usage/session surfaces | #395 |
@@ -75,6 +76,29 @@ All four decisions taken as recommended. Open issue count **34 → 31**.
 | Code signing | Moved out of `TODO.md` → `docs/decisions/2026-07-19-no-os-code-signing.md`; archived to `TODO.archive.md` as converted-not-completed |
 | Session-population caveat | Converted from an unchecked TODO checkbox to a reference note — it was never actionable work |
 
+---
+
+## Wave 0b — Already shipped, never closed (6 issues)
+
+**Found by the Codex review of this plan's own PR (#410), 2026-08-08.** Six issues in the 34-issue baseline were **fixed months ago and left administratively open**. Each was verified against the source, not just the CHANGELOG entry that named it — a CHANGELOG line can describe adjacent work.
+
+| Issue | Verified in source |
+|---|---|
+| **#283** — MCP/proxy allowlist hardcodes 4100 | `src/lib/boundPort.ts` is now the shared helper; `mcp/server.ts:22` imports `buildAllowedHosts` from it, with a comment stating the two "cannot drift apart again". CHANGELOG:297. |
+| **#288** — `claude-code-lint` unresolvable from server chunks | Resolved in a different shape than the issue proposed: the app `require.resolve`s the package.json and **spawns the bin as a CLI child** (`src/lib/lint/library.ts:39`), so `package-standalone.mjs:641-670` re-materialises the whole dependency subtree in npm layout and re-verifies every edge against the final tree with Node's real walk-up. CHANGELOG:326. |
+| **#152** — `runningProcess: false` hardcoded | `resolveLiveness()` at `agentView/aggregate.ts:36-39` consults CLI liveness and returns a `livenessSource`. |
+| **#153** — `cachedAt` stamped after fetch | `claudeAgentsCli.ts:113` stamps `sampledAt` captured *before* the call; the comment at `:101` names the original defect. |
+| **#156** — drifted local `StatusPayload` | `StatusDashboard.tsx:12` imports the canonical type from `@/lib/liveStatus`; the local interface is gone. |
+| **#157** — readdir-error early return vs. CLI cache | `liveStatus.ts` gained `transient` classification and a differentiated TTL for the CLI-unavailable case. |
+
+All four (#152/#153/#156/#157) shipped together as the T1.1 follow-up cluster — CHANGELOG:797 names them explicitly.
+
+**Why this matters beyond the six:** the burn-down's baseline was wrong by 18%, and no amount of internal consistency-checking would have caught it — the ledger only verified that every *listed* issue was scheduled, never that a listed issue was still real. **Standing correction: verify open-ness against the code before scheduling, not just against the issue's open state.** GitHub's open/closed flag is a claim about bookkeeping, not about the codebase.
+
+**Real remaining work after W0 + W0b: 25 open issues, not 31.**
+
+---
+
 **Deliberately deferred (decided 2026-08-08):** the cloud-ingest distribution stance is **gated on the W1 spike**, not on W0. If the undocumented endpoints are dead upstream (simonw/claude-code-transcripts#77), the question is moot and answering it now would have been wasted. **Trigger:** the spike returning a live response schema — ask personal-only vs. distributed at that moment, before any of Wave 10 is designed.
 
 ---
@@ -88,8 +112,7 @@ All four decisions taken as recommended. Open issue count **34 → 31**.
    - **Verify by entry count** in `.next/server/app/api/adapters/route.js.nft.json` — *not* by the build's warning count, which is noise.
    - Re-test the three pre-existing annotations in `db/migrations.ts`, `tasksDb/migrations.ts`, `serverRoot.ts` — they annotate `path.join` and are likely inert.
 3. **If #284 resolves:** narrow the `outputFileTracingExcludes` list in `next.config.ts` (added by #338) back toward just `dist/` + `src-tauri/target`.
-4. **Re-verify the standalone-package issues against the new tracer** — #287 (Next's own tracer omits nested deps under `node_modules/next/node_modules/`) and #288 (`claude-code-lint` unresolvable from server chunks). Both are upstream-tracer-shaped; a tracer version bump may close or shrink them. If they survive, fix #288 in `scripts/package-standalone.mjs` (relocate/copy) and #287 with an explicit backfill.
-5. **#283 — port 4100 hardcoded** in `src/proxy.ts` and `src/lib/mcp/server.ts` `ALLOWED_HOSTS`/`ALLOWED_ORIGINS`. Derive the allowlist from the configured port instead of a literal. This also lines up with the Settings port-picker follow-up from the WinNAT/Hyper-V exclusion finding — a server that can't run off 4100 is a real constraint on that machine.
+4. **Re-verify #287 against the new tracer** — Next's own tracer omits nested deps under `node_modules/next/node_modules/`. Upstream-tracer-shaped, so a tracer version bump may close or shrink it; if it survives, fix with an explicit backfill in `scripts/package-standalone.mjs`. (**#288 and #283 were already fixed** — see Wave 0b.)
 
 **Gates:** `pnpm typecheck`, full test suite, **and `pnpm build`** (framework upgrade — build is non-optional here), plus an out-of-repo smoke test of `dist/minder-server`.
 
@@ -105,11 +128,8 @@ Small, independent, high-confidence. Several have the fix pattern already establ
 - **#236 — duplicate React keys on `/usage`.** Two duplicate `projectSlug` rows reaching `byProject`/`projectDetails`. Dev-only symptom, real data-correctness cause. Same class as #405 (skill-chip dedupe, just shipped) — dedupe at the aggregation source, not the render site.
 - **#190 — `/api/usage` ETag omits a time component.** Rolling windows (24h/7d/30d/today) legitimately change as `now` advances without any mtime change, so a stale `If-None-Match` pins the UI. Add a time-slot component to the ETag salt.
 - **#188 — usage help doc describes removed period semantics.** `docs/help/usage.md` + the `public/help/` mirror still document calendar-aligned "This Week (Sunday)". Pure docs.
-- **t1.1 cluster as one PR — #152, #153, #156, #157.** All four are in the same liveness/CLI-cache neighbourhood and have been open since 2026-05:
-  - #153: stamp `cachedAt` *before* the fetch, not after (staleness window widened by fetch latency).
-  - #152: consult `jsonlSession.isLive` instead of hardcoding `runningProcess: false` in `agentView/aggregate.ts`.
-  - #156: delete the drifted local `StatusPayload` in `StatusDashboard.tsx`; import the canonical one.
-  - #157: readdir-error early return vs. concurrent in-flight CLI cache.
+
+*(The t1.1 cluster — #152/#153/#156/#157 — was originally scheduled here. All four shipped together long ago and were never closed; see Wave 0b.)*
 
 ---
 
