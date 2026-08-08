@@ -1,7 +1,7 @@
 # Backlog burn-down — full disposition
 
 **Date:** 2026-08-08
-**Scope:** every open GitHub issue (34) and every open `TODO.md` item (19), each dispositioned exactly once.
+**Scope:** every open GitHub issue (34) and every unchecked `TODO.md` item (22), each dispositioned exactly once.
 **Goal:** drive the established backlog to zero, distinguishing *do-now*, *do-later-with-a-named-trigger*, and *decide-and-close*.
 
 Baseline: `main` @ `0196d9c` (v1.9.1), 4,741 tests passing.
@@ -24,7 +24,21 @@ All 34 open issues appear in exactly one wave below:
 | W7 — Service mode + build hygiene | #295, #296 |
 | **Total** | **34** |
 
-TODO items are distributed across W1, W4, W5, W8–W11 and the housekeeping wave; see each section.
+And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `grep -c '^\s*- \[ \]' TODO.md` — the count must equal the total below.
+
+| Wave | TODO items | n |
+|---|---|---|
+| W1 | Next.js ≥16.3 upgrade; cloud-endpoint spike | 2 |
+| W4 | Pricing consumes `usage.speed` (fast mode) | 1 |
+| W5 | `byCategory.oneShotRate` on DB; session segmentation surfaces; Hook Activity source selector | 3 |
+| W8 | Project Groups P2 (aggregation); P3 (UI) | 2 |
+| W9 | Widen `SessionAdapter` full text; approval UI + phone view; token-usage rule fields; project-scope config drift; per-task `scheduleAtQuotaReset`; quota threshold in config; embed only semantic queries | 7 |
+| W10 | Fetcher + disk sync; `claude-cloud` adapter; attribution; distribution risk | 4 |
+| W11 | Memory Observatory M.2 | 1 |
+| Housekeeping | Capture `worktrees.png`; screenshot-without-prose PR check | 2 |
+| **Total** | | **22** |
+
+*The session-population caveat is deliberately **not** in this table — Wave 0 converted it from an unchecked checkbox into a reference note, because it was never actionable work. That is why the file's unchecked count is 22 rather than 23.*
 
 ---
 

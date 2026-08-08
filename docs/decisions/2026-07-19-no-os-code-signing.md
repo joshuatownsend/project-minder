@@ -22,9 +22,11 @@ What is deferred is **OS code signing** — the thing SmartScreen (Windows) and 
 | Platform | What is needed | Cost |
 |---|---|---|
 | macOS | Apple Developer ID — **already held**. Needs only `APPLE_*` secrets wiring; Tauri automates notarization. | already paid |
-| Windows | Azure Trusted Signing (cloud HSM) | ~$120/yr |
+| Windows | **Azure Artifact Signing** (cloud HSM) — renamed from "Trusted Signing"; GA in US/Canada/Europe as of Jan 2026, no functional change | ~$120/yr ($9.99/mo, ≤5,000 signatures, 1 cert profile) |
 
 Traditional Windows OV certificates stopped being an option for CI in June 2023, when the CA/Browser Forum began requiring private keys on certified hardware. A USB token cannot be used from a hosted runner, so the cloud-HSM route is the only CI-compatible one.
+
+*Naming note (verified 2026-08-08): the Microsoft product is now **Azure Artifact Signing**. It was called **Trusted Signing** when this decision was taken, and before that **Azure Code Signing**. Microsoft states the rename carries no functional change. Search for the current name when revisiting — the old one still dominates third-party write-ups. Sources: [product page](https://azure.microsoft.com/en-us/products/artifact-signing), [GA announcement](https://techcommunity.microsoft.com/blog/microsoft-security-blog/simplifying-code-signing-for-windows-apps-artifact-signing-ga/4482789).*
 
 ## Consequence, accepted
 

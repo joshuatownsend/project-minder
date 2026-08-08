@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:6d0eec7585ee | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:39:03.438Z -->
+## ★ Insight
+Worth noting what the pre-commit hook just proved and what it didn't. 4,741 tests passing on a markdown-only diff is a *tautology* — no test reads `TODO.md`. The hook is doing regression insurance against accidental staging, not validating this change. The actual verification for W0 was the coverage ledger: counting that all 34 issue numbers appear exactly once across the wave table. A green suite that can't fail on your change is the same shape as the piped-gate trap in CLAUDE.md — it executes, reports success, and proves nothing about the thing you changed.
+
+---
+
 <!-- insight:a4a7bbf2debc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T19:34:05.142Z -->
 ## ★ Insight
 The archive entry for code signing is labelled *converted, not completed* deliberately. `TODO.archive.md` is where finished work goes, so an unqualified `- [x]` there would read as "we signed the installers" to anyone skimming six months from now. The living-checklist convention gets you a clean active list, but only if the archive stays honest about *why* each item left — otherwise you've traded clutter for a false record.
