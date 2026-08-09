@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:52667c214014 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:39:56.209Z -->
+## ★ Insight
+That failure is the helper's design biting, and it's worth keeping rather than papering over.
+
+---
+
+<!-- insight:8d43e00b45c7 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:27:44.635Z -->
+## ★ Insight
+The guard has a design fork worth showing, because the naive versions are each wrong in an instructive way.
+
+---
+
+<!-- insight:d78621347118 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:08:34.283Z -->
+## ★ Insight
+The mutation run caught something I'd have shipped as a false guarantee. **Dropping the `os.homedir()` spy entirely left all 6 tests green.**
+
+---
+
+<!-- insight:de52b442c2b6 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:02:44.762Z -->
+## ★ Insight
+The census changed the shape of this task in two ways worth naming before I write code.
+
+---
+
 <!-- insight:24188df2d654 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:40:31.246Z -->
 ## ★ Insight
 Two mechanical things from this merge worth carrying forward, both about GitHub silently doing something other than what the text implied.

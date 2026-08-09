@@ -1,8 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
-import os from "os";
-import { promises as fs } from "fs";
-import { classifyGradeTrend, snapshotDate } from "@/lib/data/gradeSnapshots";
+import { describe, it, expect } from "vitest";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Item 4b — daily grade snapshots + trend classification.
 //
@@ -26,80 +23,67 @@ try {
 
 const COUNTS = { high: 0, medium: 0, low: 0 };
 
-describe("classifyGradeTrend", () => {
-  it("returns 'new' when there is no prior grade", () => {
-    expect(classifyGradeTrend(null, "C")).toBe("new");
-  });
-  it("returns 'improving' when the letter gets better (D → C)", () => {
-    expect(classifyGradeTrend("D", "C")).toBe("improving");
-  });
-  it("returns 'declining' when the letter gets worse (B → D)", () => {
-    expect(classifyGradeTrend("B", "D")).toBe("declining");
-  });
-  it("returns 'stable' when the letter is unchanged", () => {
-    expect(classifyGradeTrend("B", "B")).toBe("stable");
-  });
-  it("treats A as best and F as worst", () => {
-    expect(classifyGradeTrend("F", "A")).toBe("improving");
-    expect(classifyGradeTrend("A", "F")).toBe("declining");
-  });
+// `classifyGradeTrend` and `snapshotDate` are pure, but they live in a module
+// whose first lines import `getDb` from `@/lib/db/connection` — so importing
+// them statically froze `DB_DIR` to the real `~/.minder` before any isolation
+// in this file ran. Harmless in practice (nothing here called through to the
+// connection) but safe only by argument, and invisible at the call site; the
+// isolation guard in `dbIsolationGuard.test.ts` now rejects the shape. Loading
+// them through the same `reload()` the DB cases use removes the exception
+// rather than documenting it (#331).
+const state = installIsolatedState({
+  prefix: "pm-grade-snap-",
+  env: { MINDER_USE_DB: "1" },
 });
-
-describe("snapshotDate", () => {
-  it("formats the local calendar date as YYYY-MM-DD", () => {
-    // Local-time constructor → the helper's local getters round-trip exactly,
-    // regardless of the machine timezone.
-    expect(snapshotDate(new Date(2026, 4, 10, 12, 0, 0))).toBe("2026-05-10");
-    expect(snapshotDate(new Date(2026, 0, 3, 9, 30, 0))).toBe("2026-01-03");
-  });
-});
-
-// ── DB-backed round-trip ─────────────────────────────────────────────────────
-
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalUseDb: string | undefined;
-
-// Three distinct LOCAL days.
-const DAY1 = new Date(2026, 4, 10, 12, 0, 0);
-const DAY2 = new Date(2026, 4, 11, 12, 0, 0);
-const DAY3 = new Date(2026, 4, 12, 12, 0, 0);
 
 async function reload() {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   return {
     snaps: await import("@/lib/data/gradeSnapshots"),
     conn: await import("@/lib/db/connection"),
   };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalUseDb = process.env.MINDER_USE_DB;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-grade-snap-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  process.env.MINDER_USE_DB = "1";
+describe("classifyGradeTrend", () => {
+  it("returns 'new' when there is no prior grade", async () => {
+    const { snaps } = await reload();
+    expect(snaps.classifyGradeTrend(null, "C")).toBe("new");
+  });
+  it("returns 'improving' when the letter gets better (D → C)", async () => {
+    const { snaps } = await reload();
+    expect(snaps.classifyGradeTrend("D", "C")).toBe("improving");
+  });
+  it("returns 'declining' when the letter gets worse (B → D)", async () => {
+    const { snaps } = await reload();
+    expect(snaps.classifyGradeTrend("B", "D")).toBe("declining");
+  });
+  it("returns 'stable' when the letter is unchanged", async () => {
+    const { snaps } = await reload();
+    expect(snaps.classifyGradeTrend("B", "B")).toBe("stable");
+  });
+  it("treats A as best and F as worst", async () => {
+    const { snaps } = await reload();
+    expect(snaps.classifyGradeTrend("F", "A")).toBe("improving");
+    expect(snaps.classifyGradeTrend("A", "F")).toBe("declining");
+  });
 });
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  if (originalUseDb === undefined) delete process.env.MINDER_USE_DB;
-  else process.env.MINDER_USE_DB = originalUseDb;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+describe("snapshotDate", () => {
+  it("formats the local calendar date as YYYY-MM-DD", async () => {
+    // Local-time constructor → the helper's local getters round-trip exactly,
+    // regardless of the machine timezone.
+    const { snaps } = await reload();
+    expect(snaps.snapshotDate(new Date(2026, 4, 10, 12, 0, 0))).toBe("2026-05-10");
+    expect(snaps.snapshotDate(new Date(2026, 0, 3, 9, 30, 0))).toBe("2026-01-03");
+  });
 });
+
+// ── DB-backed round-trip ─────────────────────────────────────────────────────
+
+// Three distinct LOCAL days.
+const DAY1 = new Date(2026, 4, 10, 12, 0, 0);
+const DAY2 = new Date(2026, 4, 11, 12, 0, 0);
+const DAY3 = new Date(2026, 4, 12, 12, 0, 0);
 
 describe.skipIf(!driverAvailable)("recordGradeSnapshot + loadGradeTrend (DB)", () => {
   it("creates the v16 table on first write and reports 'new' with no prior snapshot", async () => {
