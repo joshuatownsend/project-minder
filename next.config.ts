@@ -141,6 +141,16 @@ const nextConfig: NextConfig = {
   // runtime — the packaged server takes its environment from the launcher,
   // never from a traced copy of the developer's env files.
   //
+  // `.minder.json` is the third of the same kind and the least obvious: it is
+  // gitignored (`.gitignore:33`) and present in any checkout where setup has
+  // been run, holding the developer's scan roots, per-project statuses, port
+  // overrides, notification prefs and feature flags. Shipping it does not
+  // just leak configuration — it SEEDS every install with someone else's,
+  // which is worse than shipping nothing. Excluding it is safe because the
+  // runtime never reads a traced copy: `config.ts` resolves
+  // `path.join(resolveStateDir(), ".minder.json")`, i.e. the user's own state
+  // directory, and creates it there on first save.
+  //
   // The pattern is the `.env` PREFIX, not the single file that happened to
   // be on disk when this was measured. `.gitignore` ignores both `.env` and
   // `.env*.local`, and the downstream payload-hygiene gate already fails on
@@ -175,6 +185,7 @@ const nextConfig: NextConfig = {
       "./.claude/**",
       "./.env*",
       "./.mcp.json",
+      "./.minder.json",
       "./agentlytics-repo/**",
       "./.worktrees/**",
       "./tests/**",

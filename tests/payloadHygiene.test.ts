@@ -28,6 +28,16 @@ describe("isForbiddenName", () => {
     expect(isForbiddenName(".worktrees-backup")).toBe(false);
   });
 
+  it("catches the developer's own Minder config", () => {
+    // `.minder.json` is gitignored and present in any checkout where setup
+    // has been run. Shipping it does not merely leak scan roots and project
+    // statuses — it SEEDS a fresh install with someone else's config. The
+    // runtime resolves its own under `resolveStateDir()`, so a payload copy
+    // is never wanted (Codex review, PR #414).
+    expect(isForbiddenName(".minder.json")).toBe(true);
+    expect(isForbiddenName(".Minder.JSON")).toBe(true);
+  });
+
   // `.env*` is prefix semantics on purpose — the workflow and CHANGELOG both
   // promise `.env*`, not an enumerated list.
   it("treats .env as a prefix, not an exact name", () => {

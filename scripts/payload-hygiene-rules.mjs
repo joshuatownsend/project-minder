@@ -24,11 +24,18 @@ export const FORBIDDEN_EXACT = new Set([
   // Nested worktrees also nest deeply, so this doubles as protection against
   // MAX_PAYLOAD_REL_PATH aborts during packaging.
   ".worktrees",
+  // The developer's own Minder config (gitignored, present in any checkout
+  // where setup has run): scan roots, per-project statuses, port overrides,
+  // notification prefs, feature flags. Shipping it seeds every install with
+  // someone else's configuration rather than merely leaking it. The runtime
+  // never wants a payload copy — config.ts resolves it under
+  // `resolveStateDir()`, the user's own state directory.
+  ".minder.json",
 ]);
 
 // Human-readable summary for log lines, kept next to the rules it describes.
 export const FORBIDDEN_SUMMARY =
-  ".git, .env*, .claude, .mcp.json, agentlytics-repo, .worktrees, dist/node";
+  ".git, .env*, .claude, .mcp.json, .minder.json, agentlytics-repo, .worktrees, dist/node";
 
 // Forbidden paths anchored at the PAYLOAD ROOT, unlike FORBIDDEN_EXACT which
 // matches a basename at any depth. Anchoring is the whole point here: `node` is
