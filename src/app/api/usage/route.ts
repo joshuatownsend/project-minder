@@ -83,7 +83,25 @@ export async function GET(request: NextRequest) {
     // `home` rides in parts like project/source: filtering to a home whose
     // sessions are all older than the rest doesn't advance maxMtime, so
     // without it a conditional request would 304 against the wrong report.
-    parts: [safePeriod, project ?? "", source ?? "", home ?? "", homesSig],
+    //
+    // `slot.cachedAt` is here because every period except `all` is a ROLLING
+    // window. Its daily buckets, totals and rates legitimately change as
+    // `now` advances and turns age off the trailing edge — with no file
+    // touched, so maxMtime does not move. Without a time component the ETag
+    // would keep matching and a revalidating client would get a 304 against a
+    // freshly recomputed report, pinning the UI to the old window until some
+    // unrelated file changed. Keying on the slot's own timestamp rotates the
+    // ETag exactly when the server recomputes, which bounds client staleness
+    // to CACHE_TTL — the staleness the server already accepts. Mirrors
+    // /api/usage/compare (#190).
+    parts: [
+      safePeriod,
+      project ?? "",
+      source ?? "",
+      home ?? "",
+      homesSig,
+      String(slot.cachedAt),
+    ],
   });
 
   const notModified = ifNoneMatch(request, etag);
