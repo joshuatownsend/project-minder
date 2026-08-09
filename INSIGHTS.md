@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:57e3529427f1 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:02:15.193Z -->
+## ★ Insight
+Round 3 produced the clearest statement yet of the pattern. Codex's three findings on #414 — `.env.local`→`.env*`, `agentlytics-repo`→`.worktrees`, then `.minder.json` — aren't three bugs. They're one rule I kept failing to state: *gitignored developer state living inside the tracing root*. I enumerated instances; the rule was sitting in `.gitignore` the whole time.
+
+---
+
 <!-- insight:da665e0d5f4a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T16:25:34.559Z -->
 ## ★ Insight
 Four findings across two rounds, and three share one shape: I fixed the **instance** where the correct boundary was the **class**. `.env.local` where the rule is `.env*`. The drive letter where the rule is "the whole Windows path." `agentlytics-repo` where the rule is "any gitignored checkout nested in the tracing root" — which is what `.worktrees` was.

@@ -83,6 +83,20 @@ describe("isForbiddenRootRelative", () => {
     expect(isForbiddenRootRelative("node_modules/next/dist/node")).toBe(false);
   });
 
+  it("rejects the checkout's own .cache but not a package's", () => {
+    // Despite the name this is not disposable build output: claudeStatsCache
+    // writes .cache/claude-stats.json keyed by ABSOLUTE transcript paths with
+    // per-file token/tool/model/error counts, and resolveStateDir() falls back
+    // to the checkout root in development (Codex review, PR #414).
+    expect(isForbiddenRootRelative(".cache")).toBe(true);
+    expect(isForbiddenRootRelative(".Cache")).toBe(true);
+    // Root-anchored, not a basename rule — `node_modules/<pkg>/.cache/` is an
+    // ordinary build-cache location and pruning it would strip real packages.
+    expect(isForbiddenName(".cache")).toBe(false);
+    expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
+    expect(isForbiddenRootRelative(".cache/claude-stats.json")).toBe(false);
+  });
+
   // A prefix/substring implementation would wrongly claim the real payload
   // subtree is forbidden and prune far more than intended.
   it("matches the directory itself, not paths beneath or beside it", () => {
@@ -98,10 +112,18 @@ describe("isForbiddenRootRelative", () => {
 
 describe("hygiene rule sets", () => {
   // Guards the split itself: moving a root-anchored path into the basename set
-  // would silently widen it to every depth.
+  // would silently widen it to every depth, which is the whole reason these
+  // are two sets.
+  //
+  // This deliberately does NOT assert that root-anchored entries contain "/".
+  // It used to, back when `dist/node` was the only entry, and that pinned an
+  // incidental property of the sample rather than the invariant: `.cache` is a
+  // perfectly good single-segment root-anchored rule, and is anchored for
+  // exactly the reason this set exists — `node_modules/<pkg>/.cache/` is
+  // legitimate, so a basename entry would prune real packages. The rule that
+  // actually matters is membership exclusivity, asserted below.
   it("keeps root-anchored paths out of the basename set", () => {
     for (const entry of FORBIDDEN_ROOT_RELATIVE) {
-      expect(entry).toContain("/");
       expect(isForbiddenName(entry)).toBe(false);
     }
   });

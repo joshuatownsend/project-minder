@@ -50,7 +50,27 @@ export const FORBIDDEN_SUMMARY =
 // next.config.ts) — which means it never fires on a clean CI run and would go
 // unnoticed until someone reorders the build steps or adds `dist/` caching.
 // That is exactly the kind of silent regression this gate exists to catch.
-export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node"]);
+//
+// `.cache` is root-anchored for the same reason `node` is, and here the
+// reason is not hypothetical. `node_modules/<pkg>/.cache/` is an ordinary
+// location, and one package in this tree uses it for something essential:
+// `@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/` holds the
+// downloaded embedding model — weights included — that backs semanticSearch.
+// A basename rule, or an unanchored tracer glob, prunes it. That was measured
+// while adding this: `./.cache/**` in next.config.ts dropped the traced
+// node_modules count on /api/health from 372 to 368, those four files being
+// the model. So the tracer cannot express this rule (its globs are
+// substring matches with no anchoring) and it lives only here, where it can
+// be anchored to the payload root.
+//
+// What it protects: the checkout's OWN `.cache/` is gitignored
+// (`.gitignore:30`) and holds developer-specific state rather than disposable
+// build output — `claudeStatsCache.ts` writes `.cache/claude-stats.json`
+// keyed by ABSOLUTE transcript paths, with per-file token, tool, model and
+// error counts, and `resolveStateDir()` falls back to the checkout root
+// during ordinary development. A local release build from a checkout that has
+// run Minder would otherwise publish it.
+export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node", ".cache"]);
 
 // `relPath` is a payload-root-relative path in either separator style.
 export function isForbiddenRootRelative(relPath) {

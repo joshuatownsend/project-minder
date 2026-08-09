@@ -151,6 +151,21 @@ const nextConfig: NextConfig = {
   // `path.join(resolveStateDir(), ".minder.json")`, i.e. the user's own state
   // directory, and creates it there on first save.
   //
+  // `.cache/` is deliberately NOT excluded here, and the reason is a worked
+  // example of the substring caveat above. It is the same class of developer
+  // state as the entries above — `claudeStatsCache.ts` writes
+  // `.cache/claude-stats.json` keyed by ABSOLUTE transcript paths with
+  // per-file token/tool/model/error counts — so excluding it looks obviously
+  // right. But `.cache` is an ordinary directory name, and these globs cannot
+  // be anchored: adding `./.cache/**` was measured to drop the traced
+  // node_modules count from 372 to 368 on /api/health, because it also
+  // matched `@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/` —
+  // the downloaded embedding model that backs semanticSearch, model weights
+  // and all. Every other entry in this list names something no package
+  // ships; this one does not, so it is enforced at the payload boundary
+  // instead, where `FORBIDDEN_ROOT_RELATIVE` can anchor it to the payload
+  // root. See scripts/payload-hygiene-rules.mjs.
+  //
   // The pattern is the `.env` PREFIX, not the single file that happened to
   // be on disk when this was measured. `.gitignore` ignores both `.env` and
   // `.env*.local`, and the downstream payload-hygiene gate already fails on
