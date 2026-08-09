@@ -37,16 +37,6 @@ const TESTS_DIR = path.resolve(__dirname);
 const SRC_DIR = path.resolve(__dirname, "..", "src");
 
 /**
- * The modules that actually resolve a `~/.minder` path into a module-scope
- * `const` — `DB_DIR`/`DB_PATH` and `TASKS_DB_DIR`/`TASKS_DB_PATH`. Everything
- * else is reached through them, which is what the graph walk works out.
- */
-const PATH_CAPTURING_MODULES = new Set([
-  "@/lib/db/connection",
-  "@/lib/tasksDb/connection",
-]);
-
-/**
  * Files allowed an unsevered static path to one of those modules, each with the
  * reason its binding to the real home is safe. Adding an entry should require
  * the same argument: say why this file cannot open, create, or write the
@@ -103,17 +93,45 @@ const ALLOWLIST = new Map<string, string>([
     // absence of a failure.
     "the rules engine returns before push/sender: mocked config has no rules",
   ],
+  [
+    "mcpBoardTools.test.ts",
+    // Reaches connection through mcp/server -> mcp/tools/usage -> data. The
+    // suite only invokes the four board tools, whose whole I/O surface is
+    // `fs.readFile`/`writeFile`/`rename` on BOARD.md — and `fs` is mocked
+    // wholesale, as is `@/lib/tasks/store`. No usage tool is called, so no
+    // query reaches getDb().
+    "mocks `fs` and tasks/store; exercises only the board tools, never a usage query",
+  ],
+  [
+    "tasksDispatcher.test.ts",
+    // dispatcher.ts imports connection directly, but every collaborator the
+    // tests drive it through — tasks/store, spawner, the two delegations —
+    // is mocked, and `fs` is mocked wholesale on top of that.
+    "mocks `fs` plus every store/spawner collaborator; nothing reaches getDb()",
+  ],
 ]);
 
 // ---------------------------------------------------------------------------
 // Static import graph over `src/`
 // ---------------------------------------------------------------------------
+//
+// The graph is keyed on RESOLVED FILE PATHS, not on specifier strings, because
+// the same module is reached by different spellings depending on where you
+// stand: a test says `@/lib/db/migrations`, and that file says `./connection`.
+// An earlier draft followed only `@/` specifiers and was blind to the 670
+// relative imports in `src/` — so a test importing `@/lib/db/migrations`, one
+// of the most direct routes to the database, walked one hop and reported
+// clean. Caught by mutation-testing this guard, not by review.
 
-/** `@/lib/x` -> the file it resolves to, or null when it isn't a source file. */
-function resolveAlias(spec: string): string | null {
-  if (!spec.startsWith("@/")) return null;
-  const base = path.join(SRC_DIR, spec.slice(2));
+/** Resolve a specifier against the importing file. Null for bare specifiers. */
+function resolveSpec(spec: string, fromFile: string): string | null {
+  let base: string;
+  if (spec.startsWith("@/")) base = path.join(SRC_DIR, spec.slice(2));
+  else if (spec.startsWith("./") || spec.startsWith("../")) {
+    base = path.resolve(path.dirname(fromFile), spec);
+  } else return null; // node builtin or package — not ours to walk
   const candidates = [
+    base,
     `${base}.ts`,
     `${base}.tsx`,
     path.join(base, "index.ts"),
@@ -125,41 +143,56 @@ function resolveAlias(spec: string): string | null {
   return null;
 }
 
-// Value-level `import ... from "@/…"` and `export ... from "@/…"`, line-anchored.
-// `import type` / `export type` are excluded — they evaluate nothing at runtime.
-const ALIAS_EDGE = /^\s*(?:import|export)\s+(?!type\s)[^;]*?from\s+["'](@\/[^"']+)["']/gm;
+/**
+ * The two modules that resolve a `~/.minder` path into a module-scope `const`
+ * — `DB_DIR`/`DB_PATH` and `TASKS_DB_DIR`/`TASKS_DB_PATH`. Everything else
+ * reaches them through the graph, which is what the walk works out.
+ */
+const TARGET_FILES = new Set(
+  [
+    path.join(SRC_DIR, "lib", "db", "connection.ts"),
+    path.join(SRC_DIR, "lib", "tasksDb", "connection.ts"),
+  ].map((p) => path.resolve(p))
+);
 
-const edgeCache = new Map<string, Set<string>>();
-function edgesFrom(spec: string): Set<string> {
-  const cached = edgeCache.get(spec);
+// Value-level `import … from "…"` / `export … from "…"`, line-anchored.
+// `import type` / `export type` are excluded — they evaluate nothing at runtime.
+const EDGE = /^\s*(?:import|export)\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/gm;
+
+const edgeCache = new Map<string, string[]>();
+function edgesFrom(file: string): string[] {
+  const cached = edgeCache.get(file);
   if (cached) return cached;
-  const file = resolveAlias(spec);
-  const out = new Set<string>();
-  if (file) {
-    for (const match of fs.readFileSync(file, "utf8").matchAll(ALIAS_EDGE)) out.add(match[1]);
+  const out: string[] = [];
+  for (const match of fs.readFileSync(file, "utf8").matchAll(EDGE)) {
+    const resolved = resolveSpec(match[1], file);
+    if (resolved) out.push(resolved);
   }
-  edgeCache.set(spec, out);
+  edgeCache.set(file, out);
   return out;
 }
 
+const rel = (file: string): string =>
+  path.relative(path.resolve(SRC_DIR, ".."), file).split(path.sep).join("/");
+
 /**
- * A path from `spec` to a path-capturing module that no mocked specifier cuts,
- * or null. Returned as the chain so a failure names the hops rather than just
- * the endpoints — the whole difficulty of this class of bug is that the link is
- * two modules away and invisible at the call site.
+ * A path from `file` to a path-capturing module that no mocked module cuts, or
+ * null. Returned as the chain of files so a failure names the hops rather than
+ * just the endpoints — the whole difficulty of this class of bug is that the
+ * link is two or three modules away and invisible at the call site.
  */
-function unseveredPathTo(
-  spec: string,
-  mocked: ReadonlySet<string>,
+function unseveredPathFrom(
+  file: string,
+  cut: ReadonlySet<string>,
   seen = new Set<string>()
 ): string[] | null {
-  if (mocked.has(spec)) return null;
-  if (PATH_CAPTURING_MODULES.has(spec)) return [spec];
-  if (seen.has(spec)) return null;
-  seen.add(spec);
-  for (const next of edgesFrom(spec)) {
-    const rest = unseveredPathTo(next, mocked, seen);
-    if (rest) return [spec, ...rest];
+  if (cut.has(file)) return null;
+  if (TARGET_FILES.has(file)) return [rel(file)];
+  if (seen.has(file)) return null;
+  seen.add(file);
+  for (const next of edgesFrom(file)) {
+    const rest = unseveredPathFrom(next, cut, seen);
+    if (rest) return [rel(file), ...rest];
   }
   return null;
 }
@@ -178,9 +211,12 @@ function listTestFiles(dir: string): string[] {
   return out;
 }
 
-const STATIC_ALIAS_IMPORT = /^\s*import\s+(?!type\s)[^;]*?from\s+["'](@\/[^"']+)["']/gm;
+const STATIC_IMPORT = /^\s*import\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/gm;
 const MOCK_CALL = /vi\.mock\(\s*["']([^"']+)["']/g;
-const DYNAMIC_ALIAS_IMPORT = /import\(\s*["'](@\/[^"']+)["']\s*\)/g;
+const DYNAMIC_IMPORT = /import\(\s*["']([^"']+)["']\s*\)/g;
+
+const resolveFrom = (specs: Iterable<string>, from: string): string[] =>
+  [...specs].map((s) => resolveSpec(s, from)).filter((f): f is string => f !== null);
 
 const files = listTestFiles(TESTS_DIR).map((full) => {
   const source = fs.readFileSync(full, "utf8");
@@ -188,17 +224,29 @@ const files = listTestFiles(TESTS_DIR).map((full) => {
     name: path.relative(TESTS_DIR, full).split(path.sep).join("/"),
     base: path.basename(full),
     source,
-    staticImports: new Set([...source.matchAll(STATIC_ALIAS_IMPORT)].map((m) => m[1])),
-    dynamicImports: new Set([...source.matchAll(DYNAMIC_ALIAS_IMPORT)].map((m) => m[1])),
-    mocked: new Set([...source.matchAll(MOCK_CALL)].map((m) => m[1])),
+    staticImports: resolveFrom(
+      new Set([...source.matchAll(STATIC_IMPORT)].map((m) => m[1])),
+      full
+    ),
+    dynamicImports: resolveFrom(
+      new Set([...source.matchAll(DYNAMIC_IMPORT)].map((m) => m[1])),
+      full
+    ),
+    // Mocks are cut vertices. Resolved to files so `vi.mock("@/lib/data")`
+    // severs the same node the graph walk reaches as `../data` from
+    // elsewhere. Bare specifiers (`fs`, `server-only`) resolve to nothing and
+    // simply do not participate — see the tasksDbConnectionRace allowlist note.
+    mocked: new Set(
+      resolveFrom(new Set([...source.matchAll(MOCK_CALL)].map((m) => m[1])), full)
+    ),
   };
 });
 
 /** Violating chains for one file, empty when it is clean. */
 function staticViolations(file: (typeof files)[number]): string[][] {
   const out: string[][] = [];
-  for (const spec of file.staticImports) {
-    const chain = unseveredPathTo(spec, file.mocked);
+  for (const imported of file.staticImports) {
+    const chain = unseveredPathFrom(imported, file.mocked);
     if (chain) out.push(chain);
   }
   return out;
@@ -217,8 +265,8 @@ function dynamicViolations(file: (typeof files)[number]): string[][] {
     /installMcpIsolation\(/.test(file.source);
   if (resets) return [];
   const out: string[][] = [];
-  for (const spec of file.dynamicImports) {
-    const chain = unseveredPathTo(spec, file.mocked);
+  for (const imported of file.dynamicImports) {
+    const chain = unseveredPathFrom(imported, file.mocked);
     if (chain) out.push(chain);
   }
   return out;
@@ -231,15 +279,27 @@ describe("database isolation convention", () => {
     // classic way a meta-test quietly stops meaning anything.
     expect(files.length).toBeGreaterThan(300);
     expect(files.some((f) => f.base === "dbMigrations.test.ts")).toBe(true);
-    expect(resolveAlias("@/lib/db/connection")).not.toBeNull();
-    expect(resolveAlias("@/lib/data")).not.toBeNull();
-    // One known two-hop chain, so a regression that stops following edges is
-    // caught here rather than by silence.
-    expect(unseveredPathTo("@/lib/data", new Set())).toEqual([
-      "@/lib/data",
-      "@/lib/db/connection",
+
+    const here = path.join(TESTS_DIR, "dbIsolationGuard.test.ts");
+    const data = resolveSpec("@/lib/data", here);
+    const migrations = resolveSpec("@/lib/db/migrations", here);
+    expect(data).not.toBeNull();
+    expect(migrations).not.toBeNull();
+
+    // Two known chains, so a walker that stops following edges fails here
+    // rather than going quiet. The second is the one that matters: migrations
+    // reaches the connection module through a RELATIVE `./connection`, and an
+    // alias-only walk missed it entirely.
+    expect(unseveredPathFrom(data!, new Set())).toEqual([
+      "src/lib/data/index.ts",
+      "src/lib/db/connection.ts",
     ]);
-    expect(unseveredPathTo("@/lib/data", new Set(["@/lib/data"]))).toBeNull();
+    expect(unseveredPathFrom(migrations!, new Set())).toEqual([
+      "src/lib/db/migrations.ts",
+      "src/lib/db/connection.ts",
+    ]);
+    // And a mock on the first hop severs it.
+    expect(unseveredPathFrom(data!, new Set([data!]))).toBeNull();
   });
 
   it("no test reaches a DB path constant through an unsevered static import", () => {

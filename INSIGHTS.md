@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:807bb5cdd929 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T21:21:55.378Z -->
+## ★ Insight
+The guard mutation run just caught a hole in the guard itself, and it's a big one.
+
+---
+
 <!-- insight:52667c214014 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:39:56.209Z -->
 ## ★ Insight
 That failure is the helper's design biting, and it's worth keeping rather than papering over.
