@@ -88,15 +88,32 @@ const nextConfig: NextConfig = {
   // of the standalone sidecar — which is also why this is `dist/node/` and not
   // `node/`. `dist/minder-server/`, `dist/node/` and `src-tauri/target/`
   // appear in no legitimate dependency path.
-  // The entries below are a MITIGATION for #284, not a fix. NFT hits a
-  // "whole project was traced unintentionally" bailout somewhere in the graph
-  // and falls back to sweeping the entire repo root into every route's trace —
-  // measured at 27,242 entries for /api/health, of which 243 were actual
-  // node_modules dependencies. The bailout itself is still unfixed; annotating
-  // the obvious unbounded `path.join` sites with `turbopackIgnore` (the
-  // approach that fixed earlier instances) was tried and measured to change
-  // the manifest by nothing at all. See the negative result on #284 before
-  // repeating that experiment.
+  // The entries below are a MITIGATION for #284, not a fix. NFT falls back to
+  // sweeping the repo root into a route's trace instead of tracing only what
+  // that route needs.
+  //
+  // Measured on 16.3.0 (`scripts/nft-census.mjs`, 213 manifests): the fallback
+  // is PER-ROUTE and strictly bimodal — 124 routes trace 909 of `src/`'s 912
+  // files, 89 trace zero. There are no intermediate values, so a route either
+  // sweeps everything or nothing.
+  //
+  // Three things this rules out, each verified rather than assumed:
+  //  - It is not one poisoned first-party module. `lib/adapters/codex.ts`
+  //    contains the textbook unbounded `fs.readdir` walk and appears in the
+  //    import closure of CLEAN routes.
+  //  - It is not simply `better-sqlite3`/`bindings` (the native-addon resolver
+  //    that walks parent directories). Those are present in all 122 poisoned
+  //    routes that carry them AND in 20 clean ones — necessary-looking, not
+  //    sufficient. No package perfectly separates the two groups.
+  //  - It is not visible in the build output. 16.3.0 prints ZERO "unexpected
+  //    file in NFT list" warnings while the sweep is completely intact, so
+  //    warning count is not just noisy (as this comment previously said) but
+  //    actively misleading. Measure the manifest.
+  //
+  // Do not re-run the `turbopackIgnore` experiment without first identifying a
+  // target: it was measured to change nothing on 16.2.10, and on 16.3.0 — even
+  // with upstream vercel/next.js#94361 shipped — the census above found no
+  // call site to annotate. See #284 for the full data.
   //
   // These directories are provably never needed by the server at runtime, so
   // excluding them bounds the damage: 27,242 -> 1,369 entries, and traced repo
@@ -115,6 +132,65 @@ const nextConfig: NextConfig = {
   // also match e.g. `node_modules/<pkg>/tests/**`. Verified non-destructive by
   // measurement — the traced node_modules entry count is 243 both with and
   // without these excludes. Re-check that number if you add another entry.
+  // `./.env*` and `.mcp.json` are here for the same reason as `.git/` and
+  // `.claude/`, and are the most important entries in this list: both were
+  // measured entering the trace of `/api/health` and `/api/projects` on
+  // 16.3.0, i.e. local credentials were being handed to the packaging step
+  // and stopped only by package-standalone's prune on the way out. Excluding
+  // them keeps them out of the pipeline entirely. This costs nothing at
+  // runtime — the packaged server takes its environment from the launcher,
+  // never from a traced copy of the developer's env files.
+  //
+  // `.minder.json` is the third of the same kind and the least obvious: it is
+  // gitignored (`.gitignore:33`) and present in any checkout where setup has
+  // been run, holding the developer's scan roots, per-project statuses, port
+  // overrides, notification prefs and feature flags. Shipping it does not
+  // just leak configuration — it SEEDS every install with someone else's,
+  // which is worse than shipping nothing. Excluding it is safe because the
+  // runtime never reads a traced copy: `config.ts` resolves
+  // `path.join(resolveStateDir(), ".minder.json")`, i.e. the user's own state
+  // directory, and creates it there on first save.
+  //
+  // `.cache/` is deliberately NOT excluded here, and the reason is a worked
+  // example of the substring caveat above. It is the same class of developer
+  // state as the entries above — `claudeStatsCache.ts` writes
+  // `.cache/claude-stats.json` keyed by ABSOLUTE transcript paths with
+  // per-file token/tool/model/error counts — so excluding it looks obviously
+  // right. But `.cache` is an ordinary directory name, and these globs cannot
+  // be anchored: adding `./.cache/**` was measured to drop the traced
+  // node_modules count from 372 to 368 on /api/health, because it also
+  // matched `@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/` —
+  // the downloaded embedding model that backs semanticSearch, model weights
+  // and all. Every other entry in this list names something no package
+  // ships; this one does not, so it is enforced at the payload boundary
+  // instead, where `FORBIDDEN_ROOT_RELATIVE` can anchor it to the payload
+  // root. See scripts/payload-hygiene-rules.mjs.
+  //
+  // The pattern is the `.env` PREFIX, not the single file that happened to
+  // be on disk when this was measured. `.gitignore` ignores both `.env` and
+  // `.env*.local`, and the downstream payload-hygiene gate already fails on
+  // any basename starting with `.env` (`scripts/payload-hygiene-rules.mjs`
+  // `isForbiddenName`) — so `.env`, `.env.development.local` and
+  // `.env.production.local` are every bit as secret-bearing as `.env.local`,
+  // and a tracer-side boundary that covers only one of them still leans on
+  // the prune this change exists to stop leaning on. Matching the hygiene
+  // rule's set keeps the two ends of the pipeline agreed.
+  //
+  // `agentlytics-repo/` is a git-ignored reference checkout that happens to
+  // sit inside the tracing root; 83 of its files (including a PNG and a
+  // package-lock.json) were being traced into every poisoned route. Nothing
+  // in the app imports it. It is listed rather than solved generically
+  // because the tracer sweeps *everything* under the root that is not
+  // excluded, so any ignored sibling directory has to be named.
+  //
+  // `.worktrees/` is the same class and is listed for the same reason,
+  // pre-emptively: it is this repo's own supported git-worktree location
+  // (`.gitignore:73-74`), so a checkout that actually has a worktree there
+  // hands the tracer a second full copy of the source tree. On this machine
+  // its three entries are empty, so it contributes nothing today — which is
+  // exactly why it needs naming now rather than after a release build is cut
+  // from a checkout where it isn't. `.claude/worktrees/` is already covered
+  // by the `./.claude/**` entry above; this is the non-agent path.
   outputFileTracingExcludes: {
     "*": [
       "./dist/minder-server/**",
@@ -122,6 +198,17 @@ const nextConfig: NextConfig = {
       "./src-tauri/target/**",
       "./.git/**",
       "./.claude/**",
+      "./.env*",
+      "./.mcp.json",
+      "./.minder.json",
+      "./agentlytics-repo/**",
+      "./.design-fetch/**",
+      "./.codegraph/**",
+      "./.playwright-mcp/**",
+      "./.agents/**",
+      "./.claudelint-cache/**",
+      "./*.pem",
+      "./.worktrees/**",
       "./tests/**",
       "./docs/**",
       "./site/**",

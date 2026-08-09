@@ -14,11 +14,35 @@ export const FORBIDDEN_EXACT = new Set([
   ".claude",
   ".mcp.json",
   "agentlytics-repo",
+  // This repo's own supported git-worktree location (`.gitignore:73-74`). A
+  // checkout with a live worktree there holds a second full copy of the
+  // source tree inside the tracing root, which the whole-root tracing
+  // fallback (#284) sweeps exactly the way it swept `agentlytics-repo`.
+  // Excluded at the tracer in next.config.ts too; listed here so the two ends
+  // of the pipeline agree on what may not ship, and so the CI backstop fails
+  // loudly rather than a release quietly carrying someone's feature branch.
+  // Nested worktrees also nest deeply, so this doubles as protection against
+  // MAX_PAYLOAD_REL_PATH aborts during packaging.
+  ".worktrees",
+  // The developer's own Minder config (gitignored, present in any checkout
+  // where setup has run): scan roots, per-project statuses, port overrides,
+  // notification prefs, feature flags. Shipping it seeds every install with
+  // someone else's configuration rather than merely leaking it. The runtime
+  // never wants a payload copy — config.ts resolves it under
+  // `resolveStateDir()`, the user's own state directory.
+  ".minder.json",
+  // Generated / downloaded developer state, all gitignored and all sitting in
+  // the tracing root where the #284 fallback sweeps them. `.agents` is the one
+  // that was actually observed in `.next/standalone`; the rest are the same
+  // shape and were added with it rather than one review round at a time.
+  // Names are distinctive enough for a basename rule — verified no package in
+  // this tree uses any of them, unlike `.cache` above.
+  ".design-fetch",
+  ".codegraph",
+  ".playwright-mcp",
+  ".agents",
+  ".claudelint-cache",
 ]);
-
-// Human-readable summary for log lines, kept next to the rules it describes.
-export const FORBIDDEN_SUMMARY =
-  ".git, .env*, .claude, .mcp.json, agentlytics-repo, dist/node";
 
 // Forbidden paths anchored at the PAYLOAD ROOT, unlike FORBIDDEN_EXACT which
 // matches a basename at any depth. Anchoring is the whole point here: `node` is
@@ -33,7 +57,40 @@ export const FORBIDDEN_SUMMARY =
 // next.config.ts) — which means it never fires on a clean CI run and would go
 // unnoticed until someone reorders the build steps or adds `dist/` caching.
 // That is exactly the kind of silent regression this gate exists to catch.
-export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node"]);
+//
+// `.cache` is root-anchored for the same reason `node` is, and here the
+// reason is not hypothetical. `node_modules/<pkg>/.cache/` is an ordinary
+// location, and one package in this tree uses it for something essential:
+// `@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/` holds the
+// downloaded embedding model — weights included — that backs semanticSearch.
+// A basename rule, or an unanchored tracer glob, prunes it. That was measured
+// while adding this: `./.cache/**` in next.config.ts dropped the traced
+// node_modules count on /api/health from 372 to 368, those four files being
+// the model. So the tracer cannot express this rule (its globs are
+// substring matches with no anchoring) and it lives only here, where it can
+// be anchored to the payload root.
+//
+// What it protects: the checkout's OWN `.cache/` is gitignored
+// (`.gitignore:30`) and holds developer-specific state rather than disposable
+// build output — `claudeStatsCache.ts` writes `.cache/claude-stats.json`
+// keyed by ABSOLUTE transcript paths, with per-file token, tool, model and
+// error counts, and `resolveStateDir()` falls back to the checkout root
+// during ordinary development. A local release build from a checkout that has
+// run Minder would otherwise publish it.
+export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node", ".cache"]);
+
+// Human-readable summary for log lines. DERIVED from the sets above rather
+// than written out, because a hand-maintained restatement is exactly the thing
+// that drifts: this list grew by six entries in one review round, and a
+// summary that quietly kept describing the old set would have made the log
+// line a false reassurance. `.env*` is spelled out because it is a prefix rule
+// in `isForbiddenName` rather than a set member.
+export const FORBIDDEN_SUMMARY = [
+  ...FORBIDDEN_EXACT,
+  ".env*",
+  "*.pem",
+  ...FORBIDDEN_ROOT_RELATIVE,
+].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
 export function isForbiddenRootRelative(relPath) {
@@ -59,9 +116,26 @@ export const MAX_PAYLOAD_REL_PATH = 180;
 // standalone output and node_modules contain none), so the broad prefix has no
 // known false positives — if a real payload file ever legitimately starts with
 // `.env`, surface it rather than silently special-casing.
+//
+// `*.pem` is a SUFFIX rule and the only one here justified primarily by blast
+// radius rather than by frequency. `.gitignore:12` ignores it repo-wide
+// because a PEM in this checkout is a private signing or TLS key; the
+// whole-project tracing fallback (#284) would sweep a root-level one into
+// `.next/standalone` and, from there, into a signed installer. Nothing else
+// in this module protects it — the rest are exact basenames.
+//
+// Verified safe to apply broadly in this tree: zero `.pem` files exist under
+// `node_modules`, so no dependency is pruned today. The residual risk is a
+// future package shipping a CA bundle as `.pem`, which the packager would
+// prune silently. That trade is taken deliberately and on the same terms as
+// `.env*` above: a private key reaching an installer is not recoverable,
+// whereas a missing CA bundle fails loudly at the first TLS call. If a real
+// payload file ever legitimately ends in `.pem`, surface it rather than
+// silently special-casing.
 export function isForbiddenName(name) {
   const lower = name.toLowerCase();
   if (FORBIDDEN_EXACT.has(lower)) return true;
   if (lower.startsWith(".env")) return true;
+  if (lower.endsWith(".pem")) return true;
   return false;
 }

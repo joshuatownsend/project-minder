@@ -1,5 +1,41 @@
 # Insights
 
+<!-- insight:029c8c89a4f1 | session:db71f844-559d-4c41-8d38-501e8f9aa0f6 | 2026-08-09T18:52:59.553Z -->
+## ★ Insight
+The tests earned their keep immediately. My first credit formula computed `agentBusy` as *last-minus-first agent event*, which returns **zero** when a gap holds a single assistant turn — the common shape of a long thinking response. Four tests failed, and the fix recovered real supervised minutes that were being silently dropped. That bug would never have surfaced as an error; it would have shipped as an invoice that was quietly ~15% low.
+
+---
+
+<!-- insight:8dd2941aa72a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T18:44:45.499Z -->
+## ★ Insight
+Two things from this round worth keeping.
+
+---
+
+<!-- insight:ff340549d739 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:58:16.873Z -->
+## ★ Insight
+Five rounds produced the same class five times: gitignored developer state inside the tracing root. Every single entry added — `.env*`, `.worktrees`, `.minder.json`, `.cache`, and now five more — was *already declared in `.gitignore`*. The code has been restating instances of a rule that file already expresses, and the review kept finding the instances I hadn't restated yet.
+
+---
+
+<!-- insight:9303939ee0c6 | session:db71f844-559d-4c41-8d38-501e8f9aa0f6 | 2026-08-09T17:36:34.320Z -->
+## ★ Insight
+The classifier is where this feature would have quietly failed. Portfolio-wide, **63% of plain-text "user" turns are not human** — 3,052 `"You are the staff historian…"` prompts are a cron-driven SDK agent, and `"Another Claude session sent a message"` is agent-to-agent chatter. Each would have opened a phantom attended block on an unattended night run.
+
+---
+
+<!-- insight:95a8f3c7e4c6 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:23:25.218Z -->
+## ★ Insight
+Codex's `.cache` suggestion was **right about the problem and wrong about the fix**, and implementing it as written would have stripped the embedding model — weights and all — out of the packaged app. Semantic search would have failed at runtime in a way that passes typecheck, tests, and the build.
+
+---
+
+<!-- insight:57e3529427f1 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:02:15.193Z -->
+## ★ Insight
+Round 3 produced the clearest statement yet of the pattern. Codex's three findings on #414 — `.env.local`→`.env*`, `agentlytics-repo`→`.worktrees`, then `.minder.json` — aren't three bugs. They're one rule I kept failing to state: *gitignored developer state living inside the tracing root*. I enumerated instances; the rule was sitting in `.gitignore` the whole time.
+
+---
+
 <!-- insight:da665e0d5f4a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T16:25:34.559Z -->
 ## ★ Insight
 Four findings across two rounds, and three share one shape: I fixed the **instance** where the correct boundary was the **class**. `.env.local` where the rule is `.env*`. The drive letter where the rule is "the whole Windows path." `agentlytics-repo` where the rule is "any gitignored checkout nested in the tracing root" — which is what `.worktrees` was.
