@@ -325,13 +325,25 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
 function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdown[] {
   // Grouped per (slug, home) so two homes with identical path layouts (same
   // project_slug) keep separable rows — mirrors the file-parse aggregator's
-  // composite projectMap key (#311). Single-home setups have one uniform
-  // home_key, so their row count is unchanged.
+  // composite projectMap key `${projectSlug}\0${homeKey}` (#311,
+  // aggregator.ts:311). Single-home setups have one uniform home_key, so
+  // their row count is unchanged.
+  //
+  // `project_dir_name` is deliberately NOT in the GROUP BY: it is a display
+  // attribute, not part of that identity, and grouping on it splits one
+  // project into several rows whenever the same directory was recorded under
+  // more than one spelling. That is not hypothetical — the encoded dir name
+  // preserves the drive letter's case, so `C--dev-foo` and `c--dev-foo` are
+  // distinct strings for the same folder while `toSlug` lowercases both to
+  // one slug. Two projects on the reference index were split exactly that
+  // way, which surfaced as duplicate React keys on /usage (#236) because
+  // every render site keys on projectSlug. MIN() picks one spelling
+  // deterministically so the row is stable across queries.
   const rows = prepCached(db,
       `SELECT
-         s.project_slug      AS projectSlug,
-         s.project_dir_name  AS projectDirName,
-         s.home_key          AS homeKey,
+         s.project_slug           AS projectSlug,
+         MIN(s.project_dir_name)  AS projectDirName,
+         s.home_key               AS homeKey,
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
@@ -342,7 +354,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY s.project_slug, s.project_dir_name, s.home_key
+       GROUP BY s.project_slug, s.home_key
        ORDER BY cost DESC`
     )
     .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
@@ -878,10 +890,16 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // top tools. We stitch in JS rather than SQL because building the
   // shape from a single query needs window functions / JSON aggregation
   // that would explode the SQL surface area for marginal gain.
+  // Keyed on project_slug alone, matching the file-parse aggregator's
+  // `projectDetailAccum` (aggregator.ts:444) — note this one has no home
+  // component, unlike byProject above. `project_dir_name` stays out of the
+  // GROUP BY for the reason spelled out in queryByProject: it splits a single
+  // project across drive-letter-case spellings of the same directory, and the
+  // downstream slugs array + React keys both assume one row per slug (#236).
   const headers = prepCached(db,
       `SELECT
-         s.project_slug      AS projectSlug,
-         s.project_dir_name  AS projectDirName,
+         s.project_slug           AS projectSlug,
+         MIN(s.project_dir_name)  AS projectDirName,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
          COUNT(*)                     AS turns
        FROM turns t JOIN sessions s USING (session_id)
@@ -890,7 +908,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY s.project_slug, s.project_dir_name
+       GROUP BY s.project_slug
        ORDER BY cost DESC`
     )
     .all(f) as Array<{ projectSlug: string; projectDirName: string; cost: number; turns: number }>;

@@ -158,6 +158,66 @@ describe("extractPrsFromEntries", () => {
     });
   });
 
+  it("finds the tool_result on top-level `content` when `message.content` is an empty array", () => {
+    // The shape #186 was about: Claude writes `message.content: []` and puts
+    // the real blocks on the top-level `content` field. A nullish fallback
+    // (`message.content ?? content ?? []`) stops at the empty array, because
+    // `[] ?? x` is `[]` — so the PR URL is silently dropped.
+    const entries: ConversationEntry[] = [
+      assistantBashCall("toolu_09", "gh pr create --title 'fix: thing'"),
+      {
+        type: "user",
+        timestamp: "2026-05-26T12:00:01Z",
+        message: { role: "user", content: [] },
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_09",
+            content: "https://github.com/foo/bar/pull/99",
+          },
+        ],
+      } as unknown as ConversationEntry,
+    ];
+    const prs = extractPrsFromEntries(entries);
+    expect(prs).toHaveLength(1);
+    expect(prs[0].number).toBe(99);
+    expect(prs[0].repo).toBe("foo/bar");
+  });
+
+  it("still prefers `message.content` when it is non-empty, ignoring top-level content", () => {
+    // Guards the other direction: the fallback must not become an
+    // unconditional preference for top-level content, which would let a
+    // stale/duplicated top-level block win over the real one.
+    const entries: ConversationEntry[] = [
+      assistantBashCall("toolu_10", "gh pr create --title 'fix: thing'"),
+      {
+        type: "user",
+        timestamp: "2026-05-26T12:00:01Z",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_10",
+              content: "https://github.com/foo/bar/pull/111",
+            },
+          ],
+        },
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_10",
+            content: "https://github.com/wrong/repo/pull/222",
+          },
+        ],
+      } as unknown as ConversationEntry,
+    ];
+    const prs = extractPrsFromEntries(entries);
+    expect(prs).toHaveLength(1);
+    expect(prs[0].number).toBe(111);
+    expect(prs[0].repo).toBe("foo/bar");
+  });
+
   it("matches by tool_use_id even when results arrive out of order (interleaved tool calls)", () => {
     // Two Bash calls dispatched in parallel; the non-PR call's result
     // arrives between the PR call and its result. Positional matching

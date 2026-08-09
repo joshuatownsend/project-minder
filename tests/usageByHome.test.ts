@@ -241,3 +241,68 @@ describe.skipIf(!driverAvailable)("home_key end-to-end: multi-home ingest → SQ
     mods.conn.closeDb();
   });
 });
+
+describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-name spelling", () => {
+  // The encoded dir name keeps the drive letter's case, so the same folder can
+  // be recorded as both `C--dev-app` and `c--dev-app` while `toSlug`
+  // lowercases both to one slug. Grouping on project_dir_name split those into
+  // two rows sharing a projectSlug, and every /usage render site keys on
+  // projectSlug — hence duplicate React keys.
+  //
+  // Driven through raw inserts rather than the ingest path on purpose: Windows
+  // filesystems are case-insensitive, so the two spellings cannot exist as
+  // sibling directories on the machine this most affects. The query is what
+  // changed, so the query is what this drives.
+  it("folds dir-name case variants of one slug into a single byProject/projectDetails row", async () => {
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const slug = "dev-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    // Same project, same home — recorded under two spellings of one directory.
+    for (const [id, dirName, tokens, cost] of [
+      ["sess-upper", "C--dev-app", 100, 1],
+      ["sess-lower", "c--dev-app", 300, 3],
+    ] as const) {
+      insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, homeKey,
+        "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+      insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
+    }
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+
+    // One row, and it carries the SUM of both spellings — folding must not
+    // drop a variant's spend, which is the failure mode that would make this
+    // look fixed while under-reporting cost.
+    expect(report.byProject).toHaveLength(1);
+    expect(report.byProject[0].projectSlug).toBe(slug);
+    expect(report.byProject[0].tokens).toBe(400);
+    expect(report.byProject[0].cost).toBeCloseTo(4);
+
+    expect(report.projectDetails).toHaveLength(1);
+    expect(report.projectDetails[0].projectSlug).toBe(slug);
+    expect(report.projectDetails[0].cost).toBeCloseTo(4);
+
+    // The invariant the render sites actually depend on.
+    const slugs = report.byProject.map((r) => r.projectSlug);
+    expect(new Set(slugs).size).toBe(slugs.length);
+
+    mods.conn.closeDb();
+  });
+});
