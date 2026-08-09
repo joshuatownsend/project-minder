@@ -24,6 +24,17 @@ export const queryKeys = {
   stats: () => ["stats"] as const,
   usage: (period: string, project?: string, home?: string) =>
     ["usage", period, project ?? null, home ?? null] as const,
+  // Thresholds are part of the key: the same period over the same bytes
+  // yields a different report at a different idle threshold, so they must
+  // not share a cache entry.
+  engagement: (
+    period: string,
+    project: string | undefined,
+    responseMinutes: number,
+    runCapMinutes: number,
+    tailMinutes: number,
+  ) =>
+    ["engagement", period, project ?? null, responseMinutes, runCapMinutes, tailMinutes] as const,
   agents: (source?: string, project?: string, query?: string) =>
     ["agents", source ?? null, project ?? null, query ?? null] as const,
   skills: (source?: string, project?: string, query?: string) =>

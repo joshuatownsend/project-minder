@@ -111,6 +111,7 @@ const GROUPS: NavGroup[] = [
       { id: "stats",           label: "Stats",           href: "/stats",           icon: ico(BarChart3) },
       { id: "usage",           label: "Usage & cost",    href: "/usage",           icon: ico(Wallet) },
       { id: "costs",           label: "Cost report",     href: "/costs",           icon: ico(Coins) },
+      { id: "timecard",        label: "Timecard",        href: "/timecard",        icon: ico(Clock) },
       { id: "health",          label: "Health",          href: "/health",          icon: ico(HeartPulse),  comingSoon: true },
       { id: "hooks",           label: "Hooks",           href: "/hooks",           icon: ico(Webhook) },
       { id: "mcps",            label: "MCP",             href: "/config?type=mcp", matchType: "mcp", icon: ico(Boxes) },

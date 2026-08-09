@@ -32,6 +32,7 @@ import type {
   ManualStepsInfo,
 } from "@/lib/types";
 import type { UsageReport } from "@/lib/usage/types";
+import type { EngagementReport } from "@/lib/engagement/types";
 import type { Provenance, SkillEntry } from "@/lib/indexer/types";
 // Type-only import (erased at runtime, so no client/server boundary or import
 // cycle): the config catalog payload shape is defined alongside the useConfig hook.
@@ -183,6 +184,41 @@ export function usageQuery(period: string, project?: string, home?: string) {
       if (home) params.set("home", home);
       const res = await fetch(`/api/usage?${params}`, { signal });
       if (!res.ok) throw new Error(`Failed to load usage: ${res.status}`);
+      return res.json();
+    },
+  });
+}
+
+/**
+ * Human-engagement (timecard) report. Thresholds travel in the key and the
+ * query string so tuning a slider refetches rather than reusing a stale
+ * number, and `tz` is sent explicitly so day buckets follow the *browser's*
+ * calendar rather than the server's.
+ */
+export function engagementQuery(
+  period: string,
+  project: string | undefined,
+  responseMinutes: number,
+  runCapMinutes: number,
+  tailMinutes: number,
+) {
+  return queryOptions({
+    queryKey: queryKeys.engagement(period, project, responseMinutes, runCapMinutes, tailMinutes),
+    queryFn: async ({ signal }): Promise<EngagementReport> => {
+      const params = new URLSearchParams({
+        period,
+        responseMinutes: String(responseMinutes),
+        runCapMinutes: String(runCapMinutes),
+        tailMinutes: String(tailMinutes),
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      });
+      if (project) params.set("project", project);
+      const res = await fetch(`/api/engagement?${params}`, { signal });
+      if (res.status === 503) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "The engagement report requires the SQLite index.");
+      }
+      if (!res.ok) throw new Error(`Failed to load engagement report: ${res.status}`);
       return res.json();
     },
   });

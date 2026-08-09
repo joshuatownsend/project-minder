@@ -40,6 +40,7 @@ export const FEATURE_FLAG_KEYS: readonly FeatureFlagKey[] = [
   "workflowLauncher",
   "workflowCatalog",
   "notificationRules",
+  "engagementReport",
 ] as const;
 
 /** Human-readable metadata for the Settings UI. Empty groups are fine —
@@ -398,6 +399,16 @@ export const FEATURE_FLAG_META: readonly FeatureFlagMeta[] = [
       "Matches every live hook event against your own {field, operator, pattern} rules and notifies on the ones that fire — .env access, failed tool calls, destructive shell commands, permission bypass. Defaults ON, but nothing fires until you add a rule in the Notifications section.",
     group: "active",
     appliesAt: "ingest",
+    wired: true,
+    defaultOn: true,
+  },
+  {
+    key: "engagementReport",
+    label: "Engagement / timecard report",
+    description:
+      "Reconstructs how much of each session you actually attended — prompts you sent and answered in real time — versus time the agent ran unwatched, and reports it as billable hours per day and per project. Requires the SQLite index; automated (SDK) sessions are excluded.",
+    group: "passive",
+    appliesAt: "ui",
     wired: true,
     defaultOn: true,
   },

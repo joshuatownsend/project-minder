@@ -1,0 +1,99 @@
+# Timecard — human engagement
+
+**Route:** `/timecard` · per-project tab: **Timecard**
+
+Answers one question: *of the wall-clock time your Claude Code transcripts
+span, how much did you actually spend attending to them?* That is the number
+that belongs on a billable timecard. Total session span is not — an agent that
+ran unattended for two hours leaves the same footprint as two hours of
+supervised pair-work.
+
+## What counts as attended
+
+Every turn is sorted onto one timeline per project and split into two kinds:
+
+- **Human** — a prompt you typed, a `/slash` command, or a `!bash` input.
+- **Agent** — assistant turns, tool results, and machine-injected `user` turns
+  (hook output, task notifications, post-compaction continuations).
+
+Between each pair of your prompts the gap is split at the agent's last event:
+
+```
+agentBusy = lastAgentEvent − yourPreviousPrompt
+quiet     = yourNextPrompt − lastAgentEvent
+
+attended  = quiet ≤ idleThreshold
+credit    = min(agentBusy, runCap) + quiet
+```
+
+The test is **`quiet`**, not the gap between your messages. Supervising a
+40-minute agent run produces a 40-minute gap with you watching the whole time;
+a 2-minute run you walked away from produces a 3-hour gap. Raw gap can't tell
+those apart — how fast you reacted once the agent actually stopped can.
+
+When `quiet` exceeds the threshold the block closes and the agent work inside
+that gap earns **nothing** but the tail credit. Fire off a prompt at 17:00, let
+a 25-minute run finish unwatched, come back at 09:00: that books the tail
+credit, not 25 minutes.
+
+## The three thresholds
+
+All three are sliders on the page and recompute live.
+
+| Threshold | Default | Where the default comes from |
+|---|---|---|
+| **Idle threshold** | 15 min | The response-latency distribution decays smoothly but its per-minute density falls off a cliff between 10–15 min (1.08 %/min) and 15–20 min (0.32 %/min) — a 3.4× drop. Below it you're replying; above it the curve flattens into a "walked away" tail that no longer depends on elapsed time. |
+| **Agent-run cap** | 30 min | p95 of observed agent-busy spans between prompts (p50 2.7, p75 8.4, p90 18.1, p95 29.8). A prompt sent 10 seconds after a 4-hour run proves you came back, not that you sat through it. |
+| **Tail credit** | 3 min | Reading and verifying after your last prompt leaves no transcript event. The smallest knob: ±1 min moves a five-week total by ~2 h. |
+
+Raising the idle threshold from 5 to 30 minutes roughly doubles the reported
+hours, so the number is only as defensible as the threshold behind it. The
+page and the CSV both state the values used.
+
+## Concurrency: why per-project hours are discounted
+
+If you worked two repos in the same minute, a naive per-project sum bills that
+minute twice. Measured across this corpus, **30 % of attended time overlaps
+another project**.
+
+The report shows both numbers:
+
+- **Raw** — attended time for that project alone.
+- **Billable** — after de-overlapping. When several projects are active in the
+  same instant, that instant is split evenly between them.
+
+Per-project billable hours always sum exactly to the day's total, so a daily
+row and its breakdown reconcile.
+
+## Automated sessions are excluded
+
+Sessions whose `entrypoint` starts with `sdk-` (SDK-driven, headless, cron)
+are dropped entirely — no human was in the loop. This matters more than any
+text heuristic: a single cron-driven project in this corpus contributed 3,479
+SDK sessions whose scripted opening prompts read exactly like human prose.
+
+Sessions with an **unknown** entrypoint are kept. Absence of evidence isn't
+evidence of automation.
+
+## Export
+
+**Export CSV** produces one row per (local day × project), ready to paste into
+a timecard, followed by a provenance block recording the period, timezone,
+thresholds, and the overlap discount. A billable figure a client can question
+should travel with the definition that produced it.
+
+Day buckets follow **your browser's timezone**, not UTC — an evening's work
+stays on the day you did it.
+
+## Requirements and limits
+
+- **Requires the SQLite index.** With `MINDER_USE_DB=0` the page reports the
+  report is unavailable rather than showing an empty one, which would read as
+  "you did no billable work". Reconstructing attendance needs every turn in
+  the period on one sorted timeline; over raw JSONL that's millions of lines
+  per request.
+- Turns are attributed to the project directory the session ran in, so work
+  done for one client from another repo's directory lands on that repo.
+- Time spent away from the terminal — reading the client's spec, a call, a
+  whiteboard — leaves no transcript and is invisible here. This measures
+  supervised agent work, not your whole engagement.
