@@ -214,17 +214,18 @@ describe("local day math", () => {
 });
 
 describe("allocateConcurrent", () => {
-  const block = (startMin: number, endMin: number) => ({
+  // `allocateConcurrent` consumes credited intervals directly — block spans
+  // overstate any block holding a capped gap, and sessions are already unioned
+  // per project by the time allocation runs.
+  const span = (startMin: number, endMin: number) => ({
     start: T0 + startMin * MIN,
     end: T0 + endMin * MIN,
-    intervals: [{ start: T0 + startMin * MIN, end: T0 + endMin * MIN }],
-    promptCount: 1,
   });
 
   it("splits concurrent time so allocations sum to the union", () => {
     const map = new Map([
-      ["alpha", [block(0, 60)]],
-      ["beta", [block(30, 90)]],
+      ["alpha", [span(0, 60)]],
+      ["beta", [span(30, 90)]],
     ]);
     const res = allocateConcurrent(map, "UTC");
     // union is 0..90 = 1.5h; overlap 30..60 is split evenly
@@ -237,7 +238,7 @@ describe("allocateConcurrent", () => {
 
   it("keeps the sum-to-union invariant with three-way concurrency", () => {
     const map = new Map([
-      ["a", [block(0, 60)]], ["b", [block(0, 60)]], ["c", [block(0, 60)]],
+      ["a", [span(0, 60)]], ["b", [span(0, 60)]], ["c", [span(0, 60)]],
     ]);
     const res = allocateConcurrent(map, "UTC");
     expect(res.unionHours).toBeCloseTo(1, 6);
@@ -257,7 +258,7 @@ describe("allocateConcurrent", () => {
   });
 
   it("honours an alternative concurrency policy", () => {
-    const map = new Map([["alpha", [block(0, 60)]], ["beta", [block(0, 60)]]]);
+    const map = new Map([["alpha", [span(0, 60)]], ["beta", [span(0, 60)]]]);
     const rank = new Map([["alpha", 10], ["beta", 1]]);
     const res = allocateConcurrent(map, "UTC", primaryWinsPolicy(rank));
     expect(res.byProject.get("alpha")).toBeCloseTo(1, 6);
@@ -335,9 +336,11 @@ describe("buildEngagementReport", () => {
   const row = (
     project: string, minute: number, role: "user" | "assistant",
     text: string | null, toolResult: string | null = null,
+    sessionId = "s1",
   ): EngagementTurnRow => ({
     projectDirName: project,
     projectSlug: project.replace(/^C--dev-/, "dev-"),
+    sessionId,
     ts: new Date(T0 + minute * MIN).toISOString(),
     role,
     textPreview: text,
@@ -393,6 +396,105 @@ describe("buildEngagementReport", () => {
     const report = buildEngagementReport(rows, { period: "30d", timeZone: "UTC", config: cfg() });
     expect(report.totalHours).toBe(0);
     expect(report.byProject).toHaveLength(0);
+  });
+
+  it("does not credit one session's prompt as a reply to another's output", () => {
+    // PR #418 review (codex P1). Session A prompts at 0 and its agent works
+    // until 120. Session B opens at 121 — a *new* conversation, not a reply.
+    // Merged into one project stream the walk saw "agent quiet 1 min, then a
+    // human" and credited the whole capped run as supervised.
+    const rows: EngagementTurnRow[] = [
+      row("C--dev-x", 0, "user", "kick off A", null, "sessionA"),
+      row("C--dev-x", 120, "assistant", "A still working", null, "sessionA"),
+      row("C--dev-x", 121, "user", "start B", null, "sessionB"),
+    ];
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg({ runCapMs: 30 * MIN }),
+    });
+    // Two lone prompts in two sessions, no attended gap anywhere, zero tail.
+    expect(report.totalHours).toBe(0);
+    expect(report.byProject[0]?.promptCount ?? 0).toBe(0);
+  });
+
+  it("unions concurrent sessions rather than summing them", () => {
+    // Same project, two sessions attended over the same wall-clock minutes.
+    // A sum would bill those minutes twice; the union bills them once.
+    const rows: EngagementTurnRow[] = [
+      row("C--dev-x", 0, "user", "a1", null, "sessionA"),
+      row("C--dev-x", 9, "assistant", "ok", null, "sessionA"),
+      row("C--dev-x", 10, "user", "a2", null, "sessionA"),
+      row("C--dev-x", 0, "user", "b1", null, "sessionB"),
+      row("C--dev-x", 9, "assistant", "ok", null, "sessionB"),
+      row("C--dev-x", 10, "user", "b2", null, "sessionB"),
+    ];
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg(),
+    });
+    // 10 minutes of wall clock, attended twice over — still 10 minutes.
+    expect(report.totalHours).toBeCloseTo(10 / 60, 2);
+    expect(report.byProject[0].promptCount).toBe(4);
+  });
+
+  it("never credits time after the report's evaluation instant", () => {
+    // PR #418 review (codex P2): tail credit hangs off the last prompt, so a
+    // prompt just before `now` would otherwise mint future minutes — and on a
+    // Today report, a row dated tomorrow.
+    const lastPromptMin = 10;
+    const rows: EngagementTurnRow[] = [
+      row("C--dev-x", 0, "user", "go"),
+      row("C--dev-x", 9, "assistant", "done"),
+      row("C--dev-x", lastPromptMin, "user", "thanks"),
+    ];
+    const nowMs = T0 + lastPromptMin * MIN; // report evaluated at the prompt
+    const report = buildEngagementReport(rows, {
+      period: "today", timeZone: "UTC", config: cfg({ tailCreditMs: 30 * MIN }),
+      clipToMs: nowMs,
+    });
+    // The 30-minute tail is entirely in the future and must be discarded.
+    expect(report.totalHours).toBeCloseTo(10 / 60, 2);
+    expect(report.byDay).toHaveLength(1);
+  });
+
+  it("counts only prompts inside the window after boundary clipping", () => {
+    // A block straddling the lower bound kept its whole prompt count, so an
+    // over-fetched lead-in inflated the audit trail.
+    const rows: EngagementTurnRow[] = [
+      row("C--dev-x", 0, "user", "before the window"),
+      row("C--dev-x", 9, "assistant", "working"),
+      row("C--dev-x", 10, "user", "inside the window"),
+    ];
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg(),
+      clipFromMs: T0 + 5 * MIN,
+    });
+    expect(report.byProject[0].promptCount).toBe(1);
+    expect(report.totalHours).toBeCloseTo(5 / 60, 2);
+  });
+
+  it("keeps every margin of the day/project matrix reconciled", () => {
+    // PR #418 review (codex P2): apportioning days and projects as separate
+    // 1-D problems diverges once daily rounding accumulates past one cent.
+    // Many small concurrent slices across many days is the shape that breaks.
+    const rows: EngagementTurnRow[] = [];
+    for (let day = 0; day < 12; day++) {
+      const base = day * 24 * 60;
+      for (const p of ["C--dev-a", "C--dev-b", "C--dev-c"]) {
+        rows.push(row(p, base, "user", "go", null, `${p}-${day}`));
+        rows.push(row(p, base + 2, "assistant", "ok", null, `${p}-${day}`));
+        rows.push(row(p, base + 3, "user", "more", null, `${p}-${day}`));
+      }
+    }
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg({ tailCreditMs: 0 }),
+    });
+    const projectSum = report.byProject.reduce((s, p) => s + p.allocatedHours, 0);
+    const daySum = report.byDay.reduce((s, d) => s + d.totalHours, 0);
+    expect(projectSum).toBeCloseTo(report.totalHours, 10);
+    expect(daySum).toBeCloseTo(report.totalHours, 10);
+    for (const d of report.byDay) {
+      const rowSum = d.byProject.reduce((s, p) => s + p.hours, 0);
+      expect(rowSum).toBeCloseTo(d.totalHours, 10);
+    }
   });
 
   it("drops rows with unparseable timestamps rather than poisoning the walk", () => {

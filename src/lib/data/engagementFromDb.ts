@@ -77,7 +77,11 @@ export function loadEngagementReportFromSql(
   options: EngagementQueryOptions,
 ): EngagementReport {
   const { period, timeZone, config, project, home, policy } = options;
-  const clipFromMs = periodStartMs(period, timeZone);
+  // Captured once so the lower bound, the upper bound and every derived label
+  // describe the same instant — sampling `Date.now()` twice inside one report
+  // is how a row lands a millisecond outside its own window.
+  const nowMs = Date.now();
+  const clipFromMs = periodStartMs(period, timeZone, nowMs);
   const periodStart =
     clipFromMs === null ? null : new Date(clipFromMs - BOUNDARY_LOOKBACK_MS).toISOString();
 
@@ -91,6 +95,7 @@ export function loadEngagementReportFromSql(
        s.project_dir_name     AS projectDirName,
        s.project_slug         AS projectSlug,
        s.home_key             AS homeKey,
+       t.session_id           AS sessionId,
        t.ts                   AS ts,
        t.role                 AS role,
        t.text_preview         AS textPreview,
@@ -118,6 +123,7 @@ export function loadEngagementReportFromSql(
     config,
     policy,
     clipFromMs,
+    clipToMs: nowMs,
     excludedAutomatedSessions: excluded?.n ?? 0,
   });
 
@@ -150,15 +156,43 @@ export function loadEngagementReportFromSql(
     })
     .filter((d) => d.totalHours > 0);
 
+  // Every scoped figure is re-derived from the **retained daily rows**, never
+  // from the unscoped period-level shares. Those were apportioned against the
+  // whole portfolio, so a project holding 0.01 h at period level but 0.00 on
+  // every individual day would otherwise report `totalHours: 0.01` above an
+  // empty daily table — and a CSV whose rows contradict its own provenance
+  // block. Summing the rows that survived scoping keeps the artifact
+  // internally consistent by construction.
+  const allocatedByKey = new Map<string, number>();
+  for (const day of byDay) {
+    for (const p of day.byProject) {
+      const k = projectKeyOf(p.projectDirName, p.homeKey);
+      allocatedByKey.set(k, (allocatedByKey.get(k) ?? 0) + p.hours);
+    }
+  }
+
+  const scopedProjects = kept
+    .map((p) => ({
+      ...p,
+      allocatedHours: round2(allocatedByKey.get(projectKeyOf(p.projectDirName, p.homeKey)) ?? 0),
+      activeDays: byDay.filter((d) =>
+        d.byProject.some(
+          (r) => projectKeyOf(r.projectDirName, r.homeKey) === projectKeyOf(p.projectDirName, p.homeKey),
+        ),
+      ).length,
+    }))
+    .filter((p) => p.allocatedHours > 0 || p.rawHours > 0);
+
+  const totalHours = round2(byDay.reduce((s, d) => s + d.totalHours, 0));
+  const rawHours = round2(scopedProjects.reduce((s, p) => s + p.rawHours, 0));
+
   return {
     ...report,
-    byProject: kept,
+    byProject: scopedProjects,
     byDay,
-    totalHours: round2(kept.reduce((s, p) => s + p.allocatedHours, 0)),
-    rawHours: round2(kept.reduce((s, p) => s + p.rawHours, 0)),
-    overlapHours: round2(
-      Math.max(0, kept.reduce((s, p) => s + p.rawHours - p.allocatedHours, 0)),
-    ),
+    totalHours,
+    rawHours,
+    overlapHours: round2(Math.max(0, rawHours - totalHours)),
   };
 }
 

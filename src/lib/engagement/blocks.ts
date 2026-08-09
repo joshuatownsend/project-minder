@@ -99,7 +99,7 @@ export function buildAttendedBlocks(
   const blocks: AttendedBlock[] = [];
   let start = ev[humanIdx[0]].ts;
   let lastPromptTs = start;
-  let prompts = isPresenceOnly?.(humanIdx[0]) ? 0 : 1;
+  let promptTimes: number[] = isPresenceOnly?.(humanIdx[0]) ? [] : [start];
   let intervals: Interval[] = [];
 
   const close = () => {
@@ -112,7 +112,8 @@ export function buildAttendedBlocks(
       start,
       end: lastPromptTs + tailCreditMs,
       intervals: mergeIntervals(withTail),
-      promptCount: prompts,
+      promptTimes,
+      promptCount: promptTimes.length,
     });
   };
 
@@ -139,13 +140,13 @@ export function buildAttendedBlocks(
       // that changes any real result.
       intervals.push({ start: Math.max(prevHumanTs, ts - credit), end: ts });
       lastPromptTs = ts;
-      if (!isPresenceOnly?.(i)) prompts++;
+      if (!isPresenceOnly?.(i)) promptTimes.push(ts);
     } else {
       close();
       start = ts;
       lastPromptTs = ts;
       intervals = [];
-      prompts = isPresenceOnly?.(i) ? 0 : 1;
+      promptTimes = isPresenceOnly?.(i) ? [] : [ts];
     }
   }
   close();

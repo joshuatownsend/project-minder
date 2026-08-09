@@ -54,7 +54,7 @@ function csvCell(value: string | number): string {
  * import tools — and this file exists to be imported into someone else's
  * timekeeping system, so the padding is worth more than the tidiness.
  */
-const CSV_COLUMNS = 3;
+const CSV_COLUMNS = 4;
 
 function csvRow(cells: (string | number)[]): string {
   const padded = [...cells];
@@ -64,10 +64,20 @@ function csvRow(cells: (string | number)[]): string {
 
 function toCsv(report: EngagementReport): string {
   const lines: string[] = [];
-  lines.push(csvRow(["date", "project", "hours"]));
+  // `home` is a column rather than an afterthought: two Claude homes can hold
+  // the same encoded project path, and the report deliberately keeps them as
+  // separate billing identities. Serializing only the directory would produce
+  // duplicate, indistinguishable rows in the one artifact that gets invoiced.
+  // Empty for the ordinary single-home case.
+  lines.push(csvRow(["date", "project", "home", "hours"]));
   for (const day of report.byDay) {
     for (const entry of day.byProject) {
-      lines.push(csvRow([day.date, entry.projectDirName, entry.hours.toFixed(2)]));
+      lines.push(csvRow([
+        day.date,
+        entry.projectDirName,
+        entry.homeKey ?? "",
+        entry.hours.toFixed(2),
+      ]));
     }
   }
   lines.push(csvRow([""]));

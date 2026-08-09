@@ -1,4 +1,4 @@
-import type { AttendedBlock, Interval } from "./types";
+import type { Interval } from "./types";
 import { mergeIntervals, intervalHours } from "./intervals";
 
 export type { Interval };
@@ -145,16 +145,16 @@ export interface AllocationResult {
  * property — on this corpus it overstates by 30 %.
  */
 export function allocateConcurrent(
-  blocksByProject: Map<string, AttendedBlock[]>,
+  intervalsByProject: Map<string, Interval[]>,
   timeZone: string,
   policy: ConcurrencyPolicy = equalSplitPolicy,
 ): AllocationResult {
+  // Takes credited intervals, not blocks: block `[start, end]` spans overstate
+  // any block containing a capped gap, and by this point the caller has
+  // already unioned each project's sessions.
   const merged = new Map<string, Interval[]>();
-  for (const [key, blocks] of blocksByProject) {
-    // Each block's own credited intervals, not its [start, end] span — those
-    // differ whenever a gap was capped, and using the span here would allocate
-    // instants the block never actually earned.
-    const iv = mergeIntervals(blocks.flatMap((b) => b.intervals));
+  for (const [key, intervals] of intervalsByProject) {
+    const iv = mergeIntervals(intervals);
     if (iv.length) merged.set(key, iv);
   }
 

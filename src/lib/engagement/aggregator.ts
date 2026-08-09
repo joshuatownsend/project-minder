@@ -1,11 +1,11 @@
 import { isHumanPrompt, isHumanInterrupt } from "./classifier";
-import { buildAttendedBlocks, blockHours } from "./blocks";
+import { buildAttendedBlocks } from "./blocks";
+import { mergeIntervals, intervalHours, clipRange } from "./intervals";
 import { allocateConcurrent, localDayKey, type ConcurrencyPolicy } from "./allocate";
 import { DEFAULT_ENGAGEMENT_CONFIG } from "./config";
 import { apportionRounded, round2 } from "./apportion";
-import { clipFrom } from "./intervals";
 import type {
-  AttendedBlock, EngagementConfig, EngagementDay, EngagementEvent,
+  EngagementConfig, EngagementDay, EngagementEvent, Interval,
   EngagementReport, ProjectEngagement,
 } from "./types";
 
@@ -15,6 +15,11 @@ export interface EngagementTurnRow {
   projectSlug: string | null;
   /** `sessions.home_key` — the Claude-home discriminator, when stamped. */
   homeKey?: string | null;
+  /**
+   * Owning session. Blocks are built **within** a session, never across —
+   * see `buildEngagementReport`.
+   */
+  sessionId: string;
   /** ISO-8601 timestamp. */
   ts: string;
   role: "user" | "assistant";
@@ -58,6 +63,13 @@ export interface BuildEngagementOptions {
    * `today` report the boundary is one gap out of very few.
    */
   clipFromMs?: number | null;
+  /**
+   * Upper bound for credited time, normally the instant the report is
+   * evaluated. Tail credit hangs off the last prompt, so without this a prompt
+   * three minutes before midnight mints credited time in the future — and, on
+   * a `today` report, a row for tomorrow.
+   */
+  clipToMs?: number | null;
 }
 
 /**
@@ -79,8 +91,23 @@ export function buildEngagementReport(
    *  directory name and the slug — keying on the directory alone silently
    *  merges them and bills one home's hours to the other (#311). */
   const identities = new Map<string, { dirName: string; slug: string | null; homeKey?: string }>();
-  const eventsByProject = new Map<string, EngagementEvent[]>();
+  /**
+   * Events keyed by **session**, not project.
+   *
+   * Attendance is a claim about one conversation. Merging every session for a
+   * project into one stream lets an unrelated session's assistant output stand
+   * in as the thing a prompt was "replying" to: session A goes quiet, session
+   * B's opening prompt lands a minute later, and the merged walk credits the
+   * whole gap as supervised even though neither session shows a person
+   * waiting. Concurrent sessions on one project are the normal case here (a
+   * main checkout plus a worktree), so this was not hypothetical. Blocks are
+   * built per session and their intervals unioned per project afterwards —
+   * union, not sum, so two genuinely concurrent sessions cannot bill the same
+   * minute twice.
+   */
+  const eventsBySession = new Map<string, EngagementEvent[]>();
   const presenceFlags = new Map<string, boolean[]>();
+  const projectOfSession = new Map<string, string>();
 
   for (const row of rows) {
     const ts = Date.parse(row.ts);
@@ -102,60 +129,72 @@ export function buildEngagementReport(
       existing.slug = row.projectSlug;
     }
 
-    let list = eventsByProject.get(key);
-    let flags = presenceFlags.get(key);
+    const sessionKey = key + KEY_SEP + row.sessionId;
+    projectOfSession.set(sessionKey, key);
+
+    let list = eventsBySession.get(sessionKey);
+    let flags = presenceFlags.get(sessionKey);
     if (!list || !flags) {
       list = []; flags = [];
-      eventsByProject.set(key, list);
-      presenceFlags.set(key, flags);
+      eventsBySession.set(sessionKey, list);
+      presenceFlags.set(sessionKey, flags);
     }
     list.push({ ts, kind: human ? "human" : "agent" });
     flags.push(human && isHumanInterrupt(row.textPreview));
   }
 
-  const blocksByProject = new Map<string, AttendedBlock[]>();
-  const rawHoursByProject = new Map<string, number>();
+  // Credited intervals and prompt counts accumulate per project, but are
+  // *produced* per session.
+  const intervalsByProject = new Map<string, Interval[]>();
   const promptsByProject = new Map<string, number>();
 
-  for (const [key, events] of eventsByProject) {
+  const clipLo = options.clipFromMs ?? Number.NEGATIVE_INFINITY;
+  const clipHi = options.clipToMs ?? Number.POSITIVE_INFINITY;
+
+  for (const [sessionKey, events] of eventsBySession) {
+    const projectKey = projectOfSession.get(sessionKey);
+    if (!projectKey) continue;
+
     // `buildAttendedBlocks` sorts internally, so the presence flags must be
     // carried on the events themselves rather than by index into the caller's
     // array — otherwise a re-sort would silently mismatch the two lists.
-    const flags = presenceFlags.get(key) ?? [];
+    const flags = presenceFlags.get(sessionKey) ?? [];
     const indexed = events.map((e, i) => ({ e, presence: flags[i] ?? false }));
     indexed.sort((a, b) => a.e.ts - b.e.ts);
     const sortedEvents = indexed.map((x) => x.e);
     const built = buildAttendedBlocks(sortedEvents, config, (i) => indexed[i].presence);
 
-    // Clip the over-fetched lead-in back out. Blocks left with no credited
-    // interval are dropped whole — they sit entirely before the period, and
-    // keeping them would inflate the prompt count with prompts from outside
-    // the window the user asked about.
-    const clip = options.clipFromMs;
-    const blocks =
-      clip == null
-        ? built
-        : built
-            .map((b) => ({ ...b, intervals: clipFrom(b.intervals, clip) }))
-            .filter((b) => b.intervals.length > 0);
+    for (const block of built) {
+      // Clip to the requested window on both ends: the lower bound removes the
+      // deliberate over-fetch, the upper stops tail credit from running past
+      // the report's own evaluation instant into the future.
+      const kept = clipRange(block.intervals, clipLo, clipHi);
+      if (!kept.length) continue;
 
-    if (!blocks.length) continue;
-    blocksByProject.set(key, blocks);
-    rawHoursByProject.set(key, blockHours(blocks));
-    promptsByProject.set(key, blocks.reduce((s, b) => s + b.promptCount, 0));
-  }
+      const list = intervalsByProject.get(projectKey);
+      if (list) list.push(...kept);
+      else intervalsByProject.set(projectKey, [...kept]);
 
-  const allocation = allocateConcurrent(blocksByProject, timeZone, options.policy);
-
-  const activeDaysByProject = new Map<string, Set<string>>();
-  for (const [day, projects] of allocation.byDay) {
-    for (const [key, hours] of projects) {
-      if (hours <= 0) continue;
-      let set = activeDaysByProject.get(key);
-      if (!set) { set = new Set(); activeDaysByProject.set(key, set); }
-      set.add(day);
+      // Recount rather than reuse `promptCount`: a block straddling the lower
+      // boundary keeps prompts from before the window unless they are
+      // filtered here, which would overstate the audit trail.
+      const inWindow = block.promptTimes.filter((t) => t >= clipLo && t <= clipHi).length;
+      promptsByProject.set(projectKey, (promptsByProject.get(projectKey) ?? 0) + inWindow);
     }
   }
+
+  // Union per project — two concurrent sessions on one project must not bill
+  // the same minute twice, which a plain sum would do.
+  const mergedByProject = new Map<string, Interval[]>();
+  const rawHoursByProject = new Map<string, number>();
+  for (const [key, intervals] of intervalsByProject) {
+    const merged = mergeIntervals(intervals);
+    if (!merged.length) continue;
+    mergedByProject.set(key, merged);
+    rawHoursByProject.set(key, intervalHours(merged));
+  }
+
+  const allocation = allocateConcurrent(mergedByProject, timeZone, options.policy);
 
   // ── Rounding, apportioned so the displayed numbers reconcile ───────────
   //
@@ -171,46 +210,69 @@ export function buildEngagementReport(
   // than `round2(unionHours)` — the two differ by at most a few hundredths,
   // and being the sum of what is on screen is worth more than being the round
   // of a number nobody sees.
-  const byDay: EngagementDay[] = [...allocation.byDay.entries()]
+  //
+  // (3) then comes for free, because project totals are summed from the very
+  // same rounded daily shares. Apportioning days and projects as two separate
+  // one-dimensional problems against a shared total does NOT converge:
+  // `apportionRounded` can hand out at most one extra hundredth per share, so
+  // a project earning ~0.0556 h on each of 30 days accumulates 1.80 h in the
+  // daily table while its period-level share rounds to 1.67, and the project
+  // table stops adding up to the headline. Summing the reconciled matrix by
+  // column is the only arrangement where every margin agrees.
+  const dayShares = [...allocation.byDay.entries()]
     .map(([date, projects]) => {
       const entries = [...projects.entries()].filter(([, hours]) => hours > 0);
       const dayTotal = round2(entries.reduce((s, [, h]) => s + h, 0));
       const shares = apportionRounded(entries.map(([, h]) => h), dayTotal);
       return {
         date,
-        totalHours: dayTotal,
-        byProject: entries
-          .map(([key], i) => {
-            const id = identities.get(key);
-            return {
-              projectDirName: id?.dirName ?? key,
-              ...(id?.homeKey ? { homeKey: id.homeKey } : {}),
-              hours: shares[i],
-            };
-          })
-          .filter((p) => p.hours > 0)
-          .sort((a, b) => b.hours - a.hours),
+        dayTotal,
+        rows: entries
+          .map(([key], i) => ({ key, hours: shares[i] }))
+          .filter((r) => r.hours > 0),
       };
     })
-    .filter((d) => d.totalHours > 0)
+    .filter((d) => d.dayTotal > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  const byDay: EngagementDay[] = dayShares.map((d) => ({
+    date: d.date,
+    totalHours: d.dayTotal,
+    byProject: d.rows
+      .map(({ key, hours }) => {
+        const id = identities.get(key);
+        return {
+          projectDirName: id?.dirName ?? key,
+          ...(id?.homeKey ? { homeKey: id.homeKey } : {}),
+          hours,
+        };
+      })
+      .sort((a, b) => b.hours - a.hours),
+  }));
 
   const totalHours = round2(byDay.reduce((s, d) => s + d.totalHours, 0));
 
-  const projectKeys = [...blocksByProject.keys()];
-  const allocatedShares = apportionRounded(
-    projectKeys.map((k) => allocation.byProject.get(k) ?? 0),
-    totalHours,
-  );
-  const byProject: ProjectEngagement[] = projectKeys
-    .map((key, i) => {
+  // Column sums of the reconciled matrix, plus each project's distinct days.
+  const allocatedByProject = new Map<string, number>();
+  const activeDaysByProject = new Map<string, Set<string>>();
+  for (const day of dayShares) {
+    for (const { key, hours } of day.rows) {
+      allocatedByProject.set(key, (allocatedByProject.get(key) ?? 0) + hours);
+      let set = activeDaysByProject.get(key);
+      if (!set) { set = new Set(); activeDaysByProject.set(key, set); }
+      set.add(day.date);
+    }
+  }
+
+  const byProject: ProjectEngagement[] = [...allocatedByProject.keys()]
+    .map((key) => {
       const id = identities.get(key);
       return {
         projectDirName: id?.dirName ?? key,
         projectSlug: id?.slug ?? null,
         ...(id?.homeKey ? { homeKey: id.homeKey } : {}),
         rawHours: round2(rawHoursByProject.get(key) ?? 0),
-        allocatedHours: allocatedShares[i],
+        allocatedHours: round2(allocatedByProject.get(key) ?? 0),
         promptCount: promptsByProject.get(key) ?? 0,
         activeDays: activeDaysByProject.get(key)?.size ?? 0,
       };

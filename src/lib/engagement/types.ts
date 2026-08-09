@@ -49,6 +49,14 @@ export interface AttendedBlock {
   end: number;
   /** Disjoint, ascending credited spans. The billable content. */
   intervals: Interval[];
+  /**
+   * Timestamps of the human prompts in this block, excluding presence-only
+   * events. Kept rather than a bare count so the count can be recomputed
+   * after the block is clipped to a period — a block straddling the lower
+   * boundary otherwise reports prompts from before the window the user asked
+   * about.
+   */
+  promptTimes: number[];
   /** Count of human prompts inside the block. Used for the audit trail. */
   promptCount: number;
 }

@@ -10,7 +10,15 @@ supervised pair-work.
 
 ## What counts as attended
 
-Every turn is sorted onto one timeline per project and split into two kinds:
+Attendance is judged **within a single session**, never across two. If one
+session's agent is still working and a different session's opening prompt
+arrives a minute later, that is a new conversation, not a reply — reading them
+as one stream would credit an unwatched run as supervised. Running a main
+checkout and a worktree side by side is the normal case here, so this matters.
+Each session's credited time is then unioned across the project: two sessions
+attended over the same minutes bill those minutes **once**.
+
+Within a session, turns are sorted onto one timeline and split into two kinds:
 
 - **Human** — a prompt you typed, a `/slash` command, or a `!bash` input.
 - **Agent** — assistant turns, tool results, and machine-injected `user` turns
@@ -86,10 +94,16 @@ evidence of automation.
 
 ## Export
 
-**Export CSV** produces one row per (local day × project), ready to paste into
-a timecard, followed by a provenance block recording the period, timezone,
-thresholds, and the overlap discount. A billable figure a client can question
-should travel with the definition that produced it.
+**Export CSV** produces one row per (local day × project × Claude home), ready
+to paste into a timecard, followed by a provenance block recording the period,
+timezone, thresholds, and the overlap discount. A billable figure a client can
+question should travel with the definition that produced it. The `home` column
+is empty in the ordinary single-home case; it exists so two homes holding the
+same project path stay distinguishable in the artifact that gets invoiced.
+
+Credited time never runs past the moment the report was generated — tail
+credit on a prompt sent minutes ago is truncated rather than booking minutes
+that have not happened yet.
 
 Day buckets follow **your browser's timezone**, not UTC — an evening's work
 stays on the day you did it. The **Today** period is measured from midnight in

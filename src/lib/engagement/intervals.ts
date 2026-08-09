@@ -35,10 +35,24 @@ export function intervalHours(intervals: Interval[]): number {
  * vanishes — and then clipped, so the over-fetch never leaks into the total.
  */
 export function clipFrom(intervals: Interval[], from: number): Interval[] {
+  return clipRange(intervals, from, Number.POSITIVE_INFINITY);
+}
+
+/**
+ * Restrict intervals to `[from, to]`, dropping and trimming as needed.
+ *
+ * The upper bound is not symmetry for its own sake. Tail credit hangs off the
+ * last prompt, so a prompt at 23:59 with a three-minute tail would otherwise
+ * credit time in the *future* — and, on a Today report, mint a row for
+ * tomorrow. Clipping at the report's evaluation instant keeps credited time
+ * inside the window that actually happened.
+ */
+export function clipRange(intervals: Interval[], from: number, to: number): Interval[] {
   const out: Interval[] = [];
   for (const iv of intervals) {
-    if (iv.end <= from) continue;
-    out.push(iv.start >= from ? iv : { start: from, end: iv.end });
+    const start = Math.max(iv.start, from);
+    const end = Math.min(iv.end, to);
+    if (end > start) out.push({ start, end });
   }
   return out;
 }
