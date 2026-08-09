@@ -16,6 +16,18 @@ describe("isForbiddenName", () => {
     expect(isForbiddenName("agentlytics-repo")).toBe(true);
   });
 
+  it("catches a nested git-worktree checkout", () => {
+    // `.worktrees/` is this repo's own supported worktree location and is
+    // gitignored, so a checkout with a live worktree there holds a second
+    // full copy of the source tree inside the tracing root — the same shape
+    // as `agentlytics-repo`, which the #284 tracing fallback already swept.
+    // Added before it shipped rather than after (Codex review, PR #414).
+    expect(isForbiddenName(".worktrees")).toBe(true);
+    expect(isForbiddenName(".WORKTREES")).toBe(true);
+    // Not a prefix rule: only the directory itself is forbidden.
+    expect(isForbiddenName(".worktrees-backup")).toBe(false);
+  });
+
   // `.env*` is prefix semantics on purpose — the workflow and CHANGELOG both
   // promise `.env*`, not an enumerated list.
   it("treats .env as a prefix, not an exact name", () => {

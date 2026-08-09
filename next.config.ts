@@ -157,6 +157,15 @@ const nextConfig: NextConfig = {
   // in the app imports it. It is listed rather than solved generically
   // because the tracer sweeps *everything* under the root that is not
   // excluded, so any ignored sibling directory has to be named.
+  //
+  // `.worktrees/` is the same class and is listed for the same reason,
+  // pre-emptively: it is this repo's own supported git-worktree location
+  // (`.gitignore:73-74`), so a checkout that actually has a worktree there
+  // hands the tracer a second full copy of the source tree. On this machine
+  // its three entries are empty, so it contributes nothing today — which is
+  // exactly why it needs naming now rather than after a release build is cut
+  // from a checkout where it isn't. `.claude/worktrees/` is already covered
+  // by the `./.claude/**` entry above; this is the non-agent path.
   outputFileTracingExcludes: {
     "*": [
       "./dist/minder-server/**",
@@ -167,6 +176,7 @@ const nextConfig: NextConfig = {
       "./.env*",
       "./.mcp.json",
       "./agentlytics-repo/**",
+      "./.worktrees/**",
       "./tests/**",
       "./docs/**",
       "./site/**",

@@ -14,11 +14,21 @@ export const FORBIDDEN_EXACT = new Set([
   ".claude",
   ".mcp.json",
   "agentlytics-repo",
+  // This repo's own supported git-worktree location (`.gitignore:73-74`). A
+  // checkout with a live worktree there holds a second full copy of the
+  // source tree inside the tracing root, which the whole-root tracing
+  // fallback (#284) sweeps exactly the way it swept `agentlytics-repo`.
+  // Excluded at the tracer in next.config.ts too; listed here so the two ends
+  // of the pipeline agree on what may not ship, and so the CI backstop fails
+  // loudly rather than a release quietly carrying someone's feature branch.
+  // Nested worktrees also nest deeply, so this doubles as protection against
+  // MAX_PAYLOAD_REL_PATH aborts during packaging.
+  ".worktrees",
 ]);
 
 // Human-readable summary for log lines, kept next to the rules it describes.
 export const FORBIDDEN_SUMMARY =
-  ".git, .env*, .claude, .mcp.json, agentlytics-repo, dist/node";
+  ".git, .env*, .claude, .mcp.json, agentlytics-repo, .worktrees, dist/node";
 
 // Forbidden paths anchored at the PAYLOAD ROOT, unlike FORBIDDEN_EXACT which
 // matches a basename at any depth. Anchoring is the whole point here: `node` is
