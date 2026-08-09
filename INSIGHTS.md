@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:397ba2f1e558 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:50:49.534Z -->
+## ★ Insight
+The P1 is the one worth keeping. I verified that fix against the two real duplicates in the index and both were case variants, so the fold was correct for every row I could observe — the C:/D: case simply doesn't exist on this machine, and no amount of measuring would have surfaced it.
+
+---
+
 <!-- insight:aee4e84582f7 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:32:04.174Z -->
 ## ★ Insight
 This is precisely the failure mode my own measurement couldn't have caught. I verified the fix against the two real duplicates on this machine, and both were case variants — so the fold was correct for every row I could observe. The C:/D: case doesn't exist in this index, so no measurement of it would ever have flagged the over-merge.

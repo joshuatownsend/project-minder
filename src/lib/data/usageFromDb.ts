@@ -94,26 +94,35 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
 }
 
 /**
- * SQL expression folding ONLY the drive letter's case in an encoded project
- * directory name, for use as a grouping key.
+ * SQL expression case-folding an encoded project directory name for use as a
+ * grouping key — but only when it encodes a WINDOWS path.
  *
  * Claude encodes `C:\dev\foo` as `C--dev-foo`, preserving whatever case the
- * path was observed with — so the same folder reaches the index as both
- * `C--dev-foo` and `c--dev-foo` depending on which code path recorded it.
- * Those must group together (#236). What must NOT group together is
- * `C--dev-foo` and `D--dev-foo`: `toSlug` strips the drive prefix, so two
- * different drives yield one slug for two genuinely different projects, and
- * the encoded directory is the only thing that still tells them apart.
+ * path was observed with. Windows filesystems are case-insensitive, so
+ * `C--Dev-App`, `c--dev-app` and `C--dev-app` are all the same folder and
+ * must group together — `toSlug` already lowercases them to one slug, and
+ * leaving them distinct here splits one project's cost across duplicate-slug
+ * rows (#236). Folding the whole name is therefore right, not just the drive
+ * letter: casing differs beyond it in practice.
  *
- * Hence: lowercase the first character, and only when it is the single-letter
- * drive prefix. Everything after it keeps its case, so case-distinct POSIX
- * paths that slugify alike also stay separate. The `[A-Za-z]--` shape is the
- * same one `canonicalizeDirName` tests for (`usage/parser.ts:72`); GLOB is
- * case-sensitive in SQLite, which LIKE is not.
+ * Two things this must NOT do:
+ *
+ *  - Merge different drives. `toSlug` strips the drive prefix, so `C:\dev\foo`
+ *    and `D:\dev\foo` yield one slug for two genuinely different projects and
+ *    the encoded directory is the only remaining discriminator. `LOWER` keeps
+ *    `c--dev-foo` and `d--dev-foo` distinct, so this is preserved.
+ *  - Fold POSIX names. Those encode as `-home-me-dev-foo` (leading dash, no
+ *    `[A-Za-z]--` prefix) and come from case-SENSITIVE filesystems, where
+ *    `/home/me/Dev` and `/home/me/dev` really are two directories. The GLOB
+ *    guard leaves them untouched.
+ *
+ * The `[A-Za-z]--` shape is the same one `canonicalizeDirName` tests for
+ * (`usage/parser.ts:72`). GLOB rather than LIKE because SQLite's LIKE is
+ * case-insensitive for ASCII, which would defeat the guard.
  */
 const DIR_NAME_DRIVE_FOLDED = `CASE
       WHEN s.project_dir_name GLOB '[A-Za-z]--*'
-      THEN LOWER(SUBSTR(s.project_dir_name, 1, 1)) || SUBSTR(s.project_dir_name, 2)
+      THEN LOWER(s.project_dir_name)
       ELSE s.project_dir_name
     END`;
 

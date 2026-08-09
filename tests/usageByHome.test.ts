@@ -275,10 +275,15 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
        VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
     );
 
-    // Same project, same home — recorded under two spellings of one directory.
+    // Same project, same home — recorded under three spellings of one
+    // directory. `C--Dev-App` is the case that matters beyond the drive
+    // letter: Windows is case-insensitive for the WHOLE path, so folding
+    // only the leading character would still split this one off (Codex
+    // review round 2, PR #415).
     for (const [id, dirName, tokens, cost] of [
       ["sess-upper", "C--dev-app", 100, 1],
       ["sess-lower", "c--dev-app", 300, 3],
+      ["sess-mixed", "C--Dev-App", 600, 6],
     ] as const) {
       insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, homeKey,
         "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
@@ -292,12 +297,12 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
     // look fixed while under-reporting cost.
     expect(report.byProject).toHaveLength(1);
     expect(report.byProject[0].projectSlug).toBe(slug);
-    expect(report.byProject[0].tokens).toBe(400);
-    expect(report.byProject[0].cost).toBeCloseTo(4);
+    expect(report.byProject[0].tokens).toBe(1000);
+    expect(report.byProject[0].cost).toBeCloseTo(10);
 
     expect(report.projectDetails).toHaveLength(1);
     expect(report.projectDetails[0].projectSlug).toBe(slug);
-    expect(report.projectDetails[0].cost).toBeCloseTo(4);
+    expect(report.projectDetails[0].cost).toBeCloseTo(10);
 
     // The invariant the render sites actually depend on.
     const slugs = report.byProject.map((r) => r.projectSlug);
@@ -351,6 +356,49 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       new Set(["C--dev-app", "D--dev-app"])
     );
     // Each keeps its own spend rather than being summed into one row.
+    expect(new Set(report.byProject.map((r) => r.tokens))).toEqual(new Set([100, 300]));
+
+    mods.conn.closeDb();
+  });
+
+  it("does NOT case-fold POSIX-encoded directories", async () => {
+    // The guard on the fold. POSIX filesystems are case-SENSITIVE, so
+    // `/home/me/Dev/app` and `/home/me/dev/app` are two real directories that
+    // happen to slugify alike. Only the `[A-Za-z]--` Windows shape is folded;
+    // these encode with a leading dash and must stay separate, or a Linux/WSL
+    // user's two projects merge into one row.
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const slug = "home-me-dev-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    for (const [id, dirName, tokens, cost] of [
+      ["sess-lower", "-home-me-dev-app", 100, 1],
+      ["sess-upper", "-home-me-Dev-app", 300, 3],
+    ] as const) {
+      insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, homeKey,
+        "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+      insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
+    }
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    expect(report.byProject).toHaveLength(2);
     expect(new Set(report.byProject.map((r) => r.tokens))).toEqual(new Set([100, 300]));
 
     mods.conn.closeDb();
