@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:e7e27b0c1fbe | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:27:09.675Z -->
+## ★ Insight
+Two things about the conflict resolution worth recording.
+
+---
+
 <!-- insight:029c8c89a4f1 | session:db71f844-559d-4c41-8d38-501e8f9aa0f6 | 2026-08-09T18:52:59.553Z -->
 ## ★ Insight
 The tests earned their keep immediately. My first credit formula computed `agentBusy` as *last-minus-first agent event*, which returns **zero** when a gap holds a single assistant turn — the common shape of a long thinking response. Four tests failed, and the fix recovered real supervised minutes that were being silently dropped. That bug would never have surfaced as an error; it would have shipped as an invoice that was quietly ~15% low.
