@@ -5,6 +5,9 @@ import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { resolveEngagementConfig } from "@/lib/engagement/config";
 import type { EngagementReport } from "@/lib/engagement/types";
+import { demoMode } from "@/lib/demo/demoMode";
+import { readConfig } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -43,6 +46,33 @@ function minutesParam(value: string | null): number | undefined {
 }
 
 export async function GET(request: NextRequest) {
+  // Demo mode serves synthetic fixtures for every read surface, and this one
+  // has no fixtures — the report is reconstructed from real transcript
+  // timings, which is precisely what a screenshot or demo must not show. It
+  // declines rather than falling through to real billable hours.
+  if (await demoMode()) {
+    return NextResponse.json(
+      {
+        error: "engagement-unavailable",
+        message: "The engagement report isn't available in demo mode.",
+        reason: "demo-mode",
+      },
+      { status: 503 }
+    );
+  }
+
+  const config_ = await readConfig();
+  if (!getFlag(config_.featureFlags, "engagementReport")) {
+    return NextResponse.json(
+      {
+        error: "engagement-unavailable",
+        message: "The engagement report is turned off in Settings.",
+        reason: "flag-off",
+      },
+      { status: 503 }
+    );
+  }
+
   const params = request.nextUrl.searchParams;
   const period = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;

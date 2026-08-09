@@ -34,11 +34,23 @@ const MIN = 60_000;
  * result, which produces no transcript event. It is the smallest of the three
  * knobs: ±1 min moves the sales-dashboards total by ~2 h across 5 weeks.
  *
- * Sensitivity, same corpus, so the cost of a different choice is visible:
+ * Sensitivity, same corpus and **produced by the shipped code** (raw hours /
+ * hours after the concurrency discount), so the cost of a different choice is
+ * visible and the docblock is reproducible from the module it documents:
  *
- *     responseThreshold   3 min -> 51.7 h      15 min -> 80.1 h
- *                         5 min -> 58.8 h      20 min -> 83.9 h
- *                        10 min -> 71.6 h      60 min -> 112.9 h
+ *     responseThreshold    5 min -> 54.68 raw / 45.56 allocated
+ *                         10 min -> 67.80 raw / 53.45 allocated
+ *                         12 min -> 71.98 raw / 55.93 allocated
+ *                         15 min -> 77.00 raw / 59.69 allocated   <- default
+ *                         20 min -> 80.75 raw / 61.20 allocated
+ *                         30 min -> 87.88 raw / 65.01 allocated
+ *
+ * An earlier revision of this table quoted 51.7–112.9 h. Those figures came
+ * from a draft that measured `agentBusy` between the first and last agent
+ * event in a gap — which returns zero whenever the gap holds a single
+ * assistant turn, dropping real supervised minutes. The numbers above replace
+ * them; the 15-minute knee is derived from raw latency data and is
+ * independent of the credit formula, so that rationale is unchanged.
  */
 export const DEFAULT_ENGAGEMENT_CONFIG: EngagementConfig = {
   responseThresholdMs: 15 * MIN,

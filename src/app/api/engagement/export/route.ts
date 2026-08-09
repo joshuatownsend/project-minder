@@ -3,6 +3,9 @@ import { validatePeriod } from "@/lib/usage/constants";
 import { getEngagement, DbUnavailableError } from "@/lib/data";
 import { resolveEngagementConfig } from "@/lib/engagement/config";
 import type { EngagementReport } from "@/lib/engagement/types";
+import { demoMode } from "@/lib/demo/demoMode";
+import { readConfig } from "@/lib/config";
+import { getFlag } from "@/lib/featureFlags";
 
 /**
  * CSV / JSON export — the artifact that actually gets filed.
@@ -68,6 +71,23 @@ function toCsv(report: EngagementReport): string {
 }
 
 export async function GET(request: NextRequest) {
+  // Same two gates as the read route. A CSV is the most durable artifact this
+  // feature produces — a demo-mode export would put real billable hours in a
+  // file that outlives the session it was taken from.
+  if (await demoMode()) {
+    return NextResponse.json(
+      { error: "engagement-unavailable", message: "The engagement report isn't available in demo mode." },
+      { status: 503 }
+    );
+  }
+  const appConfig = await readConfig();
+  if (!getFlag(appConfig.featureFlags, "engagementReport")) {
+    return NextResponse.json(
+      { error: "engagement-unavailable", message: "The engagement report is turned off in Settings." },
+      { status: 503 }
+    );
+  }
+
   const params = request.nextUrl.searchParams;
   const period = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;

@@ -38,8 +38,19 @@ export function EngagementDashboard({ project }: { project?: string } = {}) {
     return m;
   }, [scan]);
 
-  const nameFor = (dirName: string, slug: string | null) =>
-    (slug ? nameByUsageSlug.get(slug)?.name : undefined) ?? decodeDirName(dirName);
+  // The daily rows carry only a dir name, so the slug has to come from the
+  // per-project rows. Without this the breakdown column showed decoded dir
+  // names while the table above it showed real project names.
+  const slugByDirName = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const p of data?.byProject ?? []) m.set(p.projectDirName, p.projectSlug);
+    return m;
+  }, [data]);
+
+  const nameFor = (dirName: string, slug?: string | null) => {
+    const resolved = slug ?? slugByDirName.get(dirName) ?? null;
+    return (resolved ? nameByUsageSlug.get(resolved)?.name : undefined) ?? decodeDirName(dirName);
+  };
 
   const exportHref = useMemo(() => {
     const params = new URLSearchParams({
@@ -228,7 +239,7 @@ export function EngagementDashboard({ project }: { project?: string } = {}) {
                     <Td align="right" emphasis>{d.totalHours.toFixed(2)}</Td>
                     <Td align="left" muted>
                       {d.byProject
-                        .map((p) => `${nameFor(p.projectDirName, null)} ${p.hours.toFixed(2)}`)
+                        .map((p) => `${nameFor(p.projectDirName)} ${p.hours.toFixed(2)}`)
                         .join("  ·  ")}
                     </Td>
                   </tr>
