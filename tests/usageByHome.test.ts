@@ -403,4 +403,51 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
 
     mods.conn.closeDb();
   });
+
+  it("folds NON-ASCII Windows directory casing too", async () => {
+    // SQLite's LOWER() folds ASCII only, so doing this in SQL would leave
+    // `C--École-app` and `c--école-app` as separate keys while toSlug — JS
+    // `.toLowerCase()` before it strips non-ASCII — maps both to one slug.
+    // That is the same split #236 is about, surviving on exactly the paths
+    // least likely to be noticed. The fold is in JS for this reason.
+    // (Codex review round 3, PR #415.)
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    // What toSlug actually produces for both spellings: non-ASCII is
+    // lowercased first, then replaced, so both collapse to the same slug.
+    const slug = "-cole-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    for (const [id, dirName, tokens, cost] of [
+      ["sess-upper", "C--École-app", 100, 1],
+      ["sess-lower", "c--école-app", 300, 3],
+    ] as const) {
+      insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, homeKey,
+        "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+      insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
+    }
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    expect(report.byProject).toHaveLength(1);
+    expect(report.byProject[0].tokens).toBe(400);
+    expect(report.byProject[0].cost).toBeCloseTo(4);
+
+    mods.conn.closeDb();
+  });
 });

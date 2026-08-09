@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:da665e0d5f4a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T16:25:34.559Z -->
+## ★ Insight
+Four findings across two rounds, and three share one shape: I fixed the **instance** where the correct boundary was the **class**. `.env.local` where the rule is `.env*`. The drive letter where the rule is "the whole Windows path." `agentlytics-repo` where the rule is "any gitignored checkout nested in the tracing root" — which is what `.worktrees` was.
+
+---
+
 <!-- insight:397ba2f1e558 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:50:49.534Z -->
 ## ★ Insight
 The P1 is the one worth keeping. I verified that fix against the two real duplicates in the index and both were case variants, so the fold was correct for every row I could observe — the C:/D: case simply doesn't exist on this machine, and no amount of measuring would have surfaced it.

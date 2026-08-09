@@ -94,37 +94,37 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
 }
 
 /**
- * SQL expression case-folding an encoded project directory name for use as a
- * grouping key — but only when it encodes a WINDOWS path.
+ * Case-fold an encoded project directory name for use as a grouping key — but
+ * only when it encodes a WINDOWS path.
  *
  * Claude encodes `C:\dev\foo` as `C--dev-foo`, preserving whatever case the
  * path was observed with. Windows filesystems are case-insensitive, so
- * `C--Dev-App`, `c--dev-app` and `C--dev-app` are all the same folder and
- * must group together — `toSlug` already lowercases them to one slug, and
- * leaving them distinct here splits one project's cost across duplicate-slug
- * rows (#236). Folding the whole name is therefore right, not just the drive
- * letter: casing differs beyond it in practice.
+ * `C--Dev-App`, `c--dev-app` and `C--dev-app` are all one folder and must
+ * group together — `toSlug` already lowercases them to a single slug, and
+ * leaving them distinct splits one project's cost across duplicate-slug rows
+ * (#236).
  *
  * Two things this must NOT do:
  *
  *  - Merge different drives. `toSlug` strips the drive prefix, so `C:\dev\foo`
- *    and `D:\dev\foo` yield one slug for two genuinely different projects and
- *    the encoded directory is the only remaining discriminator. `LOWER` keeps
- *    `c--dev-foo` and `d--dev-foo` distinct, so this is preserved.
+ *    and `D:\dev\foo` yield one slug for two genuinely different projects, and
+ *    the encoded directory is the only remaining discriminator. Lowercasing
+ *    keeps `c--dev-foo` and `d--dev-foo` apart, so this is preserved.
  *  - Fold POSIX names. Those encode as `-home-me-dev-foo` (leading dash, no
  *    `[A-Za-z]--` prefix) and come from case-SENSITIVE filesystems, where
- *    `/home/me/Dev` and `/home/me/dev` really are two directories. The GLOB
- *    guard leaves them untouched.
+ *    `/home/me/Dev` and `/home/me/dev` really are two directories.
  *
- * The `[A-Za-z]--` shape is the same one `canonicalizeDirName` tests for
- * (`usage/parser.ts:72`). GLOB rather than LIKE because SQLite's LIKE is
- * case-insensitive for ASCII, which would defeat the guard.
+ * Deliberately JS rather than a SQL expression: SQLite's `LOWER()` folds ASCII
+ * only, so `C--École-app` and `c--école-app` would stay distinct keys while
+ * `toSlug` — which is JS `.toLowerCase()` before it strips non-ASCII — maps
+ * both to one slug, reproducing the very split this exists to remove. Folding
+ * here uses the same `.toLowerCase()` as `toSlug`, so the two agree by
+ * construction instead of by coincidence of character set. The `[A-Za-z]--`
+ * shape is the one `canonicalizeDirName` tests for (`usage/parser.ts:72`).
  */
-const DIR_NAME_DRIVE_FOLDED = `CASE
-      WHEN s.project_dir_name GLOB '[A-Za-z]--*'
-      THEN LOWER(s.project_dir_name)
-      ELSE s.project_dir_name
-    END`;
+function foldDirNameForIdentity(dirName: string): string {
+  return /^[A-Za-z]--/.test(dirName) ? dirName.toLowerCase() : dirName;
+}
 
 interface FilterParams {
   /** Inclusive ISO timestamp lower bound for `t.ts`. null for "all". */
@@ -362,21 +362,23 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // aggregator.ts:311). Single-home setups have one uniform home_key, so
   // their row count is unchanged.
   //
-  // The encoded dir name stays in the identity, but with its drive letter
-  // case-folded (see DIR_NAME_DRIVE_FOLDED). Dropping it entirely would be
-  // wrong: `toSlug` strips the drive prefix, so `C:\dev\foo` and `D:\dev\foo`
-  // share a slug while being genuinely different projects, and grouping on
-  // (slug, home) alone would sum their spend into one row labelled with
-  // whichever directory won. Keeping it unfolded is also wrong: it splits ONE
-  // project whenever the same folder was recorded under two spellings of its
-  // drive letter, which is what #236 was — two projects on the reference
-  // index split between `C--dev-…` and `c--dev-…`, surfacing as duplicate
-  // React keys because every render site keys on projectSlug.
+  // The encoded dir name stays in the identity because `toSlug` strips the
+  // drive prefix: `C:\dev\foo` and `D:\dev\foo` share a slug while being
+  // genuinely different projects, and grouping on (slug, home) alone would
+  // sum their spend into one row labelled with whichever directory won.
+  //
+  // SQL groups by the RAW dir name and the case-fold happens below in JS.
+  // Folding in SQL looks tidier but is wrong at the edges: SQLite's `LOWER()`
+  // is ASCII-only, so `C--École-app` and `c--école-app` would survive as
+  // separate keys while `toSlug` maps both to one slug — reproducing exactly
+  // the split this is meant to remove, on the paths least likely to be
+  // noticed. `foldDirNameForIdentity` uses the same `.toLowerCase()` that
+  // `toSlug` does, so the two agree by construction.
   const rows = prepCached(db,
       `SELECT
-         s.project_slug                    AS projectSlug,
-         MIN(s.project_dir_name)           AS projectDirName,
-         s.home_key                        AS homeKey,
+         s.project_slug      AS projectSlug,
+         s.project_dir_name  AS projectDirName,
+         s.home_key          AS homeKey,
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
@@ -387,15 +389,43 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY s.project_slug, ${DIR_NAME_DRIVE_FOLDED}, s.home_key
+       GROUP BY s.project_slug, s.project_dir_name, s.home_key
        ORDER BY cost DESC`
     )
     .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
-  // NULL → omitted, matching the file backend (homeKey is absent on rows
-  // whose turns carry no home stamp) so the two backends serialize alike.
-  return rows.map(({ homeKey, ...rest }) =>
-    homeKey === null ? rest : { ...rest, homeKey }
-  );
+
+  // Merge the spellings of one Windows directory. The SQL above emits a row
+  // per distinct spelling; this collapses them on the folded identity and
+  // sums the measures, so a project recorded three ways reports its whole
+  // spend once rather than a third of it three times (#236).
+  const merged = new Map<string, ProjectBreakdown & { homeKey: string | null }>();
+  for (const row of rows) {
+    const key = [
+      row.projectSlug,
+      foldDirNameForIdentity(row.projectDirName),
+      row.homeKey ?? "",
+    ].join("\u0000");
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, { ...row });
+      continue;
+    }
+    prev.tokens += row.tokens;
+    prev.cost += row.cost;
+    prev.turns += row.turns;
+    // Keep the lexicographically smallest spelling so the label a merged row
+    // carries is stable across queries rather than dependent on row order.
+    if (row.projectDirName < prev.projectDirName) {
+      prev.projectDirName = row.projectDirName;
+    }
+  }
+
+  // Re-sort: merging changes the cost ordering the SQL established.
+  // NULL homeKey → omitted, matching the file backend (homeKey is absent on
+  // rows whose turns carry no home stamp) so the two backends serialize alike.
+  return [...merged.values()]
+    .sort((a, b) => b.cost - a.cost)
+    .map(({ homeKey, ...rest }) => (homeKey === null ? rest : { ...rest, homeKey }));
 }
 
 function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreakdown[] {
