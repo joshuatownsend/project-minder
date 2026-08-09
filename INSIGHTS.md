@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:a7f3c2cb5970 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T03:25:10.230Z -->
+## ★ Insight
+The lint run turned out to be a third instance of this session's recurring shape. Three times a gate or measurement was contaminated by *a copy of the repo living somewhere unexpected*: NFT tracing `agentlytics-repo/` into every route, my `cpSync` producing a standalone tree that booted but couldn't serve, and now eslint walking a full repo snapshot nested inside the Rust target directory — nested deeply enough to contain worktrees I'd deleted an hour earlier.
+
+---
+
 <!-- insight:b74f39bab288 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T02:47:13.761Z -->
 ## ★ Insight
 Worth naming what nearly happened. I had a chain of plausible-but-wrong conclusions queued up: first "the sandbox can't reach loopback" (refuted by PowerShell on the host), then "the WinNAT 4100–4199 exclusion" (real, and it *did* invalidate my first port choice — but wasn't this), then "Next 16.3 broke standalone packaging," which I was one step from writing into a blocker report. The control — `next start` returning 200 on the same build — is what stopped it, and then the in-place run narrowed it further to my harness.
