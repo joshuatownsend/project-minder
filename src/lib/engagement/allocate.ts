@@ -1,25 +1,8 @@
-import type { AttendedBlock } from "./types";
+import type { AttendedBlock, Interval } from "./types";
+import { mergeIntervals, intervalHours } from "./intervals";
 
-export interface Interval {
-  start: number;
-  end: number;
-}
-
-/** Collapse overlapping/touching intervals into a minimal disjoint set. */
-export function mergeIntervals(intervals: Interval[]): Interval[] {
-  const sorted = [...intervals].filter((i) => i.end > i.start).sort((a, b) => a.start - b.start);
-  const out: Interval[] = [];
-  for (const iv of sorted) {
-    const last = out[out.length - 1];
-    if (last && iv.start <= last.end) last.end = Math.max(last.end, iv.end);
-    else out.push({ ...iv });
-  }
-  return out;
-}
-
-export function intervalHours(intervals: Interval[]): number {
-  return intervals.reduce((s, i) => s + Math.max(0, i.end - i.start), 0) / 3_600_000;
-}
+export type { Interval };
+export { mergeIntervals, intervalHours };
 
 // ---------------------------------------------------------------------------
 // Local-day boundaries
@@ -43,6 +26,28 @@ function tzOffsetMs(ts: number, timeZone: string): number {
   const hour = get("hour") % 24;
   const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), hour, get("minute"), get("second"));
   return asUtc - ts;
+}
+
+/**
+ * Epoch ms of the first instant of the local day containing `ts`.
+ *
+ * Exists because `getPeriodStart("today")` uses `setHours(0,0,0,0)`, which is
+ * midnight in the **server's** zone. Every other period is a rolling window
+ * where that does not matter, but `today` is calendar-aligned: on a UTC host a
+ * user in New York would get a window starting at 20:00 the previous evening
+ * while their day buckets ran on New York dates, so the Today timecard
+ * disagreed with its own rows.
+ */
+export function startOfLocalDay(ts: number, timeZone: string): number {
+  const [y, m, d] = localDayKey(ts, timeZone).split("-").map(Number);
+  const wallMidnight = Date.UTC(y, m - 1, d);
+  let guess = wallMidnight - tzOffsetMs(ts, timeZone);
+  for (let i = 0; i < 3; i++) {
+    const refined = wallMidnight - tzOffsetMs(guess, timeZone);
+    if (refined === guess) break;
+    guess = refined;
+  }
+  return guess;
 }
 
 /** `YYYY-MM-DD` for `ts` in `timeZone`. */
@@ -146,7 +151,10 @@ export function allocateConcurrent(
 ): AllocationResult {
   const merged = new Map<string, Interval[]>();
   for (const [key, blocks] of blocksByProject) {
-    const iv = mergeIntervals(blocks.map((b) => ({ start: b.start, end: b.end })));
+    // Each block's own credited intervals, not its [start, end] span — those
+    // differ whenever a gap was capped, and using the span here would allocate
+    // instants the block never actually earned.
+    const iv = mergeIntervals(blocks.flatMap((b) => b.intervals));
     if (iv.length) merged.set(key, iv);
   }
 

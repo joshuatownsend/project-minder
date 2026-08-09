@@ -15,6 +15,9 @@ import {
 } from "lucide-react";
 import { usePulse } from "./PulseProvider";
 import { useScope } from "./ScopeProvider";
+import { useConfig } from "./ConfigProvider";
+import { getFlag } from "@/lib/featureFlags";
+import type { FeatureFlagKey } from "@/lib/types/config";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import {
   sessionsQuery,
@@ -39,6 +42,12 @@ interface NavItem {
   badge?: BadgeKey;
   /** Static placeholder (shown for "Coming soon" stub routes). */
   comingSoon?: boolean;
+  /**
+   * When set, the row is hidden unless this feature flag is on. Turning a
+   * feature off in Settings should remove its entry point, not leave a link
+   * to a page whose API deliberately 503s.
+   */
+  flag?: FeatureFlagKey;
 }
 
 interface NavGroup {
@@ -111,7 +120,7 @@ const GROUPS: NavGroup[] = [
       { id: "stats",           label: "Stats",           href: "/stats",           icon: ico(BarChart3) },
       { id: "usage",           label: "Usage & cost",    href: "/usage",           icon: ico(Wallet) },
       { id: "costs",           label: "Cost report",     href: "/costs",           icon: ico(Coins) },
-      { id: "timecard",        label: "Timecard",        href: "/timecard",        icon: ico(Clock) },
+      { id: "timecard",        label: "Timecard",        href: "/timecard",        icon: ico(Clock), flag: "engagementReport" },
       { id: "health",          label: "Health",          href: "/health",          icon: ico(HeartPulse),  comingSoon: true },
       { id: "hooks",           label: "Hooks",           href: "/hooks",           icon: ico(Webhook) },
       { id: "mcps",            label: "MCP",             href: "/config?type=mcp", matchType: "mcp", icon: ico(Boxes) },
@@ -149,6 +158,20 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
   const { snapshot } = usePulse();
   const { scope } = useScope();
   const prefetch = useHoverPrefetch();
+  const config = useConfig();
+
+  // Flag-gated rows disappear entirely when their feature is off, rather than
+  // linking to a page whose API intentionally 503s. Unresolved config leaves
+  // rows visible: every gated flag here is default-on, so hiding during the
+  // initial `null` would blink the item in for most users on every load.
+  const visibleGroups = useMemo(
+    () =>
+      GROUPS.map((g) => ({
+        ...g,
+        children: g.children.filter((c) => !c.flag || getFlag(config?.featureFlags, c.flag)),
+      })).filter((g) => g.children.length > 0),
+    [config],
+  );
 
   // Bind each prefetchable route (by bare pathname) to a `() => void` warm
   // handler so hovering the nav item warms that route's list query and the page
@@ -281,7 +304,7 @@ export function AppSidebar({ collapsed, onOpenScopePicker }: SidebarProps) {
       ))}
 
       {/* Groups */}
-      {GROUPS.map((g) => {
+      {visibleGroups.map((g) => {
         const isOpen = collapsed ? true : !!openMap[g.id];
         const groupActive = g.children.some((c) => isActive(c, pathname, currentType));
         const childBadges = g.children.map((c) => ({

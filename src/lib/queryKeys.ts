@@ -26,15 +26,23 @@ export const queryKeys = {
     ["usage", period, project ?? null, home ?? null] as const,
   // Thresholds are part of the key: the same period over the same bytes
   // yields a different report at a different idle threshold, so they must
-  // not share a cache entry.
+  // not share a cache entry. `tz` likewise — it decides both the day buckets
+  // and (for `today`) the window itself, so a cached report from another
+  // zone is a different report, not a stale one.
   engagement: (
     period: string,
     project: string | undefined,
     responseMinutes: number,
     runCapMinutes: number,
     tailMinutes: number,
+    timeZone: string,
+    home?: string,
   ) =>
-    ["engagement", period, project ?? null, responseMinutes, runCapMinutes, tailMinutes] as const,
+    [
+      "engagement", period, project ?? null,
+      responseMinutes, runCapMinutes, tailMinutes,
+      timeZone, home ?? null,
+    ] as const,
   agents: (source?: string, project?: string, query?: string) =>
     ["agents", source ?? null, project ?? null, query ?? null] as const,
   skills: (source?: string, project?: string, query?: string) =>

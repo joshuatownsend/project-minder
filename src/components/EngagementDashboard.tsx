@@ -21,14 +21,16 @@ function fmtHours(h: number): string {
   return `${h.toFixed(2)} h`;
 }
 
-export function EngagementDashboard({ project }: { project?: string } = {}) {
+export function EngagementDashboard(
+  { project, home }: { project?: string; home?: string } = {},
+) {
   const [period, setPeriod] = useState(DEFAULT_PERIOD);
   const [responseMinutes, setResponseMinutes] = useState(15);
   const [runCapMinutes, setRunCapMinutes] = useState(30);
   const [tailMinutes, setTailMinutes] = useState(3);
 
   const { data, loading, fetching, error } = useEngagement(
-    period, project, responseMinutes, runCapMinutes, tailMinutes,
+    period, project, responseMinutes, runCapMinutes, tailMinutes, home,
   );
   const { data: scan } = useProjects();
 
@@ -62,8 +64,9 @@ export function EngagementDashboard({ project }: { project?: string } = {}) {
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     });
     if (project) params.set("project", project);
+    if (home) params.set("home", home);
     return `/api/engagement/export?${params}`;
-  }, [period, project, responseMinutes, runCapMinutes, tailMinutes]);
+  }, [period, project, home, responseMinutes, runCapMinutes, tailMinutes]);
 
   if (error) {
     return (

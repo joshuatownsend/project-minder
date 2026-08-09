@@ -9,9 +9,10 @@ export function useEngagement(
   responseMinutes: number,
   runCapMinutes: number,
   tailMinutes: number,
+  home?: string,
 ) {
   const query = useQuery({
-    ...engagementQuery(period, project, responseMinutes, runCapMinutes, tailMinutes),
+    ...engagementQuery(period, project, responseMinutes, runCapMinutes, tailMinutes, home),
     // Keep the previous report on screen while a slider drag refetches, so
     // the numbers move rather than flashing through an empty skeleton.
     placeholderData: (prev) => prev,

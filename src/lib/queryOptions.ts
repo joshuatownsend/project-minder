@@ -201,18 +201,25 @@ export function engagementQuery(
   responseMinutes: number,
   runCapMinutes: number,
   tailMinutes: number,
+  home?: string,
 ) {
+  // Resolved once and passed to both the key and the request, so the cache
+  // entry can never describe a different zone than the one it was fetched for.
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   return queryOptions({
-    queryKey: queryKeys.engagement(period, project, responseMinutes, runCapMinutes, tailMinutes),
+    queryKey: queryKeys.engagement(
+      period, project, responseMinutes, runCapMinutes, tailMinutes, timeZone, home,
+    ),
     queryFn: async ({ signal }): Promise<EngagementReport> => {
       const params = new URLSearchParams({
         period,
         responseMinutes: String(responseMinutes),
         runCapMinutes: String(runCapMinutes),
         tailMinutes: String(tailMinutes),
-        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        tz: timeZone,
       });
       if (project) params.set("project", project);
+      if (home) params.set("home", home);
       const res = await fetch(`/api/engagement?${params}`, { signal });
       if (res.status === 503) {
         const body = await res.json().catch(() => ({}));

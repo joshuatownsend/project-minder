@@ -8,12 +8,23 @@ import type { EngagementReport } from "@/lib/engagement/types";
 import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
+import { normalizePathKey } from "@/lib/platform";
 
 const CACHE_TTL = 2 * 60_000;
 
 interface Slot {
   report: EngagementReport;
   maxMtime: number;
+  /**
+   * When this slot was computed. Rides in the ETag because every period here
+   * is time-dependent — the rolling windows move continuously and `today`
+   * rolls at local midnight — so the report legitimately changes while no
+   * transcript file is touched and `maxMtime` never advances. Without it a
+   * revalidating browser would 304 against a stale timecard until some
+   * unrelated file changed. `/api/usage` carries the same field for the same
+   * reason (issue #190).
+   */
+  cachedAt: number;
 }
 
 const cache = getOrCreateRouteCache<Slot>("engagement", { ttlMs: CACHE_TTL });
@@ -77,6 +88,11 @@ export async function GET(request: NextRequest) {
   const period = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
   const timeZone = resolveTimeZone(params.get("tz"));
+  // Claude-home discriminator (#311). Re-normalized defensively so a
+  // hand-typed `\\wsl$\...` or mixed-case value still matches the
+  // `normalizePathKey` form the session stamps use.
+  const rawHome = params.get("home") || undefined;
+  const home = rawHome ? normalizePathKey(rawHome) : undefined;
 
   // Thresholds ride on the query string so the UI can recompute live while the
   // user tunes them — the whole "is 15 minutes right?" question is settled by
@@ -88,15 +104,15 @@ export async function GET(request: NextRequest) {
   });
 
   const cacheKey = [
-    period, project ?? "all", timeZone,
+    period, project ?? "all", home ?? "all", timeZone,
     config.responseThresholdMs, config.runCapMs, config.tailCreditMs,
   ].join(":");
 
   let slot = cache.get(cacheKey);
   if (!slot) {
     try {
-      const { report, meta } = await getEngagement(period, timeZone, config, project);
-      slot = { report, maxMtime: meta.maxMtimeMs };
+      const { report, meta } = await getEngagement(period, timeZone, config, project, home);
+      slot = { report, maxMtime: meta.maxMtimeMs, cachedAt: Date.now() };
       cache.set(cacheKey, slot);
     } catch (error) {
       if (error instanceof DbUnavailableError) {
@@ -116,14 +132,17 @@ export async function GET(request: NextRequest) {
   // The thresholds are part of the ETag: two requests differing only in
   // `responseMinutes` describe different reports over identical source bytes,
   // so keying on mtime alone would serve a 304 with the wrong number.
+  // `cachedAt` bounds staleness to the cache TTL for the same reason — see
+  // the field's comment on `Slot`.
   const etag = computeETag({
     salt: "engagement-v1",
     maxMtimeMs: slot.maxMtime,
     parts: [
-      period, project ?? "", timeZone,
+      period, project ?? "", home ?? "", timeZone,
       String(config.responseThresholdMs),
       String(config.runCapMs),
       String(config.tailCreditMs),
+      String(slot.cachedAt),
     ],
   });
 

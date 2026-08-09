@@ -3,8 +3,10 @@ import { isHumanPrompt, isHumanInterrupt } from "@/lib/engagement/classifier";
 import { buildAttendedBlocks, blockHours } from "@/lib/engagement/blocks";
 import {
   mergeIntervals, allocateConcurrent, localDayKey, startOfNextLocalDay,
-  equalSplitPolicy, primaryWinsPolicy,
+  startOfLocalDay, equalSplitPolicy, primaryWinsPolicy,
 } from "@/lib/engagement/allocate";
+import { apportionRounded, round2 } from "@/lib/engagement/apportion";
+import { clipFrom } from "@/lib/engagement/intervals";
 import { buildEngagementReport, type EngagementTurnRow } from "@/lib/engagement/aggregator";
 import { resolveEngagementConfig, DEFAULT_ENGAGEMENT_CONFIG } from "@/lib/engagement/config";
 import type { EngagementEvent } from "@/lib/engagement/types";
@@ -145,6 +147,30 @@ describe("buildAttendedBlocks — credit formula", () => {
     expect(blockHours(blocks) * 60).toBeCloseTo(41, 5);
   });
 
+  it("keeps capped credit on the timeline where it was earned", () => {
+    // PR #418 review (codex P2). A 4-hour capped run, then a short exchange.
+    // The exchange happened at 241–251 and must be credited there — the old
+    // accumulate-forward model recorded it at 31–41, which kept the block
+    // total right while handing day-bucketing and overlap allocation the
+    // wrong instants.
+    const events = ev([[0, "human"], [240, "agent"], [241, "human"], [250, "agent"], [251, "human"]]);
+    const blocks = buildAttendedBlocks(events, cfg({ runCapMs: 30 * MIN }));
+    expect(blocks).toHaveLength(1);
+
+    // The two credited spans — [241-31, 241] and [251-10, 251] — touch at 241
+    // and merge into one, which is why this is a single interval.
+    const iv = blocks[0].intervals;
+    expect(iv).toHaveLength(1);
+    // Credit sits at the END of the capped run and runs through the exchange:
+    // 210 = 241 - (min(240, 30) + 1). The old model produced [0, 41].
+    expect((iv[0].start - T0) / MIN).toBeCloseTo(210, 5);
+    expect((iv[0].end - T0) / MIN).toBeCloseTo(251, 5);
+    // Nothing is credited in the unwatched first 3.5 hours of the run.
+    expect(iv[0].start - T0).toBeGreaterThan(200 * MIN);
+    // Total is unchanged by the re-anchoring: min(240,30)+1 then 9+1.
+    expect(blockHours(blocks) * 60).toBeCloseTo(41, 5);
+  });
+
   it("excludes presence-only events from the prompt count but not the block", () => {
     const events = ev([[0, "human"], [1, "agent"], [2, "human"]]);
     const blocks = buildAttendedBlocks(events, cfg(), (i) => i === 2);
@@ -189,7 +215,10 @@ describe("local day math", () => {
 
 describe("allocateConcurrent", () => {
   const block = (startMin: number, endMin: number) => ({
-    start: T0 + startMin * MIN, end: T0 + endMin * MIN, promptCount: 1,
+    start: T0 + startMin * MIN,
+    end: T0 + endMin * MIN,
+    intervals: [{ start: T0 + startMin * MIN, end: T0 + endMin * MIN }],
+    promptCount: 1,
   });
 
   it("splits concurrent time so allocations sum to the union", () => {
@@ -218,7 +247,10 @@ describe("allocateConcurrent", () => {
   it("attributes each slice to the local day it happened in", () => {
     // 23:30 -> 00:30 local New York, spanning midnight.
     const start = Date.UTC(2026, 6, 16, 3, 30); // 23:30 EDT on the 15th
-    const map = new Map([["alpha", [{ start, end: start + 60 * MIN, promptCount: 1 }]]]);
+    const end = start + 60 * MIN;
+    const map = new Map([
+      ["alpha", [{ start, end, intervals: [{ start, end }], promptCount: 1 }]],
+    ]);
     const res = allocateConcurrent(map, "America/New_York");
     expect(res.byDay.get("2026-07-15")?.get("alpha")).toBeCloseTo(0.5, 6);
     expect(res.byDay.get("2026-07-16")?.get("alpha")).toBeCloseTo(0.5, 6);
@@ -237,6 +269,51 @@ describe("allocateConcurrent", () => {
     const res = allocateConcurrent(new Map(), "UTC", equalSplitPolicy);
     expect(res.unionHours).toBe(0);
     expect(res.byProject.size).toBe(0);
+  });
+});
+
+describe("apportionRounded", () => {
+  it("makes rounded shares sum exactly to the total", () => {
+    // PR #418 review (codex P2): three equal one-minute shares rounded
+    // independently do not reconcile with the day total.
+    const third = 1 / 60 / 3;
+    const shares = apportionRounded([third, third, third], round2(third * 3));
+    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(round2(third * 3), 10);
+  });
+
+  it("reconciles a lumpy split", () => {
+    const values = [1.114, 0.223, 0.663];
+    const total = round2(values.reduce((a, b) => a + b, 0));
+    const shares = apportionRounded(values, total);
+    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(total, 10);
+    // Every share lands on a whole hundredth (compared with tolerance —
+    // 1.12 * 100 is 112.00000000000001 in binary floating point).
+    for (const s of shares) expect(s * 100).toBeCloseTo(Math.round(s * 100), 6);
+  });
+
+  it("handles the empty and single-share cases", () => {
+    expect(apportionRounded([], 0)).toEqual([]);
+    expect(apportionRounded([0.5], 0.5)).toEqual([0.5]);
+  });
+});
+
+describe("clipFrom", () => {
+  it("trims the interval straddling the boundary and drops earlier ones", () => {
+    const out = clipFrom(
+      [{ start: 0, end: 10 }, { start: 20, end: 40 }, { start: 50, end: 60 }],
+      30,
+    );
+    expect(out).toEqual([{ start: 30, end: 40 }, { start: 50, end: 60 }]);
+  });
+});
+
+describe("startOfLocalDay", () => {
+  it("returns the requested zone's midnight, not the host's", () => {
+    // 02:00Z on the 16th is still the 15th in New York.
+    const ts = Date.UTC(2026, 6, 16, 2, 0, 0);
+    expect(localDayKey(startOfLocalDay(ts, "America/New_York"), "America/New_York")).toBe("2026-07-15");
+    expect(localDayKey(startOfLocalDay(ts, "UTC"), "UTC")).toBe("2026-07-16");
+    expect(startOfLocalDay(ts, "America/New_York")).toBeLessThanOrEqual(ts);
   });
 });
 

@@ -26,10 +26,29 @@ export interface EngagementEvent {
   kind: "human" | "agent";
 }
 
-/** A half-open [start, end) span of credited human attention, in epoch ms. */
-export interface AttendedBlock {
+/** A half-open [start, end) span in epoch ms. */
+export interface Interval {
   start: number;
   end: number;
+}
+
+/**
+ * A run of human prompts linked by attended gaps.
+ *
+ * `intervals` — not `start`/`end` — is the billable content. The two differ
+ * whenever a gap is capped: a four-hour agent run credited at a 30-minute cap
+ * covers only part of the span it sits in, and *which* part matters. Day
+ * bucketing and cross-project overlap allocation both read real instants, so
+ * credited time has to stay anchored to when it actually happened rather than
+ * being accumulated from the block's start.
+ */
+export interface AttendedBlock {
+  /** First human prompt in the block. Reporting/debug only. */
+  start: number;
+  /** Last prompt plus tail credit. Reporting/debug only. */
+  end: number;
+  /** Disjoint, ascending credited spans. The billable content. */
+  intervals: Interval[];
   /** Count of human prompts inside the block. Used for the audit trail. */
   promptCount: number;
 }
@@ -66,6 +85,14 @@ export interface ProjectEngagement {
   projectDirName: string;
   /** Route slug when resolvable, else null. */
   projectSlug: string | null;
+  /**
+   * Claude-home discriminator (`sessions.home_key`), omitted when the rows
+   * carry none. Two configured homes can hold identical path layouts and so
+   * share both slug and encoded directory name; without this they merge and a
+   * project's timecard silently includes another home's hours. Mirrors the
+   * treatment `byProject` already gets in the usage report (#311).
+   */
+  homeKey?: string;
   /** Hours of attended time attributed to this project alone. */
   rawHours: number;
   /**
@@ -86,8 +113,9 @@ export interface EngagementDay {
   date: string;
   /** De-overlapped hours across all projects in scope that day. */
   totalHours: number;
-  /** Per-project allocated hours for the day; sums to `totalHours`. */
-  byProject: { projectDirName: string; hours: number }[];
+  /** Per-project allocated hours for the day; sums **exactly** to
+   *  `totalHours` — the shares are apportioned, not rounded pointwise. */
+  byProject: { projectDirName: string; homeKey?: string; hours: number }[];
 }
 
 export interface EngagementReport {

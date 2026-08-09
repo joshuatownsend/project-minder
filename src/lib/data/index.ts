@@ -592,7 +592,8 @@ export async function getEngagement(
   period: string,
   timeZone: string,
   config: EngagementConfig,
-  project?: string
+  project?: string,
+  home?: string
 ): Promise<EngagementResult> {
   if (!dbModeRequested()) {
     throw new DbUnavailableError(
@@ -602,7 +603,7 @@ export async function getEngagement(
   }
   const db = await getReadyDb();
   const report = await callDbLoader("getEngagement", () =>
-    loadEngagementReportFromSql(db, { period, timeZone, config, project })
+    loadEngagementReportFromSql(db, { period, timeZone, config, project, home })
   );
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }

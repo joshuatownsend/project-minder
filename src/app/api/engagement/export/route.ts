@@ -6,6 +6,7 @@ import type { EngagementReport } from "@/lib/engagement/types";
 import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
+import { normalizePathKey } from "@/lib/platform";
 
 /**
  * CSV / JSON export — the artifact that actually gets filed.
@@ -45,16 +46,32 @@ function csvCell(value: string | number): string {
   return `"${guarded.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Every row carries the same three columns, including the provenance block.
+ *
+ * A trailing metadata section with a different column count is well-formed
+ * enough for a spreadsheet but trips strict RFC-4180 parsers and several
+ * import tools — and this file exists to be imported into someone else's
+ * timekeeping system, so the padding is worth more than the tidiness.
+ */
+const CSV_COLUMNS = 3;
+
+function csvRow(cells: (string | number)[]): string {
+  const padded = [...cells];
+  while (padded.length < CSV_COLUMNS) padded.push("");
+  return padded.map(csvCell).join(",");
+}
+
 function toCsv(report: EngagementReport): string {
   const lines: string[] = [];
-  lines.push(["date", "project", "hours"].map(csvCell).join(","));
+  lines.push(csvRow(["date", "project", "hours"]));
   for (const day of report.byDay) {
     for (const entry of day.byProject) {
-      lines.push([day.date, entry.projectDirName, entry.hours.toFixed(2)].map(csvCell).join(","));
+      lines.push(csvRow([day.date, entry.projectDirName, entry.hours.toFixed(2)]));
     }
   }
-  lines.push("");
-  lines.push([csvCell("# provenance"), csvCell("")].join(","));
+  lines.push(csvRow([""]));
+  lines.push(csvRow(["# provenance"]));
   const meta: [string, string | number][] = [
     ["period", report.period],
     ["timezone", report.timeZone],
@@ -66,8 +83,27 @@ function toCsv(report: EngagementReport): string {
     ["tail credit (minutes)", report.config.tailCreditMs / 60_000],
     ["automated sessions excluded", report.excludedAutomatedSessions],
   ];
-  for (const [k, v] of meta) lines.push([k, v].map(csvCell).join(","));
+  for (const [k, v] of meta) lines.push(csvRow([k, v]));
   return lines.join("\r\n");
+}
+
+/**
+ * Build a safe `Content-Disposition` filename.
+ *
+ * `project` is a raw query parameter that reaches this header, so a CR or LF
+ * in it would split the response; quotes and path separators break the header
+ * or the saved name on some clients. Everything outside a conservative
+ * allowlist collapses to `-`, mirroring the sessions export route, and the
+ * result is length-bounded so a long parameter cannot produce an unusable
+ * filename.
+ */
+function safeFilename(parts: (string | undefined)[]): string {
+  const cleaned = parts
+    .filter((p): p is string => !!p)
+    .map((p) => p.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean)
+    .join("_");
+  return (cleaned || "timecard").slice(0, 120);
 }
 
 export async function GET(request: NextRequest) {
@@ -92,6 +128,8 @@ export async function GET(request: NextRequest) {
   const period = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
   const timeZone = resolveTimeZone(params.get("tz"));
+  const rawHome = params.get("home") || undefined;
+  const home = rawHome ? normalizePathKey(rawHome) : undefined;
   const format = params.get("format") === "json" ? "json" : "csv";
 
   const config = resolveEngagementConfig({
@@ -102,7 +140,7 @@ export async function GET(request: NextRequest) {
 
   let report: EngagementReport;
   try {
-    ({ report } = await getEngagement(period, timeZone, config, project));
+    ({ report } = await getEngagement(period, timeZone, config, project, home));
   } catch (error) {
     if (error instanceof DbUnavailableError) {
       return NextResponse.json(
@@ -116,7 +154,7 @@ export async function GET(request: NextRequest) {
   const stamp = report.byDay.length
     ? `${report.byDay[0].date}_${report.byDay[report.byDay.length - 1].date}`
     : period;
-  const base = `timecard_${project ? `${project}_` : ""}${stamp}`;
+  const base = safeFilename(["timecard", project, stamp]);
 
   if (format === "json") {
     return new NextResponse(JSON.stringify(report, null, 2), {

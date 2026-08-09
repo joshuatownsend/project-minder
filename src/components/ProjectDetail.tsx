@@ -12,6 +12,7 @@ import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
 import { CostsTab } from "./CostsTab";
 import { EngagementDashboard } from "./EngagementDashboard";
+import { useEngagementReportEnabled } from "./ConfigProvider";
 import { BoardTab } from "./BoardTab";
 import { OpsPanel } from "./OpsPanel";
 import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
@@ -217,6 +218,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
+  // Turning the feature off in Settings must remove the tab, not just 503 its
+  // API — otherwise the tab renders an error panel the user cannot act on.
+  const engagementEnabled = useEngagementReportEnabled();
   const hasBoard = !!(project.board && project.board.total > 0);
   const hasOps_ = hasOps(deriveOpsSummary(project));
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
@@ -248,7 +252,8 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
     ...(hasSessions     ? [{ key: "sessions"     as TabKey, label: "Sessions"     }] : []),
     ...(hasSessions     ? [{ key: "costs"        as TabKey, label: "Costs"        }] : []),
-    ...(hasSessions     ? [{ key: "timecard"     as TabKey, label: "Timecard"     }] : []),
+    ...(hasSessions && engagementEnabled
+      ? [{ key: "timecard" as TabKey, label: "Timecard" }] : []),
     // Always show Manual Steps (like TODOs) so the Archived disclosure stays
     // reachable even after every active entry has been moved to the archive.
     { key: "manual-steps", label: "Manual Steps" },
@@ -700,7 +705,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               module does, so passing `project.slug` would silently match
               nothing on any project whose route slug differs. */}
           {activeTab === "timecard" && (
-            <EngagementDashboard project={project.usageSlug} />
+            <EngagementDashboard project={project.usageSlug} home={project.usageHomeKey} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}

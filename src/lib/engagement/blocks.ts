@@ -1,4 +1,5 @@
-import type { AttendedBlock, EngagementConfig, EngagementEvent } from "./types";
+import type { AttendedBlock, EngagementConfig, EngagementEvent, Interval } from "./types";
+import { mergeIntervals, intervalHours } from "./intervals";
 
 /**
  * Turn a project's event stream into blocks of credited human attention.
@@ -14,7 +15,7 @@ import type { AttendedBlock, EngagementConfig, EngagementEvent } from "./types";
  *
  *   attended  = quiet <= responseThreshold
  *   credit    = min(agentBusy, runCap) + quiet
- *   blockEnd  = min(humanTs, blockEnd + credit)
+ *   interval  = [humanTs - credit, humanTs]
  * ```
  *
  * If `attended` the block absorbs `credit` and continues; otherwise the block
@@ -37,13 +38,24 @@ import type { AttendedBlock, EngagementConfig, EngagementEvent } from "./types";
  * cannot tell those apart. `quiet` can: it measures how fast the human reacted
  * once the agent actually stopped, which is precisely a test of attendance.
  *
- * ## Why the cap, and why `min(humanTs, ...)`
+ * ## Why the cap, and why credit is anchored to `humanTs`
  *
  * A prompt sent 10 seconds after a 4-hour run proves the person came back, not
- * that they sat through it — `runCap` bounds that credit. The outer `min`
- * clamps credited time to real elapsed time, so a block can never bill more
- * wall clock than actually passed. Without it the two terms could double-count
- * a gap that contained an idle stretch before the agent started.
+ * that they sat through it — `runCap` bounds that credit. Where the surviving
+ * credit *sits* is a second decision: it is anchored to end at the reply, so a
+ * capped run credits its final 30 minutes rather than its first. That matches
+ * what the evidence supports — someone who answered promptly was there shortly
+ * before answering — and nothing supports the opening minutes over the closing
+ * ones.
+ *
+ * Anchoring is not cosmetic. An earlier version accumulated credit forward
+ * from the block's start (`end = min(humanTs, end + credit)`), so after any
+ * capped gap every later interval was recorded earlier than it happened. Block
+ * totals stayed correct, which is why it looked fine — but local-day bucketing
+ * and cross-project overlap allocation both read real instants, so a capped
+ * four-hour run followed by an evening exchange could book that exchange on
+ * the wrong calendar day, or miss an overlap with another project entirely.
+ * Credited time now never leaves the gap it was earned in.
  *
  * **This branch is the one that matters.** An earlier draft credited a flat
  * `runCap` and split the block whenever `agentBusy > runCap`; this one credits
@@ -86,11 +98,22 @@ export function buildAttendedBlocks(
 
   const blocks: AttendedBlock[] = [];
   let start = ev[humanIdx[0]].ts;
-  let end = start;
+  let lastPromptTs = start;
   let prompts = isPresenceOnly?.(humanIdx[0]) ? 0 : 1;
+  let intervals: Interval[] = [];
 
   const close = () => {
-    blocks.push({ start, end: end + tailCreditMs, promptCount: prompts });
+    // Tail credit hangs off the last prompt, on the real timeline like every
+    // other interval. Zero-length when tailCreditMs is 0, and `mergeIntervals`
+    // drops it — a lone prompt with no tail credit bills nothing, which is the
+    // same answer the accumulate-forward version gave.
+    const withTail = [...intervals, { start: lastPromptTs, end: lastPromptTs + tailCreditMs }];
+    blocks.push({
+      start,
+      end: lastPromptTs + tailCreditMs,
+      intervals: mergeIntervals(withTail),
+      promptCount: prompts,
+    });
   };
 
   for (let k = 1; k < humanIdx.length; k++) {
@@ -111,12 +134,17 @@ export function buildAttendedBlocks(
 
     if (quiet <= responseThresholdMs) {
       const credit = Math.min(agentBusy, runCapMs) + quiet;
-      end = Math.min(ts, end + credit);
+      // `credit <= agentBusy + quiet == ts - prevHumanTs`, so this never
+      // reaches back past the previous prompt; the max is a guard, not a clamp
+      // that changes any real result.
+      intervals.push({ start: Math.max(prevHumanTs, ts - credit), end: ts });
+      lastPromptTs = ts;
       if (!isPresenceOnly?.(i)) prompts++;
     } else {
       close();
       start = ts;
-      end = ts;
+      lastPromptTs = ts;
+      intervals = [];
       prompts = isPresenceOnly?.(i) ? 0 : 1;
     }
   }
@@ -124,7 +152,13 @@ export function buildAttendedBlocks(
   return blocks;
 }
 
-/** Total credited hours in a block list. */
+/** Total credited hours in a block list — the sum of its intervals, never
+ *  `end - start`, which overstates any block containing a capped gap. */
 export function blockHours(blocks: AttendedBlock[]): number {
-  return blocks.reduce((sum, b) => sum + Math.max(0, b.end - b.start), 0) / 3_600_000;
+  return blocks.reduce((sum, b) => sum + intervalHours(b.intervals), 0);
+}
+
+/** Every credited interval across a block list, flattened. */
+export function blockIntervals(blocks: AttendedBlock[]): Interval[] {
+  return blocks.flatMap((b) => b.intervals);
 }

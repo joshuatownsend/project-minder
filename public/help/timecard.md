@@ -36,6 +36,12 @@ that gap earns **nothing** but the tail credit. Fire off a prompt at 17:00, let
 a 25-minute run finish unwatched, come back at 09:00: that books the tail
 credit, not 25 minutes.
 
+Credited time stays anchored to when it happened. If a run is capped, the
+surviving credit sits at the **end** of that run — the part right before you
+replied — not at its start. That matters for more than tidiness: the daily
+buckets and the concurrency discount below both read real instants, so credit
+recorded at the wrong time lands on the wrong day or misses an overlap.
+
 ## The three thresholds
 
 All three are sliders on the page and recompute live.
@@ -62,8 +68,11 @@ The report shows both numbers:
 - **Billable** — after de-overlapping. When several projects are active in the
   same instant, that instant is split evenly between them.
 
-Per-project billable hours always sum exactly to the day's total, so a daily
-row and its breakdown reconcile.
+Per-project billable hours always sum exactly to the day's total, and the
+daily totals sum exactly to the period total. That is enforced rather than
+hoped for: shares are apportioned to two decimals (largest-remainder) instead
+of each being rounded on its own, which is what makes three small concurrent
+slices add up to their day rather than to a cent more.
 
 ## Automated sessions are excluded
 
@@ -83,7 +92,15 @@ thresholds, and the overlap discount. A billable figure a client can question
 should travel with the definition that produced it.
 
 Day buckets follow **your browser's timezone**, not UTC — an evening's work
-stays on the day you did it.
+stays on the day you did it. The **Today** period is measured from midnight in
+that same zone, so the window and its rows always agree even when the server
+runs somewhere else.
+
+Work that spans the start of the period is not lost. A gap that begins just
+before the boundary and finishes inside it is reconstructed from the turns
+either side, then clipped to the period — so a `Today` report still credits
+the exchange you were in the middle of at midnight, but only its portion after
+midnight.
 
 ## Requirements and limits
 
@@ -94,6 +111,9 @@ stays on the day you did it.
   per request.
 - Turns are attributed to the project directory the session ran in, so work
   done for one client from another repo's directory lands on that repo.
+- Projects are identified by directory **and Claude home**, so two configured
+  homes holding the same path layout stay separate rather than merging their
+  hours into one row.
 - Time spent away from the terminal — reading the client's spec, a call, a
   whiteboard — leaves no transcript and is invisible here. This measures
   supervised agent work, not your whole engagement.

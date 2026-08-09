@@ -2,9 +2,9 @@ import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { prepCached } from "@/lib/db/connection";
 import { periodSinceIso } from "@/lib/usage/period";
-import { buildEngagementReport, type EngagementTurnRow } from "@/lib/engagement/aggregator";
+import { buildEngagementReport, projectKeyOf, type EngagementTurnRow } from "@/lib/engagement/aggregator";
 import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
-import type { ConcurrencyPolicy } from "@/lib/engagement/allocate";
+import { startOfLocalDay, type ConcurrencyPolicy } from "@/lib/engagement/allocate";
 
 /**
  * SQL-backed human-engagement report.
@@ -38,15 +38,48 @@ export interface EngagementQueryOptions {
   /** Route slug to scope to; omitted ⇒ every project (required for a
    *  cross-project timecard, since allocation needs the full picture). */
   project?: string;
+  /** Claude-home discriminator (`ProjectData.usageHomeKey`). Two homes with
+   *  identical path layouts share a slug and an encoded directory name, so
+   *  without this a scoped report can include the other home's hours. */
+  home?: string;
   policy?: ConcurrencyPolicy;
 }
+
+/**
+ * Period lower bound, in the **requested** timezone.
+ *
+ * Only `today` is calendar-aligned; every other period is a rolling window
+ * where the host's zone is irrelevant. `getPeriodStart` computes that midnight
+ * with `setHours(0,0,0,0)` — server-local — so on a host in a different zone
+ * from the viewer the Today window and the Today day-buckets disagreed.
+ */
+function periodStartMs(period: string, timeZone: string, now = Date.now()): number | null {
+  if (period === "today") return startOfLocalDay(now, timeZone);
+  const iso = periodSinceIso(period);
+  return iso === null ? null : Date.parse(iso);
+}
+
+/**
+ * How far before the period boundary to over-fetch so a gap straddling it can
+ * still be recognised as attended.
+ *
+ * An attended gap spans at most `runCap + responseThreshold` of *credited*
+ * time, but its opening prompt can sit arbitrarily far back when the agent ran
+ * long — so this is a pragmatic bound rather than a proof. 24 hours covers
+ * every gap observed on the reference corpus (longest agent-busy span: 8.5 h)
+ * with an order of magnitude to spare, and the fetched lead-in is clipped
+ * back out before anything is billed.
+ */
+const BOUNDARY_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 export function loadEngagementReportFromSql(
   db: DatabaseT.Database,
   options: EngagementQueryOptions,
 ): EngagementReport {
-  const { period, timeZone, config, project, policy } = options;
-  const periodStart = periodSinceIso(period);
+  const { period, timeZone, config, project, home, policy } = options;
+  const clipFromMs = periodStartMs(period, timeZone);
+  const periodStart =
+    clipFromMs === null ? null : new Date(clipFromMs - BOUNDARY_LOOKBACK_MS).toISOString();
 
   // The scoped query still loads *all* projects' turns when `project` is set,
   // because per-project allocated hours are only meaningful relative to what
@@ -57,6 +90,7 @@ export function loadEngagementReportFromSql(
     `SELECT
        s.project_dir_name     AS projectDirName,
        s.project_slug         AS projectSlug,
+       s.home_key             AS homeKey,
        t.ts                   AS ts,
        t.role                 AS role,
        t.text_preview         AS textPreview,
@@ -68,18 +102,22 @@ export function loadEngagementReportFromSql(
      ORDER BY t.ts`,
   ).all({ periodStart }) as EngagementTurnRow[];
 
+  // Counted against the true period bound, not the over-fetched one — this is
+  // a disclosure figure shown to the user ("N automated sessions excluded"),
+  // so it must describe the window they asked for.
   const excluded = prepCached(
     db,
     `SELECT COUNT(*) AS n FROM sessions s
      WHERE s.entrypoint LIKE 'sdk-%'
-       AND (@periodStart IS NULL OR s.end_ts >= @periodStart)`,
-  ).get({ periodStart }) as { n: number };
+       AND (@bound IS NULL OR s.end_ts >= @bound)`,
+  ).get({ bound: clipFromMs === null ? null : new Date(clipFromMs).toISOString() }) as { n: number };
 
   const report = buildEngagementReport(rows, {
     period,
     timeZone,
     config,
     policy,
+    clipFromMs,
     excludedAutomatedSessions: excluded?.n ?? 0,
   });
 
@@ -87,13 +125,23 @@ export function loadEngagementReportFromSql(
 
   // Scoping happens after allocation so the retained rows carry the
   // concurrency discount earned against every other project.
-  const match = (slug: string | null, dir: string) => slug === project || dir === project;
-  const kept = report.byProject.filter((p) => match(p.projectSlug, p.projectDirName));
-  const keptKeys = new Set(kept.map((p) => p.projectDirName));
+  //
+  // The home check is one-directional on purpose: when the caller supplies a
+  // home, only rows from that home qualify; when it doesn't, every home
+  // matching the slug is kept, which is the single-home case and the
+  // "show me everything for this project" case alike.
+  const match = (p: { projectSlug: string | null; projectDirName: string; homeKey?: string }) =>
+    (p.projectSlug === project || p.projectDirName === project) &&
+    (!home || p.homeKey === home);
+
+  const kept = report.byProject.filter(match);
+  const keptKeys = new Set(kept.map((p) => projectKeyOf(p.projectDirName, p.homeKey)));
 
   const byDay = report.byDay
     .map((d) => {
-      const byProject = d.byProject.filter((p) => keptKeys.has(p.projectDirName));
+      const byProject = d.byProject.filter((p) =>
+        keptKeys.has(projectKeyOf(p.projectDirName, p.homeKey)),
+      );
       return {
         date: d.date,
         totalHours: round2(byProject.reduce((s, p) => s + p.hours, 0)),
