@@ -117,6 +117,43 @@ describe("GET /api/usage", () => {
     expect(partsSeen.some((p) => p.includes("//wsl.localhost/debian/home/me/.claude"))).toBe(true);
   });
 
+  it("rotates the ETag when the cache slot is recomputed (#190)", async () => {
+    // Rolling windows (24h/7d/30d/today) change as `now` advances and turns
+    // age off the trailing edge — no file is touched, so maxMtime does not
+    // move. Without a time component the ETag stays identical across a
+    // recompute and a revalidating client is pinned to the stale window.
+    await GET(makeGetRequest({ period: "7d" }));
+    const firstParts = vi
+      .mocked(computeETag)
+      .mock.calls.at(-1)![0] as { parts: string[] };
+
+    // Same request inside the TTL: served from the same slot, so the ETag
+    // parts must be unchanged — rotating here would defeat caching entirely.
+    await GET(makeGetRequest({ period: "7d" }));
+    const cachedParts = vi
+      .mocked(computeETag)
+      .mock.calls.at(-1)![0] as { parts: string[] };
+    expect(cachedParts.parts).toEqual(firstParts.parts);
+
+    // Advance past CACHE_TTL (2 min) so the next request recomputes, then
+    // assert the parts actually changed. `getUsage` firing again is what makes
+    // this a recompute rather than a third cache hit.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(Date.now() + 3 * 60_000));
+      const callsBefore = vi.mocked(getUsage).mock.calls.length;
+      await GET(makeGetRequest({ period: "7d" }));
+      expect(vi.mocked(getUsage).mock.calls.length).toBe(callsBefore + 1);
+
+      const recomputedParts = vi
+        .mocked(computeETag)
+        .mock.calls.at(-1)![0] as { parts: string[] };
+      expect(recomputedParts.parts).not.toEqual(firstParts.parts);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("defaults period to '30d' when the param is absent", async () => {
     const req = makeGetRequest({});
 
