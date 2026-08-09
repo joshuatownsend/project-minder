@@ -163,6 +163,28 @@ Then sweep the flaky cluster — several of these will close or shrink once isol
 
 **Guard rail:** per the working-practice note, verify each fix *discriminates* — mutate the implementation and confirm the test fails. Several tests in this repo have ratified defects or pinned an input order instead of the behaviour.
 
+
+### Outcome — #331 (2026-08-09, branch `fix/w3-test-isolation`)
+
+The enabler shipped in three commits. Two premises in the issue changed on contact:
+
+| Claim in #331 | What the measurement showed |
+|---|---|
+| "23 test files" hand-roll the isolation | **30**, plus 20 more that spy `os.homedir()` for non-DB reasons (out of scope) and 9 that touch the DB layer without a dynamic import |
+| Running with `MINDER_STATE_DIR` set "defeats all 23 isolations at once — measured at 24 failures" | **Already fixed.** `tests/setup/clearStateDirEnv.ts` (PR #332) deletes the variable in `setupFiles`, the only hook early enough. All 30 files pass with it set — verified, 30/30 |
+
+So the remaining value was the duplication and the fact that a *new* file still binds silently to the real `~/.minder`. Delivered:
+
+- `tests/_helpers/isolatedState.ts` — temp home + `HOME`/`USERPROFILE` + homedir spy + `MINDER_STATE_DIR` deletion + `globalThis` cache clear, with `reload()` for the per-test module reset. 31 files migrated onto it.
+- `tests/dbIsolationGuard.test.ts` — enforcement. Walks the static import graph and asks whether a test can reach `db/connection` or `tasksDb/connection` along a path no `vi.mock` severs. **Derived, not listed**: a hand-written module list passed while missing `gradeSnapshot.test.ts`, one hop away.
+- Both mutation-tested. That is what caught the guard's own worst bug — the graph followed only `@/` specifiers and was blind to `src/`'s 670 relative imports, so `@/lib/db/migrations` (which reaches connection as `./connection`) read as clean.
+
+Two real defects fixed on the way: `gradeSnapshot.test.ts` froze `DB_DIR` before its own isolation ran, and `tasksDbConnection.test.ts` bound to the real `tasks.db`, safe only by an argument asserted nowhere.
+
+Eight files carry a documented allowlist entry — each states why it cannot open the developer's real database, and a staleness check fails if one stops needing the exception.
+
+**Still open in W3:** the flaky cluster (#345, #362, #355, #273, #220, #282, #175).
+
 ---
 
 ## Wave 4 — Pricing correctness (one coherent wave in `costCalculator`/`ModelPricing`)
