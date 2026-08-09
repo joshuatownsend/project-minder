@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:24188df2d654 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:40:31.246Z -->
+## ★ Insight
+Two mechanical things from this merge worth carrying forward, both about GitHub silently doing something other than what the text implied.
+
+---
+
 <!-- insight:e7e27b0c1fbe | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:27:09.675Z -->
 ## ★ Insight
 Two things about the conflict resolution worth recording.
