@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:aee4e84582f7 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:32:04.174Z -->
+## ★ Insight
+This is precisely the failure mode my own measurement couldn't have caught. I verified the fix against the two real duplicates on this machine, and both were case variants — so the fold was correct for every row I could observe. The C:/D: case doesn't exist in this index, so no measurement of it would ever have flagged the over-merge.
+
+---
+
+<!-- insight:78e05456bd2d | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:25:27.056Z -->
+## ★ Insight
+The part worth carrying forward: the console errors were the *smaller* half of #236. `availableProjects` already deduplicated by slug inside the component, so the dropdown rendered correctly while the rows beneath it stayed split — each holding a fraction of that project's cost.
+
+---
+
 <!-- insight:7a1b511a5540 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:00:17.114Z -->
 ## ★ Insight
 The `availableProjects` dedupe at `:695-700` is worth pausing on — it's a defensive filter that was *masking* the more serious half of this bug. The dropdown looked correct because it collapsed the duplicate slugs at render time. But `byProject` still held two rows for one project, each carrying only part of its spend, and anything reading a project's cost off those rows was understating it.

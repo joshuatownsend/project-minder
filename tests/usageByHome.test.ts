@@ -305,4 +305,54 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
 
     mods.conn.closeDb();
   });
+
+  it("keeps two DRIVES apart even though they slugify identically", async () => {
+    // The other side of the same identity question, and the reason the fold
+    // is drive-letter-case-only rather than dropping project_dir_name from
+    // the grouping: `toSlug` strips the drive prefix, so C:\dev\app and
+    // D:\dev\app produce one slug for two genuinely different projects. The
+    // encoded dir name is the only thing left that tells them apart — merging
+    // them would sum unrelated spend into one row and label it with whichever
+    // directory won. (Codex review, PR #415.)
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const slug = "dev-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    for (const [id, dirName, tokens, cost] of [
+      ["sess-c", "C--dev-app", 100, 1],
+      ["sess-d", "D--dev-app", 300, 3],
+    ] as const) {
+      insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, homeKey,
+        "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+      insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
+    }
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+
+    expect(report.byProject).toHaveLength(2);
+    expect(new Set(report.byProject.map((r) => r.projectDirName))).toEqual(
+      new Set(["C--dev-app", "D--dev-app"])
+    );
+    // Each keeps its own spend rather than being summed into one row.
+    expect(new Set(report.byProject.map((r) => r.tokens))).toEqual(new Set([100, 300]));
+
+    mods.conn.closeDb();
+  });
 });

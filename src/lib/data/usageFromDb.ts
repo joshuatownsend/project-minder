@@ -93,6 +93,30 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
   return row?.value === "1";
 }
 
+/**
+ * SQL expression folding ONLY the drive letter's case in an encoded project
+ * directory name, for use as a grouping key.
+ *
+ * Claude encodes `C:\dev\foo` as `C--dev-foo`, preserving whatever case the
+ * path was observed with — so the same folder reaches the index as both
+ * `C--dev-foo` and `c--dev-foo` depending on which code path recorded it.
+ * Those must group together (#236). What must NOT group together is
+ * `C--dev-foo` and `D--dev-foo`: `toSlug` strips the drive prefix, so two
+ * different drives yield one slug for two genuinely different projects, and
+ * the encoded directory is the only thing that still tells them apart.
+ *
+ * Hence: lowercase the first character, and only when it is the single-letter
+ * drive prefix. Everything after it keeps its case, so case-distinct POSIX
+ * paths that slugify alike also stay separate. The `[A-Za-z]--` shape is the
+ * same one `canonicalizeDirName` tests for (`usage/parser.ts:72`); GLOB is
+ * case-sensitive in SQLite, which LIKE is not.
+ */
+const DIR_NAME_DRIVE_FOLDED = `CASE
+      WHEN s.project_dir_name GLOB '[A-Za-z]--*'
+      THEN LOWER(SUBSTR(s.project_dir_name, 1, 1)) || SUBSTR(s.project_dir_name, 2)
+      ELSE s.project_dir_name
+    END`;
+
 interface FilterParams {
   /** Inclusive ISO timestamp lower bound for `t.ts`. null for "all". */
   periodStart: string | null;
@@ -329,21 +353,21 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // aggregator.ts:311). Single-home setups have one uniform home_key, so
   // their row count is unchanged.
   //
-  // `project_dir_name` is deliberately NOT in the GROUP BY: it is a display
-  // attribute, not part of that identity, and grouping on it splits one
-  // project into several rows whenever the same directory was recorded under
-  // more than one spelling. That is not hypothetical — the encoded dir name
-  // preserves the drive letter's case, so `C--dev-foo` and `c--dev-foo` are
-  // distinct strings for the same folder while `toSlug` lowercases both to
-  // one slug. Two projects on the reference index were split exactly that
-  // way, which surfaced as duplicate React keys on /usage (#236) because
-  // every render site keys on projectSlug. MIN() picks one spelling
-  // deterministically so the row is stable across queries.
+  // The encoded dir name stays in the identity, but with its drive letter
+  // case-folded (see DIR_NAME_DRIVE_FOLDED). Dropping it entirely would be
+  // wrong: `toSlug` strips the drive prefix, so `C:\dev\foo` and `D:\dev\foo`
+  // share a slug while being genuinely different projects, and grouping on
+  // (slug, home) alone would sum their spend into one row labelled with
+  // whichever directory won. Keeping it unfolded is also wrong: it splits ONE
+  // project whenever the same folder was recorded under two spellings of its
+  // drive letter, which is what #236 was — two projects on the reference
+  // index split between `C--dev-…` and `c--dev-…`, surfacing as duplicate
+  // React keys because every render site keys on projectSlug.
   const rows = prepCached(db,
       `SELECT
-         s.project_slug           AS projectSlug,
-         MIN(s.project_dir_name)  AS projectDirName,
-         s.home_key               AS homeKey,
+         s.project_slug                    AS projectSlug,
+         MIN(s.project_dir_name)           AS projectDirName,
+         s.home_key                        AS homeKey,
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
@@ -354,7 +378,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
-       GROUP BY s.project_slug, s.home_key
+       GROUP BY s.project_slug, ${DIR_NAME_DRIVE_FOLDED}, s.home_key
        ORDER BY cost DESC`
     )
     .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
@@ -891,11 +915,21 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // shape from a single query needs window functions / JSON aggregation
   // that would explode the SQL surface area for marginal gain.
   // Keyed on project_slug alone, matching the file-parse aggregator's
-  // `projectDetailAccum` (aggregator.ts:444) — note this one has no home
-  // component, unlike byProject above. `project_dir_name` stays out of the
-  // GROUP BY for the reason spelled out in queryByProject: it splits a single
-  // project across drive-letter-case spellings of the same directory, and the
-  // downstream slugs array + React keys both assume one row per slug (#236).
+  // `projectDetailAccum` (aggregator.ts:444) — note this one has neither the
+  // home component nor the folded dir name that byProject groups on above.
+  // That is deliberate rather than an oversight: everything downstream of
+  // here assumes one row per slug. `slugs` below drives the `IN (...)` fan-out
+  // for the category and tool queries, whose results are stitched back by
+  // slug, and the breakdown renders with `key={p.projectSlug}`
+  // (UsageDashboard.tsx:371) — two rows sharing a slug double-count the stitch
+  // and collide the React key, which is the bug this grouping fixes (#236).
+  //
+  // The cost of slug-only is the same slug collision `toSlug` creates
+  // elsewhere: `C:\dev\foo` and `D:\dev\foo` merge into one detail row. That
+  // is pre-existing and matches the file backend exactly, so it is not
+  // introduced here — but it is the reason byProject and this query group
+  // differently, and why anything relying on per-location detail should read
+  // byProject's rows, not these.
   const headers = prepCached(db,
       `SELECT
          s.project_slug           AS projectSlug,
