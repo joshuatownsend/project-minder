@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:029c8c89a4f1 | session:db71f844-559d-4c41-8d38-501e8f9aa0f6 | 2026-08-09T18:52:59.553Z -->
+## ★ Insight
+The tests earned their keep immediately. My first credit formula computed `agentBusy` as *last-minus-first agent event*, which returns **zero** when a gap holds a single assistant turn — the common shape of a long thinking response. Four tests failed, and the fix recovered real supervised minutes that were being silently dropped. That bug would never have surfaced as an error; it would have shipped as an invoice that was quietly ~15% low.
+
+---
+
+<!-- insight:8dd2941aa72a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T18:44:45.499Z -->
+## ★ Insight
+Two things from this round worth keeping.
+
+---
+
 <!-- insight:ff340549d739 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:58:16.873Z -->
 ## ★ Insight
 Five rounds produced the same class five times: gitignored developer state inside the tracing root. Every single entry added — `.env*`, `.worktrees`, `.minder.json`, `.cache`, and now five more — was *already declared in `.gitignore`*. The code has been restating instances of a rule that file already expresses, and the review kept finding the instances I hadn't restated yet.
