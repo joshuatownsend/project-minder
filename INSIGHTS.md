@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:ff340549d739 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T17:58:16.873Z -->
+## ★ Insight
+Five rounds produced the same class five times: gitignored developer state inside the tracing root. Every single entry added — `.env*`, `.worktrees`, `.minder.json`, `.cache`, and now five more — was *already declared in `.gitignore`*. The code has been restating instances of a rule that file already expresses, and the review kept finding the instances I hadn't restated yet.
+
+---
+
 <!-- insight:9303939ee0c6 | session:db71f844-559d-4c41-8d38-501e8f9aa0f6 | 2026-08-09T17:36:34.320Z -->
 ## ★ Insight
 The classifier is where this feature would have quietly failed. Portfolio-wide, **63% of plain-text "user" turns are not human** — 3,052 `"You are the staff historian…"` prompts are a cron-driven SDK agent, and `"Another Claude session sent a message"` is agent-to-agent chatter. Each would have opened a phantom attended block on an unattended night run.

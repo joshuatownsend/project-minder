@@ -65,6 +65,19 @@ describe("isForbiddenName", () => {
     expect(isForbiddenName(".envrc")).toBe(true);
   });
 
+  it("treats .pem as a suffix — a private key must never reach an installer", () => {
+    // `.gitignore` ignores *.pem repo-wide because a PEM here is a signing or
+    // TLS key. The #284 tracing fallback would sweep a root-level one into
+    // .next/standalone and from there into a signed installer, and nothing
+    // else in this module catches it — the rest are exact basenames.
+    expect(isForbiddenName("server.pem")).toBe(true);
+    expect(isForbiddenName("localhost-key.pem")).toBe(true);
+    expect(isForbiddenName("KEY.PEM")).toBe(true);
+    // Suffix, not substring: a name merely containing "pem" is fine.
+    expect(isForbiddenName("pemberton.js")).toBe(false);
+    expect(isForbiddenName("pem")).toBe(false);
+  });
+
   it("is case-insensitive (Windows payloads)", () => {
     expect(isForbiddenName(".GIT")).toBe(true);
     expect(isForbiddenName(".Env.Local")).toBe(true);

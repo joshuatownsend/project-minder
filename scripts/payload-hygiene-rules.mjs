@@ -88,6 +88,7 @@ export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node", ".cache"]);
 export const FORBIDDEN_SUMMARY = [
   ...FORBIDDEN_EXACT,
   ".env*",
+  "*.pem",
   ...FORBIDDEN_ROOT_RELATIVE,
 ].join(", ");
 
@@ -115,9 +116,26 @@ export const MAX_PAYLOAD_REL_PATH = 180;
 // standalone output and node_modules contain none), so the broad prefix has no
 // known false positives — if a real payload file ever legitimately starts with
 // `.env`, surface it rather than silently special-casing.
+//
+// `*.pem` is a SUFFIX rule and the only one here justified primarily by blast
+// radius rather than by frequency. `.gitignore:12` ignores it repo-wide
+// because a PEM in this checkout is a private signing or TLS key; the
+// whole-project tracing fallback (#284) would sweep a root-level one into
+// `.next/standalone` and, from there, into a signed installer. Nothing else
+// in this module protects it — the rest are exact basenames.
+//
+// Verified safe to apply broadly in this tree: zero `.pem` files exist under
+// `node_modules`, so no dependency is pruned today. The residual risk is a
+// future package shipping a CA bundle as `.pem`, which the packager would
+// prune silently. That trade is taken deliberately and on the same terms as
+// `.env*` above: a private key reaching an installer is not recoverable,
+// whereas a missing CA bundle fails loudly at the first TLS call. If a real
+// payload file ever legitimately ends in `.pem`, surface it rather than
+// silently special-casing.
 export function isForbiddenName(name) {
   const lower = name.toLowerCase();
   if (FORBIDDEN_EXACT.has(lower)) return true;
   if (lower.startsWith(".env")) return true;
+  if (lower.endsWith(".pem")) return true;
   return false;
 }

@@ -207,6 +207,7 @@ const nextConfig: NextConfig = {
       "./.playwright-mcp/**",
       "./.agents/**",
       "./.claudelint-cache/**",
+      "./*.pem",
       "./.worktrees/**",
       "./tests/**",
       "./docs/**",
