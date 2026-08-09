@@ -87,6 +87,26 @@ function toCsv(report: EngagementReport): string {
   return lines.join("\r\n");
 }
 
+/** Longest any single component may contribute, applied *before* sanitizing
+ *  so the work is bounded by a constant rather than by request input. */
+const MAX_PART_LEN = 64;
+
+/**
+ * Strip leading and trailing `-` without a regex.
+ *
+ * The obvious `/^-+|-+$/` is a **polynomial ReDoS** on this input: the `-+$`
+ * alternative retries from every position in a long dash run, and `project`
+ * is attacker-controlled (CodeQL `js/polynomial-redos`, flagged on PR #418).
+ * Two pointers are linear and cannot backtrack at all.
+ */
+function trimDashes(s: string): string {
+  let a = 0;
+  let b = s.length;
+  while (a < b && s.charCodeAt(a) === 45) a++;
+  while (b > a && s.charCodeAt(b - 1) === 45) b--;
+  return s.slice(a, b);
+}
+
 /**
  * Build a safe `Content-Disposition` filename.
  *
@@ -100,11 +120,18 @@ function toCsv(report: EngagementReport): string {
 function safeFilename(parts: (string | undefined)[]): string {
   const cleaned = parts
     .filter((p): p is string => !!p)
-    .map((p) => p.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, ""))
+    // Truncate first: the allowlist replace is linear, but bounding the input
+    // keeps total work constant regardless of what the caller sends.
+    .map((p) => trimDashes(p.slice(0, MAX_PART_LEN).replace(/[^A-Za-z0-9._-]+/g, "-")))
     .filter(Boolean)
     .join("_");
   return (cleaned || "timecard").slice(0, 120);
 }
+
+/** Exported for tests only — filename sanitization is security-relevant
+ *  (header injection + ReDoS), so it is pinned directly rather than inferred
+ *  from a route response. */
+export const __testing = { safeFilename, trimDashes };
 
 export async function GET(request: NextRequest) {
   // Same two gates as the read route. A CSV is the most durable artifact this
