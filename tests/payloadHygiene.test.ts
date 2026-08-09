@@ -28,6 +28,24 @@ describe("isForbiddenName", () => {
     expect(isForbiddenName(".worktrees-backup")).toBe(false);
   });
 
+  it("catches generated developer-state directories", () => {
+    // All gitignored, all in the tracing root. `.agents` was the one actually
+    // observed inside `.next/standalone`; the rest are the same shape and were
+    // added together rather than one review round at a time (Codex, PR #414).
+    for (const name of [
+      ".design-fetch",
+      ".codegraph",
+      ".playwright-mcp",
+      ".agents",
+      ".claudelint-cache",
+    ]) {
+      expect(isForbiddenName(name)).toBe(true);
+    }
+    // Basename rules are safe for these only because no package uses the
+    // names — unlike `.cache`, which had to be root-anchored.
+    expect(isForbiddenName(".agents-sdk")).toBe(false);
+  });
+
   it("catches the developer's own Minder config", () => {
     // `.minder.json` is gitignored and present in any checkout where setup
     // has been run. Shipping it does not merely leak scan roots and project

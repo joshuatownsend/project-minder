@@ -31,11 +31,18 @@ export const FORBIDDEN_EXACT = new Set([
   // never wants a payload copy — config.ts resolves it under
   // `resolveStateDir()`, the user's own state directory.
   ".minder.json",
+  // Generated / downloaded developer state, all gitignored and all sitting in
+  // the tracing root where the #284 fallback sweeps them. `.agents` is the one
+  // that was actually observed in `.next/standalone`; the rest are the same
+  // shape and were added with it rather than one review round at a time.
+  // Names are distinctive enough for a basename rule — verified no package in
+  // this tree uses any of them, unlike `.cache` above.
+  ".design-fetch",
+  ".codegraph",
+  ".playwright-mcp",
+  ".agents",
+  ".claudelint-cache",
 ]);
-
-// Human-readable summary for log lines, kept next to the rules it describes.
-export const FORBIDDEN_SUMMARY =
-  ".git, .env*, .claude, .mcp.json, .minder.json, agentlytics-repo, .worktrees, dist/node";
 
 // Forbidden paths anchored at the PAYLOAD ROOT, unlike FORBIDDEN_EXACT which
 // matches a basename at any depth. Anchoring is the whole point here: `node` is
@@ -71,6 +78,18 @@ export const FORBIDDEN_SUMMARY =
 // during ordinary development. A local release build from a checkout that has
 // run Minder would otherwise publish it.
 export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node", ".cache"]);
+
+// Human-readable summary for log lines. DERIVED from the sets above rather
+// than written out, because a hand-maintained restatement is exactly the thing
+// that drifts: this list grew by six entries in one review round, and a
+// summary that quietly kept describing the old set would have made the log
+// line a false reassurance. `.env*` is spelled out because it is a prefix rule
+// in `isForbiddenName` rather than a set member.
+export const FORBIDDEN_SUMMARY = [
+  ...FORBIDDEN_EXACT,
+  ".env*",
+  ...FORBIDDEN_ROOT_RELATIVE,
+].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
 export function isForbiddenRootRelative(relPath) {
