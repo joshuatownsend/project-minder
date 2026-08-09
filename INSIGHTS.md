@@ -1,5 +1,83 @@
 # Insights
 
+<!-- insight:da665e0d5f4a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T16:25:34.559Z -->
+## ★ Insight
+Four findings across two rounds, and three share one shape: I fixed the **instance** where the correct boundary was the **class**. `.env.local` where the rule is `.env*`. The drive letter where the rule is "the whole Windows path." `agentlytics-repo` where the rule is "any gitignored checkout nested in the tracing root" — which is what `.worktrees` was.
+
+---
+
+<!-- insight:397ba2f1e558 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:50:49.534Z -->
+## ★ Insight
+The P1 is the one worth keeping. I verified that fix against the two real duplicates in the index and both were case variants, so the fold was correct for every row I could observe — the C:/D: case simply doesn't exist on this machine, and no amount of measuring would have surfaced it.
+
+---
+
+<!-- insight:aee4e84582f7 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:32:04.174Z -->
+## ★ Insight
+This is precisely the failure mode my own measurement couldn't have caught. I verified the fix against the two real duplicates on this machine, and both were case variants — so the fold was correct for every row I could observe. The C:/D: case doesn't exist in this index, so no measurement of it would ever have flagged the over-merge.
+
+---
+
+<!-- insight:78e05456bd2d | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:25:27.056Z -->
+## ★ Insight
+The part worth carrying forward: the console errors were the *smaller* half of #236. `availableProjects` already deduplicated by slug inside the component, so the dropdown rendered correctly while the rows beneath it stayed split — each holding a fraction of that project's cost.
+
+---
+
+<!-- insight:7a1b511a5540 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T15:00:17.114Z -->
+## ★ Insight
+The `availableProjects` dedupe at `:695-700` is worth pausing on — it's a defensive filter that was *masking* the more serious half of this bug. The dropdown looked correct because it collapsed the duplicate slugs at render time. But `byProject` still held two rows for one project, each carrying only part of its spend, and anything reading a project's cost off those rows was understating it.
+
+---
+
+<!-- insight:a7f3c2cb5970 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T03:25:10.230Z -->
+## ★ Insight
+The lint run turned out to be a third instance of this session's recurring shape. Three times a gate or measurement was contaminated by *a copy of the repo living somewhere unexpected*: NFT tracing `agentlytics-repo/` into every route, my `cpSync` producing a standalone tree that booted but couldn't serve, and now eslint walking a full repo snapshot nested inside the Rust target directory — nested deeply enough to contain worktrees I'd deleted an hour earlier.
+
+---
+
+<!-- insight:b74f39bab288 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T02:47:13.761Z -->
+## ★ Insight
+Worth naming what nearly happened. I had a chain of plausible-but-wrong conclusions queued up: first "the sandbox can't reach loopback" (refuted by PowerShell on the host), then "the WinNAT 4100–4199 exclusion" (real, and it *did* invalidate my first port choice — but wasn't this), then "Next 16.3 broke standalone packaging," which I was one step from writing into a blocker report. The control — `next start` returning 200 on the same build — is what stopped it, and then the in-place run narrowed it further to my harness.
+
+---
+
+<!-- insight:49f271edba20 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T01:44:26.682Z -->
+## ★ Insight
+That third one is the reason this issue is worth more than its size label. `next.config.ts` already documents that `.git/` and `.env.local` were "stopped only by package-standalone's prune at the copy boundary" — and the comment even notes #284 once shipped a real `.git` and `.env.local`. So the safety net is a post-hoc filter in our own packaging script, downstream of a tracer that keeps handing it secrets.
+
+---
+
+<!-- insight:56ef561cf095 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T01:27:52.243Z -->
+## ★ Insight
+Note it's an *exact* pin (`"postcss": "8.5.23"`, no caret) in both versions. That's what makes the TODO's "nothing else can reach it" claim literally true rather than rhetorical: with a caret range, Dependabot or a `pnpm.overrides` entry could lift postcss independently. Against an exact pin, an override would resolve a version Next didn't test against, and pnpm would flag the peer mismatch. So the transitive alert is welded to the framework version — upgrading Next *is* the patch, which is precisely why this one issue sat unreachable through several dependency sweeps.
+
+---
+
+<!-- insight:a8057efc22a2 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T01:11:22.564Z -->
+## ★ Insight
+That identical `src: 954` across three routes is the bailout's fingerprint, and it's a sharper test than the entry-count the plan proposed. Notice the `node_modules` column *does* vary correctly — 123 / 369 / 251, tracking each route's real dependency footprint. So NFT's dependency tracing works fine. It's specifically the first-party `src/` tree that gets swept wholesale into every route, identically, regardless of what that route imports.
+
+---
+
+<!-- insight:bade780a9ada | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T00:59:18.942Z -->
+## ★ Insight
+Two things worth noting from the first deletion. `git worktree remove` failed on Windows `MAX_PATH` *after* it had already deregistered the worktree and deleted the `.git` pointer — so a single failed command left the repo in a state git no longer tracked but the filesystem still held. That's why the script attempts git's own removal first, then falls back to `fs.rmSync`, then runs `prune` to reconcile: each step assumes the previous one may have half-succeeded.
+
+---
+
+<!-- insight:b5b2c96c4863 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T23:52:38.745Z -->
+## ★ Insight
+Worth noting what actually caught this bug, since it wasn't any gate. Typecheck couldn't see it (the coupling is a spawned CLI). The test suite couldn't (the CLI is mocked). CI couldn't (the Node 20 job ran the mock). `pnpm install` couldn't (`engines` is advisory without `engine-strict`). Every automated defense was blind for a *different* structural reason — and two review bots reading a lockfile diff found it in under a minute. That's the argument for bot review that "we have good CI" doesn't answer: CI verifies what you thought to check, review notices what you didn't.
+
+---
+
+<!-- insight:f42a3fe31968 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T23:27:34.118Z -->
+## ★ Insight
+Mocking the linter CLI in tests was the right call — you don't want a 2-minute subprocess in a unit suite. But it silently converted the Node-20 job from "we support this runtime" into "we support importing our own TypeScript on this runtime." The moment a dependency's constraint lives in a *spawned* process, no amount of in-process testing can see it. That's the same structural blind spot as the CLI-contract coupling I flagged in #411 — and it's why the bots caught something four green checkmarks didn't.
+
+---
+
 <!-- insight:43f33d061f2b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-08T23:03:40.623Z -->
 ## ★ Insight
 The stderr detail is the quiet lesson. The CLI has been printing `Update available: 0.5.0 -> 0.7.1` on every single invocation for months — `runLibraryCli` captures stdout and never reads stderr, so the notice went to a stream nobody listens to. The information needed to catch this existed, was emitted continuously, and was free. Worth remembering when wiring a subprocess: choosing not to read stderr is choosing not to hear a class of message you haven't enumerated yet.

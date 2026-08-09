@@ -168,10 +168,17 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
     }
 
     if (entry.type === "user") {
+      // Tool-result turns put their blocks on `message.content` OR — when
+      // that array is EMPTY — on top-level `content`. The fallback must be
+      // length-based, not nullish: `[] ?? x` is `[]`, so a nullish chain
+      // stops at the empty array and never looks at the top-level field,
+      // silently dropping the `gh pr create` result and its PR URL.
+      // Mirrors ticketExtractor.ts and parser.ts's `textSource`.
+      const messageContent = (entry.message?.content as unknown) ?? [];
       const content =
-        (entry.message?.content as unknown) ??
-        (entry as { content?: unknown }).content ??
-        [];
+        Array.isArray(messageContent) && messageContent.length === 0
+          ? ((entry as { content?: unknown }).content ?? messageContent)
+          : messageContent;
       if (!Array.isArray(content)) continue;
       for (const block of content as Array<Record<string, unknown>>) {
         if (block.type !== "tool_result") continue;

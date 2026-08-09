@@ -8,11 +8,33 @@ Navigate to **Usage** in the top navigation bar to view your token spending, cos
 
 ## Period Filters
 
-Use the period toggle at the top to filter data:
-- **Today** — activity from midnight today
-- **This Week** — activity from the start of the current week (Sunday)
-- **This Month** — activity from the 1st of the current month
-- **All Time** — all recorded session data
+Use the period toggle at the top to filter data. Every option except **Today**
+is a **rolling window** measured back from the moment you load the page — not a
+calendar boundary:
+
+- **24 hours** — the last 24 hours
+- **Today** — since local midnight. The one calendar-aligned option, so it is
+  the only one that shrinks to nothing just after midnight and grows through
+  the day.
+- **7 days** — the last 7×24 hours
+- **30 days** — the last 30×24 hours
+- **90 days** — the last 90×24 hours
+- **1 year** — the last 365×24 hours
+- **All time** — every recorded session, no lower bound
+
+Because rolling windows move with the clock, the same period can report a
+different total minutes later without you having done anything: work drops off
+the trailing edge as it ages out. That is expected.
+
+The **Cost report** (`/costs`) and each project's **Costs** tab offer the same
+list minus **24 hours**, which is too granular to compare projects against.
+
+Older links keep working: `?period=week` and `?period=month` are accepted as
+aliases for **7 days** and **30 days** (and `quarter` / `year` for **90 days** /
+**1 year**). These date from when the filters really were calendar-aligned —
+"this week" started on Sunday and "this month" on the 1st. They now resolve to
+the rolling equivalents, so a bookmarked link returns a slightly different span
+than it did originally.
 
 ## Cost Accuracy
 
