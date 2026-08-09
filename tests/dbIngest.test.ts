@@ -9,6 +9,7 @@ import { DERIVED_VERSION } from "@/lib/db/derivationVersion";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { SessionFile } from "@/lib/adapters/types";
 import type { MinderConfig } from "@/lib/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Ingest integration test. Lives in tmpHome with a synthetic
 // `.claude/projects/...` tree so we never touch real user data.
@@ -33,17 +34,13 @@ interface Reloaded {
   data: typeof import("@/lib/data");
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-ingest-test-" });
 
-async function freshTempHome() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "pm-ingest-test-"));
-}
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
 
 async function reloadModulesPointingAt(home: string): Promise<Reloaded> {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
+  await state.reload();
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
@@ -130,25 +127,8 @@ function userToolResultTurn(timestamp: string, toolUseId: string, output: string
   };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await freshTempHome();
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {

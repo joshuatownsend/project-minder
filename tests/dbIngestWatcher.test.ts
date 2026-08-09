@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Watcher integration test. Sets up a tmpdir, starts the watcher
 // pointed at it (`bypassEnvFlag` so we don't need to set MINDER_INDEXER),
@@ -30,18 +31,13 @@ interface Reloaded {
   watcher: typeof import("@/lib/db/ingestWatcher");
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-watcher-test-", extraGlobals: ["__minderIngestWatcher"] });
 
-async function freshTempHome(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "pm-watcher-test-"));
-}
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
 
 async function reloadModulesPointingAt(home: string): Promise<Reloaded> {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  delete (globalThis as { __minderIngestWatcher?: unknown }).__minderIngestWatcher;
+  await state.reload();
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
@@ -105,16 +101,12 @@ async function waitFor<T>(
   }
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await freshTempHome();
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 afterEach(async () => {
-  // Tear down the watcher first so its background timers don't fire
+// Tear down the watcher first so its background timers don't fire
   // against a deleted tmpHome and spam afterEach with errors.
   try {
     const watcherMod = await import("@/lib/db/ingestWatcher");
@@ -123,15 +115,6 @@ afterEach(async () => {
     /* ignore — module may not have loaded */
   }
   vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
 });
 
 describe.skipIf(!driverAvailable)("ingestWatcher", () => {

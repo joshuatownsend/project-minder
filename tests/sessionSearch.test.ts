@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Tests for `src/lib/data/sessionSearch.ts`. We drive a real ingest into
 // a tmp DB (better-sqlite3 required) so the FTS5 triggers populate
@@ -19,9 +19,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-search-test-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 interface JsonlEntry {
   type: "user" | "assistant" | "ai-title";
@@ -64,9 +65,7 @@ function assistantTurn(ts: string, model: string, text: string, slug?: string): 
 }
 
 async function reload() {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   return {
     conn: await import("@/lib/db/connection"),
     mig: await import("@/lib/db/migrations"),
@@ -75,25 +74,8 @@ async function reload() {
   };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-search-test-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.skipIf(!driverAvailable)("buildFtsQuery", () => {

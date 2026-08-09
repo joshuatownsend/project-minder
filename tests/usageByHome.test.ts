@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import { aggregateUsage } from "@/lib/usage/aggregator";
 import { emptyActivity } from "@/lib/usage/activityBuckets";
 import { normalizePathKey } from "@/lib/platform";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { MinderConfig } from "@/lib/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // #311 — the Claude-home discriminator for per-project usage/cost reports.
 // Two configured homes with identical path layouts (Ubuntu + Debian both
@@ -123,9 +123,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-usage-home-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 interface JsonlEntry {
   type: "user" | "assistant";
@@ -156,9 +157,7 @@ function assistantTurn(timestamp: string, inputTokens: number): JsonlEntry {
 }
 
 async function reloadModules() {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   return {
     fromDb: await import("@/lib/data/usageFromDb"),
     conn: await import("@/lib/db/connection"),
@@ -167,25 +166,8 @@ async function reloadModules() {
   };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-usage-home-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.skipIf(!driverAvailable)("home_key end-to-end: multi-home ingest → SQL report", () => {

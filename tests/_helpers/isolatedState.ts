@@ -95,6 +95,12 @@ export interface IsolatedStateOptions {
    * save/restore dance a third time.
    */
   env?: Record<string, string | undefined>;
+  /**
+   * Variables to save and restore WITHOUT setting — for files whose tests set
+   * them case by case (`MINDER_USE_DB` is the usual one) and which only need
+   * the value not to escape into the next file.
+   */
+  preserveEnv?: readonly string[];
   /** `beforeEach`/`afterEach` (default) or `beforeAll`/`afterAll`. */
   lifetime?: IsolationLifetime;
 }
@@ -127,6 +133,7 @@ export function installIsolatedState(
     extraGlobals = [],
     seedClaudeProjects = false,
     env = {},
+    preserveEnv = [],
     lifetime = "perTest",
   } = options;
 
@@ -135,7 +142,13 @@ export function installIsolatedState(
   // let a developer's shell silently redirect an "isolated" test at their real
   // relocated database. Callers may still override it through `env`.
   const envKeys = Array.from(
-    new Set(["HOME", "USERPROFILE", "MINDER_STATE_DIR", ...Object.keys(env)])
+    new Set([
+      "HOME",
+      "USERPROFILE",
+      "MINDER_STATE_DIR",
+      ...Object.keys(env),
+      ...preserveEnv,
+    ])
   );
 
   let tmpHome = "";

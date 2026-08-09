@@ -15,7 +15,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import {
   mcpServerKey,
@@ -23,6 +22,7 @@ import {
   isAttributed,
 } from "@/lib/usage/attribution";
 import type { SkillCost, McpServerCost } from "@/lib/usage/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 let driverAvailable: boolean;
 try {
@@ -86,35 +86,13 @@ describe("isAttributed", () => {
 
 // ── dual-backend parity ────────────────────────────────────────────────────
 
+const state = installIsolatedState({ prefix: "pm-a4-", preserveEnv: ["MINDER_USE_DB"] });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalUseDb: string | undefined;
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalUseDb = process.env.MINDER_USE_DB;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-a4-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const [k, v] of [
-    ["HOME", originalHome],
-    ["USERPROFILE", originalUserProfile],
-    ["MINDER_USE_DB", originalUseDb],
-  ] as const) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 interface Attr {
@@ -219,9 +197,7 @@ function bySkill(rows: SkillCost[]): Record<string, SkillCost> {
 
 describe.skipIf(!driverAvailable)("A4 attribution — file-parse vs SQLite parity", () => {
   async function reportFrom(useDb: boolean) {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
     process.env.MINDER_USE_DB = useDb ? "1" : "0";
 
     if (useDb) {
@@ -367,9 +343,7 @@ describe.skipIf(!driverAvailable)("skill attribution on the /skills catalog", ()
    *   `db` there would be asserting against intended behaviour.
    */
   async function skillUsageFrom(useDb: boolean, expectDbBackend = true) {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     process.env.MINDER_USE_DB = useDb ? "1" : "0";
 
     if (useDb) {
@@ -503,9 +477,7 @@ describe.skipIf(!driverAvailable)("A4 review follow-ups", () => {
   }
 
   async function usageFrom(useDb: boolean) {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     process.env.MINDER_USE_DB = useDb ? "1" : "0";
     if (useDb) await bootDb();
     const data = await import("@/lib/data");
@@ -567,9 +539,7 @@ describe.skipIf(!driverAvailable)("A4 review follow-ups", () => {
     await writeSidechainFixture();
 
     async function catalogFrom(useDb: boolean) {
-      vi.resetModules();
-      delete (globalThis as { __minderDb?: unknown }).__minderDb;
-      vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+      await state.reload();
       process.env.MINDER_USE_DB = useDb ? "1" : "0";
       if (useDb) await bootDb();
       const data = await import("@/lib/data");
@@ -588,9 +558,7 @@ describe.skipIf(!driverAvailable)("A4 review follow-ups", () => {
 
   it("falls back to file-parse while the v3 reconcile is still pending", async () => {
     await writeExplicitFixture();
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     process.env.MINDER_USE_DB = "1";
     const db = await bootDb();
 

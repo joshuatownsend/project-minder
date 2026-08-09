@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import os from "os";
-import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Integration tests for otelQueries.ts query functions.
 // Pattern mirrors otelIngest.test.ts — skipIf when better-sqlite3 native
@@ -23,17 +22,13 @@ interface Reloaded {
   queries:  typeof import("@/lib/db/otelQueries");
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-otelq-test-" });
 
-async function freshTempHome() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "pm-otelq-test-"));
-}
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
 
 async function reloadModules(home: string): Promise<Reloaded> {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
+  await state.reload();
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn    = await import("@/lib/db/connection");
   const mig     = await import("@/lib/db/migrations");
@@ -42,21 +37,8 @@ async function reloadModules(home: string): Promise<Reloaded> {
   return { conn, mig, ingest, queries };
 }
 
-beforeEach(async () => {
-  originalHome        = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome             = await freshTempHome();
-  process.env.HOME        = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined)        delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try { await fs.rm(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 // ── Shared seed helpers ────────────────────────────────────────────────────────

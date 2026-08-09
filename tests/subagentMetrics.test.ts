@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
-import os from "os";
-import { promises as fs } from "fs";
 import type { SubagentInfo } from "@/lib/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Tests for `enrichSubagentsFromOtel` — populates per-subagent runtime
 // metrics (cost, tokens, model, duration) on JSONL-derived SubagentInfo
@@ -28,9 +26,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-subagent-enrich-", env: { MINDER_USE_DB: "1" } });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 // Holds a reference to the most recently loaded connection module so
 // afterEach can close the SQLite handle deterministically — needed to
@@ -41,9 +40,7 @@ async function reloadModules() {
   if (currentConn) {
     try { currentConn.closeDb(); } catch { /* ignore */ }
   }
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   const conn = await import("@/lib/db/connection");
   currentConn = conn;
   return {
@@ -54,31 +51,17 @@ async function reloadModules() {
 }
 
 beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-subagent-enrich-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  // Force MINDER_USE_DB on so getDb() returns a real connection.
+  tmpHome = state.tmpHome();
+// Force MINDER_USE_DB on so getDb() returns a real connection.
   process.env.MINDER_USE_DB = "1";
 });
 
 afterEach(async () => {
-  if (currentConn) {
+if (currentConn) {
     try { currentConn.closeDb(); } catch { /* ignore */ }
     currentConn = null;
   }
   vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  delete process.env.MINDER_USE_DB;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
 });
 
 function makeSubagent(agentId: string, type: string): SubagentInfo {

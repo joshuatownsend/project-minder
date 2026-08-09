@@ -12,8 +12,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 let driverAvailable: boolean;
 try {
@@ -24,27 +24,17 @@ try {
   driverAvailable = false;
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-parity-test-" });
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-parity-test-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
+
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch { /* ignore */ }
+vi.restoreAllMocks();
 });
 
 async function writeFixture(filePath: string, entries: object[]): Promise<void> {
@@ -119,9 +109,7 @@ function buildFixture() {
 describe.skipIf(!driverAvailable)("Commit 3 parity: DB path vs file-parse path", () => {
   it("tool_uses.is_error, error_category, invocation_source match ToolCall fields", async () => {
     // ── Setup ──────────────────────────────────────────────────────────
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
 
     const conn = await import("@/lib/db/connection");
     const mig = await import("@/lib/db/migrations");
@@ -193,9 +181,7 @@ describe.skipIf(!driverAvailable)("Commit 3 parity: DB path vs file-parse path",
   });
 
   it("sessions.work_mode_*_pct populated and non-negative", async () => {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
 
     const conn = await import("@/lib/db/connection");
     const mig = await import("@/lib/db/migrations");

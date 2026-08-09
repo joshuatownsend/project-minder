@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
-import { promises as fs } from "fs";
 import { NextRequest } from "next/server";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Integration test for /api/sql against a tmpHome SQLite index.
 // Uses the real route handler (not a mock); spins up a fresh DB,
@@ -21,14 +20,14 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-sql-route-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 async function reloadModules() {
-  vi.resetModules();
+  await state.reload();
   delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
   const route = await import("@/app/api/sql/route");
@@ -48,26 +47,11 @@ function mkPost(body: unknown): NextRequest {
   });
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-sql-route-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
-});
+
 
 describe.skipIf(!driverAvailable)("/api/sql", () => {
   async function setupPopulatedDb() {

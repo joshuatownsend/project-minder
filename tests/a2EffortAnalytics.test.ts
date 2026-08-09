@@ -19,7 +19,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import {
   UNKNOWN_EFFORT,
@@ -30,6 +29,7 @@ import {
 } from "@/lib/usage/effort";
 import { detectOneShot, detectOneShotTasks } from "@/lib/usage/oneShotDetector";
 import type { UsageTurn, EffortBreakdown } from "@/lib/usage/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 let driverAvailable: boolean;
 try {
@@ -225,35 +225,13 @@ describe("detectOneShotTasks", () => {
 
 // ── dual-backend parity ────────────────────────────────────────────────────
 
+const state = installIsolatedState({ prefix: "pm-a2-", preserveEnv: ["MINDER_USE_DB"] });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalUseDb: string | undefined;
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalUseDb = process.env.MINDER_USE_DB;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-a2-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const [k, v] of [
-    ["HOME", originalHome],
-    ["USERPROFILE", originalUserProfile],
-    ["MINDER_USE_DB", originalUseDb],
-  ] as const) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 interface Entry {
@@ -370,9 +348,7 @@ describe.skipIf(!driverAvailable)("task_outcome across a tail-append", () => {
 
   /** Ingest whatever is on disk, then read back every stamped outcome. */
   async function ingestAndRead(): Promise<Array<{ turn_index: number; effort: string | null; task_outcome: string | null }>> {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -470,9 +446,7 @@ describe.skipIf(!driverAvailable)("byEffort — adapter (non-Claude) sessions", 
   // Exactly the silent per-backend disagreement this slice must not introduce.
   // (Codex review, PR #378.)
   it("stamps task outcomes so the effort cross-tab sees adapter tasks too", async () => {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     process.env.MINDER_USE_DB = "1";
 
     const mig = await import("@/lib/db/migrations");
@@ -541,9 +515,7 @@ describe.skipIf(!driverAvailable)("byEffort — adapter (non-Claude) sessions", 
 
 describe.skipIf(!driverAvailable)("byEffort — file-parse vs SQLite parity", () => {
   async function reportFrom(useDb: boolean): Promise<EffortBreakdown[]> {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     process.env.MINDER_USE_DB = useDb ? "1" : "0";
 
     if (useDb) {
