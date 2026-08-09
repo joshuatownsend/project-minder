@@ -116,6 +116,20 @@ All four (#152/#153/#156/#157) shipped together as the T1.1 follow-up cluster �
 
 **Gates:** `pnpm typecheck`, full test suite, **and `pnpm build`** (framework upgrade — build is non-optional here), plus an out-of-repo smoke test of `dist/minder-server`.
 
+> ### W1 outcome — recorded 2026-08-09
+>
+> **Done:** Next `~16.2.12` → `^16.3.0`. Closes the 4 postcss alerts in **#396** (Next pins postcss *exactly*, so an override could never have reached it — the framework upgrade was the only path). Suite unchanged at 4,741 passing; typecheck, build, `package:standalone` and an out-of-repo smoke test (4 routes, all 200) all green.
+>
+> **Step 2 (#284) did not work, and is retired rather than deferred.** Upstream #94361 shipped in 16.3.0 and there is still no call site to annotate. Measured with the new `scripts/nft-census.mjs`: the sweep is per-route and strictly bimodal (124 routes trace 909 of `src/`'s 912 files, 89 trace zero, nothing between), so a partial fix is indistinguishable from no fix. Three candidate causes were tested and falsified — not a poisoned first-party module, not `better-sqlite3`/`bindings`, and no package separates the two groups. 16.3.0 also prints **zero** NFT warnings while the sweep is intact, so warning count is no longer merely noisy but actively misleading. Full data on #284; the follow-up is now a TODO item with a named next experiment.
+>
+> **Step 3 (narrow the excludes) is therefore void** — it was conditional on step 2 resolving. The list instead *grew*: `.env.local` and `.mcp.json` were being traced into `/api/health` and `/api/projects` and materialized in `.next/standalone`, stopped only by `package-standalone`'s prune on the way out; plus `agentlytics-repo/` (83 files, git-ignored sibling checkout). The node_modules invariant was re-checked and holds exactly (126 / 372 / 254 unchanged).
+>
+> **Step 4 (#287):** shrank from 9 missing nested deps to 4. Backfill still load-bearing; issue stays open.
+>
+> **Two new items found:** `instrumentation` bypasses `outputFileTracingExcludes` entirely (35,287-entry manifest including `.git/`, `tests/`, `docs/`) — latent, now a TODO; and **#413**, the packaged server serving nothing when `MINDER_USE_DB=0`.
+>
+> **The spike did not run** — it reads `~/.claude/.credentials.json` and calls an undocumented endpoint with a bearer token, which the permission classifier blocked. Script is written and ready. **W10 remains gated**, and the personal-vs-distributed decision is still unasked, as designed.
+
 **Parallel side-quest (cheap, high information):** the **cloud-session spike** — ~60 lines, scratchpad only, outside the repo. Read org UUID from `~/.claude.json`, call `GET /v1/sessions`, dump the response shape. This gates 4 TODO items. If upstream issue simonw/claude-code-transcripts#77 means the endpoints are dead for everyone, an entire backlog section collapses to "closed, moot" — which is exactly what a burn-down wants to learn on day one, not month three.
 
 ---
