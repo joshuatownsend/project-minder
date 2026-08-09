@@ -165,6 +165,17 @@ export function buildEngagementReport(
     const built = buildAttendedBlocks(sortedEvents, config, (i) => indexed[i].presence);
 
     for (const block of built) {
+      // Prompts are counted independently of whether the block earned billable
+      // time. With tail credit at 0 an isolated prompt produces no interval at
+      // all, and folding the count into the interval branch made the audit
+      // trail read zero for work the user can see they did. Recount rather
+      // than reuse `promptCount` so a block straddling the lower boundary
+      // contributes only its in-window prompts.
+      const inWindow = block.promptTimes.filter((t) => t >= clipLo && t <= clipHi).length;
+      if (inWindow > 0) {
+        promptsByProject.set(projectKey, (promptsByProject.get(projectKey) ?? 0) + inWindow);
+      }
+
       // Clip to the requested window on both ends: the lower bound removes the
       // deliberate over-fetch, the upper stops tail credit from running past
       // the report's own evaluation instant into the future.
@@ -174,12 +185,6 @@ export function buildEngagementReport(
       const list = intervalsByProject.get(projectKey);
       if (list) list.push(...kept);
       else intervalsByProject.set(projectKey, [...kept]);
-
-      // Recount rather than reuse `promptCount`: a block straddling the lower
-      // boundary keeps prompts from before the window unless they are
-      // filtered here, which would overstate the audit trail.
-      const inWindow = block.promptTimes.filter((t) => t >= clipLo && t <= clipHi).length;
-      promptsByProject.set(projectKey, (promptsByProject.get(projectKey) ?? 0) + inWindow);
     }
   }
 
@@ -252,19 +257,35 @@ export function buildEngagementReport(
 
   const totalHours = round2(byDay.reduce((s, d) => s + d.totalHours, 0));
 
-  // Column sums of the reconciled matrix, plus each project's distinct days.
+  // Column sums of the reconciled matrix.
   const allocatedByProject = new Map<string, number>();
-  const activeDaysByProject = new Map<string, Set<string>>();
   for (const day of dayShares) {
     for (const { key, hours } of day.rows) {
       allocatedByProject.set(key, (allocatedByProject.get(key) ?? 0) + hours);
-      let set = activeDaysByProject.get(key);
-      if (!set) { set = new Set(); activeDaysByProject.set(key, set); }
-      set.add(day.date);
     }
   }
 
-  const byProject: ProjectEngagement[] = [...allocatedByProject.keys()]
+  // Active days come from the **unrounded** allocation, not the display rows.
+  // A brief slice concurrent with another project can round to 0.00 and drop
+  // out of the table while still being a day with attended time — counting
+  // the rendered rows would contradict what the field means.
+  const activeDaysByProject = new Map<string, Set<string>>();
+  for (const [date, projects] of allocation.byDay) {
+    for (const [key, hours] of projects) {
+      if (hours <= 0) continue;
+      let set = activeDaysByProject.get(key);
+      if (!set) { set = new Set(); activeDaysByProject.set(key, set); }
+      set.add(date);
+    }
+  }
+
+  // Union of keys: a project can have in-window prompts but no billable time
+  // (every gap unattended, tail credit 0). Dropping it would hide activity the
+  // user knows happened; a 0.00 row next to a prompt count is the honest
+  // rendering.
+  const projectKeys = new Set([...allocatedByProject.keys(), ...promptsByProject.keys()]);
+
+  const byProject: ProjectEngagement[] = [...projectKeys]
     .map((key) => {
       const id = identities.get(key);
       return {

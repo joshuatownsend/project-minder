@@ -118,6 +118,12 @@ midnight.
 
 ## Requirements and limits
 
+- **Claude Code sessions only.** The report is built entirely from the
+  intervals *between* turns, so a source that records one timestamp per
+  session rather than per turn cannot be measured — it would collapse each
+  conversation to a single instant and bill the flat tail credit as if it were
+  work. The Codex adapter is in that category today and is excluded rather
+  than approximated.
 - **Requires the SQLite index.** With `MINDER_USE_DB=0` the page reports the
   report is unavailable rather than showing an empty one, which would read as
   "you did no billable work". Reconstructing attendance needs every turn in

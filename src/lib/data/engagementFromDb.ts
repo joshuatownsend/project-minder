@@ -31,6 +31,27 @@ import { startOfLocalDay, type ConcurrencyPolicy } from "@/lib/engagement/alloca
  */
 const NOT_AUTOMATED = "(s.entrypoint IS NULL OR s.entrypoint NOT LIKE 'sdk-%')";
 
+/**
+ * Only sources that record a timestamp **per turn** can be measured here.
+ *
+ * This report is built entirely out of the intervals *between* turns, so a
+ * source that stamps every turn with one time is not merely imprecise — it
+ * collapses each conversation to a single instant. The Codex adapter does
+ * exactly that ("Codex has no per-turn timestamps; use session creation time",
+ * `src/lib/adapters/codex.ts`), so every one of its sessions would contribute
+ * a block of zero duration plus the flat tail credit: pure phantom hours, on
+ * an invoice, silently merged into any Claude project sharing the path. Its
+ * sessions also carry a null entrypoint, so `NOT_AUTOMATED` does not catch
+ * them.
+ *
+ * NULL means a row indexed before `source` existed, which was Claude by
+ * definition — unlike the entrypoint case, absence here is evidence. Any
+ * future adapter must stamp `source` *and* provide real per-turn timestamps
+ * before being added to this predicate; being timestamp-poor is not a reason
+ * to be billed approximately.
+ */
+const HAS_PER_TURN_TIMESTAMPS = "COALESCE(s.source, 'claude') = 'claude'";
+
 export interface EngagementQueryOptions {
   period: string;
   timeZone: string;
@@ -103,6 +124,7 @@ export function loadEngagementReportFromSql(
      FROM turns t JOIN sessions s USING (session_id)
      WHERE t.is_sidechain = 0
        AND ${NOT_AUTOMATED}
+       AND ${HAS_PER_TURN_TIMESTAMPS}
        AND (@periodStart IS NULL OR t.ts >= @periodStart)
      ORDER BY t.ts`,
   ).all({ periodStart }) as EngagementTurnRow[];

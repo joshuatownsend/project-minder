@@ -411,9 +411,12 @@ describe("buildEngagementReport", () => {
     const report = buildEngagementReport(rows, {
       period: "30d", timeZone: "UTC", config: cfg({ runCapMs: 30 * MIN }),
     });
-    // Two lone prompts in two sessions, no attended gap anywhere, zero tail.
+    // Both prompts are seen — but neither earns anything, because no attended
+    // gap exists once the sessions are kept apart. Merged, session B's prompt
+    // would have cashed in session A's capped run.
     expect(report.totalHours).toBe(0);
-    expect(report.byProject[0]?.promptCount ?? 0).toBe(0);
+    expect(report.byProject[0].promptCount).toBe(2);
+    expect(report.byProject[0].allocatedHours).toBe(0);
   });
 
   it("unions concurrent sessions rather than summing them", () => {
@@ -495,6 +498,43 @@ describe("buildEngagementReport", () => {
       const rowSum = d.byProject.reduce((s, p) => s + p.hours, 0);
       expect(rowSum).toBeCloseTo(d.totalHours, 10);
     }
+  });
+
+  it("counts in-window prompts even when a block earns no billable time", () => {
+    // PR #418 review (codex P2). Tail credit 0 + an isolated prompt produces
+    // no interval at all; the count used to be folded into the interval
+    // branch, so the audit trail read zero for work the user can see.
+    const rows: EngagementTurnRow[] = [
+      row("C--dev-x", 0, "user", "one shot"),
+      row("C--dev-x", 1, "assistant", "done"),
+    ];
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg({ tailCreditMs: 0 }),
+    });
+    expect(report.totalHours).toBe(0);
+    expect(report.byProject).toHaveLength(1);
+    expect(report.byProject[0].promptCount).toBe(1);
+    expect(report.byProject[0].allocatedHours).toBe(0);
+  });
+
+  it("counts an active day whose share rounds away", () => {
+    // A sliver of attended time concurrent with a much larger project can
+    // round to 0.00 and vanish from the table while still being a day with
+    // attended time. activeDays reads the unrounded allocation.
+    const rows: EngagementTurnRow[] = [
+      // Big project, one long attended block on day 0.
+      row("C--dev-big", 0, "user", "go", null, "big"),
+      row("C--dev-big", 100, "assistant", "ok", null, "big"),
+      row("C--dev-big", 101, "user", "more", null, "big"),
+      // Tiny project, a couple of seconds inside the same window.
+      row("C--dev-tiny", 50, "user", "tiny", null, "tiny"),
+    ];
+    const report = buildEngagementReport(rows, {
+      period: "30d", timeZone: "UTC", config: cfg({ runCapMs: 200 * MIN, tailCreditMs: 1000 }),
+    });
+    const tiny = report.byProject.find((p) => p.projectDirName === "C--dev-tiny");
+    expect(tiny).toBeDefined();
+    expect(tiny!.activeDays).toBe(1);
   });
 
   it("drops rows with unparseable timestamps rather than poisoning the walk", () => {
