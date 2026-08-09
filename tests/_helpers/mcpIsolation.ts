@@ -5,6 +5,24 @@ import { promises as fs } from "fs";
 
 // Shared isolation hooks for the MCP test suite (#173 Problem A).
 //
+// RELATIONSHIP TO `isolatedState.ts`
+//
+// Two isolation helpers live here on purpose. `isolatedState.ts` (#331) is the
+// general one: temp home, homedir spy, `MINDER_STATE_DIR` deletion, module
+// reset. **New tests that touch `~/.minder` should use that one.**
+//
+// This file is an MCP-specific SUPERSET, and the extra behaviour is the reason
+// it stays separate rather than wrapping the general helper: it seeds the scan
+// cache with an empty `ScanResult` so `getCachedOrFreshScan()` short-circuits
+// the devRoot walk, and it runs `initDb()` during setup so OTEL/usage queries
+// return empty rows instead of "no such table". Both are right for MCP tools
+// that walk the filesystem at call time, and wrong as defaults for the thirty
+// DB tests — several of which assert on a database that does NOT yet exist.
+//
+// The other difference is shape: this installs hooks and gets on with it,
+// whereas `isolatedState` hands back a `reload()` the caller invokes per test.
+// That suits files which re-import a module mid-test to watch it re-initialise.
+//
 // Why this exists:
 // - Several MCP tools / resources walk `~/.claude/projects/` and the
 //   configured devRoot at call time. Without isolation they hit the
