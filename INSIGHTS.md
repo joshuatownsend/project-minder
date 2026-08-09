@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:b74f39bab288 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T02:47:13.761Z -->
+## ★ Insight
+Worth naming what nearly happened. I had a chain of plausible-but-wrong conclusions queued up: first "the sandbox can't reach loopback" (refuted by PowerShell on the host), then "the WinNAT 4100–4199 exclusion" (real, and it *did* invalidate my first port choice — but wasn't this), then "Next 16.3 broke standalone packaging," which I was one step from writing into a blocker report. The control — `next start` returning 200 on the same build — is what stopped it, and then the in-place run narrowed it further to my harness.
+
+---
+
+<!-- insight:49f271edba20 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T01:44:26.682Z -->
+## ★ Insight
+That third one is the reason this issue is worth more than its size label. `next.config.ts` already documents that `.git/` and `.env.local` were "stopped only by package-standalone's prune at the copy boundary" — and the comment even notes #284 once shipped a real `.git` and `.env.local`. So the safety net is a post-hoc filter in our own packaging script, downstream of a tracer that keeps handing it secrets.
+
+---
+
 <!-- insight:56ef561cf095 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T01:27:52.243Z -->
 ## ★ Insight
 Note it's an *exact* pin (`"postcss": "8.5.23"`, no caret) in both versions. That's what makes the TODO's "nothing else can reach it" claim literally true rather than rhetorical: with a caret range, Dependabot or a `pnpm.overrides` entry could lift postcss independently. Against an exact pin, an override would resolve a version Next didn't test against, and pnpm would flag the peer mismatch. So the transitive alert is welded to the framework version — upgrading Next *is* the patch, which is precisely why this one issue sat unreachable through several dependency sweeps.
