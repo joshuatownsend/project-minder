@@ -132,14 +132,24 @@ const nextConfig: NextConfig = {
   // also match e.g. `node_modules/<pkg>/tests/**`. Verified non-destructive by
   // measurement — the traced node_modules entry count is 243 both with and
   // without these excludes. Re-check that number if you add another entry.
-  // `.env.local` and `.mcp.json` are here for the same reason as `.git/` and
+  // `./.env*` and `.mcp.json` are here for the same reason as `.git/` and
   // `.claude/`, and are the most important entries in this list: both were
   // measured entering the trace of `/api/health` and `/api/projects` on
   // 16.3.0, i.e. local credentials were being handed to the packaging step
   // and stopped only by package-standalone's prune on the way out. Excluding
   // them keeps them out of the pipeline entirely. This costs nothing at
   // runtime — the packaged server takes its environment from the launcher,
-  // never from a traced copy of the developer's `.env.local`.
+  // never from a traced copy of the developer's env files.
+  //
+  // The pattern is the `.env` PREFIX, not the single file that happened to
+  // be on disk when this was measured. `.gitignore` ignores both `.env` and
+  // `.env*.local`, and the downstream payload-hygiene gate already fails on
+  // any basename starting with `.env` (`scripts/payload-hygiene-rules.mjs`
+  // `isForbiddenName`) — so `.env`, `.env.development.local` and
+  // `.env.production.local` are every bit as secret-bearing as `.env.local`,
+  // and a tracer-side boundary that covers only one of them still leans on
+  // the prune this change exists to stop leaning on. Matching the hygiene
+  // rule's set keeps the two ends of the pipeline agreed.
   //
   // `agentlytics-repo/` is a git-ignored reference checkout that happens to
   // sit inside the tracing root; 83 of its files (including a PNG and a
@@ -154,7 +164,7 @@ const nextConfig: NextConfig = {
       "./src-tauri/target/**",
       "./.git/**",
       "./.claude/**",
-      "./.env.local",
+      "./.env*",
       "./.mcp.json",
       "./agentlytics-repo/**",
       "./tests/**",

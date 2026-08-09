@@ -32,7 +32,19 @@ const SERVER = path.join(ROOT, ".next/server");
 
 const argv = process.argv.slice(2);
 const verbose = argv.includes("--verbose");
-const only = argv.includes("--route") ? argv[argv.indexOf("--route") + 1] : null;
+
+// `--route` with no value (end of argv, or another flag next) would otherwise
+// leave `only` undefined and silently run the full census — the one output a
+// typo'd route name must not produce, since it looks like a successful run.
+let only = null;
+if (argv.includes("--route")) {
+  const value = argv[argv.indexOf("--route") + 1];
+  if (!value || value.startsWith("--")) {
+    console.error("--route requires a route name, e.g. --route app/api/adapters/route");
+    process.exit(2);
+  }
+  only = value;
+}
 
 // A route is "swept" if it traces more than this many first-party src/ files.
 // Real values observed are 0-18 (genuine runtime reads) or 909 (the sweep), so
@@ -65,6 +77,12 @@ function analyze(manifestPath) {
   } catch {
     return null;
   }
+  // A manifest can parse cleanly and still not have the shape we expect
+  // (`files: null`, or a future/partial format). Skip it rather than letting
+  // the iteration below throw and abort a census over 200+ files — the count
+  // of skipped manifests is reported so a silent shape change is still
+  // visible.
+  if (!Array.isArray(files)) return null;
   const buckets = new Map();
   for (const f of files) {
     const rel = path.relative(ROOT, path.resolve(base, f)).split(path.sep).join("/");
@@ -90,6 +108,12 @@ if (manifests.length === 0) {
 }
 
 const rows = manifests.map(analyze).filter(Boolean);
+const skipped = manifests.length - rows.length;
+if (skipped > 0) {
+  console.warn(
+    `warning: skipped ${skipped} manifest(s) that were unreadable or had no files[] array`
+  );
+}
 
 if (only) {
   const row = rows.find((r) => r.route === only);
