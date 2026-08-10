@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:05179684a774 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:34:24.871Z -->
+## ★ Insight
+Five rounds in, the pattern in the findings is worth stating plainly: **every single one has been a false guarantee in the guard, not a bug in the migration.**
+
+---
+
 <!-- insight:c5fe955906f0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:21:47.819Z -->
 ## ★ Insight
 Four review rounds, and every finding has been the same species: **an option or check that appears to do something and doesn't.**
