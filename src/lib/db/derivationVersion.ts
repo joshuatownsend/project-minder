@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 18;
+export const DERIVED_VERSION = 19;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -304,6 +304,28 @@ export const DERIVED_VERSION = 18;
 //     If the re-parse cost is ever judged too high for a change this narrow,
 //     the honest alternative is a targeted re-price of the affected rows, not
 //     silently skipping the bump.
+// 19 — #426: `tool_uses` ingest was dropping every tool call that arrived on a
+//     repeat `message.id` line. Claude Code writes ONE LINE PER CONTENT BLOCK,
+//     all lines of a message sharing an id and repeating the message-level
+//     `usage` verbatim; the old A6 guard `continue`d on the repeat and threw
+//     the block away. Measured on one 47 MB transcript: 2,716 `tool_use` blocks
+//     in the file against 720 rows stored — exactly those on a first-seen id —
+//     with `Agent` at 72 → 6. Corpus-wide, 5,652 of 6,036 sessions held no
+//     `tool_uses` rows at all.
+//
+//     Unlike v18 this bump changes a great many rows, and not only in
+//     `tool_uses`: the dropped lines also carried text and thinking blocks, so
+//     `text_preview`, the FTS `search_text`, and `usageTurn.assistantText` were
+//     truncated to whatever the message's first block happened to be. Because
+//     `assistantText` and `toolCalls` are the classifier's inputs, categories
+//     move on re-parse, and with them `task_outcome` anchoring and every
+//     one-shot rate derived from it.
+//
+//     This is the one bump kind that IS visible to a test — a fixture whose
+//     message spans several lines fails loudly without the fix. It is listed
+//     here anyway because the *stored* rows are what the bump exists for: a
+//     user's existing index holds the old, short counts, and nothing about
+//     them looks broken from the read side.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because
