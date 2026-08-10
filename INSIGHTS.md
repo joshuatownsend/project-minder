@@ -1,5 +1,18 @@
 # Insights
 
+<!-- insight:477c0ab16fe1 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:01:01.941Z -->
+## ★ Insight
+**#175 claims** the ~9s cost is paid *per test* because `reloadModules()` calls `vi.resetModules()` in every `it()`. But the run above shows only the **first** test in each file costs ~3.8s — every later test that calls the same `reloadModules()` costs 28–214ms.
+That reframes it: `vi.resetModules()` clears the *module registry*, but Vite's **transform cache** survives, so re-import re-executes cheap already-transformed modules. The summary line agrees — `transform 3.66s` versus `import 364ms`.
+
+---
+
+<!-- insight:594e364c2c7a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:23:23.110Z -->
+## ★ Insight
+This is the round where I stopped folding findings in, and the reasoning matters more than the fix.
+
+---
+
 <!-- insight:ec84bae5d44b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:12:11.037Z -->
 ## ★ Insight
 The more serious bug wasn't either finding — it surfaced *while measuring* one.
