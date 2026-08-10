@@ -183,7 +183,28 @@ Two real defects fixed on the way: `gradeSnapshot.test.ts` froze `DB_DIR` before
 
 Eight files carry a documented allowlist entry — each states why it cannot open the developer's real database, and a staleness check fails if one stops needing the exception.
 
-**Still open in W3:** the flaky cluster (#345, #362, #355, #273, #220, #282, #175).
+### Outcome — the flaky cluster (2026-08-10, branch `fix/w3-flaky-cluster`)
+
+Three of the seven issues proposed raising timeouts or tuning the pool. Measurement said the cost was elsewhere, and once it was removed no timeout policy was needed at all.
+
+**#175 — premise corrected.** The issue attributed ~9s per "file backend" test to `vi.resetModules()` forcing a re-import in every `it()`. Measured, a reset + re-import costs **23ms**: `resetModules` clears only transformed source, so externalized deps are never re-executed. The real cost was a once-per-fork cold load, so the issue's fixes 2 and 3 would have saved ~0ms. Profiling the graph found one carrier — `contributionCalendar` importing the `date-fns` **barrel** (~700 modules, 2187ms). `next.config.ts` already lists date-fns under `optimizePackageImports`, so production never paid it; the vitest module runner has no equivalent. Four deep subpath imports:
+
+| | before | after |
+|---|---|---|
+| cold `@/lib/data` import | 3306ms | 1814ms |
+| per-test "file backend …" | 3808ms | 2044ms |
+
+**#220 — mechanism found, but not the one in the issue.** The pricing disk cache resolves under `resolveStateDir()` = `MINDER_STATE_DIR || process.cwd()`, and the suite deletes that variable, so the cache path was **the repo root**: runs read, and on a miss wrote, a 1.2 MB `.cache/litellm-pricing.json` beside the source. Where absent (every CI runner) pricing came off the network once per `vi.resetModules()` — **221 requests to raw.githubusercontent.com in one measured run**. A fork whose fetch lost silently used `FALLBACK_PRICING` while its siblings used live rates. New `MINDER_PRICING_FILE` seam pins pricing to a committed 26 KB fixture; suite verified with all `fetch` rejected and the cache removed: **0 network attempts**, previously 221 plus a failure. Not claimed as *the* #220 fix — its exact 3.0× ratio is equally consistent with a turn-count difference, and fixture and fallback agree on the models that parity test exercises. Pricing is removed as a variable.
+
+**#282 — fixed as diagnosed.** `prune` buckets by UTC calendar day, and the test derived a "same day" sibling as `Date.now() - 2d + 60_000`, true only more than 60s from UTC midnight. Anchored to a fixed mid-day instant, plus a new case asserting the straddle-midnight behaviour deliberately. Mutation-tested both directions.
+
+**#273 — diagnosis improved, cause still open.** `reconcileAllSessions` counts per-file failures in `stats.errors` rather than throwing, and clears the v3 readiness gate only at zero — so the façade serves file-parse and the failure surfaces later as a parity divergence. All 18 façade call sites discarded those stats. `assertReconcileClean` now asserts it at the setup line; verified by forcing an error and confirming the message names the gate. **Why reconcile errors on the Windows runner is still unknown** and not reproducible locally.
+
+**#345 / #362 / #355 — no timeout policy needed.** After the two fixes above, the exact tests these issues name run at 1.8–2.7s against a 30s ceiling (11–16× headroom). Reproduced their condition directly — full suite with 12 of 16 cores saturated — reaching **2.8× inflation**, matching the 2.5× and 2.4× the issues report, with **zero timeouts and 4,827 passing**. Raising the ceiling would have hidden 221 network round-trips inside test bodies rather than removing them.
+
+Full suite **61.19s → 45.59s**; import 78.87s → 55.74s; test time 179.34s → 100.0s.
+
+Also of note: the `dbIsolationGuard` shipped with #331 caught a file written *after* it — `pinnedPricing.test.ts`, whose loop-based env restore it cannot verify. Rewritten in the per-key form rather than relaxing the guard.
 
 ---
 
