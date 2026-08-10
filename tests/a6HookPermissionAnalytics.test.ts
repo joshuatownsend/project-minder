@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 /**
  * A6 — hook performance + permission/denial analytics.
@@ -36,10 +36,10 @@ try {
 const SESSION = "aaaaaaaa-4444-4444-4444-4444a6a6a6a6";
 const PROJECT_DIR = "C--dev-a6-demo";
 
+const state = installIsolatedState({ prefix: "pm-a6-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalStateDir: string | undefined;
 
 /**
  * A system entry shaped exactly like the real ones: `hookInfos` with a mix of
@@ -87,33 +87,14 @@ async function writeFixture(): Promise<void> {
   await fs.writeFile(file, fixtureEntries().map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalStateDir = process.env.MINDER_STATE_DIR;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-a6-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  process.env.MINDER_STATE_DIR = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  if (originalStateDir === undefined) delete process.env.MINDER_STATE_DIR;
-  else process.env.MINDER_STATE_DIR = originalStateDir;
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {});
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe("A6 — hook decode, file-parse backend", () => {
   it("finds hook runs on system entries", async () => {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
 
     const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
     const s = (await scanAllSessions()).find((x) => x.sessionId === SESSION);
@@ -127,8 +108,7 @@ describe("A6 — hook decode, file-parse backend", () => {
 
   it("keeps an unmeasured hook's duration undefined, not zero", async () => {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
 
     const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
     const s = (await scanAllSessions()).find((x) => x.sessionId === SESSION);
@@ -140,8 +120,7 @@ describe("A6 — hook decode, file-parse backend", () => {
 
   it("decodes hook errors and whether they blocked the turn", async () => {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
 
     const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
     const s = (await scanAllSessions()).find((x) => x.sessionId === SESSION);
@@ -153,8 +132,7 @@ describe("A6 — hook decode, file-parse backend", () => {
 
 describe.runIf(driverAvailable)("A6 — hook decode, SQLite backend", () => {
   async function ingest() {
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -298,8 +276,7 @@ describe.runIf(driverAvailable)("A6 — hook decode, SQLite backend", () => {
 describe.runIf(driverAvailable)("A6 — denial breakdown crossed with task outcome", () => {
   it("reports hasData=false rather than an empty clean bill of health", async () => {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -323,8 +300,7 @@ describe.runIf(driverAvailable)("A6 — denial breakdown crossed with task outco
     // were never recorded" — a claim about the schema, not the week (Copilot
     // review of #386).
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -350,8 +326,7 @@ describe.runIf(driverAvailable)("A6 — denial breakdown crossed with task outco
 
   it("groups by kind and counts a multi-denial turn's task once", async () => {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");

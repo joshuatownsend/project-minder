@@ -14,9 +14,8 @@
  * a turn count under a session-shaped label, which looks plausible and is off
  * by an order of magnitude.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import {
   UNKNOWN_ENTRYPOINT,
@@ -27,6 +26,7 @@ import {
   isBackgroundSession,
 } from "@/lib/usage/entrypoint";
 import type { EntrypointBreakdown } from "@/lib/usage/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 let driverAvailable: boolean;
 try {
@@ -98,35 +98,13 @@ describe("isBackgroundSession", () => {
 
 // ── dual-backend parity ────────────────────────────────────────────────────
 
+const state = installIsolatedState({ prefix: "pm-a3-", preserveEnv: ["MINDER_USE_DB"] });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalUseDb: string | undefined;
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalUseDb = process.env.MINDER_USE_DB;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-a3-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const [k, v] of [
-    ["HOME", originalHome],
-    ["USERPROFILE", originalUserProfile],
-    ["MINDER_USE_DB", originalUseDb],
-  ] as const) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 function assistant(ts: string, tokens = 100) {
@@ -242,9 +220,7 @@ function byKey(rows: EntrypointBreakdown[]): Record<string, EntrypointBreakdown>
 
 describe.skipIf(!driverAvailable)("byEntrypoint — file-parse vs SQLite parity", () => {
   async function reportFrom(useDb: boolean): Promise<EntrypointBreakdown[]> {
-    vi.resetModules();
-    delete (globalThis as { __minderDb?: unknown }).__minderDb;
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
     process.env.MINDER_USE_DB = useDb ? "1" : "0";
 
     if (useDb) {

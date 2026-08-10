@@ -7,6 +7,19 @@ import {
 } from "@/lib/memory/usageTracker";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { ProjectData } from "@/lib/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
+
+// `@/lib/memory/usageTracker` reaches `@/lib/db/connection` through a runtime
+// `import()` inside `persistUsageMap()`. Nothing below calls it — these are
+// pure-function tests — but the per-test `vi.spyOn(os, "homedir")` calls
+// further down cover only the cases that need a fixed home, so a future test
+// touching `getMemoryUsage()` would resolve the developer's real database
+// (Codex review, PR #419).
+//
+// A file-scoped hook fixes that for every test rather than the ones that
+// remembered. The individual spies still win where they run: they are applied
+// inside the test, after this hook's setup.
+installIsolatedState({ prefix: "pm-mem-usage-" });
 
 // Pure-function tests for the JSONL replay aggregator. The production entry
 // point `getMemoryUsage` wraps a single-flight cache + DB write-through; we

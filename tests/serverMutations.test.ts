@@ -95,11 +95,19 @@ describe("setProjectStatus", () => {
   });
 
   it("no-ops in demo mode (never persists a synthetic slug's status)", async () => {
+    // `finally`, not a trailing `delete`: a failing assertion above throws, so
+    // the plain version leaves MINDER_DEMO=1 set for whatever file runs next
+    // in this vitest worker — putting the entire app into demo mode, where
+    // every read surface serves synthetic fixtures. One failure here would
+    // cascade into unrelated files and look like anything but its cause.
     process.env.MINDER_DEMO = "1";
-    await setProjectStatus("aurora-commerce", "archived");
-    expect(mockMutateConfig).not.toHaveBeenCalled();
-    expect(mockInvalidateCache).not.toHaveBeenCalled();
-    delete process.env.MINDER_DEMO;
+    try {
+      await setProjectStatus("aurora-commerce", "archived");
+      expect(mockMutateConfig).not.toHaveBeenCalled();
+      expect(mockInvalidateCache).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.MINDER_DEMO;
+    }
   });
 });
 

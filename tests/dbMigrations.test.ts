@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { isWindows } from "@/lib/platform";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Migrations integration test. Uses a temp HOME so we don't touch the real
 // ~/.minder/index.db. Walks through:
@@ -28,46 +29,24 @@ try {
   driverAvailable = false;
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-db-test-" });
 
-async function freshTempHome() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-db-test-"));
-  return dir;
-}
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
 
 async function reloadModulesPointingAt(home: string) {
-  vi.resetModules();
+  await state.reload();
   // The connection module caches its state on globalThis to survive HMR.
   // Tests need a clean slate per reload, otherwise a stale db handle or
   // lastError from a previous test leaks across.
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
   return { conn, mig };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await freshTempHome();
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.skipIf(!driverAvailable)("initDb", () => {

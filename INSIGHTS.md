@@ -1,5 +1,83 @@
 # Insights
 
+<!-- insight:ec84bae5d44b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:12:11.037Z -->
+## ★ Insight
+The more serious bug wasn't either finding — it surfaced *while measuring* one.
+
+---
+
+<!-- insight:18cf675e8172 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:48:14.610Z -->
+## ★ Insight
+Worth separating two things that look alike in a review comment: the **mechanism** and the **concern**.
+
+---
+
+<!-- insight:05179684a774 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:34:24.871Z -->
+## ★ Insight
+Five rounds in, the pattern in the findings is worth stating plainly: **every single one has been a false guarantee in the guard, not a bug in the migration.**
+
+---
+
+<!-- insight:c5fe955906f0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:21:47.819Z -->
+## ★ Insight
+Four review rounds, and every finding has been the same species: **an option or check that appears to do something and doesn't.**
+
+---
+
+<!-- insight:5e174cc4beff | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:13:30.585Z -->
+## ★ Insight
+This is worth naming as a general hazard of shipping a repo-wide meta-test: **its result depends on files no branch in the PR touches.**
+
+---
+
+<!-- insight:b1fa1722abc0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:03:14.698Z -->
+## ★ Insight
+The `MINDER_DEMO` one is worth dwelling on, because of how badly it would have presented.
+
+---
+
+<!-- insight:fb12cc5367bc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T10:43:22.700Z -->
+## ★ Insight
+The P1 is the more interesting of the two, because of *why* the codemod got it wrong.
+
+---
+
+<!-- insight:807bb5cdd929 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T21:21:55.378Z -->
+## ★ Insight
+The guard mutation run just caught a hole in the guard itself, and it's a big one.
+
+---
+
+<!-- insight:52667c214014 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:39:56.209Z -->
+## ★ Insight
+That failure is the helper's design biting, and it's worth keeping rather than papering over.
+
+---
+
+<!-- insight:8d43e00b45c7 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:27:44.635Z -->
+## ★ Insight
+The guard has a design fork worth showing, because the naive versions are each wrong in an instructive way.
+
+---
+
+<!-- insight:d78621347118 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:08:34.283Z -->
+## ★ Insight
+The mutation run caught something I'd have shipped as a false guarantee. **Dropping the `os.homedir()` spy entirely left all 6 tests green.**
+
+---
+
+<!-- insight:de52b442c2b6 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T20:02:44.762Z -->
+## ★ Insight
+The census changed the shape of this task in two ways worth naming before I write code.
+
+---
+
+<!-- insight:24188df2d654 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:40:31.246Z -->
+## ★ Insight
+Two mechanical things from this merge worth carrying forward, both about GitHub silently doing something other than what the text implied.
+
+---
+
 <!-- insight:e7e27b0c1fbe | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T19:27:09.675Z -->
 ## ★ Insight
 Two things about the conflict resolution worth recording.

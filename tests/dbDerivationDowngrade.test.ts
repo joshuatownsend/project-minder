@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { DERIVED_VERSION } from "@/lib/db/derivationVersion";
 import type { UsageTurn } from "@/lib/usage/types";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 /**
  * Regression: an OLDER build must never rewrite rows derived by a NEWER one.
@@ -36,13 +37,13 @@ interface Reloaded {
   ingest: typeof import("@/lib/db/ingest");
 }
 
+const state = installIsolatedState({ prefix: "pm-downgrade-test-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 async function reloadModulesPointingAt(home: string): Promise<Reloaded> {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
+  await state.reload();
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
@@ -80,25 +81,8 @@ async function appendJsonl(filePath: string, entries: unknown[]): Promise<void> 
   await fs.appendFile(filePath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-downgrade-test-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 const SENTINEL = "written-by-a-newer-build";

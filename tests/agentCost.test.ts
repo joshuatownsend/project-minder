@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Tests for `computeAgentCostFromFiles` (back-compat name) and the
 // underlying `computeAgentCostInvocationsFromOtel` it now delegates
@@ -22,9 +21,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-agent-cost-otel-", extraGlobals: ["__agentCostCache"], env: { MINDER_USE_DB: "1" } });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 
 // Holds a reference to the most recently loaded connection module so
 // afterEach can close the SQLite handle deterministically — `vi.
@@ -38,10 +38,7 @@ async function reloadModules() {
   if (currentConn) {
     try { currentConn.closeDb(); } catch { /* ignore */ }
   }
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  delete (globalThis as { __agentCostCache?: unknown }).__agentCostCache;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   const conn = await import("@/lib/db/connection");
   currentConn = conn;
   return {
@@ -53,32 +50,18 @@ async function reloadModules() {
 }
 
 beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-agent-cost-otel-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  process.env.MINDER_USE_DB = "1";
+  tmpHome = state.tmpHome();
+process.env.MINDER_USE_DB = "1";
 });
 
 afterEach(async () => {
-  // Close the SQLite handle before removing tmpHome — `state.db.close()`
+// Close the SQLite handle before removing tmpHome — `state.db.close()`
   // releases the WAL/SHM file locks that Windows holds onto until then.
   if (currentConn) {
     try { currentConn.closeDb(); } catch { /* ignore */ }
     currentConn = null;
   }
   vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  delete process.env.MINDER_USE_DB;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
 });
 
 function insertSubagentCompleted(

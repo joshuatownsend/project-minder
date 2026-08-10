@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 /**
  * C3 — OTEL ↔ transcript correlation, and tool provenance.
@@ -33,10 +33,10 @@ const PROJECT_DIR = "C--dev-c3-demo";
 const REQ_MATCHED = "req_011MatchedAAAAAAAAAAAAAA";
 const REQ_UNMATCHED = "req_011UnmatchedBBBBBBBBBBB";
 
+const state = installIsolatedState({ prefix: "pm-c3-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalStateDir: string | undefined;
 
 function assistant(id: string, requestId: string, ts: string) {
   return {
@@ -64,33 +64,14 @@ async function writeFixture(): Promise<void> {
   await fs.writeFile(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalStateDir = process.env.MINDER_STATE_DIR;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-c3-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-  process.env.MINDER_STATE_DIR = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  if (originalStateDir === undefined) delete process.env.MINDER_STATE_DIR;
-  else process.env.MINDER_STATE_DIR = originalStateDir;
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {});
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
   async function setup() {
     await writeFixture();
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -162,8 +143,7 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     ];
     await fs.writeFile(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
 
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");
@@ -368,8 +348,7 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     // repairs nothing because applyPendingMigrations skips v24. The attributes
     // are right there in payload_json, so the telemetry is recoverable but
     // permanently uncorrelated (Codex review, #387).
-    vi.resetModules();
-    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    await state.reload();
     const mig = await import("@/lib/db/migrations");
     expect((await mig.initDb()).error).toBeNull();
     const conn = await import("@/lib/db/connection");

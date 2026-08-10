@@ -1,9 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import os from "os";
-import { promises as fs } from "fs";
 import logsFixture from "./fixtures/otlp-logs.json";
 import metricsFixture from "./fixtures/otlp-metrics.json";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // OTEL ingest integration test. Uses a temp home so it never touches the
 // real ~/.minder/index.db.
@@ -27,17 +26,15 @@ interface Reloaded {
   otelIngest: typeof import("@/lib/db/otelIngest");
 }
 
-let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
+const state = installIsolatedState({ prefix: "pm-otel-test-" });
 
-async function freshTempHome() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "pm-otel-test-"));
-}
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
+let tmpHome: string;
 
 async function reloadModules(home: string): Promise<Reloaded> {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
+  await state.reload();
+  // Re-point after the helper's own spy: callers pass an explicit home so a
+  // test can reload against a second directory.
   vi.spyOn(os, "homedir").mockReturnValue(home);
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
@@ -45,25 +42,8 @@ async function reloadModules(home: string): Promise<Reloaded> {
   return { conn, mig, otelIngest };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await freshTempHome();
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    // best-effort cleanup
-  }
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 describe.skipIf(!driverAvailable)("otelIngest", () => {

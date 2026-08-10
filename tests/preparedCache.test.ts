@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Tests for the prepared-statement cache wired into `connection.ts`.
 // Verifies three properties the SQL read paths depend on:
@@ -25,9 +24,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-prep-cache-" });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
 // Track the singleton's connection module across reloadModules() calls
 // so afterEach can close the open db handle. Without this, the global
 // state's db handle leaks past the `delete globalThis.__minderDb` reset
@@ -42,38 +42,23 @@ async function reloadModules() {
     activeConn.closeDb();
     activeConn = null;
   }
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  await state.reload();
   const conn = await import("@/lib/db/connection");
   const mig = await import("@/lib/db/migrations");
   activeConn = conn;
   return { conn, mig };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-prep-cache-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
 afterEach(async () => {
-  if (activeConn) {
+if (activeConn) {
     activeConn.closeDb();
     activeConn = null;
   }
   vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
 });
 
 describe.skipIf(!driverAvailable)("prepCached", () => {

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // Parity test for `getAgentUsage`. Drives the same fixture through
 // both backends (file-parse via `parseAllSessions` + `groupAgentCalls`,
@@ -28,10 +28,10 @@ try {
   driverAvailable = false;
 }
 
+const state = installIsolatedState({ prefix: "pm-data-agents-", extraGlobals: ["__usageCache", "__usageFileCache", "__sessionIndex", "__sessionsCache", "__agentCostCache"], preserveEnv: ["MINDER_USE_DB"] });
+
+/** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
-let originalHome: string | undefined;
-let originalUserProfile: string | undefined;
-let originalUseDb: string | undefined;
 
 interface JsonlEntry {
   type: "user" | "assistant" | "system";
@@ -119,14 +119,8 @@ async function setupFixture(): Promise<string> {
 }
 
 async function reloadModules() {
-  vi.resetModules();
-  delete (globalThis as { __minderDb?: unknown }).__minderDb;
-  delete (globalThis as { __usageCache?: unknown }).__usageCache;
-  delete (globalThis as { __usageFileCache?: unknown }).__usageFileCache;
-  delete (globalThis as { __sessionIndex?: unknown }).__sessionIndex;
-  delete (globalThis as { __sessionsCache?: unknown }).__sessionsCache;
+  await state.reload();
   delete (globalThis as { __agentCostCache?: unknown }).__agentCostCache;
-  vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   return {
     facade: await import("@/lib/data"),
     conn: await import("@/lib/db/connection"),
@@ -135,29 +129,11 @@ async function reloadModules() {
   };
 }
 
-beforeEach(async () => {
-  originalHome = process.env.HOME;
-  originalUserProfile = process.env.USERPROFILE;
-  originalUseDb = process.env.MINDER_USE_DB;
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-data-agents-"));
-  process.env.HOME = tmpHome;
-  process.env.USERPROFILE = tmpHome;
+beforeEach(() => {
+  tmpHome = state.tmpHome();
 });
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  if (originalUseDb === undefined) delete process.env.MINDER_USE_DB;
-  else process.env.MINDER_USE_DB = originalUseDb;
-  try {
-    await fs.rm(tmpHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
-});
+
 
 describe.skipIf(!driverAvailable)("data façade — getAgentUsage backend parity", () => {
   it("file backend serves when MINDER_USE_DB=0", async () => {
