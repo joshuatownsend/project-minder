@@ -546,10 +546,14 @@ function dynamicViolations(file: (typeof files)[number]): string[][] {
  * opens a database through `import()`, and the file has no isolation at all.
  */
 function runtimeOpenerViolations(file: (typeof files)[number]): string[] {
+  // A lifecycle hook, not a bare spy. A `vi.spyOn(os, "homedir")` sitting
+  // inside one `it` says nothing about whether it is armed when some other
+  // test trips the runtime import — `memoryUsageTracker.test.ts` was exactly
+  // that shape, with spies only inside a few pure `canonicalMemoryKey` cases
+  // (Codex review, PR #419). A hook runs for every test in its scope, which is
+  // the property this rule actually needs.
   const isolated =
-    /installIsolatedState\(/.test(file.code) ||
-    /installMcpIsolation\(/.test(file.code) ||
-    /spyOn\(os,\s*["']homedir["']\)/.test(file.code);
+    /installIsolatedState\(/.test(file.code) || /installMcpIsolation\(/.test(file.code);
   if (isolated) return [];
   const openers = runtimeDbOpeners();
   const out: string[] = [];

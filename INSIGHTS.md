@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:ec84bae5d44b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:12:11.037Z -->
+## ★ Insight
+The more serious bug wasn't either finding — it surfaced *while measuring* one.
+
+---
+
 <!-- insight:18cf675e8172 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:48:14.610Z -->
 ## ★ Insight
 Worth separating two things that look alike in a review comment: the **mechanism** and the **concern**.
