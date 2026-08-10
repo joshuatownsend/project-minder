@@ -1,4 +1,18 @@
-import { startOfWeek, subWeeks, addDays, format } from "date-fns";
+// Deep subpath imports, not the `date-fns` barrel. The barrel re-exports the
+// package's ~700 modules, and importing it costs ~2.2s in a vitest fork — two
+// thirds of the cold load of the `@/lib/data` graph, which reaches here through
+// `usage/aggregator`. Next's `optimizePackageImports` (next.config.ts) rewrites
+// the barrel for the app build, so production never paid this; the test module
+// runner has no equivalent, so every fork that touched the façade did. That
+// cost was being read as "DB fixture setup is slow" (#345, #362) — the SQLite
+// driver itself loads in 21ms.
+//
+// Client components may keep the barrel form: they are covered by
+// `optimizePackageImports` and are not in the test graph.
+import { startOfWeek } from "date-fns/startOfWeek";
+import { subWeeks } from "date-fns/subWeeks";
+import { addDays } from "date-fns/addDays";
+import { format } from "date-fns/format";
 import type { ContributionCell } from "./types";
 import { type ActivityTurnInput, toLocalDateStr } from "./activityBuckets";
 
