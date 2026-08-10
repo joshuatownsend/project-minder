@@ -227,6 +227,12 @@ All three touch the same pricing tier machinery and should ship together.
 
 **One pre-existing test had ratified the defect.** `longContextTier.test.ts` pinned cache reads at the *base* rate inside the long tier and passed — on the exact turn shape where cache is ~98% of the bill. Corrected.
 
+**Bot review found four more defects across three rounds, and three shared one shape: a second copy of logic that had drifted from the first.** `scanSessionFile` keeps its own token accumulation for the session list and was not passing `speed`; `sessionQuality`'s cache rebuild-waste read `ModelPricing`'s base fields directly, so it ignored the tier, fast mode *and* the 1-hour TTL (the last understating it ~37% on every real session, and pre-dating this wave); and the 1-hour tiered rate had its own fallback branch that reached for a base rate. Round 1's response consolidated rate selection into one exported `selectEffectiveRates` rather than patching call sites, which is why round 2 produced a single finding and round 3 none. The fourth was a real race in a new test (un-awaited scan against a cache rewrite), caught by Copilot.
+
+The 1-hour finding is the one worth carrying forward as technique: the broken fallback priced the **1-hour TTL cheaper than the 5-minute one**, which is impossible — 2× base input against 1.25×. That ordering is structural, so the bug was provable without knowing a single published rate, and the invariant is now asserted across every model in the pinned table. *Prefer an invariant that holds for all inputs over a literal that pins one.*
+
+Merged as `c49d2b7` (PR #423), 4 commits. Open issues 18 → 16.
+
 ---
 
 ## Wave 5 — Usage & session surfaces (small backend items)
