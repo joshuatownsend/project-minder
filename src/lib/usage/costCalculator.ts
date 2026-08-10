@@ -276,6 +276,38 @@ export async function loadPricing(): Promise<void> {
       if (config.pricingRules?.length) setPricingRules(config.pricingRules);
     } catch { /* non-critical */ }
 
+    // Pinned pricing: when `MINDER_PRICING_FILE` names a readable JSON file in
+    // LiteLLM's schema, it is the whole source of truth — no disk-cache stat,
+    // no network, no cache write.
+    //
+    // This exists because the disk cache lives at `resolveStateDir()/.cache`,
+    // and `resolveStateDir()` falls back to `process.cwd()`. Under vitest the
+    // suite deletes `MINDER_STATE_DIR` (tests/setup/clearStateDirEnv.ts), so
+    // that resolved to the repo root: the suite read — and wrote — a 1.2 MB
+    // `.cache/litellm-pricing.json` next to the source. Where it was absent
+    // (any CI runner) every `vi.resetModules()` produced a fresh module with a
+    // fresh single-flight promise, measured at **221 requests** to
+    // raw.githubusercontent.com in one run. Those forks race a rate limiter,
+    // so some resolve real rates and others silently take
+    // `FALLBACK_PRICING` — which is how a cost stored at ingest and one
+    // recomputed live can disagree by an exact model-rate ratio (#220).
+    //
+    // Read here rather than at module scope on purpose: a module-scope capture
+    // is frozen at first import and cannot be isolated per test, which is the
+    // failure class #331 was about.
+    const pinnedPath = process.env.MINDER_PRICING_FILE;
+    if (pinnedPath) {
+      try {
+        const pinned = await fs.readFile(pinnedPath, "utf-8");
+        pricingMap = buildPricingMap(JSON.parse(pinned) as Record<string, unknown>);
+      } catch {
+        // A named-but-unreadable file is a config error, not a reason to reach
+        // for the network the setting exists to avoid.
+        useFallback();
+      }
+      return;
+    }
+
     try {
       let useDiskCache = false;
       try {

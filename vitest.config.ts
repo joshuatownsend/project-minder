@@ -17,7 +17,10 @@ export default defineConfig({
     // Runs before each test file is imported — the only point early enough to
     // affect the module-level DB path constants. See the file for why the
     // suite must not inherit a MINDER_STATE_DIR from the developer's shell.
-    setupFiles: ["tests/setup/clearStateDirEnv.ts"],
+    // Order matters: `pinPricing` explains itself in terms of what
+    // `clearStateDirEnv` does to the pricing cache path, and both must run
+    // before any test module is imported.
+    setupFiles: ["tests/setup/clearStateDirEnv.ts", "tests/setup/pinPricing.ts"],
     // Pin the hook order this suite depends on rather than inheriting it.
     //
     // `stack` runs `beforeEach` in registration order and `afterEach` in
