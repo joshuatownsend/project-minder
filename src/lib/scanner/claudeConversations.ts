@@ -390,7 +390,16 @@ async function scanSessionFile(
             outputTokens += out;
             cacheCreateTokens += cc;
             cacheReadTokens += cr;
-            accumulateTurn(perModelTokens, model, inp, out, cc, cr, cc1h);
+            // `speed` matters here for the same reason it does in
+            // `scanConversationFile`: this path computes the session list's own
+            // `costEstimate`, so omitting it would price a fast turn at half
+            // rate on `/sessions` while the aggregate scanner and the SQLite
+            // backend both price it correctly — a backend disagreement visible
+            // only by comparing two screens.
+            accumulateTurn(
+              perModelTokens, model, inp, out, cc, cr, cc1h,
+              (usage as { speed?: string }).speed,
+            );
           }
 
           if (entry.isApiErrorMessage) errorCount++;

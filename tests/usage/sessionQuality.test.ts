@@ -96,6 +96,58 @@ describe("getModelContextWindow", () => {
   });
 });
 
+describe("computeCacheStats — rebuild waste uses the rates that actually apply", () => {
+  // Codex review of #423. This figure was computed from `ModelPricing`'s BASE
+  // cache fields, so it disagreed with the cost shown beside it along three
+  // axes at once, none of them visible: the >200k tier (#393), fast mode, and
+  // the 1-hour cache-write TTL. Each is pinned separately below, because a fix
+  // for one does not imply a fix for the others.
+
+  it("prices long-context cache writes at the above-200k rate", () => {
+    // Sonnet 4.5, prompt over 200k: 5m write is $7.50/M in the long tier
+    // against $3.75/M at base.
+    const long = computeCacheStats([
+      assistant({
+        model: "claude-sonnet-4-5",
+        inputTokens: 5_000,
+        cacheCreateTokens: 100_000,
+        cacheReadTokens: 150_000,
+      }),
+    ]);
+    const expected = 100_000 * 0.0000075 - 150_000 * 0.0000006;
+    expect(long.rebuildWasteUsd).toBeCloseTo(expected, 10);
+    // The base-rate figure this used to produce, stated so the regression has
+    // a name rather than just a number.
+    expect(long.rebuildWasteUsd).not.toBeCloseTo(
+      100_000 * 0.00000375 - 150_000 * 0.0000003,
+      10,
+    );
+  });
+
+  it("prices a fast turn from the fast table", () => {
+    const base = { model: "claude-opus-5", cacheCreateTokens: 10_000, cacheReadTokens: 0 };
+    const standard = computeCacheStats([assistant({ ...base, speed: "standard" })]);
+    const fast = computeCacheStats([assistant({ ...base, speed: "fast" })]);
+    expect(fast.rebuildWasteUsd).toBeCloseTo(standard.rebuildWasteUsd * 2, 10);
+  });
+
+  it("charges 1-hour cache writes at the 1-hour rate", () => {
+    // Claude Code writes at the 1-hour TTL, so this is the ordinary case, not
+    // an edge one: billing the whole total at the 5-minute rate understated
+    // the waste by ~37% on essentially every real session.
+    const stats = computeCacheStats([
+      assistant({
+        model: "claude-opus-5",
+        cacheCreateTokens: 10_000,
+        cacheCreate1hTokens: 10_000,
+        cacheReadTokens: 0,
+      }),
+    ]);
+    expect(stats.rebuildWasteUsd).toBeCloseTo(10_000 * 0.00001, 10);
+    expect(stats.rebuildWasteUsd).not.toBeCloseTo(10_000 * 0.00000625, 10);
+  });
+});
+
 describe("computeCacheStats", () => {
   it("returns null hit ratio when no cache activity exists", () => {
     const turns = [assistant({ inputTokens: 100, outputTokens: 50 })];

@@ -616,19 +616,32 @@ export const TIER_BOUNDARY = 200_000;
  */
 export type PricingTier = "auto" | "base" | "long";
 
+/** The five per-token rates that actually apply to one token tuple. */
+export interface EffectiveRates {
+  inputRate: number;
+  outputRate: number;
+  /** Cache writes made at the 5-minute (default) TTL. */
+  cacheWriteRate: number;
+  /** Cache writes made at the 1-hour TTL. */
+  cacheWrite1hRate: number;
+  cacheReadRate: number;
+}
+
 /**
- * Apply pricing to a token-count tuple. Sync — caller is responsible for
- * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
+ * Resolve which rates apply to a token tuple, before any multiplication.
  *
- * Single source of truth for the cost formula across the file-parse path
- * and the SQLite ingest path. Both must produce identical numbers when
- * P2b switches the read side over.
+ * Split out of `applyPricing` so that consumers computing something *other*
+ * than a bill — the cache rebuild-waste diagnostic in `sessionQuality`, most
+ * notably — select rates the same way the bill does instead of reaching for
+ * the base fields directly. That divergence is invisible by construction: both
+ * numbers look plausible, they are shown on different screens, and only a
+ * long-context or fast turn makes them disagree.
  */
-export function applyPricing(
+export function selectEffectiveRates(
   pricing: ModelPricing,
   tokens: TokenCounts,
   tier: PricingTier = "auto"
-): number {
+): EffectiveRates {
   // Long-context pricing is a per-request TIER selected by prompt size, NOT a
   // marginal per-bucket split. LiteLLM/Anthropic switch the rates based on the
   // request's input (prompt) size: once it exceeds 200k, the ENTIRE request's
@@ -668,18 +681,6 @@ export function applyPricing(
       ? pricing.outputCostPerTokenAbove200k
       : pricing.outputCostPerToken;
 
-  // Cache writes have two rates, selected by the TTL the write was made with:
-  // 1.25x base for the 5-minute default, 2x for the 1-hour TTL. Claude Code
-  // writes at the 1-hour TTL, so on its transcripts `cacheCreate1hTokens` is
-  // effectively the whole total — billing it at the 5-minute rate understates
-  // cache-write cost by ~37%. Clamp to the total so a malformed breakdown can
-  // never bill more 1-hour tokens than were written.
-  const cacheCreate1h = Math.min(
-    Math.max(tokens.cacheCreate1hTokens ?? 0, 0),
-    tokens.cacheCreateTokens
-  );
-  const cacheCreate5m = tokens.cacheCreateTokens - cacheCreate1h;
-
   // Each cache rate falls back to its OWN base counterpart when the long-tier
   // variant is absent, rather than to a shared default. That keeps
   // "absent means flat" true per rate, so a model that published, say, only a
@@ -699,12 +700,50 @@ export function applyPricing(
       ? pricing.cacheReadCostPerTokenAbove200k
       : pricing.cacheReadCostPerToken;
 
+  return { inputRate, outputRate, cacheWriteRate, cacheWrite1hRate, cacheReadRate };
+}
+
+/**
+ * Split `cacheCreateTokens` into its 1-hour and 5-minute portions.
+ *
+ * Claude Code writes at the 1-hour TTL, so on its transcripts the 1-hour slice
+ * is effectively the whole total — treating it all as 5-minute understates
+ * cache-write cost by ~37%. Clamped to the total so a malformed breakdown can
+ * never charge more 1-hour tokens than were written.
+ */
+export function splitCacheCreate(tokens: TokenCounts): {
+  cacheCreate1h: number;
+  cacheCreate5m: number;
+} {
+  const cacheCreate1h = Math.min(
+    Math.max(tokens.cacheCreate1hTokens ?? 0, 0),
+    tokens.cacheCreateTokens
+  );
+  return { cacheCreate1h, cacheCreate5m: tokens.cacheCreateTokens - cacheCreate1h };
+}
+
+/**
+ * Apply pricing to a token-count tuple. Sync — caller is responsible for
+ * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
+ *
+ * Single source of truth for the cost formula across the file-parse path
+ * and the SQLite ingest path. Both must produce identical numbers when
+ * P2b switches the read side over.
+ */
+export function applyPricing(
+  pricing: ModelPricing,
+  tokens: TokenCounts,
+  tier: PricingTier = "auto"
+): number {
+  const rates = selectEffectiveRates(pricing, tokens, tier);
+  const { cacheCreate1h, cacheCreate5m } = splitCacheCreate(tokens);
+
   return (
-    tokens.inputTokens * inputRate +
-    tokens.outputTokens * outputRate +
-    cacheCreate5m * cacheWriteRate +
-    cacheCreate1h * cacheWrite1hRate +
-    tokens.cacheReadTokens * cacheReadRate
+    tokens.inputTokens * rates.inputRate +
+    tokens.outputTokens * rates.outputRate +
+    cacheCreate5m * rates.cacheWriteRate +
+    cacheCreate1h * rates.cacheWrite1hRate +
+    tokens.cacheReadTokens * rates.cacheReadRate
   );
 }
 

@@ -159,7 +159,11 @@ describe("scan-cache tier split (#394)", () => {
 
   it("discards a cache written by an older version rather than misreading it", async () => {
     await (await freshScanner()).scanAllClaudeConversations();
-    const expected = (await freshScanner()).scanAllClaudeConversations();
+    // Awaited before the file is touched below. Leaving this scan in flight
+    // races the rewrite: it reads and may rewrite the very cache file the next
+    // statement stamps, so it could observe the v1 stamp or a half-written
+    // file. Nothing about the assertion needs it to be concurrent.
+    const expected = await (await freshScanner()).scanAllClaudeConversations();
 
     // Stamp the file back to v1, the shape that had no `perModel` at all.
     const cache = await readCache();
@@ -172,7 +176,24 @@ describe("scan-cache tier split (#394)", () => {
     const after = await (await freshScanner()).scanAllClaudeConversations();
     // A discarded cache means a full re-parse, which must reproduce the
     // original number exactly — not a degraded one.
-    expect(after.costEstimate).toBeCloseTo((await expected).costEstimate, 10);
+    expect(after.costEstimate).toBeCloseTo(expected.costEstimate, 10);
+  });
+
+  it("the session list prices the same transcript as the aggregate scanner", async () => {
+    // Codex review of #423. `scanSessionFile` keeps its own token accumulation
+    // for the session list's `costEstimate`, and it had its own
+    // `accumulateTurn` call that was not passing `speed`. A fast turn therefore
+    // priced at half rate on /sessions while the aggregate scanner and the
+    // SQLite backend both priced it correctly — a disagreement visible only by
+    // holding two screens side by side, which is why the parity is asserted
+    // here rather than the fast rate alone.
+    const mod = await freshScanner();
+    const aggregate = await mod.scanAllClaudeConversations();
+    const sessions = await mod.scanAllSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].costEstimate).toBeGreaterThan(0);
+    expect(sessions[0].costEstimate).toBeCloseTo(aggregate.costEstimate, 10);
   });
 
   it("the persisted split is load-bearing: removing it changes the answer", async () => {
