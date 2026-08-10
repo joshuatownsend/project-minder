@@ -25,7 +25,31 @@
  * longer turn this suite red on its own.
  *
  * Individual tests that want the fallback table instead can delete the
- * variable in their own scope and restore it — nothing does today.
+ * variable in their own scope and restore it — `tests/usage/longContextTier`
+ * does, because forcing the offline branch is its whole subject.
+ *
+ * ## Regenerating the fixture
+ *
+ * It was extracted from a live LiteLLM table by keeping the model ids the
+ * suite names and the fields `parseLiteLLMEntry` reads. To refresh it (e.g. to
+ * add a model a new test uses), from the repo root with a current
+ * `.cache/litellm-pricing.json`:
+ *
+ * ```js
+ * const raw = JSON.parse(fs.readFileSync(".cache/litellm-pricing.json", "utf8"));
+ * const want = /^(claude-|gpt-5|gpt-4|gemini-1\.5-pro$|gemini-2\.0-flash$|gemini-2\.5-flash$|gemini-3)/;
+ * const FIELDS = ["input_cost_per_token", "output_cost_per_token",
+ *   "cache_read_input_token_cost", "cache_creation_input_token_cost",
+ *   "cache_creation_input_token_cost_above_1hr",
+ *   "input_cost_per_token_above_200k_tokens",
+ *   "output_cost_per_token_above_200k_tokens", "max_input_tokens", "max_tokens"];
+ * // keep entries matching `want`, projected onto FIELDS → tests/fixtures/litellm-pricing.json
+ * ```
+ *
+ * A model id outside the fixture is not an error: `getModelPricing` falls
+ * through to `FALLBACK_PRICING`, which is how the suite behaved before this
+ * existed. It is silent, though — so if a cost assertion is ever mysteriously
+ * zero for a non-Claude model, check whether the id is in the fixture first.
  */
 import path from "path";
 
