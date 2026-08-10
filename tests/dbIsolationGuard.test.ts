@@ -44,6 +44,12 @@ const SRC_DIR = path.resolve(__dirname, "..", "src");
  *
  * Keep this list short. An entry is a standing exception to a rule that exists
  * because the failure it prevents is invisible.
+ *
+ * Keyed by path relative to `tests/`, not by basename. The inventory recurses
+ * (`tests/usage/longContextTier.test.ts` already exists), so a future
+ * `tests/api/hooksRoute.test.ts` would otherwise inherit the root file's
+ * exemption without inheriting a word of its safety argument (Codex review,
+ * PR #419).
  */
 const ALLOWLIST = new Map<string, string>([
   [
@@ -119,6 +125,17 @@ const ALLOWLIST = new Map<string, string>([
     "imports a route only for two pure string helpers; no query runs",
   ],
   [
+    "bootstrap.test.ts",
+    // Imports `@/lib/bootstrap`, which reaches both connection modules through
+    // runtime `import()`. Both sit inside `onShutdown(...)` callbacks
+    // (bootstrap.ts:231, :235) — registered during boot, executed only when the
+    // process shuts down, which this suite never does. It also never calls
+    // `initServiceLog()`, guarded behind `!process.env.VITEST` at
+    // bootstrap.ts:173, so the `~/.minder/logs` mkdir #331 asked about does not
+    // fire either.
+    "its runtime DB imports live in onShutdown callbacks the suite never runs",
+  ],
+  [
     "tasksDispatcher.test.ts",
     // dispatcher.ts imports connection directly, but every collaborator the
     // tests drive it through — tasks/store, spawner, the two delegations —
@@ -183,15 +200,72 @@ function edgesFrom(file: string): string[] {
   const cached = edgeCache.get(file);
   if (cached) return cached;
   const out: string[] = [];
-  const src = fs.readFileSync(file, "utf8");
+  // Comment-stripped, for the same reason the test inventory is: a module's
+  // doc comment can contain a perfectly-formed import. `isolatedState.ts`
+  // documents its own usage with `await import("@/lib/db/connection")` in a
+  // header comment, which was being read as a real edge — making every one of
+  // the 31 files that use the helper appear to reach the connection module
+  // through it. Found while measuring a different change (PR #419).
+  const src = stripComments(fs.readFileSync(file, "utf8"));
   for (const pattern of [EDGE, EDGE_SIDE_EFFECT]) {
     for (const match of src.matchAll(pattern)) {
       const resolved = resolveSpec(match[1], file);
       if (resolved) out.push(resolved);
     }
   }
+  // NOTE: runtime `import()` inside a source module is deliberately NOT an
+  // edge here. See `opensDbAtRuntime` below for why, and for the narrower rule
+  // that covers it instead.
   edgeCache.set(file, out);
   return out;
+}
+
+/**
+ * Source modules that open a database through a RUNTIME `import()` of a
+ * connection module: `bootstrap.ts`, `memory/usageTracker.ts`,
+ * `usage/agentCostFromOtel.ts`.
+ *
+ * These are a different risk from a static import chain and are handled by a
+ * separate rule, because folding them into the static walk is a category
+ * error. A static chain freezes `DB_DIR` at module load — unconditionally, for
+ * every test in the file. A runtime `import()` captures only when its function
+ * is actually CALLED, and if that happens after a reload it resolves
+ * correctly.
+ *
+ * Measured before choosing: propagating these as ordinary edges flagged 30+
+ * files, almost all pure-parsing suites whose chain runs
+ * `claudeConversations -> subagentEnrichment -> agentCostFromOtel` and which
+ * never call the OTEL cost function at all. Treating a conditional runtime
+ * edge as an unconditional freeze overstates the risk by that whole margin,
+ * and a guard that cries wolf gets routed around (Codex review, PR #419).
+ *
+ * What is left is narrow and real: a test that imports one of these three
+ * directly can trip the runtime import, so it has to be isolated somehow.
+ */
+// Computed lazily: this walks `src/` using helpers declared further down the
+// file, so an eagerly-evaluated module-scope constant hits the temporal dead
+// zone.
+let runtimeDbOpenersCache: Set<string> | null = null;
+function runtimeDbOpeners(): Set<string> {
+  if (runtimeDbOpenersCache) return runtimeDbOpenersCache;
+  const found = new Set<string>();
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(full)) {
+        const code = stripComments(fs.readFileSync(full, "utf8"));
+        for (const match of code.matchAll(DYNAMIC_IMPORT)) {
+          if (isTypePosition(code, match)) continue;
+          const resolved = resolveSpec(match[1], full);
+          if (resolved && TARGET_FILES.has(resolved)) found.add(full);
+        }
+      }
+    }
+  };
+  walk(SRC_DIR);
+  runtimeDbOpenersCache = found;
+  return found;
 }
 
 const rel = (file: string): string =>
@@ -467,6 +541,26 @@ function dynamicViolations(file: (typeof files)[number]): string[][] {
   return out;
 }
 
+/**
+ * Runtime-opener violations for one file: it statically imports a module that
+ * opens a database through `import()`, and the file has no isolation at all.
+ */
+function runtimeOpenerViolations(file: (typeof files)[number]): string[] {
+  const isolated =
+    /installIsolatedState\(/.test(file.code) ||
+    /installMcpIsolation\(/.test(file.code) ||
+    /spyOn\(os,\s*["']homedir["']\)/.test(file.code);
+  if (isolated) return [];
+  const openers = runtimeDbOpeners();
+  const out: string[] = [];
+  for (const imported of file.staticImports) {
+    if (!openers.has(imported)) continue;
+    if (file.mocked.has(imported)) continue;
+    out.push(rel(imported));
+  }
+  return out;
+}
+
 describe("database isolation convention", () => {
   it("resolves the graph it is about to walk", () => {
     // Guards the walker itself. A broken alias resolution or a glob that
@@ -500,7 +594,7 @@ describe("database isolation convention", () => {
   it("no test reaches a DB path constant through an unsevered static import", () => {
     const violations: string[] = [];
     for (const file of files) {
-      if (ALLOWLIST.has(file.base)) continue;
+      if (ALLOWLIST.has(file.name)) continue;
       for (const chain of staticViolations(file)) {
         violations.push(
           `${file.name}: static import chain ${chain.join(" -> ")} — the path ` +
@@ -518,7 +612,7 @@ describe("database isolation convention", () => {
   it("no test dynamically imports one without resetting the module registry", () => {
     const violations: string[] = [];
     for (const file of files) {
-      if (ALLOWLIST.has(file.base)) continue;
+      if (ALLOWLIST.has(file.name)) continue;
       for (const chain of dynamicViolations(file)) {
         violations.push(
           `${file.name}: dynamic import chain ${chain.join(" -> ")} with no ` +
@@ -601,18 +695,54 @@ describe("database isolation convention", () => {
     expect([...new Set(violations)]).toEqual([]);
   });
 
+  it("finds the runtime DB openers it is about to check", () => {
+    // The walk is the whole basis of the next test; if it silently found
+    // nothing, that test would pass by vacuity.
+    const openers = [...runtimeDbOpeners()].map(rel).sort();
+    expect(openers).toEqual([
+      "src/lib/bootstrap.ts",
+      "src/lib/memory/usageTracker.ts",
+      "src/lib/usage/agentCostFromOtel.ts",
+    ]);
+  });
+
+  it("isolates any test that imports a module opening the DB at runtime", () => {
+    // The narrow, real half of the runtime-import problem (see
+    // runtimeDbOpeners()). Importing one of those modules freezes nothing on
+    // its own, so this does not ask for a dynamic import — it asks that the
+    // file be isolated at all, by any of the three means the suite uses, so
+    // that if the runtime import does fire it resolves under a temp home.
+    const violations: string[] = [];
+    for (const file of files) {
+      if (ALLOWLIST.has(file.name)) continue;
+      for (const opener of runtimeOpenerViolations(file)) {
+        violations.push(
+          `${file.name} imports ${opener}, which opens a database ` +
+            `through a runtime import(), but the file has no isolation. If ` +
+            `that code path runs it resolves against the developer's real ` +
+            `~/.minder. Install isolatedState (or mock the module).`
+        );
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("keeps the allowlist honest", () => {
     // An allowlist entry for a file that no longer violates anything is a
     // standing exception nobody re-examines. Fail so it gets deleted.
     const stale: string[] = [];
-    for (const [base] of ALLOWLIST) {
-      const file = files.find((f) => f.base === base);
+    for (const [name] of ALLOWLIST) {
+      const file = files.find((f) => f.name === name);
       if (!file) {
-        stale.push(`${base} is allowlisted but no such test file exists`);
+        stale.push(`${name} is allowlisted but no such test file exists`);
         continue;
       }
-      if (staticViolations(file).length + dynamicViolations(file).length === 0) {
-        stale.push(`${base} is allowlisted but no longer needs to be`);
+      const total =
+        staticViolations(file).length +
+        dynamicViolations(file).length +
+        runtimeOpenerViolations(file).length;
+      if (total === 0) {
+        stale.push(`${name} is allowlisted but no longer needs to be`);
       }
     }
     expect(stale).toEqual([]);
