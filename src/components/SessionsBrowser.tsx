@@ -39,6 +39,7 @@ import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLi
 const DELEGATION_BADGE_EXPLANATION = (label: string) =>
   `${label}. Claude Code caps subagent spawns and web searches per session; a session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
+import { entrypointBucket, entrypointLabel, compareEntrypoint } from "@/lib/usage/entrypoint";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
 
@@ -819,6 +820,7 @@ export function SessionsBrowser() {
   const [groupByProject, setGroupByProject] = useState(true);
   const [starredOnly, setStarredOnly] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [entrypointFilter, setEntrypointFilter] = useState<string>("all");
   const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
   const [searchState, setSearchState] = useState<SearchState>({ kind: "idle" });
 
@@ -886,6 +888,27 @@ export function SessionsBrowser() {
     return [...srcs].sort();
   }, [data]);
 
+  /**
+   * Entrypoints present in the loaded sessions, in the panel's fixed order.
+   *
+   * Enumerated from the data rather than from `ENTRYPOINT_ORDER` so a future
+   * Claude Code entrypoint is filterable the first time it appears, and so a
+   * corpus that has never produced `sdk-py` doesn't offer a choice that can
+   * only ever return nothing.
+   */
+  const availableEntrypoints = useMemo(() => {
+    const eps = new Set(data.map((s) => entrypointBucket(s.entrypoint)));
+    // An active selection stays in the list even after the refresh that
+    // removed its last session. The list reloads every 15s, so a bucket can
+    // disappear underneath a filter that is still applied — leaving an empty
+    // page whose only remaining control has hidden itself. Keeping the value
+    // present means the way back is always on screen, and it is preferred to
+    // silently resetting the filter: a transient short read would then rewrite
+    // a choice the reader made, which is a worse surprise than a stale option.
+    if (entrypointFilter !== "all") eps.add(entrypointFilter);
+    return [...eps].sort(compareEntrypoint);
+  }, [data, entrypointFilter]);
+
   const filtered = useMemo(() => {
     let result = data;
     if (starredOnly) {
@@ -893,6 +916,12 @@ export function SessionsBrowser() {
     }
     if (sourceFilter !== "all") {
       result = result.filter((s) => (s.source ?? "claude") === sourceFilter);
+    }
+    // Bucketed, not compared raw: null and "" both mean `unknown`, and a row
+    // whose entrypoint is empty string has to be reachable by the same choice
+    // as one whose entrypoint is absent.
+    if (entrypointFilter !== "all") {
+      result = result.filter((s) => entrypointBucket(s.entrypoint) === entrypointFilter);
     }
     const trimmed = search.trim();
     if (trimmed) {
@@ -932,7 +961,7 @@ export function SessionsBrowser() {
         default: return endedAt(b) - endedAt(a);
       }
     });
-  }, [data, search, sortBy, searchState, starredOnly, sourceFilter]);
+  }, [data, search, sortBy, searchState, starredOnly, sourceFilter, entrypointFilter]);
 
   const projectGroups = useMemo(
     () => groupByProject ? buildProjectGroups(filtered) : [],
@@ -1087,6 +1116,26 @@ export function SessionsBrowser() {
             <option value="all">All sources</option>
             {availableSources.map((s) => (
               <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Entrypoint filter — who drove the session. Offered only when the
+            corpus actually contains more than one, since on a machine that has
+            never run the SDK the control would have a single real choice — but
+            never hidden while a filter is active, or clearing it would require
+            a page reload. (`availableEntrypoints` keeps the active value, so
+            this stays true even after the bucket's last session disappears.) */}
+        {(availableEntrypoints.length > 1 || entrypointFilter !== "all") && (
+          <select
+            aria-label="Filter by entrypoint"
+            value={entrypointFilter}
+            onChange={(e) => setEntrypointFilter(e.target.value)}
+            style={{ padding: "5px 8px", fontSize: "0.72rem", fontFamily: "var(--font-body)", color: entrypointFilter !== "all" ? "var(--accent)" : "var(--text-secondary)", background: "var(--bg-surface)", border: `1px solid ${entrypointFilter !== "all" ? "var(--accent-border)" : "var(--border-subtle)"}`, borderRadius: "var(--radius)", cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
+          >
+            <option value="all">All entrypoints</option>
+            {availableEntrypoints.map((e) => (
+              <option key={e} value={e}>{entrypointLabel(e)}</option>
             ))}
           </select>
         )}

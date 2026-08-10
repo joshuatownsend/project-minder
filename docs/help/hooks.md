@@ -84,6 +84,17 @@ result says which via a `source` field — the two are never blended, because th
 key on different things and merging them would count the same execution twice
 under two labels.
 
+**Pick a source with the Auto / OTEL / Transcript toggle on the card.** Auto is
+the default and does what the paragraph above describes. The explicit choices
+exist because auto alone makes the transcript view unreachable: the time window
+is a *lower* bound, so every period ending now includes recent events, and once
+OTEL has any data at all no choice of period ever falls back. On a machine with
+telemetry running that can leave tens of thousands of transcript-derived runs
+invisible behind a smaller OTEL count. A named source is answered honestly or
+not at all — asking for OTEL when telemetry was never enabled reports nothing
+rather than quietly substituting the other pipeline's rows, which are counting
+something else.
+
 **A hook with no recorded duration counts as a fire but contributes no
 percentile.** Claude Code records a command without a duration for roughly a
 fifth of hook executions. That is "not measured", not "instant" — treating it as
@@ -100,9 +111,9 @@ happened, what it said, and whether it stopped the turn continuing.
 
 | Surface | Question it answers |
 | --- | --- |
-| **Stats → Telemetry → Hook Activity** | Which hooks are slow across all my work? Ranked by fire count, with a badge naming the source. |
+| **Stats → Telemetry → Hook Activity** | Which hooks are slow across all my work? Ranked by fire count, with a source toggle and a badge naming the pipeline that answered. |
 | **Session detail → Hooks tab** | What did hooks cost *this* session? Ranked by total time. |
-| `get-hook-activity` (MCP) | Either pipeline, named explicitly — `source: "transcript"` is the only way to read transcript-derived runs on a machine where OTEL always wins the card. |
+| `get-hook-activity` (MCP) | Either pipeline, named explicitly with `source: "otel" \| "transcript" \| "auto"` — the same choice the card's toggle makes. |
 
 The per-session **Hooks** tab appears on any session that recorded a hook run or
 a hook failure. It groups runs by command and ranks them by total measured time —

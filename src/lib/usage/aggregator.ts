@@ -4,7 +4,7 @@ import { computeToolTransitions } from "./toolTransitions";
 import { computeTurnCost, loadPricing } from "./costCalculator";
 import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
-import { detectOneShot, detectOneShotTasks } from "./oneShotDetector";
+import { detectOneShotTasks } from "./oneShotDetector";
 import { effortBucket, compareEffort } from "./effort";
 import { entrypointBucket, compareEntrypoint, isBackgroundSession } from "./entrypoint";
 import { mcpServerKey, isAttributed } from "./attribution";
@@ -228,7 +228,16 @@ export async function aggregateUsage(
   const modelMap = new Map<string, ModelCost>();
   const projectMap = new Map<string, ProjectBreakdown>();
   const categoryMap = new Map<CategoryType, CategoryBreakdown>();
-  const categoryTurnsMap = new Map<CategoryType, UsageTurn[]>();
+  /**
+   * Each assistant turn's category, by object identity, so the one-shot walk
+   * below can ask "what was the anchor turn classified as?" without
+   * re-classifying. `classifyTurn` is deterministic, but calling it twice
+   * would make it possible for the spend side and the task side to be
+   * computed under two different classifier versions after a future refactor.
+   */
+  const categoryOfTurn = new Map<UsageTurn, CategoryType>();
+  /** Task outcomes per category, keyed by the ANCHOR turn's category (A5). */
+  const categoryTasks = new Map<CategoryType, { verified: number; oneShot: number }>();
   const effortMap = new Map<string, EffortBreakdown>();
   /**
    * A3 entrypoint accumulator. Sets rather than counters because `sessions`
@@ -325,13 +334,7 @@ export async function aggregateUsage(
     cat.tokens += tokens;
     cat.cost += cost;
     categoryMap.set(category, cat);
-    // Per-category one-shot detection runs on primary turns only (A5 groups by
-    // session); a subagent turn isn't a user-verified task, so exclude it.
-    if (!isSub) {
-      const catTurns = categoryTurnsMap.get(category) ?? [];
-      catTurns.push(turn);
-      categoryTurnsMap.set(category, catTurns);
-    }
+    categoryOfTurn.set(turn, category);
 
     // Effort (A2) — spend side. Subagent turns are included, matching
     // byModel/byProject/byCategory; the task side below is primary-only.
@@ -484,29 +487,6 @@ export async function aggregateUsage(
     totalCacheWrite += turn.cacheCreateTokens;
   }
 
-  // Per-category one-shot rates. A5: segment each category's turns by
-  // sessionId before running detectOneShot so an edit in one session can't
-  // pair with a verification from another (the detector scans in array order).
-  // Mirrors the session-grouped headline logic below.
-  for (const [cat, catTurns] of categoryTurnsMap.entries()) {
-    const bySession = new Map<string, UsageTurn[]>();
-    for (const t of catTurns) {
-      const arr = bySession.get(t.sessionId) ?? [];
-      arr.push(t);
-      bySession.set(t.sessionId, arr);
-    }
-    let verified = 0;
-    let oneShot = 0;
-    for (const sessionCatTurns of bySession.values()) {
-      const stats = detectOneShot(sessionCatTurns);
-      verified += stats.totalVerifiedTasks;
-      oneShot += stats.oneShotTasks;
-    }
-    const breakdown = categoryMap.get(cat);
-    if (breakdown && verified > 0) {
-      breakdown.oneShotRate = oneShot / verified;
-    }
-  }
 
   // Top tools (non-MCP)
   const toolCounts = new Map<string, number>();
@@ -549,6 +529,26 @@ export async function aggregateUsage(
         eff.verifiedTasks++;
         if (task.oneShot) eff.oneShotTasks++;
       }
+      // Same anchor turn, crossed with its category (A5).
+      //
+      // Until 2026-08-10 this was computed the other way round — each
+      // category's turns were sliced out and `detectOneShot` re-run over the
+      // slice. That could not work: the classifier puts the edit in `Coding`
+      // and the `pnpm test` that judges it in `Testing`, so every ordinary
+      // task was split across two slices, leaving an edit with no
+      // verification in one and a verification with no edit in the other.
+      // Neither half formed a task, and the field came back undefined on
+      // essentially every category while the headline reported the task
+      // normally. Anchoring matches `byEffort`, `bySkill`, and the
+      // `turns.task_outcome` column the SQL backend reads.
+      const anchorCategory = categoryOfTurn.get(sessionTurns[task.anchorIndex]);
+      if (anchorCategory !== undefined) {
+        const ct = categoryTasks.get(anchorCategory) ?? { verified: 0, oneShot: 0 };
+        ct.verified++;
+        if (task.oneShot) ct.oneShot++;
+        categoryTasks.set(anchorCategory, ct);
+      }
+
       // Same anchor turn, crossed with attribution (A4). Answers "which
       // skills produce work that passes verification first time?" — the
       // question `task_outcome` was made a turn-level column to allow.
@@ -563,6 +563,12 @@ export async function aggregateUsage(
   }
   for (const eff of effortMap.values()) {
     if (eff.verifiedTasks > 0) eff.oneShotRate = eff.oneShotTasks / eff.verifiedTasks;
+  }
+  for (const [cat, t] of categoryTasks.entries()) {
+    const breakdown = categoryMap.get(cat);
+    // Left undefined, never 0, when a category anchored no task — "nothing
+    // measured" has to stay distinguishable from "failed every time".
+    if (breakdown && t.verified > 0) breakdown.oneShotRate = t.oneShot / t.verified;
   }
 
   // A7: cache-hit-rate denominator includes cache WRITE tokens so the rate

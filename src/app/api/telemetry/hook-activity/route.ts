@@ -1,6 +1,12 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { getHookActivity } from "@/lib/db/otelQueries";
+import { getHookActivity, type HookActivitySource } from "@/lib/db/otelQueries";
+
+const SOURCES: readonly HookActivitySource[] = ["auto", "otel", "transcript"];
+
+function isSource(v: string): v is HookActivitySource {
+  return (SOURCES as readonly string[]).includes(v);
+}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
@@ -11,8 +17,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid since parameter" }, { status: 400 });
   }
 
+  // Rejected rather than silently coerced to `auto`. The whole point of naming
+  // a source is that the two pipelines measure different things, so a typo that
+  // quietly fell back would answer a question the caller did not ask and label
+  // it with the source they did not pick.
+  const sourceParam = searchParams.get("source");
+  if (sourceParam !== null && !isSource(sourceParam)) {
+    return NextResponse.json(
+      { error: `Invalid source parameter — expected one of ${SOURCES.join(", ")}` },
+      { status: 400 }
+    );
+  }
+
   try {
-    const result = await getHookActivity({ since });
+    const result = await getHookActivity({ since, source: sourceParam ?? undefined });
     return NextResponse.json(result);
   } catch (err) {
     console.error("[telemetry/hook-activity]", err);

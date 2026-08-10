@@ -392,10 +392,12 @@ CREATE INDEX daily_costs_by_day ON daily_costs(day DESC);
 -- pipeline whenever a session's turns change category mix (e.g., a
 -- classifier version bump moves a turn from 'Coding' to 'Refactoring').
 --
--- Note: `byCategory.oneShotRate` is intentionally NOT denormalized here.
--- The rate is per-(category, session) and would need a much wider
--- pre-aggregate to maintain. The SQL read-path leaves the field
--- undefined; consumers that need it fall back to the file-parse backend.
+-- Note: `byCategory.oneShotRate` is deliberately NOT denormalized here.
+-- The read path pairs this rollup with a small live GROUP BY over
+-- `turns.task_outcome` instead (`queryCategoryTasks` in usageFromDb.ts),
+-- which keeps this table's incremental maintenance a pure spend rollup —
+-- the rate would otherwise have to be recomputed on every ingest for a
+-- field that two callers read.
 
 CREATE TABLE category_costs (
   day           TEXT NOT NULL,

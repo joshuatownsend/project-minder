@@ -49,18 +49,22 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 // * `mcpStats` — the SQL groups by (server, tool); we re-shape into the
 //   nested `McpServerStats[]` the UI consumes.
 //
-// Two known divergences from the file-parse aggregator, both intentional:
+// One known divergence from the file-parse aggregator, and it is intentional:
+// `oneShot` aggregates are session-level sums (`SUM(verified_task_count),
+// SUM(one_shot_task_count) FROM sessions WHERE end_ts >= @periodStart`). For
+// boundary sessions whose turns straddle `periodStart`, the file-parse path
+// computes one-shot only over filtered turns; the SQL path includes the whole
+// session. period=all has zero divergence; bounded periods over-count boundary
+// sessions slightly.
 //
-// 1. `byCategory.oneShotRate` is left undefined. Computing it would
-//    require a per-(category, session) one-shot pre-aggregate — a much
-//    wider schema bump than this slice. Consumers needing the rate fall
-//    back to file-parse.
-// 2. `oneShot` aggregates are session-level sums (`SUM(verified_task_count),
-//    SUM(one_shot_task_count) FROM sessions WHERE end_ts >= @periodStart`).
-//    For boundary sessions whose turns straddle `periodStart`, the
-//    file-parse path computes one-shot only over filtered turns; the SQL
-//    path includes the whole session. period=all has zero divergence;
-//    bounded periods over-count boundary sessions slightly.
+// `byCategory.oneShotRate` used to be a second, larger divergence — this
+// backend left it undefined because the file backend's definition (slice a
+// session's turns by category, re-run the detector per slice) had no cheap SQL
+// equivalent. That definition turned out to be broken rather than merely
+// expensive: it split every ordinary task across the `Coding` edit and the
+// `Testing` command that verified it, so neither half formed a task. Both
+// backends now anchor a task on the turn that started it, which is what
+// `turns.task_outcome` already records. See `tests/usage/byCategoryOneShot`.
 
 /** Convert a Period token to an inclusive ISO start timestamp, or null for "all".
  *  Re-export of `periodSinceIso` from `usage/period.ts` so existing call sites
@@ -442,7 +446,9 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            t.category                 AS category,
            COUNT(*)                   AS turns,
            COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
-           COALESCE(SUM(t.cost_usd), 0) AS cost
+           COALESCE(SUM(t.cost_usd), 0) AS cost,
+           SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
+           SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
          FROM turns t JOIN sessions s USING (session_id)
          WHERE t.role = 'assistant'
            AND t.category IS NOT NULL
@@ -453,17 +459,28 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
          GROUP BY t.category
          ORDER BY cost DESC`
       )
-      .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
+      .all(f) as Array<{
+        category: string; turns: number; tokens: number; cost: number;
+        verifiedTasks: number; oneShotTasks: number;
+      }>;
+    // The `is_sidechain = 0` guards live INSIDE the CASE, not in the WHERE:
+    // subagent spend belongs in this breakdown (matching byModel/byProject)
+    // while subagent turns anchor no user-verified task. Moving them up would
+    // silently drop subagent tokens from the cost column.
     return rows.map((r) => ({
       category: r.category as CategoryType,
       turns: r.turns,
       tokens: r.tokens,
       cost: r.cost,
+      ...oneShotRateOf(r),
     }));
   }
 
-  // Source-agnostic (the common case): read the fast `category_costs` rollup.
-  // `oneShotRate` is intentionally omitted — see header comment.
+  // Source-agnostic (the common case): read the fast `category_costs` rollup
+  // for spend, and a second small query over `turns` for the task columns.
+  // The rollup is keyed (day, project, category) and carries no
+  // `task_outcome`, so the rate cannot come from it; denormalizing one in
+  // would mean re-deriving it on every ingest for a field two callers read.
   const rows = prepCached(db,
       `SELECT
          category,
@@ -477,12 +494,58 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
        ORDER BY cost DESC`
     )
     .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
+
+  const tasks = queryCategoryTasks(db, f);
   return rows.map((r) => ({
     category: r.category as CategoryType,
     turns: r.turns,
     tokens: r.tokens,
     cost: r.cost,
+    ...oneShotRateOf(tasks.get(r.category)),
   }));
+}
+
+/** Omitted rather than 0 when nothing was measured — matches the file backend
+ *  and `EffortBreakdown`, and keeps "no data" distinguishable from "failed
+ *  every time". */
+function oneShotRateOf(t: { verifiedTasks: number; oneShotTasks: number } | undefined) {
+  return t && t.verifiedTasks > 0
+    ? { oneShotRate: t.oneShotTasks / t.verifiedTasks }
+    : {};
+}
+
+/**
+ * Task outcomes per category, for the rollup path of `queryByCategory`.
+ *
+ * Filtered on `@periodStart` (a timestamp) while the rollup it decorates is
+ * filtered on `@startDay` (that timestamp's date). The rollup window is
+ * therefore the wider of the two, back to midnight on the boundary day. Only
+ * the boundary day is affected and only for bounded periods; matching
+ * `byEffort` and the file backend's turn filtering is worth more than matching
+ * the rollup's day granularity, since the rate is read on its own rather than
+ * against the `turns` column beside it.
+ */
+function queryCategoryTasks(
+  db: DatabaseT.Database,
+  f: FilterParams,
+): Map<string, { verifiedTasks: number; oneShotTasks: number }> {
+  const rows = prepCached(db,
+      `SELECT
+         t.category                                                   AS category,
+         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.category IS NOT NULL
+         AND t.task_outcome IS NOT NULL
+         AND t.is_sidechain = 0
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+       GROUP BY t.category`
+    )
+    .all(f) as Array<{ category: string; verifiedTasks: number; oneShotTasks: number }>;
+
+  return new Map(rows.map((r) => [r.category, r]));
 }
 
 /**
@@ -492,12 +555,17 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
  * records each task's verdict against the turn that started it. Without that
  * column this would have to rehydrate every turn *and its tool arguments*
  * through `detectOneShotTasks` — the read-time cost the SQL backend exists to
- * avoid — or be dropped on this backend the way `byCategory.oneShotRate` is.
+ * avoid. `byCategory` now reads the same column for the same reason.
  *
  * Both halves come from one GROUP BY so the spend and task columns are always
  * over the same row set. Subagent turns are included in the spend half
- * (matching byModel/byProject/byCategory) but contribute no tasks: ingest
- * never anchors an outcome on a sidechain turn.
+ * (matching byModel/byProject/byCategory) but contribute no tasks — enforced
+ * by an `is_sidechain = 0` guard inside the CASE rather than left to the fact
+ * that ingest never anchors an outcome on a sidechain turn. `schema.sql` states
+ * the guard as the contract for one-shot reads; relying on the upstream
+ * invariant instead made a future ingest regression corrupt these counts
+ * silently, while a guard makes it a no-op. In the CASE and not the WHERE,
+ * because the spend half must keep counting subagent turns.
  */
 function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown[] {
   const rows = prepCached(db,
@@ -507,8 +575,8 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
-         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)     AS verifiedTasks,
-         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END)    AS oneShotTasks
+         SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)

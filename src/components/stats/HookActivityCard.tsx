@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { useReportFetch } from "@/hooks/useReportFetch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { msLabel, defaultSince } from "@/lib/format";
-import type { HookActivityResult } from "@/lib/db/otelQueries";
+import type { HookActivityResult, HookActivitySource } from "@/lib/db/otelQueries";
 
 interface Props {
   since?: string;
@@ -45,18 +46,124 @@ const SOURCE_META: Record<
 /** Header when the payload predates the `source` field and cannot say which it is. */
 const UNKNOWN_SOURCE_COLUMN = "Hook";
 
+const SOURCE_CHOICES: ReadonlyArray<{ value: HookActivitySource; label: string; hint: string }> = [
+  {
+    value: "auto",
+    label: "Auto",
+    hint: "Prefer OTEL, fall back to the transcript only when OTEL has nothing.",
+  },
+  { value: "otel", label: "OTEL", hint: SOURCE_META.otel.explanation },
+  { value: "transcript", label: "Transcript", hint: SOURCE_META.transcript.explanation },
+];
+
+/**
+ * Why this control exists rather than a date range.
+ *
+ * `auto` prefers OTEL and falls back only when OTEL returns nothing — and
+ * `since` is a *lower* bound, so every window ending at now includes recent
+ * events and no period ever falls back. Once OTEL has any data at all the
+ * transcript view is unreachable, which on a typical machine hides tens of
+ * thousands of transcript-derived runs behind the OTEL count. Asking for the
+ * other pipeline has to be a direct request, because the two are not two views
+ * of one dataset: OTEL names the hook, the transcript names the command it ran.
+ */
+function SourceToggle({
+  value,
+  onChange,
+}: {
+  value: HookActivitySource;
+  onChange: (v: HookActivitySource) => void;
+}) {
+  // Segmented control, not a tab list — mutually-exclusive buttons with no
+  // panels being switched. Matches `PeriodToggle` in ItemUsageBreakdown.
+  return (
+    <div
+      role="group"
+      aria-label="Hook activity source"
+      style={{
+        display: "inline-flex",
+        gap: "4px",
+        padding: "3px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: "var(--radius)",
+      }}
+    >
+      {SOURCE_CHOICES.map((c) => {
+        const active = c.value === value;
+        return (
+          <button
+            key={c.value}
+            type="button"
+            aria-pressed={active}
+            title={c.hint}
+            onClick={() => onChange(c.value)}
+            style={{
+              padding: "3px 9px",
+              fontSize: "0.62rem",
+              fontFamily: "var(--font-mono)",
+              fontWeight: active ? 600 : 400,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: active ? "var(--text-primary)" : "var(--text-muted)",
+              background: active ? "var(--bg-elevated)" : "transparent",
+              border: "none",
+              borderRadius: "calc(var(--radius) - 2px)",
+              cursor: "pointer",
+            }}
+          >
+            {c.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Empty-state copy that names the source the reader actually asked for. */
+function emptyMessage(source: HookActivitySource): string {
+  if (source === "otel") {
+    return "No OTEL hook events in this window. OTEL is opt-in — if you haven't enabled telemetry there is nothing to find here. Transcript needs no setup and covers all history.";
+  }
+  if (source === "transcript") {
+    return "No hook runs decoded from session transcripts in this window.";
+  }
+  return "No hooks fired yet.";
+}
+
 export function HookActivityCard({ since }: Props) {
   const sinceParam = since ?? defaultSince();
+  const [source, setSource] = useState<HookActivitySource>("auto");
   const { data, loading, error } = useReportFetch<HookActivityResult>(
-    `/api/telemetry/hook-activity?since=${encodeURIComponent(sinceParam)}`,
+    `/api/telemetry/hook-activity?since=${encodeURIComponent(sinceParam)}&source=${source}`,
   );
 
-  if (loading) return <Skeleton className="h-32" />;
+  // The toggle renders above every branch below, including the empty and error
+  // ones. Putting it inside the has-data branch would let a reader pick a
+  // source that happens to be empty and then have no control left to pick
+  // their way back out of it.
+  const toggle = (
+    <div style={{ display: "flex", justifyContent: "flex-end", paddingBottom: "6px" }}>
+      <SourceToggle value={source} onChange={setSource} />
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div>
+        {toggle}
+        <Skeleton className="h-32" />
+      </div>
+    );
+  }
 
   if (error || !data?.hasData) {
     return (
-      <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
-        {error ? `Error: ${error}` : "No hooks fired yet."}
+      <div>
+        {toggle}
+        <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
+          {error ? `Error: ${error}` : emptyMessage(source)}
+        </div>
       </div>
     );
   }
@@ -71,36 +178,42 @@ export function HookActivityCard({ since }: Props) {
   // `fires`, contributing zero, because "the server didn't tell me" must not
   // render as "these went untimed".
   const unmeasured = data.hooks.reduce((n, h) => n + (h.fires - (h.measuredFires ?? h.fires)), 0);
-  const source = data.source ? SOURCE_META[data.source] : undefined;
+  // Which pipeline actually answered, which is not the same as which one was
+  // asked for: under `auto` the badge is the only place the resolution is
+  // visible, and under an explicit pick it confirms the server honored it.
+  const answered = data.source ? SOURCE_META[data.source] : undefined;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-      {source && (
-        <div style={{ display: "flex", justifyContent: "flex-end", paddingBottom: "6px" }}>
-          <span className="sr-only">{source.explanation}</span>
-          <span
-            aria-hidden="true"
-            title={source.explanation}
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.58rem",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              color: "var(--text-muted)",
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "3px",
-              padding: "1px 6px",
-              cursor: "help",
-            }}
-          >
-            {source.label}
-          </span>
-        </div>
-      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px", paddingBottom: "6px" }}>
+        {answered && (
+          <>
+            <span className="sr-only">{answered.explanation}</span>
+            <span
+              aria-hidden="true"
+              title={answered.explanation}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.58rem",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--text-muted)",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                padding: "1px 6px",
+                cursor: "help",
+              }}
+            >
+              {answered.label}
+            </span>
+          </>
+        )}
+        <SourceToggle value={source} onChange={setSource} />
+      </div>
       {/* Header */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 60px 60px", gap: "4px", paddingBottom: "6px", borderBottom: "1px solid var(--border-subtle)" }}>
-        {[source?.column ?? UNKNOWN_SOURCE_COLUMN, "Fires", "p50", "p95"].map((h) => (
+        {[answered?.column ?? UNKNOWN_SOURCE_COLUMN, "Fires", "p50", "p95"].map((h) => (
           <span key={h} style={{ fontFamily: "var(--font-mono)", fontSize: "0.6rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             {h}
           </span>
