@@ -36,6 +36,7 @@ let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 let originalStateDir: string | undefined;
+let originalPricingFile: string | undefined;
 
 async function freshPricing() {
   vi.resetModules();
@@ -69,6 +70,13 @@ beforeEach(async () => {
   // offline assertions silently test LiteLLM's table instead of the fallback,
   // which is the one thing these tests exist to pin.
   process.env.MINDER_STATE_DIR = tmpHome;
+  // The suite pins pricing to a committed LiteLLM fixture
+  // (tests/setup/pinPricing.ts) so no test depends on the network. That pin
+  // short-circuits `loadPricing()` *before* the fetch — which is precisely the
+  // branch this file exists to exercise. Opt out for the duration of each
+  // case, so a rejected `fetch` still lands on `FALLBACK_PRICING`.
+  originalPricingFile = process.env.MINDER_PRICING_FILE;
+  delete process.env.MINDER_PRICING_FILE;
 });
 
 afterEach(async () => {
@@ -81,6 +89,8 @@ afterEach(async () => {
   else process.env.USERPROFILE = originalUserProfile;
   if (originalStateDir === undefined) delete process.env.MINDER_STATE_DIR;
   else process.env.MINDER_STATE_DIR = originalStateDir;
+  if (originalPricingFile === undefined) delete process.env.MINDER_PRICING_FILE;
+  else process.env.MINDER_PRICING_FILE = originalPricingFile;
   await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {});
 });
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Parity test for `getSessionsList`. Drives the same fixture through
 // both backends (file-parse via `scanAllSessions`, DB via
@@ -179,7 +180,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbResult = await dbFacade.getSessionsList();
     expect(dbResult.meta.backend).toBe("db");
     expect(dbResult.sessions.length).toBe(2);
@@ -281,7 +282,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
     process.env.MINDER_USE_DB = "1";
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbResult = await dbFacade.getSessionsList();
     expect(dbResult.meta.backend).toBe("db");
     const dbWt = dbResult.sessions.find((s) => s.sessionId === SESSION_WT)!;

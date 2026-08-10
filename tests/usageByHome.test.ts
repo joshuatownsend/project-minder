@@ -7,6 +7,7 @@ import { normalizePathKey } from "@/lib/platform";
 import type { UsageTurn } from "@/lib/usage/types";
 import type { MinderConfig } from "@/lib/types";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // #311 — the Claude-home discriminator for per-project usage/cost reports.
 // Two configured homes with identical path layouts (Ubuntu + Debian both
@@ -189,7 +190,7 @@ describe.skipIf(!driverAvailable)("home_key end-to-end: multi-home ingest → SQ
     expect(init.available).toBe(true);
     const db = (await mods.conn.getDb())!;
     const config = { claudeHomes: [extraHome] } as unknown as MinderConfig;
-    await mods.ingest.reconcileAllSessions(db, { config });
+    assertReconcileClean(await mods.ingest.reconcileAllSessions(db, { config }));
 
     const primaryKey = normalizePathKey(primaryHome);
     const extraKey = normalizePathKey(extraHome);

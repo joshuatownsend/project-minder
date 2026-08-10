@@ -1,5 +1,39 @@
 # Insights
 
+<!-- insight:02ddc76f21cf | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:26:43.092Z -->
+## ★ Insight
+`loadPricing()` single-flights via a module-scoped promise — but `vi.resetModules()` gives every isolated test a *fresh* module instance, so each reload re-fetches. That's how 371 files produce 221 requests to one URL.
+`raw.githubusercontent.com` rate-limits. Under 8 parallel forks some reloads get LiteLLM rates and some silently fall back — so a cost stored at **ingest** and one recomputed **live** can straddle that boundary. That is a concrete mechanism for #220's exact-3× divergence, and for the #345/#362 timeouts.
+
+---
+
+<!-- insight:6ab916b1127f | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:19:43.184Z -->
+## ★ Insight
+Cache miss → `await fetch(LITELLM_URL)`. Success gives real LiteLLM rates; failure silently gives `FALLBACK_PRICING`. Meanwhile `getModelPricing` reads `pricingMap ?? FALLBACK`, so *whether the fetch has resolved yet* changes the rate.
+DB `costEstimate` is computed at **ingest**; the façade recomputes **live**. If the fetch resolves between those two moments, the same turn gets priced two ways — which is precisely the 3× divergence in #220.
+
+---
+
+<!-- insight:84a157ab5084 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:08:12.194Z -->
+## ★ Insight
+`date-fns` v3+ ships as a **barrel** — `import { x } from "date-fns"` makes the module runner resolve and execute the package's entire index, thousands of modules. Next.js hides this in production via `optimizePackageImports`, but Vitest's module runner has no such optimization, so the full barrel is paid per fork.
+That's why the cost looked like "DB fixture setup": it lands in whichever test first touches the graph, and the DB-heavy files happen to be the ones that do.
+
+---
+
+<!-- insight:477c0ab16fe1 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:01:01.941Z -->
+## ★ Insight
+**#175 claims** the ~9s cost is paid *per test* because `reloadModules()` calls `vi.resetModules()` in every `it()`. But the run above shows only the **first** test in each file costs ~3.8s — every later test that calls the same `reloadModules()` costs 28–214ms.
+That reframes it: `vi.resetModules()` clears the *module registry*, but Vite's **transform cache** survives, so re-import re-executes cheap already-transformed modules. The summary line agrees — `transform 3.66s` versus `import 364ms`.
+
+---
+
+<!-- insight:594e364c2c7a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:23:23.110Z -->
+## ★ Insight
+This is the round where I stopped folding findings in, and the reasoning matters more than the fix.
+
+---
+
 <!-- insight:ec84bae5d44b | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T12:12:11.037Z -->
 ## ★ Insight
 The more serious bug wasn't either finding — it surfaced *while measuring* one.

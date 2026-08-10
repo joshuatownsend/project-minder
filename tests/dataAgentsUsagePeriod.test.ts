@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Phase 4.1: SQL filter on `loadAgentUsageFromDb` / `loadSkillUsageFromDb`.
 // The new `sinceIso` parameter adds `WHERE tu.ts >= ?` to the aggregate
@@ -109,7 +110,7 @@ describe.skipIf(!driverAvailable)("loadAgentUsageFromDb / loadSkillUsageFromDb â
     const mods = await reloadModules();
     const init = await mods.mig.initDb();
     expect(init.available).toBe(true);
-    await mods.ingest.reconcileAllSessions((await mods.conn.getDb())!, { projectsDir });
+    assertReconcileClean(await mods.ingest.reconcileAllSessions((await mods.conn.getDb())!, { projectsDir }));
     return mods;
   }
 

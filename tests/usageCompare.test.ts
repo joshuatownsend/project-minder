@@ -3,6 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import type { UsageComparison } from "@/lib/usage/types";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 /** Narrow a UsageComparison to its comparable variant (throws otherwise) so
  *  tests can read current/previous/deltas/windows without `!`. */
@@ -140,7 +141,7 @@ describe.skipIf(!driverAvailable)("compareUsageFromSql — window + delta math",
     const init = await mods.mig.initDb();
     expect(init.available).toBe(true);
     const db = (await mods.conn.getDb())!;
-    await mods.ingest.reconcileAllSessions(db, { projectsDir });
+    assertReconcileClean(await mods.ingest.reconcileAllSessions(db, { projectsDir }));
     return { ...mods, db, projectsDir };
   }
 
@@ -276,7 +277,7 @@ describe.skipIf(!driverAvailable)("getUsageCompare — façade not-comparable br
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     const { comparison, meta } = await facade.getUsageCompare("7d", undefined);
     expect(meta.backend).toBe("db");

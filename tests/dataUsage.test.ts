@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Parity test for the read-side usage façade. Drives the same fixture
 // through both backends (file-parse and DB-rehydrate) and asserts the
@@ -179,7 +180,7 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     process.env.MINDER_USE_DB = "1";
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbR = (await dbFacade.getUsage("all", undefined)).report;
 
     // Subagent tokens broken out and folded into the totals.
@@ -210,7 +211,7 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbResult = await dbFacade.getUsage("all", undefined);
     expect(dbResult.meta.backend).toBe("db");
 
@@ -314,7 +315,7 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     // Reconcile clears the v3 readiness flag on success — re-set it to
     // simulate a process that's been restarted between migration apply
@@ -338,7 +339,7 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     const result = await facade.getUsage("all", undefined);
     expect(result.meta.backend).toBe("db");
