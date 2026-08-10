@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import { installIsolatedState } from "./_helpers/isolatedState";
 
@@ -26,7 +26,7 @@ try {
   driverAvailable = false;
 }
 
-const state = installIsolatedState({ prefix: "pm-init-retry-", extraGlobals: ["__usageCache", "__usageFileCache", "__sessionsCache"] });
+const state = installIsolatedState({ prefix: "pm-init-retry-", extraGlobals: ["__usageCache", "__usageFileCache", "__sessionsCache"], preserveEnv: ["MINDER_USE_DB"] });
 
 /** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;

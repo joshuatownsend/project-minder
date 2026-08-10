@@ -17,7 +17,7 @@
  * predates `effort`, so folding it into `medium` or dropping it would change
  * every rate on the page while still looking reasonable.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -28,7 +28,7 @@ try {
   driverAvailable = false;
 }
 
-const state = installIsolatedState({ prefix: "pm-data-agents-", extraGlobals: ["__usageCache", "__usageFileCache", "__sessionIndex", "__sessionsCache", "__agentCostCache"] });
+const state = installIsolatedState({ prefix: "pm-data-agents-", extraGlobals: ["__usageCache", "__usageFileCache", "__sessionIndex", "__sessionsCache", "__agentCostCache"], preserveEnv: ["MINDER_USE_DB"] });
 
 /** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;

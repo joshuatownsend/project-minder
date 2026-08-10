@@ -218,18 +218,40 @@ const DYNAMIC_IMPORT = /import\(\s*["']([^"']+)["']\s*\)/g;
 const resolveFrom = (specs: Iterable<string>, from: string): string[] =>
   [...specs].map((s) => resolveSpec(s, from)).filter((f): f is string => f !== null);
 
+/**
+ * Source with comments removed, for checks that look for the PRESENCE of a
+ * call — a commented-out `state.reload()` must not satisfy the reset check
+ * (Copilot review, PR #419).
+ *
+ * Only whole-line `//` comments and block comments are stripped, never a
+ * mid-line `//`: that would eat the rest of any line containing a URL in a
+ * string, which is a worse failure than the one being fixed.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .join("\n");
+}
+
 const files = listTestFiles(TESTS_DIR).map((full) => {
   const source = fs.readFileSync(full, "utf8");
+  // Every check reads `code`, never `source`. A commented-out `vi.mock()` read
+  // as a cut vertex would be the worst kind of miss — it would sever a path in
+  // the model that is wide open at runtime.
+  const code = stripComments(source);
   return {
     name: path.relative(TESTS_DIR, full).split(path.sep).join("/"),
     base: path.basename(full),
     source,
+    code,
     staticImports: resolveFrom(
-      new Set([...source.matchAll(STATIC_IMPORT)].map((m) => m[1])),
+      new Set([...code.matchAll(STATIC_IMPORT)].map((m) => m[1])),
       full
     ),
     dynamicImports: resolveFrom(
-      new Set([...source.matchAll(DYNAMIC_IMPORT)].map((m) => m[1])),
+      new Set([...code.matchAll(DYNAMIC_IMPORT)].map((m) => m[1])),
       full
     ),
     // Mocks are cut vertices. Resolved to files so `vi.mock("@/lib/data")`
@@ -237,7 +259,7 @@ const files = listTestFiles(TESTS_DIR).map((full) => {
     // elsewhere. Bare specifiers (`fs`, `server-only`) resolve to nothing and
     // simply do not participate — see the tasksDbConnectionRace allowlist note.
     mocked: new Set(
-      resolveFrom(new Set([...source.matchAll(MOCK_CALL)].map((m) => m[1])), full)
+      resolveFrom(new Set([...code.matchAll(MOCK_CALL)].map((m) => m[1])), full)
     ),
   };
 });
@@ -259,10 +281,20 @@ function staticViolations(file: (typeof files)[number]): string[][] {
  * the same frozen path, arrived at by a route that looks correct.
  */
 function dynamicViolations(file: (typeof files)[number]): string[][] {
+  // Note what does NOT count: `installIsolatedState()` alone. It registers
+  // lifecycle hooks and allocates the temp home; the module registry is reset
+  // only when the caller invokes `state.reload()`. An earlier version accepted
+  // the install as evidence, so a file that set isolation up and then forgot
+  // the reload before a dynamic import passed this check while still receiving
+  // a cached module bound to another home — precisely the leak the guard
+  // exists to catch (Codex review, PR #419).
+  //
+  // `installMcpIsolation()` does stand alone: it calls `vi.resetModules()`
+  // inside its own setup hook, before any dynamic import the test can make.
   const resets =
-    /vi\.resetModules\(\)/.test(file.source) ||
-    /installIsolatedState\(/.test(file.source) ||
-    /installMcpIsolation\(/.test(file.source);
+    /vi\.resetModules\(\)/.test(file.code) ||
+    /\.reload\(\)/.test(file.code) ||
+    /installMcpIsolation\(/.test(file.code);
   if (resets) return [];
   const out: string[][] = [];
   for (const imported of file.dynamicImports) {
@@ -333,6 +365,41 @@ describe("database isolation convention", () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it("no test mutates process.env without arranging for it to be put back", () => {
+    // Added because the migration in this PR dropped eight files' `MINDER_USE_DB`
+    // save/restore and nothing failed (Codex review, PR #419). Vitest reuses a
+    // worker process across files, so a variable left set escapes into whatever
+    // file runs next — there it silently selects the file backend instead of
+    // the DB one, and the victim is a suite that never mentions the variable.
+    // Invisible in exactly the way the rest of this guard exists to prevent.
+    //
+    // A file satisfies the rule three ways: hand the variable to
+    // installIsolatedState (`env` for one it sets, `preserveEnv` for one its
+    // tests set case by case), restore it by hand, or use vitest's own
+    // `stubEnv`. Note `dbIngest.test.ts` was already leaking before the
+    // migration — the rule catches pre-existing cases too, which is why it is
+    // worth having rather than just fixing the eight.
+    const violations: string[] = [];
+    for (const file of files) {
+      const install = /installIsolatedState\(\{[\s\S]*?\}\);/.exec(file.code);
+      for (const match of file.code.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\s*=(?!=)/g)) {
+        const name = match[1];
+        const declared = install !== null && install[0].includes(name);
+        const restored = new RegExp(
+          `delete process\\.env\\.${name}\\b|process\\.env\\.${name}\\s*=\\s*original|stubEnv|unstubAllEnvs`
+        ).test(file.code);
+        if (declared || restored) continue;
+        violations.push(
+          `${file.name} sets process.env.${name} and never restores it — it ` +
+            `escapes into the next file in the same vitest worker. Declare it ` +
+            `in installIsolatedState's env/preserveEnv, restore it in a ` +
+            `teardown hook, or use vi.stubEnv.`
+        );
+      }
+    }
+    expect([...new Set(violations)]).toEqual([]);
   });
 
   it("keeps the allowlist honest", () => {

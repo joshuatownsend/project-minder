@@ -13,7 +13,7 @@
  * that mixed them would be meaningless. The contract is that a list is wholly
  * explicit or wholly inferred, and says which.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import {

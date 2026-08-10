@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
@@ -34,7 +34,7 @@ interface Reloaded {
   data: typeof import("@/lib/data");
 }
 
-const state = installIsolatedState({ prefix: "pm-ingest-test-" });
+const state = installIsolatedState({ prefix: "pm-ingest-test-", preserveEnv: ["MINDER_USE_DB"] });
 
 /** Mirror of the helper's temp home, so fixture paths below read unchanged. */
 let tmpHome: string;
