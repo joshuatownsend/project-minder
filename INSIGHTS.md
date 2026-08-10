@@ -1,5 +1,26 @@
 # Insights
 
+<!-- insight:8aa91a979669 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:39:57.237Z -->
+## ★ Insight
+- Confirmed empirically, and it's worse than "missing on one backend": for a textbook edit→verify task the headline reports **1 one-shot task**, while `byCategory` reports **no rate on any category**. The Edit lands in `Coding`, the `pnpm test` in `Testing`, and slicing by category leaves each half unable to form a task.
+- So the plan's framing — "fill in the DB backend to close a divergence" — would have copied a broken definition. The right fix is the one `byEffort` and `bySkill` already use: run the detector over the **whole** session and bucket each task by its *anchor turn's* category. That also happens to be exactly what `turns.task_outcome` records, so both backends converge on one definition.
+
+---
+
+<!-- insight:d490c875350a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:38:11.657Z -->
+## ★ Insight
+- I've hit something the plan didn't anticipate. The file backend computes this rate by **slicing a session's turns by category, then running `detectOneShot` on each slice**. But the classifier puts an `Edit` turn in `Coding` (rule 11) and a `Bash pnpm test` turn in `Testing` (rule 3) — so a normal edit→verify task gets *split across two slices*, leaving an edit with no verification in one and a verification with no edit in the other. Neither slice yields a task.
+- If that's right, the file backend's `byCategory.oneShotRate` isn't just missing on the DB side — it's near-always **absent or wrong** on the file side too, and "parity" would mean copying a defect.
+
+---
+
+<!-- insight:a8efdb0fd189 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:34:16.607Z -->
+## ★ Insight
+- `byCategory.oneShotRate` is computed by the **file** backend and rendered by **no UI surface** — its only consumer is the MCP `get-usage` tool. So this fix closes a data-contract hole, not a visible bug: two backends answering the same question differently is the defect.
+- The DB backend has two paths through `queryByCategory`: a fast `category_costs` rollup (no `task_outcome` column) and a live `turns` recompute for source/home filters. Only the second can carry the task columns in the same `GROUP BY`.
+
+---
+
 <!-- insight:e10d60fc0299 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T16:47:04.743Z -->
 ## ★ Insight
 - On `claude-sonnet-4-20250514` the tiered 5m write is **$7.50** while my fallback picks the base 1h rate of **$6.00**. A 1-hour cache write is *always* more expensive than a 5-minute one (2× base vs 1.25× base) — so the fallback produces `1h < 5m`, which is impossible pricing.

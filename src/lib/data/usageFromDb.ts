@@ -51,10 +51,15 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 //
 // Two known divergences from the file-parse aggregator, both intentional:
 //
-// 1. `byCategory.oneShotRate` is left undefined. Computing it would
-//    require a per-(category, session) one-shot pre-aggregate — a much
-//    wider schema bump than this slice. Consumers needing the rate fall
-//    back to file-parse.
+// 1. `byCategory.oneShotRate` is computed from `turns.task_outcome`, which
+//    anchors each task's verdict on the turn that *started* it. The file
+//    backend instead slices a session's turns by category and re-runs
+//    `detectOneShot` over each slice, so a task whose turns span two
+//    categories is attributed differently by the two backends. Same
+//    trade-off `byEffort` already ships, and the alternative is the
+//    read-time rehydrate the SQL backend exists to avoid. (Before 2026-08-10
+//    this backend left the field undefined entirely; `task_outcome`,
+//    schema v21, is what made the cheap version possible.)
 // 2. `oneShot` aggregates are session-level sums (`SUM(verified_task_count),
 //    SUM(one_shot_task_count) FROM sessions WHERE end_ts >= @periodStart`).
 //    For boundary sessions whose turns straddle `periodStart`, the
@@ -442,7 +447,9 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            t.category                 AS category,
            COUNT(*)                   AS turns,
            COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
-           COALESCE(SUM(t.cost_usd), 0) AS cost
+           COALESCE(SUM(t.cost_usd), 0) AS cost,
+           SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
+           SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
          FROM turns t JOIN sessions s USING (session_id)
          WHERE t.role = 'assistant'
            AND t.category IS NOT NULL
@@ -453,17 +460,24 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
          GROUP BY t.category
          ORDER BY cost DESC`
       )
-      .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
+      .all(f) as Array<{
+        category: string; turns: number; tokens: number; cost: number;
+        verifiedTasks: number; oneShotTasks: number;
+      }>;
     return rows.map((r) => ({
       category: r.category as CategoryType,
       turns: r.turns,
       tokens: r.tokens,
       cost: r.cost,
+      ...oneShotRateOf(r),
     }));
   }
 
-  // Source-agnostic (the common case): read the fast `category_costs` rollup.
-  // `oneShotRate` is intentionally omitted — see header comment.
+  // Source-agnostic (the common case): read the fast `category_costs` rollup
+  // for spend, and a second small query over `turns` for the task columns.
+  // The rollup is keyed (day, project, category) and carries no
+  // `task_outcome`, so the rate cannot come from it; denormalizing one in
+  // would mean re-deriving it on every ingest for a field two callers read.
   const rows = prepCached(db,
       `SELECT
          category,
@@ -477,12 +491,57 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
        ORDER BY cost DESC`
     )
     .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
+
+  const tasks = queryCategoryTasks(db, f);
   return rows.map((r) => ({
     category: r.category as CategoryType,
     turns: r.turns,
     tokens: r.tokens,
     cost: r.cost,
+    ...oneShotRateOf(tasks.get(r.category)),
   }));
+}
+
+/** Omitted rather than 0 when nothing was measured — matches the file backend
+ *  and `EffortBreakdown`, and keeps "no data" distinguishable from "failed
+ *  every time". */
+function oneShotRateOf(t: { verifiedTasks: number; oneShotTasks: number } | undefined) {
+  return t && t.verifiedTasks > 0
+    ? { oneShotRate: t.oneShotTasks / t.verifiedTasks }
+    : {};
+}
+
+/**
+ * Task outcomes per category, for the rollup path of `queryByCategory`.
+ *
+ * Filtered on `@periodStart` (a timestamp) while the rollup it decorates is
+ * filtered on `@startDay` (that timestamp's date). The rollup window is
+ * therefore the wider of the two, back to midnight on the boundary day. Only
+ * the boundary day is affected and only for bounded periods; matching
+ * `byEffort` and the file backend's turn filtering is worth more than matching
+ * the rollup's day granularity, since the rate is read on its own rather than
+ * against the `turns` column beside it.
+ */
+function queryCategoryTasks(
+  db: DatabaseT.Database,
+  f: FilterParams,
+): Map<string, { verifiedTasks: number; oneShotTasks: number }> {
+  const rows = prepCached(db,
+      `SELECT
+         t.category                                                   AS category,
+         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.category IS NOT NULL
+         AND t.task_outcome IS NOT NULL
+         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND (@project IS NULL OR s.project_slug = @project)
+       GROUP BY t.category`
+    )
+    .all(f) as Array<{ category: string; verifiedTasks: number; oneShotTasks: number }>;
+
+  return new Map(rows.map((r) => [r.category, r]));
 }
 
 /**
@@ -492,7 +551,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
  * records each task's verdict against the turn that started it. Without that
  * column this would have to rehydrate every turn *and its tool arguments*
  * through `detectOneShotTasks` — the read-time cost the SQL backend exists to
- * avoid — or be dropped on this backend the way `byCategory.oneShotRate` is.
+ * avoid. `byCategory` now reads the same column for the same reason.
  *
  * Both halves come from one GROUP BY so the spend and task columns are always
  * over the same row set. Subagent turns are included in the spend half
