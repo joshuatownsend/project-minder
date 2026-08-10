@@ -135,6 +135,17 @@ describe("installIsolatedState", () => {
     expect(process.env.HOME).toBe(state.tmpHome());
   });
 
+  it("rejects MINDER_STATE_DIR as a caller option instead of silently dropping it", () => {
+    // `reload()` re-applies the isolation invariant, which deletes this
+    // variable — so an `env` override would hold through setup and vanish at
+    // the reload every caller has to make, leaving the test exercising the
+    // homedir fallback it was written to bypass. Failing loudly at install is
+    // the only version of that a caller can notice (Codex review, PR #419).
+    expect(() =>
+      installIsolatedState({ prefix: "pm-reject-", env: { MINDER_STATE_DIR: "/tmp/x" } })
+    ).toThrow(/MINDER_STATE_DIR cannot be set through `env`/);
+  });
+
   it("restores environment variables it was asked to override", async () => {
     // Discriminates: the save/restore loop over `envKeys`. A file that sets
     // MINDER_USE_DB for its own cases must not hand that setting to the next

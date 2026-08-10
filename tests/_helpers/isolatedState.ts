@@ -140,7 +140,28 @@ export function installIsolatedState(
   // `MINDER_STATE_DIR` is always managed: it takes precedence over the
   // `os.homedir()` spy in `DB_DIR`/`TASKS_DB_DIR`, so leaving it in place would
   // let a developer's shell silently redirect an "isolated" test at their real
-  // relocated database. Callers may still override it through `env`.
+  // relocated database.
+  //
+  // It is NOT a caller option, and passing it is an error rather than a no-op.
+  // `reload()` re-applies the isolation invariant and therefore deletes the
+  // variable again, so an `env` override would survive setup, vanish at the
+  // reload every caller has to make, and leave the test quietly exercising the
+  // `os.homedir()` fallback it was written to bypass (Codex review, PR #419).
+  //
+  // Supporting the override instead was considered and rejected: the whole
+  // point of deleting it is that all thirty files resolve their database the
+  // same way, at `<tmpHome>/.minder`. Three of them used to set it to
+  // `<tmpHome>` and were migrated off precisely to remove that divergence,
+  // and `dbMigrations.test.ts` asserts the `<tmpHome>/.minder` path directly.
+  if ("MINDER_STATE_DIR" in env) {
+    throw new Error(
+      "installIsolatedState: MINDER_STATE_DIR cannot be set through `env` — " +
+        "the helper deletes it on every reload() so the homedir spy stays " +
+        "authoritative. A test that needs to exercise MINDER_STATE_DIR itself " +
+        "should set it after reload() and restore it in a finally, the way " +
+        "tests/serverRoot.test.ts does."
+    );
+  }
   const envKeys = Array.from(
     new Set([
       "HOME",
