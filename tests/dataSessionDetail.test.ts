@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Parity test for `getSessionDetail`. Drives the same fixture through
 // both backends (file-parse via `scanSessionDetail`, DB via
@@ -182,7 +183,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbResult = await dbFacade.getSessionDetail(SESSION_ID);
     expect(dbResult.meta.backend).toBe("db");
     expect(dbResult.detail).not.toBeNull();
@@ -287,7 +288,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
     const db = (await conn.getDb())!;
-    await ingest.reconcileAllSessions(db, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions(db, { projectsDir }));
 
     // Stamp non-default values that reconcile doesn't naturally produce.
     db.prepare(
@@ -320,7 +321,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
     const projectsDir = path.join(tmpHome, ".claude", "projects");
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     const result = await facade.getSessionDetail("../../../etc/passwd");
     expect(result.detail).toBeNull();
@@ -358,7 +359,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     process.env.MINDER_USE_DB = "1";
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     const result = await facade.getSessionDetail(SLUG);
     expect(result.meta.backend).toBe("db");
@@ -381,7 +382,7 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     process.env.MINDER_USE_DB = "1";
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
 
     const result = await facade.getSessionDetail(HEX_ID);
     expect(result.meta.backend).toBe("db");

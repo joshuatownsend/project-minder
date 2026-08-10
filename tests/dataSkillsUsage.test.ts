@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Parity test for `getSkillUsage`. Mirror of `dataAgentsUsage.test.ts`
 // against `tool_uses.skill_name`. No documented divergences — both
@@ -161,7 +162,7 @@ describe.skipIf(!driverAvailable)("data façade — getSkillUsage backend parity
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir });
+    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
     const dbResult = await dbFacade.getSkillUsage();
     expect(dbResult.meta.backend).toBe("db");
 
