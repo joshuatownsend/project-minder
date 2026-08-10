@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:e10d60fc0299 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T16:47:04.743Z -->
+## ★ Insight
+- On `claude-sonnet-4-20250514` the tiered 5m write is **$7.50** while my fallback picks the base 1h rate of **$6.00**. A 1-hour cache write is *always* more expensive than a 5-minute one (2× base vs 1.25× base) — so the fallback produces `1h < 5m`, which is impossible pricing.
+- That inverted ordering is a **structural invariant violation**, provable without knowing any rate. It's much stronger evidence than "the number looks low," and it's the kind of check worth asserting in the test rather than only pinning literals.
+- My original comment claimed each rate falling back to its own base keeps "absent means flat" true per rate. That reasoning holds when the model publishes *no* tier — but this entry does publish one, so the model isn't flat, and falling back mixes a tiered rate with a base one inside a single request.
+
+---
+
 <!-- insight:b038a5b6237a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T15:16:29.871Z -->
 ## ★ Insight
 - Anthropic's docs no longer publish a Sonnet 4/4.5 long-context *table* (those models are retired), so the premise can't be verified by quotation any more. It can be verified by **derivation**: the docs state cache multipliers are "relative to base input token rates" and "stack with other pricing modifiers". Sonnet 4.5's above-200k input is $6 (2× base $3), so cache read = 0.1×$6 = **$0.60**, 5m write = 1.25×$6 = **$7.50**, 1h write = 2×$6 = **$12**.
