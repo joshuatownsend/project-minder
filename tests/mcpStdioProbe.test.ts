@@ -178,26 +178,32 @@ describe("probeStdioHandshake", () => {
   });
 
   it("passes only a minimal inherited env plus the server's own env (no process.env leak)", async () => {
+    // `finally`, not a trailing `delete`: the assertions below throw on
+    // failure, which would leave this variable set for the next file in the
+    // same vitest worker.
     process.env.MINDER_UNRELATED_SECRET = "leak-me";
-    const child = makeChild();
-    let capturedOpts: { env?: Record<string, string> } | undefined;
-    const spawnFn = ((_c: string, _a: string[], o: { env?: Record<string, string> }) => {
-      capturedOpts = o;
-      return child;
-    }) as never;
-    const p = probeStdioHandshake(server({ command: "node" }), {
-      spawnFn,
-      timeoutMs: 500,
-      readEnv: async () => ({ MY_SERVER_KEY: "v" }),
-      killFn: () => {},
-    });
-    await tick();
-    expect(capturedOpts?.env?.MY_SERVER_KEY).toBe("v"); // server's own env passed
-    expect(capturedOpts?.env?.MINDER_UNRELATED_SECRET).toBeUndefined(); // Minder's secret NOT leaked
-    expect(capturedOpts?.env?.PATH ?? capturedOpts?.env?.Path).toBeDefined(); // minimal system env present
-    child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
-    await p;
-    delete process.env.MINDER_UNRELATED_SECRET;
+    try {
+      const child = makeChild();
+      let capturedOpts: { env?: Record<string, string> } | undefined;
+      const spawnFn = ((_c: string, _a: string[], o: { env?: Record<string, string> }) => {
+        capturedOpts = o;
+        return child;
+      }) as never;
+      const p = probeStdioHandshake(server({ command: "node" }), {
+        spawnFn,
+        timeoutMs: 500,
+        readEnv: async () => ({ MY_SERVER_KEY: "v" }),
+        killFn: () => {},
+      });
+      await tick();
+      expect(capturedOpts?.env?.MY_SERVER_KEY).toBe("v"); // server's own env passed
+      expect(capturedOpts?.env?.MINDER_UNRELATED_SECRET).toBeUndefined(); // Minder's secret NOT leaked
+      expect(capturedOpts?.env?.PATH ?? capturedOpts?.env?.Path).toBeDefined(); // minimal system env present
+      child.stdout.emit("data", JSON.stringify({ jsonrpc: "2.0", id: 1, result: OK_RESULT }) + "\n");
+      await p;
+    } finally {
+      delete process.env.MINDER_UNRELATED_SECRET;
+    }
   });
 
   it("is down (not a crash) when stdin errors — command closed it early", async () => {

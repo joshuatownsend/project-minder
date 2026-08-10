@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:fb12cc5367bc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T10:43:22.700Z -->
+## ★ Insight
+The P1 is the more interesting of the two, because of *why* the codemod got it wrong.
+
+---
+
 <!-- insight:807bb5cdd929 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-09T21:21:55.378Z -->
 ## ★ Insight
 The guard mutation run just caught a hole in the guard itself, and it's a big one.

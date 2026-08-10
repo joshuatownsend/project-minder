@@ -155,18 +155,24 @@ const TARGET_FILES = new Set(
   ].map((p) => path.resolve(p))
 );
 
-// Value-level `import … from "…"` / `export … from "…"`, line-anchored.
-// `import type` / `export type` are excluded — they evaluate nothing at runtime.
+// Value-level `import … from "…"` / `export … from "…"`, line-anchored, plus
+// the bindingless `import "…";` side-effect form — which evaluates the module
+// and so carries the same freeze. `import type` / `export type` are excluded:
+// they evaluate nothing at runtime.
 const EDGE = /^\s*(?:import|export)\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/gm;
+const EDGE_SIDE_EFFECT = /^\s*import\s+["']([^"']+)["']\s*;/gm;
 
 const edgeCache = new Map<string, string[]>();
 function edgesFrom(file: string): string[] {
   const cached = edgeCache.get(file);
   if (cached) return cached;
   const out: string[] = [];
-  for (const match of fs.readFileSync(file, "utf8").matchAll(EDGE)) {
-    const resolved = resolveSpec(match[1], file);
-    if (resolved) out.push(resolved);
+  const src = fs.readFileSync(file, "utf8");
+  for (const pattern of [EDGE, EDGE_SIDE_EFFECT]) {
+    for (const match of src.matchAll(pattern)) {
+      const resolved = resolveSpec(match[1], file);
+      if (resolved) out.push(resolved);
+    }
   }
   edgeCache.set(file, out);
   return out;
@@ -212,8 +218,34 @@ function listTestFiles(dir: string): string[] {
 }
 
 const STATIC_IMPORT = /^\s*import\s+(?!type\s)[^;]*?from\s+["']([^"']+)["']/gm;
+// `import "…";` with no bindings. It has no `from`, so the pattern above never
+// sees it — yet it evaluates the module and freezes its path constants just as
+// thoroughly (Codex review, PR #419). Nothing in the repo uses this form today
+// in `tests/` or `src/`; the pattern is here so the first one is caught.
+const SIDE_EFFECT_IMPORT = /^\s*import\s+["']([^"']+)["']\s*;/gm;
 const MOCK_CALL = /vi\.mock\(\s*["']([^"']+)["']/g;
 const DYNAMIC_IMPORT = /import\(\s*["']([^"']+)["']\s*\)/g;
+
+/**
+ * Is this `import("…")` a TYPE query rather than a runtime call?
+ *
+ * TypeScript spells module types with the same syntax: `typeof import("x")`
+ * and `import("x").SomeType` are erased at compile time and load nothing.
+ * These files use both — `interface Reloaded { conn: typeof import("@/lib/db/
+ * connection") }` is the common shape — so counting them as runtime imports
+ * reports a reset-ordering violation on code that never executes.
+ *
+ * The two forms are told apart by what surrounds them: a preceding `typeof`,
+ * or a trailing `.` followed by an Uppercase name. The second is a convention
+ * rather than a rule, but it separates `import("x").OtlpMetric` from the only
+ * runtime member access that appears on a dynamic import, `.then(`.
+ */
+function isTypePosition(code: string, match: RegExpExecArray): boolean {
+  const before = code.slice(Math.max(0, match.index - 8), match.index);
+  if (/\btypeof\s*$/.test(before)) return true;
+  const after = code.slice(match.index + match[0].length);
+  return /^\s*\.\s*[A-Z]/.test(after);
+}
 
 const resolveFrom = (specs: Iterable<string>, from: string): string[] =>
   [...specs].map((s) => resolveSpec(s, from)).filter((f): f is string => f !== null);
@@ -247,11 +279,19 @@ const files = listTestFiles(TESTS_DIR).map((full) => {
     source,
     code,
     staticImports: resolveFrom(
-      new Set([...code.matchAll(STATIC_IMPORT)].map((m) => m[1])),
+      new Set(
+        [...code.matchAll(STATIC_IMPORT), ...code.matchAll(SIDE_EFFECT_IMPORT)].map(
+          (m) => m[1]
+        )
+      ),
       full
     ),
     dynamicImports: resolveFrom(
-      new Set([...code.matchAll(DYNAMIC_IMPORT)].map((m) => m[1])),
+      new Set(
+        [...code.matchAll(DYNAMIC_IMPORT)]
+          .filter((m) => !isTypePosition(code, m))
+          .map((m) => m[1])
+      ),
       full
     ),
     // Mocks are cut vertices. Resolved to files so `vi.mock("@/lib/data")`
@@ -280,6 +320,99 @@ function staticViolations(file: (typeof files)[number]): string[][] {
  * hands back the cached instance whose constant was captured on first load —
  * the same frozen path, arrived at by a route that looks correct.
  */
+/**
+ * Start index of the innermost `{ … }` block containing `at`, or 0 for module
+ * scope. Used to ask a narrower question than "does this file reset anywhere".
+ */
+function enclosingBlockStart(code: string, at: number): number {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    if (code[i] === "}") depth++;
+    else if (code[i] === "{") {
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return 0;
+}
+
+const RESET_CALL = /vi\.resetModules\(\)|\.reload\(\)/;
+
+/**
+ * The bodies of every `afterEach` / `afterAll` / `finally` in a file,
+ * concatenated.
+ *
+ * The env rule needs this because "the file mentions `delete process.env.X`
+ * somewhere" is not the same claim as "X gets put back". A suite that deletes
+ * a variable during setup and assigns it later satisfies the first and fails
+ * the second, leaking the final value into the next file in the worker
+ * (Codex review, PR #419). Restoration only counts if it runs after the test.
+ *
+ * `finally` belongs here alongside the hooks. Four files restore an env var in
+ * a `try`/`finally` inside the test that set it — `mcpStdioProbe`,
+ * `serverMutations`, `serviceScript`, `dbIngestWatcher` — which is at least as
+ * good as a hook, since the scope is exactly the code that needs it. An
+ * earlier draft accepted only the hooks and flagged all four.
+ */
+function teardownCode(code: string): string {
+  let out = "";
+  for (const match of code.matchAll(/\b(?:afterEach|afterAll)\s*\(|\bfinally\s*\{/g)) {
+    const open = code.indexOf("{", match.index);
+    if (open === -1) continue;
+    let depth = 0;
+    let i = open;
+    for (; i < code.length; i++) {
+      if (code[i] === "{") depth++;
+      else if (code[i] === "}") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    out += code.slice(open, i) + "\n";
+  }
+  return out;
+}
+
+/**
+ * Does a module-registry reset run before this dynamic import, in the same
+ * block?
+ *
+ * A file-wide match was the first version and Codex was right that it stays
+ * partially open: one reload anywhere exempts every import in the file,
+ * including one that runs before it, and including a second test that imports
+ * without reloading at all.
+ *
+ * What it checks instead is POSITION: a reset has to appear before this import
+ * in the import's own block, or in one enclosing it. That catches an import
+ * that runs before the file's only reload, and an import in a file whose
+ * reload comes later — both of which the file-wide version waved through.
+ *
+ * KNOWN LIMIT, stated rather than papered over. The walk reaches module scope,
+ * so a reset written in a SIBLING function that happens to appear earlier in
+ * the file still counts. Stopping at the enclosing function was tried and
+ * reverted: several files here reload inside the test and then import inside a
+ * thin loader helper — correct code that a regex cannot tell apart from the
+ * sibling case, because it requires following the call. Four real files were
+ * falsely flagged. A guard that cries wolf on correct code is worse than one
+ * with a limit written down, since the first teaches people to route around it.
+ *
+ * Closing this properly needs the call graph, not another pattern.
+ *
+ * `installMcpIsolation()` is the one thing accepted file-wide, because it
+ * resets inside its own `beforeEach` — which runs first by construction rather
+ * than by textual position.
+ */
+function resetPrecedes(code: string, importAt: number): boolean {
+  if (/installMcpIsolation\(/.test(code)) return true;
+  let at = importAt;
+  for (;;) {
+    const blockStart = enclosingBlockStart(code, at);
+    if (RESET_CALL.test(code.slice(blockStart, importAt))) return true;
+    if (blockStart === 0) return false;
+    at = blockStart;
+  }
+}
+
 function dynamicViolations(file: (typeof files)[number]): string[][] {
   // Note what does NOT count: `installIsolatedState()` alone. It registers
   // lifecycle hooks and allocates the temp home; the module registry is reset
@@ -288,16 +421,12 @@ function dynamicViolations(file: (typeof files)[number]): string[][] {
   // the reload before a dynamic import passed this check while still receiving
   // a cached module bound to another home — precisely the leak the guard
   // exists to catch (Codex review, PR #419).
-  //
-  // `installMcpIsolation()` does stand alone: it calls `vi.resetModules()`
-  // inside its own setup hook, before any dynamic import the test can make.
-  const resets =
-    /vi\.resetModules\(\)/.test(file.code) ||
-    /\.reload\(\)/.test(file.code) ||
-    /installMcpIsolation\(/.test(file.code);
-  if (resets) return [];
   const out: string[][] = [];
-  for (const imported of file.dynamicImports) {
+  for (const match of file.code.matchAll(DYNAMIC_IMPORT)) {
+    if (isTypePosition(file.code, match)) continue;
+    const imported = resolveSpec(match[1], path.join(TESTS_DIR, file.name));
+    if (!imported) continue;
+    if (resetPrecedes(file.code, match.index)) continue;
     const chain = unseveredPathFrom(imported, file.mocked);
     if (chain) out.push(chain);
   }
@@ -384,13 +513,28 @@ describe("database isolation convention", () => {
     const violations: string[] = [];
     for (const file of files) {
       const install = /installIsolatedState\(\{[\s\S]*?\}\);/.exec(file.code);
+      const teardown = teardownCode(file.code);
       for (const match of file.code.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\s*=(?!=)/g)) {
         const name = match[1];
-        const declared = install !== null && install[0].includes(name);
-        const restored = new RegExp(
-          `delete process\\.env\\.${name}\\b|process\\.env\\.${name}\\s*=\\s*original|stubEnv|unstubAllEnvs`
-        ).test(file.code);
-        if (declared || restored) continue;
+        // `HOME`, `USERPROFILE` and `MINDER_STATE_DIR` are saved and restored
+        // by installIsolatedState unconditionally — they are the isolation
+        // invariant, not caller options — so they never appear in the options
+        // text a file writes.
+        const HELPER_MANAGED = ["HOME", "USERPROFILE", "MINDER_STATE_DIR"];
+        const declared =
+          install !== null && (install[0].includes(name) || HELPER_MANAGED.includes(name));
+        // Each alternative is bound to THIS variable, and — apart from
+        // `vi.stubEnv`, which vitest restores itself — has to sit in a
+        // teardown hook. A bare `stubEnv` token anywhere used to exempt every
+        // assignment in the file, and a `delete` in setup counted as a
+        // restore for an assignment that came after it (Codex review).
+        const restoresThis = new RegExp(
+          `delete process\\.env\\.${name}\\b|` +
+            `process\\.env\\.${name}\\s*=\\s*(original|saved|prev)|` +
+            `unstubAllEnvs`
+        );
+        const stubbed = new RegExp(`stubEnv\\(\\s*["']${name}["']`).test(file.code);
+        if (declared || stubbed || restoresThis.test(teardown)) continue;
         violations.push(
           `${file.name} sets process.env.${name} and never restores it — it ` +
             `escapes into the next file in the same vitest worker. Declare it ` +
