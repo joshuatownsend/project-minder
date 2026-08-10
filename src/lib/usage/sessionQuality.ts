@@ -104,7 +104,7 @@ export function computeCacheStats(turns: UsageTurn[]): CacheStats {
     cacheCreateTokens += t.cacheCreateTokens;
     if (t.cacheCreateTokens === 0 && t.cacheReadTokens === 0) continue;
 
-    const pricing = getModelPricing(t.model);
+    const pricing = getModelPricing(t.model, t.speed);
     const buildCost = t.cacheCreateTokens * pricing.cacheWriteCostPerToken;
     const savings = t.cacheReadTokens * pricing.cacheReadCostPerToken;
     rebuildWasteUsd += buildCost - savings;
@@ -544,7 +544,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
       cacheReadTokens += t.cacheReadTokens;
       cacheCreateTokens += t.cacheCreateTokens;
       if (t.cacheCreateTokens > 0 || t.cacheReadTokens > 0) {
-        const pricing = getModelPricing(t.model);
+        const pricing = getModelPricing(t.model, t.speed);
         rebuildWasteUsd +=
           t.cacheCreateTokens * pricing.cacheWriteCostPerToken -
           t.cacheReadTokens * pricing.cacheReadCostPerToken;

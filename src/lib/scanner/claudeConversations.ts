@@ -38,6 +38,7 @@ import {
   writeDiskCache,
   isCacheHit,
   type CachedFileStats,
+  type CachedModelBuckets,
 } from "../claudeStatsCache";
 import { inferSessionStatus } from "./sessionStatus";
 import { mostFrequent, canonicalizeDirName } from "../usage/parser";
@@ -973,7 +974,7 @@ export async function scanSessionDetail(
 type TokenBucket = { i: number; o: number; cc: number; cc1h: number; cr: number };
 
 /**
- * Per-model token totals, **split by long-context pricing tier**.
+ * Per-model token totals, **split by every dimension that changes the rate**.
  *
  * The above-200k tier is a per-*request* decision: a single turn whose prompt
  * exceeds 200k bills its whole input and output at the higher rates. That
@@ -981,21 +982,66 @@ type TokenBucket = { i: number; o: number; cc: number; cc1h: number; cr: number 
  * 200k routinely without any individual turn coming close, and pricing the
  * summed bucket would then bill every ordinary turn long-context. So each turn
  * lands in `base` or `long` as it is read, and the two are priced separately.
+ *
+ * `fast` is the same argument for `usage.speed === "fast"`, which bills at
+ * double (Opus 5 / 4.8: $10/$50 against $5/$25). It is a third bucket rather
+ * than a flag because the choice is unrecoverable once turns are summed —
+ * exactly like the tier. It needs no long variant: Anthropic's pricing page
+ * states fast pricing "applies across the full context window, including
+ * requests over 200k input tokens", so there is no tier stacked on top of it.
  */
-type PerModelTokens = Map<string, { base: TokenBucket; long: TokenBucket }>;
+type ModelBuckets = { base: TokenBucket; long: TokenBucket; fast: TokenBucket };
+type PerModelTokens = Map<string, ModelBuckets>;
 
 function emptyBucket(): TokenBucket {
   return { i: 0, o: 0, cc: 0, cc1h: 0, cr: 0 };
 }
 
-function tiersFor(map: PerModelTokens, model: string | undefined) {
+function bucketIsEmpty(b: TokenBucket): boolean {
+  return b.i === 0 && b.o === 0 && b.cc === 0 && b.cc1h === 0 && b.cr === 0;
+}
+
+function tiersFor(map: PerModelTokens, model: string | undefined): ModelBuckets {
   const key = model && model !== "<synthetic>" ? model : "unknown";
   let entry = map.get(key);
   if (!entry) {
-    entry = { base: emptyBucket(), long: emptyBucket() };
+    entry = { base: emptyBucket(), long: emptyBucket(), fast: emptyBucket() };
     map.set(key, entry);
   }
   return entry;
+}
+
+/**
+ * Flatten the buckets for the on-disk stats cache, dropping empty ones.
+ *
+ * The wire shape is `CachedModelBuckets`, whose fields are all optional; an
+ * ordinary transcript serializes to `base` alone.
+ */
+function serializePerModel(map: PerModelTokens): Record<string, CachedModelBuckets> {
+  const out: Record<string, CachedModelBuckets> = {};
+  for (const [model, tiers] of map) {
+    const entry: CachedModelBuckets = {};
+    if (!bucketIsEmpty(tiers.base)) entry.base = { ...tiers.base };
+    if (!bucketIsEmpty(tiers.long)) entry.long = { ...tiers.long };
+    if (!bucketIsEmpty(tiers.fast)) entry.fast = { ...tiers.fast };
+    if (entry.base || entry.long || entry.fast) out[model] = entry;
+  }
+  return out;
+}
+
+/** Inverse of {@link serializePerModel}, for the cache-hit path. */
+function deserializePerModel(
+  raw: Record<string, CachedModelBuckets>
+): PerModelTokens {
+  const map: PerModelTokens = new Map();
+  for (const [model, entry] of Object.entries(raw)) {
+    map.set(model, {
+      base: entry.base ? { ...entry.base } : emptyBucket(),
+      long: entry.long ? { ...entry.long } : emptyBucket(),
+      fast: entry.fast ? { ...entry.fast } : emptyBucket(),
+    });
+  }
+  return map;
 }
 
 function addInto(dest: TokenBucket, src: TokenBucket): void {
@@ -1003,38 +1049,54 @@ function addInto(dest: TokenBucket, src: TokenBucket): void {
   dest.cc1h += src.cc1h; dest.cr += src.cr;
 }
 
-/** Accumulate ONE assistant turn, choosing its tier from its own prompt size. */
+/**
+ * Accumulate ONE assistant turn, choosing its bucket from its own speed and
+ * prompt size.
+ */
 function accumulateTurn(
   map: PerModelTokens,
   model: string | undefined,
   inp: number, out: number, cc: number, cr: number,
   cc1h = 0,
+  speed?: string,
 ): void {
   const tiers = tiersFor(map, model);
+  // Fast mode is checked first and wins outright: it is priced across the full
+  // context window, so a fast turn has no long-context variant to fall into.
   // Bucket by the size of the whole prompt, not just its uncached part —
   // cached tokens still count toward the >200k boundary, and Claude Code
   // reports them separately, so a cache-heavy long request would otherwise
   // land in the base bucket. Must match `applyPricing`'s `auto` rule exactly:
   // this function's whole job is to pre-decide the tier that function would
   // have inferred, and a disagreement between the two is invisible.
-  const bucket = inp + cr + cc > TIER_BOUNDARY ? tiers.long : tiers.base;
+  const bucket =
+    speed === "fast"
+      ? tiers.fast
+      : inp + cr + cc > TIER_BOUNDARY
+        ? tiers.long
+        : tiers.base;
   addInto(bucket, { i: inp, o: out, cc, cc1h, cr });
 }
 
-/** Fold one already-tier-split map into another, preserving the split. */
+/** Fold one already-split map into another, preserving the split. */
 function mergePerModel(dest: PerModelTokens, src: PerModelTokens): void {
   for (const [model, tiers] of src) {
     const into = tiersFor(dest, model);
     addInto(into.base, tiers.base);
     addInto(into.long, tiers.long);
+    addInto(into.fast, tiers.fast);
   }
 }
 
 /**
- * Fold in a pre-aggregated, tier-less file total — the disk-cache hit path,
- * which stored only whole-file sums and no per-turn breakdown. Attributed to
- * `base`: the individual turns behind it were overwhelmingly sub-200k, and
- * assuming otherwise would overcharge the entire file.
+ * Fold in a pre-aggregated, split-less file total.
+ *
+ * Only reachable for a cache entry written before `perModel` existed. Version
+ * 2 of the stats cache discards those wholesale, so in practice this is dead —
+ * it stays as the honest degradation for an entry that somehow arrives without
+ * a breakdown, and it is the exact behaviour #394 describes as the bug:
+ * everything attributed to `unknown` (priced as Sonnet), base tier, and no
+ * 1-hour cache-write split.
  */
 function accumulateCachedFileTotal(
   map: PerModelTokens,
@@ -1091,7 +1153,10 @@ async function scanConversationFile(filePath: string): Promise<{
             result.outputTokens += out;
             result.cacheCreateTokens += cc;
             result.cacheReadTokens += cr;
-            accumulateTurn(result.perModelTokens, model, inp, out, cc, cr, cc1h);
+            accumulateTurn(
+              result.perModelTokens, model, inp, out, cc, cr, cc1h,
+              (usage as { speed?: string }).speed,
+            );
           }
           if (entry.isApiErrorMessage) result.errors++;
           if (Array.isArray(msg.content)) {
@@ -1126,11 +1191,17 @@ async function scanConversationFile(filePath: string): Promise<{
 function computeCostFromPerModel(perModelTokens: PerModelTokens): number {
   let cost = 0;
   for (const [model, tiers] of perModelTokens) {
-    const pricing = getModelPricing(model === "unknown" ? "" : model);
+    const id = model === "unknown" ? "" : model;
+    const pricing = getModelPricing(id);
     // Each bucket is a sum of many requests, so the tier is passed explicitly
     // rather than inferred from the summed prompt size.
     cost += applyPricing(pricing, toCounts(tiers.base), "base");
     cost += applyPricing(pricing, toCounts(tiers.long), "long");
+    // Fast turns resolve against a different rate table entirely, hence the
+    // second lookup. `"base"` because fast pricing is flat across the window.
+    if (!bucketIsEmpty(tiers.fast)) {
+      cost += applyPricing(getModelPricing(id, "fast"), toCounts(tiers.fast), "base");
+    }
   }
   return cost;
 }
@@ -1297,8 +1368,13 @@ async function scanConversationDirs(
 
         if (isCacheHit(cached, fstat.mtimeMs, fstat.size)) {
           fileStats = cached!;
-          // No per-model breakdown in cache → treat as unknown (sonnet fallback pricing)
-          fileCostPerModel = null;
+          // Rehydrate the per-model/per-rate split the last full parse stored
+          // (#394). Without it the recompute below loses the model, the
+          // long-context tier and the 1-hour cache TTL all at once, so the
+          // displayed cost dropped on the second scan and stayed low.
+          fileCostPerModel = fileStats.perModel
+            ? deserializePerModel(fileStats.perModel)
+            : null;
         } else {
           const result = await scanConversationFile(filePath);
           fileStats = {
@@ -1313,6 +1389,7 @@ async function scanConversationDirs(
             tools: result.tools,
             errors: result.errors,
             models: Array.from(result.models),
+            perModel: serializePerModel(result.perModelTokens),
           };
           fileCostPerModel = result.perModelTokens;
           cacheChanged = true;

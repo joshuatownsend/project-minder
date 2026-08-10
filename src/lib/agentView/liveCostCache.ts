@@ -63,7 +63,7 @@ export async function getLiveSessionMetrics(
 
   for (const turn of turns) {
     if (turn.role !== "assistant") continue;
-    const pricing = getModelPricing(turn.model);
+    const pricing = getModelPricing(turn.model, turn.speed);
     totalCostUsd += applyPricing(pricing, turn);
     const maxCtx = getModelMaxContextTokens(turn.model);
     // Use the most recent turn's fill, not the historical peak. Turns are

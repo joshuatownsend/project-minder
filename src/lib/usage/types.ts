@@ -385,6 +385,45 @@ export interface ModelPricing {
    */
   inputCostPerTokenAbove200k?: number;
   outputCostPerTokenAbove200k?: number;
+  /**
+   * Above-200k rates for the three CACHE categories, from LiteLLM's
+   * `cache_read_input_token_cost_above_200k_tokens`,
+   * `cache_creation_input_token_cost_above_200k_tokens` and
+   * `cache_creation_input_token_cost_above_1hr_above_200k_tokens`.
+   *
+   * These exist because the long-context tier is a whole-*request* tier, and
+   * cache tokens are part of the request. Leaving them at base rate — which is
+   * what Minder did before #393 — under-bills the dominant component of a
+   * long-context request: a turn reported as 5k uncached input + 220k cache
+   * read enters the long tier and then has ~98% of its prompt priced at half
+   * rate.
+   *
+   * ── Where the numbers come from (the tripwire; see #376's mistake) ────────
+   *
+   * The Anthropic pricing page NO LONGER PUBLISHES a long-context rate table:
+   * the tier only ever existed for the Sonnet 3.5→4.5 lineage, and those models
+   * are now retired from the first-party API. Do not go looking for a quote to
+   * confirm these — there isn't one any more. The premise was verified by
+   * DERIVATION from two rules the page does still state (checked 2026-08-10):
+   *
+   *   "Prompt caching uses the following pricing multipliers relative to base
+   *    input token rates: 5-minute cache write 1.25x base input price; 1-hour
+   *    cache write 2x base input price; cache read (hit) 0.1x base input
+   *    price. […] These multipliers stack with other pricing modifiers."
+   *
+   * Sonnet 4.5's above-200k input rate is $6/MTok (2x its $3 base), so the
+   * multipliers give cache read $0.60, 5m write $7.50, 1h write $12.00 — which
+   * is exactly what LiteLLM publishes in the three fields named above
+   * (6e-7 / 7.5e-6 / 1.2e-5). Two independent derivations landing on identical
+   * numbers is the evidence; a single review comment was not, which is why the
+   * issue sat open rather than being patched on assertion.
+   *
+   * Absent → `applyPricing` falls back to each rate's own base counterpart, so
+   * a model with no tier (every current Claude) keeps flat cache pricing.
+   */
+  cacheReadCostPerTokenAbove200k?: number;
+  cacheWriteCostPerTokenAbove200k?: number;
+  cacheWrite1hCostPerTokenAbove200k?: number;
 }
 
 export interface PortfolioYield {
