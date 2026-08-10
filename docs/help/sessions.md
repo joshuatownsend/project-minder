@@ -269,6 +269,15 @@ Bar chart showing which tools were used and how many times.
 ### Files
 Table of file operations (read, write, edit, glob, grep) with file paths and tool names.
 
+*Tool counts across the app — this table, the per-session tool breakdown, the
+subagent count, and the tool charts on **Usage** — were undercounted before
+#426. Claude Code writes one transcript line per content block, and the index
+was keeping only the tools that landed on a message's first line; on the
+reference history that was about a quarter of them, and most sessions recorded
+none at all. **These fill in as your history re-indexes in the background.**
+Until that finishes a session may show fewer tool calls than it made — nothing
+shown is wrong, there is just less of it.*
+
 ### Subagents
 Cards for each spawned subagent showing type, description, and top tools used.
 

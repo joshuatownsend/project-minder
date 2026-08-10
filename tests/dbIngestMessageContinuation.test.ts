@@ -97,6 +97,10 @@ async function writeFixture(projectsDir: string, sessionId: string): Promise<voi
     line("2026-08-01T10:00:01Z", "msg_1", thinkingBlock("weighing two approaches")),
     line("2026-08-01T10:00:01Z", "msg_1", thinkingBlock("second thought, deeper")),
     line("2026-08-01T10:00:01Z", "msg_1", textBlock("Delegating the sweep.")),
+    // The same prose block re-logged. Tools dedupe on `tool_use_id`; text has
+    // no id, so it dedupes on the body — without that, the merge would append
+    // this to the turn and the preview would read the sentence twice.
+    line("2026-08-01T10:00:01Z", "msg_1", textBlock("Delegating the sweep.")),
     line("2026-08-01T10:00:01Z", "msg_1", toolBlock("tu_a", "Agent", { description: "scan A" })),
     line("2026-08-01T10:00:01Z", "msg_1", toolBlock("tu_b", "Agent", { description: "scan B" })),
     // A GENUINE re-log: same message, same tool_use_id, emitted twice. This is
@@ -171,7 +175,9 @@ describe.skipIf(!driverAvailable)("#426 multi-line assistant messages", () => {
       )
       .get() as { text_preview: string | null; has_thinking: number };
     // The message's first line was a thinking block, so before the fix this
-    // turn stored no prose whatsoever.
+    // turn stored no prose whatsoever. Exact equality is the point: the same
+    // block is re-logged in the fixture, and a merge that appended it would
+    // give "Delegating the sweep.\nDelegating the sweep.".
     expect(turn.text_preview).toBe("Delegating the sweep.");
     expect(turn.has_thinking).toBe(1);
 
@@ -208,5 +214,69 @@ describe.skipIf(!driverAvailable)("#426 multi-line assistant messages", () => {
     expect(detail!.toolUsage["Agent"]).toBe(3);
     expect(dbSpawns).toBe(2);
     expect(Math.abs(detail!.toolUsage["Agent"]! - dbSpawns)).toBeLessThanOrEqual(1);
+  });
+
+  /**
+   * A continuation that arrives after later turns must not revive its own
+   * turn's pending tool calls.
+   *
+   * Continuations are usually adjacent, but not reliably: across four large
+   * transcripts 6 to 87 per session were separated from their first line, one
+   * by 3,639 lines. `lastAssistantPendingIds` describes the CURRENT last
+   * assistant turn, so extending it from an older turn would leave a finished
+   * session stuck reporting `waiting` — which the dashboard time-gates into
+   * `needs_attention`, an alert for work that already completed.
+   */
+  it("does not reopen a finished session when a continuation arrives late", async () => {
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const file = path.join(projectsDir, "C--dev-myapp", "cafe05.jsonl");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:00Z",
+          message: { content: [{ type: "text", text: "run the sweep" }] },
+        }),
+        line("2026-08-01T10:00:01Z", "msg_1", toolBlock("tu_1", "Bash", { command: "ls" })),
+        // The tool answered, so msg_1 has nothing outstanding.
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:02Z",
+          message: { content: [{ type: "tool_result", tool_use_id: "tu_1", content: "ok" }] },
+        }),
+        // A later message finishes the session cleanly.
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-08-01T10:00:03Z",
+          message: {
+            id: "msg_2",
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "All done." }],
+            stop_reason: "end_turn",
+            usage: USAGE,
+          },
+        }),
+        // …and only now does another block of msg_1 turn up.
+        line("2026-08-01T10:00:04Z", "msg_1", toolBlock("tu_late", "Bash", { command: "pwd" })),
+      ].join("\n") + "\n"
+    );
+
+    const db = (await conn.getDb())!;
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const session = db
+      .prepare("SELECT status FROM sessions WHERE session_id = 'cafe05'")
+      .get() as { status: string | null };
+    // The late block is still stored on msg_1's turn…
+    const tools = db
+      .prepare("SELECT tool_use_id FROM tool_uses WHERE session_id = 'cafe05' ORDER BY sequence_in_turn")
+      .all() as Array<{ tool_use_id: string }>;
+    expect(tools.map((t) => t.tool_use_id)).toEqual(["tu_1", "tu_late"]);
+    // …but it does not become an unresolved call on a session that ended.
+    expect(session.status).toBe("inactive");
   });
 });
