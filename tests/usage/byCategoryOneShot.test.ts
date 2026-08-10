@@ -274,6 +274,34 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     }
   });
 
+  it("reports the rate on the source-filtered path too", async () => {
+    // `queryByCategory` has two SQL bodies: the fast `category_costs` rollup,
+    // and a live recompute over `turns` used whenever a `?source=` or `?home=`
+    // filter is present (the rollup carries neither column). Only the rollup
+    // path is exercised above, so without this the filtered body could drop
+    // the rate entirely and every other test here would still pass.
+    await writeFixture();
+    await state.reload();
+    process.env.MINDER_USE_DB = "1";
+
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = await conn.getDb();
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db!, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+
+    const data = await import("@/lib/data");
+    const { report, meta } = await data.getUsage("all", undefined, "claude");
+    expect(meta.backend).toBe("db");
+
+    const rows = byKey(report.byCategory);
+    expect(rows.Coding.oneShotRate).toBe(1);
+    expect(rows.Testing.oneShotRate).toBe(0);
+  });
+
   it("omits the rate on both backends for a category that anchored no task", async () => {
     const dir = path.join(tmpHome, ".claude", "projects", "C--dev-x");
     await fs.mkdir(dir, { recursive: true });

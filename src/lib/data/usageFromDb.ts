@@ -49,23 +49,22 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 // * `mcpStats` — the SQL groups by (server, tool); we re-shape into the
 //   nested `McpServerStats[]` the UI consumes.
 //
-// Two known divergences from the file-parse aggregator, both intentional:
+// One known divergence from the file-parse aggregator, and it is intentional:
+// `oneShot` aggregates are session-level sums (`SUM(verified_task_count),
+// SUM(one_shot_task_count) FROM sessions WHERE end_ts >= @periodStart`). For
+// boundary sessions whose turns straddle `periodStart`, the file-parse path
+// computes one-shot only over filtered turns; the SQL path includes the whole
+// session. period=all has zero divergence; bounded periods over-count boundary
+// sessions slightly.
 //
-// 1. `byCategory.oneShotRate` is computed from `turns.task_outcome`, which
-//    anchors each task's verdict on the turn that *started* it. The file
-//    backend instead slices a session's turns by category and re-runs
-//    `detectOneShot` over each slice, so a task whose turns span two
-//    categories is attributed differently by the two backends. Same
-//    trade-off `byEffort` already ships, and the alternative is the
-//    read-time rehydrate the SQL backend exists to avoid. (Before 2026-08-10
-//    this backend left the field undefined entirely; `task_outcome`,
-//    schema v21, is what made the cheap version possible.)
-// 2. `oneShot` aggregates are session-level sums (`SUM(verified_task_count),
-//    SUM(one_shot_task_count) FROM sessions WHERE end_ts >= @periodStart`).
-//    For boundary sessions whose turns straddle `periodStart`, the
-//    file-parse path computes one-shot only over filtered turns; the SQL
-//    path includes the whole session. period=all has zero divergence;
-//    bounded periods over-count boundary sessions slightly.
+// `byCategory.oneShotRate` used to be a second, larger divergence — this
+// backend left it undefined because the file backend's definition (slice a
+// session's turns by category, re-run the detector per slice) had no cheap SQL
+// equivalent. That definition turned out to be broken rather than merely
+// expensive: it split every ordinary task across the `Coding` edit and the
+// `Testing` command that verified it, so neither half formed a task. Both
+// backends now anchor a task on the turn that started it, which is what
+// `turns.task_outcome` already records. See `tests/usage/byCategoryOneShot`.
 
 /** Convert a Period token to an inclusive ISO start timestamp, or null for "all".
  *  Re-export of `periodSinceIso` from `usage/period.ts` so existing call sites

@@ -1,5 +1,12 @@
 # Insights
 
+<!-- insight:00c606e3af6f | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:57:05.622Z -->
+## ★ Insight
+- The measurement: **5 of 13 categories** now carry a rate, over 1,699 verified tasks. And the rates genuinely differ — `Refactoring` 92.1% vs `Debugging` 78.3% — a signal that was structurally invisible before.
+- To be precise about what the old code *could* see: a task only survived slicing when the edit and its verification classified into the **same** category. In practice that's just test-file edits verified by a test command, since an `Edit` to a `*test*` path is itself `Testing`. So it wasn't uniformly zero — it was a narrow, unrepresentative sliver.
+
+---
+
 <!-- insight:8aa91a979669 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:39:57.237Z -->
 ## ★ Insight
 - Confirmed empirically, and it's worse than "missing on one backend": for a textbook edit→verify task the headline reports **1 one-shot task**, while `byCategory` reports **no rate on any category**. The Edit lands in `Coding`, the `pnpm test` in `Testing`, and slicing by category leaves each half unable to form a task.
