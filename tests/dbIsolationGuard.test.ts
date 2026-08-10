@@ -103,6 +103,22 @@ const ALLOWLIST = new Map<string, string>([
     "mocks `fs` and tasks/store; exercises only the board tools, never a usage query",
   ],
   [
+    "engagementExportFilename.test.ts",
+    // Arrived on main in #418 while this branch was open, and the guard caught
+    // it on the merge — which is the guard working, not a merge problem.
+    //
+    // The file imports the export route only to reach two pure string helpers
+    // it re-exports as `__testing` (`safeFilename`, `trimDashes`); the route
+    // then pulls in `@/lib/data`. Every test here passes strings to those two
+    // functions, so no query runs.
+    //
+    // Allowlisted rather than rewritten because the real fix belongs to that
+    // module, not to this file: move the helpers somewhere a test can import
+    // without dragging a route's dependency graph behind them. Filed in
+    // TODO.md.
+    "imports a route only for two pure string helpers; no query runs",
+  ],
+  [
     "tasksDispatcher.test.ts",
     // dispatcher.ts imports connection directly, but every collaborator the
     // tests drive it through — tasks/store, spawner, the two delegations —

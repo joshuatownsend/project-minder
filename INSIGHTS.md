@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:b1fa1722abc0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:03:14.698Z -->
+## ★ Insight
+The `MINDER_DEMO` one is worth dwelling on, because of how badly it would have presented.
+
+---
+
 <!-- insight:fb12cc5367bc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T10:43:22.700Z -->
 ## ★ Insight
 The P1 is the more interesting of the two, because of *why* the codemod got it wrong.
