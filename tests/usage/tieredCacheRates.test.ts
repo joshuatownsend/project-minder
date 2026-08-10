@@ -3,6 +3,7 @@ import {
   applyPricing,
   getModelPricing,
   loadPricing,
+  selectEffectiveRates,
 } from "@/lib/usage/costCalculator";
 import type { ModelPricing } from "@/lib/usage/types";
 
@@ -135,6 +136,64 @@ describe("long-context tier — cache rates (#393)", () => {
       100_000 * 0.00000375 + // writes stay at base — no tiered rate published
       150_000 * 0.0000006; // read tiered
     expect(cost).toBeCloseTo(expected, 10);
+  });
+
+  it("derives the tiered 1-hour write rate when only the 5-minute one is published", async () => {
+    // Codex review of #423, round 2. LiteLLM's dated Sonnet 4 entries publish a
+    // tiered 5-minute write rate but no tiered 1-hour one. Falling back to the
+    // base 1-hour rate mixes a tiered and a base rate inside one request — and
+    // Claude Code writes at the 1-hour TTL, so that is the dominant cache
+    // component of a long-context turn, not a corner of it.
+    await loadPricing();
+    const p = getModelPricing("claude-sonnet-4-20250514");
+    expect(p.cacheWriteCostPerTokenAbove200k).toBeCloseTo(0.0000075, 12);
+    expect(p.cacheWrite1hCostPerTokenAbove200k).toBeUndefined(); // the gap
+
+    const cost = applyPricing(p, {
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cacheCreateTokens: 100_000,
+      cacheCreate1hTokens: 100_000,
+      cacheReadTokens: 150_000,
+    });
+    const expected =
+      1_000 * 0.000006 +
+      100_000 * 0.000012 + // base 1h $6 scaled by the same 2x the 5m rate moved
+      150_000 * 0.0000006;
+    expect(cost).toBeCloseTo(expected, 10);
+    // The pre-fix number: base 1h at $6/MTok.
+    expect(cost).not.toBeCloseTo(
+      1_000 * 0.000006 + 100_000 * 0.000006 + 150_000 * 0.0000006,
+      10,
+    );
+  });
+
+  it("never prices a 1-hour write below a 5-minute one", async () => {
+    // The structural invariant, asserted rather than assumed. A 1-hour write is
+    // 2x base input and a 5-minute write 1.25x, so `1h >= 5m` holds for every
+    // model at every tier — and the bug above was detectable from this alone,
+    // without knowing a single published rate.
+    await loadPricing();
+    const tokens = {
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 250_000, // forces the long tier where one exists
+    };
+    for (const id of [
+      "claude-sonnet-4-20250514",
+      "claude-4-sonnet-20250514",
+      "claude-sonnet-4-5",
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-haiku-4-5",
+    ]) {
+      const rates = selectEffectiveRates(getModelPricing(id), tokens);
+      expect(
+        rates.cacheWrite1hRate,
+        `${id}: 1-hour cache write priced below the 5-minute rate`,
+      ).toBeGreaterThanOrEqual(rates.cacheWriteRate);
+    }
   });
 
   it("carries the tiered cache rates through the LiteLLM parser", async () => {

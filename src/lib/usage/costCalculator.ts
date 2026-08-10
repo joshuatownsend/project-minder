@@ -616,6 +616,47 @@ export const TIER_BOUNDARY = 200_000;
  */
 export type PricingTier = "auto" | "base" | "long";
 
+/**
+ * The 1-hour cache-write rate for a request, given whether it is in the long
+ * tier and what the 5-minute rate resolved to.
+ *
+ * The awkward case, and a real one: LiteLLM's dated Sonnet 4 entries
+ * (`claude-sonnet-4-20250514`, `claude-4-sonnet-20250514`) publish a tiered
+ * **5-minute** write rate but no tiered **1-hour** one. Falling back to the
+ * base 1-hour rate there mixes a tiered rate and a base rate inside a single
+ * request, and produces an ordering that cannot exist: base 1h is $6/MTok
+ * against a tiered 5m of $7.50/MTok, so the *longer*, always-more-expensive TTL
+ * would come out cheaper. A 1-hour write is 2x base input and a 5-minute write
+ * 1.25x, so `1h >= 5m` is structural — an implementation that breaks it is
+ * wrong on its face, without needing to know either number.
+ *
+ * So when the tier applies and only the 1-hour tiered rate is missing, it is
+ * derived by scaling the base 1-hour rate by the factor the 5-minute rate
+ * actually moved. Same technique `applyPricingOverlay` uses for user rules, and
+ * it degrades correctly: if no tiered write rate is published at all, the ratio
+ * is 1 and cache writes stay flat, which is the per-rate "absent means flat"
+ * rule this function otherwise follows.
+ */
+function resolveCacheWrite1hRate(
+  pricing: ModelPricing,
+  longContext: boolean,
+  cacheWriteRate: number
+): number {
+  const base1h = pricing.cacheWrite1hCostPerToken;
+  if (!longContext) return base1h ?? cacheWriteRate;
+  if (pricing.cacheWrite1hCostPerTokenAbove200k !== undefined) {
+    return pricing.cacheWrite1hCostPerTokenAbove200k;
+  }
+  // No 1-hour rate at all → the provider has a single write rate; use the
+  // (possibly tiered) 5-minute one rather than inventing a second.
+  if (base1h === undefined) return cacheWriteRate;
+  const tierRatio =
+    pricing.cacheWriteCostPerToken > 0
+      ? cacheWriteRate / pricing.cacheWriteCostPerToken
+      : 1;
+  return base1h * tierRatio;
+}
+
 /** The five per-token rates that actually apply to one token tuple. */
 export interface EffectiveRates {
   inputRate: number;
@@ -691,10 +732,7 @@ export function selectEffectiveRates(
     longContext && pricing.cacheWriteCostPerTokenAbove200k !== undefined
       ? pricing.cacheWriteCostPerTokenAbove200k
       : pricing.cacheWriteCostPerToken;
-  const cacheWrite1hRate =
-    longContext && pricing.cacheWrite1hCostPerTokenAbove200k !== undefined
-      ? pricing.cacheWrite1hCostPerTokenAbove200k
-      : (pricing.cacheWrite1hCostPerToken ?? cacheWriteRate);
+  const cacheWrite1hRate = resolveCacheWrite1hRate(pricing, longContext, cacheWriteRate);
   const cacheReadRate =
     longContext && pricing.cacheReadCostPerTokenAbove200k !== undefined
       ? pricing.cacheReadCostPerTokenAbove200k
