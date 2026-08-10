@@ -352,7 +352,24 @@ function enclosingBlockStart(code: string, at: number): number {
   return 0;
 }
 
-const RESET_CALL = /vi\.resetModules\(\)|\.reload\(\)/;
+/**
+ * What counts as a module-registry reset IN THIS FILE.
+ *
+ * `vi.resetModules()` always does. The other form is `reload()` on the handle
+ * `installIsolatedState()` returned — and it has to be bound to that handle by
+ * name, not accepted as any method called `reload`. A DB-reaching test that
+ * happened to call `fixture.reload()` beforehand would otherwise be read as
+ * having reset the registry when nothing of the sort ran (Codex review,
+ * PR #419).
+ */
+function resetPattern(code: string): RegExp {
+  const handles = [
+    ...code.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*installIsolatedState\s*\(/g),
+  ].map((m) => m[1]);
+  const alternatives = ["vi\\.resetModules\\(\\)"];
+  for (const handle of handles) alternatives.push(`\\b${handle}\\.reload\\(\\)`);
+  return new RegExp(alternatives.join("|"));
+}
 
 /**
  * The bodies of every `afterEach` / `afterAll` / `finally` in a file,
@@ -418,12 +435,12 @@ function teardownCode(code: string): string {
  * resets inside its own `beforeEach` — which runs first by construction rather
  * than by textual position.
  */
-function resetPrecedes(code: string, importAt: number): boolean {
+function resetPrecedes(code: string, importAt: number, reset: RegExp): boolean {
   if (/installMcpIsolation\(/.test(code)) return true;
   let at = importAt;
   for (;;) {
     const blockStart = enclosingBlockStart(code, at);
-    if (RESET_CALL.test(code.slice(blockStart, importAt))) return true;
+    if (reset.test(code.slice(blockStart, importAt))) return true;
     if (blockStart === 0) return false;
     at = blockStart;
   }
@@ -438,11 +455,12 @@ function dynamicViolations(file: (typeof files)[number]): string[][] {
   // a cached module bound to another home — precisely the leak the guard
   // exists to catch (Codex review, PR #419).
   const out: string[][] = [];
+  const reset = resetPattern(file.code);
   for (const match of file.code.matchAll(DYNAMIC_IMPORT)) {
     if (isTypePosition(file.code, match)) continue;
     const imported = resolveSpec(match[1], path.join(TESTS_DIR, file.name));
     if (!imported) continue;
-    if (resetPrecedes(file.code, match.index)) continue;
+    if (resetPrecedes(file.code, match.index, reset)) continue;
     const chain = unseveredPathFrom(imported, file.mocked);
     if (chain) out.push(chain);
   }
@@ -530,8 +548,20 @@ describe("database isolation convention", () => {
     for (const file of files) {
       const install = /installIsolatedState\(\{[\s\S]*?\}\);/.exec(file.code);
       const teardown = teardownCode(file.code);
-      for (const match of file.code.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\s*=(?!=)/g)) {
-        const name = match[1];
+      // Two ways to mutate the environment, and both leak. `vi.stubEnv` only
+      // self-restores when `test.unstubEnvs` is enabled in the vitest config,
+      // which this repo does NOT set — `bootstrap.test.ts`, the one file using
+      // stubs, calls `vi.unstubAllEnvs()` in its own afterEach. A stub was
+      // previously invisible to this rule entirely (Codex review, PR #419).
+      const mutations = [
+        ...[...file.code.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\s*=(?!=)/g)].map(
+          (m) => ({ name: m[1], stub: false })
+        ),
+        ...[...file.code.matchAll(/vi\.stubEnv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g)].map(
+          (m) => ({ name: m[1], stub: true })
+        ),
+      ];
+      for (const { name, stub } of mutations) {
         // `HOME`, `USERPROFILE` and `MINDER_STATE_DIR` are saved and restored
         // by installIsolatedState unconditionally — they are the isolation
         // invariant, not caller options — so they never appear in the options
@@ -539,23 +569,32 @@ describe("database isolation convention", () => {
         const HELPER_MANAGED = ["HOME", "USERPROFILE", "MINDER_STATE_DIR"];
         const declared =
           install !== null && (install[0].includes(name) || HELPER_MANAGED.includes(name));
-        // Each alternative is bound to THIS variable, and — apart from
-        // `vi.stubEnv`, which vitest restores itself — has to sit in a
-        // teardown hook. A bare `stubEnv` token anywhere used to exempt every
-        // assignment in the file, and a `delete` in setup counted as a
-        // restore for an assignment that came after it (Codex review).
-        const restoresThis = new RegExp(
-          `delete process\\.env\\.${name}\\b|` +
-            `process\\.env\\.${name}\\s*=\\s*(original|saved|prev)|` +
-            `unstubAllEnvs`
-        );
-        const stubbed = new RegExp(`stubEnv\\(\\s*["']${name}["']`).test(file.code);
-        if (declared || stubbed || restoresThis.test(teardown)) continue;
+        // Each alternative is bound to THIS variable and has to sit in
+        // teardown. A bare `stubEnv` token anywhere used to exempt every
+        // assignment in the file, and a `delete` in setup counted as a restore
+        // for an assignment that came after it (Codex review).
+        //
+        // `unstubAllEnvs()` restores stubs and only stubs, so it answers for a
+        // `vi.stubEnv` mutation and NOT for a direct assignment — matching what
+        // vitest actually undoes.
+        const restoresThis = stub
+          ? /unstubAllEnvs\s*\(/
+          : new RegExp(
+              `delete process\\.env\\.${name}\\b|` +
+                `process\\.env\\.${name}\\s*=\\s*(original|saved|prev)`
+            );
+        if (declared || restoresThis.test(teardown)) continue;
         violations.push(
-          `${file.name} sets process.env.${name} and never restores it — it ` +
-            `escapes into the next file in the same vitest worker. Declare it ` +
-            `in installIsolatedState's env/preserveEnv, restore it in a ` +
-            `teardown hook, or use vi.stubEnv.`
+          stub
+            ? `${file.name} calls vi.stubEnv("${name}") with no ` +
+              `vi.unstubAllEnvs() in teardown — vitest only restores stubs ` +
+              `automatically when test.unstubEnvs is enabled, and this repo ` +
+              `does not set it, so the value escapes into the next file in ` +
+              `the same worker.`
+            : `${file.name} sets process.env.${name} and never restores it — ` +
+              `it escapes into the next file in the same vitest worker. ` +
+              `Declare it in installIsolatedState's env/preserveEnv, or ` +
+              `restore it in a teardown hook or a finally.`
         );
       }
     }

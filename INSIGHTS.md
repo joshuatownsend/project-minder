@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:c5fe955906f0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:21:47.819Z -->
+## ★ Insight
+Four review rounds, and every finding has been the same species: **an option or check that appears to do something and doesn't.**
+
+---
+
+<!-- insight:5e174cc4beff | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:13:30.585Z -->
+## ★ Insight
+This is worth naming as a general hazard of shipping a repo-wide meta-test: **its result depends on files no branch in the PR touches.**
+
+---
+
 <!-- insight:b1fa1722abc0 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T11:03:14.698Z -->
 ## ★ Insight
 The `MINDER_DEMO` one is worth dwelling on, because of how badly it would have presented.
