@@ -18,6 +18,24 @@ export default defineConfig({
     // affect the module-level DB path constants. See the file for why the
     // suite must not inherit a MINDER_STATE_DIR from the developer's shell.
     setupFiles: ["tests/setup/clearStateDirEnv.ts"],
+    // Pin the hook order this suite depends on rather than inheriting it.
+    //
+    // `stack` runs `beforeEach` in registration order and `afterEach` in
+    // REVERSE, each awaited before the next. Four files rely on that: they call
+    // `installIsolatedState()` at module scope (registering its teardown first)
+    // and then register an `afterEach` of their own that closes a SQLite handle
+    // or stops a watcher. Reverse order means their cleanup runs BEFORE the
+    // helper drops the globalThis slot and removes the temp dir — which is what
+    // Windows needs, since an open .db blocks the directory removal.
+    //
+    // This is already vitest's default (verified against 4.1.10, by docs and by
+    // a probe asserting the observed sequence). It is written down because the
+    // ordering is load-bearing and silent when wrong: `parallel` would let the
+    // helper delete `__minderIngestWatcher` while the other hook is still
+    // awaiting its dynamic import, leaving a live chokidar watcher on a deleted
+    // directory. Raised as a review question on PR #419; the answer is to stop
+    // depending on a default.
+    sequence: { hooks: "stack" },
     testTimeout: 30000,
     execArgv: ["--max-old-space-size=4096"],
     // Cap fork concurrency to avoid Windows VirtualAlloc failures when running
