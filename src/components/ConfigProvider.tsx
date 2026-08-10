@@ -99,6 +99,22 @@ export function useBurnHudEnabled(): boolean {
  * bar). Defaults ON; toggling OFF in Settings hides both placements. Gates the
  * client render only; the underlying POST /api/tasks path is always available.
  */
+/**
+ * True when the `engagementReport` flag is on — the `/timecard` route, its
+ * sidebar entry, and the per-project Timecard tab are shown. Defaults ON.
+ *
+ * Read-only surface, so unknown config counts as *enabled*: the flag's own
+ * default is on, and treating the initial `null` as off would pop the nav item
+ * in a moment after load for the majority who never touch the setting. The
+ * cost is a brief flash for someone who did turn it off — the opposite
+ * trade-off from `useWorkflowLauncherEnabled`, which gates a mutating surface
+ * and so must fail closed.
+ */
+export function useEngagementReportEnabled(): boolean {
+  const config = useConfig();
+  return getFlag(config?.featureFlags, "engagementReport");
+}
+
 export function useWorkflowLauncherEnabled(): boolean {
   const config = useConfig();
   // This gates a *mutating* surface (the chips POST to /api/tasks), so unknown

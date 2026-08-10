@@ -44,7 +44,8 @@ export type FeatureFlagKey =
   | "demoMode"
   | "workflowLauncher"
   | "workflowCatalog"
-  | "notificationRules";
+  | "notificationRules"
+  | "engagementReport";
 
 /**
  * Every Claude Code lifecycle hook event, in rough lifecycle order.

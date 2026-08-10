@@ -12,6 +12,8 @@ import {
   getDbMaxMtimeMs,
   needsReconcileAfterV3,
 } from "./usageFromDb";
+import { loadEngagementReportFromSql } from "./engagementFromDb";
+import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
@@ -568,6 +570,41 @@ export async function getUsage(
     loadUsageReportFromSql(db, period, project, source, home)
   );
   if (!project) await augmentPortfolioYield(report);
+  return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+}
+
+export interface EngagementResult {
+  report: EngagementReport;
+  meta: UsageBackendMeta;
+}
+
+/**
+ * Human-engagement (timecard) report.
+ *
+ * **SQL-only, and it says so rather than degrading.** Unlike `getUsage`, there
+ * is no file-parse fallback: the report needs every turn in the period sorted
+ * on one timeline to reconstruct attendance, which over the JSONL corpus means
+ * parsing millions of lines per request. With `MINDER_USE_DB=0` this throws
+ * `DbUnavailableError` so the route can return an explicit 503 — a silent
+ * empty report would read as "you did no billable work".
+ */
+export async function getEngagement(
+  period: string,
+  timeZone: string,
+  config: EngagementConfig,
+  project?: string,
+  home?: string
+): Promise<EngagementResult> {
+  if (!dbModeRequested()) {
+    throw new DbUnavailableError(
+      "driver-missing",
+      "The engagement report requires the SQLite index (MINDER_USE_DB is off)."
+    );
+  }
+  const db = await getReadyDb();
+  const report = await callDbLoader("getEngagement", () =>
+    loadEngagementReportFromSql(db, { period, timeZone, config, project, home })
+  );
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 

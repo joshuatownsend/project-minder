@@ -11,6 +11,8 @@ import { PortEditor } from "./PortEditor";
 import { ManualStepsList } from "./ManualStepsList";
 import { InsightsTab } from "./InsightsTab";
 import { CostsTab } from "./CostsTab";
+import { EngagementDashboard } from "./EngagementDashboard";
+import { useEngagementReportEnabled } from "./ConfigProvider";
 import { BoardTab } from "./BoardTab";
 import { OpsPanel } from "./OpsPanel";
 import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
@@ -60,7 +62,7 @@ import { formatDistanceToNow } from "date-fns";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type TabKey = "overview" | "context" | "todos" | "sessions" | "costs" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
+type TabKey = "overview" | "context" | "todos" | "sessions" | "costs" | "timecard" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
   project: ProjectData;
@@ -108,7 +110,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 // ── Main Component ─────────────────────────────────────────────────────────
 
 const VALID_TABS = new Set<TabKey>([
-  "overview", "context", "todos", "sessions", "costs", "manual-steps", "insights",
+  "overview", "context", "todos", "sessions", "costs", "timecard", "manual-steps", "insights",
   "board", "ops", "memory", "planning", "agents", "skills", "efficiency", "hot-files",
   "errors", "patterns", "config", "config-history", "config-lint",
 ]);
@@ -216,6 +218,9 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     project.worktrees?.some((wt) => (wt.insights?.total ?? 0) > 0)
   );
   const hasSessions = !!(project.claude && project.claude.sessionCount > 0);
+  // Turning the feature off in Settings must remove the tab, not just 503 its
+  // API — otherwise the tab renders an error panel the user cannot act on.
+  const engagementEnabled = useEngagementReportEnabled();
   const hasBoard = !!(project.board && project.board.total > 0);
   const hasOps_ = hasOps(deriveOpsSummary(project));
   const hasConfig = !!(project.hooks || project.mcpServers || project.cicd);
@@ -247,6 +252,8 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
     { key: "todos",       label: `TODOs${todos ? ` (${todos.pending})` : ""}` },
     ...(hasSessions     ? [{ key: "sessions"     as TabKey, label: "Sessions"     }] : []),
     ...(hasSessions     ? [{ key: "costs"        as TabKey, label: "Costs"        }] : []),
+    ...(hasSessions && engagementEnabled
+      ? [{ key: "timecard" as TabKey, label: "Timecard" }] : []),
     // Always show Manual Steps (like TODOs) so the Archived disclosure stays
     // reachable even after every active entry has been moved to the archive.
     { key: "manual-steps", label: "Manual Steps" },
@@ -690,6 +697,15 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
           {/* ── COSTS ─────────────────────────────────────────────────── */}
           {activeTab === "costs" && (
             <CostsTab usageSlug={project.usageSlug} usageHomeKey={project.usageHomeKey} />
+          )}
+
+          {/* ── TIMECARD ──────────────────────────────────────────────── */}
+          {/* Scoped by usageSlug, not the route slug: the engagement query
+              keys turns on the encoded conversation dir the way the usage
+              module does, so passing `project.slug` would silently match
+              nothing on any project whose route slug differs. */}
+          {activeTab === "timecard" && (
+            <EngagementDashboard project={project.usageSlug} home={project.usageHomeKey} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}
