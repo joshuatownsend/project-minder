@@ -302,6 +302,66 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     expect(rows.Testing.oneShotRate).toBe(0);
   });
 
+  it("ignores a task outcome stamped on a subagent turn", async () => {
+    // `schema.sql` states the contract: one-shot reads guard on
+    // `is_sidechain = 0`. Ingest never anchors an outcome on a sidechain turn
+    // today, so this state is unreachable through the normal path — which is
+    // exactly why it is worth pinning. Without the guard the read depends on an
+    // invariant enforced in a different module, and a future ingest regression
+    // would corrupt these counts with nothing failing. (Copilot, PR #424.)
+    //
+    // The subagent row is a copy of a real turn so it satisfies every NOT NULL
+    // column, with only the three fields under test changed. It is stamped
+    // `retry` against `Coding`, whose genuine task passed: an unguarded read
+    // would halve that category's rate from 1 to 0.5, which no rounding or
+    // ordering difference could produce.
+    await writeFixture();
+    await state.reload();
+    process.env.MINDER_USE_DB = "1";
+
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = (await conn.getDb())!;
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+    });
+
+    const cols = (db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>)
+      .map((c) => c.name);
+    const src = db
+      .prepare("SELECT * FROM turns WHERE role = 'assistant' LIMIT 1")
+      .get() as Record<string, unknown>;
+    const maxIdx = (db.prepare("SELECT MAX(turn_index) AS m FROM turns").get() as { m: number }).m;
+    db.prepare(
+      `INSERT INTO turns (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`
+    ).run({
+      ...src,
+      turn_index: maxIdx + 1,
+      is_sidechain: 1,
+      task_outcome: "retry",
+      category: "Coding",
+    });
+
+    // Guard the guard: if the row did not land, the assertions below would
+    // pass against an unchanged table and prove nothing.
+    const planted = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE is_sidechain = 1 AND task_outcome IS NOT NULL")
+      .get() as { n: number };
+    expect(planted.n, "the sidechain row under test must exist").toBe(1);
+
+    const data = await import("@/lib/data");
+    // Both SQL bodies: the rollup path (no filter) and the live recompute.
+    for (const source of [undefined, "claude"]) {
+      const { report } = await data.getUsage("all", undefined, source);
+      const rows = byKey(report.byCategory);
+      expect(rows.Coding.oneShotRate, `source=${source ?? "none"}`).toBe(1);
+    }
+
+    conn.closeDb();
+  });
+
   it("omits the rate on both backends for a category that anchored no task", async () => {
     const dir = path.join(tmpHome, ".claude", "projects", "C--dev-x");
     await fs.mkdir(dir, { recursive: true });

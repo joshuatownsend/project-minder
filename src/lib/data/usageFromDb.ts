@@ -447,8 +447,8 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            COUNT(*)                   AS turns,
            COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
            COALESCE(SUM(t.cost_usd), 0) AS cost,
-           SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
-           SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
+           SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
+           SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
          FROM turns t JOIN sessions s USING (session_id)
          WHERE t.role = 'assistant'
            AND t.category IS NOT NULL
@@ -463,6 +463,10 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
         category: string; turns: number; tokens: number; cost: number;
         verifiedTasks: number; oneShotTasks: number;
       }>;
+    // The `is_sidechain = 0` guards live INSIDE the CASE, not in the WHERE:
+    // subagent spend belongs in this breakdown (matching byModel/byProject)
+    // while subagent turns anchor no user-verified task. Moving them up would
+    // silently drop subagent tokens from the cost column.
     return rows.map((r) => ({
       category: r.category as CategoryType,
       turns: r.turns,
@@ -534,6 +538,7 @@ function queryCategoryTasks(
        WHERE t.role = 'assistant'
          AND t.category IS NOT NULL
          AND t.task_outcome IS NOT NULL
+         AND t.is_sidechain = 0
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
          AND (@project IS NULL OR s.project_slug = @project)
        GROUP BY t.category`
@@ -554,8 +559,13 @@ function queryCategoryTasks(
  *
  * Both halves come from one GROUP BY so the spend and task columns are always
  * over the same row set. Subagent turns are included in the spend half
- * (matching byModel/byProject/byCategory) but contribute no tasks: ingest
- * never anchors an outcome on a sidechain turn.
+ * (matching byModel/byProject/byCategory) but contribute no tasks — enforced
+ * by an `is_sidechain = 0` guard inside the CASE rather than left to the fact
+ * that ingest never anchors an outcome on a sidechain turn. `schema.sql` states
+ * the guard as the contract for one-shot reads; relying on the upstream
+ * invariant instead made a future ingest regression corrupt these counts
+ * silently, while a guard makes it a no-op. In the CASE and not the WHERE,
+ * because the spend half must keep counting subagent turns.
  */
 function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown[] {
   const rows = prepCached(db,
@@ -565,8 +575,8 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
          COALESCE(SUM(t.input_tokens + t.output_tokens
                     + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
          COALESCE(SUM(t.cost_usd), 0) AS cost,
-         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)     AS verifiedTasks,
-         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END)    AS oneShotTasks
+         SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND (@periodStart IS NULL OR t.ts >= @periodStart)
