@@ -898,8 +898,16 @@ export function SessionsBrowser() {
    */
   const availableEntrypoints = useMemo(() => {
     const eps = new Set(data.map((s) => entrypointBucket(s.entrypoint)));
+    // An active selection stays in the list even after the refresh that
+    // removed its last session. The list reloads every 15s, so a bucket can
+    // disappear underneath a filter that is still applied — leaving an empty
+    // page whose only remaining control has hidden itself. Keeping the value
+    // present means the way back is always on screen, and it is preferred to
+    // silently resetting the filter: a transient short read would then rewrite
+    // a choice the reader made, which is a worse surprise than a stale option.
+    if (entrypointFilter !== "all") eps.add(entrypointFilter);
     return [...eps].sort(compareEntrypoint);
-  }, [data]);
+  }, [data, entrypointFilter]);
 
   const filtered = useMemo(() => {
     let result = data;
@@ -1114,8 +1122,11 @@ export function SessionsBrowser() {
 
         {/* Entrypoint filter — who drove the session. Offered only when the
             corpus actually contains more than one, since on a machine that has
-            never run the SDK the control would have a single real choice. */}
-        {availableEntrypoints.length > 1 && (
+            never run the SDK the control would have a single real choice — but
+            never hidden while a filter is active, or clearing it would require
+            a page reload. (`availableEntrypoints` keeps the active value, so
+            this stays true even after the bucket's last session disappears.) */}
+        {(availableEntrypoints.length > 1 || entrypointFilter !== "all") && (
           <select
             aria-label="Filter by entrypoint"
             value={entrypointFilter}
