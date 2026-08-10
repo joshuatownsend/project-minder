@@ -87,5 +87,35 @@ export function applyPricingOverlay(
       : 1;
     overlaid.outputCostPerTokenAbove200k = overlaid.outputCostPerToken * ratio;
   }
+  // The cache half of the >200k tier (#393), same argument again: a rule that
+  // says what a cache read costs must govern long-context cache reads too, or
+  // the override applies to short prompts only. Each tiered cache rate is
+  // scaled by its own base's ratio — the 1-hour tiered rate against the 1-hour
+  // base, not against the 5-minute one, since the two differ by 1.25x vs 2x and
+  // sharing a ratio would silently reprice one of them.
+  if (rule.cacheReadUsdPerMillion !== undefined && base.cacheReadCostPerTokenAbove200k !== undefined) {
+    const ratio = base.cacheReadCostPerToken > 0
+      ? base.cacheReadCostPerTokenAbove200k / base.cacheReadCostPerToken
+      : 1;
+    overlaid.cacheReadCostPerTokenAbove200k = overlaid.cacheReadCostPerToken * ratio;
+  }
+  if (rule.cacheCreateUsdPerMillion !== undefined) {
+    if (base.cacheWriteCostPerTokenAbove200k !== undefined) {
+      const ratio = base.cacheWriteCostPerToken > 0
+        ? base.cacheWriteCostPerTokenAbove200k / base.cacheWriteCostPerToken
+        : 1;
+      overlaid.cacheWriteCostPerTokenAbove200k = overlaid.cacheWriteCostPerToken * ratio;
+    }
+    if (
+      base.cacheWrite1hCostPerTokenAbove200k !== undefined &&
+      base.cacheWrite1hCostPerToken !== undefined &&
+      overlaid.cacheWrite1hCostPerToken !== undefined
+    ) {
+      const ratio = base.cacheWrite1hCostPerToken > 0
+        ? base.cacheWrite1hCostPerTokenAbove200k / base.cacheWrite1hCostPerToken
+        : 1;
+      overlaid.cacheWrite1hCostPerTokenAbove200k = overlaid.cacheWrite1hCostPerToken * ratio;
+    }
+  }
   return overlaid;
 }

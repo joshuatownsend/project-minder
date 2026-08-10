@@ -85,6 +85,11 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
   // this table with a real >200k tier: their 1M window shipped as a beta opt-in
   // priced at 2x input / 1.5x output ($6 / $22.50). Matches LiteLLM's own
   // `claude-sonnet-4-5` entry exactly.
+  //
+  // The tier covers the CACHE rates too, and this is the only entry that may
+  // carry them — see the derivation recorded on `ModelPricing`. They are the
+  // standard multipliers taken against the $6 above-200k input rate rather than
+  // the $3 base: read 0.1x = $0.60, 5m write 1.25x = $7.50, 1h write 2x = $12.
   "claude-sonnet-4": {
     inputCostPerToken: 0.000003,
     outputCostPerToken: 0.000015,
@@ -93,6 +98,9 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
     cacheReadCostPerToken: 0.0000003,
     inputCostPerTokenAbove200k: 0.000006,
     outputCostPerTokenAbove200k: 0.0000225,
+    cacheReadCostPerTokenAbove200k: 0.0000006,
+    cacheWriteCostPerTokenAbove200k: 0.0000075,
+    cacheWrite1hCostPerTokenAbove200k: 0.000012,
   },
   "claude-haiku-4-5": {
     inputCostPerToken: 0.000001,
@@ -109,6 +117,60 @@ const FALLBACK_PRICING: Record<string, ModelPricing> = {
     cacheReadCostPerToken: 0.00000008,
   },
 };
+
+// ── Fast-mode pricing ────────────────────────────────────────────────────────
+//
+// Fast mode (`message.usage.speed === "fast"`) is a premium tier, not a label:
+// it bills at DOUBLE the standard rate. Anthropic's pricing page states it
+// directly (checked 2026-08-10):
+//
+//   "Fast mode, in research preview, provides significantly faster output for
+//    Claude Opus 5 and Claude Opus 4.8 at premium pricing. Fast mode pricing
+//    applies across the full context window, including requests over 200k
+//    input tokens. […] Claude Opus 5 / Claude Opus 4.8 — $10 / MTok input,
+//    $50 / MTok output. […] Fast mode pricing stacks with other pricing
+//    modifiers: prompt caching multipliers apply on top of fast mode pricing."
+//
+// Hardcoded rather than parsed because LiteLLM carries `supports_speed: true`
+// for these models but publishes NO fast rates — there is nothing to read. The
+// cache rates below are the standard multipliers against the $10 fast input
+// rate: read 0.1x = $1, 5m write 1.25x = $12.50, 1h write 2x = $20. (Sanity
+// check: that is exactly the Claude Fable 5 row above, which is also $10/$50.)
+//
+// No above-200k fields, and that absence is an assertion: the page says fast
+// pricing "applies across the full context window", so there is no long-context
+// tier to model on top of it.
+const FAST_PRICING: Record<string, ModelPricing> = {
+  "claude-opus-5": {
+    inputCostPerToken: 0.00001,
+    outputCostPerToken: 0.00005,
+    cacheWriteCostPerToken: 0.0000125,
+    cacheWrite1hCostPerToken: 0.00002,
+    cacheReadCostPerToken: 0.000001,
+  },
+};
+
+/**
+ * Canonical `FAST_PRICING` key for a model id, or `null` if the model has no
+ * fast tier.
+ *
+ * Deliberately matched on the RAW model id rather than via
+ * `resolveClaudeFamily`, which folds every Opus 4.5-and-later id onto the same
+ * `claude-opus-5` key. Fast mode is narrower than that family: the pricing page
+ * says it is unavailable on Opus 4.7 (a `speed: "fast"` request errors) and
+ * that Opus 4.6 "run[s] at standard speed and [is] billed at standard rates".
+ * So a family-keyed lookup would invent a doubled rate for two models that can
+ * never incur one.
+ */
+function resolveFastFamily(model: string): string | null {
+  const lower = model.toLowerCase();
+  // Substring match so dated snapshots (`claude-opus-5-20251101`) resolve too.
+  // `opus-4-5` cannot collide with `opus-5`: the ids differ at the `4-`.
+  if (lower.includes("opus-5") || lower.includes("opus-4-8")) {
+    return "claude-opus-5";
+  }
+  return null;
+}
 
 /**
  * Claude model id → canonical `FALLBACK_PRICING` key, matched by substring and
@@ -228,6 +290,14 @@ function parseLiteLLMEntry(entry: Record<string, unknown>): ModelPricing {
   // so models without a tier keep flat pricing. See A4.
   const inputAbove = entry["input_cost_per_token_above_200k_tokens"];
   const outputAbove = entry["output_cost_per_token_above_200k_tokens"];
+  // The same tier applied to the three cache categories (#393). Carried through
+  // only where LiteLLM publishes them, so a model without a tier keeps flat
+  // cache pricing — `claude-sonnet-4-5` publishes all three, every current
+  // Claude publishes none.
+  const cacheReadAbove = entry["cache_read_input_token_cost_above_200k_tokens"];
+  const cacheWriteAbove = entry["cache_creation_input_token_cost_above_200k_tokens"];
+  const cacheWrite1hAbove =
+    entry["cache_creation_input_token_cost_above_1hr_above_200k_tokens"];
   return {
     inputCostPerToken: input,
     outputCostPerToken: output,
@@ -236,6 +306,11 @@ function parseLiteLLMEntry(entry: Record<string, unknown>): ModelPricing {
     ...(typeof cacheWrite1h === "number" ? { cacheWrite1hCostPerToken: cacheWrite1h } : {}),
     ...(typeof inputAbove === "number" ? { inputCostPerTokenAbove200k: inputAbove } : {}),
     ...(typeof outputAbove === "number" ? { outputCostPerTokenAbove200k: outputAbove } : {}),
+    ...(typeof cacheReadAbove === "number" ? { cacheReadCostPerTokenAbove200k: cacheReadAbove } : {}),
+    ...(typeof cacheWriteAbove === "number" ? { cacheWriteCostPerTokenAbove200k: cacheWriteAbove } : {}),
+    ...(typeof cacheWrite1hAbove === "number"
+      ? { cacheWrite1hCostPerTokenAbove200k: cacheWrite1hAbove }
+      : {}),
   };
 }
 
@@ -345,9 +420,42 @@ export async function loadPricing(): Promise<void> {
 /**
  * Look up pricing for a model by name. Falls back gracefully.
  * Applies any active pricing rule overlay before returning.
+ *
+ * `speed` is `UsageTurn.speed` — `message.usage.speed`, i.e. `"fast"` or
+ * `"standard"` or absent. Only `"fast"`, on a model that has a fast tier,
+ * changes anything.
+ *
+ * **Unknown speed bills standard, deliberately.** Everywhere else in this
+ * codebase a null/absent `speed` means "unknown, never assume standard" — the
+ * field is nullable on exactly the turns that also lack `effort`. Pricing is
+ * the one place that rule inverts: the alternative to assuming standard is
+ * assuming a doubled rate on every turn from before the field existed, which
+ * would fabricate cost across the whole historical corpus. Under-reporting an
+ * unlabelled fast turn is the safe direction, and fast mode is opt-in per
+ * request, so absence really is standard far more often than not.
  */
-export function getModelPricing(model: string): ModelPricing {
+export function getModelPricing(model: string, speed?: string): ModelPricing {
   const map = pricingMap ?? new Map(Object.entries(FALLBACK_PRICING));
+
+  // 0. Fast mode short-circuits the whole resolution chain: LiteLLM publishes
+  //    no fast rates, so there is nothing in `map` to find and the fallback
+  //    table below would return the STANDARD rate for the same model.
+  if (speed === "fast") {
+    const fastKey = resolveFastFamily(model);
+    if (fastKey) {
+      // Rule overlay still applies — a user rule matching this model is saying
+      // what the model costs them, and silently exempting fast turns from it
+      // would be its own surprise.
+      return applyPricingOverlay(
+        FAST_PRICING[fastKey],
+        matchPricingRule(getPricingRules(), model)
+      );
+    }
+    // A `fast` turn on a model with no fast tier falls through to standard
+    // pricing rather than erroring. Opus 4.6 does exactly this at the provider
+    // (runs standard, bills standard), so the fall-through is the correct
+    // behaviour rather than merely the lenient one.
+  }
 
   // 1. Exact match
   let base = map.get(model);
@@ -509,29 +617,89 @@ export const TIER_BOUNDARY = 200_000;
 export type PricingTier = "auto" | "base" | "long";
 
 /**
- * Apply pricing to a token-count tuple. Sync — caller is responsible for
- * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
+ * The 1-hour cache-write rate for a request, given whether it is in the long
+ * tier and what the 5-minute rate resolved to.
  *
- * Single source of truth for the cost formula across the file-parse path
- * and the SQLite ingest path. Both must produce identical numbers when
- * P2b switches the read side over.
+ * The awkward case, and a real one: LiteLLM's dated Sonnet 4 entries
+ * (`claude-sonnet-4-20250514`, `claude-4-sonnet-20250514`) publish a tiered
+ * **5-minute** write rate but no tiered **1-hour** one. Falling back to the
+ * base 1-hour rate there mixes a tiered rate and a base rate inside a single
+ * request, and produces an ordering that cannot exist: base 1h is $6/MTok
+ * against a tiered 5m of $7.50/MTok, so the *longer*, always-more-expensive TTL
+ * would come out cheaper. A 1-hour write is 2x base input and a 5-minute write
+ * 1.25x, so `1h >= 5m` is structural — an implementation that breaks it is
+ * wrong on its face, without needing to know either number.
+ *
+ * So when the tier applies and only the 1-hour tiered rate is missing, it is
+ * derived by scaling the base 1-hour rate by the factor the 5-minute rate
+ * actually moved. Same technique `applyPricingOverlay` uses for user rules, and
+ * it degrades correctly: if no tiered write rate is published at all, the ratio
+ * is 1 and cache writes stay flat, which is the per-rate "absent means flat"
+ * rule this function otherwise follows.
  */
-export function applyPricing(
+function resolveCacheWrite1hRate(
+  pricing: ModelPricing,
+  longContext: boolean,
+  cacheWriteRate: number
+): number {
+  const base1h = pricing.cacheWrite1hCostPerToken;
+  if (!longContext) return base1h ?? cacheWriteRate;
+  if (pricing.cacheWrite1hCostPerTokenAbove200k !== undefined) {
+    return pricing.cacheWrite1hCostPerTokenAbove200k;
+  }
+  // No 1-hour rate at all → the provider has a single write rate; use the
+  // (possibly tiered) 5-minute one rather than inventing a second.
+  if (base1h === undefined) return cacheWriteRate;
+  const tierRatio =
+    pricing.cacheWriteCostPerToken > 0
+      ? cacheWriteRate / pricing.cacheWriteCostPerToken
+      : 1;
+  return base1h * tierRatio;
+}
+
+/** The five per-token rates that actually apply to one token tuple. */
+export interface EffectiveRates {
+  inputRate: number;
+  outputRate: number;
+  /** Cache writes made at the 5-minute (default) TTL. */
+  cacheWriteRate: number;
+  /** Cache writes made at the 1-hour TTL. */
+  cacheWrite1hRate: number;
+  cacheReadRate: number;
+}
+
+/**
+ * Resolve which rates apply to a token tuple, before any multiplication.
+ *
+ * Split out of `applyPricing` so that consumers computing something *other*
+ * than a bill — the cache rebuild-waste diagnostic in `sessionQuality`, most
+ * notably — select rates the same way the bill does instead of reaching for
+ * the base fields directly. That divergence is invisible by construction: both
+ * numbers look plausible, they are shown on different screens, and only a
+ * long-context or fast turn makes them disagree.
+ */
+export function selectEffectiveRates(
   pricing: ModelPricing,
   tokens: TokenCounts,
   tier: PricingTier = "auto"
-): number {
+): EffectiveRates {
   // Long-context pricing is a per-request TIER selected by prompt size, NOT a
   // marginal per-bucket split. LiteLLM/Anthropic switch the rates based on the
   // request's input (prompt) size: once it exceeds 200k, the ENTIRE request's
   // input AND output are billed at the above-200k rates (A4). An earlier
   // version split each bucket at 200k and left output at the base rate, which
   // undercharged a 250k-input/short-output call vs provider billing.
-  // Cache tokens stay at their base rate — ModelPricing doesn't carry
-  // cache above-200k rates today.
+  // Cache tokens ride the same tier (#393): the tier is a property of the
+  // request, and cached tokens are part of the request's prompt. Before that
+  // they stayed at base rate, which under-billed the dominant component of
+  // exactly the requests the tier exists for — a 5k-input + 220k-cache-read
+  // turn is ~98% cache.
   const publishesLongRates =
     pricing.inputCostPerTokenAbove200k !== undefined ||
-    pricing.outputCostPerTokenAbove200k !== undefined;
+    pricing.outputCostPerTokenAbove200k !== undefined ||
+    pricing.cacheReadCostPerTokenAbove200k !== undefined ||
+    pricing.cacheWriteCostPerTokenAbove200k !== undefined ||
+    pricing.cacheWrite1hCostPerTokenAbove200k !== undefined;
   // The tier is chosen by the size of the REQUEST'S PROMPT, and cached tokens
   // are part of that prompt. Claude Code reports new uncached input separately
   // from `cache_read_input_tokens`, so a real 225k-token request that hit the
@@ -554,27 +722,66 @@ export function applyPricing(
       ? pricing.outputCostPerTokenAbove200k
       : pricing.outputCostPerToken;
 
-  // Cache writes have two rates, selected by the TTL the write was made with:
-  // 1.25x base for the 5-minute default, 2x for the 1-hour TTL. Claude Code
-  // writes at the 1-hour TTL, so on its transcripts `cacheCreate1hTokens` is
-  // effectively the whole total — billing it at the 5-minute rate understates
-  // cache-write cost by ~37%. Clamp to the total so a malformed breakdown can
-  // never bill more 1-hour tokens than were written.
+  // Each cache rate falls back to its OWN base counterpart when the long-tier
+  // variant is absent, rather than to a shared default. That keeps
+  // "absent means flat" true per rate, so a model that published, say, only a
+  // tiered cache-read rate would not accidentally lift its write rates too.
+  // Providers that publish no separate 1-hour rate still keep flat cache-write
+  // pricing via the second `??`.
+  const cacheWriteRate =
+    longContext && pricing.cacheWriteCostPerTokenAbove200k !== undefined
+      ? pricing.cacheWriteCostPerTokenAbove200k
+      : pricing.cacheWriteCostPerToken;
+  const cacheWrite1hRate = resolveCacheWrite1hRate(pricing, longContext, cacheWriteRate);
+  const cacheReadRate =
+    longContext && pricing.cacheReadCostPerTokenAbove200k !== undefined
+      ? pricing.cacheReadCostPerTokenAbove200k
+      : pricing.cacheReadCostPerToken;
+
+  return { inputRate, outputRate, cacheWriteRate, cacheWrite1hRate, cacheReadRate };
+}
+
+/**
+ * Split `cacheCreateTokens` into its 1-hour and 5-minute portions.
+ *
+ * Claude Code writes at the 1-hour TTL, so on its transcripts the 1-hour slice
+ * is effectively the whole total — treating it all as 5-minute understates
+ * cache-write cost by ~37%. Clamped to the total so a malformed breakdown can
+ * never charge more 1-hour tokens than were written.
+ */
+export function splitCacheCreate(tokens: TokenCounts): {
+  cacheCreate1h: number;
+  cacheCreate5m: number;
+} {
   const cacheCreate1h = Math.min(
     Math.max(tokens.cacheCreate1hTokens ?? 0, 0),
     tokens.cacheCreateTokens
   );
-  const cacheCreate5m = tokens.cacheCreateTokens - cacheCreate1h;
-  // Providers that publish no separate 1-hour rate keep flat cache-write pricing.
-  const cacheWrite1hRate =
-    pricing.cacheWrite1hCostPerToken ?? pricing.cacheWriteCostPerToken;
+  return { cacheCreate1h, cacheCreate5m: tokens.cacheCreateTokens - cacheCreate1h };
+}
+
+/**
+ * Apply pricing to a token-count tuple. Sync — caller is responsible for
+ * having `loadPricing()` resolved (or accepts hardcoded fallbacks).
+ *
+ * Single source of truth for the cost formula across the file-parse path
+ * and the SQLite ingest path. Both must produce identical numbers when
+ * P2b switches the read side over.
+ */
+export function applyPricing(
+  pricing: ModelPricing,
+  tokens: TokenCounts,
+  tier: PricingTier = "auto"
+): number {
+  const rates = selectEffectiveRates(pricing, tokens, tier);
+  const { cacheCreate1h, cacheCreate5m } = splitCacheCreate(tokens);
 
   return (
-    tokens.inputTokens * inputRate +
-    tokens.outputTokens * outputRate +
-    cacheCreate5m * pricing.cacheWriteCostPerToken +
-    cacheCreate1h * cacheWrite1hRate +
-    tokens.cacheReadTokens * pricing.cacheReadCostPerToken
+    tokens.inputTokens * rates.inputRate +
+    tokens.outputTokens * rates.outputRate +
+    cacheCreate5m * rates.cacheWriteRate +
+    cacheCreate1h * rates.cacheWrite1hRate +
+    tokens.cacheReadTokens * rates.cacheReadRate
   );
 }
 
@@ -585,7 +792,7 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
   if (!pricingMap) {
     await loadPricing();
   }
-  return applyPricing(getModelPricing(turn.model), turn);
+  return applyPricing(getModelPricing(turn.model, turn.speed), turn);
 }
 
 /**
@@ -604,7 +811,7 @@ export async function computeTurnCost(turn: UsageTurn): Promise<number> {
  * behaviour every other pre-`loadPricing` caller already gets.
  */
 export function computeTurnCostSync(turn: UsageTurn): number {
-  return applyPricing(getModelPricing(turn.model), turn);
+  return applyPricing(getModelPricing(turn.model, turn.speed), turn);
 }
 
 /**

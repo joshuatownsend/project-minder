@@ -1269,7 +1269,8 @@ async function readJsonlSession(
     if (t.role === "assistant") {
       t.category = classifyTurn(t.usageTurn);
       if (t.model) {
-        t.costUsd = applyPricing(getModelPricing(t.model), t);
+        // `speed` rides on the UsageTurn projection, not on ParsedTurn itself.
+        t.costUsd = applyPricing(getModelPricing(t.model, t.usageTurn.speed), t);
         costUsd += t.costUsd;
       }
     }
@@ -1363,7 +1364,7 @@ async function readJsonlSession(
       parentToolUseId: sc.parentToolUseId,
     };
     const category = classifyTurn(usageTurn);
-    const scCost = applyPricing(getModelPricing(sc.model), {
+    const scCost = applyPricing(getModelPricing(sc.model, sc.speed), {
       inputTokens: sc.inputTokens,
       outputTokens: sc.outputTokens,
       cacheCreateTokens: sc.cacheCreateTokens,
@@ -3122,7 +3123,7 @@ export function buildAdapterParsedSession(
       if (turn.model) modelCounts.set(turn.model, (modelCounts.get(turn.model) ?? 0) + 1);
       category = classifyTurn({ ...turn, source: file.source });
       if (turn.model) {
-        turnCostUsd = applyPricing(getModelPricing(turn.model), turn);
+        turnCostUsd = applyPricing(getModelPricing(turn.model, turn.speed), turn);
         costUsd += turnCostUsd;
       }
       textPreview = truncateText(turn.assistantText ?? "", TEXT_PREVIEW_LIMIT);

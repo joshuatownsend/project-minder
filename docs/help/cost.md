@@ -63,10 +63,17 @@ by the same proportion, preserving the 1.6× relationship between them.
 ### Long-context (>200K) pricing
 
 A few Claude models charge a premium for prompts over 200,000 tokens. Where that
-tier exists, the **whole request** — input *and* output — is billed at the higher
-rate, not just the tokens past the boundary. Minder selects the tier per request,
-so a session of many ordinary turns is never billed long-context just because its
-turns add up to more than 200K.
+tier exists, the **whole request** — input, output *and* cache — is billed at the
+higher rate, not just the tokens past the boundary. Minder selects the tier per
+request, so a session of many ordinary turns is never billed long-context just
+because its turns add up to more than 200K.
+
+The tier reaches the cache rates too, which matters more than it sounds: a real
+long-context turn arrives as a small amount of new input against a very large
+cache read (say 5K input and 220K cache read), so the cache is most of the bill.
+The cache multipliers apply on top of the tiered input rate rather than the base
+one — for Sonnet 4.5, whose above-200K input is $6/M, that gives $0.60/M cache
+read, $7.50/M for 5-minute writes and $12/M for 1-hour writes.
 
 **A 1M context window does not imply a long-context surcharge.** Anthropic's
 pricing page states that Claude 4.6 and later include the full 1M window at
@@ -75,14 +82,33 @@ billed flat no matter how long the prompt gets. The surcharge is real only for
 the Sonnet 3.5–4.5 lineage, whose 1M window shipped as a priced beta at 2× input
 and 1.5× output.
 
-An **Input $/M** or **Output $/M** override scales the matching above-200K rate by
-the same proportion, so the tier keeps its shape rather than leaving long prompts
-at the provider's list price.
+An **Input $/M**, **Output $/M**, **Cache Read $/M** or **Cache Write $/M**
+override scales the matching above-200K rate by the same proportion, so the tier
+keeps its shape rather than leaving long prompts at the provider's list price.
+
+### Fast mode
+
+Fast mode (`speed: "fast"`, currently a research preview on Claude Opus 5 and
+Opus 4.8) trades price for speed: **$10/M input and $50/M output against the
+standard $5/$25** — double. Minder reads `usage.speed` from each turn and prices
+fast turns from that table, with the usual cache multipliers on top ($12.50/M for
+5-minute writes, $20/M for 1-hour, $1/M reads).
+
+Two edges worth knowing:
+
+- Fast pricing is flat across the whole context window, so there is no
+  long-context tier stacked on top of it.
+- A turn with **no** `speed` recorded is billed at standard rates. Transcripts
+  written before the field existed carry no speed at all, and assuming fast
+  would inflate historical cost across the board.
+
+Fast mode is unavailable on Opus 4.7 and Opus 4.6 even though they share Opus 5's
+pricing family, so those models are always billed standard.
 
 ### Important notes
 
 - Rule changes apply to **new session ingest immediately** — no restart required.
-- **Previously indexed session costs are not retroactively recalculated.** If you need historical recost, delete `~/.minder/index.db` (all sessions will be re-indexed on next startup, which may take a few minutes).
+- **Previously indexed session costs are not retroactively recalculated** when *your* rules change. If you need historical recost, delete `~/.minder/index.db` (all sessions will be re-indexed on next startup, which may take a few minutes). Changes to Minder's own pricing *formula* are different: they bump an internal derivation version, and the next startup re-indexes the corpus by itself so both storage backends agree.
 - Click **Reset to defaults** to clear all overrides and return to LiteLLM pricing.
 
 ## Usage Quota (Claude Max)

@@ -149,5 +149,89 @@ describe("applyPricingOverlay", () => {
       const rule: PricingRule = { pattern: "*", cacheCreateUsdPerMillion: 7.5 };
       expect(applyPricingOverlay(BASE, rule).cacheWrite1hCostPerToken).toBeUndefined();
     });
+
+    // ── The cache half of the >200k tier (#393) ──────────────────────────────
+    //
+    // Same three properties as the input/output half above, and they need
+    // saying separately: a mutation that stopped scaling the tiered CACHE rates
+    // passed every test in this file before these existed.
+    const TIERED_CACHE: ModelPricing = {
+      ...TIERED,
+      cacheReadCostPerTokenAbove200k: 0.0000006, // 2x the 0.0000003 base
+      cacheWriteCostPerTokenAbove200k: 0.0000075, // 2x the 0.00000375 base
+      cacheWrite1hCostPerTokenAbove200k: 0.000012, // 2x the 0.000006 base
+    };
+
+    it("carries the tiered cache rates through an unrelated override", () => {
+      const rule: PricingRule = { pattern: "*", outputUsdPerMillion: 20 };
+      const result = applyPricingOverlay(TIERED_CACHE, rule);
+      expect(result.cacheReadCostPerTokenAbove200k).toBe(
+        TIERED_CACHE.cacheReadCostPerTokenAbove200k
+      );
+      expect(result.cacheWriteCostPerTokenAbove200k).toBe(
+        TIERED_CACHE.cacheWriteCostPerTokenAbove200k
+      );
+    });
+
+    it("scales the tiered cache-read rate with a cache-read override", () => {
+      // $0.50/MTok against a $0.30 base is 1.667x; the tiered rate has to move
+      // by the same factor or the override applies to short prompts only.
+      const rule: PricingRule = { pattern: "*", cacheReadUsdPerMillion: 0.5 };
+      const result = applyPricingOverlay(TIERED_CACHE, rule);
+      expect(result.cacheReadCostPerToken).toBeCloseTo(0.0000005, 12);
+      expect(result.cacheReadCostPerTokenAbove200k).toBeCloseTo(0.000001, 12);
+      expect(result.cacheReadCostPerTokenAbove200k!).toBeGreaterThan(
+        result.cacheReadCostPerToken
+      );
+    });
+
+    it("scales both tiered write rates, each against its own base", () => {
+      // The 5m and 1h rates sit at 1.25x and 2x base input, so a single shared
+      // ratio would silently reprice one of them. $7.50/MTok doubles the 5m
+      // base, so both tiered write rates should double too.
+      const rule: PricingRule = { pattern: "*", cacheCreateUsdPerMillion: 7.5 };
+      const result = applyPricingOverlay(TIERED_CACHE, rule);
+      expect(result.cacheWriteCostPerTokenAbove200k).toBeCloseTo(0.000015, 12);
+      // 1h base 0.000006 → overlaid 0.0000075 * 1.6 = 0.000012; tiered is 2x
+      // its own base, so 0.000024.
+      expect(result.cacheWrite1hCostPerToken).toBeCloseTo(0.000012, 12);
+      expect(result.cacheWrite1hCostPerTokenAbove200k).toBeCloseTo(0.000024, 12);
+    });
+
+    it("scales each write rate against its OWN base, not a shared ratio", () => {
+      // Deliberately asymmetric, and synthetic for a reason worth recording:
+      // on every model that actually publishes these, both tiered write rates
+      // are exactly 2x their base (the tier doubles input, and the 1.25x/2x
+      // cache multipliers ride on top), so a shared ratio and a per-rate ratio
+      // agree on all real data — a mutation swapping one for the other survives
+      // the test above. The per-rate form is still the contract this code
+      // states, so it gets a fixture that can tell the two apart.
+      const asymmetric: ModelPricing = {
+        ...TIERED_CACHE,
+        cacheWriteCostPerTokenAbove200k: 0.0000075, // 2x its base
+        cacheWrite1hCostPerTokenAbove200k: 0.000018, // 3x its base
+      };
+      const rule: PricingRule = { pattern: "*", cacheCreateUsdPerMillion: 7.5 };
+      const result = applyPricingOverlay(asymmetric, rule);
+
+      // 5m: overlaid 0.0000075, own ratio 2 → 0.000015.
+      expect(result.cacheWriteCostPerTokenAbove200k).toBeCloseTo(0.000015, 12);
+      // 1h: overlaid 0.000012, own ratio 3 → 0.000036. Borrowing the 5m ratio
+      // would give 0.000024.
+      expect(result.cacheWrite1hCostPerTokenAbove200k).toBeCloseTo(0.000036, 12);
+      expect(result.cacheWrite1hCostPerTokenAbove200k).not.toBeCloseTo(0.000024, 12);
+    });
+
+    it("leaves tiered cache rates absent when the base has none", () => {
+      const rule: PricingRule = {
+        pattern: "*",
+        cacheReadUsdPerMillion: 0.5,
+        cacheCreateUsdPerMillion: 7.5,
+      };
+      const result = applyPricingOverlay(TIERED, rule);
+      expect(result.cacheReadCostPerTokenAbove200k).toBeUndefined();
+      expect(result.cacheWriteCostPerTokenAbove200k).toBeUndefined();
+      expect(result.cacheWrite1hCostPerTokenAbove200k).toBeUndefined();
+    });
   });
 });

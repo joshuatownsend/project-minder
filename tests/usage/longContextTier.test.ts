@@ -240,15 +240,26 @@ describe("#376 — scanner prices per-request tiers, not per-bucket sums", () =>
     // the tier on exactly the requests the tier exists for.
     const { getModelPricing, applyPricing, loadPricing } = await freshPricing();
     await loadPricing();
-    const CACHE_READ = 0.0000003;
+    // Cache reads ride the tier too, since #393 — 0.1x of the $6 above-200k
+    // input rate, not of the $3 base. This assertion used to name the BASE
+    // cache-read rate and passed, which is how it came to ratify the very
+    // defect #393 reports: it pinned the tier as reaching input and output
+    // only, on the one turn shape where cache is ~98% of the bill.
+    const CACHE_READ_LONG = 0.0000006;
     const cost = applyPricing(getModelPricing(TIERED_MODEL), {
       inputTokens: 5_000,
       outputTokens: 1_000,
       cacheCreateTokens: 0,
       cacheReadTokens: 220_000,
     });
-    expect(cost).toBeCloseTo(5_000 * IN_LONG + 1_000 * OUT_LONG + 220_000 * CACHE_READ, 10);
-    expect(cost).not.toBeCloseTo(5_000 * IN_BASE + 1_000 * OUT_BASE + 220_000 * CACHE_READ, 10);
+    expect(cost).toBeCloseTo(
+      5_000 * IN_LONG + 1_000 * OUT_LONG + 220_000 * CACHE_READ_LONG,
+      10,
+    );
+    expect(cost).not.toBeCloseTo(
+      5_000 * IN_BASE + 1_000 * OUT_BASE + 220_000 * CACHE_READ_LONG,
+      10,
+    );
   });
 
   it("still leaves a small cached request on the base tier", async () => {

@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 17;
+export const DERIVED_VERSION = 18;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -260,6 +260,50 @@ export const DERIVED_VERSION = 17;
 //     re-parse — the same accounting A2 made against A1's v13. If v16 has
 //     already run by the time this merges, it costs one further pass; stated
 //     rather than hidden.
+//
+// 18 — W4 pricing corrections. `turns.cost_usd` is stamped at ingest, so a
+//     change to the cost FORMULA leaves every previously-indexed row holding a
+//     number computed by the old one. Three formula changes land together:
+//
+//       - the >200k tier now also applies to cache read and cache write
+//         rates (#393), which raises long-context Sonnet 4/4.5 turns;
+//       - `usage.speed === "fast"` bills at the premium Opus 5 / 4.8 rates
+//         rather than standard, which doubles those turns;
+//       - the file-parse scan cache persists its per-model/per-rate split
+//         (#394) — not a DB change itself, but it means the two backends
+//         would otherwise heal on different schedules.
+//
+//     This is the textbook case for the "bump when costCalculator semantics
+//     change" rule at the top of this file, and it is the one bump reason that
+//     is invisible without it: nothing errors, no column is NULL, and no test
+//     can see it — a test always ingests with current code, so only a real
+//     user's existing DB carries old-rate rows. Left unbumped, the SQLite and
+//     file-parse backends would report different costs for exactly the turns
+//     these fixes touch, which is the #220 parity class all over again.
+//
+//     **Cost, measured rather than assumed — and it does not favour the bump.**
+//     v17 is fully reconciled on this machine (6,011 of 6,011 sessions), so
+//     unlike v15–v17 this does NOT ride along on an unreconciled predecessor:
+//     it is a genuine additional full re-parse (~45 min at the v14 timing).
+//     And on this corpus it will change ZERO rows. Of 102,179 priced turns,
+//     the count with a >200k prompt on a tiered-lineage model — Sonnet 3.5 /
+//     3.7 / 4 / 4.5, the only models that publish a tier — is 0. Every one of
+//     the 47,912 long-prompt turns here is Opus 4.8 / Opus 5 / Fable 5 /
+//     Sonnet 5, all flat across the full 1M window. `speed = "fast"` has never
+//     been observed either.
+//
+//     Bumped anyway, for two reasons that outlive this machine. First, the
+//     rule at the top of this file is unconditional and this is squarely a
+//     costCalculator semantics change; making an exception for "my corpus
+//     happens not to hit it" is how a constant like this stops being
+//     trustworthy. Second, a user who DID run Sonnet 4/4.5 above 200k would
+//     otherwise get a file-parse backend that heals (scan-cache v2) and a
+//     SQLite backend that does not — the two reporting different costs for the
+//     same turns, which is precisely the backend-parity failure class of #220.
+//
+//     If the re-parse cost is ever judged too high for a change this narrow,
+//     the honest alternative is a targeted re-price of the affected rows, not
+//     silently skipping the bump.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

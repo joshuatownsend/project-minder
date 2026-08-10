@@ -27,7 +27,7 @@ export async function computeProjectYield(
 
   await loadPricing();
   const intervals = buildSessionIntervals(turns, (t) =>
-    applyPricing(getModelPricing(t.model), t)
+    applyPricing(getModelPricing(t.model, t.speed), t)
   );
 
   if (intervals.length === 0) {

@@ -1,5 +1,31 @@
 import type { ToolCall, UsageTurn } from "./types";
-import { getModelPricing } from "./costCalculator";
+import {
+  getModelPricing,
+  selectEffectiveRates,
+  splitCacheCreate,
+} from "./costCalculator";
+
+/**
+ * Build-side cache spend for one turn, net of what its cache reads cost.
+ *
+ * Rates come from `selectEffectiveRates`, the same selection `applyPricing`
+ * uses, rather than from `ModelPricing`'s base fields directly. Reading the
+ * base fields was wrong along three axes at once, and none of them was
+ * visible: a long-context turn's cache rates ride the >200k tier (#393), a
+ * fast turn's ride the premium table, and Claude Code writes its cache at the
+ * 1-hour TTL rather than the 5-minute one. So this diagnostic could disagree
+ * with the very cost figure shown beside it, on a different screen, with both
+ * numbers looking entirely plausible.
+ */
+function cacheRebuildWaste(t: UsageTurn): number {
+  const pricing = getModelPricing(t.model, t.speed);
+  const rates = selectEffectiveRates(pricing, t);
+  const { cacheCreate1h, cacheCreate5m } = splitCacheCreate(t);
+  const buildCost =
+    cacheCreate5m * rates.cacheWriteRate + cacheCreate1h * rates.cacheWrite1hRate;
+  const savings = t.cacheReadTokens * rates.cacheReadRate;
+  return buildCost - savings;
+}
 
 // ── Model context windows ─────────────────────────────────────────────────────
 //
@@ -104,10 +130,7 @@ export function computeCacheStats(turns: UsageTurn[]): CacheStats {
     cacheCreateTokens += t.cacheCreateTokens;
     if (t.cacheCreateTokens === 0 && t.cacheReadTokens === 0) continue;
 
-    const pricing = getModelPricing(t.model);
-    const buildCost = t.cacheCreateTokens * pricing.cacheWriteCostPerToken;
-    const savings = t.cacheReadTokens * pricing.cacheReadCostPerToken;
-    rebuildWasteUsd += buildCost - savings;
+    rebuildWasteUsd += cacheRebuildWaste(t);
   }
 
   const total = cacheReadTokens + cacheCreateTokens;
@@ -544,10 +567,7 @@ export function computeSessionQuality(turns: UsageTurn[]): SessionQualitySummary
       cacheReadTokens += t.cacheReadTokens;
       cacheCreateTokens += t.cacheCreateTokens;
       if (t.cacheCreateTokens > 0 || t.cacheReadTokens > 0) {
-        const pricing = getModelPricing(t.model);
-        rebuildWasteUsd +=
-          t.cacheCreateTokens * pricing.cacheWriteCostPerToken -
-          t.cacheReadTokens * pricing.cacheReadCostPerToken;
+        rebuildWasteUsd += cacheRebuildWaste(t);
       }
       if (t.inputTokens > 0) {
         const window = getModelContextWindow(t.model);

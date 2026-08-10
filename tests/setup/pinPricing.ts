@@ -42,9 +42,22 @@
  *   "cache_read_input_token_cost", "cache_creation_input_token_cost",
  *   "cache_creation_input_token_cost_above_1hr",
  *   "input_cost_per_token_above_200k_tokens",
- *   "output_cost_per_token_above_200k_tokens", "max_input_tokens", "max_tokens"];
+ *   "output_cost_per_token_above_200k_tokens",
+ *   "cache_read_input_token_cost_above_200k_tokens",
+ *   "cache_creation_input_token_cost_above_200k_tokens",
+ *   "cache_creation_input_token_cost_above_1hr_above_200k_tokens",
+ *   "max_input_tokens", "max_tokens"];
  * // keep entries matching `want`, projected onto FIELDS → tests/fixtures/litellm-pricing.json
+ * // JSON.stringify(out, null, 1), no trailing newline — matches the committed file.
  * ```
+ *
+ * **The projection is load-bearing, and silently so.** A field missing from
+ * `FIELDS` is not a smaller fixture — it is a pricing feature the pinned suite
+ * can never exercise. The three `*_above_200k_tokens` cache fields were absent
+ * until #393 added them here, which meant no test could have caught that
+ * `applyPricing` left cache tokens at base rate in the long tier. If you add a
+ * rate to `ModelPricing`, add its LiteLLM field to this list in the same
+ * change.
  *
  * A model id outside the fixture is not an error: `getModelPricing` falls
  * through to `FALLBACK_PRICING`, which is how the suite behaved before this
