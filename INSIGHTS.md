@@ -1,5 +1,13 @@
 # Insights
 
+<!-- insight:b038a5b6237a | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T15:16:29.871Z -->
+## ★ Insight
+- Anthropic's docs no longer publish a Sonnet 4/4.5 long-context *table* (those models are retired), so the premise can't be verified by quotation any more. It can be verified by **derivation**: the docs state cache multipliers are "relative to base input token rates" and "stack with other pricing modifiers". Sonnet 4.5's above-200k input is $6 (2× base $3), so cache read = 0.1×$6 = **$0.60**, 5m write = 1.25×$6 = **$7.50**, 1h write = 2×$6 = **$12**.
+- Those three derived numbers match LiteLLM's published `*_above_200k_tokens` fields to the digit (`6e-7`, `7.5e-6`, `1.2e-5`). Two independent paths landing on identical numbers is much stronger evidence than one page quote — and it's what #376 lacked when it guessed wrong in the opposite direction.
+- Bonus cross-check for fast mode: derived fast-Opus-5 rates ($10/$50/$12.50/$20/$1) are *exactly* the Fable 5 row that already exists in the fallback table.
+
+---
+
 <!-- insight:02ddc76f21cf | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T13:26:43.092Z -->
 ## ★ Insight
 `loadPricing()` single-flights via a module-scoped promise — but `vi.resetModules()` gives every isolated test a *fresh* module instance, so each reload re-fetches. That's how 371 files produce 221 requests to one URL.

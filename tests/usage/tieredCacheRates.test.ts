@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { applyPricing } from "@/lib/usage/costCalculator";
+import {
+  applyPricing,
+  getModelPricing,
+  loadPricing,
+} from "@/lib/usage/costCalculator";
 import type { ModelPricing } from "@/lib/usage/types";
 
 /**
@@ -131,6 +135,33 @@ describe("long-context tier — cache rates (#393)", () => {
       100_000 * 0.00000375 + // writes stay at base — no tiered rate published
       150_000 * 0.0000006; // read tiered
     expect(cost).toBeCloseTo(expected, 10);
+  });
+
+  it("carries the tiered cache rates through the LiteLLM parser", async () => {
+    // The tests above build `ModelPricing` by hand, and the offline-fallback
+    // tests in longContextTier never touch the parser — so deleting the three
+    // `*_above_200k_tokens` cache fields from `parseLiteLLMEntry` used to pass
+    // the entire suite. Found by mutation, which is the only way that gap was
+    // ever going to surface. This pins the online/pinned-fixture path.
+    await loadPricing();
+    const p = getModelPricing("claude-sonnet-4-5");
+
+    expect(p.cacheReadCostPerTokenAbove200k).toBeCloseTo(0.0000006, 12);
+    expect(p.cacheWriteCostPerTokenAbove200k).toBeCloseTo(0.0000075, 12);
+    expect(p.cacheWrite1hCostPerTokenAbove200k).toBeCloseTo(0.000012, 12);
+    // Each is 2x its base counterpart — the tier doubles the input rate, and
+    // the cache multipliers ride on top of the tiered rate.
+    expect(p.cacheReadCostPerTokenAbove200k!).toBeCloseTo(
+      p.cacheReadCostPerToken * 2,
+      12,
+    );
+  });
+
+  it("publishes no tiered cache rates for a flat model, through the parser", async () => {
+    await loadPricing();
+    const p = getModelPricing("claude-sonnet-5");
+    expect(p.cacheReadCostPerTokenAbove200k).toBeUndefined();
+    expect(p.cacheWriteCostPerTokenAbove200k).toBeUndefined();
   });
 
   it("keeps flat cache pricing for a model with no tier at all", () => {
