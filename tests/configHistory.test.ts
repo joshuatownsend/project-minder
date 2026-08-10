@@ -379,6 +379,24 @@ describe("removeBackup (post-PR-#59 review)", () => {
 });
 
 describe("prune", () => {
+  // A fixed mid-day UTC instant, used instead of `Date.now()` wherever a case
+  // derives "same calendar day" timestamps by offsetting a base instant.
+  //
+  // `prune` buckets the 24h-7d window by UTC calendar day (`dayKey` is the
+  // ISO string's first 10 characters). Deriving a sibling entry as
+  // `base + 60_000` is therefore only "the same day" while `base` is not
+  // within 60s of UTC midnight. Both Node legs of CI for PR #281 happened to
+  // run at 23:59 UTC: the offset crossed into the next day, the two entries
+  // landed in different buckets, nothing collapsed, and `removed` came back 0
+  // instead of 1 (#282).
+  //
+  // Anchoring makes the calendar arithmetic independent of when the suite
+  // runs. No production change is needed — `prune(now)` already accepts the
+  // instant as a parameter, and the test threads it through. The boundary
+  // behaviour the flake stumbled into is now covered deliberately, in
+  // "…straddle UTC midnight…" below.
+  const ANCHOR = Date.UTC(2026, 0, 15, 12, 0, 0); // 2026-01-15T12:00:00.000Z
+
   it("keeps every entry within 24h", async () => {
     const { recordPreWrite, prune, list } = await reloadModule();
     const target = path.join(tmpHome, "x.json");
@@ -410,7 +428,7 @@ describe("prune", () => {
     const manifestPath = path.join(tmpHome, ".minder", "config-history", "manifest.jsonl");
     await fs.mkdir(path.dirname(manifestPath), { recursive: true });
 
-    const now = Date.now();
+    const now = ANCHOR;
     const oneDay = 24 * 60 * 60_000;
     const twoDaysAgo = new Date(now - 2 * oneDay).toISOString();
     const twoDaysAgoLater = new Date(now - 2 * oneDay + 60_000).toISOString();
@@ -428,13 +446,48 @@ describe("prune", () => {
     expect(result.kept).toBe(2);
   });
 
+  it("keeps both entries when 60s apart but straddling UTC midnight", async () => {
+    // The contract the #282 flake tripped over, asserted deliberately instead
+    // of being stumbled into once a day. Two entries a minute apart are the
+    // *same* daily bucket only if they share a UTC calendar date; across
+    // midnight they are two buckets and both survive. That is correct
+    // behaviour for `prune` — the old test was wrong to assume a 60s offset
+    // never changes the date.
+    const mod = await reloadModule();
+    const target = path.join(tmpHome, "x.json");
+    await fs.writeFile(target, "x", "utf-8");
+    const manifestPath = path.join(tmpHome, ".minder", "config-history", "manifest.jsonl");
+    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+
+    const midnight = Date.UTC(2026, 0, 13, 0, 0, 0);
+    const inputs = [
+      // 2026-01-12T23:59:30Z and 2026-01-13T00:00:30Z.
+      { id: "before", timestamp: new Date(midnight - 30_000).toISOString(), targetPath: target, contentSha: "a", wasMissing: false },
+      { id: "after",  timestamp: new Date(midnight + 30_000).toISOString(), targetPath: target, contentSha: "b", wasMissing: false },
+    ];
+    await fs.writeFile(manifestPath, inputs.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
+
+    // Two days after the boundary, so both entries are past the 24h "keep
+    // everything" window and inside the 7d daily-collapse window — the only
+    // window where `dayKey` decides anything.
+    const result = await mod.prune(midnight + 2 * 24 * 60 * 60_000);
+    expect(result.removed).toBe(0);
+    expect(result.kept).toBe(2);
+    expect((await mod.list()).map((e) => e.id).sort()).toEqual(["after", "before"]);
+  });
+
   it("drops entries older than 30 days", async () => {
     const mod = await reloadModule();
     const target = path.join(tmpHome, "x.json");
     const manifestPath = path.join(tmpHome, ".minder", "config-history", "manifest.jsonl");
     await fs.mkdir(path.dirname(manifestPath), { recursive: true });
 
-    const now = Date.now();
+    // Anchored for the same reason as the case above. This one does not
+    // currently depend on a day boundary — `recent` lands in the `recent:`
+    // bucket (age <= 24h), which is keyed by entry id, not by `dayKey` — but
+    // it derives timestamps by offsetting a base instant in the same way, so
+    // shrinking that 30s margin would silently make it clock-dependent.
+    const now = ANCHOR;
     const oneDay = 24 * 60 * 60_000;
     const ancient = new Date(now - 60 * oneDay).toISOString();
     const recent = new Date(now - 1 * oneDay + 30_000).toISOString();
