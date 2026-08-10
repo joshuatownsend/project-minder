@@ -130,6 +130,9 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
 
   This ranking is what the **Relevance** sort orders by, and starting a search switches to it automatically. Picking any other sort (Recent, Longest, …) deliberately discards the ranking and orders by that field instead — so if you sort by Recent while searching, you get matches newest-first, not best-match-first. A sort you chose yourself is kept when you start searching; only the default Recent is swapped for Relevance.
 - **Sort** — by relevance (while searching), most recent, longest duration, most tokens, or best one-shot rate. **Relevance appears only when the FTS index is serving** — without it (`MINDER_USE_DB=0`, or a failed search request) matching falls back to plain substring filtering, which produces no ranking to sort by.
+- **Entrypoint** — narrows the list to sessions driven by one entrypoint: **Interactive** (`cli`, a person at a terminal), **SDK (CLI)** / **SDK (Python)** (a program), or **Unknown**. It appears only when the loaded sessions actually contain more than one, so a machine that has never run the SDK isn't offered a choice that can only return nothing.
+
+  Worth using rather than ignoring, because the two populations barely resemble each other. On the reference index an interactive session costs **$13.43** against an SDK-driven session's **$0.22** — roughly **61×** — and the imbalance runs the other way by volume: **69%** of sessions are SDK-driven but they account for **4%** of the spend. Any figure averaged over the unfiltered list is describing a mixture that no individual session looks like. The same split, with costs, is on the **Entrypoint** panel of the [Usage](/help/usage) page and each project's Costs tab.
 
 ### Semantic search (optional, off by default)
 

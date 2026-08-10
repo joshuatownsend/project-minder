@@ -40,6 +40,13 @@
  *     parent's entrypoint). Measured that way the split reads as 88% sdk-cli /
  *     4.5% cli — nearly the opposite of what the panel shows. **Quote figures
  *     from the index, never from a file probe.**
+ *
+ * Re-measured 2026-08-10 on a grown corpus (6,024 sessions): cli 1,448 at
+ * $13.43/session against sdk-cli 4,156 at $0.22 — the gap widened from 44x to
+ * **61x**, and the inversion sharpened to 69% of sessions producing 4% of the
+ * spend. The figures above are kept as the dated original rather than
+ * overwritten; what matters is that the direction has held across both
+ * measurements, not the exact multiple on any one day.
  */
 
 /**

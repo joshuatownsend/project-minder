@@ -1,5 +1,12 @@
 # Insights
 
+<!-- insight:58a5ca272ee8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T18:18:25.681Z -->
+## ★ Insight
+- The plan's claim holds and is **sharper** than stated: `cli` costs **$13.43**/session against `sdk-cli`'s **$0.22** — a 61× spread, not 44×. The blended $3.46 describes neither population.
+- The asymmetry is the real story: **69%** of sessions are SDK-driven (4,156 of 6,024) but they account for only **4%** of the spend. Any average over that mixture is a number no session resembles.
+
+---
+
 <!-- insight:00c606e3af6f | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T17:57:05.622Z -->
 ## ★ Insight
 - The measurement: **5 of 13 categories** now carry a rate, over 1,699 verified tasks. And the rates genuinely differ — `Refactoring` 92.1% vs `Debugging` 78.3% — a signal that was structurally invisible before.
