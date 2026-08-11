@@ -99,12 +99,17 @@ function sumNames(counts: Record<string, number> | undefined, names: readonly st
  * applies to a single stale child — one unrefreshed transcript makes the total
  * a lower bound, not a total.
  *
- * The residual gap is one-directional and stays: a subagent transcript that was
- * never indexed at all is invisible to this, so a returned total can still
- * under-count. It cannot over-count. That direction matters — the badge this
- * feeds says a session "may have been silently truncated", and under-warning
- * costs a missing badge while over-warning asserts something that did not
- * happen.
+ * Two residual gaps stay, and they are not symmetric. A subagent transcript
+ * that was never indexed at all is invisible here, so a returned total can
+ * under-count — the common case, and the safe direction, since the badge this
+ * feeds asserts a session "may have been silently truncated". Over-counting is
+ * possible but confined to one narrow shape: `sidechain_tool_counts` dedupes
+ * `tool_use_id`s within a single parse, so a re-logged tool block whose first
+ * emission fell in an earlier tail window is counted twice (83 re-logs in
+ * 37,394 blocks locally, times the chance one straddles a flush boundary).
+ * Persisting the ids to close that would cost more than the error it removes —
+ * but "cannot over-count" would be the wrong thing to claim, and a badge is
+ * only worth having if its stated limits are true.
  */
 export function rollUpTreeDelegation(
   rootSessionId: string,

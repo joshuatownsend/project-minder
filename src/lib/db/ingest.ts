@@ -1070,8 +1070,15 @@ async function readJsonlSession(
    * would be the same defect wearing a new name.
    *
    * Session-scoped rather than per-message: `tool_use_id` is unique within a
-   * session, so this is the stricter test, and a tail window never re-reads a
-   * line it already consumed.
+   * session, so this is the stricter test.
+   *
+   * It is scoped to one PARSE, though, which leaves a narrow hole: a tail
+   * window never re-reads a line it already consumed, but a *re-log* is a new
+   * line, so a block whose first emission fell in an earlier window is counted
+   * again and the additive upsert compounds it. 83 re-logs in 37,394 blocks
+   * locally, times the odds one straddles a flush boundary — small enough that
+   * persisting the ids would cost more than the error, and named here rather
+   * than left for someone to rediscover as a discrepancy.
    */
   const sidechainToolCounts = new Map<string, number>();
   const seenSidechainToolIds = new Set<string>();
