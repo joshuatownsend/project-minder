@@ -135,10 +135,17 @@ CREATE TABLE sessions (
   --   entrypoint: `cli` | `sdk-cli`.
   session_kind TEXT,
   ai_title     TEXT,
-  entrypoint   TEXT
+  entrypoint   TEXT,
+  -- Schema v25 / DERIVED_VERSION 20 (#395): for a subagent transcript
+  -- (`<project>/<parent-session-id>/subagents/agent-*.jsonl`), the session that
+  -- spawned it. NULL for ordinary top-level transcripts. The directory name is
+  -- the only linkage this data has — subagent files ingest as their own
+  -- sessions and `turns.parent_tool_use_id` is NULL on every indexed row.
+  parent_session_id TEXT
 );
 
 CREATE INDEX idx_sessions_source          ON sessions(source);
+CREATE INDEX idx_sessions_parent          ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
 CREATE INDEX sessions_by_project_end      ON sessions(project_slug, end_ts DESC);
 CREATE INDEX sessions_by_end_ts      ON sessions(end_ts DESC);
 CREATE INDEX sessions_by_mtime       ON sessions(file_mtime_ms DESC);
@@ -344,6 +351,29 @@ CREATE INDEX tool_uses_by_file    ON tool_uses(file_path) WHERE file_path IS NOT
 CREATE INDEX tool_uses_by_agent   ON tool_uses(agent_name) WHERE agent_name IS NOT NULL;
 CREATE INDEX tool_uses_by_skill   ON tool_uses(skill_name) WHERE skill_name IS NOT NULL;
 CREATE INDEX tool_uses_by_mcp     ON tool_uses(mcp_server) WHERE mcp_server IS NOT NULL;
+
+-- ─── sidechain_tool_counts ───────────────────────────────────────────────
+-- Schema v25 / DERIVED_VERSION 20 (#395). Tool calls made inside SUBAGENT
+-- (sidechain) turns, counted per session per tool name.
+--
+-- `tool_uses` holds primary turns only and always has — every query above
+-- reads it with no `is_sidechain` predicate, so subagent calls cannot go in
+-- there without moving /usage, /agents, /skills, /costs and the denial
+-- analytics all at once. This table is the separate fact: how much tool work
+-- happened *below* a session, available to the delegation roll-up without
+-- redefining anything already on screen.
+--
+-- Counts rather than rows because the per-call detail already exists in the
+-- subagent's own transcript, and names as-observed rather than resolved
+-- buckets so read-time keeps the interpretation.
+
+CREATE TABLE sidechain_tool_counts (
+  session_id TEXT NOT NULL,
+  tool_name  TEXT NOT NULL,
+  n          INTEGER NOT NULL,
+  PRIMARY KEY (session_id, tool_name),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
 
 -- ─── file_edits ──────────────────────────────────────────────────────────
 -- Denormalized "this turn produced a write/edit on this file" projection.

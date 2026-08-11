@@ -6,6 +6,7 @@ import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
 import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
+import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -101,6 +102,23 @@ import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 //    calls for a session that made 72 (#426). Direction is worth stating
 //    plainly: the residual is file-parse counting a rare duplicate, not
 //    the DB missing most of the data.
+// 10. `treeDelegation` (#395): **DB-only, and only once re-derived.** The
+//    tree roll-up needs `sessions.parent_session_id` and
+//    `sidechain_tool_counts`, which no file-parse pass produces —
+//    `claudeConversations.ts` walks top-level transcripts and never opens
+//    `<session>/subagents/*.jsonl`. So the file backend leaves the field
+//    undefined and the delegation badge does not render there.
+//
+//    That is a deliberate downgrade, not an oversight. The badge asserts a
+//    session "may have been silently truncated" by a cap; the only number
+//    file-parse can offer is the root-only count that #395 was filed about,
+//    which under-reports by the whole nested tree. A missing badge is the
+//    honest form of "not measured here" — the same rule `delegationLimits.ts`
+//    already applies to `concurrent` and `depth`.
+//
+//    The DB backend is subject to the same rule over time rather than over
+//    backends: until a session and every linked child reach
+//    `TREE_DELEGATION_MIN_DERIVED_VERSION`, the field stays undefined.
 
 interface SessionRow {
   session_id: string;
@@ -157,6 +175,8 @@ interface SessionRow {
   session_kind: string | null;
   ai_title: string | null;
   entrypoint: string | null;
+  /** Gates the #395 tree roll-up — see `rollUpTreeDelegation`. */
+  derived_version: number;
 }
 
 interface ToolCountRow {
@@ -220,7 +240,8 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             work_mode_exploration_pct, work_mode_building_pct,
             work_mode_testing_pct, work_mode_other_pct,
             source,
-            session_kind, ai_title, entrypoint
+            session_kind, ai_title, entrypoint,
+            derived_version
      FROM sessions
      -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
      -- transcripts ingested from <session>/subagents/*.jsonl — needed so
@@ -245,6 +266,42 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as ToolCountRow[],
     (r) => [r.session_id, r.tool_name, r.n]
   );
+
+  // #395: the two extra facts the delegation roll-up needs, over ALL sessions —
+  // not just the ones in `headers`. Subagent transcripts are excluded from the
+  // header query by `turn_count > 0` (they are not sessions the user ran), yet
+  // their tool calls are exactly what the roll-up is for. Querying them
+  // separately is the point, not an oversight.
+  const sidechainToolsBySession = groupCounts(
+    prepCached(
+      db,
+      `SELECT session_id, tool_name, n FROM sidechain_tool_counts`
+    ).all() as ToolCountRow[],
+    (r) => [r.session_id, r.tool_name, r.n]
+  );
+  const derivedVersionById = new Map<string, number>();
+  const childrenByParent = new Map<string, string[]>();
+  for (const r of prepCached(
+    db,
+    `SELECT session_id, parent_session_id, derived_version FROM sessions`
+  ).all() as Array<{
+    session_id: string;
+    parent_session_id: string | null;
+    derived_version: number;
+  }>) {
+    derivedVersionById.set(r.session_id, r.derived_version);
+    if (r.parent_session_id) {
+      const siblings = childrenByParent.get(r.parent_session_id);
+      if (siblings) siblings.push(r.session_id);
+      else childrenByParent.set(r.parent_session_id, [r.session_id]);
+    }
+  }
+  const delegationTreeSource: DelegationTreeSource = {
+    derivedVersion: derivedVersionById,
+    childrenByParent,
+    primaryTools: toolsBySession,
+    sidechainTools: sidechainToolsBySession,
+  };
 
   // A2: per-session effort histogram. `is_sidechain = 0` matches the
   // file-parse path, where a subagent's turns live in a separate transcript
@@ -392,6 +449,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       // tally is the same number from the same source, modulo
       // sidechain skipping (divergence #4).
       subagentCount: toolUsage["Agent"] ?? 0,
+      // #395: the same calls counted over the whole tree instead of the root
+      // turn set, or undefined when the index cannot yet see the tree.
+      treeDelegation: rollUpTreeDelegation(h.session_id, delegationTreeSource),
       errorCount: h.error_count,
       isActive,
       status,

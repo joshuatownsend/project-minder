@@ -822,6 +822,69 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 25,
+    name: "#395: subagent tool counts + parent-session linkage",
+    up: (db) => {
+      const hasCol = (table: string, col: string) =>
+        (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+          .some((c) => c.name === col);
+
+      // Tool calls made *inside* subagent turns, counted per session per tool.
+      //
+      // Deliberately NOT rows in `tool_uses`. Sidechain turns have never carried
+      // tool_uses rows, and ~20 queries across /usage, /agents, /skills, /costs
+      // and the denial analytics read that table with no `is_sidechain`
+      // predicate. Adding subagent rows there would move every one of those
+      // numbers at once — the "quietly widening the existing meaning" that #395
+      // explicitly rules out — and would leave twenty places that must each
+      // remember to exclude them, which is precisely the one-contract-two-
+      // implementations shape that produced #426.
+      //
+      // It survives a corpus this one does not have, too: on the local index no
+      // session mixes primary and sidechain turns (0 of 6,045), because modern
+      // Claude Code writes subagents to their own files. Older transcripts
+      // inline them (`claudeConversations.ts:820` — probed 0/214 in 2026-05, but
+      // that is a fact about this machine, not about the format). A separate
+      // table is correct on both shapes; writing into `tool_uses` is only safe
+      // on this one.
+      //
+      // Counts, not rows: the roll-up needs "how many", and the per-call detail
+      // for a subagent already exists in its own transcript. Storing names as
+      // they appear rather than a pre-resolved `spawns`/`web_searches` pair
+      // keeps the *interpretation* at read time — deciding later that WebFetch
+      // counts toward the search cap then costs a query edit, not another
+      // DERIVED_VERSION bump and a one-hour re-index.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sidechain_tool_counts (
+          session_id TEXT NOT NULL,
+          tool_name  TEXT NOT NULL,
+          n          INTEGER NOT NULL,
+          PRIMARY KEY (session_id, tool_name),
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+      `);
+
+      // The only linkage that exists between a subagent transcript and the
+      // session that spawned it — see `subagentTranscriptPath.ts`. Stamped at
+      // ingest rather than re-derived at each read site so the rule has one
+      // implementation.
+      if (!hasCol("sessions", "parent_session_id")) {
+        db.prepare("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT").run();
+      }
+      // Partial: NULL on every ordinary session (5,000-odd of 6,045 locally),
+      // and the non-NULL subset is exactly what the roll-up looks up.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_sessions_parent
+          ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
+      `);
+
+      // No backfill. Both values come from a parse this checkout has not run
+      // yet; the DERIVED_VERSION bump that ships with them is what re-derives
+      // them, and until a session reaches that version the roll-up reports
+      // itself unmeasured rather than summing a partial tree.
+    },
+  },
 ];
 
 /**

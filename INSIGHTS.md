@@ -1,5 +1,19 @@
 # Insights
 
+<!-- insight:c8e0fac5abfb | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T11:59:15.573Z -->
+## ★ Insight
+- **The version bump is doing real work here, not bookkeeping.** The roll-up will refuse to answer unless root *and* every linked child is stamped at 20. Without the bump, a v19 index carries the new columns as empty and `treeDelegation` silently equals the root-only count it replaced — the exact partial-count comparison #395 exists to prevent, now wearing the new field's name.
+- **`stale ⇒ unmeasured` is only expressible because the version moved.** This is the counter-lesson to the memory note "`DERIVED_VERSION` bumps are invisible to tests": usually the bump is the invisible part; here it's the enforcement mechanism.
+
+---
+
+<!-- insight:4213137d34f8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T11:44:52.852Z -->
+## ★ Insight
+- **A migration must be correct on corpora you don't have.** The "0 of 6,045 sessions mix primary and sidechain turns" measurement makes writing into `tool_uses` *look* safe — but that's a property of this machine's transcripts, not of the format. Legacy Claude Code inlined subagent entries into the parent file; on such a corpus the same write silently changes root sessions' `subagentCount`.
+- **Store facts, defer interpretation.** `(session_id, tool_name, n)` rather than `spawns`/`web_searches` columns means "does WebFetch count toward the search cap?" stays a read-time question. Getting that wrong later costs a query edit instead of a `DERIVED_VERSION` bump and an hour-long re-index.
+
+---
+
 <!-- insight:58a5ca272ee8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-10T18:18:25.681Z -->
 ## ★ Insight
 - The plan's claim holds and is **sharper** than stated: `cli` costs **$13.43**/session against `sdk-cli`'s **$0.22** — a 61× spread, not 44×. The blended $3.46 describes neither population.

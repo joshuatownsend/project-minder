@@ -37,7 +37,7 @@ import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLi
 
 /** Shared by the tooltip and the screen-reader text so the two cannot drift. */
 const DELEGATION_BADGE_EXPLANATION = (label: string) =>
-  `${label}. Claude Code caps subagent spawns and web searches per session; a session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
+  `${label}. Counted across this session and every subagent it spawned, since Claude Code's caps apply to the whole session. A session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
 import { entrypointBucket, entrypointLabel, compareEntrypoint } from "@/lib/usage/entrypoint";
 
@@ -339,10 +339,21 @@ function SessionRow({
   // Code's caps on a harness where they do not exist. `cliVersion` gates the
   // rest: a session recorded before its cap shipped was never constrained by
   // it (Codex review, #388).
+  //
+  // #395: the counts come from `treeDelegation`, NOT from `subagentCount` /
+  // `toolUsage["WebSearch"]`. Those two describe the root turn set; Claude
+  // Code's caps are per session, and a subagent that spawns its own agents or
+  // runs its own searches spends the same budget. Feeding the root-only numbers
+  // in left the badge silent in exactly the runaway case it exists to catch.
+  //
+  // Undefined here means unmeasured — an index not yet re-derived, or the
+  // file-parse backend, which cannot see subagent transcripts at all. Passing
+  // `undefined` suppresses the comparison; substituting the root-only count
+  // would reinstate the bug behind a field that claims to be a tree total.
   const isClaudeSession = (session.source ?? "claude") === "claude";
   const delegationAssessment = assessDelegation({
-    spawns: isClaudeSession ? session.subagentCount : undefined,
-    webSearches: isClaudeSession ? (session.toolUsage["WebSearch"] ?? 0) : undefined,
+    spawns: isClaudeSession ? session.treeDelegation?.spawns : undefined,
+    webSearches: isClaudeSession ? session.treeDelegation?.webSearches : undefined,
     cliVersion: isClaudeSession ? session.cliVersion : undefined,
   });
   const delegationLabel = delegationBadgeLabel(delegationAssessment);

@@ -433,6 +433,26 @@ A session at or near a cap gets a warning chip on its row. Sessions comfortably
 inside the limits get nothing — a badge on every session that used a handful of
 subagents is noise, and noise is how a real one gets missed.
 
+**Counts cover the whole session tree.** A subagent that spawns its own agents
+or runs its own searches spends the same per-session budget, so the chip counts
+the root session plus every subagent transcript below it. Before #395 it counted
+only the root's own calls, which meant the chip was silent in precisely the
+runaway-delegation case it exists to warn about — locally, three quarters of all
+web searches were being made inside subagents and none of them were counted.
+
+This is deliberately *not* what the **Subagents** count or the tool tables on
+**Usage** show; those still mean "calls this session made itself", which is what
+per-session cost and tool reporting is built on.
+
+**The chip needs a re-derived index.** The tree can only be reconstructed from
+data written by a current version of the indexer, so until your history
+re-indexes — and until every subagent transcript belonging to a session has been
+re-indexed too — the cap is reported as unmeasured and no chip appears. A
+partial count is worse than no count here: it would understate by exactly the
+nested work the chip exists to surface. For the same reason the chip does not
+appear at all with `MINDER_USE_DB=0`, which reads transcripts directly and never
+opens the `subagents/` directory.
+
 The chip says a cap was **reached**, never that anything was *blocked*. Two of
 the caps are configurable (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,
 `--max-budget-usd`), so Minder can see the count but not the ceiling actually in
@@ -444,6 +464,9 @@ fetches and no searches as nearing a cap it is nowhere near.
 
 **Concurrency and depth are not measured.** Concurrency is an instantaneous
 property a finished transcript cannot recover. Depth needs parent-to-child
-linkage between spawns, which the index does not currently populate. They are
-reported as unmeasured rather than as zero — showing `0` would render a session
-nested five deep as comfortably inside a cap of three.
+linkage between individual spawns, which the transcripts do not carry — the
+session-to-session linkage added in #395 is enough to find every transcript
+below a session, but not to tell which of them spawned which, because Claude
+Code files them all flat under the root session's directory. They are reported
+as unmeasured rather than as zero — showing `0` would render a session nested
+five deep as comfortably inside a cap of three.
