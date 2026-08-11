@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rollUpTreeDelegation,
+  delegationUsageForSession,
   TREE_DELEGATION_MIN_DERIVED_VERSION as MIN_V,
   type DelegationTreeSource,
 } from "@/lib/usage/delegationTree";
@@ -137,5 +138,49 @@ describe("rollUpTreeDelegation", () => {
       })
     );
     expect(got).toEqual({ spawns: 0, webSearches: 0, sessionCount: 1 });
+  });
+});
+
+describe("delegationUsageForSession", () => {
+  const TREE = { spawns: 190, webSearches: 12, sessionCount: 4 };
+
+  it("feeds the cap comparison the TREE totals, not the root-only counts", () => {
+    // The regression this exists to catch: `spawns: session.subagentCount`
+    // looks right, type-checks, renders, and silently restores the root-only
+    // comparison #395 removed. The call site is an untested component, so
+    // without this assertion nothing would fail.
+    expect(
+      delegationUsageForSession({
+        cliVersion: "2.1.220",
+        treeDelegation: TREE,
+        // Deliberately present and deliberately different: a reversion to
+        // either of these fields produces the wrong number here.
+        ...({ subagentCount: 3, toolUsage: { WebSearch: 1 } } as object),
+      })
+    ).toEqual({ spawns: 190, webSearches: 12, cliVersion: "2.1.220" });
+  });
+
+  it("passes undefined counts through when the tree is unmeasured", () => {
+    // Not zero, and not a fallback — `assessDelegation` reports the caps as
+    // unmeasured, which is the whole contract.
+    expect(delegationUsageForSession({ cliVersion: "2.1.220" })).toEqual({
+      spawns: undefined,
+      webSearches: undefined,
+      cliVersion: "2.1.220",
+    });
+  });
+
+  it("suppresses everything for a non-Claude session", () => {
+    // Codex and Gemini sessions run under no such caps; a tool named `Agent`
+    // in their transcripts must not produce a Claude Code cap warning.
+    expect(
+      delegationUsageForSession({ source: "codex", cliVersion: "2.1.220", treeDelegation: TREE })
+    ).toEqual({});
+  });
+
+  it("treats a missing source as Claude", () => {
+    expect(
+      delegationUsageForSession({ cliVersion: "2.1.220", treeDelegation: TREE }).spawns
+    ).toBe(190);
   });
 });

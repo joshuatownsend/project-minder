@@ -34,6 +34,7 @@ import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 import { EffortMixChip } from "@/components/EffortMixChip";
 import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLimits";
+import { delegationUsageForSession } from "@/lib/usage/delegationTree";
 
 /** Shared by the tooltip and the screen-reader text so the two cannot drift. */
 const DELEGATION_BADGE_EXPLANATION = (label: string) =>
@@ -327,35 +328,13 @@ function SessionRow({
     [prefetch, session.sessionId],
   );
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
-  // C2: the documented cap is 200 web SEARCHES. `WebFetch` is a different tool
-  // with no documented quota, and folding it in meant a session with 160
-  // fetches and no searches was labelled as nearing the search cap — and 200
-  // fetches falsely reported the cap reached (Codex + Copilot review of #388).
-  // Counting only what the cap actually counts.
-  //
-  // Claude sessions only. The DB loader is source-agnostic, so a Codex or
-  // Gemini session with a tool named `Agent` or `WebSearch` derives the same
-  // `subagentCount`/`toolUsage` fields — and would get a warning about Claude
-  // Code's caps on a harness where they do not exist. `cliVersion` gates the
-  // rest: a session recorded before its cap shipped was never constrained by
-  // it (Codex review, #388).
-  //
-  // #395: the counts come from `treeDelegation`, NOT from `subagentCount` /
-  // `toolUsage["WebSearch"]`. Those two describe the root turn set; Claude
-  // Code's caps are per session, and a subagent that spawns its own agents or
-  // runs its own searches spends the same budget. Feeding the root-only numbers
-  // in left the badge silent in exactly the runaway case it exists to catch.
-  //
-  // Undefined here means unmeasured — an index not yet re-derived, or the
-  // file-parse backend, which cannot see subagent transcripts at all. Passing
-  // `undefined` suppresses the comparison; substituting the root-only count
-  // would reinstate the bug behind a field that claims to be a tree total.
-  const isClaudeSession = (session.source ?? "claude") === "claude";
-  const delegationAssessment = assessDelegation({
-    spawns: isClaudeSession ? session.treeDelegation?.spawns : undefined,
-    webSearches: isClaudeSession ? session.treeDelegation?.webSearches : undefined,
-    cliVersion: isClaudeSession ? session.cliVersion : undefined,
-  });
+  // Which counts feed the cap comparison — and which sessions get compared at
+  // all — is decided in `delegationUsageForSession`, where it can be tested.
+  // The short version: tree totals (#395), never the root-only
+  // `subagentCount` / `toolUsage["WebSearch"]`; Claude sessions only; and
+  // `undefined` means unmeasured, which suppresses the badge rather than
+  // falling back to a partial count.
+  const delegationAssessment = assessDelegation(delegationUsageForSession(session));
   const delegationLabel = delegationBadgeLabel(delegationAssessment);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))

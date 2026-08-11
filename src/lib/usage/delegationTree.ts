@@ -110,11 +110,11 @@ export function rollUpTreeDelegation(
   rootSessionId: string,
   src: DelegationTreeSource
 ): TreeDelegationCounts | undefined {
-  const rootVersion = src.derivedVersion.get(rootSessionId);
-  if (rootVersion === undefined || rootVersion < TREE_DELEGATION_MIN_DERIVED_VERSION) {
-    return undefined;
-  }
-
+  // The root is the first element, so the loop's version check covers it too —
+  // there is deliberately no separate pre-check for it. An earlier draft had
+  // one; mutation testing showed it could be deleted with every test still
+  // green, which is the signature of a second implementation of a rule that
+  // already had one.
   const ids = [rootSessionId, ...(src.childrenByParent.get(rootSessionId) ?? [])];
 
   let spawns = 0;
@@ -132,4 +132,31 @@ export function rollUpTreeDelegation(
   }
 
   return { spawns, webSearches, sessionCount: ids.length };
+}
+
+/**
+ * The inputs `assessDelegation` should be given for one session row.
+ *
+ * A function rather than three expressions inlined at the call site, because
+ * the call site is a `.tsx` component with no test around it — and the single
+ * most damaging regression available here is silently reverting `spawns` to
+ * `session.subagentCount`, which would restore the root-only comparison #395
+ * exists to remove while every test still passed. Pulling the choice into a
+ * pure function makes that reversion fail something.
+ *
+ * Non-Claude sessions get nothing: the DB loader is source-agnostic, so a Codex
+ * or Gemini session with a tool named `Agent` derives the same fields and would
+ * otherwise be warned about Claude Code's caps on a harness that has none.
+ */
+export function delegationUsageForSession(session: {
+  source?: string;
+  cliVersion?: string;
+  treeDelegation?: TreeDelegationCounts;
+}): { spawns?: number; webSearches?: number; cliVersion?: string } {
+  if ((session.source ?? "claude") !== "claude") return {};
+  return {
+    spawns: session.treeDelegation?.spawns,
+    webSearches: session.treeDelegation?.webSearches,
+    cliVersion: session.cliVersion,
+  };
 }
