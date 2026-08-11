@@ -1,5 +1,12 @@
 # Insights
 
+<!-- insight:c6c25d96ced8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T12:30:24.423Z -->
+## ★ Insight
+- **13 mutations, 12 killed — and the one survivor was the most useful result.** `rootVersion < MIN` before the loop looked like the primary gate, but `ids[0]` is the root, so the loop already checked it. A test asserting "stale root → undefined" passes either way. The fix was deleting the pre-check, not writing a test for it.
+- That's the same defect shape as #426 and every finding in its review rounds: **one contract with two implementations allowed to disagree.** Here they happened to agree — which is why only a mutation could find it.
+
+---
+
 <!-- insight:c8e0fac5abfb | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T11:59:15.573Z -->
 ## ★ Insight
 - **The version bump is doing real work here, not bookkeeping.** The roll-up will refuse to answer unless root *and* every linked child is stamped at 20. Without the bump, a v19 index carries the new columns as empty and `treeDelegation` silently equals the root-only count it replaced — the exact partial-count comparison #395 exists to prevent, now wearing the new field's name.
