@@ -279,4 +279,83 @@ describe.skipIf(!driverAvailable)("#426 multi-line assistant messages", () => {
     // …but it does not become an unresolved call on a session that ended.
     expect(session.status).toBe("inactive");
   });
+
+  /**
+   * Subagent transcripts split their messages the same way.
+   *
+   * Sidechain rows carry no `tool_uses` by design, so the only thing that can
+   * be lost here is prose — but that prose is the FTS body for delegated work,
+   * which the sessions help page advertises as searchable. Covered separately
+   * because the sidechain collector is a second implementation of the same
+   * contract: without a test, deleting its merge leaves the suite green, and
+   * two paths with one contract and asymmetric guards is the defect shape this
+   * whole change exists to remove.
+   */
+  it("merges continuation blocks in subagent transcripts too", async () => {
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const file = path.join(projectsDir, "C--dev-myapp", "cafe06.jsonl");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const sidechainLine = (block: unknown) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-01T10:00:01Z",
+        isSidechain: true,
+        message: {
+          id: "sub_1",
+          model: "claude-sonnet-4-5",
+          content: [block],
+          usage: USAGE,
+        },
+      });
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:00Z",
+          message: { content: [{ type: "text", text: "delegate it" }] },
+        }),
+        sidechainLine(textBlock("subagent prose about the parser rewrite plan")),
+        // A distinct second block, and then an exact re-log of the first.
+        sidechainLine(thinkingBlock("subagent weighed a rewrite")),
+        sidechainLine(textBlock("subagent prose about the parser rewrite plan")),
+        // A genuinely new block whose body is a strict SUBSTRING of the first.
+        // Deduping on "is this text already in there somewhere" would discard
+        // it; only exact block identity keeps it.
+        sidechainLine(thinkingBlock("rewrite plan")),
+      ].join("\n") + "\n"
+    );
+
+    const db = (await conn.getDb())!;
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const rows = db
+      .prepare("SELECT COUNT(*) AS n FROM turns WHERE session_id = 'cafe06' AND is_sidechain = 1")
+      .get() as { n: number };
+    // One message, one row — tokens counted once, as on the primary path.
+    expect(rows.n).toBe(1);
+
+    // Read the indexed body rather than asking whether a term matches: a
+    // presence check passes whether the re-logged block was deduped or
+    // appended twice, so it cannot discriminate the guard it exists to cover.
+    const indexed = (
+      db.prepare("SELECT text FROM prompts_fts WHERE session_id = 'cafe06'").all() as Array<{
+        text: string;
+      }>
+    )
+      .map((r) => r.text)
+      .join("\n");
+
+    // The block that arrived on a continuation line is searchable at all…
+    expect(indexed).toContain("subagent weighed a rewrite");
+    // …the block that was re-logged appears exactly once…
+    expect(indexed.split("subagent prose about the parser rewrite plan").length - 1).toBe(1);
+    // …and the substring block survives on its own. Twice: once inside the
+    // longer first block, once as itself. A substring-based dedupe would
+    // report 1 here, silently losing a subagent's reasoning because an
+    // earlier sentence happened to contain the same words.
+    expect(indexed.split("rewrite plan").length - 1).toBe(2);
+  });
 });

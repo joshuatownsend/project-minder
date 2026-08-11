@@ -327,6 +327,14 @@ export const DERIVED_VERSION = 19;
 //     user's existing index holds the old, short counts, and nothing about
 //     them looks broken from the read side.
 //
+//     **Cost.** A genuine full re-parse, and unlike v18 it changes a large
+//     share of rows rather than none. The last measured full pass was v14 at
+//     45.3 minutes over 4,894 files; this corpus is larger (6,036 sessions),
+//     so budget an hour. Verified against the transcript that exposed the bug
+//     — re-ingested in isolation it stored 2,694 `tool_uses` against 2,694
+//     distinct `tool_use_id`s in the file, `Agent` 6 -> 72, and 2,350
+//     assistant turns, matching the raw counts exactly.
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because
 // this is the file the next person changing these rules will open.

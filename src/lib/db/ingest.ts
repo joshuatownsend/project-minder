@@ -950,8 +950,14 @@ async function readJsonlSession(
   // `turns` rows AFTER the primary detectors run (so status/one-shot/quality
   // stay primary-only) but BEFORE the write + rollup-tuple derivation (so their
   // tokens/cost fold into daily_costs/category_costs and the usage totals).
-  /** `message.id` → index in `sidechainCollected`, the sidechain counterpart of {@link openMessages}. */
-  const sidechainByMessageId = new Map<string, number>();
+  /**
+   * `message.id` → the sidechain row it is building, the counterpart of
+   * {@link openMessages}. `keys` holds the exact block bodies already folded in
+   * — the same identity test the primary path uses, deliberately not a
+   * substring check, which would drop a short thinking block that happened to
+   * appear inside earlier prose.
+   */
+  const sidechainByMessageId = new Map<string, { pos: number; keys: Set<string> }>();
   const sidechainCollected: Array<{
     ts: string;
     model: string;
@@ -1080,18 +1086,23 @@ async function readJsonlSession(
             // instead of being dropped. Sidechain rows carry no `tool_uses`
             // (by design — see the A1 note above), so only `searchText` can
             // grow here; tokens stay first-line-only exactly as before.
-            const pos = sidechainByMessageId.get(messageId);
+            const open = sidechainByMessageId.get(messageId);
             const more = extractProseAndThinking(entry.message?.content);
-            if (pos !== undefined && more) {
-              const row = sidechainCollected[pos];
-              if (row && !(row.searchText ?? "").includes(more)) {
+            if (open && more && !open.keys.has(more)) {
+              open.keys.add(more);
+              const row = sidechainCollected[open.pos];
+              if (row) {
                 row.searchText = row.searchText ? `${row.searchText}\n${more}` : more;
               }
             }
           } else {
             if (messageId) {
               seenMessageIds.add(messageId);
-              sidechainByMessageId.set(messageId, sidechainCollected.length);
+              const first = extractProseAndThinking(entry.message?.content);
+              sidechainByMessageId.set(messageId, {
+                pos: sidechainCollected.length,
+                keys: new Set(first ? [first] : []),
+              });
             }
             const usage = entry.message?.usage ?? {};
             sidechainCollected.push({
