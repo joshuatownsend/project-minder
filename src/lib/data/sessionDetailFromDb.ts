@@ -87,6 +87,13 @@ import type {
 //    Read/Write/Edit/Glob/Grep + Bash. MultiEdit/NotebookEdit (which
 //    are persisted to `file_edits` for hot-file analytics) are
 //    deliberately filtered out here so DB and file-parse agree.
+// 9. **Re-logged tool blocks**: ingest unions a message's blocks across
+//    the JSONL lines that share its `message.id` and dedupes them on
+//    `tool_use_id`; file-parse has no dedupe and counts a re-log twice.
+//    File-parse therefore over-counts by ~0.4% (22 blocks in 5,591 on
+//    the reference corpus). Until #426 this ran the other way and by
+//    12x — ingest dropped every block on a repeat-id line, so a session
+//    with 72 `Agent` calls stored 6.
 //
 // SessionSummary fields derived from indexed non-sidechain rows match
 // the file-parse path within the bounds of (3) and (7) above. The

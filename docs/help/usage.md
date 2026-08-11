@@ -216,6 +216,16 @@ to it.
 The gap is not a naming artifact. Restricting the comparison to the 13 servers
 that appear under both signals still gives **10.6x**.
 
+*The ratios above were measured before the tool-call indexing fix in #426, and
+the call-site column is the side that was short: the index was storing only the
+tool calls that arrived on the first line of an assistant message, which on the
+reference corpus was roughly a quarter of them. **Expect these multiples to
+shrink once your history re-indexes.** The direction of the finding does not
+depend on the exact figure — attribution counts the expensive turn a tool call
+causes, call sites count the cheap turn that issues it, and no correction to the
+denominator changes which of those is larger. The numbers here are left as
+measured, dated, rather than quietly adjusted to a value nobody has run.*
+
 ### "estimated" badge
 
 Sessions recorded before Claude Code began emitting attribution have no

@@ -554,6 +554,29 @@ interface ReadResult {
   hasOrphanToolResults: boolean;
 }
 
+/**
+ * A `tool_use` block's name, or `"unknown"` when it has none.
+ *
+ * `ToolCall.name` and `tool_uses.tool_name` describe the same block, so they
+ * have to agree on the malformed case. They did not: the stored row fell back
+ * to `"unknown"` while the in-memory `ToolCall` was built by an `any` cast that
+ * let `undefined` through a field typed `string` — and that field is what
+ * `classifyTurn` matches tool names against, so the two representations of one
+ * block disagreed exactly where a name was missing. Shared here so the fallback
+ * cannot drift between them again. (Copilot, PR #427.)
+ */
+function normalizeToolName(name: unknown): string {
+  return typeof name === "string" ? name : "unknown";
+}
+
+/** Build the classifier-facing `ToolCall` view of a raw `tool_use` block. */
+function toToolCall(b: { name?: unknown; input?: unknown }): ToolCall {
+  return {
+    name: normalizeToolName(b.name),
+    arguments: b.input as Record<string, unknown> | undefined,
+  };
+}
+
 async function readJsonlSession(
   filePath: string,
   projectDirName: string,
@@ -760,10 +783,227 @@ async function readJsonlSession(
   // be inserted twice. Full-file parses dedup correctly. A proper fix needs a
   // `turns.message_id` column (a schema migration) to seed this set — deferred.
   const seenMessageIds = new Set<string>();
+  /**
+   * Open assistant messages, keyed by `message.id`, so a later line carrying
+   * more of the SAME message merges into the turn already pushed for it.
+   *
+   * Claude Code writes **one JSONL line per content block**. A message that
+   * thought twice and then called two tools is four lines sharing one
+   * `message.id`, each repeating the message-level `usage` verbatim. Deduping
+   * by that id is right for tokens and was wrong for everything else: the old
+   * code `continue`d on the repeat and dropped the block the line carried.
+   *
+   * Measured on one 47 MB transcript before the fix: 2,716 `tool_use` blocks in
+   * the file, 720 rows stored — exactly the count sitting on a first-seen id.
+   * `Agent` went 72 → 6, which is why the delegation badge (#395) never fired.
+   * Corpus-wide, 5,652 of 6,036 sessions had no `tool_uses` rows at all.
+   *
+   * The blocks are distinct content, not re-logs: 5,591 distinct against 22
+   * exact duplicates across 15 messages. Those 22 are the genuine re-log this
+   * guard was written for, and they repeat their `tool_use_id` — so dedupe
+   * moves to block level (`toolUseIds` / `blockKeys`) and keeps catching them
+   * while the union recovers the rest.
+   */
+  interface OpenMessage {
+    /** Index into `turns` of the row this message's blocks belong to. */
+    turnPos: number;
+    /** Every text block so far, joined — re-truncated into the turn on merge. */
+    text: string;
+    /** Every thinking block so far, joined. Feeds `searchText` only. */
+    thinking: string;
+    /** `tool_use_id`s already stored for this message. */
+    toolUseIds: Set<string>;
+    /** Text/thinking bodies already stored, to drop an exact re-log. */
+    blockKeys: Set<string>;
+    /**
+     * The slash-command window in force when this message STARTED.
+     *
+     * Latched rather than read live at merge time. A continuation can arrive
+     * after later user turns — the whole reason this map is keyed on
+     * `message.id` — and `prevUserTimestamp` would by then name a different
+     * prompt, so a `Skill` call split onto a continuation line would be filed
+     * as `auto`, or worse, attributed to an unrelated later slash command.
+     * (Codex + Copilot, PR #427.)
+     */
+    slashCmds: Set<string> | undefined;
+    /**
+     * Whether this message already claimed the pending slash-command window.
+     * Per MESSAGE rather than per line: one message is one turn, and a
+     * tool split across two lines must not consume the window twice.
+     */
+    slashConsumed: boolean;
+  }
+  const openMessages = new Map<string, OpenMessage>();
+
+  /**
+   * Convert `tool_use` blocks into storable rows.
+   *
+   * Shared by the first line of a message and every continuation line, so the
+   * two cannot drift — the continuation path is not a reduced copy that forgets
+   * to resolve errors or denials. `startIndex` continues `sequenceInTurn` from
+   * what the turn already holds, keeping the column a dense 0..n-1 per turn
+   * rather than restarting at 0 on each line.
+   *
+   * `msg` carries the slash-command window across a message's lines; a message
+   * with no id (unmergeable) passes undefined and gets a per-call window.
+   */
+  function buildToolUses(
+    blocks: Array<{ id?: string; name?: string; input?: unknown }>,
+    startIndex: number,
+    msg: OpenMessage | undefined
+  ): ParsedToolUse[] {
+    // An open message carries the window it started under; only a message with
+    // no id (unmergeable, so always its own single line) reads the live cursor.
+    const slashCmds = msg
+      ? msg.slashCmds
+      : prevUserTimestamp
+        ? slashCommandsByTimestamp.get(prevUserTimestamp)
+        : undefined;
+    const window = msg ?? { slashConsumed: false };
+    return blocks.map((b, idx): ParsedToolUse => {
+      const args = (b.input ?? {}) as Record<string, unknown>;
+      const toolName = normalizeToolName(b.name);
+      const mcp = parseMcpTool(toolName);
+      const { filePath: fp, fileOp } = extractFileOp(toolName, args);
+      let argsJson: string | null = null;
+      try {
+        argsJson = truncateText(JSON.stringify(args), ARGS_JSON_LIMIT);
+      } catch {
+        argsJson = null;
+      }
+      const toolUseId = typeof b.id === "string" ? b.id : null;
+      const errEntry = toolUseId ? errorByToolUseId.get(toolUseId) : undefined;
+      const isError: 0 | 1 = errEntry?.isError ? 1 : 0;
+      const errorCategory: string | null =
+        isError && errEntry?.content ? categorizeToolError(errEntry.content) : null;
+      const skillName = extractSkillName(toolName, args);
+      const isSlashMatch =
+        !window.slashConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
+      if (isSlashMatch) window.slashConsumed = true;
+      const invocationSource: string = isSlashMatch ? "slash_command" : "auto";
+      return {
+        sequenceInTurn: startIndex + idx,
+        toolUseId,
+        toolName,
+        mcpServer: mcp?.server ?? null,
+        mcpTool: mcp?.tool ?? null,
+        agentName: extractAgentName(toolName, args),
+        skillName,
+        argumentsJson: argsJson,
+        filePath: fp,
+        fileOp,
+        isError,
+        errorCategory,
+        invocationSource,
+        denialKind: toolUseId ? denialByToolUseId.get(toolUseId) ?? null : null,
+      };
+    });
+  }
+
+  /**
+   * Fold a continuation line's blocks into the turn its message already owns.
+   *
+   * Keyed on `message.id`, never on "the previous turn": continuation lines are
+   * usually adjacent but not reliably so — across four large transcripts, 6 to
+   * 87 continuations per session were separated from their first line, one by
+   * 3,639 lines. Nothing here touches tokens, `assistantTurnCount`, or
+   * `modelCounts`; the first line already accounted for the whole message.
+   */
+  function mergeContinuation(messageId: string, content: unknown, lineOffset: number): void {
+    const open = openMessages.get(messageId);
+    // Straddle: the message's first line landed in an earlier tail chunk, so
+    // there is no turn in THIS parse to merge into. Dropping the block matches
+    // the previous behaviour rather than inventing a turn whose tokens would
+    // double-count — same limitation already documented on `seenMessageIds`.
+    if (!open || !Array.isArray(content)) return;
+    const turn = turns[open.turnPos];
+    if (!turn) return;
+
+    const newTools: Array<{ id?: string; name?: string; input?: unknown }> = [];
+    let textChanged = false;
+    for (const b of content as any[]) {
+      if (b?.type === "text" && typeof b.text === "string" && b.text) {
+        const key = `t:${b.text}`;
+        if (open.blockKeys.has(key)) continue;
+        open.blockKeys.add(key);
+        open.text = open.text ? `${open.text}\n${b.text}` : b.text;
+        textChanged = true;
+      } else if (b?.type === "thinking") {
+        // `text_offset` is the ONLY way the timeline retrieves thinking bodies
+        // (`readThinkingFromJsonl` reads exactly the one line it points at), and
+        // it was set to the message's FIRST line. A message that opened with
+        // text and thought on a later line would therefore advertise a thinking
+        // event whose content resolves to "unavailable". Point the offset at the
+        // first line that actually carries thinking. Only the first: one column
+        // holds one offset, so a message that thought several times is still
+        // retrievable for its first block only — the same single-block limit
+        // that predates this merge, not a new one. (Codex, PR #427.)
+        if (!turn.hasThinking) turn.textOffset = lineOffset;
+        turn.hasThinking = 1;
+        hasThinkingSession = true;
+        if (typeof b.thinking === "string" && b.thinking) {
+          const key = `k:${b.thinking}`;
+          if (open.blockKeys.has(key)) continue;
+          open.blockKeys.add(key);
+          open.thinking = open.thinking ? `${open.thinking}\n${b.thinking}` : b.thinking;
+          textChanged = true;
+        }
+      } else if (b?.type === "tool_use") {
+        const id = typeof b.id === "string" ? b.id : null;
+        // The 22 measured exact duplicates repeat their `tool_use_id`. This is
+        // where the A6 guard's real job survives the union.
+        if (id) {
+          if (open.toolUseIds.has(id)) continue;
+          open.toolUseIds.add(id);
+        }
+        newTools.push(b);
+      }
+    }
+
+    if (textChanged) {
+      // Re-derive rather than append: `textPreview` is a truncation of the
+      // whole prose and `searchText` interleaves thinking after it, so neither
+      // can be extended by concatenation once a cap has been applied.
+      turn.textPreview = truncateText(open.text, TEXT_PREVIEW_LIMIT) || null;
+      turn.searchText =
+        (open.thinking
+          ? open.text
+            ? `${open.text}\n${open.thinking}`
+            : open.thinking
+          : open.text) || null;
+      turn.usageTurn.assistantText = open.text
+        ? open.text.slice(0, USAGE_USER_TEXT_LIMIT)
+        : undefined;
+    }
+
+    if (newTools.length > 0) {
+      const built = buildToolUses(newTools, turn.toolUses.length, open);
+      turn.toolUses.push(...built);
+      turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
+      toolCallCount += built.length;
+      // Pending tool_use ids belong to the CURRENT last assistant turn only.
+      // A continuation arriving after later turns (the 3,639-line gap above)
+      // must not resurrect an older turn's pendings, which would flip a
+      // finished session to 'waiting'.
+      if (open.turnPos === lastAssistantTurnIdx) {
+        for (const b of newTools) {
+          if (typeof b.id === "string") lastAssistantPendingIds.add(b.id);
+        }
+      }
+    }
+  }
   // A1: subagent (sidechain) assistant turns collected here, then appended as
   // `turns` rows AFTER the primary detectors run (so status/one-shot/quality
   // stay primary-only) but BEFORE the write + rollup-tuple derivation (so their
   // tokens/cost fold into daily_costs/category_costs and the usage totals).
+  /**
+   * `message.id` → the sidechain row it is building, the counterpart of
+   * {@link openMessages}. `keys` holds the exact block bodies already folded in
+   * — the same identity test the primary path uses, deliberately not a
+   * substring check, which would drop a short thinking block that happened to
+   * appear inside earlier prose.
+   */
+  const sidechainByMessageId = new Map<string, { pos: number; keys: Set<string> }>();
   const sidechainCollected: Array<{
     ts: string;
     model: string;
@@ -886,8 +1126,30 @@ async function readJsonlSession(
           const messageId =
             (entry.message as { id?: string } | undefined)?.id ??
             (entry as { requestId?: string }).requestId;
-          if (!messageId || !seenMessageIds.has(messageId)) {
-            if (messageId) seenMessageIds.add(messageId);
+          if (messageId && seenMessageIds.has(messageId)) {
+            // Same continuation rule as the primary path: a repeat id is more
+            // of this message, so its prose joins the row already collected
+            // instead of being dropped. Sidechain rows carry no `tool_uses`
+            // (by design — see the A1 note above), so only `searchText` can
+            // grow here; tokens stay first-line-only exactly as before.
+            const open = sidechainByMessageId.get(messageId);
+            const more = extractProseAndThinking(entry.message?.content);
+            if (open && more && !open.keys.has(more)) {
+              open.keys.add(more);
+              const row = sidechainCollected[open.pos];
+              if (row) {
+                row.searchText = row.searchText ? `${row.searchText}\n${more}` : more;
+              }
+            }
+          } else {
+            if (messageId) {
+              seenMessageIds.add(messageId);
+              const first = extractProseAndThinking(entry.message?.content);
+              sidechainByMessageId.set(messageId, {
+                pos: sidechainCollected.length,
+                keys: new Set(first ? [first] : []),
+              });
+            }
             const usage = entry.message?.usage ?? {};
             sidechainCollected.push({
               ts: entry.timestamp,
@@ -932,14 +1194,20 @@ async function readJsonlSession(
       }
       const model = entry.message?.model;
       if (!model || model === "<synthetic>") continue;
-      // A6: skip a re-logged assistant message (same message.id / requestId).
+      // A6: a repeat `message.id` is the same message CONTINUING, not a
+      // re-logged one — Claude Code emits one line per content block. Tokens
+      // stay first-line-only (every line repeats them verbatim, measured
+      // 3,248 identical / 0 differing), while the block this line carries
+      // merges into the turn already pushed for the message. See
+      // `openMessages` for what the old unconditional `continue` cost.
       const messageId =
         (entry.message as { id?: string } | undefined)?.id ??
         (entry as { requestId?: string }).requestId;
-      if (messageId) {
-        if (seenMessageIds.has(messageId)) continue;
-        seenMessageIds.add(messageId);
+      if (messageId && seenMessageIds.has(messageId)) {
+        mergeContinuation(messageId, entry.message?.content, fromOffset + thisLineOffset);
+        continue;
       }
+      if (messageId) seenMessageIds.add(messageId);
       modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);
 
       const usage = entry.message?.usage ?? {};
@@ -966,9 +1234,15 @@ async function readJsonlSession(
       let thinkingText = "";
       let hasTurnThinking = false;
       const toolBlocks: Array<{ id?: string; name?: string; input?: unknown }> = [];
+      // Per-block identity for this message, so a later line that repeats a
+      // block verbatim (a genuine re-log) is dropped while a later line
+      // carrying a NEW block is merged. Keyed per block rather than on the
+      // joined text, which would stop matching once two blocks are joined.
+      const blockKeys = new Set<string>();
       if (Array.isArray(content)) {
         for (const b of content as any[]) {
           if (b?.type === "text" && typeof b.text === "string") {
+            blockKeys.add(`t:${b.text}`);
             if (text) text += "\n";
             text += b.text;
           } else if (b?.type === "tool_use") {
@@ -986,6 +1260,7 @@ async function readJsonlSession(
             // user-visible prose. Mixing thinking in there would change
             // classification verdicts as a side effect of a search change.
             if (typeof b.thinking === "string" && b.thinking) {
+              blockKeys.add(`k:${b.thinking}`);
               if (thinkingText) thinkingText += "\n";
               thinkingText += b.thinking;
             }
@@ -999,46 +1274,28 @@ async function readJsonlSession(
       // disk anyway.
       const searchText = thinkingText ? (text ? `${text}\n${thinkingText}` : thinkingText) : text;
 
-      const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
-      let slashWindowConsumed = false;
-      const toolUses: ParsedToolUse[] = toolBlocks.map((b, idx): ParsedToolUse => {
-        const args = (b.input ?? {}) as Record<string, unknown>;
-        const toolName = typeof b.name === "string" ? b.name : "unknown";
-        const mcp = parseMcpTool(toolName);
-        const { filePath: fp, fileOp } = extractFileOp(toolName, args);
-        let argsJson: string | null = null;
-        try {
-          argsJson = truncateText(JSON.stringify(args), ARGS_JSON_LIMIT);
-        } catch {
-          argsJson = null;
-        }
-        const toolUseId = typeof b.id === "string" ? b.id : null;
-        const errEntry = toolUseId ? errorByToolUseId.get(toolUseId) : undefined;
-        const isError: 0 | 1 = errEntry?.isError ? 1 : 0;
-        const errorCategory: string | null =
-          isError && errEntry?.content ? categorizeToolError(errEntry.content) : null;
-        const skillName = extractSkillName(toolName, args);
-        const isSlashMatch =
-          !slashWindowConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
-        if (isSlashMatch) slashWindowConsumed = true;
-        const invocationSource: string = isSlashMatch ? "slash_command" : "auto";
-        return {
-          sequenceInTurn: idx,
-          toolUseId,
-          toolName,
-          mcpServer: mcp?.server ?? null,
-          mcpTool: mcp?.tool ?? null,
-          agentName: extractAgentName(toolName, args),
-          skillName,
-          argumentsJson: argsJson,
-          filePath: fp,
-          fileOp,
-          isError,
-          errorCategory,
-          invocationSource,
-          denialKind: toolUseId ? denialByToolUseId.get(toolUseId) ?? null : null,
-        };
-      });
+      // Register the message as open BEFORE the turn is pushed: `turns.length`
+      // is the index this turn is about to occupy, and nothing pushes between
+      // here and the push below. A message with no id stays unmergeable — the
+      // pre-existing shape where each of its lines becomes its own turn.
+      const openMessage: OpenMessage | undefined = messageId
+        ? {
+            turnPos: turns.length,
+            text,
+            thinking: thinkingText,
+            toolUseIds: new Set(
+              toolBlocks.flatMap((b) => (typeof b.id === "string" ? [b.id] : []))
+            ),
+            blockKeys,
+            slashConsumed: false,
+            slashCmds: prevUserTimestamp
+              ? slashCommandsByTimestamp.get(prevUserTimestamp)
+              : undefined,
+          }
+        : undefined;
+      if (messageId && openMessage) openMessages.set(messageId, openMessage);
+
+      const toolUses = buildToolUses(toolBlocks, 0, openMessage);
       toolCallCount += toolUses.length;
 
       const usageTurn: UsageTurn = {
@@ -1053,9 +1310,7 @@ async function readJsonlSession(
         cacheCreateTokens: tcc,
         cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
-        toolCalls: toolBlocks.map(
-          (b: any): ToolCall => ({ name: b.name, arguments: b.input })
-        ),
+        toolCalls: toolBlocks.map(toToolCall),
         // Cap to the same 500-char limit the file-parse path applies via
         // `extractText`. Without this, DB-ingest produces a longer
         // projection than file-parse and `selfCorrection.textHasSelfCorrection`

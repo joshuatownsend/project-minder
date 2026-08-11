@@ -88,6 +88,19 @@ import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 //    `startTime` / `endTime` (and therefore `durationMs`) can fall
 //    inside the file-parse window — the file-parse window strictly
 //    contains the DB window, never the reverse.
+// 9. `toolUsage` / `subagentCount`: the DB drops a **re-logged** tool
+//    block, file-parse does not. Claude Code writes one JSONL line per
+//    content block, all sharing a `message.id`; ingest unions those
+//    blocks and dedupes on `tool_use_id`, while `claudeConversations.ts`
+//    has no dedupe at all and counts a re-log twice. So file-parse now
+//    OVER-counts by the re-log rate — 22 blocks in 5,591 on the
+//    reference corpus, ~0.4%.
+//
+//    This entry used to point the other way and by 12x. Ingest `continue`d
+//    on the repeat id and threw the block away with it, storing 6 `Agent`
+//    calls for a session that made 72 (#426). Direction is worth stating
+//    plainly: the residual is file-parse counting a rare duplicate, not
+//    the DB missing most of the data.
 
 interface SessionRow {
   session_id: string;
