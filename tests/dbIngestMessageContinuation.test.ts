@@ -291,6 +291,52 @@ describe.skipIf(!driverAvailable)("#426 multi-line assistant messages", () => {
   });
 
   /**
+   * A block with no usable `name` reads the same in both representations.
+   *
+   * `tool_uses.tool_name` and `usageTurn.toolCalls[].name` describe the same
+   * block, and `ToolCall.name` is typed `string`. The stored row fell back to
+   * `"unknown"` while the in-memory view was built through an `any` cast that
+   * let `undefined` past the type — and that view is what `classifyTurn`
+   * matches on. Asserted on both the first line and a continuation, because
+   * the merge path was a second construction site free to disagree.
+   */
+  it("normalizes a nameless tool block identically on both paths", async () => {
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const file = path.join(projectsDir, "C--dev-myapp", "cafe09.jsonl");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    // `name` omitted entirely — the malformed shape both sites must agree on.
+    const nameless = (id: string) => ({ type: "tool_use", id, input: { a: 1 } });
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:00Z",
+          message: { content: [{ type: "text", text: "go" }] },
+        }),
+        line("2026-08-01T10:00:01Z", "msg_1", nameless("tu_first")),
+        line("2026-08-01T10:00:01Z", "msg_1", nameless("tu_cont")),
+      ].join("\n") + "\n"
+    );
+
+    const db = (await conn.getDb())!;
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const rows = db
+      .prepare(
+        "SELECT tool_use_id, tool_name FROM tool_uses WHERE session_id = 'cafe09' ORDER BY sequence_in_turn"
+      )
+      .all() as Array<{ tool_use_id: string; tool_name: string }>;
+    // Both blocks stored, and the continuation is normalized like the first.
+    expect(rows).toEqual([
+      { tool_use_id: "tu_first", tool_name: "unknown" },
+      { tool_use_id: "tu_cont", tool_name: "unknown" },
+    ]);
+  });
+
+  /**
    * Slash-command attribution follows the message, not the cursor.
    *
    * `buildToolUses` used to read the live `prevUserTimestamp` every time it

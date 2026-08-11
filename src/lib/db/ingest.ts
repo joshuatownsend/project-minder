@@ -554,6 +554,29 @@ interface ReadResult {
   hasOrphanToolResults: boolean;
 }
 
+/**
+ * A `tool_use` block's name, or `"unknown"` when it has none.
+ *
+ * `ToolCall.name` and `tool_uses.tool_name` describe the same block, so they
+ * have to agree on the malformed case. They did not: the stored row fell back
+ * to `"unknown"` while the in-memory `ToolCall` was built by an `any` cast that
+ * let `undefined` through a field typed `string` — and that field is what
+ * `classifyTurn` matches tool names against, so the two representations of one
+ * block disagreed exactly where a name was missing. Shared here so the fallback
+ * cannot drift between them again. (Copilot, PR #427.)
+ */
+function normalizeToolName(name: unknown): string {
+  return typeof name === "string" ? name : "unknown";
+}
+
+/** Build the classifier-facing `ToolCall` view of a raw `tool_use` block. */
+function toToolCall(b: { name?: unknown; input?: unknown }): ToolCall {
+  return {
+    name: normalizeToolName(b.name),
+    arguments: b.input as Record<string, unknown> | undefined,
+  };
+}
+
 async function readJsonlSession(
   filePath: string,
   projectDirName: string,
@@ -839,7 +862,7 @@ async function readJsonlSession(
     const window = msg ?? { slashConsumed: false };
     return blocks.map((b, idx): ParsedToolUse => {
       const args = (b.input ?? {}) as Record<string, unknown>;
-      const toolName = typeof b.name === "string" ? b.name : "unknown";
+      const toolName = normalizeToolName(b.name);
       const mcp = parseMcpTool(toolName);
       const { filePath: fp, fileOp } = extractFileOp(toolName, args);
       let argsJson: string | null = null;
@@ -956,9 +979,7 @@ async function readJsonlSession(
     if (newTools.length > 0) {
       const built = buildToolUses(newTools, turn.toolUses.length, open);
       turn.toolUses.push(...built);
-      turn.usageTurn.toolCalls.push(
-        ...newTools.map((b: any): ToolCall => ({ name: b.name, arguments: b.input }))
-      );
+      turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
       toolCallCount += built.length;
       // Pending tool_use ids belong to the CURRENT last assistant turn only.
       // A continuation arriving after later turns (the 3,639-line gap above)
@@ -1289,9 +1310,7 @@ async function readJsonlSession(
         cacheCreateTokens: tcc,
         cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
-        toolCalls: toolBlocks.map(
-          (b: any): ToolCall => ({ name: b.name, arguments: b.input })
-        ),
+        toolCalls: toolBlocks.map(toToolCall),
         // Cap to the same 500-char limit the file-parse path applies via
         // `extractText`. Without this, DB-ingest produces a longer
         // projection than file-parse and `selfCorrection.textHasSelfCorrection`
