@@ -7,6 +7,7 @@ import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
 import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -103,8 +104,8 @@ import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/del
 //    plainly: the residual is file-parse counting a rare duplicate, not
 //    the DB missing most of the data.
 // 10. `treeDelegation` (#395): **DB-only, and only once re-derived.** The
-//    tree roll-up needs `sessions.parent_session_id` and
-//    `sidechain_tool_counts`, which no file-parse pass produces —
+//    tree roll-up needs `sidechain_tool_uses`, which no file-parse pass
+//    produces —
 //    `claudeConversations.ts` walks top-level transcripts and never opens
 //    `<session>/subagents/*.jsonl`. So the file backend leaves the field
 //    undefined and the delegation badge does not render there.
@@ -267,33 +268,45 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     (r) => [r.session_id, r.tool_name, r.n]
   );
 
-  // #395: the two extra facts the delegation roll-up needs, over ALL sessions —
-  // not just the ones in `headers`. Subagent transcripts are excluded from the
-  // header query by `turn_count > 0` (they are not sessions the user ran), yet
-  // their tool calls are exactly what the roll-up is for. Querying them
-  // separately is the point, not an oversight.
+  // #395: what the delegation roll-up needs, over ALL sessions — not just the
+  // ones in `headers`. Subagent transcripts are excluded from the header query
+  // by `turn_count > 0` (they are not sessions the user ran), yet their tool
+  // calls are exactly what the roll-up is for. Querying them separately is the
+  // point, not an oversight.
   const sidechainToolsBySession = groupCounts(
     prepCached(
       db,
-      `SELECT session_id, tool_name, n FROM sidechain_tool_counts`
+      `SELECT session_id, tool_name, COUNT(*) AS n
+       FROM sidechain_tool_uses
+       GROUP BY session_id, tool_name`
     ).all() as ToolCountRow[],
     (r) => [r.session_id, r.tool_name, r.n]
   );
+  // Parent linkage comes from `file_path`, NOT from a stored column, and the
+  // difference is load-bearing. A column would be stamped by the same parse
+  // that stamps `derived_version`, so a child not yet re-derived would carry no
+  // link — and this loop would not see it, the version check below would have
+  // nothing stale to reject, and the root's own counts would be returned as a
+  // complete tree. The sessions whose link is missing are exactly the ones the
+  // gate exists to catch (Codex review of #428). `file_path` is present on
+  // every row at every version, so a stale child is always visible here and is
+  // rejected on its version instead.
   const derivedVersionById = new Map<string, number>();
   const childrenByParent = new Map<string, string[]>();
   for (const r of prepCached(
     db,
-    `SELECT session_id, parent_session_id, derived_version FROM sessions`
+    `SELECT session_id, file_path, derived_version FROM sessions`
   ).all() as Array<{
     session_id: string;
-    parent_session_id: string | null;
+    file_path: string;
     derived_version: number;
   }>) {
     derivedVersionById.set(r.session_id, r.derived_version);
-    if (r.parent_session_id) {
-      const siblings = childrenByParent.get(r.parent_session_id);
+    const parent = parseSubagentParentSessionId(r.file_path);
+    if (parent) {
+      const siblings = childrenByParent.get(parent);
       if (siblings) siblings.push(r.session_id);
-      else childrenByParent.set(r.parent_session_id, [r.session_id]);
+      else childrenByParent.set(parent, [r.session_id]);
     }
   }
   const delegationTreeSource: DelegationTreeSource = {

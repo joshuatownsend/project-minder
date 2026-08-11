@@ -17,6 +17,7 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 let driverAvailable: boolean;
 try {
@@ -136,7 +137,7 @@ beforeEach(() => {
   tmpHome = state.tmpHome();
 });
 
-describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
+describe.skipIf(!driverAvailable)("#395 subagent tool calls", () => {
   async function ingestAll() {
     const { conn, mig, ingest } = await reload();
     const init = await mig.initDb();
@@ -159,9 +160,8 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
 
     const counts = db
       .prepare(
-        `SELECT s.session_id, c.tool_name, c.n
-           FROM sidechain_tool_counts c JOIN sessions s USING (session_id)
-          WHERE s.parent_session_id = 'cafe11' ORDER BY c.tool_name`
+        `SELECT tool_name, COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id <> 'cafe11' GROUP BY tool_name ORDER BY tool_name`
       )
       .all() as Array<{ tool_name: string; n: number }>;
     expect(counts.map((c) => [c.tool_name, c.n])).toEqual([
@@ -173,10 +173,7 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
     // subagent's calls must NOT appear in `tool_uses`, which ~20 queries read
     // with no sidechain predicate.
     const toolUses = db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM tool_uses
-          WHERE session_id IN (SELECT session_id FROM sessions WHERE parent_session_id = 'cafe11')`
-      )
+      .prepare(`SELECT COUNT(*) AS n FROM tool_uses WHERE session_id <> 'cafe11'`)
       .get() as { n: number };
     expect(toolUses.n).toBe(0);
   });
@@ -202,9 +199,9 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
       ["Agent", 1],
       ["WebSearch", 1],
     ]);
-    // And the root records no sidechain counts of its own under this layout.
+    // And the root records no sidechain calls of its own under this layout.
     const rootSidechain = db
-      .prepare("SELECT COUNT(*) AS n FROM sidechain_tool_counts WHERE session_id = 'cafe12'")
+      .prepare("SELECT COUNT(*) AS n FROM sidechain_tool_uses WHERE session_id = 'cafe12'")
       .get() as { n: number };
     expect(rootSidechain.n).toBe(0);
   });
@@ -239,14 +236,14 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
 
     const row = db
       .prepare(
-        `SELECT SUM(c.n) AS n FROM sidechain_tool_counts c JOIN sessions s USING (session_id)
-          WHERE s.parent_session_id = 'cafe13' AND c.tool_name = 'WebSearch'`
+        `SELECT COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id <> 'cafe13' AND tool_name = 'WebSearch'`
       )
       .get() as { n: number };
     expect(row.n).toBe(2);
   });
 
-  it("adds a tail window's calls to the ones already recorded", async () => {
+  it("carries a tail window's calls alongside the ones already recorded", async () => {
     // `appendSessionTail` amends a session in place as its file grows. A
     // replacing write here would report only the final window's calls, so a
     // long-running session's subagent work would SHRINK as it ran.
@@ -266,29 +263,54 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
 
     const row = db
       .prepare(
-        `SELECT SUM(c.n) AS n FROM sidechain_tool_counts c JOIN sessions s USING (session_id)
-          WHERE s.parent_session_id = 'cafe14' AND c.tool_name = 'WebSearch'`
+        `SELECT COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id <> 'cafe14' AND tool_name = 'WebSearch'`
       )
       .get() as { n: number };
     expect(row.n).toBe(2);
   });
 
-  it("stamps parent_session_id on subagent transcripts and leaves roots null", async () => {
+  it("does not double-count a call re-logged across a tail-window boundary", async () => {
+    // The write is additive in effect, so it needs a key that survives between
+    // parses. Parse-local dedupe state does not: window 2 has never seen
+    // window 1's ids, and a re-log is a NEW LINE rather than a re-read one, so
+    // a per-tool counter would add it again and stay wrong until the next full
+    // re-parse (Codex review of #428).
+    const { db, projectsDir, ingest } = await ingestAll();
+    await writeRoot(projectsDir, "cafe18");
+    const file = await writeSubagent(projectsDir, "cafe18", "agent-1", [
+      { id: "straddle", name: "WebSearch" },
+    ]);
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Same tool_use_id, emitted again after the byte cursor.
+    await fs.appendFile(
+      file,
+      assistantLine("2026-08-01T10:01:00Z", "s9", toolBlock("straddle", "WebSearch"), true) + "\n"
+    );
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id <> 'cafe18' AND tool_name = 'WebSearch'`
+      )
+      .get() as { n: number };
+    expect(row.n).toBe(1);
+  });
+
+  it("links a subagent transcript to its parent through its stored path", async () => {
     const { db, projectsDir, ingest } = await ingestAll();
     await writeRoot(projectsDir, "cafe15");
     await writeSubagent(projectsDir, "cafe15", "agent-1", [{ id: "s_a", name: "Agent" }]);
     await ingest.reconcileAllSessions(db, { projectsDir });
 
-    const root = db
-      .prepare("SELECT parent_session_id FROM sessions WHERE session_id = 'cafe15'")
-      .get() as { parent_session_id: string | null };
-    expect(root.parent_session_id).toBeNull();
-
-    const kids = db
-      .prepare("SELECT session_id FROM sessions WHERE parent_session_id = 'cafe15'")
-      .all() as Array<{ session_id: string }>;
-    expect(kids).toHaveLength(1);
-    expect(kids[0].session_id).not.toBe("cafe15");
+    const rows = db
+      .prepare("SELECT session_id, file_path FROM sessions")
+      .all() as Array<{ session_id: string; file_path: string }>;
+    const linked = rows.map((r) => [r.session_id, parseSubagentParentSessionId(r.file_path)]);
+    expect(linked).toContainEqual(["cafe15", undefined]);
+    expect(linked.filter(([, parent]) => parent === "cafe15")).toHaveLength(1);
   });
 
   it("rolls the whole tree into the session summary's treeDelegation", async () => {
@@ -320,9 +342,10 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
   });
 
   it("reports treeDelegation as unmeasured when a child is left stale", async () => {
-    // The gate that makes the field trustworthy. A stale child contributes no
-    // counts, so without this the total would look complete and be short by
-    // that whole branch.
+    // The gate that makes the field trustworthy, in the state an upgrade
+    // actually produces: the root has been re-derived and its subagent
+    // transcript has not. A stale child records no calls, so without the gate
+    // the total would look complete and be short by that whole branch.
     const { db, projectsDir, ingest } = await ingestAll();
     await writeRoot(projectsDir, "cafe17");
     await writeSubagent(projectsDir, "cafe17", "agent-1", [{ id: "a_1", name: "Agent" }]);
@@ -330,8 +353,12 @@ describe.skipIf(!driverAvailable)("#395 subagent tool counts", () => {
 
     const { TREE_DELEGATION_MIN_DERIVED_VERSION } = await import("@/lib/usage/delegationTree");
     db.prepare(
-      "UPDATE sessions SET derived_version = ? WHERE parent_session_id = 'cafe17'"
+      "UPDATE sessions SET derived_version = ? WHERE session_id <> 'cafe17'"
     ).run(TREE_DELEGATION_MIN_DERIVED_VERSION - 1);
+    // And its calls are gone, as they would be on an index written before the
+    // table existed — so a roll-up that failed to notice would silently return
+    // the root's own 1 spawn as the tree total.
+    db.prepare("DELETE FROM sidechain_tool_uses WHERE session_id <> 'cafe17'").run();
 
     const { loadSessionsListFromDb } = await import("@/lib/data/sessionsListFromDb");
     const root = loadSessionsListFromDb(db).find((s) => s.sessionId === "cafe17");

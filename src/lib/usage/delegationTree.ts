@@ -22,8 +22,8 @@
  */
 
 /**
- * `sessions.derived_version` at which `parent_session_id` and
- * `sidechain_tool_counts` began to be written.
+ * `sessions.derived_version` at which `sidechain_tool_uses` began to be
+ * written.
  *
  * Compared with `>=`, never `===`. An equality gate against the current
  * `DERIVED_VERSION` would make every session read as unmeasured the moment an
@@ -63,11 +63,18 @@ export type ToolCountsBySession = Map<string, Record<string, number>>;
 export interface DelegationTreeSource {
   /** `sessions.derived_version`, for every session in the index. */
   derivedVersion: Map<string, number>;
-  /** Child session ids per parent, from `sessions.parent_session_id`. */
+  /**
+   * Child session ids per parent, derived from `sessions.file_path` — NOT read
+   * from a stored column. A column would be written by the same parse that
+   * stamps `derived_version`, so a not-yet-re-derived child would carry no link
+   * and would be missing from this map entirely; the version check below would
+   * then have nothing stale to reject and would return the root's own counts as
+   * a complete tree (Codex review of #428).
+   */
   childrenByParent: Map<string, string[]>;
   /** Tool calls on primary turns (`tool_uses`), per session. */
   primaryTools: ToolCountsBySession;
-  /** Tool calls on subagent turns (`sidechain_tool_counts`), per session. */
+  /** Tool calls on subagent turns (`sidechain_tool_uses`), per session. */
   sidechainTools: ToolCountsBySession;
 }
 
@@ -99,17 +106,13 @@ function sumNames(counts: Record<string, number> | undefined, names: readonly st
  * applies to a single stale child — one unrefreshed transcript makes the total
  * a lower bound, not a total.
  *
- * Two residual gaps stay, and they are not symmetric. A subagent transcript
- * that was never indexed at all is invisible here, so a returned total can
- * under-count — the common case, and the safe direction, since the badge this
- * feeds asserts a session "may have been silently truncated". Over-counting is
- * possible but confined to one narrow shape: `sidechain_tool_counts` dedupes
- * `tool_use_id`s within a single parse, so a re-logged tool block whose first
- * emission fell in an earlier tail window is counted twice (83 re-logs in
- * 37,394 blocks locally, times the chance one straddles a flush boundary).
- * Persisting the ids to close that would cost more than the error it removes —
- * but "cannot over-count" would be the wrong thing to claim, and a badge is
- * only worth having if its stated limits are true.
+ * One residual gap stays, and it is one-directional. A subagent transcript that
+ * was never indexed at all is invisible here, so a returned total can
+ * under-count; it cannot over-count, because `sidechain_tool_uses` is keyed on
+ * `tool_use_id` and a call therefore contributes once however many times it was
+ * logged or re-read. The direction matters: the badge this feeds asserts a
+ * session "may have been silently truncated", so under-warning costs a missing
+ * badge while over-warning asserts something that did not happen.
  */
 export function rollUpTreeDelegation(
   rootSessionId: string,

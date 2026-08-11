@@ -334,14 +334,13 @@ export const DERIVED_VERSION = 20;
 //     — re-ingested in isolation it stored 2,694 `tool_uses` against 2,694
 //     distinct `tool_use_id`s in the file, `Agent` 6 -> 72, and 2,350
 //     assistant turns, matching the raw counts exactly.
-// 20 — #395: two new derived facts per session, neither of which any prior
-//     parse produced — `sessions.parent_session_id` (which session spawned this
-//     subagent transcript, from its path) and `sidechain_tool_counts` (tool
-//     calls made inside subagent turns). Together they make a session's whole
-//     delegation tree countable for the first time; before this, a subagent's
-//     tool calls were not stored anywhere, so the cap comparison on /sessions
-//     asked a table that structurally could not answer and read the resulting
-//     zero as "no nested work".
+// 20 — #395: `sidechain_tool_uses` — the tool calls made inside subagent turns,
+//     which no prior parse produced because no table could hold them.
+//     `tool_uses` has only ever carried primary turns, so the cap comparison on
+//     /sessions asked a table that structurally could not answer and read the
+//     resulting zero as "no nested work". With these rows, plus parent linkage
+//     derived from `sessions.file_path` at read time, a session's whole
+//     delegation tree becomes countable for the first time.
 //
 //     **This bump is load-bearing, not bookkeeping.** The roll-up refuses to
 //     report a tree total unless the root AND every linked child is stamped at
@@ -356,8 +355,10 @@ export const DERIVED_VERSION = 20;
 //     release means one pass (~1 hour, 6,036 sessions) delivers #426 and #395
 //     together instead of two. Verified against the corpus that motivated it:
 //     1,260 subagent transcripts, 37,394 `tool_use` blocks over 37,311 distinct
-//     ids (hence the id dedupe), `Agent` 62 and `WebSearch` 123 nested — none of
-//     which had ever reached the index.
+//     ids — hence rows keyed on `tool_use_id` rather than a per-tool counter,
+//     which would double a re-log straddling a tail-window boundary and stay
+//     wrong until the next full re-parse. `Agent` 62 and `WebSearch` 123 nested,
+//     none of which had ever reached the index.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

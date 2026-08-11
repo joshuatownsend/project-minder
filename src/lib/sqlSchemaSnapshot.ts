@@ -38,8 +38,6 @@ export const SQL_SCHEMA: TableSchema[] = [
       "source", "home_key",
       // v20 (A1)
       "session_kind", "ai_title", "entrypoint",
-      // v25 (#395)
-      "parent_session_id",
     ],
   },
   {
@@ -71,8 +69,8 @@ export const SQL_SCHEMA: TableSchema[] = [
   },
   {
     // v25 (#395): subagent tool calls, which `tool_uses` has never carried.
-    table: "sidechain_tool_counts",
-    columns: ["session_id", "tool_name", "n"],
+    table: "sidechain_tool_uses",
+    columns: ["session_id", "tool_use_id", "tool_name"],
   },
   {
     table: "session_hook_runs",

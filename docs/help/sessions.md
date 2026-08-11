@@ -454,8 +454,7 @@ appear at all with `MINDER_USE_DB=0`, which reads transcripts directly and never
 opens the `subagents/` directory.
 
 A subagent transcript that was never indexed is invisible to the count, so the
-number can read low; it can read high only in one rare case, where Claude Code
-re-logged a tool call across the boundary of an incremental index update.
+number can read low. It cannot read high.
 
 The chip says a cap was **reached**, never that anything was *blocked*. Two of
 the caps are configurable (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,

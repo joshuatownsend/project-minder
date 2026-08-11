@@ -1,3 +1,5 @@
+import { isValidSessionId } from "@/lib/usage/sessionPath";
+
 /**
  * Parent-session linkage for subagent transcripts, derived from the file path.
  *
@@ -15,19 +17,33 @@
  * spawner — so one level of linkage covers the whole tree. That is what makes a
  * tree roll-up possible at all; `depth` still is not recoverable, because
  * flatness is exactly the property that discards it.
+ *
+ * Derived on demand rather than stored on the session row. A stored column
+ * would be written by the same parse that stamps `derived_version`, so a
+ * not-yet-re-derived child would have no link — and a roll-up looking for
+ * children by that column would find none and report the root's own counts as a
+ * complete tree. The failure is specifically invisible: the sessions whose link
+ * is missing are exactly the stale ones the version gate exists to catch
+ * (Codex review of #428). `file_path` is on every row at every version, so
+ * deriving from it cannot hide a child.
  */
-
-/** A Claude Code session id: a UUID, or the hex-ish ids used by test fixtures. */
-const SESSION_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{5,}$/;
 
 /**
  * The parent session id for a subagent transcript, or `undefined` for an
  * ordinary top-level transcript.
  *
  * Accepts either path separator: the paths come from `fs.readdir` on Windows and
- * from fixtures on CI, and a rule that only understood one separator would
- * return `undefined` on the other — which reads as "this is a root session"
- * rather than as a parse failure.
+ * from fixtures on CI, and a rule that only understood one would return
+ * `undefined` on the other — which reads as "this is a root session" rather
+ * than as a parse failure.
+ *
+ * The id check is `isValidSessionId`, the same rule the rest of the app uses,
+ * rather than a stricter local one. The errors are asymmetric: rejecting a real
+ * session id silently drops a whole branch of the tree, while accepting a
+ * directory that is not one produces a link to a session that does not exist,
+ * which matches nothing and costs nothing (Copilot review of #428). Position
+ * does most of the work here anyway — the segment must sit directly above a
+ * `subagents` directory.
  */
 export function parseSubagentParentSessionId(filePath: string): string | undefined {
   const segments = filePath.split(/[\\/]/);
@@ -36,6 +52,6 @@ export function parseSubagentParentSessionId(filePath: string): string | undefin
   if (fileIdx < 2) return undefined;
   if (segments[fileIdx - 1] !== "subagents") return undefined;
   const parent = segments[fileIdx - 2];
-  if (!parent || !SESSION_ID_RE.test(parent)) return undefined;
+  if (!parent || !isValidSessionId(parent)) return undefined;
   return parent;
 }
