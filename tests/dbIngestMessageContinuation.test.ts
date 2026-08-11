@@ -33,7 +33,17 @@ try {
   driverAvailable = false;
 }
 
-const state = installIsolatedState({ prefix: "pm-ingest-cont-", preserveEnv: ["MINDER_USE_DB"] });
+// Pinned rather than preserved. These assertions read indexed rows, so the DB
+// path is a requirement of the file, not an ambient preference — the same
+// reason `initDb.test.ts` and `agentCost.test.ts` pin it. (Reviewer predicted
+// a failure under `MINDER_USE_DB=0`, which does not actually occur: this file
+// calls `initDb`/`getDb`/`reconcileAllSessions` directly and never goes
+// through the `data/index.ts` façade that reads the flag. Pinned anyway, so
+// the requirement is stated rather than inferred.)
+const state = installIsolatedState({
+  prefix: "pm-ingest-cont-",
+  env: { MINDER_USE_DB: "1" },
+});
 let tmpHome: string;
 
 async function reload() {
@@ -278,6 +288,100 @@ describe.skipIf(!driverAvailable)("#426 multi-line assistant messages", () => {
     expect(tools.map((t) => t.tool_use_id)).toEqual(["tu_1", "tu_late"]);
     // …but it does not become an unresolved call on a session that ended.
     expect(session.status).toBe("inactive");
+  });
+
+  /**
+   * Slash-command attribution follows the message, not the cursor.
+   *
+   * `buildToolUses` used to read the live `prevUserTimestamp` every time it
+   * ran. For a continuation arriving after an intervening user turn — the case
+   * this merge exists to support — that names a different prompt, so a `Skill`
+   * call split onto a later line is filed as `auto`, or attributed to whatever
+   * unrelated slash command happened to run in between.
+   */
+  it("attributes a continuation's Skill call to the slash command that started the message", async () => {
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const file = path.join(projectsDir, "C--dev-myapp", "cafe08.jsonl");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const userLine = (ts: string, text: string) =>
+      JSON.stringify({ type: "user", timestamp: ts, message: { content: [{ type: "text", text }] } });
+    await fs.writeFile(
+      file,
+      [
+        // The slash command that actually initiated the message.
+        userLine("2026-08-01T10:00:00Z", "<command-name>pr-resolve</command-name>\nresolve them"),
+        line("2026-08-01T10:00:01Z", "msg_1", textBlock("Reading the comments.")),
+        // An unrelated slash command lands between the message's two lines,
+        // moving the cursor the buggy version consulted.
+        userLine("2026-08-01T10:00:02Z", "<command-name>unrelated</command-name>\nsomething else"),
+        line(
+          "2026-08-01T10:00:03Z",
+          "msg_1",
+          toolBlock("tu_skill", "Skill", { skill: "pr-resolve" })
+        ),
+      ].join("\n") + "\n"
+    );
+
+    const db = (await conn.getDb())!;
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const row = db
+      .prepare(
+        "SELECT skill_name, invocation_source FROM tool_uses WHERE session_id = 'cafe08' AND tool_name = 'Skill'"
+      )
+      .get() as { skill_name: string; invocation_source: string };
+    expect(row.skill_name).toBe("pr-resolve");
+    // Reading the live cursor here yields the `unrelated` window, which does
+    // not contain `pr-resolve`, and the call is recorded as `auto`.
+    expect(row.invocation_source).toBe("slash_command");
+  });
+
+  /**
+   * A thinking block that arrives on a continuation line stays retrievable.
+   *
+   * `has_thinking` and `text_offset` have to agree: the timeline shows an
+   * expandable thinking event from the flag, and `readThinkingFromJsonl` reads
+   * exactly the ONE line the offset names. Merging set the flag from any line
+   * while the offset still pointed at the message's first — so a message that
+   * opened with text and thought afterwards advertised an event that resolved
+   * to "Thinking content unavailable".
+   */
+  it("points text_offset at the line the thinking is actually on", async () => {
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const file = path.join(projectsDir, "C--dev-myapp", "cafe07.jsonl");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:00Z",
+          message: { content: [{ type: "text", text: "go" }] },
+        }),
+        // Text FIRST, thinking second — the order that broke retrieval.
+        line("2026-08-01T10:00:01Z", "msg_1", textBlock("Starting now.")),
+        line("2026-08-01T10:00:01Z", "msg_1", thinkingBlock("the tricky part is ordering")),
+      ].join("\n") + "\n"
+    );
+
+    const db = (await conn.getDb())!;
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const turn = db
+      .prepare(
+        "SELECT turn_index, has_thinking FROM turns WHERE session_id = 'cafe07' AND role = 'assistant'"
+      )
+      .get() as { turn_index: number; has_thinking: number };
+    expect(turn.has_thinking).toBe(1);
+
+    // The real reader, not a re-implementation of the offset arithmetic.
+    const { readThinkingFromJsonl } = await import("@/lib/data/thinkingContent");
+    const body = await readThinkingFromJsonl(db, "cafe07", turn.turn_index);
+    expect(body).toContain("the tricky part is ordering");
   });
 
   /**

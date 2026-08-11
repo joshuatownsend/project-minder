@@ -793,6 +793,17 @@ async function readJsonlSession(
     /** Text/thinking bodies already stored, to drop an exact re-log. */
     blockKeys: Set<string>;
     /**
+     * The slash-command window in force when this message STARTED.
+     *
+     * Latched rather than read live at merge time. A continuation can arrive
+     * after later user turns — the whole reason this map is keyed on
+     * `message.id` — and `prevUserTimestamp` would by then name a different
+     * prompt, so a `Skill` call split onto a continuation line would be filed
+     * as `auto`, or worse, attributed to an unrelated later slash command.
+     * (Codex + Copilot, PR #427.)
+     */
+    slashCmds: Set<string> | undefined;
+    /**
      * Whether this message already claimed the pending slash-command window.
      * Per MESSAGE rather than per line: one message is one turn, and a
      * tool split across two lines must not consume the window twice.
@@ -818,9 +829,13 @@ async function readJsonlSession(
     startIndex: number,
     msg: OpenMessage | undefined
   ): ParsedToolUse[] {
-    const slashCmds = prevUserTimestamp
-      ? slashCommandsByTimestamp.get(prevUserTimestamp)
-      : undefined;
+    // An open message carries the window it started under; only a message with
+    // no id (unmergeable, so always its own single line) reads the live cursor.
+    const slashCmds = msg
+      ? msg.slashCmds
+      : prevUserTimestamp
+        ? slashCommandsByTimestamp.get(prevUserTimestamp)
+        : undefined;
     const window = msg ?? { slashConsumed: false };
     return blocks.map((b, idx): ParsedToolUse => {
       const args = (b.input ?? {}) as Record<string, unknown>;
@@ -871,7 +886,7 @@ async function readJsonlSession(
    * 3,639 lines. Nothing here touches tokens, `assistantTurnCount`, or
    * `modelCounts`; the first line already accounted for the whole message.
    */
-  function mergeContinuation(messageId: string, content: unknown): void {
+  function mergeContinuation(messageId: string, content: unknown, lineOffset: number): void {
     const open = openMessages.get(messageId);
     // Straddle: the message's first line landed in an earlier tail chunk, so
     // there is no turn in THIS parse to merge into. Dropping the block matches
@@ -891,6 +906,16 @@ async function readJsonlSession(
         open.text = open.text ? `${open.text}\n${b.text}` : b.text;
         textChanged = true;
       } else if (b?.type === "thinking") {
+        // `text_offset` is the ONLY way the timeline retrieves thinking bodies
+        // (`readThinkingFromJsonl` reads exactly the one line it points at), and
+        // it was set to the message's FIRST line. A message that opened with
+        // text and thought on a later line would therefore advertise a thinking
+        // event whose content resolves to "unavailable". Point the offset at the
+        // first line that actually carries thinking. Only the first: one column
+        // holds one offset, so a message that thought several times is still
+        // retrievable for its first block only — the same single-block limit
+        // that predates this merge, not a new one. (Codex, PR #427.)
+        if (!turn.hasThinking) turn.textOffset = lineOffset;
         turn.hasThinking = 1;
         hasThinkingSession = true;
         if (typeof b.thinking === "string" && b.thinking) {
@@ -1158,7 +1183,7 @@ async function readJsonlSession(
         (entry.message as { id?: string } | undefined)?.id ??
         (entry as { requestId?: string }).requestId;
       if (messageId && seenMessageIds.has(messageId)) {
-        mergeContinuation(messageId, entry.message?.content);
+        mergeContinuation(messageId, entry.message?.content, fromOffset + thisLineOffset);
         continue;
       }
       if (messageId) seenMessageIds.add(messageId);
@@ -1242,6 +1267,9 @@ async function readJsonlSession(
             ),
             blockKeys,
             slashConsumed: false,
+            slashCmds: prevUserTimestamp
+              ? slashCommandsByTimestamp.get(prevUserTimestamp)
+              : undefined,
           }
         : undefined;
       if (messageId && openMessage) openMessages.set(messageId, openMessage);
