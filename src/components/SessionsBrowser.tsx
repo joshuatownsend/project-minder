@@ -34,10 +34,11 @@ import { WORK_MODE_SEGMENTS } from "@/lib/usage/workMode";
 import { SourceBadge } from "@/components/SourceBadge";
 import { EffortMixChip } from "@/components/EffortMixChip";
 import { assessDelegation, delegationBadgeLabel } from "@/lib/usage/delegationLimits";
+import { delegationUsageForSession } from "@/lib/usage/delegationTree";
 
 /** Shared by the tooltip and the screen-reader text so the two cannot drift. */
 const DELEGATION_BADGE_EXPLANATION = (label: string) =>
-  `${label}. Claude Code caps subagent spawns and web searches per session; a session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
+  `${label}. Counted across this session and every subagent it spawned, since Claude Code's caps apply to the whole session. A session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
 import { entrypointBucket, entrypointLabel, compareEntrypoint } from "@/lib/usage/entrypoint";
 
@@ -327,24 +328,13 @@ function SessionRow({
     [prefetch, session.sessionId],
   );
   const totalTools = Object.values(session.toolUsage).reduce((s, c) => s + c, 0);
-  // C2: the documented cap is 200 web SEARCHES. `WebFetch` is a different tool
-  // with no documented quota, and folding it in meant a session with 160
-  // fetches and no searches was labelled as nearing the search cap — and 200
-  // fetches falsely reported the cap reached (Codex + Copilot review of #388).
-  // Counting only what the cap actually counts.
-  //
-  // Claude sessions only. The DB loader is source-agnostic, so a Codex or
-  // Gemini session with a tool named `Agent` or `WebSearch` derives the same
-  // `subagentCount`/`toolUsage` fields — and would get a warning about Claude
-  // Code's caps on a harness where they do not exist. `cliVersion` gates the
-  // rest: a session recorded before its cap shipped was never constrained by
-  // it (Codex review, #388).
-  const isClaudeSession = (session.source ?? "claude") === "claude";
-  const delegationAssessment = assessDelegation({
-    spawns: isClaudeSession ? session.subagentCount : undefined,
-    webSearches: isClaudeSession ? (session.toolUsage["WebSearch"] ?? 0) : undefined,
-    cliVersion: isClaudeSession ? session.cliVersion : undefined,
-  });
+  // Which counts feed the cap comparison — and which sessions get compared at
+  // all — is decided in `delegationUsageForSession`, where it can be tested.
+  // The short version: tree totals (#395), never the root-only
+  // `subagentCount` / `toolUsage["WebSearch"]`; Claude sessions only; and
+  // `undefined` means unmeasured, which suppresses the badge rather than
+  // falling back to a partial count.
+  const delegationAssessment = assessDelegation(delegationUsageForSession(session));
   const delegationLabel = delegationBadgeLabel(delegationAssessment);
   const totalEdits = Object.entries(FILE_OP_BY_TOOL)
     .filter(([, op]) => isFileWriteOp(op))

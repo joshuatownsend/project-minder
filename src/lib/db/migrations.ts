@@ -822,6 +822,65 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 25,
+    name: "#395: subagent tool calls, deduped by tool_use_id",
+    up: (db) => {
+      // Tool calls made *inside* subagent turns, one row per call.
+      //
+      // Keyed on `tool_use_id`, not aggregated into a per-tool counter, and
+      // that is the whole point of the shape. A session is not always written
+      // in one pass — `appendSessionTail` amends it as the file grows — and
+      // dedupe state does not survive between parses. A counter therefore has
+      // to be written additively, so a tool block re-logged across a window
+      // boundary (83 re-logs in 37,394 blocks locally) is added a second time
+      // and stays wrong until the next full re-parse. `INSERT OR IGNORE` on the
+      // id is idempotent across windows, across the tail/full split, and across
+      // repeated reconciles, with no state carried between them.
+      //
+      // Deliberately NOT rows in `tool_uses`. Sidechain turns have never carried
+      // tool_uses rows, and ~20 queries across /usage, /agents, /skills, /costs
+      // and the denial analytics read that table with no `is_sidechain`
+      // predicate. Adding subagent rows there would move every one of those
+      // numbers at once — the "quietly widening the existing meaning" that #395
+      // explicitly rules out — and would leave twenty places that must each
+      // remember to exclude them, which is precisely the one-contract-two-
+      // implementations shape that produced #426.
+      //
+      // It survives a corpus this one does not have, too: on the local index no
+      // session mixes primary and sidechain turns (0 of 6,045), because modern
+      // Claude Code writes subagents to their own files. Older transcripts
+      // inline them (`claudeConversations.ts:820` — probed 0/214 in 2026-05, but
+      // that is a fact about this machine, not about the format). A separate
+      // table is correct on both shapes; writing into `tool_uses` is only safe
+      // on this one.
+      //
+      // `tool_name` as observed rather than a resolved spawn/search bucket, so
+      // read-time keeps the interpretation — deciding later that WebFetch counts
+      // toward the search cap then costs a query edit, not another
+      // DERIVED_VERSION bump and a one-hour re-index.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sidechain_tool_uses (
+          session_id  TEXT NOT NULL,
+          tool_use_id TEXT NOT NULL,
+          tool_name   TEXT NOT NULL,
+          PRIMARY KEY (session_id, tool_use_id),
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS idx_sidechain_tool_uses_name
+          ON sidechain_tool_uses(tool_name);
+      `);
+
+      // No backfill and no parent-session column. Parent linkage is derived from
+      // `sessions.file_path` at read time instead of stamped here — a stored
+      // column would be written by the same parse that stamps `derived_version`,
+      // so an unrefreshed child would carry no link, and a roll-up looking for
+      // children by that column would find none and report a root-only count as
+      // a complete tree. The rows below are what the DERIVED_VERSION bump
+      // re-derives; until a session reaches that version the roll-up reports
+      // itself unmeasured rather than summing a partial tree.
+    },
+  },
 ];
 
 /**

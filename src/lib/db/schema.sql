@@ -345,6 +345,37 @@ CREATE INDEX tool_uses_by_agent   ON tool_uses(agent_name) WHERE agent_name IS N
 CREATE INDEX tool_uses_by_skill   ON tool_uses(skill_name) WHERE skill_name IS NOT NULL;
 CREATE INDEX tool_uses_by_mcp     ON tool_uses(mcp_server) WHERE mcp_server IS NOT NULL;
 
+-- ─── sidechain_tool_uses ─────────────────────────────────────────────────
+-- Schema v25 / DERIVED_VERSION 20 (#395). Tool calls made inside SUBAGENT
+-- (sidechain) turns, one row per call.
+--
+-- `tool_uses` holds primary turns only and always has — every query above
+-- reads it with no `is_sidechain` predicate, so subagent calls cannot go in
+-- there without moving /usage, /agents, /skills, /costs and the denial
+-- analytics all at once. This table is the separate fact: how much tool work
+-- happened *below* a session, available to the delegation roll-up without
+-- redefining anything already on screen.
+--
+-- Keyed on `tool_use_id` so the write is idempotent. A session may be written
+-- across several passes (`appendSessionTail` amends as the file grows) and
+-- parse-local dedupe state does not survive between them, so a per-tool
+-- counter would have to be additive — and a tool block re-logged across a
+-- window boundary would be counted twice, permanently. Every one of the
+-- 37,394 observed blocks carries an id.
+--
+-- `tool_name` as observed, not a resolved spawn/search bucket: read-time keeps
+-- the interpretation.
+
+CREATE TABLE sidechain_tool_uses (
+  session_id  TEXT NOT NULL,
+  tool_use_id TEXT NOT NULL,
+  tool_name   TEXT NOT NULL,
+  PRIMARY KEY (session_id, tool_use_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX idx_sidechain_tool_uses_name ON sidechain_tool_uses(tool_name);
+
 -- ─── file_edits ──────────────────────────────────────────────────────────
 -- Denormalized "this turn produced a write/edit on this file" projection.
 -- Drives the hot-file detector and file-coupling diagrams from the TODO.

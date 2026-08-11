@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 19;
+export const DERIVED_VERSION = 20;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -334,6 +334,31 @@ export const DERIVED_VERSION = 19;
 //     — re-ingested in isolation it stored 2,694 `tool_uses` against 2,694
 //     distinct `tool_use_id`s in the file, `Agent` 6 -> 72, and 2,350
 //     assistant turns, matching the raw counts exactly.
+// 20 — #395: `sidechain_tool_uses` — the tool calls made inside subagent turns,
+//     which no prior parse produced because no table could hold them.
+//     `tool_uses` has only ever carried primary turns, so the cap comparison on
+//     /sessions asked a table that structurally could not answer and read the
+//     resulting zero as "no nested work". With these rows, plus parent linkage
+//     derived from `sessions.file_path` at read time, a session's whole
+//     delegation tree becomes countable for the first time.
+//
+//     **This bump is load-bearing, not bookkeeping.** The roll-up refuses to
+//     report a tree total unless the root AND every linked child is stamped at
+//     20 — see `sessionsListFromDb`. Without the bump, a v19 index would carry
+//     the new columns as empty and the roll-up would silently equal the
+//     root-only count it replaced: the partial-count comparison #395 exists to
+//     stop, wearing the new field's name. `stale ⇒ unmeasured` is only
+//     expressible because the version moved.
+//
+//     **Cost.** None on its own — v19's full re-parse was already outstanding
+//     and unrun on the reference index (found at 17). Shipping both in one
+//     release means one pass (~1 hour, 6,036 sessions) delivers #426 and #395
+//     together instead of two. Verified against the corpus that motivated it:
+//     1,260 subagent transcripts, 37,394 `tool_use` blocks over 37,311 distinct
+//     ids — hence rows keyed on `tool_use_id` rather than a per-tool counter,
+//     which would double a re-log straddling a tail-window boundary and stay
+//     wrong until the next full re-parse. `Agent` 62 and `WebSearch` 123 nested,
+//     none of which had ever reached the index.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

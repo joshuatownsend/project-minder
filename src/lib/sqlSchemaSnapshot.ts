@@ -1,4 +1,4 @@
-// Last verified: schema version 24 (src/lib/db/schema.sql + migrations v1-v24)
+// Last verified: schema version 25 (src/lib/db/schema.sql + migrations v1-v25)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -66,6 +66,11 @@ export const SQL_SCHEMA: TableSchema[] = [
       // v20 (A1)
       "denial_kind",
     ],
+  },
+  {
+    // v25 (#395): subagent tool calls, which `tool_uses` has never carried.
+    table: "sidechain_tool_uses",
+    columns: ["session_id", "tool_use_id", "tool_name"],
   },
   {
     table: "session_hook_runs",

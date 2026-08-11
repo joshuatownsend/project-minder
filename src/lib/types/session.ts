@@ -1,3 +1,5 @@
+import type { TreeDelegationCounts } from "@/lib/usage/delegationTree";
+
 export type SessionStatus = "working" | "needs_attention" | "idle";
 
 export type LiveSessionStatus = "working" | "approval" | "waiting" | "other";
@@ -49,6 +51,22 @@ export interface SessionSummary {
   modelsUsed: string[];
   gitBranch?: string;
   subagentCount: number;
+  /**
+   * #395: delegation counts summed over the session's whole subagent tree,
+   * for comparison against Claude Code's per-session caps.
+   *
+   * Distinct from `subagentCount` / `toolUsage` rather than replacing them:
+   * those mean "calls made by the root turn set", which is what /costs, /stats
+   * and the per-session views are built on. This one means "calls made anywhere
+   * below this session", which is the only thing a per-session cap can be
+   * compared against.
+   *
+   * `undefined` means UNMEASURED, never zero — the index has not been re-derived
+   * far enough to know the tree, or the file-parse backend is serving (it walks
+   * top-level transcripts only). Consumers must suppress the comparison rather
+   * than substitute the root-only count.
+   */
+  treeDelegation?: TreeDelegationCounts;
   errorCount: number;
   isActive: boolean;
   status: SessionStatus;

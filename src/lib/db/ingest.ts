@@ -502,6 +502,21 @@ interface ParsedSession {
    * INSERT OR IGNORE on `session_tickets` makes repeated passes a NOOP.
    */
   tickets: TicketLink[];
+  /**
+   * #395: `tool_use_id` → tool name, for calls made in SIDECHAIN turns.
+   *
+   * The counterpart to `tool_uses`, which holds primary turns only and always
+   * has. A subagent's tool calls have never been representable in the index at
+   * all, which is why the delegation caps could not see nested work: the read
+   * side asked a table that structurally could not answer, and got zero.
+   *
+   * Keyed by id rather than tallied per tool so the write is idempotent — a
+   * session can be written across several passes, and dedupe state does not
+   * survive between them. One logical call is emitted on as many lines as its
+   * message has blocks (#426): 37,394 blocks over 37,311 distinct ids across
+   * 1,260 subagent transcripts.
+   */
+  sidechainToolUses: Map<string, string>;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -1034,6 +1049,35 @@ async function readJsonlSession(
     searchText?: string;
   }> = [];
 
+  /**
+   * #395: `tool_use_id` → tool name, for calls made in sidechain turns.
+   *
+   * Keying by id rather than tallying is what makes this survivable. Claude
+   * Code emits one JSONL line per content block, so a message that called three
+   * tools arrives as three lines sharing one `message.id`, and a block can be
+   * re-logged (83 times in 37,394 blocks locally). A per-tool counter would
+   * have to be written additively — the tail path amends a session in place
+   * rather than replacing it — so a re-log straddling a window boundary would
+   * be added twice and stay wrong until the next full re-parse. Carrying the
+   * ids through to the write instead makes `INSERT OR IGNORE` settle it, with
+   * no dedupe state needing to survive between parses.
+   *
+   * A block with no id would be unkeyable and is dropped; none exist in the
+   * 37,394 observed (Codex review of #428).
+   */
+  const sidechainToolUses = new Map<string, string>();
+  function collectSidechainTools(content: unknown): void {
+    if (!Array.isArray(content)) return;
+    for (const b of content as Array<{ type?: string; name?: unknown; id?: unknown }>) {
+      if (b?.type !== "tool_use") continue;
+      if (typeof b.id !== "string" || !b.id) continue;
+      // Plain `set`, no first-wins guard: the id IS the identity of the call,
+      // so a repeat carries the same name and the guard was unobservable —
+      // mutation testing removed it with every test still green.
+      sidechainToolUses.set(b.id, normalizeToolName(b.name));
+    }
+  }
+
   const tParse = PROFILE ? performance.now() : 0;
   for (const { line, entry } of parsedLines) {
     // Advance byte cursor BEFORE any continues so the offset is correct
@@ -1121,6 +1165,7 @@ async function readJsonlSession(
     // is untouched (identical to the pre-A1 skip for every other purpose).
     if (entry.isSidechain) {
       if (entry.type === "assistant") {
+        collectSidechainTools(entry.message?.content);
         const model = entry.message?.model;
         if (model && model !== "<synthetic>") {
           const messageId =
@@ -1732,6 +1777,7 @@ async function readJsonlSession(
       fileMtimeMs,
       fileSize,
       byteOffset: safeOffset,
+      sidechainToolUses,
       startTs,
       endTs,
       primaryModel,
@@ -1899,6 +1945,37 @@ function safeComputeQuality(
 // ── DB writers ─────────────────────────────────────────────────────────────
 
 /**
+ * #395: persist subagent tool calls, idempotently.
+ *
+ * `INSERT OR IGNORE` on `(session_id, tool_use_id)` rather than an additive
+ * counter, because a session is not always written in one pass:
+ * `appendSessionTail` amends it in place as the file grows, and no dedupe state
+ * survives between parses. An additive counter would therefore double a tool
+ * block re-logged across a window boundary and stay wrong until the next full
+ * re-parse; a replacing counter would report only the final window, making a
+ * long-running session's subagent work *shrink* as it ran. Keying on the id
+ * makes both questions moot — running it twice over the same bytes is a no-op.
+ *
+ * Returns rows actually inserted (not attempted), for the caller's tally.
+ */
+function writeSidechainToolUses(
+  db: DatabaseT.Database,
+  sessionId: string,
+  toolUses: Map<string, string>
+): number {
+  if (toolUses.size === 0) return 0;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO sidechain_tool_uses (session_id, tool_use_id, tool_name)
+     VALUES (?, ?, ?)`
+  );
+  let rows = 0;
+  for (const [toolUseId, toolName] of toolUses) {
+    rows += Number(stmt.run(sessionId, toolUseId, toolName).changes ?? 0);
+  }
+  return rows;
+}
+
+/**
  * Write one parsed session. Caller wraps in a transaction. On a re-parse of
  * an existing session, we DELETE the old session row first (cascading FK
  * deletes wipe children) then INSERT fresh — simpler and more correct than
@@ -2063,6 +2140,12 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   });
   rows++;
   if (PROFILE) tick("write.insertSession", performance.now() - tInsertSession);
+
+  // #395: subagent tool calls. The `DELETE FROM sessions` above cascades these
+  // away on a rewrite, so this pass rebuilds them exactly; the same statement
+  // serves `appendSessionTail`, which does NOT delete first and relies on the
+  // id key to ignore what it has already stored.
+  rows += writeSidechainToolUses(db, s.sessionId, s.sidechainToolUses);
 
   // A1 one-to-many session metadata. DELETE-then-INSERT rather than INSERT OR
   // IGNORE: these have no natural unique key (the same hook command runs many
@@ -2633,6 +2716,12 @@ function appendSessionTail(
     const result = insertSessionTicket.run(sessionId, t.url, t.provider, t.key);
     rows += Number(result.changes ?? 0);
   }
+
+  // #395: this window's subagent tool calls join whatever earlier windows
+  // recorded. Keyed on `tool_use_id`, so a call re-logged across the boundary
+  // between two windows settles to one row rather than being counted twice —
+  // see `writeSidechainToolUses`.
+  rows += writeSidechainToolUses(db, sessionId, parsed.sidechainToolUses);
 
   for (const t of parsed.turns) {
     insertTurn.run({
@@ -3478,6 +3567,11 @@ export function buildAdapterParsedSession(
     // Non-Claude sessions are always full-replaced (no tail-append), so the
     // safe cursor is simply the end of the file.
     byteOffset: fileSize,
+    // #395: a Claude-transcript concept. No other adapter marks turns as
+    // sidechain, so this stays empty rather than being guessed at — and an
+    // empty map means "this session records no subagent tool calls", which for
+    // a non-Claude session is true rather than merely unmeasured.
+    sidechainToolUses: new Map<string, string>(),
     startTs,
     endTs,
     primaryModel: mostFrequent(modelCounts),
