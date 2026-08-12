@@ -1,5 +1,19 @@
 # Insights
 
+<!-- insight:a575c492aee4 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-12T16:49:16.749Z -->
+## ★ Insight
+- The site's publish path is fully automated: `gh-pages-publish.yml` mirrors `site/` → the orphan `gh-pages` branch on any push to `main` touching `site/**`. So "running the workflow" really means *changing `site/` and merging* — never touching `gh-pages` by hand.
+- `site-screenshots-check.yml` is deliberately one-directional: prose-only changes pass, but screenshots without prose fail. That asymmetry encodes the real failure mode (regenerating images and forgetting the captions).
+- Probing the live app before writing copy just paid off — `/board` has **0 issues portfolio-wide** and project-minder has no `OPERATIONS.md`, so a naive capture would have shipped empty-state screenshots onto the landing page.
+
+---
+
+<!-- insight:ad7f1086be68 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T15:37:07.408Z -->
+## ★ Insight
+The trap: git's merge abort protects *bytes that exist nowhere else*, not the file. Once the same path is ignored, checkout classifies it as expendable and the protection vanishes. So testing one verb told me nothing about the other — I generalized from `merge` to `switch` and got it wrong. Codex tested the verb I hadn't.
+
+---
+
 <!-- insight:0f5a2b6b3b13 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T15:16:32.241Z -->
 ## ★ Insight
 The asymmetry between Case A and Case B is git protecting *working-tree changes*, not the file. A clean file is fully represented in history, so deleting it destroys nothing git can't reproduce — hence no prompt. The modified file holds bytes that exist nowhere else, so the merge aborts. Git's safety model is about recoverability, not about whether you wanted the file.

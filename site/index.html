@@ -54,7 +54,7 @@
       <div class="feature-row feature-row--flip">
         <div class="feature-text">
           <h2>Claude Code Integration</h2>
-          <p>Dashboard cards show a live <strong>green "coding"</strong> or <strong>amber "waiting on you"</strong> badge when a Claude session is active — inferred from the JSONL tail and refreshed automatically every 15 seconds. When the Claude CLI is recent enough to expose <code>claude agents --json</code>, the badge gains two further states: a solid green <strong>"live"</strong> with PID and session name when the CLI confirms a running process, and a dim outlined <strong>"live?"</strong> that flags stale hook events from a crashed session the CLI no longer sees. The Sessions browser supports <em>full-text content search</em> across message bodies (not just prompts), auto-refreshes without a manual reload, and highlights matched snippets inline. <em>Session recaps</em> — written by Claude Code's <code>/recap</code> command — surface as the primary session label with an amber badge, with full recap history on the detail page. Session timelines render fenced code blocks and inline <code>code</code> spans. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories — worktree sessions are merged into their parent project — with CSV/JSON export and a <strong>Compare</strong> toggle that overlays a delta strip diffing the current period against the immediately preceding window of equal length.</p>
+          <p>Dashboard cards show a live <strong>green "coding"</strong> or <strong>amber "waiting on you"</strong> badge when a Claude session is active — inferred from the JSONL tail and refreshed automatically every 15 seconds. When the Claude CLI is recent enough to expose <code>claude agents --json</code>, the badge gains two further states: a solid green <strong>"live"</strong> with PID and session name when the CLI confirms a running process, and a dim outlined <strong>"live?"</strong> that flags stale hook events from a crashed session the CLI no longer sees. The Sessions browser supports <em>full-text content search</em> across message bodies (not just prompts), auto-refreshes without a manual reload, and highlights matched snippets inline. <em>Session recaps</em> — written by Claude Code's <code>/recap</code> command — surface as the primary session label with an amber badge, with full recap history on the detail page. Session timelines render fenced code blocks and inline <code>code</code> spans. <em>Insights extraction</em> scrapes <code>★ Insight</code> blocks from conversation history into searchable per-project files. The Usage dashboard breaks down token spend by model, project, and 13 activity categories — worktree sessions are merged into their parent project — with CSV/JSON export and a <strong>Compare</strong> toggle that overlays a delta strip diffing the current period against the immediately preceding window of equal length. Sessions carry Claude Code's own title when it has set one, an <em>entrypoint</em> filter separates sessions you started by hand from scripted and scheduled runs, a permission-mode chip marks where the session switched modes on the timeline, and a per-session <strong>Hooks</strong> tab shows every hook that fired.</p>
           <div class="secondary-shots">
             <img src="screenshots/session-detail.png" alt="Session detail with timeline and tool usage">
             <img src="screenshots/insights-browser.png" alt="Cross-project insights browser">
@@ -110,14 +110,30 @@
         </div>
       </div>
 
+      <!-- Portfolio Command Deck -->
+      <div class="feature-row feature-row--flip">
+        <div class="feature-text">
+          <h2>Portfolio Command Deck</h2>
+          <p>Planning that lives in your repo instead of a SaaS. <code>BOARD.md</code> is a plain-markdown planning board of epics and issues with stable IDs, parsed into a cross-project <strong>Board</strong> with search plus status and project filters, and a per-project Board tab with inline status editing and an add-to-Inbox field. Every write goes through a serializing writer that resolves the canonical file, locks it, writes atomically, and re-parses, so the file on disk stays the source of truth and your hand edits are never clobbered. Planning is canonical to the main checkout: a write from inside a worktree redirects to the parent <code>BOARD.md</code> so plans don't fragment per branch. Any issue can be <strong>promoted to a dispatcher task</strong> in one click, which moves it to <em>doing</em> and back to <em>done</em> when the task finishes. Claude can drive the same board over MCP — <code>board_create_issue</code>, <code>board_log_finding</code>, <code>board_postpone</code>, <code>board_promote_to_task</code> — so an agent can file what it found without leaving the session.</p>
+          <p>The <strong>Ops panel</strong> answers "who gets paged, and how do I restore this." Half of it is auto-detected from what's already in the repo: deploy targets, external services, the database and its managed provider (Neon, PlanetScale, Supabase, Upstash, Railway, Render, inferred from <code>DATABASE_URL</code>), Dependabot schedules, and every Vercel and GitHub Actions cron merged into one list. The other half is the curated <code>OPERATIONS.md</code> runbook: backups, monitoring and alerting, on-call and escalation, secrets and rotation, restore and recovery. Headings are matched tolerantly so synonyms still land in the right section and unknown ones are kept verbatim, and a coverage line ("3 of 9 operational facts captured") plus per-section prompts tell you exactly what's still undocumented.</p>
+          <p>A <strong>GitHub activity strip</strong> on each card and detail page shows open PRs, CI state, and last push, read through your own already-authenticated <code>gh</code> CLI. No token in a config file, no shell string (arguments go as an array and <code>owner/repo</code> is validated first), and a missing or unauthenticated <code>gh</code> degrades to a quiet "unavailable" instead of breaking a scan. Open PRs are cross-linked back to the Claude sessions that created them.</p>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/ops-panel.png" alt="Ops panel — auto-detected deploy targets, services, database, and dependency update schedules alongside the OPERATIONS.md runbook" class="shot">
+        </div>
+      </div>
+
       <!-- Observability & Setup -->
       <div class="feature-row feature-row--flip">
         <div class="feature-text">
           <h2>Observability &amp; Setup</h2>
           <p>The Stats dashboard gives a portfolio-wide overview: tech stack distribution, project health, and Claude Code usage across all sessions. Each project earns an <strong>A–F efficiency grade</strong> from its session analytics, snapshotted once per calendar day so the dashboard can classify a <em>trend</em> — a worded <code>↑ improving</code> / <code>↓ declining</code> / <code>= stable</code> / <code>• new</code> badge on the project's Efficiency tab and a compact green ↑ / red ↓ arrow next to the grade letter on each card — by comparing today's grade against the most-recent prior-day snapshot. Dev server control lets you start, stop, and restart managed servers from the UI with live stdout/stderr output. The Setup guide provides copy-paste CLAUDE.md instruction blocks and Claude Code hooks — apply them to any managed project with one click.</p>
+          <p>A <strong>Telemetry</strong> section folds in what Claude Code's own OpenTelemetry stream and session transcripts report about themselves: <em>Permission Denials</em> (what Claude asked for and you refused, grouped by tool), <em>Tool Provenance</em> (which tools came from MCP servers versus built-ins), <em>Hook Activity</em> with an explicit source toggle between the OTEL and transcript backends, and <em>Tool Latency</em> percentiles. One period control drives the whole section, and every card names the data source it read, so a number is never ambiguous about where it came from.</p>
+          <p>Per-project <strong>code intelligence</strong> tabs read the same session index from the other direction: <em>Hot Files</em> ranks what Claude actually touches most, <em>File Coupling</em> surfaces files that keep getting edited together, and <em>Error Propagation</em> traces which failures cascaded into others.</p>
           <div class="secondary-shots">
             <img src="screenshots/setup.png" alt="Setup guide page">
             <img src="screenshots/config.png" alt="Config page with multiple scan roots">
+            <img src="screenshots/code-intel.png" alt="Hot Files tab — the files Claude edits most in a project, ranked by edit count">
           </div>
         </div>
         <div class="feature-shot">
@@ -161,6 +177,7 @@
         <div class="feature-text">
           <h2>Templates &amp; Library</h2>
           <p><strong>Templates</strong> package a curated bundle of Claude Code config — agents, skills, commands, hooks, MCP servers, plugin enables, GitHub Actions workflows, and selected <code>settings.json</code> keys — and apply it to other projects (or new projects) in one click. Templates come in two flavors: <em>live</em> (a pointer to a source project where edits flow through) and <em>snapshot</em> (a frozen copy under <code>.minder/templates/&lt;slug&gt;/bundle/</code>). The apply layer handles conflicts with <em>skip</em>, <em>overwrite</em>, <em>merge</em>, and <em>rename</em> policies, and every apply runs through a dry-run preview first. The <strong>Library</strong> ships 16 production-ready starter items — commands like <code>/review</code> and <code>/commit</code>, skills like <code>code-reviewer</code> and <code>test-writer</code>, agents like <code>backend-architect</code> — applied with the same idempotent layer. The <strong>New Project wizard</strong> chains it all: name a directory, pick a stack, choose library items, and Project Minder bootstraps the repo with <code>git init</code> and applies the selection.</p>
+          <p><strong>Quick Launch</strong> closes the loop. A row of one-click chips on each project detail page (and a global row with a project picker) dispatches a curated workflow or one of your own user-invocable skills straight into a Claude Code task, already scoped to that project's directory. It is the gentle on-ramp to the same dispatcher the Swarms composer drives.</p>
           <div class="secondary-shots">
             <img src="screenshots/library.png" alt="Curated Library — 16 production-ready commands, skills, and agents">
             <img src="screenshots/new-project-wizard.png" alt="New Project wizard — stack and library selection">
@@ -200,6 +217,21 @@
         </div>
       </div>
 
+      <!-- Cost & Time Accounting -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <h2>Cost &amp; Time Accounting</h2>
+          <p>The <strong>Cost Report</strong> ranks every project by spend for a single period (today, 7 days, 30 days, 90 days, 1 year, or all time) in one sortable table, and each row drops straight into that project's own Costs tab with per-model and per-category breakdowns. Pricing is tier-aware rather than a flat per-token guess: long-context requests bill at the above-200K rates <em>including</em> the cache read and write rates that make up most of a long-context bill, and Fast mode bills as the premium tier it actually is. Stored per-turn costs re-price themselves when a pricing formula changes, so a correction repairs your history instead of only applying to sessions you run afterwards.</p>
+          <p><strong>Timecard</strong> answers a different question: not what the tokens cost, but how much of the session <em>you</em> were actually there for, in billable hours. It reconstructs attended time from the transcript's own timing and discounts the overlap when several agents were running at once, so two sessions in the same hour bill as one hour and not two. Three thresholds are tunable in the UI with the corpus-measured default shown for each: an <em>idle threshold</em> for how long the agent may sit silent before your next prompt and still count as watching, an <em>agent-run cap</em> for the most credit one uninterrupted run can earn, and a flat <em>tail credit</em> for reading and verifying after your last prompt, which leaves no transcript trace. Totals break down per project in decimal hours, with CSV export ready to paste into a timesheet.</p>
+          <div class="secondary-shots">
+            <img src="screenshots/costs.png" alt="Cost Report — every project ranked by spend for one period">
+          </div>
+        </div>
+        <div class="feature-shot">
+          <img src="screenshots/timecard.png" alt="Timecard — billable hours with a concurrency discount and tunable idle, run-cap, and tail thresholds" class="shot">
+        </div>
+      </div>
+
       <!-- Notifications & Budgets -->
       <div class="feature-row feature-row--flip">
         <div class="feature-text">
@@ -219,7 +251,10 @@
         <div class="feature-text">
           <h2>Power-User Tools</h2>
           <p>For when you need to go deeper. The <strong>Commands catalog</strong> indexes every slash command across user, plugin, and project scope with allowed-tools, argument hints, body excerpts, and one-click "copy to project". The <strong>SQL browser</strong> exposes the indexed session database directly — full schema sidebar and a results table, for when the built-in dashboards don't slice it the way you need. The <strong>Plans browser</strong> tracks GSD phase plans across all repos. <strong>Schedule</strong> manages cron-scheduled remote agent routines (create, update, run on demand). <strong>Health</strong> watches port conflicts, file-watcher status, MCP server health, and database integrity. The <strong>Insights Report viewer</strong> sandboxes and renders <code>claude /insights</code>'s HTML output inline with server-side sanitization, polling for regeneration. <strong>Adapter settings</strong> enable Claude Code, Codex, and Gemini session sources independently so you can index sessions from every coding agent you use. The <strong>Harnesses</strong> page (route <code>/adapters</code>) goes one step further with a read-only view of an enabled harness's own config home — the Codex adapter reads <code>~/.codex/config.toml</code> and its instruction files — with <em>secret redaction</em> applied on the server before anything leaves it: tokens, API keys, and auth headers are blanked wholesale while the surrounding keys stay visible, so you can see <em>that</em> something is configured without exposing its value. View-only by design, never an edit or copy affordance.</p>
+          <p>The <strong>Workflows catalog</strong> folds Claude Code's per-session workflow scripts into one row per workflow rather than one per run, which turns a directory of near-identical copies into an answer to "which workflows do I actually use, and how often." The <strong>Instructions browser</strong> is its counterpart for the other harnesses: enable the Codex or Gemini adapter and it catalogs their native instruction files (Codex <code>rules</code>, <code>AGENTS.md</code>, and <code>prompts</code>; Gemini's <code>GEMINI.md</code>) with the projected context cost of each, so you can see what a session pays to read before it starts. Read-only, and opt-in per harness.</p>
+          <p>And Project Minder answers questions from inside Claude, not just in the browser. It ships its own <strong>MCP server</strong> over Streamable HTTP: point Claude Code or Claude Desktop at it and Claude can query your token usage, sessions, agents and skills catalogs, OTEL telemetry, manual steps, insights, git status, and portfolio stats directly, plus write to the board. Tools call the library functions in-process rather than looping back over HTTP, and DNS-rebinding protection pins the server to localhost so nothing off-machine can reach it.</p>
           <div class="secondary-shots">
+            <img src="screenshots/workflows.png" alt="Workflows catalog — one row per workflow with run counts, not one per session copy">
             <img src="screenshots/sql.png" alt="SQL browser — direct queries against the indexed session database">
             <img src="screenshots/plans.png" alt="Plans browser — GSD phase plans across all projects">
             <img src="screenshots/schedule.png" alt="Schedule — cron-driven remote agent routines">
@@ -240,13 +275,19 @@
   <section class="quick-start" id="quick-start">
     <div class="container">
       <h2>Quick Start</h2>
+      <p class="prereqs">The fastest route is the <strong>desktop app</strong>: grab the installer for your platform from <a href="https://github.com/joshuatownsend/project-minder/releases">GitHub Releases</a> (Windows <code>.exe</code>, macOS <code>.dmg</code>, Linux <code>.AppImage</code> / <code>.deb</code>). It bundles the dashboard server and its own Node runtime, drops a tray icon, and opens the UI at <code>localhost:4100</code>. Nothing else to install.</p>
+      <p class="prereqs">Or run it from source:</p>
       <pre class="code-block"><code>git clone https://github.com/joshuatownsend/project-minder.git
 cd project-minder
-npm install
+pnpm install
 <span class="cmt"># create .minder.json in the repo root:</span>
 <span class="cmt"># { "devRoots": ["~/dev"] }  (Windows: "C:\\dev")</span>
-npm run dev   <span class="cmt"># open http://localhost:4100</span></code></pre>
-      <p class="prereqs"><strong>Prerequisites:</strong> Node.js ≥ 22.12 &nbsp;·&nbsp; macOS, Linux, or Windows</p>
+pnpm dev   <span class="cmt"># open http://localhost:4100</span>
+
+<span class="cmt"># just want a look around? demo mode serves deterministic</span>
+<span class="cmt"># sample data for every screen, and reads nothing of yours:</span>
+MINDER_DEMO=1 pnpm dev</code></pre>
+      <p class="prereqs"><strong>Prerequisites:</strong> Node.js ≥ 22.12 and <a href="https://pnpm.io">pnpm</a> (<code>corepack enable</code> picks up the pinned version) &nbsp;·&nbsp; macOS, Linux, or Windows</p>
     </div>
   </section>
 
