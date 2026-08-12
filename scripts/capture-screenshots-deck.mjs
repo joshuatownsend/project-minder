@@ -146,11 +146,15 @@ async function waitForTextGone(page, text, timeout = DEFAULT_TEXT_WAIT_MS) {
 // render as nothing. A panel that is empty because its data never arrived
 // looks identical to one that finished, so those shots need positive evidence
 // that the feature is actually on screen before the PNG is overwritten.
+// Case-insensitive on purpose. `innerText` returns *rendered* text, so a label
+// written as "Thresholds" in the source arrives as "THRESHOLDS" when CSS
+// uppercases it — a case-sensitive check failed exactly that way here, which
+// would have failed the capture on a perfectly healthy page.
 async function waitForTextPresent(page, text, timeout = DEFAULT_TEXT_WAIT_MS) {
   try {
     await page.waitForFunction(
-      (t) => (document.body.innerText || '').includes(t),
-      text,
+      (t) => (document.body.innerText || '').toLowerCase().includes(t),
+      text.toLowerCase(),
       { timeout, polling: 500 },
     );
     return true;
@@ -234,8 +238,15 @@ async function tabIsActive(page, label) {
       waitTextGone: 'Analyzing file activity', waitTextTimeout: 180000 },
     // /costs runs last: it is by far the slowest route, so a timeout here
     // costs nothing that has not already been captured.
-    { group: 'Cost & time', name: 'timecard', route: '/timecard', settle: 1500 },
-    { group: 'Cost & time', name: 'costs', route: '/costs', settle: 1200 },
+    // Both cost routes navigate fine and then render an *empty* report when
+    // their child API fails: EngagementDashboard.tsx:97 prints "Engagement
+    // report unavailable." on a 503, and CostReportDashboard prints "No cost
+    // data for this period" with no rows. Neither is a skeleton, so only a
+    // positive assertion keeps a published PNG from being replaced by one.
+    { group: 'Cost & time', name: 'timecard', route: '/timecard', settle: 1500,
+      requireText: 'Thresholds' },
+    { group: 'Cost & time', name: 'costs', route: '/costs', settle: 1200,
+      requireText: 'SHARE' },
   ];
 
   // MINDER_CAPTURE_ONLY=costs,timecard re-shoots a subset. /costs is slow
