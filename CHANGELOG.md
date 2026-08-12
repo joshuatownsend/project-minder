@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-08-11
+
+*A one-line dependency revert, and nothing else.* Four of the app's main pages returned 500 on every request in 1.10.0 — `/usage`, `/stats`, `/skills` and `/sessions` — on a healthy, fully-indexed database. The cause was not in this codebase: **Next.js 16.3.0** miscompiles an `async` function in the read-side data façade so that a value the function provably returns arrives at its caller as `undefined`. Pinning back to 16.2.12 restores all four.
+
+> ### ⚠️ This re-opens four Dependabot alerts
+>
+> The 16.3.0 upgrade closed four postcss advisories (#396). Reverting the version brings them back. That is a deliberate trade: a transitive dev-time advisory is a smaller problem than four broken pages, and the alerts return the moment a fixed Next release lands.
+
+### Fixed
+
+- **`/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` no longer 500.** Bisected to `7d96242` (the Next.js 16.3.0 bump) against an isolated copy of a real 6,078-session index, then isolated further by taking that commit's *parent* and changing only the Next version — same application code, same config, same database, opposite result. Under 16.3.0 the façade logs `getUsage returning object [ 'report', 'meta' ]` while the route logs `getUsage returned undefined` for the same call. Reproduces on the first request after a cold boot against a large index; later requests in the same process sometimes succeed, which is why it reads as flaky rather than broken. `/api/agents` was never affected and served as the control throughout. (#432)
+
+### Changed
+
+- **Next.js 16.3.0 → 16.2.12**, and `eslint-config-next` with it. The payload-hygiene work that shipped alongside the upgrade — the `outputFileTracingExcludes` entries keeping `.env*`, `.mcp.json` and `.minder.json` out of the traced payload — is **kept**, since it is independent of the framework version.
+
 ## [1.10.0] - 2026-08-11
 
 *Two features, and a sweep through numbers that were quietly wrong.* The additions are a **billable-hours timecard** and an **entrypoint filter** that separates two populations of session differing 61× in cost. The substance, though, is corrective: the index was storing roughly a quarter of the tool calls it saw, the delegation-cap warning could not see subagent work at all, and long-context bills were priced at standard rates. Each was invisible for the same reason — the system reporting the number could not represent the data it was missing, so every query against it confirmed the wrong answer. Node 20 support is removed.
