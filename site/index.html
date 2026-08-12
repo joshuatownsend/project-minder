@@ -224,7 +224,7 @@
       <div class="feature-row">
         <div class="feature-text">
           <h2>Cost &amp; Time Accounting</h2>
-          <p>The <strong>Cost Report</strong> ranks every project by spend for a single period (today, 7 days, 30 days, 90 days, 1 year, or all time) in one sortable table, and each row drops straight into that project's own Costs tab with per-model and per-category breakdowns. Pricing is tier-aware rather than a flat per-token guess: long-context requests bill at the above-200K rates <em>including</em> the cache read and write rates that make up most of a long-context bill, and Fast mode bills as the premium tier it actually is. Stored per-turn costs re-price themselves when a pricing formula changes, so a correction repairs your history instead of only applying to sessions you run afterwards.</p>
+          <p>The <strong>Cost Report</strong> ranks every project by spend for a single period (today, 7 days, 30 days, 90 days, 1 year, or all time) in one sortable table, and any row that matches a currently scanned project drops straight into that project's own Costs tab with per-model and per-category breakdowns. Spend from directories you no longer scan still appears in the ranking rather than quietly vanishing from your totals. Pricing is tier-aware rather than a flat per-token guess: long-context requests bill at the above-200K rates <em>including</em> the cache read and write rates that make up most of a long-context bill, and Fast mode bills as the premium tier it actually is. Stored per-turn costs re-price themselves when a pricing formula changes, so a correction repairs your history instead of only applying to sessions you run afterwards.</p>
           <p><strong>Timecard</strong> answers a different question: not what the tokens cost, but how much of the session <em>you</em> were actually there for, in billable hours. It reconstructs attended time from the transcript's own timing and discounts the overlap when several agents were running at once, so two sessions in the same hour bill as one hour and not two. Three thresholds are tunable in the UI with the corpus-measured default shown for each: an <em>idle threshold</em> for how long the agent may sit silent before your next prompt and still count as watching, an <em>agent-run cap</em> for the most credit one uninterrupted run can earn, and a flat <em>tail credit</em> for reading and verifying after your last prompt, which leaves no transcript trace. Totals break down per project in decimal hours, with CSV export ready to paste into a timesheet.</p>
           <div class="secondary-shots">
             <img src="screenshots/costs.png" alt="Cost Report — every project ranked by spend for one period">
@@ -278,7 +278,7 @@
   <section class="quick-start" id="quick-start">
     <div class="container">
       <h2>Quick Start</h2>
-      <p class="prereqs">The fastest route is the <strong>desktop app</strong>: grab the installer for your platform from <a href="https://github.com/joshuatownsend/project-minder/releases">GitHub Releases</a> (Windows <code>.exe</code>, macOS <code>.dmg</code>, Linux <code>.AppImage</code> / <code>.deb</code>). It bundles the dashboard server and its own Node runtime, drops a tray icon, and opens the UI at <code>localhost:4100</code>. Nothing else to install.</p>
+      <p class="prereqs">The fastest route is the <strong>desktop app</strong>: grab the installer for your platform from <a href="https://github.com/joshuatownsend/project-minder/releases">GitHub Releases</a> — Windows <code>.exe</code>, macOS Apple Silicon <code>.dmg</code>, macOS Intel <code>.app.tar.gz</code> (extract, then drag to Applications), Linux <code>.AppImage</code> / <code>.deb</code>. It bundles the dashboard server and its own Node runtime, drops a tray icon, and opens the UI at <code>localhost:4100</code>. Nothing else to install.</p>
       <p class="prereqs">Or run it from source:</p>
       <pre class="code-block"><code>git clone https://github.com/joshuatownsend/project-minder.git
 cd project-minder
@@ -289,7 +289,8 @@ pnpm dev   <span class="cmt"># open http://localhost:4100</span>
 
 <span class="cmt"># just want a look around? demo mode serves deterministic</span>
 <span class="cmt"># sample data for every screen, and reads nothing of yours:</span>
-MINDER_DEMO=1 pnpm dev</code></pre>
+MINDER_DEMO=1 pnpm dev              <span class="cmt"># macOS / Linux / Git Bash</span>
+$env:MINDER_DEMO=1; pnpm dev        <span class="cmt"># Windows PowerShell</span></code></pre>
       <p class="prereqs"><strong>Prerequisites:</strong> Node.js ≥ 22.12 and <a href="https://pnpm.io">pnpm</a> (<code>corepack enable</code> picks up the pinned version) &nbsp;·&nbsp; macOS, Linux, or Windows</p>
     </div>
   </section>

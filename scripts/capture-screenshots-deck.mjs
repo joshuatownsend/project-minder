@@ -99,7 +99,9 @@ async function go(page, route, settle = 1000, { base = BASE, stableTimeout = 600
 // their own loading sentence instead ("Analyzing file activity…") sail straight
 // through it, and the shot catches the spinner rather than the feature. Give
 // those a literal string to wait out.
-async function waitForTextGone(page, text, timeout = 60000) {
+const DEFAULT_TEXT_WAIT_MS = 60000;
+
+async function waitForTextGone(page, text, timeout = DEFAULT_TEXT_WAIT_MS) {
   try {
     await page.waitForFunction(
       (t) => !(document.body.innerText || '').includes(t),
@@ -112,17 +114,29 @@ async function waitForTextGone(page, text, timeout = 60000) {
   }
 }
 
-// Assert a tab actually rendered before shooting it. ProjectDetail silently
-// falls back to Overview for a `?tab=` it does not offer (the deep-link guard),
-// so without this check a missing Ops tab would ship an Overview screenshot
-// captioned as the ops runbook.
+// Assert the requested tab is actually *selected* before shooting it.
+// ProjectDetail silently falls back to Overview for a `?tab=` it does not
+// offer, so without this check a rejected `?tab=ops` would ship an Overview
+// screenshot captioned as the ops runbook.
+//
+// Presence of the button is not enough: the tab strip can list a tab that is
+// not the active one. ProjectDetail marks selection with inline styles only —
+// no `aria-selected`, no data attribute (see the tabs.map in
+// src/components/ProjectDetail.tsx) — so selection has to be read back off the
+// computed style. The active tab is the only one with a non-transparent bottom
+// border.
 async function tabIsActive(page, label) {
   try {
     await page.waitForSelector(`button:has-text("${label}")`, { timeout: 4000 });
-    return true;
   } catch {
     return false;
   }
+  return page.evaluate((text) => {
+    const isTransparent = (c) => !c || c === 'transparent' || /^rgba\(.*,\s*0\)$/.test(c);
+    return [...document.querySelectorAll('button')]
+      .filter((b) => (b.textContent || '').trim().startsWith(text))
+      .some((b) => !isTransparent(getComputedStyle(b).borderBottomColor));
+  }, label);
 }
 
 (async () => {
@@ -189,8 +203,10 @@ async function tabIsActive(page, label) {
       }
       if (s.waitTextGone && !(await waitForTextGone(page, s.waitTextGone, s.waitTextTimeout))) {
         // Shooting a stuck loading state is worse than shipping no shot: the
-        // page would advertise the feature with a spinner.
-        skipped.push(`${s.name} — still showing "${s.waitTextGone}" after 60s`);
+        // page would advertise the feature with a spinner. Report the budget
+        // that actually applied — it is per-shot, not a fixed 60s.
+        const waited = Math.round((s.waitTextTimeout ?? DEFAULT_TEXT_WAIT_MS) / 1000);
+        skipped.push(`${s.name} — still showing "${s.waitTextGone}" after ${waited}s`);
         console.warn(`  ⚠  ${s.name}.png skipped: never finished loading`);
         continue;
       }
