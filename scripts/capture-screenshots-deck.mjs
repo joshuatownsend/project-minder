@@ -163,7 +163,10 @@ async function tabIsActive(page, label) {
     { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE,
       why: 'set MINDER_CAPTURE_DEMO_BASE to a MINDER_DEMO=1 server (a real board is empty until you write BOARD.md)' },
     { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200 },
-    { group: 'Power tools', name: 'instructions', route: '/instructions', settle: 1200 },
+    // No /instructions shot on purpose. That catalog is opt-in per harness and
+    // renders an empty state until a Codex or Gemini adapter is enabled, so
+    // capturing it costs time and leaves an orphan PNG that site/index.html
+    // does not reference. Add it back only alongside prose that uses it.
     { group: 'Power tools', name: 'code-intel', route: '/project/project-minder?tab=hot-files', settle: 1500,
       requireTab: 'Hot Files', why: 'no Hot Files tab on project-minder',
       // The panel's own endpoints are slow on a large session index
