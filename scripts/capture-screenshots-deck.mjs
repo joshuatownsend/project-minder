@@ -105,7 +105,13 @@ async function hideTransientBanners(page) {
   }
 }
 
-async function go(page, route, settle = 1000, { base = BASE, stableTimeout = 60000, postSettle = 4000 } = {}) {
+// stableTimeout defaults to the same budget as navigation. It used to be a
+// fixed 60s, which was harmless while a stability timeout was swallowed — but
+// now that it *fails* the run, 60s is a hair-trigger on precisely the slowest
+// route: /costs is measured at ~60s cold. The wait short-circuits as soon as
+// the page is quiet for 1.5s, so a higher ceiling costs nothing on a page that
+// loads promptly; it only buys patience for one that does not.
+async function go(page, route, settle = 1000, { base = BASE, stableTimeout = NAV_TIMEOUT, postSettle = 4000 } = {}) {
   await page.goto(`${base}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await hideTransientBanners(page);
   await page.waitForTimeout(settle);
@@ -127,6 +133,23 @@ async function waitForTextGone(page, text, timeout = DEFAULT_TEXT_WAIT_MS) {
   try {
     await page.waitForFunction(
       (t) => !(document.body.innerText || '').includes(t),
+      text,
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The mirror of waitForTextGone, for shots whose subject can legitimately
+// render as nothing. A panel that is empty because its data never arrived
+// looks identical to one that finished, so those shots need positive evidence
+// that the feature is actually on screen before the PNG is overwritten.
+async function waitForTextPresent(page, text, timeout = DEFAULT_TEXT_WAIT_MS) {
+  try {
+    await page.waitForFunction(
+      (t) => (document.body.innerText || '').includes(t),
       text,
       { timeout, polling: 500 },
     );
@@ -181,14 +204,24 @@ async function tabIsActive(page, label) {
   const SHOTS = [
     { group: 'Command Deck', name: 'ops-panel', route: `/project/${OPS_PROJECT}?tab=ops`, settle: 1500,
       requireTab: 'Ops', why: `project "${OPS_PROJECT}" has no Ops tab — set MINDER_CAPTURE_OPS_PROJECT` },
-    { group: 'Command Deck', name: 'github-activity', route: '/project/project-minder', settle: 2000 },
+    // GithubActivityStrip is "quiet by design": it renders nothing at all when
+    // `gh` is missing, unauthenticated, or simply slower than the settle window
+    // (the cache can spend three sequential 8s `gh` calls). An empty strip is
+    // indistinguishable from a finished one, so this shot demands positive
+    // evidence rather than trusting the generic stability check.
+    { group: 'Command Deck', name: 'github-activity', route: '/project/project-minder', settle: 2000,
+      requireText: 'GITHUB' },
     // `optional` marks a shot site/index.html does not reference, so skipping
     // it is a normal outcome rather than a failure. Everything else is
     // published, and failing to regenerate a published shot must not exit 0 —
     // see the exit handling at the end of this file.
     { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE, optional: true,
       why: 'set MINDER_CAPTURE_DEMO_BASE to a MINDER_DEMO=1 server (a real board is empty until you write BOARD.md)' },
-    { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200 },
+    // WorkflowsBrowser prints a plain "Loading…" paragraph rather than a
+    // skeleton (src/components/WorkflowsBrowser.tsx:113), so waitForStableUI
+    // sails straight past it on a large workflow history.
+    { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200,
+      waitTextGone: 'Loading…' },
     // No /instructions shot on purpose. That catalog is opt-in per harness and
     // renders an empty state until a Codex or Gemini adapter is enabled, so
     // capturing it costs time and leaves an orphan PNG that site/index.html
@@ -235,6 +268,10 @@ async function tabIsActive(page, label) {
       }
       if (s.requireTab && !(await tabIsActive(page, s.requireTab))) {
         skip(s.why);
+        continue;
+      }
+      if (s.requireText && !(await waitForTextPresent(page, s.requireText, s.waitTextTimeout))) {
+        skip(`"${s.requireText}" never appeared — the feature this shot illustrates did not render`);
         continue;
       }
       if (s.waitTextGone && !(await waitForTextGone(page, s.waitTextGone, s.waitTextTimeout))) {
