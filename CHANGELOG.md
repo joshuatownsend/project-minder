@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A re-index no longer takes the dashboard down with it.** The packaged server now hosts ingest in a worker thread by default. `better-sqlite3` is synchronous, so a reconcile on the main thread monopolizes the event loop and the HTTP server accepts connections it never reads — after the 1.10.0 `DERIVED_VERSION` bump that meant **~3 hours of total unavailability** on a 6,078-session history, every route timing out including static ones, with the process pinned at ~101% of one core. Worker mode is what `workerHost.ts` was built for ("the HTTP server stays up"); it had simply never been switched on for the packaged path, whose `server.js` set only `MINDER_SERVER_ROOT`. (#431)
+
+  Both opt-outs keep working: `MINDER_INDEXER_WORKER=0` is honoured from the environment *or* `.env.local`, and `MINDER_INDEXER=0` still disables automatic index updates entirely — it takes precedence, so the worker cannot re-enable ingest you turned off. A worker that fails to spawn falls back to the in-process watcher, so ingest cannot end up off unintentionally either.
+
+- **Packaging now fails loudly if the ingest worker bundle is missing**, rather than warning and shipping a package that silently degrades back to the blocking in-process path. The generated `server.js` is also asserted to carry the worker default, so a future edit to that template can't quietly drop the fix.
+
+- **A repeatedly-crashing ingest worker now hands off instead of leaving the index frozen.** On exhausting its crash budget (5 non-zero exits in an hour) the host gave up without telling the caller, whose `startIngest()` had returned long before — so nothing restarted ingest and the SQL-backed views quietly went stale until the server was restarted. That was survivable while worker mode was a developer opt-in; with the packaged server now defaulting to it, the same path would strand an install with no ingest at all. The host now invokes the failure callback, which starts the in-process watcher. Related: the callback is registered unconditionally rather than only when a start handshake is sent, so it can no longer be silently dropped.
+
 ## [1.10.1] - 2026-08-11
 
 *A one-line dependency revert, and nothing else.* Four of the app's main pages returned 500 on every request in 1.10.0 — `/usage`, `/stats`, `/skills` and `/sessions` — on a healthy, fully-indexed database. The cause was not in this codebase: **Next.js 16.3.0** miscompiles an `async` function in the read-side data façade so that a value the function provably returns arrives at its caller as `undefined`. Pinning back to 16.2.12 restores all four.

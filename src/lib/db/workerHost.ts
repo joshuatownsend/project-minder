@@ -241,10 +241,15 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
   // ping/pong worker pass `sendStart: false` to keep behavior identical
   // to phase 1. Remembered on state so crash-respawn replays it.
   const sendStart = options.sendStart ?? true;
+  // Stored unconditionally, OUTSIDE the sendStart branch. The callback means
+  // "the worker cannot serve ingest — take over", not "the start handshake
+  // failed": the crash-budget path in the exit handler uses it too, and that
+  // can fire whether or not a handshake was ever sent. Keeping it inside the
+  // branch silently dropped the callback for any `sendStart: false` caller.
+  state.onStartFailure = options.onStartFailure ?? null;
   if (sendStart) {
     state.startOptions = options.watcherOptions ?? {};
     state.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
-    state.onStartFailure = options.onStartFailure ?? null;
     const startPromise = sendStartHandshake(state, state.startOptions, state.startTimeoutMs);
     if (options.awaitStart ?? true) {
       await startPromise;
@@ -531,12 +536,35 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     console.warn(`[ingest-worker] exited with code ${code}; scheduling respawn (${crashes} crashes in last hour)`);
 
     if (crashes >= MAX_RESPAWNS_PER_HOUR) {
+      // Hand off to the in-process watcher rather than stopping dead.
+      //
+      // This used to just give up, which was survivable while worker mode was
+      // an opt-in a developer had switched on: the advice was "restart the dev
+      // server". Now that the packaged server defaults to worker-hosted ingest
+      // (#431), the same path would leave every install with NO ingest at all
+      // — the index silently frozen, the SQL-backed views quietly going stale,
+      // and no dev server for the user to restart (PR #435 review, Codex P2).
+      //
+      // `startIngest()` has long since returned, so the only route back to a
+      // running watcher is the onStartFailure callback the caller registered.
+      // Cleared before invoking so a later crash of the handed-off state can't
+      // fire it twice; `startIngestWatcher` is itself idempotent, so a double
+      // call would be noisy rather than harmful, but once is the contract.
       // eslint-disable-next-line no-console
       console.warn(
         `[ingest-worker] crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour); ` +
-          `giving up. Restart the dev server to resume ingest.`
+          `giving up on the worker and falling back to the in-process watcher.`
       );
       state.worker = null;
+      const fail = state.onStartFailure;
+      state.onStartFailure = null;
+      if (fail) {
+        try {
+          fail(new Error(`ingest worker crash budget exceeded (${crashes} crashes in the last hour)`));
+        } catch {
+          /* swallow — a throwing callback must not take down the exit handler */
+        }
+      }
       return;
     }
 
