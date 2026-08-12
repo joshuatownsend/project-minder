@@ -171,6 +171,7 @@ function installSignalHandlers() {
     await run('node', ['scripts/capture-screenshots.mjs'], { env: captureEnv });
     await run('node', ['scripts/capture-agents-skills.mjs'], { env: captureEnv });
     await run('node', ['scripts/capture-screenshots-extended.mjs'], { env: captureEnv });
+    await run('node', ['scripts/capture-screenshots-deck.mjs'], { env: captureEnv });
   } finally {
     await killServer();
   }
