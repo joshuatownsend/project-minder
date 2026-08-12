@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:bf6184873d70 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T13:22:42.178Z -->
+## ★ Insight
+This is the characteristic risk of flipping a default: the code didn't change, but its consequences did. A rare degraded path on an opt-in becomes a guaranteed-eventually path on by-default. Codex found it by reasoning about what my change did to code I never touched — which is exactly the review I couldn't do for myself, because I was looking at my diff.
+
+---
+
 <!-- insight:30c8a99190ab | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T12:41:05.210Z -->
 ## ★ Insight
 Both Codex findings share one shape: the code was correct about *what* to decide and wrong about *where*. The wrapper knows the packaged/source distinction, which made it the tempting place — but it runs too early to see the operator's configuration, and too early to consult a flag whose meaning depends on another flag. Extracting `resolveIngestMode` moved the policy to a layer that can see everything it needs, and made a three-flag interaction unit-testable instead of only observable by booting a packaged server.
