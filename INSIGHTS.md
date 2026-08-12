@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:8ed4a073120f | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T22:07:58.869Z -->
+## ★ Insight
+This reframes the whole investigation. Everything I eliminated earlier — the data, the DB, pricing, module resolution, caching — was eliminated correctly; I was searching the application layer for a fault that lives under it. It also explains the single most confusing observation: an async function that provably returns an object while its caller receives `undefined` is close to impossible in correct JavaScript, but entirely possible if the framework compiling and invoking that function has a bug. The "impossible" symptom was the strongest clue available, and I read it as noise for too long.
+
+---
+
+<!-- insight:c9c9e9002ee8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T19:41:46.438Z -->
+## ★ Insight
+The never-wake gate has a subtlety worth noting: `ingest.ts:3964` shields rows under an unreachable home from the *prune* pass — skipping a home must never delete its sessions. That's correct. But shielding-from-prune isn't the same as scheduling-for-re-derive, so a `DERIVED_VERSION` bump can leave a sleeping home's rows stale indefinitely, with the version gate quietly suppressing the feature for exactly those sessions. It fails safe (no wrong numbers), but silently.
+
+---
+
+<!-- insight:059d9b54af44 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T18:03:00.037Z -->
+## ★ Insight
+This is a *default* bug, not a code bug — the isolation exists and works, it just isn't switched on in the artifact you actually installed. The tell is `Responding: True` plus a listening socket plus zero completed requests: the kernel accepts connections into the backlog, and the app never gets a turn to read them. A crashed server refuses connections; a blocked one hangs them.
+
+---
+
 <!-- insight:c6c25d96ced8 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T12:30:24.423Z -->
 ## ★ Insight
 - **13 mutations, 12 killed — and the one survivor was the most useful result.** `rootVersion < MIN` before the loop looked like the primary gate, but `ids[0]` is the root, so the loop already checked it. A test asserting "stale root → undefined" passes either way. The fix was deleting the pre-check, not writing a test for it.
