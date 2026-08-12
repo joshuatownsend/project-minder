@@ -76,9 +76,25 @@ const NAV_TIMEOUT = Number(process.env.MINDER_CAPTURE_NAV_TIMEOUT || 180000);
 // across the top of a landing-page screenshot. Hide it rather than re-shooting
 // until the weather is nice: it is a live-data strip, not part of the feature
 // being illustrated. Must be re-applied after every navigation.
+//
+// Two surfaces, not one. ClaudeStatusBanner renders the strip, but
+// ClaudeStatusProvider *also* pushes incident transitions through the generic
+// toast container once its status fetch resolves — which lands after the
+// banner is already hidden, so hiding the banner alone is not enough. A
+// "Claude incident resolved" toast reached a committed screenshot this way.
+// The toast container has no stable hook, so this is coupled to the utility
+// classes on the wrapper div in src/components/ui/toast.tsx; if a toast ever
+// reappears in a capture, that coupling is where to look.
+const TRANSIENT_SELECTORS = [
+  '[data-claude-status]',
+  '.fixed.bottom-4.right-4.z-50',
+];
+
 async function hideTransientBanners(page) {
   try {
-    await page.addStyleTag({ content: '[data-claude-status]{display:none !important}' });
+    await page.addStyleTag({
+      content: `${TRANSIENT_SELECTORS.join(',')}{display:none !important}`,
+    });
   } catch {
     // Page navigated out from under us — the next go() will re-apply it.
   }
@@ -160,7 +176,11 @@ async function tabIsActive(page, label) {
     { group: 'Command Deck', name: 'ops-panel', route: `/project/${OPS_PROJECT}?tab=ops`, settle: 1500,
       requireTab: 'Ops', why: `project "${OPS_PROJECT}" has no Ops tab — set MINDER_CAPTURE_OPS_PROJECT` },
     { group: 'Command Deck', name: 'github-activity', route: '/project/project-minder', settle: 2000 },
-    { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE,
+    // `optional` marks a shot site/index.html does not reference, so skipping
+    // it is a normal outcome rather than a failure. Everything else is
+    // published, and failing to regenerate a published shot must not exit 0 —
+    // see the exit handling at the end of this file.
+    { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE, optional: true,
       why: 'set MINDER_CAPTURE_DEMO_BASE to a MINDER_DEMO=1 server (a real board is empty until you write BOARD.md)' },
     { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200 },
     // No /instructions shot on purpose. That catalog is opt-in per harness and
@@ -192,16 +212,19 @@ async function tabIsActive(page, label) {
       group = s.group;
       console.log(`\n${group}:`);
     }
+    const skip = (reason) => {
+      skipped.push({ name: s.name, reason, optional: !!s.optional });
+      console.warn(`  ⚠  ${s.name}.png skipped: ${reason}`);
+    };
+
     if ('base' in s && !s.base) {
-      skipped.push(`${s.name} — ${s.why}`);
-      console.warn(`  ⚠  ${s.name}.png skipped: ${s.why}`);
+      skip(s.why);
       continue;
     }
     try {
       await go(page, s.route, s.settle, s.base ? { base: s.base } : undefined);
       if (s.requireTab && !(await tabIsActive(page, s.requireTab))) {
-        skipped.push(`${s.name} — ${s.why}`);
-        console.warn(`  ⚠  ${s.name}.png skipped: ${s.why}`);
+        skip(s.why);
         continue;
       }
       if (s.waitTextGone && !(await waitForTextGone(page, s.waitTextGone, s.waitTextTimeout))) {
@@ -209,14 +232,12 @@ async function tabIsActive(page, label) {
         // page would advertise the feature with a spinner. Report the budget
         // that actually applied — it is per-shot, not a fixed 60s.
         const waited = Math.round((s.waitTextTimeout ?? DEFAULT_TEXT_WAIT_MS) / 1000);
-        skipped.push(`${s.name} — still showing "${s.waitTextGone}" after ${waited}s`);
-        console.warn(`  ⚠  ${s.name}.png skipped: never finished loading`);
+        skip(`never finished loading — still showing "${s.waitTextGone}" after ${waited}s`);
         continue;
       }
       await shoot(page, s.name);
     } catch (err) {
-      skipped.push(`${s.name} — ${err.name}: ${err.message.split('\n')[0]}`);
-      console.warn(`  ⚠  ${s.name}.png failed: ${err.message.split('\n')[0]}`);
+      skip(`${err.name}: ${err.message.split('\n')[0]}`);
     }
   }
 
@@ -224,7 +245,23 @@ async function tabIsActive(page, label) {
 
   if (skipped.length) {
     console.log(`\n⚠  Skipped ${skipped.length} shot(s):`);
-    for (const s of skipped) console.log(`   - ${s}`);
+    for (const s of skipped) console.log(`   - ${s.name} — ${s.reason}`);
   }
   console.log(`\nScreenshots saved to:\n  ${OUT}\n`);
+
+  // A skipped shot leaves the previously committed PNG in place. For anything
+  // site/index.html references, that means the page keeps publishing a stale
+  // image while the run reports success — and this script is now part of
+  // `capture:docs:prod`, so a silent exit 0 would let an orchestrator print
+  // "Done" over images it never regenerated. Optional shots (see `optional`
+  // above) are expected to skip and do not fail the run.
+  const required = skipped.filter((s) => !s.optional);
+  if (required.length) {
+    console.error(
+      `\n✗ ${required.length} published screenshot(s) could not be regenerated: ` +
+      `${required.map((s) => s.name).join(', ')}\n` +
+      `  The committed PNGs for these are unchanged and may now be stale.\n`,
+    );
+    process.exitCode = 1;
+  }
 })();
