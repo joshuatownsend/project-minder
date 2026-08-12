@@ -876,13 +876,17 @@ if (storeTripwireFailures.length > 0) {
 
 // --- 3. Ingest worker bundle ---
 //
-// REQUIRED — the server.js wrapper below defaults MINDER_INDEXER_WORKER=1
-// (#431), so this bundle is load-bearing rather than opt-in extra.
+// REQUIRED — the packaged server defaults ingest into the worker thread
+// (#431: the wrapper below stamps MINDER_PACKAGED=1 and instrumentation
+// acts on it), so this bundle is load-bearing rather than opt-in extra.
 // `workers/ingestWorker.mjs` dynamic-imports `./dist/ingestWorker.mjs`
-// at a path resolved via `path.join(process.cwd(), "workers",
-// "ingestWorker.mjs")` (workerHost.ts) — a runtime `new Worker(path)`
-// call, not a static import, so Next's file tracer cannot see it and
-// never copies `workers/` into `.next/standalone` on its own.
+// at a path resolved by `resolveDefaultWorkerEntry(process.cwd(),
+// process.env.MINDER_SERVER_ROOT)` (workerHost.ts:232), which PREFERS
+// MINDER_SERVER_ROOT — set by the wrapper to this package's own
+// directory — and falls back to cwd. Either way it is a runtime
+// `new Worker(path)` call, not a static import, so Next's file tracer
+// cannot see it and never copies `workers/` into `.next/standalone` on
+// its own.
 //
 // Missing bundle is a HARD FAIL, not a warning. Ingest would still run —
 // startIngest() falls back to the in-process watcher when the worker
@@ -1272,9 +1276,10 @@ const path = require("node:path");
 
 // Anchor MINDER_SERVER_ROOT to this package's own directory (__dirname
 // is CJS-native here — this file is never bundled, it's written fresh
-// by the packaging script). Without this, code that resolves paths
-// relative to process.cwd() (workerHost.ts's default ingest-worker
-// entry, migrations.ts's resolveSchemaPath cwd-walk fallback) breaks
+// by the packaging script). Without this, the code paths that FALL BACK
+// to process.cwd() when MINDER_SERVER_ROOT is unset (workerHost.ts's
+// resolveDefaultWorkerEntry, which prefers MINDER_SERVER_ROOT and only
+// then tries cwd; migrations.ts's resolveSchemaPath cwd-walk) break
 // the moment this package is launched by absolute path from some other
 // directory — found nothing (or, launched from a repo checkout,
 // silently loaded that repo's SOURCE files instead of this package's
@@ -1284,22 +1289,25 @@ if (!process.env.MINDER_SERVER_ROOT) {
   process.env.MINDER_SERVER_ROOT = __dirname;
 }
 
-// Host ingest in a worker thread by default (#431). better-sqlite3 is
+// Mark this as the packaged server. instrumentation-node.ts reads it to
+// default ingest into a worker thread (#431) — better-sqlite3 is
 // synchronous, so a reconcile on the main thread monopolizes the event
 // loop and the HTTP server accepts connections it never reads: measured
 // at ~3 hours of total unavailability on a 6,078-session corpus after
-// the v1.10.0 DERIVED_VERSION bump, with the process pinned at ~101% of
-// one core and every route — including static ones — timing out until
-// the reconcile finished. Worker mode is what workerHost.ts was built
-// for ("the HTTP server stays up"); it was simply never switched on for
-// the packaged path, which set only MINDER_SERVER_ROOT.
+// the v1.10.0 DERIVED_VERSION bump.
 //
-// \`=== undefined\` rather than the falsy check above: an operator who
-// explicitly sets 0 (or empty) is opting out and must be honoured. If
-// the worker fails to spawn, startIngest() falls back to the in-process
-// watcher, so this cannot leave an install with no ingest at all.
-if (process.env.MINDER_INDEXER_WORKER === undefined) {
-  process.env.MINDER_INDEXER_WORKER = "1";
+// The DECISION deliberately does not live here, even though this is
+// where the packaged/source distinction is known (PR #435 review, Codex
+// P2). This file runs before \`require("./server.next.js")\`, which is
+// what loads Next's environment files, and Next never overwrites a
+// variable already present in process.env — so setting the flag here
+// would silently mask an operator's \`MINDER_INDEXER_WORKER=0\` in
+// .env.local and defeat the opt-out this fix advertises. Setting a
+// marker instead lets the choice happen inside instrumentation, after
+// env files have loaded, where \`MINDER_INDEXER=0\` can also be given
+// precedence in the same place.
+if (process.env.MINDER_PACKAGED === undefined) {
+  process.env.MINDER_PACKAGED = "1";
 }
 
 // Startup ABI check: better-sqlite3's prebuilt .node binary is tied to the
@@ -1332,16 +1340,18 @@ require("./server.next.js");
 `;
 writeFileSync(generatedServerPath, wrapper);
 
-// The worker default is the whole of #431's fix and it lives in a template
-// string, where a future edit can drop it with nothing failing. Assert on the
-// bytes actually written rather than trusting the template above.
-if (!readFileSync(generatedServerPath, "utf8").includes("MINDER_INDEXER_WORKER")) {
+// The MINDER_PACKAGED marker is what makes #431's worker default fire, and it
+// lives in a template string where a future edit can drop it with nothing
+// failing. Assert on the bytes actually written rather than trusting the
+// template above.
+if (!readFileSync(generatedServerPath, "utf8").includes("MINDER_PACKAGED")) {
   fail(
-    `generated server.js does not set MINDER_INDEXER_WORKER — the packaged server would ` +
-      `run ingest on the event loop and block all HTTP during a reconcile (#431).`
+    `generated server.js does not set MINDER_PACKAGED — instrumentation would not default ` +
+      `ingest into the worker thread, so a reconcile would run on the event loop and block ` +
+      `all HTTP (#431).`
   );
 }
-step("Wrote server.js wrapper (MINDER_SERVER_ROOT, worker ingest default, ABI check, delegates to server.next.js)");
+step("Wrote server.js wrapper (MINDER_SERVER_ROOT, MINDER_PACKAGED, ABI check, delegates to server.next.js)");
 
 // --- Shorten over-long .pnpm store keys (Windows MAX_PATH budget) ---
 //

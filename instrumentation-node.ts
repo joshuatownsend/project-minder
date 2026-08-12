@@ -11,13 +11,18 @@ import "server-only";
 // Three ingest modes, in priority order:
 //
 //   MINDER_INDEXER_WORKER=1  → start the worker_threads-hosted ingest.
-//                              Opt-in from source; the PACKAGED server
-//                              defaults it ON (the server.js wrapper
-//                              written by scripts/package-standalone.mjs),
+//                              Opt-in from a source checkout. In the
+//                              PACKAGED server it is ON by default —
+//                              scripts/package-standalone.mjs stamps
+//                              MINDER_PACKAGED=1 into the server.js
+//                              wrapper and the choice is made below —
 //                              because a reconcile on the main thread
 //                              blocks every HTTP request for as long as
-//                              it runs — measured at ~3 hours on a
-//                              6,078-session corpus (#431).
+//                              it runs, measured at ~3 hours on a
+//                              6,078-session corpus (#431). Set
+//                              MINDER_INDEXER_WORKER=0 to opt out.
+//   MINDER_INDEXER=0         → no automatic index updates at all. Wins
+//                              over the packaged worker default.
 //   default                  → start the in-process chokidar watcher.
 //                              The dashboard's default read path is
 //                              SQL-backed, which depends on this
@@ -63,7 +68,14 @@ export async function startIngest(): Promise<void> {
   // disposal stops ingest BEFORE the DB handle closes.
   await registerIngestDisposer();
 
-  if (process.env.MINDER_INDEXER_WORKER === "1") {
+  // Flag interaction lives in `resolveIngestMode` — pure, unit-tested, and
+  // documented there. Runs at this point (not in the packaged server.js
+  // wrapper) so Next's .env files have already loaded and an operator's
+  // `.env.local` opt-out is visible (PR #435 review, Codex P1 + P2).
+  const { resolveIngestMode } = await import("@/lib/db/ingestMode");
+  const mode = resolveIngestMode(process.env);
+
+  if (mode === "worker") {
     try {
       const { startWorker, stopWorker, onWorkerMessage } = await import("@/lib/db/workerHost");
       // awaitStart: false — return as soon as the worker is alive and
@@ -128,7 +140,7 @@ export async function startIngest(): Promise<void> {
     return;
   }
 
-  if (process.env.MINDER_INDEXER !== "0") {
+  if (mode === "in-process") {
     await startInProcessWatcher();
   }
 }
