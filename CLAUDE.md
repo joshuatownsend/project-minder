@@ -206,7 +206,9 @@ Use the tool's own reset (`pnpm package:standalone` already clears `outDir` itse
 
 ## Tracking TODO.md / MANUAL_STEPS.md / INSIGHTS.md in Git
 
-These three files all get committed. Don't stash them — `git stash pop` can silently keep the entry on conflict and a later `git stash drop` permanently deletes the changes. If you need to keep these files out of a feature commit, make a small `chore:` commit for them instead. Full rationale and per-file guidance lives on the dashboard's Setup page under "Tracking in Git."
+`TODO.md` and `MANUAL_STEPS.md` get committed. Don't stash them — `git stash pop` can silently keep the entry on conflict and a later `git stash drop` permanently deletes the changes. If you need to keep these files out of a feature commit, make a small `chore:` commit for them instead. Full rationale and per-file guidance lives on the dashboard's Setup page under "Tracking in Git."
+
+**`INSIGHTS.md` is git-ignored in this repo** (2026-08-12) — a session hook appends to it on most turns, so it dirtied the tree constantly and needed its own `chore:` commit or a berth in an unrelated PR. Entries through `64bae04` stay in git history; new ones are local-only, so a lost working copy can't be recovered past that point. **This is a local exception, not a change of advice**: the Setup page still tells other projects to commit all three, which is right for a file a human curates rather than a hook writes.
 
 `TODO.md` and `MANUAL_STEPS.md` are **living checklists**: completed/obsolete items are moved into companion `TODO.archive.md` / `MANUAL_STEPS.archive.md` files (committed too) rather than deleted, so the active files — and the dashboard counts — show only outstanding work. The scanners ignore `*.archive.md`. `INSIGHTS.md` is the exception: it's an append-only log and is never pruned.
 

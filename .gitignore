@@ -88,3 +88,11 @@ dist/
 .agents/
 .claudelint-cache/
 /t2.1-*.png
+
+# this repo's own insights log — untracked 2026-08-12. A session hook appends to
+# it on nearly every turn, so it dirtied the tree constantly and needed its own
+# chore: commit or a place in an unrelated PR. Entries through 64bae04 remain in
+# git history; only new ones are unversioned. Scanners read it from disk, so the
+# Insights UI is unaffected — and this applies to THIS repo only, not to the
+# guidance Minder gives other projects.
+/INSIGHTS.md
