@@ -252,7 +252,7 @@ Set in `.env.local` (gitignored) for persistent per-machine overrides:
 |---|---|---|
 | `MINDER_USE_DB` | on | `=0` disables the SQLite index (session pages fall back to direct JSONL parsing). |
 | `MINDER_INDEXER` | on | `=0` suppresses the chokidar watcher (no automatic index updates). |
-| `MINDER_INDEXER_WORKER` | off | `=1` hosts the watcher in a `worker_thread` for crash isolation. |
+| `MINDER_INDEXER_WORKER` | off from source, **on in the packaged/installed server** | `=1` hosts the watcher in a `worker_thread`, keeping the HTTP server responsive while a reconcile runs. Set `=0` to opt out. |
 | `GEMINI_HOME` | `~/.gemini` | Override the Gemini CLI data directory. |
 
 ### Service Mode (Background Operation)
@@ -295,7 +295,9 @@ The process manager spawns dev servers as child processes using project-local bi
 ### Power tools
 
 - **Read-only `/api/sql`** — query the local SQLite index for ad-hoc analytics. `GET /api/sql?sql=…` or `POST /api/sql {sql, params?}`. SELECT/WITH only, hard 10 000-row cap, both regex pre-gate and `stmt.readonly` enforcement.
-- **Worker mode (opt-in)** — set `MINDER_INDEXER_WORKER=1` to host the watcher in a Node `worker_thread`. Server boots immediately while the initial reconcile (~20 s for 3k JSONL files post-throughput-tuning) runs in the background. If SQLite or chokidar throws fatally, the dashboard falls back to the in-process watcher automatically.
+- **Worker mode** — hosts the watcher in a Node `worker_thread`. **On by default in the packaged/installed server**; from a source checkout it is opt-in via `MINDER_INDEXER_WORKER=1`. Either way the server boots immediately while the initial reconcile runs in the background, and if SQLite or chokidar throws fatally the dashboard falls back to the in-process watcher automatically.
+
+  This matters most on a big re-parse. `better-sqlite3` is synchronous, so an in-process reconcile monopolizes the event loop and the server accepts connections it never reads — a `DERIVED_VERSION` bump on a ~6,000-session history made the dashboard unreachable for about three hours, static routes included (#431). Set `MINDER_INDEXER_WORKER=0` to opt out.
 
 ---
 

@@ -11,8 +11,13 @@ import "server-only";
 // Three ingest modes, in priority order:
 //
 //   MINDER_INDEXER_WORKER=1  → start the worker_threads-hosted ingest.
-//                              Strictly opt-in until worker mode is
-//                              burned in.
+//                              Opt-in from source; the PACKAGED server
+//                              defaults it ON (the server.js wrapper
+//                              written by scripts/package-standalone.mjs),
+//                              because a reconcile on the main thread
+//                              blocks every HTTP request for as long as
+//                              it runs — measured at ~3 hours on a
+//                              6,078-session corpus (#431).
 //   default                  → start the in-process chokidar watcher.
 //                              The dashboard's default read path is
 //                              SQL-backed, which depends on this

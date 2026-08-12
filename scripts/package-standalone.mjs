@@ -876,29 +876,39 @@ if (storeTripwireFailures.length > 0) {
 
 // --- 3. Ingest worker bundle ---
 //
-// Opt-in via MINDER_INDEXER_WORKER=1 (see instrumentation-node.ts).
+// REQUIRED — the server.js wrapper below defaults MINDER_INDEXER_WORKER=1
+// (#431), so this bundle is load-bearing rather than opt-in extra.
 // `workers/ingestWorker.mjs` dynamic-imports `./dist/ingestWorker.mjs`
 // at a path resolved via `path.join(process.cwd(), "workers",
 // "ingestWorker.mjs")` (workerHost.ts) — a runtime `new Worker(path)`
 // call, not a static import, so Next's file tracer cannot see it and
-// never copies `workers/` into `.next/standalone` on its own. Without
-// this step, the default (non-worker) in-process chokidar watcher
-// still works fine, but flipping MINDER_INDEXER_WORKER=1 against the
-// packaged server would fail with a "module not found" the moment it
-// tried to spawn the worker thread.
-step("Copying workers/ (ingest worker bundle, opt-in via MINDER_INDEXER_WORKER=1)");
-if (existsSync(workersDir)) {
-  copyDereferenced(workersDir, path.join(outDir, "workers"));
-  const bundlePath = path.join(outDir, "workers", "dist", "ingestWorker.mjs");
-  if (!existsSync(bundlePath)) {
-    console.warn(
-      `[package-standalone] WARNING: workers/dist/ingestWorker.mjs missing — ` +
-        `"pnpm build" runs "build:worker" via prebuild, so it should exist. ` +
-        `MINDER_INDEXER_WORKER=1 will fail against this package until it's rebuilt.`
-    );
-  }
-} else {
-  console.warn(`[package-standalone] WARNING: workers/ not found, skipping`);
+// never copies `workers/` into `.next/standalone` on its own.
+//
+// Missing bundle is a HARD FAIL, not a warning. Ingest would still run —
+// startIngest() falls back to the in-process watcher when the worker
+// can't spawn — but that fallback is precisely the failure this fix
+// exists to prevent: the reconcile then runs on the event loop and a
+// DERIVED_VERSION bump takes the dashboard down for hours (#431). A
+// package that degrades silently back into that is broken, not
+// slightly-reduced, and a warning in a build log is not going to be
+// read at the moment it matters.
+step("Copying workers/ (ingest worker bundle — required, see #431)");
+if (!existsSync(workersDir)) {
+  fail(
+    `workers/ not found. The packaged server defaults MINDER_INDEXER_WORKER=1, so this ` +
+      `bundle is required — without it the reconcile runs on the event loop and blocks ` +
+      `all HTTP (#431). Run "pnpm build:worker" (or "pnpm build", which runs it via prebuild).`
+  );
+}
+copyDereferenced(workersDir, path.join(outDir, "workers"));
+const bundlePath = path.join(outDir, "workers", "dist", "ingestWorker.mjs");
+if (!existsSync(bundlePath)) {
+  fail(
+    `workers/dist/ingestWorker.mjs missing from the packaged output. "pnpm build" runs ` +
+      `"build:worker" via prebuild, so it should exist. The packaged server defaults ` +
+      `MINDER_INDEXER_WORKER=1 and would silently fall back to the blocking in-process ` +
+      `watcher (#431).`
+  );
 }
 
 // --- 3b. schema.sql for the worker's schema lookup ---
@@ -1274,6 +1284,24 @@ if (!process.env.MINDER_SERVER_ROOT) {
   process.env.MINDER_SERVER_ROOT = __dirname;
 }
 
+// Host ingest in a worker thread by default (#431). better-sqlite3 is
+// synchronous, so a reconcile on the main thread monopolizes the event
+// loop and the HTTP server accepts connections it never reads: measured
+// at ~3 hours of total unavailability on a 6,078-session corpus after
+// the v1.10.0 DERIVED_VERSION bump, with the process pinned at ~101% of
+// one core and every route — including static ones — timing out until
+// the reconcile finished. Worker mode is what workerHost.ts was built
+// for ("the HTTP server stays up"); it was simply never switched on for
+// the packaged path, which set only MINDER_SERVER_ROOT.
+//
+// \`=== undefined\` rather than the falsy check above: an operator who
+// explicitly sets 0 (or empty) is opting out and must be honoured. If
+// the worker fails to spawn, startIngest() falls back to the in-process
+// watcher, so this cannot leave an install with no ingest at all.
+if (process.env.MINDER_INDEXER_WORKER === undefined) {
+  process.env.MINDER_INDEXER_WORKER = "1";
+}
+
 // Startup ABI check: better-sqlite3's prebuilt .node binary is tied to the
 // NODE_MODULE_VERSION it was compiled against (see BUILD_INFO.json). Running
 // this package under a mismatched Node major fails opaquely deep inside the
@@ -1303,7 +1331,17 @@ try {
 require("./server.next.js");
 `;
 writeFileSync(generatedServerPath, wrapper);
-step("Wrote server.js wrapper (sets MINDER_SERVER_ROOT, ABI check, delegates to server.next.js)");
+
+// The worker default is the whole of #431's fix and it lives in a template
+// string, where a future edit can drop it with nothing failing. Assert on the
+// bytes actually written rather than trusting the template above.
+if (!readFileSync(generatedServerPath, "utf8").includes("MINDER_INDEXER_WORKER")) {
+  fail(
+    `generated server.js does not set MINDER_INDEXER_WORKER — the packaged server would ` +
+      `run ingest on the event loop and block all HTTP during a reconcile (#431).`
+  );
+}
+step("Wrote server.js wrapper (MINDER_SERVER_ROOT, worker ingest default, ABI check, delegates to server.next.js)");
 
 // --- Shorten over-long .pnpm store keys (Windows MAX_PATH budget) ---
 //

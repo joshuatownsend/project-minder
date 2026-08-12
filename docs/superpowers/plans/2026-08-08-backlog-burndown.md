@@ -130,6 +130,16 @@ All four (#152/#153/#156/#157) shipped together as the T1.1 follow-up cluster �
 >
 > **The spike did not run** — it reads `~/.claude/.credentials.json` and calls an undocumented endpoint with a bearer token, which the permission classifier blocked. Script is written and ready. **W10 remains gated**, and the personal-vs-distributed decision is still unasked, as designed.
 
+> ### W1 REVERTED — 2026-08-12
+>
+> **Next.js was pinned back to `~16.2.12` in v1.10.1.** 16.3.0 miscompiles an `async` function in `src/lib/data/index.ts` so that a value the function provably returns arrives at its caller as `undefined`; `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` returned 500 on every request. Bisected against a copy of a real 6,078-session index — last good `cea6509`, first bad `7d96242` (this wave's upgrade), parent and child — then isolated by changing *only* the Next version on the last-good commit. Details on #432, which stays **open**: the pin is a workaround, and a future `next` bump (including a routine Dependabot PR) re-breaks the same four routes.
+>
+> **So W1's headline win is undone**: #396's four postcss alerts are re-opened, and there is no fixed Next release to escape to (16.3.0 was still latest at the time of writing). #284 remains retired on its own evidence; #287's 9→4 improvement was tracer-version-dependent and should be re-measured if it matters.
+>
+> **How it shipped past the gates, which is the part worth keeping.** This wave's record says it was verified with "an out-of-repo smoke test of `dist/minder-server` (4 routes, all 200)". That gate ran, passed, and proved nothing: the failure needs a **large real index** *and* the **first request after a cold boot**. Against a fresh or small index every route returns 200, and a later request in the same process often succeeds even when the index is large — so a retry that goes green is not evidence either.
+>
+> **Gate for any future framework upgrade** (a documented step, deliberately not CI automation — CI has no 1.9 GB index): point a packaged build at a `VACUUM INTO` copy of a real index via `MINDER_STATE_DIR`, cold-boot it, and probe `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` on the **first** request each. `/api/agents` is a useful control — it was unaffected throughout.
+
 **Parallel side-quest (cheap, high information):** the **cloud-session spike** — ~60 lines, scratchpad only, outside the repo. Read org UUID from `~/.claude.json`, call `GET /v1/sessions`, dump the response shape. This gates 4 TODO items. If upstream issue simonw/claude-code-transcripts#77 means the endpoints are dead for everyone, an entire backlog section collapses to "closed, moot" — which is exactly what a burn-down wants to learn on day one, not month three.
 
 ---
