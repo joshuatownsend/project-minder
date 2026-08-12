@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:30c8a99190ab | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T12:41:05.210Z -->
+## ★ Insight
+Both Codex findings share one shape: the code was correct about *what* to decide and wrong about *where*. The wrapper knows the packaged/source distinction, which made it the tempting place — but it runs too early to see the operator's configuration, and too early to consult a flag whose meaning depends on another flag. Extracting `resolveIngestMode` moved the policy to a layer that can see everything it needs, and made a three-flag interaction unit-testable instead of only observable by booting a packaged server.
+
+---
+
+<!-- insight:adefff568d0d | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T11:58:36.108Z -->
+## ★ Insight
+Had the reconcile not been running, "0 timeouts" would have measured an idle server and looked identical to a passing test — the precise failure mode that let the Next 16.3 regression through W1's gate a few days ago. The fix was to stop trusting the harness's own summary and go measure the side effect independently: the scratch database growing to 398 MB / 4,689 sessions is proof of work that no exit code can fake.
+
+---
+
 <!-- insight:b68423556bbe | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T11:03:46.592Z -->
 ## ★ Insight
 This is the same failure class as the piped-gate problem already recorded in CLAUDE.md: a check that executes, reports green, and doesn't exercise the condition under which the thing breaks. The four-route smoke test wasn't wrong to exist — it was scoped to a corpus where the bug is invisible. Any gate guarding a framework upgrade here needs to run against a realistically-sized index, or it's measuring the wrong system.
