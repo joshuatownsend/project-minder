@@ -1,5 +1,23 @@
 # Insights
 
+<!-- insight:0f5a2b6b3b13 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T15:16:32.241Z -->
+## ★ Insight
+The asymmetry between Case A and Case B is git protecting *working-tree changes*, not the file. A clean file is fully represented in history, so deleting it destroys nothing git can't reproduce — hence no prompt. The modified file holds bytes that exist nowhere else, so the merge aborts. Git's safety model is about recoverability, not about whether you wanted the file.
+
+---
+
+<!-- insight:fafbc7c64a66 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T14:51:51.684Z -->
+## ★ Insight
+`.gitignore` only governs *untracked* files — adding a rule for something already in the index does nothing, which is a classic silent no-op. `git rm --cached` is what removes it from tracking while leaving the working copy alone. The staged result reads as `D INSIGHTS.md`, which looks alarming but is index-only: the 6,048-line file never moved.
+
+---
+
+<!-- insight:3da3e84ea0dc | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T14:06:23.081Z -->
+## ★ Insight
+This is the same failure class the block was written to document — a gate that runs, passes, and proves nothing. The original W1 smoke test hit 4 routes, got 4×200, and missed the regression for exactly this reason. Writing the gate down without fixing its probe strategy would have preserved the bug in the fix.
+
+---
+
 <!-- insight:bf6184873d70 | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T13:22:42.178Z -->
 ## ★ Insight
 This is the characteristic risk of flipping a default: the code didn't change, but its consequences did. A rare degraded path on an opt-in becomes a guaranteed-eventually path on by-default. Codex found it by reasoning about what my change did to code I never touched — which is exactly the review I couldn't do for myself, because I was looking at my diff.
