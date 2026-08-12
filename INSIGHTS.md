@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:b68423556bbe | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-12T11:03:46.592Z -->
+## ★ Insight
+This is the same failure class as the piped-gate problem already recorded in CLAUDE.md: a check that executes, reports green, and doesn't exercise the condition under which the thing breaks. The four-route smoke test wasn't wrong to exist — it was scoped to a corpus where the bug is invisible. Any gate guarding a framework upgrade here needs to run against a realistically-sized index, or it's measuring the wrong system.
+
+---
+
 <!-- insight:8ed4a073120f | session:664eb182-fb42-426d-a422-a4058871f944 | 2026-08-11T22:07:58.869Z -->
 ## ★ Insight
 This reframes the whole investigation. Everything I eliminated earlier — the data, the DB, pricing, module resolution, caching — was eliminated correctly; I was searching the application layer for a fault that lives under it. It also explains the single most confusing observation: an async function that provably returns an object while its caller receives `undefined` is close to impossible in correct JavaScript, but entirely possible if the framework compiling and invoking that function has a bug. The "impossible" symptom was the strongest clue available, and I read it as noise for too long.
