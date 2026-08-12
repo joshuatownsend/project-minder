@@ -40,6 +40,10 @@ async function shoot(page, name) {
 // Same stability gate as capture-screenshots-extended.mjs: wait until the
 // Next dev "Compiling…" pill and every .animate-pulse skeleton have been gone
 // for ~1.5s sustained, via page-context JS so the wait stays bounded.
+// Returns false when the budget expired with the page still loading. The
+// caller must not swallow that: shoot() would happily overwrite a published
+// PNG with a skeleton, leaving `skipped` empty and the run green — a stale
+// image published under a passing gate.
 async function waitForStableUI(page, { timeout = 25000 } = {}) {
   try {
     await page.waitForFunction(
@@ -61,8 +65,9 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
       null,
       { timeout, polling: 250 },
     );
+    return true;
   } catch {
-    // Stability not achieved within timeout — accept whatever's on screen.
+    return false;
   }
 }
 
@@ -104,11 +109,12 @@ async function go(page, route, settle = 1000, { base = BASE, stableTimeout = 600
   await page.goto(`${base}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await hideTransientBanners(page);
   await page.waitForTimeout(settle);
-  await waitForStableUI(page, { timeout: stableTimeout });
+  const stable = await waitForStableUI(page, { timeout: stableTimeout });
   await page.waitForTimeout(postSettle);
   // The banner mounts after a delay (it waits on its own fetch), so re-apply
   // once the page has settled or it reappears between the two waits.
   await hideTransientBanners(page);
+  return stable;
 }
 
 // waitForStableUI only knows about .animate-pulse skeletons. Panels that print
@@ -222,7 +228,11 @@ async function tabIsActive(page, label) {
       continue;
     }
     try {
-      await go(page, s.route, s.settle, s.base ? { base: s.base } : undefined);
+      const stable = await go(page, s.route, s.settle, s.base ? { base: s.base } : undefined);
+      if (!stable) {
+        skip('page never stopped loading — still showing a skeleton or the dev compile indicator');
+        continue;
+      }
       if (s.requireTab && !(await tabIsActive(page, s.requireTab))) {
         skip(s.why);
         continue;
@@ -237,7 +247,13 @@ async function tabIsActive(page, label) {
       }
       await shoot(page, s.name);
     } catch (err) {
-      skip(`${err.name}: ${err.message.split('\n')[0]}`);
+      // Not every throw is an Error. Reading .name/.message off a string or a
+      // plain object would throw again *inside* the catch and take down the
+      // whole run — the exact per-shot independence this loop exists to give.
+      const detail = err instanceof Error
+        ? `${err.name}: ${err.message.split('\n')[0]}`
+        : `threw a non-Error: ${String(err).split('\n')[0]}`;
+      skip(detail);
     }
   }
 
