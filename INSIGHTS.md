@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:177734a02f2e | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-12T20:25:44.560Z -->
+## ★ Insight
+The resolution problem is really two multiplied together: a 1440px-wide image displayed in a ~500px column is downscaled 2.9×, and on a HiDPI display the browser wants 2× that again — so effectively ~6× the detail is thrown away. Fixing it needs *both* a wider display slot and a `deviceScaleFactor: 2` capture; either alone leaves it blurry.
+
+---
+
 <!-- insight:a575c492aee4 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-12T16:49:16.749Z -->
 ## ★ Insight
 - The site's publish path is fully automated: `gh-pages-publish.yml` mirrors `site/` → the orphan `gh-pages` branch on any push to `main` touching `site/**`. So "running the workflow" really means *changing `site/` and merging* — never touching `gh-pages` by hand.
