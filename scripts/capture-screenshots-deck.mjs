@@ -145,6 +145,7 @@ async function tabIsActive(page, label) {
   const SHOTS = [
     { group: 'Command Deck', name: 'ops-panel', route: `/project/${OPS_PROJECT}?tab=ops`, settle: 1500,
       requireTab: 'Ops', why: `project "${OPS_PROJECT}" has no Ops tab — set MINDER_CAPTURE_OPS_PROJECT` },
+    { group: 'Command Deck', name: 'github-activity', route: '/project/project-minder', settle: 2000 },
     { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE,
       why: 'set MINDER_CAPTURE_DEMO_BASE to a MINDER_DEMO=1 server (a real board is empty until you write BOARD.md)' },
     { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200 },
