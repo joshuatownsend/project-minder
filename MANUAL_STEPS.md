@@ -1,3 +1,25 @@
+## 2026-08-12 11:20 | insights-untrack | Restore INSIGHTS.md on any other checkout of this repo
+
+PR #437 git-ignores this repo's own `INSIGHTS.md` and untracks it. An ignore rule does
+not protect an already-tracked file, so **any other checkout — a second clone, a WSL
+checkout, an agent worktree — deletes its copy when it pulls past that commit.** Verified
+in a scratch clone: a clean file is removed silently; a file holding uncommitted entries
+aborts the merge instead, so unversioned work is never destroyed.
+
+Nothing is permanently lost: every entry through `64bae04` is in git history.
+
+- [ ] After pulling this into any other checkout, check whether `INSIGHTS.md` is gone
+  `test -f INSIGHTS.md && echo present || echo missing`
+  The symptom to watch for is that checkout's Insights tab going empty.
+- [ ] If missing, restore it from history
+  `git show 64bae04:INSIGHTS.md > INSIGHTS.md`
+  It lands git-ignored, so it will not dirty the tree. Confirm with `git status --short`.
+- [ ] If a merge instead **aborts** complaining about local `INSIGHTS.md` changes, that
+  checkout has entries that exist nowhere else. Copy the file aside first, then
+  `git checkout -- INSIGHTS.md`, pull, and restore the copy — do not discard it.
+
+---
+
 ## 2026-08-05 19:30 | index-downgrade | Don't restart the v1.7.0 tray until a new build is packaged
 
 The installed tray (`%LOCALAPPDATA%\Project Minder Tray`, packaged 2026-08-03) ships
