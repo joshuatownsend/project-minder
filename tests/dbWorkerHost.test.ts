@@ -156,6 +156,46 @@ describe("workerHost lifecycle", () => {
     expect(second.startedAt!).toBeGreaterThanOrEqual(first.startedAt!);
   });
 
+  it("falls back via onStartFailure when the crash budget is exhausted", async () => {
+    // PR #435 review, Codex P2. Exhausting the budget used to `return` without
+    // calling onStartFailure, so the caller — which returned from startIngest()
+    // long ago — never learned to start the in-process watcher. That was
+    // survivable while worker mode was a developer opt-in ("restart the dev
+    // server"); once the packaged server defaults to it (#431), the same path
+    // leaves an install with NO ingest at all, index silently frozen.
+    //
+    // The crash history is pre-seeded rather than crashing five times for
+    // real: the respawn backoff is [500, 2000, 10000], so the honest version
+    // of this test would spend ~23s asleep to reach the same branch.
+    const entry = createInlineWorker(TRIVIAL_WORKER);
+    const host = await reloadHost();
+
+    const failures: Error[] = [];
+    await host.startWorker({
+      workerEntry: entry,
+      onStartFailure: (err: Error) => failures.push(err),
+    });
+
+    const state = (globalThis as { __minderWorker?: { crashHistory: number[] } }).__minderWorker;
+    expect(state).toBeTruthy();
+    // Four recent crashes already on the clock; the next one is the fifth and
+    // trips MAX_RESPAWNS_PER_HOUR.
+    const now = Date.now();
+    state!.crashHistory.push(now, now, now, now);
+
+    host.postMessage({ type: "crash" });
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && failures.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    expect(failures.length).toBe(1);
+    expect(failures[0].message).toMatch(/crash budget exceeded/i);
+    // And it gave up on the worker rather than respawning into the same crash.
+    expect(host.getWorkerStatus().running).toBe(false);
+  }, 15_000);
+
   it("respawns after an unexpected crash", async () => {
     const entry = createInlineWorker(TRIVIAL_WORKER);
     const host = await reloadHost();
