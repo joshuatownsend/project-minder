@@ -98,24 +98,33 @@ async function assertDataMode(expectDemo) {
   const slugs = new Set(projects.map((p) => p?.slug));
   const found = DEMO_FIXTURE_SLUGS.filter((s) => slugs.has(s));
 
-  if (expectDemo && found.length === 0) {
+  // Demo mode serves the COMPLETE fixture set, always — so require all of it
+  // rather than treating any single match as proof. One shared slug is not
+  // evidence in either direction: a real portfolio that happens to contain a
+  // project called `atlas-cli` or `ledger-api` would otherwise abort every real
+  // capture run, and a demo launch that silently failed would sail through the
+  // demo assertion on that same one collision.
+  const isDemo = found.length === DEMO_FIXTURE_SLUGS.length;
+  const detail = `${found.length}/${DEMO_FIXTURE_SLUGS.length} fixture slugs present`;
+
+  if (expectDemo && !isDemo) {
     throw new Error(
-      'This pass expects DEMO fixtures but /api/projects returned none ' +
-      `(saw ${projects.length} real projects: ${[...slugs].slice(0, 5).join(', ')}...). ` +
+      `This pass expects DEMO fixtures but the server is not serving the full set (${detail}; ` +
+      `${projects.length} projects, e.g. ${[...slugs].slice(0, 5).join(', ')}). ` +
       'Check that MINDER_DEMO=1 reached the server process. ' +
       'Refusing to capture — these shots would contain real data.',
     );
   }
-  if (!expectDemo && found.length > 0) {
+  if (!expectDemo && isDemo) {
     throw new Error(
-      `This pass expects REAL data but /api/projects returned demo fixtures (${found.join(', ')}). ` +
+      `This pass expects REAL data but the server is serving the complete demo fixture set (${detail}). ` +
       'Clearing MINDER_DEMO does not override the persisted `demoMode` feature flag — ' +
       'turn it off in Settings (or .minder.json) before capturing. ' +
       'Refusing to capture — these shots would contain fixtures.',
     );
   }
   console.log(
-    `\n✓ Data mode confirmed: ${expectDemo ? `demo (${found.length} fixture projects)` : `real (${projects.length} projects, no fixtures)`}.`,
+    `\n✓ Data mode confirmed: ${expectDemo ? `demo (${detail})` : `real (${projects.length} projects, ${detail})`}.`,
   );
 }
 
