@@ -27,13 +27,49 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
 const DEMO_BASE = process.env.MINDER_CAPTURE_DEMO_BASE || '';
 const OPS_PROJECT = process.env.MINDER_CAPTURE_OPS_PROJECT || 'perfect-palette';
-const OUT = join(__dirname, '..', 'site', 'screenshots');
+// MINDER_CAPTURE_OUT lets the demo pass write to a temp dir instead of the live
+// screenshot directory; MINDER_CAPTURE_DPR=2 is the resolution fix (see
+// capture-screenshots.mjs for the rationale).
+const OUT = process.env.MINDER_CAPTURE_OUT || join(__dirname, '..', 'site', 'screenshots');
+const DPR = Number(process.env.MINDER_CAPTURE_DPR || 2);
+// Demo mode has no `project-minder` (that route renders "Project not found"),
+// so the demo pass points the per-project shots at a fixture project instead.
+const PROJECT = process.env.MINDER_CAPTURE_PROJECT || 'project-minder';
+// Shots another pass owns (see capture-screenshots.mjs for why skipping the
+// navigation matters, not just the file write).
+const SKIP = new Set(
+  (process.env.MINDER_CAPTURE_SKIP || '').split(',').map((s) => s.trim()).filter(Boolean),
+);
 
 mkdirSync(OUT, { recursive: true });
 
+
+// Chromium renders its own error page ("This page couldn't load") as a
+// SUCCESSFUL navigation, so a nav-ok check does not catch a crashed renderer.
+// See capture-screenshots.mjs — this shipped a browser error page as a
+// published screenshot on 2026-08-12.
+async function pageIsHealthy(page) {
+  try {
+    return await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      if (/This page couldn.t load|site can.t be reached|Aw, Snap|ERR_[A-Z_]{3,}/i.test(text)) {
+        return false;
+      }
+      return document.querySelectorAll('a').length > 0;
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function shoot(page, name) {
+  if (!(await pageIsHealthy(page))) {
+    throw new Error('browser is showing an error page, not the app');
+  }
   const dest = join(OUT, `${name}.png`);
-  await page.screenshot({ path: dest, fullPage: false, timeout: 90000 });
+  // `animations: disabled` stops a continuously-polling panel from holding the
+  // screenshot open while Playwright waits for animations to settle.
+  await page.screenshot({ path: dest, fullPage: false, timeout: 120000, animations: 'disabled', caret: 'hide' });
   console.log(`  ✓  ${name}.png`);
 }
 
@@ -190,7 +226,7 @@ async function tabIsActive(page, label) {
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: DPR });
   const page = await ctx.newPage();
   const skipped = [];
 
@@ -213,7 +249,7 @@ async function tabIsActive(page, label) {
     // (the cache can spend three sequential 8s `gh` calls). An empty strip is
     // indistinguishable from a finished one, so this shot demands positive
     // evidence rather than trusting the generic stability check.
-    { group: 'Command Deck', name: 'github-activity', route: '/project/project-minder', settle: 2000,
+    { group: 'Command Deck', name: 'github-activity', route: `/project/${PROJECT}`, settle: 2000,
       requireText: 'GITHUB' },
     // `optional` marks a shot site/index.html does not reference, so skipping
     // it is a normal outcome rather than a failure. Everything else is
@@ -230,7 +266,7 @@ async function tabIsActive(page, label) {
     // renders an empty state until a Codex or Gemini adapter is enabled, so
     // capturing it costs time and leaves an orphan PNG that site/index.html
     // does not reference. Add it back only alongside prose that uses it.
-    { group: 'Power tools', name: 'code-intel', route: '/project/project-minder?tab=hot-files', settle: 1500,
+    { group: 'Power tools', name: 'code-intel', route: `/project/${PROJECT}?tab=hot-files`, settle: 1500,
       requireTab: 'Hot Files', why: 'no Hot Files tab on project-minder',
       // The panel's own endpoints are slow on a large session index
       // (hot-files ~30s, file-coupling ~100s measured), so this wait needs a
@@ -256,7 +292,15 @@ async function tabIsActive(page, label) {
     .split(',').map((s) => s.trim()).filter(Boolean);
 
   let group = null;
-  for (const s of SHOTS) {
+  // Drop shots another pass owns before doing any work for them — including the
+  // navigation, which is the expensive part on the heavy analytics routes.
+  const plan = SHOTS.filter((s) => {
+    if (!SKIP.has(s.name)) return true;
+    console.log(`  -  ${s.name}.png (owned by another pass)`);
+    return false;
+  });
+
+  for (const s of plan) {
     if (only.length && !only.includes(s.name)) continue;
     if (s.group !== group) {
       group = s.group;

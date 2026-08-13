@@ -9,19 +9,109 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // a prod-built `next start` on a different port — avoids dev-mode "Compiling…"
 // pills and skeleton placeholders.
 const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
-const OUT  = join(__dirname, '..', 'site', 'screenshots');
+// MINDER_CAPTURE_OUT lets a second pass write somewhere other than the live
+// screenshot directory — the hybrid orchestrator captures a demo-mode pass into
+// a temp dir and then promotes only the shots demo fixtures actually improve.
+const OUT  = process.env.MINDER_CAPTURE_OUT || join(__dirname, '..', 'site', 'screenshots');
+// The project whose detail page the per-project shots use. Demo mode has no
+// `project-minder` — that route renders "Project not found" — so the demo pass
+// points these at a fixture project instead.
+const PROJECT = process.env.MINDER_CAPTURE_PROJECT || 'project-minder';
+// Capture at 2x device pixel ratio. The landing page displays these at up to
+// ~1130 CSS px and the lightbox shows them at full size, so a 1x capture was
+// being upscaled in the lightbox and resampled on every HiDPI screen. 2x costs
+// ~4x the bytes and is the whole fix for "screenshots are low-resolution".
+const DPR = Number(process.env.MINDER_CAPTURE_DPR || 2);
+// Nav timeout. 90s was too tight against a real index: /usage aggregates
+// thousands of sessions server-side and blew that budget. The deck script
+// already runs at 180s for the same reason.
+const NAV_TIMEOUT = Number(process.env.MINDER_CAPTURE_NAV_TIMEOUT || 180000);
+
 
 mkdirSync(OUT, { recursive: true });
 
-async function shoot(page, name, { selector } = {}) {
-  const dest = join(OUT, `${name}.png`);
-  if (selector) {
-    const el = await page.waitForSelector(selector);
-    await el.screenshot({ path: dest });
-  } else {
-    await page.screenshot({ path: dest, fullPage: false });
+// Shots another pass owns (the hybrid orchestrator hands its demo-pass list to
+// the real pass). Skipping the NAVIGATION matters as much as skipping the file:
+// /usage and /stats run heavy synchronous SQLite aggregations that monopolise
+// the server's event loop, leaving it unresponsive for every shot AFTER them —
+// so visiting a route whose output we intend to throw away is not merely
+// wasteful, it breaks the rest of the run.
+const SKIP = new Set(
+  (process.env.MINDER_CAPTURE_SKIP || '').split(',').map((s) => s.trim()).filter(Boolean),
+);
+function owned(name) {
+  if (!SKIP.has(name)) return false;
+  console.log(`  –  ${name}.png (owned by another pass)`);
+  return true;
+}
+
+// One slow route must not abandon the rest of the run. This script used to die
+// on the first timeout — losing every shot after it — which turned a full
+// refresh into a whack-a-mole of one-fix-per-20-minute-run. Failures are
+// collected and reported at the end, and a missing published shot exits
+// non-zero so a partial run can't read as success.
+const failures = [];
+
+// Whether the most recent go() actually landed. A failed navigation leaves the
+// browser on the PREVIOUS route, so shooting afterwards would write the wrong
+// page under the new shot's name — a silently incorrect screenshot, which is
+// worse than a missing one.
+let lastNavOk = true;
+
+// Chromium renders its OWN error page ("This page couldn't load", "Aw, Snap!")
+// as a perfectly successful navigation, so checking that go() resolved does not
+// catch a crashed renderer or a dead server. On 2026-08-12 that shipped a
+// screenshot of the browser error page into usage-dashboard.png, which passed
+// every other guard: nav ok, screenshot taken, file written, 2x dimensions.
+// The only tell was the file size.
+async function pageIsHealthy(page) {
+  try {
+    return await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      if (/This page couldn.t load|site can.t be reached|Aw, Snap|ERR_[A-Z_]{3,}/i.test(text)) {
+        return false;
+      }
+      // The app shell always paints its sidebar; a bare error page has no links.
+      return document.querySelectorAll('a').length > 0;
+    });
+  } catch {
+    return false;
   }
-  console.log(`  ✓  ${name}.png`);
+}
+
+// `optional: true` marks a shot site/index.html does not reference (worktrees),
+// where skipping is a normal outcome rather than a failure.
+async function shoot(page, name, { selector, optional = false } = {}) {
+  if (!lastNavOk) {
+    console.warn(`  ⚠  ${name}.png skipped — its page failed to load (previous shot's page still displayed)`);
+    if (!optional) failures.push(name);
+    return;
+  }
+  if (!(await pageIsHealthy(page))) {
+    console.warn(`  ⚠  ${name}.png skipped — the browser is showing an error page, not the app`);
+    if (!optional) failures.push(name);
+    return;
+  }
+  const dest = join(OUT, `${name}.png`);
+  // Playwright's default screenshot timeout is 30s, which this script was
+  // relying on implicitly — and at deviceScaleFactor 2 the raster is 4x the
+  // pixels, so it started blowing that budget on heavier routes. `animations:
+  // disabled` matters just as much: Playwright waits for animations to settle,
+  // and this app polls and re-renders continuously, so a live panel can hold a
+  // screenshot open indefinitely. Disabling finishes them at their end state.
+  const opts = { path: dest, timeout: 120000, animations: 'disabled', caret: 'hide' };
+  try {
+    if (selector) {
+      const el = await page.waitForSelector(selector);
+      await el.screenshot(opts);
+    } else {
+      await page.screenshot({ ...opts, fullPage: false });
+    }
+    console.log(`  ✓  ${name}.png`);
+  } catch (err) {
+    console.warn(`  ⚠  ${name}.png failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    if (!optional) failures.push(name);
+  }
 }
 
 // Wait until both the Next.js dev "Compiling…" pill and Tailwind's
@@ -67,97 +157,160 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   // arrives via /api/usage which takes ~5s in dev). waitForStableUI returns
   // instantly when no skeleton is ever shown, so we always wait a final
   // window for data fetches to complete.
-  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  try {
+    await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    lastNavOk = true;
+  } catch (err) {
+    lastNavOk = false;
+    console.warn(`  ⚠  navigation to ${route} failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    return false;
+  }
   await page.waitForTimeout(settle);
   await waitForStableUI(page, { timeout: stableTimeout });
   await page.waitForTimeout(postSettle);
+  return true;
 }
 
 (async () => {
   const browser = await chromium.launch({ headless: false });
-  const ctx     = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx     = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: DPR });
   const page    = await ctx.newPage();
 
-  console.log('Fetching first session ID...');
+  // /api/sessions is one of the heavy endpoints, so don't pay for it when the
+  // only shot that needs it belongs to another pass.
   let firstSessionId = null;
-  const resp = await page.goto(`${BASE}/api/sessions`);
-  if (!resp) {
-    console.warn('  ⚠  Sessions endpoint did not respond — session-detail screenshot will be skipped');
-  } else if (!resp.ok()) {
-    console.warn(`  ⚠  Sessions endpoint returned ${resp.status()} — session-detail screenshot will be skipped`);
-  } else {
-    const sessions = await resp.json();
-    firstSessionId = sessions[0]?.sessionId ?? null;
-    if (!firstSessionId) {
-      console.warn('  ⚠  No sessions found — session-detail screenshot will be skipped');
+  if (SKIP.has('session-detail')) {
+    console.log('Skipping session lookup — session-detail is owned by another pass.');
+  } else try {
+    console.log('Fetching first session ID...');
+    // Needs an explicit timeout: Playwright's default is 30s and /api/sessions
+    // takes longer than that against a large index, which threw an UNCAUGHT
+    // rejection here and killed the whole run before a single shot was taken.
+    // Every other failure mode in this block is already a warn-and-continue, so
+    // a slow endpoint should be too.
+    // page.request.get, NOT page.goto + response.json(): a navigation response
+    // body is read back over the DevTools protocol and this payload is large
+    // enough to be evicted from that buffer first ("Request content was evicted
+    // from inspector cache").
+    const resp = await page.request.get(`${BASE}/api/sessions`, { timeout: 180000 });
+    if (!resp) {
+      console.warn('  ⚠  Sessions endpoint did not respond — session-detail screenshot will be skipped');
+    } else if (!resp.ok()) {
+      console.warn(`  ⚠  Sessions endpoint returned ${resp.status()} — session-detail screenshot will be skipped`);
+    } else {
+      const sessions = await resp.json();
+      firstSessionId = sessions[0]?.sessionId ?? null;
+      if (!firstSessionId) {
+        console.warn('  ⚠  No sessions found — session-detail screenshot will be skipped');
+      }
     }
+  } catch (err) {
+    console.warn(
+      `  ⚠  Sessions endpoint failed (${err instanceof Error ? err.message.split('\n')[0] : String(err)}) — ` +
+      'session-detail screenshot will be skipped',
+    );
   }
 
   console.log('\nCapturing screenshots...');
 
   // 1. Dashboard — full viewport
-  await go(page, '/');
-  await shoot(page, 'dashboard');
+  if (!owned('dashboard')) {
+    await go(page, '/');
+    await shoot(page, 'dashboard');
+  }
 
   // 2. Project detail — Overview tab
-  await go(page, '/project/project-minder', 900);
-  await shoot(page, 'project-detail');
+  if (!owned('project-detail')) {
+    await go(page, `/project/${PROJECT}`, 900);
+    await shoot(page, 'project-detail');
+  }
 
   // 3. Sessions browser
-  await go(page, '/sessions');
-  await shoot(page, 'sessions-browser');
+  if (!owned('sessions-browser')) {
+    await go(page, '/sessions');
+    await shoot(page, 'sessions-browser');
+  }
 
   // 4. Session detail (skipped if no sessions)
-  if (firstSessionId) {
+  if (firstSessionId && !owned('session-detail')) {
     await go(page, `/sessions/${firstSessionId}`, 900);
     await shoot(page, 'session-detail');
   }
 
   // 5. Insights browser
-  await go(page, '/insights');
-  await shoot(page, 'insights-browser');
+  if (!owned('insights-browser')) {
+    await go(page, '/insights');
+    await shoot(page, 'insights-browser');
+  }
 
   // 6. Usage dashboard
-  await go(page, '/usage', 900);
-  await shoot(page, 'usage-dashboard');
+  if (!owned('usage-dashboard')) {
+    await go(page, '/usage', 900);
+    await shoot(page, 'usage-dashboard');
+  }
 
   // 7. Stats dashboard
-  await go(page, '/stats', 900);
-  await shoot(page, 'stats-dashboard');
+  if (!owned('stats-dashboard')) {
+    await go(page, '/stats', 900);
+    await shoot(page, 'stats-dashboard');
+  }
 
   // 8. Manual steps
-  await go(page, '/manual-steps');
-  await shoot(page, 'manual-steps');
+  if (!owned('manual-steps')) {
+    await go(page, '/manual-steps');
+    await shoot(page, 'manual-steps');
+  }
 
   // 9. TODOs tab — project detail, TODOs tab. (Previously misnamed "worktrees";
   // the real worktree-overlay shot is step 15 below, captured only when an
   // active worktree exists.)
-  await go(page, '/project/project-minder', 900);
-  try {
-    await page.getByRole('tab', { name: 'TODOs' }).click();
-    await page.waitForTimeout(400);
-  } catch { /* tab absent or already active — screenshot whatever is visible */ }
-  await shoot(page, 'todos-tab');
+  if (!owned('todos-tab')) {
+    await go(page, `/project/${PROJECT}`, 900);
+    try {
+      await page.getByRole('tab', { name: 'TODOs' }).click();
+      await page.waitForTimeout(400);
+    } catch { /* tab absent or already active — screenshot whatever is visible */ }
+    await shoot(page, 'todos-tab');
+  }
 
   // 10. Setup page
-  await go(page, '/setup');
-  await shoot(page, 'setup');
+  if (!owned('setup')) {
+    await go(page, '/setup');
+    await shoot(page, 'setup');
+  }
 
   // 11. Config page
-  await go(page, '/config');
-  await shoot(page, 'config');
+  if (!owned('config')) {
+    await go(page, '/config');
+    await shoot(page, 'config');
+  }
 
   // 12. System Status page — live cross-project session bucket view
-  await go(page, '/status', 1200);
-  await shoot(page, 'status');
+  if (!owned('status')) {
+    await go(page, '/status', 1200);
+    await shoot(page, 'status');
+  }
 
   // 13. Memory tab on project detail — MEMORY.md overview
-  await go(page, '/project/project-minder?tab=memory', 1200);
-  await shoot(page, 'memory');
+  if (!owned('memory')) {
+    await go(page, `/project/${PROJECT}?tab=memory`, 1200);
+    await shoot(page, 'memory');
+  }
 
-  // 14. Card detail — element screenshot of the project-minder card link
-  await go(page, '/');
-  await shoot(page, 'card-detail', { selector: 'a[href="/project/project-minder"]' });
+  // 14. The project card grid, plus an element crop of one card.
+  //
+  // Both read from `/projects`, not `/`: the Claudoscope redesign moved the
+  // card grid off `/` and put the Home overview there, so `/` no longer
+  // contains a single `a[href="/project/..."]`. The old selector silently
+  // pointed at a page with no cards on it.
+  //
+  // If the anchor never appears, shoot() records the failure and leaves the
+  // previous card-detail.png in place rather than throwing.
+  if (!owned('projects-grid')) {
+    await go(page, '/projects', 1200);
+    await shoot(page, 'projects-grid');
+    await shoot(page, 'card-detail', { selector: `a[href="/project/${PROJECT}"]` });
+  }
 
   // 15. Worktree overlay — the dedicated "Worktrees" panel on a project that has
   // an active Claude Code worktree (the `*--claude-worktrees-*` convention).
@@ -192,7 +345,7 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     } catch {
       /* panel markup changed — capture whatever's on screen */
     }
-    await shoot(page, 'worktrees');
+    await shoot(page, 'worktrees', { optional: true });
   } else {
     console.warn(
       '  ⚠  No active worktree overlay found in any project — worktrees.png not regenerated (see TODO.md).',
@@ -201,4 +354,17 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   await browser.close();
   console.log(`\nAll screenshots saved to:\n  ${OUT}\n`);
-})();
+
+  if (failures.length) {
+    console.error(
+      `✗ ${failures.length} published shot(s) failed: ${failures.join(', ')}\n` +
+      '  site/index.html references these, so the page still shows their previous version.',
+    );
+    process.exitCode = 1;
+  }
+})().catch((err) => {
+  // Anything escaping the per-shot guards is a real bug — surface it as a
+  // non-zero exit rather than an unhandled rejection warning.
+  console.error('\n✗ capture-screenshots failed:', err);
+  process.exit(1);
+});

@@ -74,15 +74,15 @@
           </div>
           <div class="shots">
             <figure class="shot-figure">
-              <a class="shot-link" href="screenshots/dashboard.png" data-lightbox data-caption="Dashboard — search, status filters, and sort across every scanned project.">
-                <img src="screenshots/dashboard.png" alt="Dashboard view" loading="lazy" width="1440" height="900">
+              <a class="shot-link" href="screenshots/projects-grid.png" data-lightbox data-caption="The project grid — search, status filters, and sort across every scanned project.">
+                <img src="screenshots/projects-grid.png" alt="Project grid with search, status filters, and sort across every scanned project" loading="lazy" width="1440" height="900">
               </a>
-              <figcaption>Dashboard — search, status filters, and sort across every scanned project.</figcaption>
+              <figcaption>The project grid — search, status filters, and sort across every scanned project.</figcaption>
             </figure>
             <div class="shot-grid">
               <figure class="shot-figure">
                 <a class="shot-link" href="screenshots/card-detail.png" data-lightbox data-caption="A single project card — git dirty indicator and stack badges.">
-                  <img src="screenshots/card-detail.png" alt="Project card detail showing git dirty indicator and badges" loading="lazy" width="267" height="122">
+                  <img src="screenshots/card-detail.png" alt="Project card detail showing git dirty indicator and badges" loading="lazy" width="368" height="302">
                 </a>
                 <figcaption>A single card — dirty indicator and stack badges.</figcaption>
               </figure>
@@ -671,7 +671,9 @@ $env:MINDER_DEMO=1; pnpm dev        <span class="cmt"># Windows PowerShell</span
   <!-- ── Lightbox ───────────────────────────────────────────── -->
   <dialog class="lightbox" id="lightbox" aria-label="Screenshot viewer">
     <div class="lightbox-inner">
-      <img class="lightbox-img" src="" alt="">
+      <!-- No `src` until a thumbnail is clicked: an empty src="" is a spurious
+           request to the page URL in some browsers. lightbox.js sets it. -->
+      <img class="lightbox-img" alt="">
       <p class="lightbox-caption">
         <span class="lightbox-caption-text"></span>
         <span class="lightbox-count"></span>
