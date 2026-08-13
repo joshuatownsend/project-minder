@@ -27,6 +27,12 @@ const NAV_TIMEOUT = Number(process.env.MINDER_CAPTURE_NAV_TIMEOUT || 180000);
 // Demo mode has no `project-minder` (that route renders "Project not found"),
 // so the demo pass points the per-project shots at a fixture project instead.
 const PROJECT = process.env.MINDER_CAPTURE_PROJECT || 'project-minder';
+// NOTE: this script has no MINDER_CAPTURE_SKIP support, unlike its three
+// siblings. That is deliberate rather than an oversight — none of its 24 shots
+// are in the hybrid orchestrator's DEMO_OWNED list, so there is nothing here
+// for another pass to own and the env var would have no effect. If a shot from
+// this file is ever added to DEMO_OWNED, add the guard here first, or the real
+// pass will keep paying for a capture the demo pass overwrites.
 
 mkdirSync(OUT, { recursive: true });
 

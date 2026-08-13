@@ -43,7 +43,6 @@ const DEMO_OWNED = [
   'card-detail',        // element crop of a fixture project's card
   'project-detail',     // aurora-commerce overview
   'todos-tab',          // aurora-commerce has fixture TODOs
-  'memory',             // aurora-commerce memory tab
   'sessions-browser',   // fixture sessions with readable titles
   'session-detail',
   'insights-browser',
@@ -54,19 +53,26 @@ const DEMO_OWNED = [
   'costs',
   'ops-panel',          // aurora-commerce Ops tab
   'github-activity',    // fixture repo shows open PRs + CI
-  // /stats belongs here for a second reason beyond looking tidier: against a
-  // real ~6,000-session index these analytics routes run large synchronous
-  // SQLite aggregations on the server's main thread, which wedges the whole
-  // process and leaves it unresponsive to every shot after them. On fixtures
-  // they are instant.
-  'stats-dashboard',
-  // NOTE: `usage-dashboard` is deliberately NOT here. /usage throws a
-  // client-side "circular link" error under demo mode — in both dev and prod
-  // builds — and renders Chromium's "This page couldn't load" instead of the
-  // app. It captured cleanly on real data. Demo mode bought nothing for this
-  // shot anyway: the demo /usage still surfaced a real project name. See #443
-  // before moving it back.
 ];
+
+// Three shots that LOOK like they belong in DEMO_OWNED and do not. Each was
+// promoted, inspected, and moved back out — recorded here so the next person
+// does not re-add them on the same reasoning:
+//
+//   usage-dashboard  /usage throws a client-side "circular link" error under
+//                    demo mode (dev AND prod builds) and renders Chromium's
+//                    "This page couldn't load" instead of the app. See #443.
+//                    Demo bought nothing anyway — demo /usage still surfaced a
+//                    real project name.
+//   memory           Demo fixtures ship no memory files, so the tab renders
+//                    "No memory files yet for this project" — an empty state
+//                    directly contradicting the prose it illustrates.
+//   stats-dashboard  Renders richly, but its cross-check panel compares the
+//                    demo totals against the REAL Claude stats cache and shows
+//                    a red "-91% / -100%" drift, which reads as a broken app.
+//
+// The general lesson: "the demo pass produced a file" is not evidence the file
+// is good. Look at it.
 
 function run(cmd, args, env) {
   return new Promise((resolve, reject) => {

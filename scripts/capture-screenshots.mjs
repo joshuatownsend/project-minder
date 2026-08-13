@@ -145,6 +145,24 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
   }
 }
 
+// waitForStableUI only recognises .animate-pulse skeletons. Panels that print a
+// plain "loading…" string instead sail straight past it, and the 4s postSettle
+// is not always enough — the Home overview shipped a hero image reading
+// "CONFIG HEALTH — loading…" and "0 projects · 0 active sessions" because its
+// stat cards had not resolved when the shutter fired.
+async function waitForTextGone(page, text, timeout = 45000) {
+  try {
+    await page.waitForFunction(
+      (t) => !(document.body.innerText || '').toLowerCase().includes(t),
+      text.toLowerCase(),
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000 } = {}) {
   // domcontentloaded + settle is more reliable than networkidle for this app:
   // background polling (git status, sessions, OTEL) keeps the network busy
@@ -215,7 +233,14 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   // 1. Dashboard — full viewport
   if (!owned('dashboard')) {
-    await go(page, '/');
+    // This is the hero image, and the Home overview's stat cards resolve after
+    // the generic stability gate has already given up (they render "loading…"
+    // text, not a skeleton). Wait for that to clear before shooting.
+    await go(page, '/', 2000, { postSettle: 6000 });
+    if (!(await waitForTextGone(page, 'loading…'))) {
+      console.warn('  ⚠  dashboard: stat cards still showing "loading…" after 45s');
+    }
+    await page.waitForTimeout(2500);
     await shoot(page, 'dashboard');
   }
 
@@ -293,7 +318,10 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   // 13. Memory tab on project detail — MEMORY.md overview
   if (!owned('memory')) {
-    await go(page, `/project/${PROJECT}?tab=memory`, 1200);
+    // The Memory tab fetches its file list after mount and renders an empty
+    // panel until it arrives — no skeleton, so the stability gate returns
+    // immediately and a short settle captures a blank box.
+    await go(page, `/project/${PROJECT}?tab=memory`, 1500, { postSettle: 10000 });
     await shoot(page, 'memory');
   }
 
