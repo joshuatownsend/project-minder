@@ -64,8 +64,8 @@ const DEMO_OWNED = [
   // client-side "circular link" error under demo mode — in both dev and prod
   // builds — and renders Chromium's "This page couldn't load" instead of the
   // app. It captured cleanly on real data. Demo mode bought nothing for this
-  // shot anyway: the demo /usage still surfaced a real project name. See the
-  // tracking issue before moving it back.
+  // shot anyway: the demo /usage still surfaced a real project name. See #443
+  // before moving it back.
 ];
 
 function run(cmd, args, env) {
