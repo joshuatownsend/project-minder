@@ -237,11 +237,16 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     // the generic stability gate has already given up (they render "loading…"
     // text, not a skeleton). Wait for that to clear before shooting.
     await go(page, '/', 2000, { postSettle: 6000 });
-    if (!(await waitForTextGone(page, 'loading…'))) {
-      console.warn('  ⚠  dashboard: stat cards still showing "loading…" after 45s');
+    if (await waitForTextGone(page, 'loading…')) {
+      await page.waitForTimeout(2500);
+      await shoot(page, 'dashboard');
+    } else {
+      // Do NOT shoot. This shot exists because a loading-state hero shipped
+      // once already; warning and overwriting anyway would reproduce exactly
+      // that, and count it as a success.
+      console.warn('  ⚠  dashboard.png skipped — stat cards still showing "loading…" after 45s');
+      failures.push('dashboard');
     }
-    await page.waitForTimeout(2500);
-    await shoot(page, 'dashboard');
   }
 
   // 2. Project detail — Overview tab
@@ -256,10 +261,21 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     await shoot(page, 'sessions-browser');
   }
 
-  // 4. Session detail (skipped if no sessions)
-  if (firstSessionId && !owned('session-detail')) {
-    await go(page, `/sessions/${firstSessionId}`, 900);
-    await shoot(page, 'session-detail');
+  // 4. Session detail.
+  //
+  // A missing session id is a FAILURE, not a quiet skip: session-detail.png is
+  // published by site/index.html, so exiting 0 here would let the orchestrator
+  // report a successful refresh while the site keeps the previous image. The
+  // lookup above is best-effort precisely so one slow endpoint cannot kill the
+  // run — but "we could not get the data" still has to be recorded.
+  if (!owned('session-detail')) {
+    if (firstSessionId) {
+      await go(page, `/sessions/${firstSessionId}`, 900);
+      await shoot(page, 'session-detail');
+    } else {
+      console.warn('  ⚠  session-detail.png skipped — no session id could be fetched');
+      failures.push('session-detail');
+    }
   }
 
   // 5. Insights browser
