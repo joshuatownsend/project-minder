@@ -14,21 +14,83 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.MINDER_CAPTURE_BASE || 'http://localhost:4100';
-const OUT  = join(__dirname, '..', 'site', 'screenshots');
+// MINDER_CAPTURE_OUT lets the demo pass write to a temp dir instead of the live
+// screenshot directory; MINDER_CAPTURE_DPR=2 is the resolution fix (see
+// capture-screenshots.mjs for the rationale).
+const OUT  = process.env.MINDER_CAPTURE_OUT || join(__dirname, '..', 'site', 'screenshots');
+const DPR = Number(process.env.MINDER_CAPTURE_DPR || 2);
+// Nav timeout. 90s was too tight against a real index: /usage aggregates
+// thousands of sessions server-side and blew that budget. The deck script
+// already runs at 180s for the same reason.
+const NAV_TIMEOUT = Number(process.env.MINDER_CAPTURE_NAV_TIMEOUT || 180000);
+
+// Demo mode has no `project-minder` (that route renders "Project not found"),
+// so the demo pass points the per-project shots at a fixture project instead.
+const PROJECT = process.env.MINDER_CAPTURE_PROJECT || 'project-minder';
+// NOTE: this script has no MINDER_CAPTURE_SKIP support, unlike its three
+// siblings. That is deliberate rather than an oversight — none of its 24 shots
+// are in the hybrid orchestrator's DEMO_OWNED list, so there is nothing here
+// for another pass to own and the env var would have no effect. If a shot from
+// this file is ever added to DEMO_OWNED, add the guard here first, or the real
+// pass will keep paying for a capture the demo pass overwrites.
 
 mkdirSync(OUT, { recursive: true });
 
-async function shoot(page, name, { selector } = {}) {
-  const dest = join(OUT, `${name}.png`);
-  // 60s timeout absorbs slow font/asset loads on heavy routes (/agent-view, /stats).
-  const opts = { path: dest, timeout: 90000 };
-  if (selector) {
-    const el = await page.waitForSelector(selector, { timeout: 5000 });
-    await el.screenshot(opts);
-  } else {
-    await page.screenshot({ ...opts, fullPage: false });
+// Same per-shot isolation as capture-screenshots.mjs: 25 shots in a row means
+// one slow route would otherwise discard every capture after it.
+const failures = [];
+// A failed navigation leaves the browser on the PREVIOUS route, so shooting
+// afterwards writes the wrong page under the new name — worse than no shot.
+let lastNavOk = true;
+
+
+// Chromium renders its own error page ("This page couldn't load") as a
+// SUCCESSFUL navigation, so a nav-ok check does not catch a crashed renderer.
+// See capture-screenshots.mjs — this shipped a browser error page as a
+// published screenshot on 2026-08-12.
+async function pageIsHealthy(page) {
+  try {
+    return await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      if (/This page couldn.t load|site can.t be reached|Aw, Snap|ERR_[A-Z_]{3,}/i.test(text)) {
+        return false;
+      }
+      return document.querySelectorAll('a').length > 0;
+    });
+  } catch {
+    return false;
   }
-  console.log(`  ✓  ${name}.png`);
+}
+
+async function shoot(page, name, { selector } = {}) {
+  if (!lastNavOk) {
+    console.warn(`  ⚠  ${name}.png skipped — its page failed to load`);
+    failures.push(name);
+    return;
+  }
+  if (!(await pageIsHealthy(page))) {
+    console.warn(`  ⚠  ${name}.png skipped — the browser is showing an error page, not the app`);
+    failures.push(name);
+    return;
+  }
+  const dest = join(OUT, `${name}.png`);
+  // 120s timeout absorbs slow font/asset loads on heavy routes (/agent-view,
+  // /stats), now doubled from 60s because a 2x raster is 4x the pixels.
+  // `animations: disabled` stops a continuously-polling panel from holding the
+  // screenshot open while Playwright waits for animations to settle.
+  const opts = { path: dest, timeout: 120000, animations: 'disabled', caret: 'hide' };
+  try {
+    if (selector) {
+      const el = await page.waitForSelector(selector, { timeout: 5000 });
+      await el.screenshot(opts);
+    } else {
+      await page.screenshot({ ...opts, fullPage: false });
+    }
+    console.log(`  ✓  ${name}.png`);
+  } catch (err) {
+    console.warn(`  ⚠  ${name}.png failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    failures.push(name);
+  }
 }
 
 // Wait until both the Next.js dev "Compiling…" pill and Tailwind's
@@ -74,10 +136,18 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   // arrives via /api/usage which takes ~5s in dev). waitForStableUI returns
   // instantly when no skeleton is ever shown, so we always wait a final
   // window for data fetches to complete.
-  await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  try {
+    await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    lastNavOk = true;
+  } catch (err) {
+    lastNavOk = false;
+    console.warn(`  ⚠  navigation to ${route} failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    return false;
+  }
   await page.waitForTimeout(settle);
   await waitForStableUI(page, { timeout: stableTimeout });
   await page.waitForTimeout(postSettle);
+  return true;
 }
 
 // Click a navigation button by visible text. The Settings page uses a sidebar
@@ -110,18 +180,28 @@ async function clickButton(page, name) {
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const ctx     = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const ctx     = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: DPR });
   const page    = await ctx.newPage();
 
   // Fetch first session ID for the session-quality shots.
-  // 90s timeout — cold parse of all session JSONL files can be slow.
+  // 180s timeout — cold parse of all session JSONL files can be slow, and 90s
+  // was measured as too short against a ~6,000-session index. This path only
+  // warns on failure, so an over-tight timeout does not fail the run; it
+  // silently drops session-replay-scrubber and session-diagnosis instead.
   console.log('Fetching first session ID for session-detail captures...');
   let firstSessionId = null;
   try {
-    const resp = await page.goto(`${BASE}/api/sessions`, { timeout: 90000 });
-    if (resp?.ok()) {
+    // Use the API request context, NOT page.goto + response.json(). Reading a
+    // navigation response body goes through the DevTools protocol, and this
+    // endpoint's payload is large enough to be dropped from that buffer before
+    // we read it — "Request content was evicted from inspector cache", which
+    // silently cost both session shots a refresh on 2026-08-12.
+    const resp = await page.request.get(`${BASE}/api/sessions`, { timeout: 180000 });
+    if (resp.ok()) {
       const sessions = await resp.json();
       firstSessionId = sessions[0]?.sessionId ?? null;
+    } else {
+      console.warn(`  ⚠  /api/sessions returned ${resp.status()}`);
     }
   } catch (err) {
     console.warn(`  ⚠  /api/sessions error: ${err.message}`);
@@ -171,7 +251,7 @@ async function clickButton(page, name) {
   // ── Config Linting & Security ─────────────────────────────
   console.log('\nConfig Lint & Security:');
   // ConfigLintPanel lives on project detail under ?tab=config-lint
-  await go(page, '/project/project-minder?tab=config-lint', 1200);
+  await go(page, `/project/${PROJECT}?tab=config-lint`, 1200);
   await shoot(page, 'config-linter');
 
   // MCP tab on global Config browser, with security findings
@@ -179,7 +259,7 @@ async function clickButton(page, name) {
   await shoot(page, 'mcp-security');
 
   // Config history tab on project detail
-  await go(page, '/project/project-minder?tab=config-history', 1000);
+  await go(page, `/project/${PROJECT}?tab=config-history`, 1000);
   await shoot(page, 'config-history');
 
   // ── Session Quality & Diagnosis ───────────────────────────
@@ -242,4 +322,15 @@ async function clickButton(page, name) {
 
   await browser.close();
   console.log(`\nAll new screenshots saved to:\n  ${OUT}\n`);
-})();
+
+  if (failures.length) {
+    console.error(
+      `✗ ${failures.length} published shot(s) failed: ${failures.join(', ')}\n` +
+      '  site/index.html references these, so the page still shows their previous version.',
+    );
+    process.exitCode = 1;
+  }
+})().catch((err) => {
+  console.error('\n✗ capture-screenshots-extended failed:', err);
+  process.exit(1);
+});

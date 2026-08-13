@@ -50,7 +50,16 @@ const nextConfig: NextConfig = {
   // server. `next dev` / `next start` from the repo are unaffected —
   // standalone output is only produced by `next build` and only consumed
   // by `scripts/package-standalone.mjs`.
-  output: "standalone",
+  //
+  // Exception — `next start` DOES care. It refuses to serve a standalone build
+  // ("next start does not work with output: standalone configuration"), which
+  // silently broke `capture:docs:prod` from #285 onward: the orchestrator's
+  // server never came up, so screenshot captures quietly fell back to being
+  // taken against `next dev` — the exact thing that orchestrator exists to
+  // avoid. The capture path sets MINDER_BUILD_NO_STANDALONE=1 so its build
+  // emits a normal server that `next start` can serve. Nothing else sets it;
+  // packaging and CI still get standalone output.
+  output: process.env.MINDER_BUILD_NO_STANDALONE === "1" ? undefined : "standalone",
   // Pin the file-tracing root to this project directory. Without this,
   // Next walks up from `next.config.ts` looking for the outermost
   // ancestor with a lockfile/package.json to infer a "workspace root" —

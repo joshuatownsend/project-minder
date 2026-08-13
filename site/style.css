@@ -5,17 +5,23 @@
 :root {
   --bg:         #0a0a0a;
   --bg-card:    #111111;
+  --bg-raised:  #141414;
   --bg-code:    #0d0d0d;
   --border:     #1e1e1e;
   --border-mid: #2a2a2a;
   --text:       #e5e5e5;
+  --text-dim:   #b4b4b4;
   --muted:      #888888;
   --amber:      #f59e0b;
   --amber-dim:  rgba(245, 158, 11, 0.12);
   --amber-glow: rgba(245, 158, 11, 0.25);
   --r:          10px;
   --mono:       'Menlo', 'Consolas', 'Liberation Mono', monospace;
-  --max:        1100px;
+  --max:        1180px;
+  /* Prose is capped independently of the container: full-width body text at
+     1180px is ~150 characters per line, which is roughly twice the comfortable
+     reading measure. Screenshots still get the full container width. */
+  --measure:    72ch;
 }
 
 /* ── Base ───────────────────────────────────────────────── */
@@ -52,6 +58,14 @@ kbd {
   color: var(--text);
 }
 
+/* Visible focus ring for keyboard users — the accordion and lightbox are both
+   keyboard-driven, so this is functional, not decorative. */
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 /* ── Layout ─────────────────────────────────────────────── */
 .container {
   max-width: var(--max);
@@ -61,7 +75,7 @@ kbd {
 
 /* ── Hero ───────────────────────────────────────────────── */
 .hero {
-  padding: 72px 0 48px;
+  padding: 72px 0 56px;
   text-align: center;
 }
 
@@ -69,10 +83,10 @@ kbd {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 40px;
+  gap: 44px;
 }
 
-.hero-content { max-width: 640px; }
+.hero-content { max-width: 660px; }
 
 .hero h1 {
   font-size: clamp(2.25rem, 6vw, 3.75rem);
@@ -136,71 +150,299 @@ kbd {
     0 24px 64px rgba(0, 0, 0, 0.85);
 }
 
-/* ── Feature Groups ─────────────────────────────────────── */
-.features { padding: 32px 0 96px; }
+/* ── Feature index (table of contents) ──────────────────── */
+.features { padding: 8px 0 88px; }
 
-.features .container {
+.toc { margin-bottom: 36px; }
+
+.toc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.toc-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.toc-toggle {
+  background: none;
+  border: 1px solid var(--border-mid);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.toc-toggle:hover { border-color: var(--amber); color: var(--amber); }
+
+.toc-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px 20px;
+}
+
+.toc-list a {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.9375rem;
+  padding: 3px 0;
+  border-bottom: 1px solid transparent;
+}
+.toc-list a:hover {
+  color: var(--amber);
+  text-decoration: none;
+  border-bottom-color: var(--amber-dim);
+}
+
+/* ── Feature accordions ─────────────────────────────────── */
+.feature {
+  border-top: 1px solid var(--border);
+}
+.feature:last-of-type { border-bottom: 1px solid var(--border); }
+
+/* Anchor offset so a #hash jump doesn't tuck the heading under the top edge. */
+.feature { scroll-margin-top: 24px; }
+
+.feature > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 22px 44px 22px 0;
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 80px;
+  gap: 3px;
+  transition: color 0.15s;
 }
+/* Safari/Chrome still paint a disclosure triangle without this. */
+.feature > summary::-webkit-details-marker { display: none; }
+.feature > summary::marker { content: ''; }
 
-.feature-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 48px;
-  align-items: start;
-}
+.feature > summary:hover .feature-title { color: var(--amber); }
 
-/* Flip layout: text right, screenshot left */
-.feature-row--flip { direction: rtl; }
-.feature-row--flip > * { direction: ltr; }
-
-.feature-text h2 {
-  font-size: 1.5rem;
+.feature-title {
+  font-size: 1.3125rem;
   font-weight: 600;
   color: #fff;
   letter-spacing: -0.015em;
-  margin-bottom: 12px;
+  transition: color 0.15s;
 }
 
-.feature-text p {
+.feature-teaser {
   font-size: 0.9375rem;
   color: var(--muted);
-  line-height: 1.75;
 }
 
-.secondary-shots {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* Chevron drawn from two borders — no icon font, no SVG request. */
+.feature-chevron {
+  position: absolute;
+  right: 8px;
+  top: 30px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.2s, border-color 0.2s;
+}
+.feature[open] > summary .feature-chevron {
+  transform: rotate(-135deg);
+  border-color: var(--amber);
+}
+.feature > summary:hover .feature-chevron { border-color: var(--amber); }
+
+.feature-body { padding: 4px 0 40px; }
+
+.prose { max-width: var(--measure); }
+
+.prose p {
+  font-size: 0.9688rem;
+  color: var(--text-dim);
+  line-height: 1.78;
+}
+.prose p + p { margin-top: 14px; }
+
+/* ── Screenshots ────────────────────────────────────────── */
+.shots { margin-top: 28px; }
+
+/* The lead screenshot of a section gets the full container width — this is the
+   fix for the old half-column layout, where a 1440px capture was downscaled
+   into ~500px and became unreadable. */
+.shot-figure { margin: 0; }
+.shot-figure + .shot-figure { margin-top: 20px; }
+
+.shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 20px;
   margin-top: 20px;
 }
+.shot-grid .shot-figure + .shot-figure { margin-top: 0; }
 
-.secondary-shots img {
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  opacity: 0.65;
-  transition: opacity 0.2s, border-color 0.2s;
-}
-.secondary-shots img:hover { opacity: 1; border-color: var(--border-mid); }
-
-/* Sticky primary screenshot — scrolls away at viewport top */
-.feature-shot {
-  position: sticky;
-  top: 24px;
-}
-
-.shot {
-  width: 100%;
+.shot-link {
+  display: block;
   border-radius: var(--r);
+  overflow: hidden;
   border: 1px solid var(--border-mid);
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  position: relative;
 }
-.shot:hover {
+.shot-link:hover {
   border-color: var(--amber-glow);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 20px var(--amber-dim);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7), 0 0 24px var(--amber-dim);
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+
+.shot-link img { width: 100%; }
+
+/* "Expand" affordance. Revealed on hover (or keyboard focus) with a pointer,
+   and shown permanently on touch — a touch device has no hover state to reveal
+   it with, so hiding it there would leave the affordance undiscoverable. */
+.shot-link::after {
+  content: '⤢';
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(10, 10, 10, 0.82);
+  border: 1px solid var(--border-mid);
+  color: var(--text);
+  font-size: 0.875rem;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.shot-link:hover::after,
+.shot-link:focus-visible::after { opacity: 1; }
+
+@media (hover: none) {
+  .shot-link::after { opacity: 1; }
+}
+
+.shot-figure figcaption {
+  margin-top: 9px;
+  font-size: 0.8438rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* ── Lightbox ───────────────────────────────────────────── */
+.lightbox {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: 100vw;
+  max-height: 100vh;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text);
+}
+/* Near-opaque: at 0.92 the page behind stayed legible through the caption,
+   which read as a rendering fault rather than a modal. */
+.lightbox::backdrop { background: rgba(0, 0, 0, 0.97); }
+
+.lightbox-inner {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  /* Bottom padding reserves a band for the caption AND the keyboard hint below
+     it — they collided when this was 24px and the caption wrapped to 2 lines. */
+  padding: 60px 72px 64px;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  /* Leave room for the caption and controls; without an explicit cap the image
+     can push the caption off-screen on short viewports. Must stay in step with
+     the vertical padding above plus the caption band. */
+  max-height: calc(100vh - 200px);
+  width: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--border-mid);
+}
+
+.lightbox-caption {
+  font-size: 0.875rem;
+  color: var(--muted);
+  text-align: center;
+  max-width: 80ch;
+}
+.lightbox-caption .lightbox-count {
+  color: var(--border-mid);
+  margin-left: 8px;
+}
+
+.lightbox-btn {
+  position: absolute;
+  background: rgba(20, 20, 20, 0.9);
+  border: 1px solid var(--border-mid);
+  color: var(--text);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.lightbox-btn:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: rgba(20, 20, 20, 1);
+}
+
+.lightbox-close {
+  top: 14px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  font-size: 1.25rem;
+}
+
+.lightbox-prev, .lightbox-next {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  font-size: 1.5rem;
+}
+.lightbox-prev { left: 12px; }
+.lightbox-next { right: 12px; }
+
+.lightbox-hint {
+  position: absolute;
+  bottom: 18px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #555;
+  pointer-events: none;
+}
+/* No keyboard on touch — the hint would be a lie. */
+@media (hover: none) {
+  .lightbox-hint { display: none; }
 }
 
 /* ── Quick Start ────────────────────────────────────────── */
@@ -237,6 +479,7 @@ kbd {
   margin-top: 16px;
   font-size: 0.875rem;
   color: var(--muted);
+  max-width: var(--measure);
 }
 
 /* ── Inspired By ────────────────────────────────────────── */
@@ -278,14 +521,18 @@ footer { padding: 24px 0; }
 }
 
 /* ── Responsive ─────────────────────────────────────────── */
-@media (max-width: 720px) {
-  .feature-row,
-  .feature-row--flip {
-    grid-template-columns: 1fr;
-    direction: ltr;
-    gap: 28px;
-  }
-  .feature-row--flip .feature-shot { order: -1; }
-  .feature-shot { position: static; }
+@media (max-width: 760px) {
   .hero { padding: 48px 0 32px; }
+  .feature > summary { padding: 18px 34px 18px 0; }
+  .feature-title { font-size: 1.1875rem; }
+  .shot-grid { grid-template-columns: 1fr; }
+  .lightbox-inner { padding: 52px 12px 40px; }
+  .lightbox-prev, .lightbox-next { width: 36px; height: 52px; }
+  .lightbox-img { max-height: calc(100vh - 150px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition-duration: 0.01ms !important; }
+  .shot-link:hover { transform: none; }
 }
