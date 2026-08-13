@@ -96,6 +96,12 @@ const demoOnly = has('--demo-only');
 const skipBuild = has('--skip-build') || demoOnly;
 
 (async () => {
+  // Held, not thrown. The two passes own disjoint sets of shots, so a real-pass
+  // failure must not cost the demo pass its run — the prod orchestrator was
+  // just taught to preserve partial results for exactly this reason, and
+  // aborting here would discard them one level up. Reported at the end.
+  let realPassError = null;
+
   if (!demoOnly) {
     console.log(`\n══ PASS ${realOnly ? '1/1' : '1/2'} — real data ══════════════════════════════\n`);
     await run('node', ['scripts/capture-screenshots-prod.mjs'], {
@@ -117,10 +123,19 @@ const skipBuild = has('--skip-build') || demoOnly;
       // demo images in place — the opposite of what "capture everything from
       // real data" asks for.
       MINDER_CAPTURE_SKIP: realOnly ? '' : DEMO_OWNED.join(','),
+    }).catch((err) => {
+      console.warn(`\n  ⚠  Real pass reported failures: ${err.message}`);
+      console.warn('     Continuing to the demo pass — its shots are independent of these.\n');
+      realPassError = err;
     });
   }
 
   if (realOnly) {
+    if (realPassError) {
+      console.error(`\n✗ --real-only: the real pass reported failures: ${realPassError.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
     console.log('\n✓ --real-only: skipping the demo pass.\n');
     return;
   }
@@ -193,6 +208,15 @@ const skipBuild = has('--skip-build') || demoOnly;
     console.error(`\n✗ Demo pass failed: ${err.message}`);
     console.error(`  Staged output (may be partial): ${demoOut}`);
     throw err;
+  }
+
+  if (realPassError) {
+    console.error(
+      `\n✗ The demo pass completed, but the real pass reported failures: ${realPassError.message}\n` +
+      '  Demo-owned shots were still refreshed; the real-owned ones may be stale.\n',
+    );
+    process.exitCode = 1;
+    return;
   }
 
   console.log('✓ Hybrid capture complete.\n');
