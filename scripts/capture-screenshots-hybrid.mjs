@@ -92,6 +92,14 @@ const argv = process.argv.slice(2);
 const has = (flag) => argv.includes(flag);
 const realOnly = has('--real-only');
 const demoOnly = has('--demo-only');
+
+// Mutually exclusive, and silently catastrophic together: --demo-only skips the
+// real pass, then --real-only returns before the demo pass, so the command
+// captures nothing at all and still prints a success message and exits 0.
+if (realOnly && demoOnly) {
+  console.error('✗ --real-only and --demo-only are mutually exclusive; nothing would be captured.');
+  process.exit(2);
+}
 // --demo-only implies an existing build; there is nothing for it to rebuild.
 const skipBuild = has('--skip-build') || demoOnly;
 
