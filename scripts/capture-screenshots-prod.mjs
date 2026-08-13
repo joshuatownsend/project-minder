@@ -78,23 +78,45 @@ const DEMO_FIXTURE_SLUGS = [
   'atlas-cli', 'beacon-mobile', 'synth-playground', 'archive-legacy-dash',
 ];
 
-async function assertDemoFixturesLive() {
+/**
+ * Assert the server is serving the data mode this pass expects.
+ *
+ * Both directions matter. `MINDER_DEMO=1` not taking is the obvious hazard, but
+ * the reverse is just as real and less visible: demo mode is ALSO enabled by
+ * the persisted `demoMode` feature flag in .minder.json, and `demoMode()`
+ * returns true when EITHER source is on (src/lib/demo/demoMode.ts). So clearing
+ * the env var does not force demo off — a developer who left the Settings
+ * toggle enabled would get fixtures in the "real" pass and never be told.
+ */
+async function assertDataMode(expectDemo) {
   const resp = await fetch(`${BASE}/api/projects`, { signal: AbortSignal.timeout(30_000) });
   if (!resp.ok) {
-    throw new Error(`Demo check: /api/projects returned ${resp.status}`);
+    throw new Error(`Data-mode check: /api/projects returned ${resp.status}`);
   }
   const data = await resp.json();
   const projects = Array.isArray(data) ? data : (data.projects ?? []);
   const slugs = new Set(projects.map((p) => p?.slug));
   const found = DEMO_FIXTURE_SLUGS.filter((s) => slugs.has(s));
-  if (found.length === 0) {
+
+  if (expectDemo && found.length === 0) {
     throw new Error(
-      'MINDER_DEMO=1 was set but /api/projects returned no demo fixture projects ' +
-      `(saw ${projects.length}: ${[...slugs].slice(0, 5).join(', ')}...). ` +
+      'This pass expects DEMO fixtures but /api/projects returned none ' +
+      `(saw ${projects.length} real projects: ${[...slugs].slice(0, 5).join(', ')}...). ` +
+      'Check that MINDER_DEMO=1 reached the server process. ' +
       'Refusing to capture — these shots would contain real data.',
     );
   }
-  console.log(`\n✓ Demo mode confirmed live (${found.length} fixture projects present).`);
+  if (!expectDemo && found.length > 0) {
+    throw new Error(
+      `This pass expects REAL data but /api/projects returned demo fixtures (${found.join(', ')}). ` +
+      'Clearing MINDER_DEMO does not override the persisted `demoMode` feature flag — ' +
+      'turn it off in Settings (or .minder.json) before capturing. ' +
+      'Refusing to capture — these shots would contain fixtures.',
+    );
+  }
+  console.log(
+    `\n✓ Data mode confirmed: ${expectDemo ? `demo (${found.length} fixture projects)` : `real (${projects.length} projects, no fixtures)`}.`,
+  );
 }
 
 async function killServer() {
@@ -218,25 +240,62 @@ function installSignalHandlers() {
 
   await waitForReady();
 
-  // When this pass is meant to capture demo data, prove the flag actually took
-  // before spending ~20 minutes on it. MINDER_DEMO is read by the server
-  // process, not by the capture scripts, so a mis-plumbed env var fails silently
-  // and would publish the real portfolio under the demo pass's filenames — the
-  // one outcome the demo pass exists to prevent.
-  if (process.env.MINDER_DEMO === '1') {
-    await assertDemoFixturesLive();
+  // Prove the server is serving the data this pass expects before spending ~20
+  // minutes on it. MINDER_DEMO is read by the server process, not by the
+  // capture scripts, so a mis-plumbed env var fails silently and would publish
+  // the wrong dataset under this pass's filenames.
+  //
+  // MINDER_CAPTURE_EXPECT lets the hybrid orchestrator state its intent
+  // explicitly ('real' | 'demo'). Without it we can only infer from MINDER_DEMO,
+  // which cannot detect the persisted-flag case — see assertDataMode.
+  const expect = process.env.MINDER_CAPTURE_EXPECT
+    || (process.env.MINDER_DEMO === '1' ? 'demo' : '');
+  if (expect === 'demo' || expect === 'real') {
+    await assertDataMode(expect === 'demo');
   }
 
   console.log(`\n→ Server ready. Running captures against ${BASE}...\n`);
 
   const captureEnv = { ...process.env, MINDER_CAPTURE_BASE: BASE };
+  const scriptFailures = [];
   try {
-    await run('node', ['scripts/capture-screenshots.mjs'], { env: captureEnv });
-    await run('node', ['scripts/capture-agents-skills.mjs'], { env: captureEnv });
-    await run('node', ['scripts/capture-screenshots-extended.mjs'], { env: captureEnv });
-    await run('node', ['scripts/capture-screenshots-deck.mjs'], { env: captureEnv });
+    // Run EVERY capture script, collecting failures, rather than aborting the
+    // sequence on the first non-zero exit.
+    //
+    // These four are independent — each owns a disjoint set of shots — so one
+    // failing must not cost the others their run. With sequential `await`s it
+    // did: a single expected failure in the first script (e.g. the demo pass
+    // legitimately refusing to write /usage, see #443) meant agents, skills,
+    // ops-panel, github-activity and costs were never captured at all, and the
+    // hybrid orchestrator's missing-file gate then failed the whole run over
+    // shots nothing had gone wrong with.
+    for (const script of [
+      'scripts/capture-screenshots.mjs',
+      'scripts/capture-agents-skills.mjs',
+      'scripts/capture-screenshots-extended.mjs',
+      'scripts/capture-screenshots-deck.mjs',
+    ]) {
+      try {
+        await run('node', [script], { env: captureEnv });
+      } catch (err) {
+        console.warn(`\n  ⚠  ${script} reported failures: ${err.message}`);
+        scriptFailures.push(script);
+      }
+    }
   } finally {
     await killServer();
+  }
+
+  if (scriptFailures.length) {
+    // Still non-zero, so a partial run can never read as success — but only
+    // after every script has had its turn.
+    console.error(
+      `\n✗ ${scriptFailures.length} capture script(s) reported failures:\n` +
+      scriptFailures.map((s) => `    - ${s}`).join('\n') +
+      '\n  Captures from the other scripts were still written.\n',
+    );
+    process.exitCode = 1;
+    return;
   }
 
   console.log('\n✓ Done. Captures written to site/screenshots/\n');

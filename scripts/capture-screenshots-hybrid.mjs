@@ -103,6 +103,11 @@ const skipBuild = has('--skip-build') || demoOnly;
       // Explicitly clear demo mode: this pass must not inherit it from the
       // caller's shell, or "real" and "demo" would capture the same thing.
       MINDER_DEMO: '',
+      // Clearing MINDER_DEMO is NOT enough on its own — the persisted
+      // `demoMode` feature flag also enables demo mode, and demoMode() is an
+      // OR of the two. Declaring the intent lets the prod script assert that
+      // no fixtures are being served and fail loudly if the flag is on.
+      MINDER_CAPTURE_EXPECT: 'real',
       // Don't spend real-server time on shots pass 2 is going to overwrite.
       // This is a correctness measure, not just a speed one — see DEMO_OWNED.
       //
@@ -137,6 +142,7 @@ const skipBuild = has('--skip-build') || demoOnly;
     // promote failed to materialise, that sets a non-zero exit.
     await run('node', ['scripts/capture-screenshots-prod.mjs'], {
       MINDER_DEMO: '1',
+      MINDER_CAPTURE_EXPECT: 'demo',
       MINDER_CAPTURE_OUT: demoOut,
       MINDER_CAPTURE_PROJECT: DEMO_PROJECT,
       // The deck script targets the Ops shot with its OWN slug, defaulting to
