@@ -307,8 +307,9 @@ kbd {
 
 .shot-link img { width: 100%; }
 
-/* "Expand" affordance — only meaningful with a pointer, so it is hidden on
-   touch where there is no hover state to reveal it. */
+/* "Expand" affordance. Revealed on hover (or keyboard focus) with a pointer,
+   and shown permanently on touch — a touch device has no hover state to reveal
+   it with, so hiding it there would leave the affordance undiscoverable. */
 .shot-link::after {
   content: '⤢';
   position: absolute;

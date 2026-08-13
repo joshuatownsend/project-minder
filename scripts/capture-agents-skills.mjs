@@ -28,13 +28,24 @@ const SKIP = new Set(
 
 
 
+// All three shots here are published by site/index.html, so a failure must exit
+// non-zero the way the other capture scripts do — otherwise the prod
+// orchestrator reports a successful refresh while a stale image stays on the
+// site.
+const failures = [];
+
 async function shoot(page, name) {
   const dest = join(OUT, `${name}.png`);
   // See capture-screenshots.mjs: 2x rasters exceed Playwright's 30s default,
   // and `animations: disabled` stops a continuously-polling panel from holding
   // the screenshot open.
-  await page.screenshot({ path: dest, fullPage: false, timeout: 120000, animations: 'disabled', caret: 'hide' });
-  console.log(`  ✓  ${name}.png`);
+  try {
+    await page.screenshot({ path: dest, fullPage: false, timeout: 120000, animations: 'disabled', caret: 'hide' });
+    console.log(`  ✓  ${name}.png`);
+  } catch (err) {
+    console.warn(`  ⚠  ${name}.png failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    failures.push(name);
+  }
 }
 
 // Wait until both the Next.js dev "Compiling…" pill and Tailwind's
@@ -115,7 +126,11 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
         await page.waitForTimeout(800);
         await shoot(page, 'provenance');
       } catch (err) {
+        // The expanded row is what this shot is FOR, so a failed click means
+        // the next line would capture the collapsed list under the provenance
+        // name. Record it and skip — never shoot the wrong thing.
         console.warn(`  ⚠  provenance.png failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+        failures.push('provenance');
       }
     }
   }
@@ -129,4 +144,15 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   await browser.close();
   console.log('\nDone.');
-})();
+
+  if (failures.length) {
+    console.error(
+      `✗ ${failures.length} published shot(s) failed: ${failures.join(', ')}\n` +
+      '  site/index.html references these, so the page still shows their previous version.',
+    );
+    process.exitCode = 1;
+  }
+})().catch((err) => {
+  console.error('\n✗ capture-agents-skills failed:', err);
+  process.exit(1);
+});

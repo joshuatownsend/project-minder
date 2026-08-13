@@ -97,7 +97,7 @@ const skipBuild = has('--skip-build') || demoOnly;
 
 (async () => {
   if (!demoOnly) {
-    console.log('\n══ PASS 1/2 — real data ══════════════════════════════\n');
+    console.log(`\n══ PASS ${realOnly ? '1/1' : '1/2'} — real data ══════════════════════════════\n`);
     await run('node', ['scripts/capture-screenshots-prod.mjs'], {
       MINDER_CAPTURE_SKIP_BUILD: skipBuild ? '1' : '',
       // Explicitly clear demo mode: this pass must not inherit it from the
@@ -105,7 +105,13 @@ const skipBuild = has('--skip-build') || demoOnly;
       MINDER_DEMO: '',
       // Don't spend real-server time on shots pass 2 is going to overwrite.
       // This is a correctness measure, not just a speed one — see DEMO_OWNED.
-      MINDER_CAPTURE_SKIP: DEMO_OWNED.join(','),
+      //
+      // ONLY when a demo pass will actually follow. Under --real-only there is
+      // no second pass to produce them, so skipping here would regenerate
+      // nothing for those shots and silently leave the previously committed
+      // demo images in place — the opposite of what "capture everything from
+      // real data" asks for.
+      MINDER_CAPTURE_SKIP: realOnly ? '' : DEMO_OWNED.join(','),
     });
   }
 
