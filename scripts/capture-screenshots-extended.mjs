@@ -385,14 +385,14 @@ async function clickButton(page, name) {
   if (!owned('agent-view')) await shoot(page, 'agent-view');
 
   await go(page, '/kanban', 1200, { shot: 'kanban' });
-  // Kanban defaults to the "Board" source, which is empty unless BOARD.md has
-  // open issues — so the default view published as four "Nothing here" columns.
-  // The prose describes this page as unifying *sessions with dispatcher tasks*,
-  // which is the "All" source. Switch to it so the shot shows what it claims.
-  if (selected('kanban')) {
-    await clickButton(page, 'All');
-    await page.waitForTimeout(1500);
-  }
+  // No filter click here, deliberately. An earlier version called
+  // clickButton(page, 'All') to move off what looked like a "Board"-scoped view,
+  // but that was wrong twice over: KanbanBoard already initialises kindFilter to
+  // "all" (KanbanBoard.tsx:233), so there is nothing to switch; and with the
+  // sidebar expanded, the helper's `button:has-text("All")` candidate matches the
+  // sidebar's "All projects" scope button (AppSidebar.tsx:257) instead. That
+  // opens ProjectScopeMenu, and the shot would publish the scope-picker overlay
+  // covering the board — a wrong image, which is worse than an empty one.
   if (!owned('kanban')) await shoot(page, 'kanban');
 
   await go(page, '/tasks', 1000, { shot: 'tasks' });
