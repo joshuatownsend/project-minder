@@ -62,6 +62,12 @@ let lastNavOk = true;
 // that never settled is how /status shipped as four empty grey bars — the shot
 // "succeeded" in every mechanical sense and published a loading state.
 let lastSettled = true;
+// A POSITIVE assertion about this view's data failed. Mirrors capture-screenshots.mjs:
+// unlike a settle timeout this cannot be re-checked generically, because the page
+// is genuinely QUIET while its data is missing — settleBeforeShot would pass and
+// publish exactly the placeholder the assertion exists to catch. Hard refusal,
+// reset by each successful go().
+let lastAssertFailed = false;
 
 
 // Chromium renders its own error page ("This page couldn't load") as a
@@ -85,6 +91,11 @@ async function pageIsHealthy(page) {
 async function shoot(page, name, { selector } = {}) {
   if (!lastNavOk) {
     console.warn(`  ⚠  ${name}.png skipped — its page failed to load`);
+    failures.push(name);
+    return;
+  }
+  if (lastAssertFailed) {
+    console.warn(`  ⚠  ${name}.png skipped — its data never arrived (positive assertion failed)`);
     failures.push(name);
     return;
   }
@@ -249,6 +260,8 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   try {
     await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     lastNavOk = true;
+    // Per-view state: a previous route's failed assertion must not refuse this one.
+    lastAssertFailed = false;
   } catch (err) {
     lastNavOk = false;
     console.warn(`  ⚠  navigation to ${route} failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
@@ -381,8 +394,31 @@ async function clickButton(page, name) {
   await go(page, `/project/${PROJECT}?tab=config-lint`, 1200, { shot: 'config-linter' });
   if (!owned('config-linter')) await shoot(page, 'config-linter');
 
-  // MCP tab on global Config browser, with security findings
-  await go(page, '/config?type=mcp', 1200, { shot: 'mcp-security' });
+  // MCP tab on global Config browser, with security findings.
+  //
+  // Needs a positive assertion, because this route defeats every generic check:
+  // ConfigBrowser renders its pending catalog as six placeholder divs carrying
+  // NO text, NO class and NO animation — just height/background/opacity
+  // (ConfigBrowser.tsx:208-220). Body text length therefore holds perfectly
+  // steady while it loads, which the quiet window reads as "settled".
+  //
+  // So assert on the fetch that fills the catalog, as /config does in
+  // capture-screenshots.mjs. Armed BEFORE navigating: the response lands inside
+  // go()'s settle window, and a waiter created after would miss it.
+  if (selected('mcp-security')) {
+    const mcpFetched = page
+      .waitForResponse(
+        (r) => r.url().includes('/api/claude-config') && r.status() === 200,
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    await go(page, '/config?type=mcp', 1200, { shot: 'mcp-security' });
+    if (!(await mcpFetched)) {
+      console.warn('  ⚠  mcp-security: no /api/claude-config response seen');
+      lastAssertFailed = true;
+    }
+  }
   if (!owned('mcp-security')) await shoot(page, 'mcp-security');
 
   // Config history tab on project detail
@@ -400,11 +436,16 @@ async function clickButton(page, name) {
 
     // Diagnosis tab — use locator with :has-text() for direct text match
     // (getByRole + regex was returning empty even with TabBar rendered).
-    try {
-      await page.locator('button:has-text("Diagnosis")').first().click({ timeout: 5000 });
-      await page.waitForTimeout(600);
-    } catch {
-      console.warn('  ⚠  could not click Diagnosis tab — capturing current view');
+    // Gated like the /settings tab clicks: a run that only wants
+    // session-replay-scrubber should not pay for this click, nor risk its
+    // flakiness. It also leaves the scrubber's own view undisturbed.
+    if (selected('session-diagnosis')) {
+      try {
+        await page.locator('button:has-text("Diagnosis")').first().click({ timeout: 5000 });
+        await page.waitForTimeout(600);
+      } catch {
+        console.warn('  ⚠  could not click Diagnosis tab — capturing current view');
+      }
     }
     if (!owned('session-diagnosis')) await shoot(page, 'session-diagnosis');
   } else {
