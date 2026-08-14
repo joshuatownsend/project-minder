@@ -462,6 +462,30 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
       )
       .then(() => true)
       .catch(() => false);
+    // The page has a SECOND, independent data source. /config opens on the
+    // Settings tab, which ConfigDashboard renders from its own plain
+    // `fetch("/api/config")`, and while `draft` is null it shows text-free,
+    // unanimated placeholders (ConfigDashboard.tsx:270-280) — invisible to every
+    // stability gate. So the catalog can be ready while Settings is still blank.
+    //
+    // Match on the exact PATHNAME rather than a substring. The two endpoints sit
+    // one character apart by eye, and an includes('/api/config') check would also
+    // resolve on any nested /api/config/* route — precise equality keeps this
+    // assertion about the request it names. Unlike the catalog this is NOT
+    // RSC-prefetched (a plain client fetch in an effect), so it always fires.
+    const settingsFetched = page
+      .waitForResponse(
+        (r) => {
+          try {
+            return new URL(r.url()).pathname === '/api/config' && r.status() === 200;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
     await go(page, '/config', 1200, { postSettle: 6000 });
     // Check the populated count FIRST. The rscHydration flag is default-ON and
     // covers /config (featureFlags.ts), so the catalog is prefetched on the
@@ -473,10 +497,16 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     // empty — that warns and refuses rather than publishing a zeroed page.
     const COUNTS_FILLED =
       'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
-    if (!(await waitForPattern(page, COUNTS_FILLED, 10000)) && !(await configFetched)) {
-      console.warn('  ⚠  config: no /api/claude-config response seen and no catalog count filled in');
+    const catalogReady =
+      (await waitForPattern(page, COUNTS_FILLED, 10000)) || (await configFetched);
+    // BOTH halves of the page must be ready — the shot shows both.
+    const settingsReady = await settingsFetched;
+    if (!catalogReady || !settingsReady) {
+      console.warn(
+        `  ⚠  config: not ready (catalog=${catalogReady}, settings=${settingsReady})`,
+      );
       // Hard refusal, not a settle hint: the page IS quiet here, so a shutter-time
-      // re-check would pass and publish exactly the zeroed view this catches.
+      // re-check would pass and publish exactly the placeholder view this catches.
       lastAssertFailed = true;
     }
     await shoot(page, 'config');
