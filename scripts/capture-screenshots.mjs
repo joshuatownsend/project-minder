@@ -412,9 +412,16 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     await go(page, '/config', 1200, { postSettle: 6000 });
     // The tab counts are the only reliable "data arrived" signal here: they sit
     // at 0 while the rest of the page is already stable, and fill in on a second
-    // wave ~20s after navigation. Require at least one non-zero count.
-    if (!(await waitForPattern(page, 'Hooks\\s+[1-9]'))) {
-      console.warn('  ⚠  config: tab counts never became non-zero');
+    // wave ~20s after navigation.
+    //
+    // Accept ANY catalog tab becoming non-zero, or the explicit empty state.
+    // Requiring `Hooks >= 1` alone bakes in this machine's install: on a clean
+    // checkout with no hooks configured, "Hooks 0" plus "No hooks configured."
+    // (ConfigBrowser.tsx) is the correct FINAL state, and the assertion would
+    // burn its full 60s budget and then refuse a perfectly good capture.
+    const CONFIG_READY = 'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|No hooks configured';
+    if (!(await waitForPattern(page, CONFIG_READY))) {
+      console.warn('  ⚠  config: no catalog count filled in and no empty state shown');
       lastSettled = false;
     }
     await shoot(page, 'config');

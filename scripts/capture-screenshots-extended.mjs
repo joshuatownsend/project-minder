@@ -290,26 +290,32 @@ async function clickButton(page, name) {
   // was measured as too short against a ~6,000-session index. This path only
   // warns on failure, so an over-tight timeout does not fail the run; it
   // silently drops session-replay-scrubber and session-diagnosis instead.
-  console.log('Fetching first session ID for session-detail captures...');
+  // Only the two session shots need this, and the request is expensive (a cold
+  // parse of a ~6,000-session index). A targeted run for an unrelated image
+  // should not pay for it, so skip the lookup when neither shot is selected.
+  const needsSession = ['session-replay-scrubber', 'session-diagnosis'].some(selected);
   let firstSessionId = null;
-  try {
-    // Use the API request context, NOT page.goto + response.json(). Reading a
-    // navigation response body goes through the DevTools protocol, and this
-    // endpoint's payload is large enough to be dropped from that buffer before
-    // we read it — "Request content was evicted from inspector cache", which
-    // silently cost both session shots a refresh on 2026-08-12.
-    const resp = await page.request.get(`${BASE}/api/sessions`, { timeout: 180000 });
-    if (resp.ok()) {
-      const sessions = await resp.json();
-      firstSessionId = sessions[0]?.sessionId ?? null;
-    } else {
-      console.warn(`  ⚠  /api/sessions returned ${resp.status()}`);
+  if (needsSession) {
+    console.log('Fetching first session ID for session-detail captures...');
+    try {
+      // Use the API request context, NOT page.goto + response.json(). Reading a
+      // navigation response body goes through the DevTools protocol, and this
+      // endpoint's payload is large enough to be dropped from that buffer before
+      // we read it — "Request content was evicted from inspector cache", which
+      // silently cost both session shots a refresh on 2026-08-12.
+      const resp = await page.request.get(`${BASE}/api/sessions`, { timeout: 180000 });
+      if (resp.ok()) {
+        const sessions = await resp.json();
+        firstSessionId = sessions[0]?.sessionId ?? null;
+      } else {
+        console.warn(`  ⚠  /api/sessions returned ${resp.status()}`);
+      }
+    } catch (err) {
+      console.warn(`  ⚠  /api/sessions error: ${err.message}`);
     }
-  } catch (err) {
-    console.warn(`  ⚠  /api/sessions error: ${err.message}`);
-  }
-  if (!firstSessionId) {
-    console.warn('  ⚠  No sessions found — session-replay-scrubber + session-diagnosis will be skipped');
+    if (!firstSessionId) {
+      console.warn('  ⚠  No sessions found — session-replay-scrubber + session-diagnosis will be skipped');
+    }
   }
 
   console.log('\nCapturing 25 new screenshots...\n');
