@@ -77,7 +77,14 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
         // Match the animation NAME: DashboardGrid.tsx:454 renders
         // `animation: loading ? "spin …" : "none"`, so a [style*="animation"]
         // selector would match the idle state and never settle.
-        const hasSkeleton = document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
+        //
+        // The 24px floor applies ONLY to inline pulses: GithubActivityStrip's
+        // 7px CI dot pulses while a check RUNS, which is a settled state, and
+        // treating it as loading pins this page at "busy" forever. The Tailwind
+        // class needs no floor — `h-4` skeletons are only 16px tall.
+        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0
+          || [...document.querySelectorAll('[style*="pulse"]')]
+            .some((el) => el.getBoundingClientRect().height >= 24);
         if (hasCompile || hasLoadingText || hasSkeleton) {
           w.__minderQuietSince = null;
           return false;

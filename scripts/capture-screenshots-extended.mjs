@@ -355,7 +355,14 @@ async function clickButton(page, name) {
       console.warn(`  ⚠  /api/sessions error: ${err.message}`);
     }
     if (!firstSessionId) {
-      console.warn('  ⚠  No sessions found — session-replay-scrubber + session-diagnosis will be skipped');
+      console.warn('  ⚠  No sessions found — session-replay-scrubber + session-diagnosis cannot be captured');
+      // A SELECTED shot that cannot be captured must fail, not silently vanish.
+      // Without this a targeted rerun (MINDER_CAPTURE_ONLY=session-diagnosis)
+      // whose /api/sessions lookup failed would exit 0 having regenerated
+      // nothing, reporting success while the stale image stays published.
+      for (const s of ['session-replay-scrubber', 'session-diagnosis']) {
+        if (selected(s)) failures.push(s);
+      }
     }
   }
 
