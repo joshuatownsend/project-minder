@@ -38,9 +38,14 @@ const SKIP = new Set(
 const ONLY = new Set(
   (process.env.MINDER_CAPTURE_ONLY || '').split(',').map((v) => v.trim()).filter(Boolean),
 );
-function owned(name) {
+// Pure predicate — no logging, so go() can consult it without duplicating the
+// "not selected" line that owned() prints at the shoot() call site.
+function selected(name) {
   const wanted = ONLY.size === 0 || ONLY.has(name);
-  if (wanted && !SKIP.has(name)) return false;
+  return wanted && !SKIP.has(name);
+}
+function owned(name) {
+  if (selected(name)) return false;
   console.log(`  -  ${name}.png (not selected for this run)`);
   return true;
 }
@@ -131,8 +136,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
     const busy = await page.evaluate(() => {
       const text = document.body.innerText || '';
       return /Compiling/i.test(text)
-        || /Loading/i.test(text)
-        || /Connecting/i.test(text)
+        || /\bLoading\b/i.test(text)
+        || /\bConnecting\b/i.test(text)
         || document.querySelectorAll('.animate-pulse').length > 0;
     }).catch(() => false);
     if (!busy) {
@@ -141,8 +146,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       await page.waitForTimeout(1500);
       const stillIdle = await page.evaluate(() => {
         const text = document.body.innerText || '';
-        return !(/Compiling/i.test(text) || /Loading/i.test(text)
-          || /Connecting/i.test(text)
+        return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
+          || /\bConnecting\b/i.test(text)
           || document.querySelectorAll('.animate-pulse').length > 0);
       }).catch(() => false);
       if (stillIdle) return true;
@@ -175,8 +180,8 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
         const text = document.body.innerText || '';
         const busy =
           /Compiling/i.test(text) ||
-          /Loading/i.test(text) ||
-          /Connecting/i.test(text) ||
+          /\bLoading\b/i.test(text) ||
+          /\bConnecting\b/i.test(text) ||
           document.querySelectorAll('.animate-pulse').length > 0;
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
@@ -201,25 +206,24 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   }
 }
 
-// Positive assertion that a view's DATA arrived, for shots where a quiet-window
-// heuristic is provably not enough. /config is the worked example: its tab
-// counts stay at 0 while the page text is otherwise stable, then a SECOND data
-// wave lands at ~20s and fills them in (measured). Any settle heuristic short of
-// that publishes "Settings 0 Hooks 0 Plugins 0 MCP 0" — which is what shipped.
-async function waitForPattern(page, source, timeout = 60000) {
-  try {
-    await page.waitForFunction(
-      (src) => new RegExp(src).test(document.body.innerText || ''),
-      source,
-      { timeout, polling: 500 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
+// NOTE: the positive-assertion helper (waitForPattern) lives in
+// capture-screenshots.mjs, which owns the /config shot it was written for. This
+// script's `mcp-security` shot renders the same Config page (/config?type=mcp)
+// and so is plausibly exposed to the same late second data wave — but that has
+// not been measured here, and a wrong pattern would refuse the shot forever
+// while silently keeping the stale image. Measure before adding one.
 
-async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000 } = {}) {
+async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000, shot } = {}) {
+  // A targeted run must not pay for routes it will never photograph. Navigating
+  // and settling costs up to 60s per route, so without this bail MINDER_CAPTURE_ONLY
+  // saves nothing — it would still walk all 21 routes to produce one image.
+  // `shot` names the capture(s) this navigation exists for; when none is still
+  // selected, skip the expensive part. The matching shoot() calls are separately
+  // guarded by owned(), which prints the skip line.
+  //
+  // With no env vars set ONLY is empty, selected() is always true, and this can
+  // never fire — a full capture run is byte-identical to before.
+  if (shot && ![].concat(shot).some(selected)) return false;
   // domcontentloaded + settle is more reliable than networkidle for this app:
   // background polling (git status, sessions, OTEL) keeps the network busy
   // and would otherwise time out the 30s networkidle wait.
@@ -312,65 +316,69 @@ async function clickButton(page, name) {
 
   // ── Memory Observatory ────────────────────────────────────
   console.log('Memory Observatory:');
-  await go(page, '/memory', 1200);
+  await go(page, '/memory', 1200, { shot: 'memory-observatory' });
   if (!owned('memory-observatory')) await shoot(page, 'memory-observatory');
 
-  await go(page, '/memory/seed', 1000);
+  await go(page, '/memory/seed', 1000, { shot: 'memory-seed' });
   if (!owned('memory-seed')) await shoot(page, 'memory-seed');
 
-  await go(page, '/memory/triage', 1000);
+  await go(page, '/memory/triage', 1000, { shot: 'memory-triage' });
   if (!owned('memory-triage')) await shoot(page, 'memory-triage');
 
   // ── Multi-Agent Coordination ──────────────────────────────
   console.log('\nMulti-Agent:');
-  await go(page, '/agent-view', 1200);
+  await go(page, '/agent-view', 1200, { shot: 'agent-view' });
   if (!owned('agent-view')) await shoot(page, 'agent-view');
 
-  await go(page, '/kanban', 1200);
+  await go(page, '/kanban', 1200, { shot: 'kanban' });
   // Kanban defaults to the "Board" source, which is empty unless BOARD.md has
   // open issues — so the default view published as four "Nothing here" columns.
   // The prose describes this page as unifying *sessions with dispatcher tasks*,
   // which is the "All" source. Switch to it so the shot shows what it claims.
-  await clickButton(page, 'All');
-  await page.waitForTimeout(1500);
+  if (selected('kanban')) {
+    await clickButton(page, 'All');
+    await page.waitForTimeout(1500);
+  }
   if (!owned('kanban')) await shoot(page, 'kanban');
 
-  await go(page, '/tasks', 1000);
+  await go(page, '/tasks', 1000, { shot: 'tasks' });
   if (!owned('tasks')) await shoot(page, 'tasks');
 
-  await go(page, '/swarms', 1000);
+  await go(page, '/swarms', 1000, { shot: 'swarms' });
   if (!owned('swarms')) await shoot(page, 'swarms');
 
   // ── Templates & Library ───────────────────────────────────
   console.log('\nTemplates & Library:');
-  await go(page, '/templates', 1000);
+  await go(page, '/templates', 1000, { shot: 'templates' });
   if (!owned('templates')) await shoot(page, 'templates');
 
-  await go(page, '/library', 1200);
+  await go(page, '/library', 1200, { shot: 'library' });
   if (!owned('library')) await shoot(page, 'library');
 
-  await go(page, '/new-project', 1000);
+  await go(page, '/new-project', 1000, { shot: 'new-project-wizard' });
   if (!owned('new-project-wizard')) await shoot(page, 'new-project-wizard');
 
   // ── Config Linting & Security ─────────────────────────────
   console.log('\nConfig Lint & Security:');
   // ConfigLintPanel lives on project detail under ?tab=config-lint
-  await go(page, `/project/${PROJECT}?tab=config-lint`, 1200);
+  await go(page, `/project/${PROJECT}?tab=config-lint`, 1200, { shot: 'config-linter' });
   if (!owned('config-linter')) await shoot(page, 'config-linter');
 
   // MCP tab on global Config browser, with security findings
-  await go(page, '/config?type=mcp', 1200);
+  await go(page, '/config?type=mcp', 1200, { shot: 'mcp-security' });
   if (!owned('mcp-security')) await shoot(page, 'mcp-security');
 
   // Config history tab on project detail
-  await go(page, `/project/${PROJECT}?tab=config-history`, 1000);
+  await go(page, `/project/${PROJECT}?tab=config-history`, 1000, { shot: 'config-history' });
   if (!owned('config-history')) await shoot(page, 'config-history');
 
   // ── Session Quality & Diagnosis ───────────────────────────
   console.log('\nSession Quality:');
   if (firstSessionId) {
     // Timeline with replay scrubber + retry-cycle highlights (default tab)
-    await go(page, `/sessions/${firstSessionId}`, 2500);
+    await go(page, `/sessions/${firstSessionId}`, 2500, {
+      shot: ['session-replay-scrubber', 'session-diagnosis'],
+    });
     if (!owned('session-replay-scrubber')) await shoot(page, 'session-replay-scrubber');
 
     // Diagnosis tab — use locator with :has-text() for direct text match
@@ -394,34 +402,39 @@ async function clickButton(page, name) {
 
   // ── Notifications, Budgets, Adapters (single /settings visit) ────
   console.log('\nNotifications + Settings tabs:');
-  await go(page, '/settings', 2000);
-  await clickButton(page, 'Notifications');
+  await go(page, '/settings', 2000, {
+    shot: ['notifications', 'settings-cost-cap', 'settings-adapters'],
+  });
+  // Each tab click is guarded by its own shot: when go() above has bailed, the
+  // browser is still on the previous route and these would click into it. The
+  // tabs are independent, so skipping one does not strand the next.
+  if (selected('notifications')) await clickButton(page, 'Notifications');
   if (!owned('notifications')) await shoot(page, 'notifications');
 
-  await clickButton(page, 'Cost');
+  if (selected('settings-cost-cap')) await clickButton(page, 'Cost');
   if (!owned('settings-cost-cap')) await shoot(page, 'settings-cost-cap');
 
-  await clickButton(page, 'Adapters');
+  if (selected('settings-adapters')) await clickButton(page, 'Adapters');
   if (!owned('settings-adapters')) await shoot(page, 'settings-adapters');
 
   // ── Power-User Tools ──────────────────────────────────────
   console.log('\nPower Tools:');
-  await go(page, '/commands', 1200);
+  await go(page, '/commands', 1200, { shot: 'commands' });
   if (!owned('commands')) await shoot(page, 'commands');
 
-  await go(page, '/sql', 1000);
+  await go(page, '/sql', 1000, { shot: 'sql' });
   if (!owned('sql')) await shoot(page, 'sql');
 
-  await go(page, '/plans', 1000);
+  await go(page, '/plans', 1000, { shot: 'plans' });
   if (!owned('plans')) await shoot(page, 'plans');
 
-  await go(page, '/schedule', 1000);
+  await go(page, '/schedule', 1000, { shot: 'schedule' });
   if (!owned('schedule')) await shoot(page, 'schedule');
 
-  await go(page, '/health', 1000);
+  await go(page, '/health', 1000, { shot: 'health' });
   if (!owned('health')) await shoot(page, 'health');
 
-  await go(page, '/insights-report', 1500);
+  await go(page, '/insights-report', 1500, { shot: 'insights-report' });
   if (!owned('insights-report')) await shoot(page, 'insights-report');
 
   await browser.close();

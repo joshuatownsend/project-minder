@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:c41f8e2b7d93 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T13:40:00.000Z -->
+## ★ Insight
+`\b` is overloaded across layers, and one of its meanings is invisible. In a JS regex literal it's a word boundary; in a string that passes through a shell or any escape-resolving layer it's U+0008 backspace. The loading-detection fix shipped with 24 literal backspace bytes in place of the escape — `/\x08Loading\x08/i`, which compiles cleanly, throws nothing, lints clean, and can never match DOM text. Three defences failed at once: the regex is valid so there's no syntax error; `git diff` renders U+0008 as nothing, so the old side reads as a plausible `/Loading/i`; and the screenshots still came out right, because `/config` was carried by its separate positive assertion (`waitForPattern`) rather than by the dead gate. A passing outcome downstream of a dead check is not evidence the check ran. Both review bots caught it independently and both were right. The verification that actually settled it executed the regex — extracted the literals from the source file and tested them against `Loading…` and against near-misses like `Reloading complete` — rather than reading them.
+
+---
+
 <!-- insight:8660641985db | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-12T22:57:08.337Z -->
 ## ★ Insight
 Demo fixtures and real data fail on *opposite* screens. The heavy analytics routes (`/usage`, `/stats`, `/costs`) wedge the real server with synchronous SQLite aggregation but are instant on fixtures; the light feature routes (`/kanban`, `/swarms`, `/templates`) are fast on real data but render empty under demo. So the hybrid split isn't just cosmetic — each pass should skip what the other owns, or the real pass keeps wedging on routes whose output it will discard anyway.

@@ -141,8 +141,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
     const busy = await page.evaluate(() => {
       const text = document.body.innerText || '';
       return /Compiling/i.test(text)
-        || /Loading/i.test(text)
-        || /Connecting/i.test(text)
+        || /\bLoading\b/i.test(text)
+        || /\bConnecting\b/i.test(text)
         || document.querySelectorAll('.animate-pulse').length > 0;
     }).catch(() => false);
     if (!busy) {
@@ -151,8 +151,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       await page.waitForTimeout(1500);
       const stillIdle = await page.evaluate(() => {
         const text = document.body.innerText || '';
-        return !(/Compiling/i.test(text) || /Loading/i.test(text)
-          || /Connecting/i.test(text)
+        return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
+          || /\bConnecting\b/i.test(text)
           || document.querySelectorAll('.animate-pulse').length > 0);
       }).catch(() => false);
       if (stillIdle) return true;
@@ -185,8 +185,8 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
         const text = document.body.innerText || '';
         const busy =
           /Compiling/i.test(text) ||
-          /Loading/i.test(text) ||
-          /Connecting/i.test(text) ||
+          /\bLoading\b/i.test(text) ||
+          /\bConnecting\b/i.test(text) ||
           document.querySelectorAll('.animate-pulse').length > 0;
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
