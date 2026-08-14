@@ -98,7 +98,7 @@ async function shoot(page, name, { selector, optional = false } = {}) {
   }
   if (!(await settleBeforeShot(page))) {
     console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
-    failures.push(name);
+    if (!optional) failures.push(name);
     return;
   }
   if (!(await pageIsHealthy(page))) {
@@ -143,7 +143,7 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       return /Compiling/i.test(text)
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
-        || document.querySelectorAll('.animate-pulse').length > 0;
+        || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
     }).catch(() => false);
     if (!busy) {
       // Hold briefly and re-confirm, so a gap between two loading phases is not
@@ -153,7 +153,7 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         const text = document.body.innerText || '';
         return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
           || /\bConnecting\b/i.test(text)
-          || document.querySelectorAll('.animate-pulse').length > 0);
+          || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0);
       }).catch(() => false);
       if (stillIdle) return true;
       continue;
@@ -165,11 +165,25 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 
 // Wait until the view has stopped loading.
 //
-// The app has THREE loading idioms and only one is externally detectable (#445):
-// `<Skeleton>` renders `.animate-pulse`, ~20 components render a plain "Loading…"
-// string, and ~12 render bespoke inline-styled placeholder divs carrying no
-// marker at all. Gating on `.animate-pulse` alone published /status as four
-// empty grey bars and /config with every tab count reading 0.
+// The app has four loading idioms (#445) and gating on `.animate-pulse` alone
+// published /status as four empty grey bars and /config with every tab count
+// reading 0. All four are covered here:
+//   A  `<Skeleton>`            -> `.animate-pulse`
+//   B  plain "Loading…"/"Connecting…" text (~20 components)
+//   C  bespoke placeholder divs (~12) — NO class and NO text, so they look
+//      identical to a settled page. They are still detectable: they carry an
+//      INLINE `animation: "pulse 1.5s ease-in-out infinite"`
+//      (StatusDashboard.tsx:80, DiagnosisPanel.tsx:159), hence `[style*="pulse"]`.
+//   D  Next's "Compiling" pill
+//
+// Match the animation NAME, not the `animation` property: DashboardGrid.tsx:454
+// renders `animation: loading ? "spin …" : "none"`, so a `[style*="animation"]`
+// selector would match the IDLE state too and the gate would never settle.
+//
+// Text alone is still not sufficient, so this also blocks on the body text
+// length holding steady. Length rather than content, so a ticking relative
+// timestamp ("3m ago" -> "4m ago") does not count as churn and prevent the page
+// from ever settling.
 //
 // Until the app grows a single marker, approximate one from the outside: a view
 // that is still loading has text that is still CHANGING. So block on the two
@@ -187,7 +201,7 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
           /Compiling/i.test(text) ||
           /\bLoading\b/i.test(text) ||
           /\bConnecting\b/i.test(text) ||
-          document.querySelectorAll('.animate-pulse').length > 0;
+          document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
         if (busy || growing) {
@@ -205,8 +219,9 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
     );
     return true;
   } catch {
-    // Budget expired with the view still loading. Callers decide whether that
-    // is fatal; shoot() refuses to write for shots that declare requireText.
+    // Budget expired with the view still loading. Returning false sets
+    // lastSettled, and shoot() then skips the capture — recording a failure
+    // unless the shot is marked optional.
     return false;
   }
 }

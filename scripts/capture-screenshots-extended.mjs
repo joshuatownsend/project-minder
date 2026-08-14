@@ -138,7 +138,7 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       return /Compiling/i.test(text)
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
-        || document.querySelectorAll('.animate-pulse').length > 0;
+        || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
     }).catch(() => false);
     if (!busy) {
       // Hold briefly and re-confirm, so a gap between two loading phases is not
@@ -148,7 +148,7 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         const text = document.body.innerText || '';
         return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
           || /\bConnecting\b/i.test(text)
-          || document.querySelectorAll('.animate-pulse').length > 0);
+          || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0);
       }).catch(() => false);
       if (stillIdle) return true;
       continue;
@@ -182,7 +182,7 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
           /Compiling/i.test(text) ||
           /\bLoading\b/i.test(text) ||
           /\bConnecting\b/i.test(text) ||
-          document.querySelectorAll('.animate-pulse').length > 0;
+          document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
         if (busy || growing) {
@@ -200,8 +200,8 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
     );
     return true;
   } catch {
-    // Budget expired with the view still loading. Callers decide whether that
-    // is fatal; shoot() refuses to write for shots that declare requireText.
+    // Budget expired with the view still loading. Returning false sets
+    // lastSettled, and shoot() then skips the capture and records a failure.
     return false;
   }
 }
