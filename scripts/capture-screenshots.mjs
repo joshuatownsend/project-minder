@@ -463,13 +463,17 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
       .then(() => true)
       .catch(() => false);
     await go(page, '/config', 1200, { postSettle: 6000 });
-    // Fall back to a populated count, because the payload can come from the
-    // RSC-prefetched cache with no client round-trip to observe (useConfig.ts).
+    // Check the populated count FIRST. The rscHydration flag is default-ON and
+    // covers /config (featureFlags.ts), so the catalog is prefetched on the
+    // server and the browser makes NO request — awaiting the response first
+    // would burn its full 60s budget on every default run before falling
+    // through to a check that was already true.
+    //
     // Residual uncovered case: no observable fetch AND every catalog genuinely
     // empty — that warns and refuses rather than publishing a zeroed page.
     const COUNTS_FILLED =
       'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
-    if (!(await configFetched) && !(await waitForPattern(page, COUNTS_FILLED, 10000))) {
+    if (!(await waitForPattern(page, COUNTS_FILLED, 10000)) && !(await configFetched)) {
       console.warn('  ⚠  config: no /api/claude-config response seen and no catalog count filled in');
       // Hard refusal, not a settle hint: the page IS quiet here, so a shutter-time
       // re-check would pass and publish exactly the zeroed view this catches.

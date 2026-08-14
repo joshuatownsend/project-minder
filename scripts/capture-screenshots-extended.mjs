@@ -228,12 +228,23 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   }
 }
 
-// NOTE: the positive-assertion helper (waitForPattern) lives in
-// capture-screenshots.mjs, which owns the /config shot it was written for. This
-// script's `mcp-security` shot renders the same Config page (/config?type=mcp)
-// and so is plausibly exposed to the same late second data wave — but that has
-// not been measured here, and a wrong pattern would refuse the shot forever
-// while silently keeping the stale image. Measure before adding one.
+// Positive assertion that a view's DATA arrived, for shots where a quiet-window
+// heuristic is provably not enough. Mirrors capture-screenshots.mjs. Used here by
+// `mcp-security`: ConfigBrowser's pending catalog is six text-free, class-free,
+// UNANIMATED divs (ConfigBrowser.tsx:208-220), so the body text length holds
+// steady while it loads and every generic check reads that as settled.
+async function waitForPattern(page, source, timeout = 60000) {
+  try {
+    await page.waitForFunction(
+      (src) => new RegExp(src).test(document.body.innerText || ''),
+      source,
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle = 4000, shot } = {}) {
   // A targeted run must not pay for routes it will never photograph. Navigating
@@ -406,6 +417,21 @@ async function clickButton(page, name) {
   // capture-screenshots.mjs. Armed BEFORE navigating: the response lands inside
   // go()'s settle window, and a waiter created after would miss it.
   if (selected('mcp-security')) {
+    // TWO readiness paths, because the two render modes are mutually exclusive:
+    //
+    //  rscHydration ON (the default) — the catalog is prefetched on the server
+    //    and streamed into the query cache, so the browser deliberately makes
+    //    NO /api/claude-config request and the page paints with data already
+    //    present. Waiting on the response alone would time out on every default
+    //    run and fail the whole capture.
+    //  rscHydration OFF — the client fetches on mount, and until it resolves
+    //    ConfigBrowser shows the text-free placeholders described above.
+    //
+    // So: accept a populated tab count (covers the hydrated path, where the
+    // data is already painted) OR an observed fetch (covers the client path,
+    // where counts may legitimately be 0). Same residual as /config: hydrated
+    // AND every catalog genuinely empty warns and refuses rather than
+    // publishing placeholders.
     const mcpFetched = page
       .waitForResponse(
         (r) => r.url().includes('/api/claude-config') && r.status() === 200,
@@ -414,8 +440,10 @@ async function clickButton(page, name) {
       .then(() => true)
       .catch(() => false);
     await go(page, '/config?type=mcp', 1200, { shot: 'mcp-security' });
-    if (!(await mcpFetched)) {
-      console.warn('  ⚠  mcp-security: no /api/claude-config response seen');
+    const COUNTS_FILLED =
+      'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
+    if (!(await waitForPattern(page, COUNTS_FILLED, 10000)) && !(await mcpFetched)) {
+      console.warn('  ⚠  mcp-security: no catalog count filled in and no /api/claude-config response seen');
       lastAssertFailed = true;
     }
   }
