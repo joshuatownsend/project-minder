@@ -1,5 +1,35 @@
 # Insights
 
+<!-- insight:bb5bb596966b | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T15:21:23.467Z -->
+## ★ Insight
+Worth noting what just happened: I wrote a justification into a code comment ("`/api/config` is a substring of `/api/claude-config`"), then wrote a test asserting it — and the test failed, because the claim was false. The fix was still the right fix, but for a different reason than I'd recorded.
+
+---
+
+<!-- insight:d2f987e461b8 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T15:09:00.975Z -->
+## ★ Insight
+This round is a good illustration of why "add an assertion" is riskier than it sounds. My `mcp-security` fix asserted on a network request that, under the **default** configuration, correctly never happens — so a guard written to prevent a rare bad screenshot would have failed *every* capture run instead. The blast radius of a wrong assertion is larger than the bug it guards.
+
+---
+
+<!-- insight:e18a8e564bc4 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T14:31:37.690Z -->
+## ★ Insight
+Round 5's two findings share one root, and it's worth naming: **every guard has a failure direction, and the safe one is rarely the default.** `.catch(() => false)` reads naturally as "couldn't check, carry on" — but for a *busy* probe, "carry on" means fire the shutter at a page you know nothing about. The same code with `.catch(() => true)` waits, then refuses loudly.
+
+---
+
+<!-- insight:9738e38fd0e5 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T13:24:57.439Z -->
+## ★ Insight
+This is the exact failure class I'd just written a memory about, reproduced inside the fix for it. `\b` is overloaded: in a JS regex literal it's a word boundary, but in a string that passes through a shell/`printf`/escape-interpreting layer it's the backspace control character. Somewhere in editing, the escape got *resolved* rather than preserved, and the result is still syntactically valid JavaScript — a regex that compiles cleanly and can never match.
+
+---
+
+<!-- insight:9268fa2a6217 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T12:27:35.756Z -->
+## ★ Insight
+**Why `-d` would have been the wrong tool here.** `git branch -d` asks "are this branch's commits ancestors of HEAD?" Under a squash-merge workflow the answer is *always no* — the squash creates one brand-new commit with a different SHA and no parent link to the branch. So every one of those 27 merged branches would have refused deletion, and the refusal carries zero information about whether the work actually landed. The authoritative answer lives in GitHub's PR state, which is why the cross-check ran first — and it earned its keep: `pr370` came back **CLOSED**, not merged.
+
+---
+
 <!-- insight:c41f8e2b7d93 | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T13:40:00.000Z -->
 ## ★ Insight
 `\b` is overloaded across layers, and one of its meanings is invisible. In a JS regex literal it's a word boundary; in a string that passes through a shell or any escape-resolving layer it's U+0008 backspace. The loading-detection fix shipped with 24 literal backspace bytes in place of the escape — `/\x08Loading\x08/i`, which compiles cleanly, throws nothing, lints clean, and can never match DOM text. Three defences failed at once: the regex is valid so there's no syntax error; `git diff` renders U+0008 as nothing, so the old side reads as a plausible `/Loading/i`; and the screenshots still came out right, because `/config` was carried by its separate positive assertion (`waitForPattern`) rather than by the dead gate. A passing outcome downstream of a dead check is not evidence the check ran. Both review bots caught it independently and both were right. The verification that actually settled it executed the regex — extracted the literals from the source file and tested them against `Loading…` and against near-misses like `Reloading complete` — rather than reading them.
