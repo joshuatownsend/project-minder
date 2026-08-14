@@ -184,12 +184,6 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 // length holding steady. Length rather than content, so a ticking relative
 // timestamp ("3m ago" -> "4m ago") does not count as churn and prevent the page
 // from ever settling.
-//
-// Until the app grows a single marker, approximate one from the outside: a view
-// that is still loading has text that is still CHANGING. So block on the two
-// detectable idioms AND on the body text length holding steady. Length rather
-// than content, so a ticking relative timestamp ("3m ago" -> "4m ago") does not
-// count as churn and prevent the page from ever settling.
 async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
@@ -424,19 +418,35 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   // 11. Config page
   if (!owned('config')) {
-    await go(page, '/config', 1200, { postSettle: 6000 });
-    // The tab counts are the only reliable "data arrived" signal here: they sit
-    // at 0 while the rest of the page is already stable, and fill in on a second
-    // wave ~20s after navigation.
+    // /config needs a positive assertion: its tab counts sit at 0 while the
+    // page is otherwise stable and fill in on a second wave ~20s in, so every
+    // quiet-window heuristic photographs "Hooks 0 Plugins 0 MCP 0".
     //
-    // Accept ANY catalog tab becoming non-zero, or the explicit empty state.
-    // Requiring `Hooks >= 1` alone bakes in this machine's install: on a clean
-    // checkout with no hooks configured, "Hooks 0" plus "No hooks configured."
-    // (ConfigBrowser.tsx) is the correct FINAL state, and the assertion would
-    // burn its full 60s budget and then refuse a perfectly good capture.
-    const CONFIG_READY = 'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|No hooks configured';
-    if (!(await waitForPattern(page, CONFIG_READY))) {
-      console.warn('  ⚠  config: no catalog count filled in and no empty state shown');
+    // But the counts cannot be asserted on directly, because 0 is a legitimate
+    // FINAL value on an install with no hooks/plugins/MCP. (An earlier attempt
+    // to accept "No hooks configured." as the empty-state signal was dead code:
+    // /config opens on the Settings tab, and that text is rendered only by
+    // HooksList once the Hooks tab is opened.)
+    //
+    // So prefer the fetch that populates the counts — true whatever it returns.
+    // Armed BEFORE navigating: the response lands during go()'s settle window,
+    // and a waiter created afterwards would miss it and time out.
+    const configFetched = page
+      .waitForResponse(
+        (r) => r.url().includes('/api/claude-config') && r.status() === 200,
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    await go(page, '/config', 1200, { postSettle: 6000 });
+    // Fall back to a populated count, because the payload can come from the
+    // RSC-prefetched cache with no client round-trip to observe (useConfig.ts).
+    // Residual uncovered case: no observable fetch AND every catalog genuinely
+    // empty — that warns and refuses rather than publishing a zeroed page.
+    const COUNTS_FILLED =
+      'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
+    if (!(await configFetched) && !(await waitForPattern(page, COUNTS_FILLED, 10000))) {
+      console.warn('  ⚠  config: no /api/claude-config response seen and no catalog count filled in');
       lastSettled = false;
     }
     await shoot(page, 'config');

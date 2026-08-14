@@ -160,17 +160,22 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 
 // Wait until the view has stopped loading.
 //
-// The app has THREE loading idioms and only one is externally detectable (#445):
-// `<Skeleton>` renders `.animate-pulse`, ~20 components render a plain "Loading…"
-// string, and ~12 render bespoke inline-styled placeholder divs carrying no
-// marker at all. Gating on `.animate-pulse` alone published /status as four
-// empty grey bars and /config with every tab count reading 0.
+// The app has four loading idioms (#445) and gating on `.animate-pulse` alone
+// published /status as four empty grey bars. All four are covered here, matching
+// capture-screenshots.mjs:
+//   A  `<Skeleton>`            -> `.animate-pulse`
+//   B  plain "Loading…"/"Connecting…" text (~20 components)
+//   C  bespoke placeholder divs (~12) — NO class and NO text, but they carry an
+//      INLINE `animation: "pulse …"` (StatusDashboard.tsx:80), so `[style*="pulse"]`
+//      finds them. Match the animation NAME, not the property: DashboardGrid.tsx:454
+//      renders `animation: loading ? "spin …" : "none"`, and `[style*="animation"]`
+//      would match that IDLE state and never settle.
+//   D  Next's "Compiling" pill
 //
-// Until the app grows a single marker, approximate one from the outside: a view
-// that is still loading has text that is still CHANGING. So block on the two
-// detectable idioms AND on the body text length holding steady. Length rather
-// than content, so a ticking relative timestamp ("3m ago" -> "4m ago") does not
-// count as churn and prevent the page from ever settling.
+// Text and markers alone are still not sufficient, so this also blocks on the
+// body text length holding steady. Length rather than content, so a ticking
+// relative timestamp ("3m ago" -> "4m ago") does not count as churn and prevent
+// the page from ever settling.
 async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
