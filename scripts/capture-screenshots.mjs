@@ -57,6 +57,10 @@ const failures = [];
 // page under the new shot's name — a silently incorrect screenshot, which is
 // worse than a missing one.
 let lastNavOk = true;
+// Whether the last go() reached a settled (not-loading) view. Shooting a view
+// that never settled is how /status shipped as four empty grey bars — the shot
+// "succeeded" in every mechanical sense and published a loading state.
+let lastSettled = true;
 
 // Chromium renders its OWN error page ("This page couldn't load", "Aw, Snap!")
 // as a perfectly successful navigation, so checking that go() resolved does not
@@ -87,6 +91,16 @@ async function shoot(page, name, { selector, optional = false } = {}) {
     if (!optional) failures.push(name);
     return;
   }
+  if (!lastSettled) {
+    console.warn(`  ⚠  ${name}.png skipped — the view never finished loading`);
+    if (!optional) failures.push(name);
+    return;
+  }
+  if (!(await settleBeforeShot(page))) {
+    console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
+    failures.push(name);
+    return;
+  }
   if (!(await pageIsHealthy(page))) {
     console.warn(`  ⚠  ${name}.png skipped — the browser is showing an error page, not the app`);
     if (!optional) failures.push(name);
@@ -114,20 +128,69 @@ async function shoot(page, name, { selector, optional = false } = {}) {
   }
 }
 
-// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
-// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
-// We run the check via waitForFunction (page-context JS, Playwright-enforced
-// timeout) instead of locator polling — keeps the whole wait bounded and
-// avoids the locator.count() hang we hit on stubborn pages.
-async function waitForStableUI(page, { timeout = 25000 } = {}) {
+// Assert the view is not loading AT SHUTTER TIME, and wait if it is.
+//
+// Checking during go() is not enough and was the bug that published
+// memory-observatory.png with the word "Loading" in it: the settle gate ran
+// before the panel had even mounted its loading indicator, found a quiet page,
+// and returned — then the panel mounted, started loading, and the screenshot
+// was taken. The only moment whose answer matters is the moment of capture.
+async function settleBeforeShot(page, budgetMs = 60000) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    const busy = await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      return /Compiling/i.test(text)
+        || /Loading/i.test(text)
+        || /Connecting/i.test(text)
+        || document.querySelectorAll('.animate-pulse').length > 0;
+    }).catch(() => false);
+    if (!busy) {
+      // Hold briefly and re-confirm, so a gap between two loading phases is not
+      // mistaken for the end of loading.
+      await page.waitForTimeout(1500);
+      const stillIdle = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        return !(/Compiling/i.test(text) || /Loading/i.test(text)
+          || /Connecting/i.test(text)
+          || document.querySelectorAll('.animate-pulse').length > 0);
+      }).catch(() => false);
+      if (stillIdle) return true;
+      continue;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+// Wait until the view has stopped loading.
+//
+// The app has THREE loading idioms and only one is externally detectable (#445):
+// `<Skeleton>` renders `.animate-pulse`, ~20 components render a plain "Loading…"
+// string, and ~12 render bespoke inline-styled placeholder divs carrying no
+// marker at all. Gating on `.animate-pulse` alone published /status as four
+// empty grey bars and /config with every tab count reading 0.
+//
+// Until the app grows a single marker, approximate one from the outside: a view
+// that is still loading has text that is still CHANGING. So block on the two
+// detectable idioms AND on the body text length holding steady. Length rather
+// than content, so a ticking relative timestamp ("3m ago" -> "4m ago") does not
+// count as churn and prevent the page from ever settling.
+async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
-      () => {
+      (quiet) => {
         const w = /** @type {any} */ (window);
         const now = Date.now();
-        const hasCompile = /Compiling/i.test(document.body.innerText || '');
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
-        if (hasCompile || hasSkeleton) {
+        const text = document.body.innerText || '';
+        const busy =
+          /Compiling/i.test(text) ||
+          /Loading/i.test(text) ||
+          /Connecting/i.test(text) ||
+          document.querySelectorAll('.animate-pulse').length > 0;
+        const growing = text.length !== w.__minderLastLen;
+        w.__minderLastLen = text.length;
+        if (busy || growing) {
           w.__minderQuietSince = null;
           return false;
         }
@@ -135,13 +198,16 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
           w.__minderQuietSince = now;
           return false;
         }
-        return now - w.__minderQuietSince >= 1500;
+        return now - w.__minderQuietSince >= quiet;
       },
-      null,
-      { timeout, polling: 250 },
+      quietMs,
+      { timeout, polling: 400 },
     );
+    return true;
   } catch {
-    // Stability not achieved within timeout — accept whatever's on screen.
+    // Budget expired with the view still loading. Callers decide whether that
+    // is fatal; shoot() refuses to write for shots that declare requireText.
+    return false;
   }
 }
 
@@ -155,6 +221,24 @@ async function waitForTextGone(page, text, timeout = 45000) {
     await page.waitForFunction(
       (t) => !(document.body.innerText || '').toLowerCase().includes(t),
       text.toLowerCase(),
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Positive assertion that a view's DATA arrived, for shots where a quiet-window
+// heuristic is provably not enough. /config is the worked example: its tab
+// counts stay at 0 while the page text is otherwise stable, then a SECOND data
+// wave lands at ~20s and fills them in (measured). Any settle heuristic short of
+// that publishes "Settings 0 Hooks 0 Plugins 0 MCP 0" — which is what shipped.
+async function waitForPattern(page, source, timeout = 60000) {
+  try {
+    await page.waitForFunction(
+      (src) => new RegExp(src).test(document.body.innerText || ''),
+      source,
       { timeout, polling: 500 },
     );
     return true;
@@ -184,7 +268,10 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     return false;
   }
   await page.waitForTimeout(settle);
-  await waitForStableUI(page, { timeout: stableTimeout });
+  lastSettled = await waitForStableUI(page, { timeout: stableTimeout });
+  if (!lastSettled) {
+    console.warn(`  ⚠  ${route} never stopped loading within ${Math.round(stableTimeout / 1000)}s`);
+  }
   await page.waitForTimeout(postSettle);
   return true;
 }
@@ -322,7 +409,14 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   // 11. Config page
   if (!owned('config')) {
-    await go(page, '/config');
+    await go(page, '/config', 1200, { postSettle: 6000 });
+    // The tab counts are the only reliable "data arrived" signal here: they sit
+    // at 0 while the rest of the page is already stable, and fill in on a second
+    // wave ~20s after navigation. Require at least one non-zero count.
+    if (!(await waitForPattern(page, 'Hooks\\s+[1-9]'))) {
+      console.warn('  ⚠  config: tab counts never became non-zero');
+      lastSettled = false;
+    }
     await shoot(page, 'config');
   }
 

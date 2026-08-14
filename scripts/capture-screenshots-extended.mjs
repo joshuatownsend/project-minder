@@ -27,12 +27,23 @@ const NAV_TIMEOUT = Number(process.env.MINDER_CAPTURE_NAV_TIMEOUT || 180000);
 // Demo mode has no `project-minder` (that route renders "Project not found"),
 // so the demo pass points the per-project shots at a fixture project instead.
 const PROJECT = process.env.MINDER_CAPTURE_PROJECT || 'project-minder';
-// NOTE: this script has no MINDER_CAPTURE_SKIP support, unlike its three
-// siblings. That is deliberate rather than an oversight — none of its 24 shots
-// are in the hybrid orchestrator's DEMO_OWNED list, so there is nothing here
-// for another pass to own and the env var would have no effect. If a shot from
-// this file is ever added to DEMO_OWNED, add the guard here first, or the real
-// pass will keep paying for a capture the demo pass overwrites.
+// Shots another pass owns, or that a targeted re-run wants to leave alone.
+// None of this file's shots are in the hybrid orchestrator's DEMO_OWNED list,
+// so this started as a deliberate exemption — but re-shooting ONE image without
+// re-running all 24 turned out to matter a great deal while fixing loading-state
+// captures, and MINDER_CAPTURE_ONLY is the cheap way to get it.
+const SKIP = new Set(
+  (process.env.MINDER_CAPTURE_SKIP || '').split(',').map((v) => v.trim()).filter(Boolean),
+);
+const ONLY = new Set(
+  (process.env.MINDER_CAPTURE_ONLY || '').split(',').map((v) => v.trim()).filter(Boolean),
+);
+function owned(name) {
+  const wanted = ONLY.size === 0 || ONLY.has(name);
+  if (wanted && !SKIP.has(name)) return false;
+  console.log(`  -  ${name}.png (not selected for this run)`);
+  return true;
+}
 
 mkdirSync(OUT, { recursive: true });
 
@@ -42,6 +53,10 @@ const failures = [];
 // A failed navigation leaves the browser on the PREVIOUS route, so shooting
 // afterwards writes the wrong page under the new name — worse than no shot.
 let lastNavOk = true;
+// Whether the last go() reached a settled (not-loading) view. Shooting a view
+// that never settled is how /status shipped as four empty grey bars — the shot
+// "succeeded" in every mechanical sense and published a loading state.
+let lastSettled = true;
 
 
 // Chromium renders its own error page ("This page couldn't load") as a
@@ -65,6 +80,16 @@ async function pageIsHealthy(page) {
 async function shoot(page, name, { selector } = {}) {
   if (!lastNavOk) {
     console.warn(`  ⚠  ${name}.png skipped — its page failed to load`);
+    failures.push(name);
+    return;
+  }
+  if (!lastSettled) {
+    console.warn(`  ⚠  ${name}.png skipped — the view never finished loading`);
+    failures.push(name);
+    return;
+  }
+  if (!(await settleBeforeShot(page))) {
+    console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
     failures.push(name);
     return;
   }
@@ -93,20 +118,69 @@ async function shoot(page, name, { selector } = {}) {
   }
 }
 
-// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
-// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
-// We run the check via waitForFunction (page-context JS, Playwright-enforced
-// timeout) instead of locator polling — keeps the whole wait bounded and
-// avoids the locator.count() hang we hit on stubborn pages.
-async function waitForStableUI(page, { timeout = 25000 } = {}) {
+// Assert the view is not loading AT SHUTTER TIME, and wait if it is.
+//
+// Checking during go() is not enough and was the bug that published
+// memory-observatory.png with the word "Loading" in it: the settle gate ran
+// before the panel had even mounted its loading indicator, found a quiet page,
+// and returned — then the panel mounted, started loading, and the screenshot
+// was taken. The only moment whose answer matters is the moment of capture.
+async function settleBeforeShot(page, budgetMs = 60000) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    const busy = await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      return /Compiling/i.test(text)
+        || /Loading/i.test(text)
+        || /Connecting/i.test(text)
+        || document.querySelectorAll('.animate-pulse').length > 0;
+    }).catch(() => false);
+    if (!busy) {
+      // Hold briefly and re-confirm, so a gap between two loading phases is not
+      // mistaken for the end of loading.
+      await page.waitForTimeout(1500);
+      const stillIdle = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        return !(/Compiling/i.test(text) || /Loading/i.test(text)
+          || /Connecting/i.test(text)
+          || document.querySelectorAll('.animate-pulse').length > 0);
+      }).catch(() => false);
+      if (stillIdle) return true;
+      continue;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+// Wait until the view has stopped loading.
+//
+// The app has THREE loading idioms and only one is externally detectable (#445):
+// `<Skeleton>` renders `.animate-pulse`, ~20 components render a plain "Loading…"
+// string, and ~12 render bespoke inline-styled placeholder divs carrying no
+// marker at all. Gating on `.animate-pulse` alone published /status as four
+// empty grey bars and /config with every tab count reading 0.
+//
+// Until the app grows a single marker, approximate one from the outside: a view
+// that is still loading has text that is still CHANGING. So block on the two
+// detectable idioms AND on the body text length holding steady. Length rather
+// than content, so a ticking relative timestamp ("3m ago" -> "4m ago") does not
+// count as churn and prevent the page from ever settling.
+async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
-      () => {
+      (quiet) => {
         const w = /** @type {any} */ (window);
         const now = Date.now();
-        const hasCompile = /Compiling/i.test(document.body.innerText || '');
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
-        if (hasCompile || hasSkeleton) {
+        const text = document.body.innerText || '';
+        const busy =
+          /Compiling/i.test(text) ||
+          /Loading/i.test(text) ||
+          /Connecting/i.test(text) ||
+          document.querySelectorAll('.animate-pulse').length > 0;
+        const growing = text.length !== w.__minderLastLen;
+        w.__minderLastLen = text.length;
+        if (busy || growing) {
           w.__minderQuietSince = null;
           return false;
         }
@@ -114,13 +188,34 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
           w.__minderQuietSince = now;
           return false;
         }
-        return now - w.__minderQuietSince >= 1500;
+        return now - w.__minderQuietSince >= quiet;
       },
-      null,
-      { timeout, polling: 250 },
+      quietMs,
+      { timeout, polling: 400 },
     );
+    return true;
   } catch {
-    // Stability not achieved within timeout — accept whatever's on screen.
+    // Budget expired with the view still loading. Callers decide whether that
+    // is fatal; shoot() refuses to write for shots that declare requireText.
+    return false;
+  }
+}
+
+// Positive assertion that a view's DATA arrived, for shots where a quiet-window
+// heuristic is provably not enough. /config is the worked example: its tab
+// counts stay at 0 while the page text is otherwise stable, then a SECOND data
+// wave lands at ~20s and fills them in (measured). Any settle heuristic short of
+// that publishes "Settings 0 Hooks 0 Plugins 0 MCP 0" — which is what shipped.
+async function waitForPattern(page, source, timeout = 60000) {
+  try {
+    await page.waitForFunction(
+      (src) => new RegExp(src).test(document.body.innerText || ''),
+      source,
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -145,7 +240,10 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
     return false;
   }
   await page.waitForTimeout(settle);
-  await waitForStableUI(page, { timeout: stableTimeout });
+  lastSettled = await waitForStableUI(page, { timeout: stableTimeout });
+  if (!lastSettled) {
+    console.warn(`  ⚠  ${route} never stopped loading within ${Math.round(stableTimeout / 1000)}s`);
+  }
   await page.waitForTimeout(postSettle);
   return true;
 }
@@ -215,59 +313,65 @@ async function clickButton(page, name) {
   // ── Memory Observatory ────────────────────────────────────
   console.log('Memory Observatory:');
   await go(page, '/memory', 1200);
-  await shoot(page, 'memory-observatory');
+  if (!owned('memory-observatory')) await shoot(page, 'memory-observatory');
 
   await go(page, '/memory/seed', 1000);
-  await shoot(page, 'memory-seed');
+  if (!owned('memory-seed')) await shoot(page, 'memory-seed');
 
   await go(page, '/memory/triage', 1000);
-  await shoot(page, 'memory-triage');
+  if (!owned('memory-triage')) await shoot(page, 'memory-triage');
 
   // ── Multi-Agent Coordination ──────────────────────────────
   console.log('\nMulti-Agent:');
   await go(page, '/agent-view', 1200);
-  await shoot(page, 'agent-view');
+  if (!owned('agent-view')) await shoot(page, 'agent-view');
 
   await go(page, '/kanban', 1200);
-  await shoot(page, 'kanban');
+  // Kanban defaults to the "Board" source, which is empty unless BOARD.md has
+  // open issues — so the default view published as four "Nothing here" columns.
+  // The prose describes this page as unifying *sessions with dispatcher tasks*,
+  // which is the "All" source. Switch to it so the shot shows what it claims.
+  await clickButton(page, 'All');
+  await page.waitForTimeout(1500);
+  if (!owned('kanban')) await shoot(page, 'kanban');
 
   await go(page, '/tasks', 1000);
-  await shoot(page, 'tasks');
+  if (!owned('tasks')) await shoot(page, 'tasks');
 
   await go(page, '/swarms', 1000);
-  await shoot(page, 'swarms');
+  if (!owned('swarms')) await shoot(page, 'swarms');
 
   // ── Templates & Library ───────────────────────────────────
   console.log('\nTemplates & Library:');
   await go(page, '/templates', 1000);
-  await shoot(page, 'templates');
+  if (!owned('templates')) await shoot(page, 'templates');
 
   await go(page, '/library', 1200);
-  await shoot(page, 'library');
+  if (!owned('library')) await shoot(page, 'library');
 
   await go(page, '/new-project', 1000);
-  await shoot(page, 'new-project-wizard');
+  if (!owned('new-project-wizard')) await shoot(page, 'new-project-wizard');
 
   // ── Config Linting & Security ─────────────────────────────
   console.log('\nConfig Lint & Security:');
   // ConfigLintPanel lives on project detail under ?tab=config-lint
   await go(page, `/project/${PROJECT}?tab=config-lint`, 1200);
-  await shoot(page, 'config-linter');
+  if (!owned('config-linter')) await shoot(page, 'config-linter');
 
   // MCP tab on global Config browser, with security findings
   await go(page, '/config?type=mcp', 1200);
-  await shoot(page, 'mcp-security');
+  if (!owned('mcp-security')) await shoot(page, 'mcp-security');
 
   // Config history tab on project detail
   await go(page, `/project/${PROJECT}?tab=config-history`, 1000);
-  await shoot(page, 'config-history');
+  if (!owned('config-history')) await shoot(page, 'config-history');
 
   // ── Session Quality & Diagnosis ───────────────────────────
   console.log('\nSession Quality:');
   if (firstSessionId) {
     // Timeline with replay scrubber + retry-cycle highlights (default tab)
     await go(page, `/sessions/${firstSessionId}`, 2500);
-    await shoot(page, 'session-replay-scrubber');
+    if (!owned('session-replay-scrubber')) await shoot(page, 'session-replay-scrubber');
 
     // Diagnosis tab — use locator with :has-text() for direct text match
     // (getByRole + regex was returning empty even with TabBar rendered).
@@ -277,7 +381,7 @@ async function clickButton(page, name) {
     } catch {
       console.warn('  ⚠  could not click Diagnosis tab — capturing current view');
     }
-    await shoot(page, 'session-diagnosis');
+    if (!owned('session-diagnosis')) await shoot(page, 'session-diagnosis');
   } else {
     console.log('  (skipping session-replay-scrubber + session-diagnosis: no sessions)');
   }
@@ -292,33 +396,33 @@ async function clickButton(page, name) {
   console.log('\nNotifications + Settings tabs:');
   await go(page, '/settings', 2000);
   await clickButton(page, 'Notifications');
-  await shoot(page, 'notifications');
+  if (!owned('notifications')) await shoot(page, 'notifications');
 
   await clickButton(page, 'Cost');
-  await shoot(page, 'settings-cost-cap');
+  if (!owned('settings-cost-cap')) await shoot(page, 'settings-cost-cap');
 
   await clickButton(page, 'Adapters');
-  await shoot(page, 'settings-adapters');
+  if (!owned('settings-adapters')) await shoot(page, 'settings-adapters');
 
   // ── Power-User Tools ──────────────────────────────────────
   console.log('\nPower Tools:');
   await go(page, '/commands', 1200);
-  await shoot(page, 'commands');
+  if (!owned('commands')) await shoot(page, 'commands');
 
   await go(page, '/sql', 1000);
-  await shoot(page, 'sql');
+  if (!owned('sql')) await shoot(page, 'sql');
 
   await go(page, '/plans', 1000);
-  await shoot(page, 'plans');
+  if (!owned('plans')) await shoot(page, 'plans');
 
   await go(page, '/schedule', 1000);
-  await shoot(page, 'schedule');
+  if (!owned('schedule')) await shoot(page, 'schedule');
 
   await go(page, '/health', 1000);
-  await shoot(page, 'health');
+  if (!owned('health')) await shoot(page, 'health');
 
   await go(page, '/insights-report', 1500);
-  await shoot(page, 'insights-report');
+  if (!owned('insights-report')) await shoot(page, 'insights-report');
 
   await browser.close();
   console.log(`\nAll new screenshots saved to:\n  ${OUT}\n`);
