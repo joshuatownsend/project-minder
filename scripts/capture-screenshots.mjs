@@ -160,7 +160,9 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       return /Compiling/i.test(text)
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
-        || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
+        || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
       // Fail toward BUSY. If evaluation throws — a detached frame, a navigation
       // in flight — we have learned nothing about the view, and "nothing" must
       // not read as "idle". Treating it as busy makes the loop keep waiting and,
@@ -175,7 +177,9 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         const text = document.body.innerText || '';
         return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
           || /\bConnecting\b/i.test(text)
-          || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0);
+          || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24));
       }).catch(() => false);
       if (stillIdle) return true;
       continue;
@@ -202,6 +206,13 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 // renders `animation: loading ? "spin …" : "none"`, so a `[style*="animation"]`
 // selector would match the IDLE state too and the gate would never settle.
 //
+// And require height >= 24px, because not every pulse means "loading". The CI
+// status dot in GithubActivityStrip.tsx:23-34 is a 7px circle that pulses to
+// show a check is RUNNING — a fully settled state. Without the size floor, any
+// project view with CI in flight reads as permanently loading and its shot is
+// skipped (this would have broken projects-grid.png, the hero image). Every
+// real placeholder here is a bar or block of 32-120px.
+//
 // Text alone is still not sufficient, so this also blocks on the body text
 // length holding steady. Length rather than content, so a ticking relative
 // timestamp ("3m ago" -> "4m ago") does not count as churn and prevent the page
@@ -217,7 +228,9 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
           /Compiling/i.test(text) ||
           /\bLoading\b/i.test(text) ||
           /\bConnecting\b/i.test(text) ||
-          document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
+          document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
         if (busy || growing) {

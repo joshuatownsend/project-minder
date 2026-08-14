@@ -152,7 +152,9 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       return /Compiling/i.test(text)
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
-        || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
+        || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
       // Fail toward BUSY: an evaluation error (detached frame, navigation in
       // flight) teaches us nothing about the view, and "nothing" must not read
       // as "idle". Waiting and then refusing beats publishing a blank.
@@ -165,7 +167,9 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         const text = document.body.innerText || '';
         return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
           || /\bConnecting\b/i.test(text)
-          || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0);
+          || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24));
       }).catch(() => false);
       if (stillIdle) return true;
       continue;
@@ -204,7 +208,9 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
           /Compiling/i.test(text) ||
           /\bLoading\b/i.test(text) ||
           /\bConnecting\b/i.test(text) ||
-          document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
+          document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
         const growing = text.length !== w.__minderLastLen;
         w.__minderLastLen = text.length;
         if (busy || growing) {
@@ -440,10 +446,17 @@ async function clickButton(page, name) {
       .then(() => true)
       .catch(() => false);
     await go(page, '/config?type=mcp', 1200, { shot: 'mcp-security' });
-    const COUNTS_FILLED =
-      'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
-    if (!(await waitForPattern(page, COUNTS_FILLED, 10000)) && !(await mcpFetched)) {
-      console.warn('  ⚠  mcp-security: no catalog count filled in and no /api/claude-config response seen');
+    // MCP-SPECIFIC signals only. `?type=mcp` returns a type-scoped payload, so
+    // every OTHER tab count stays at 0 even when the page is fully loaded — a
+    // general "any count is non-zero" test can never pass here.
+    //
+    // Accept a populated MCP count, or the valid empty state that the hydrated
+    // path renders for a legitimately empty catalog (ConfigBrowser.tsx:688).
+    // Unlike the "No hooks configured." mistake on /config, this text IS on the
+    // active tab: ?type=mcp opens the MCP tab, which is what renders it.
+    const MCP_READY = 'MCP\\s+[1-9]|No MCP servers configured';
+    if (!(await waitForPattern(page, MCP_READY, 10000)) && !(await mcpFetched)) {
+      console.warn('  ⚠  mcp-security: MCP catalog neither populated nor empty-stated, and no fetch seen');
       lastAssertFailed = true;
     }
   }
