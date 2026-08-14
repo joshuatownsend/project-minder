@@ -57,6 +57,23 @@ const failures = [];
 // page under the new shot's name — a silently incorrect screenshot, which is
 // worse than a missing one.
 let lastNavOk = true;
+// Whether the last go() reached a settled (not-loading) view. Shooting a view
+// that never settled is how /status shipped as four empty grey bars — the shot
+// "succeeded" in every mechanical sense and published a loading state.
+//
+// This is a navigation-time HINT, not a verdict: a route that finishes loading
+// just after the stability timeout (or during postSettle) is idle by the time
+// the shutter fires. So it no longer refuses on its own — it defers to
+// settleBeforeShot, which asks at the only moment whose answer matters.
+// Refusing here turned a transient delay near the timeout boundary into a
+// failed capture and left the previously published image stale.
+let lastSettled = true;
+// A POSITIVE assertion about this specific view's data failed — e.g. /config's
+// catalog never arrived. Unlike a settle timeout this CANNOT be re-checked
+// generically: settleBeforeShot would find a perfectly quiet page and pass,
+// republishing the zeroed view the assertion exists to catch. So this one is a
+// hard refusal. Reset by each successful go().
+let lastAssertFailed = false;
 
 // Chromium renders its OWN error page ("This page couldn't load", "Aw, Snap!")
 // as a perfectly successful navigation, so checking that go() resolved does not
@@ -87,6 +104,20 @@ async function shoot(page, name, { selector, optional = false } = {}) {
     if (!optional) failures.push(name);
     return;
   }
+  if (lastAssertFailed) {
+    console.warn(`  ⚠  ${name}.png skipped — its data never arrived (positive assertion failed)`);
+    if (!optional) failures.push(name);
+    return;
+  }
+  if (!lastSettled) {
+    // Not fatal on its own — re-ask at the shutter, below.
+    console.warn(`  ⚠  ${name}: had not settled at navigation time — re-checking at capture`);
+  }
+  if (!(await settleBeforeShot(page))) {
+    console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
+    if (!optional) failures.push(name);
+    return;
+  }
   if (!(await pageIsHealthy(page))) {
     console.warn(`  ⚠  ${name}.png skipped — the browser is showing an error page, not the app`);
     if (!optional) failures.push(name);
@@ -114,20 +145,95 @@ async function shoot(page, name, { selector, optional = false } = {}) {
   }
 }
 
-// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
-// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
-// We run the check via waitForFunction (page-context JS, Playwright-enforced
-// timeout) instead of locator polling — keeps the whole wait bounded and
-// avoids the locator.count() hang we hit on stubborn pages.
-async function waitForStableUI(page, { timeout = 25000 } = {}) {
+// Assert the view is not loading AT SHUTTER TIME, and wait if it is.
+//
+// Checking during go() is not enough and was the bug that published
+// memory-observatory.png with the word "Loading" in it: the settle gate ran
+// before the panel had even mounted its loading indicator, found a quiet page,
+// and returned — then the panel mounted, started loading, and the screenshot
+// was taken. The only moment whose answer matters is the moment of capture.
+async function settleBeforeShot(page, budgetMs = 60000) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    const busy = await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      return /Compiling/i.test(text)
+        || /\bLoading\b/i.test(text)
+        || /\bConnecting\b/i.test(text)
+        || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
+      // Fail toward BUSY. If evaluation throws — a detached frame, a navigation
+      // in flight — we have learned nothing about the view, and "nothing" must
+      // not read as "idle". Treating it as busy makes the loop keep waiting and,
+      // if it never recovers, refuse the shot loudly instead of publishing a
+      // blank one.
+    }).catch(() => true);
+    if (!busy) {
+      // Hold briefly and re-confirm, so a gap between two loading phases is not
+      // mistaken for the end of loading.
+      await page.waitForTimeout(1500);
+      const stillIdle = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
+          || /\bConnecting\b/i.test(text)
+          || document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24));
+      }).catch(() => false);
+      if (stillIdle) return true;
+      continue;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+// Wait until the view has stopped loading.
+//
+// The app has four loading idioms (#445) and gating on `.animate-pulse` alone
+// published /status as four empty grey bars and /config with every tab count
+// reading 0. All four are covered here:
+//   A  `<Skeleton>`            -> `.animate-pulse`
+//   B  plain "Loading…"/"Connecting…" text (~20 components)
+//   C  bespoke placeholder divs (~12) — NO class and NO text, so they look
+//      identical to a settled page. They are still detectable: they carry an
+//      INLINE `animation: "pulse 1.5s ease-in-out infinite"`
+//      (StatusDashboard.tsx:80, DiagnosisPanel.tsx:159), hence `[style*="pulse"]`.
+//   D  Next's "Compiling" pill
+//
+// Match the animation NAME, not the `animation` property: DashboardGrid.tsx:454
+// renders `animation: loading ? "spin …" : "none"`, so a `[style*="animation"]`
+// selector would match the IDLE state too and the gate would never settle.
+//
+// And require height >= 24px, because not every pulse means "loading". The CI
+// status dot in GithubActivityStrip.tsx:23-34 is a 7px circle that pulses to
+// show a check is RUNNING — a fully settled state. Without the size floor, any
+// project view with CI in flight reads as permanently loading and its shot is
+// skipped (this would have broken projects-grid.png, the hero image). Every
+// real placeholder here is a bar or block of 32-120px.
+//
+// Text alone is still not sufficient, so this also blocks on the body text
+// length holding steady. Length rather than content, so a ticking relative
+// timestamp ("3m ago" -> "4m ago") does not count as churn and prevent the page
+// from ever settling.
+async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
-      () => {
+      (quiet) => {
         const w = /** @type {any} */ (window);
         const now = Date.now();
-        const hasCompile = /Compiling/i.test(document.body.innerText || '');
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
-        if (hasCompile || hasSkeleton) {
+        const text = document.body.innerText || '';
+        const busy =
+          /Compiling/i.test(text) ||
+          /\bLoading\b/i.test(text) ||
+          /\bConnecting\b/i.test(text) ||
+          document.querySelectorAll('.animate-pulse').length > 0
+        || [...document.querySelectorAll('[style*="pulse"]')]
+          .some((el) => el.getBoundingClientRect().height >= 24);
+        const growing = text.length !== w.__minderLastLen;
+        w.__minderLastLen = text.length;
+        if (busy || growing) {
           w.__minderQuietSince = null;
           return false;
         }
@@ -135,13 +241,17 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
           w.__minderQuietSince = now;
           return false;
         }
-        return now - w.__minderQuietSince >= 1500;
+        return now - w.__minderQuietSince >= quiet;
       },
-      null,
-      { timeout, polling: 250 },
+      quietMs,
+      { timeout, polling: 400 },
     );
+    return true;
   } catch {
-    // Stability not achieved within timeout — accept whatever's on screen.
+    // Budget expired with the view still loading. Returning false sets
+    // lastSettled, and shoot() then skips the capture — recording a failure
+    // unless the shot is marked optional.
+    return false;
   }
 }
 
@@ -155,6 +265,24 @@ async function waitForTextGone(page, text, timeout = 45000) {
     await page.waitForFunction(
       (t) => !(document.body.innerText || '').toLowerCase().includes(t),
       text.toLowerCase(),
+      { timeout, polling: 500 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Positive assertion that a view's DATA arrived, for shots where a quiet-window
+// heuristic is provably not enough. /config is the worked example: its tab
+// counts stay at 0 while the page text is otherwise stable, then a SECOND data
+// wave lands at ~20s and fills them in (measured). Any settle heuristic short of
+// that publishes "Settings 0 Hooks 0 Plugins 0 MCP 0" — which is what shipped.
+async function waitForPattern(page, source, timeout = 60000) {
+  try {
+    await page.waitForFunction(
+      (src) => new RegExp(src).test(document.body.innerText || ''),
+      source,
       { timeout, polling: 500 },
     );
     return true;
@@ -178,13 +306,18 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   try {
     await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     lastNavOk = true;
+    // Per-view state: a previous route's failed assertion must not refuse this one.
+    lastAssertFailed = false;
   } catch (err) {
     lastNavOk = false;
     console.warn(`  ⚠  navigation to ${route} failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
     return false;
   }
   await page.waitForTimeout(settle);
-  await waitForStableUI(page, { timeout: stableTimeout });
+  lastSettled = await waitForStableUI(page, { timeout: stableTimeout });
+  if (!lastSettled) {
+    console.warn(`  ⚠  ${route} never stopped loading within ${Math.round(stableTimeout / 1000)}s`);
+  }
   await page.waitForTimeout(postSettle);
   return true;
 }
@@ -322,7 +455,73 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
 
   // 11. Config page
   if (!owned('config')) {
-    await go(page, '/config');
+    // /config needs a positive assertion: its tab counts sit at 0 while the
+    // page is otherwise stable and fill in on a second wave ~20s in, so every
+    // quiet-window heuristic photographs "Hooks 0 Plugins 0 MCP 0".
+    //
+    // But the counts cannot be asserted on directly, because 0 is a legitimate
+    // FINAL value on an install with no hooks/plugins/MCP. (An earlier attempt
+    // to accept "No hooks configured." as the empty-state signal was dead code:
+    // /config opens on the Settings tab, and that text is rendered only by
+    // HooksList once the Hooks tab is opened.)
+    //
+    // So prefer the fetch that populates the counts — true whatever it returns.
+    // Armed BEFORE navigating: the response lands during go()'s settle window,
+    // and a waiter created afterwards would miss it and time out.
+    const configFetched = page
+      .waitForResponse(
+        (r) => r.url().includes('/api/claude-config') && r.status() === 200,
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    // The page has a SECOND, independent data source. /config opens on the
+    // Settings tab, which ConfigDashboard renders from its own plain
+    // `fetch("/api/config")`, and while `draft` is null it shows text-free,
+    // unanimated placeholders (ConfigDashboard.tsx:270-280) — invisible to every
+    // stability gate. So the catalog can be ready while Settings is still blank.
+    //
+    // Match on the exact PATHNAME rather than a substring. The two endpoints sit
+    // one character apart by eye, and an includes('/api/config') check would also
+    // resolve on any nested /api/config/* route — precise equality keeps this
+    // assertion about the request it names. Unlike the catalog this is NOT
+    // RSC-prefetched (a plain client fetch in an effect), so it always fires.
+    const settingsFetched = page
+      .waitForResponse(
+        (r) => {
+          try {
+            return new URL(r.url()).pathname === '/api/config' && r.status() === 200;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 60000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    await go(page, '/config', 1200, { postSettle: 6000 });
+    // Check the populated count FIRST. The rscHydration flag is default-ON and
+    // covers /config (featureFlags.ts), so the catalog is prefetched on the
+    // server and the browser makes NO request — awaiting the response first
+    // would burn its full 60s budget on every default run before falling
+    // through to a check that was already true.
+    //
+    // Residual uncovered case: no observable fetch AND every catalog genuinely
+    // empty — that warns and refuses rather than publishing a zeroed page.
+    const COUNTS_FILLED =
+      'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
+    const catalogReady =
+      (await waitForPattern(page, COUNTS_FILLED, 10000)) || (await configFetched);
+    // BOTH halves of the page must be ready — the shot shows both.
+    const settingsReady = await settingsFetched;
+    if (!catalogReady || !settingsReady) {
+      console.warn(
+        `  ⚠  config: not ready (catalog=${catalogReady}, settings=${settingsReady})`,
+      );
+      // Hard refusal, not a settle hint: the page IS quiet here, so a shutter-time
+      // re-check would pass and publish exactly the placeholder view this catches.
+      lastAssertFailed = true;
+    }
     await shoot(page, 'config');
   }
 

@@ -48,8 +48,19 @@ async function shoot(page, name) {
   }
 }
 
-// Wait until both the Next.js dev "Compiling…" pill and Tailwind's
-// .animate-pulse skeleton placeholders have been gone for ~1.5s sustained.
+// Wait until every loading indicator has been gone for ~1.5s sustained.
+//
+// Gating on `.animate-pulse` + "Compiling" alone missed two of the app's four
+// idioms (#445) — plain "Loading…"/"Connecting…" text, and the bespoke
+// placeholder divs that carry no class and no text but do run an inline
+// `animation: pulse …` (StatusDashboard.tsx:80). agents.png / skills.png /
+// provenance.png are all published on the landing page, so the same detection
+// that guards capture-screenshots.mjs applies here.
+//
+// KNOWN REMAINING GAP: on timeout this still accepts whatever is on screen
+// rather than refusing the shot, so a genuinely slow page can still publish a
+// loading state. The sibling scripts refuse instead. Closing that here means
+// giving this script the same shoot()-level guard — tracked with #445.
 // We run the check via waitForFunction (page-context JS, Playwright-enforced
 // timeout) instead of locator polling — keeps the whole wait bounded and
 // avoids the locator.count() hang we hit on stubborn pages.
@@ -59,9 +70,22 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
       () => {
         const w = /** @type {any} */ (window);
         const now = Date.now();
-        const hasCompile = /Compiling/i.test(document.body.innerText || '');
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
-        if (hasCompile || hasSkeleton) {
+        const text = document.body.innerText || '';
+        const hasCompile = /Compiling/i.test(text);
+        // Word boundaries, so "Reloading"/"Disconnecting" do not read as busy.
+        const hasLoadingText = /\bLoading\b/i.test(text) || /\bConnecting\b/i.test(text);
+        // Match the animation NAME: DashboardGrid.tsx:454 renders
+        // `animation: loading ? "spin …" : "none"`, so a [style*="animation"]
+        // selector would match the idle state and never settle.
+        //
+        // The 24px floor applies ONLY to inline pulses: GithubActivityStrip's
+        // 7px CI dot pulses while a check RUNS, which is a settled state, and
+        // treating it as loading pins this page at "busy" forever. The Tailwind
+        // class needs no floor — `h-4` skeletons are only 16px tall.
+        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0
+          || [...document.querySelectorAll('[style*="pulse"]')]
+            .some((el) => el.getBoundingClientRect().height >= 24);
+        if (hasCompile || hasLoadingText || hasSkeleton) {
           w.__minderQuietSince = null;
           return false;
         }
