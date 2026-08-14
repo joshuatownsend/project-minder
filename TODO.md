@@ -1,6 +1,8 @@
 # TODO
 
-*Sequencing for everything below — plus every open GitHub issue — lives in `docs/superpowers/plans/2026-08-08-backlog-burndown.md` (11 waves, each item dispositioned once). This file stays the source of truth for **what** is outstanding; the plan is the source of truth for **when**.*
+*Sequencing for everything below — plus every open GitHub issue — lives in `docs/superpowers/plans/2026-08-08-backlog-burndown.md` (waves W0–W13, each item dispositioned once). This file stays the source of truth for **what** is outstanding; the plan is the source of truth for **when**.*
+
+*Reconciled 2026-08-14 — read the plan's **Status reconciliation** section first; the two ledger tables at the top of that doc are the 2026-08-08 baseline and are superseded there. Current state: 22 open issues (4 parked, 1 a standing gate) and the 26 unchecked items below. **W12 — demo-mode coverage** is the recommended next wave; the five demo-mode items in this file are its `TODO.md` half.*
 
 *The Claude Code schema-alignment wave (v2.1.202 → 2.1.222) is fully closed: the wave itself shipped 2026-08-04 → 2026-08-06 and its last three follow-ups (A2, A3, A6) shipped 2026-08-10 in W5. History in `TODO.archive.md`, spec in `docs/superpowers/plans/2026-08-04-claude-code-schema-alignment.md`. Its out-of-scope review findings live as GitHub issues, not TODO items: #391 and #395 remain open (#393, #394 closed in W4).*
 
