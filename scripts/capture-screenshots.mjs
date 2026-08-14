@@ -60,7 +60,20 @@ let lastNavOk = true;
 // Whether the last go() reached a settled (not-loading) view. Shooting a view
 // that never settled is how /status shipped as four empty grey bars — the shot
 // "succeeded" in every mechanical sense and published a loading state.
+//
+// This is a navigation-time HINT, not a verdict: a route that finishes loading
+// just after the stability timeout (or during postSettle) is idle by the time
+// the shutter fires. So it no longer refuses on its own — it defers to
+// settleBeforeShot, which asks at the only moment whose answer matters.
+// Refusing here turned a transient delay near the timeout boundary into a
+// failed capture and left the previously published image stale.
 let lastSettled = true;
+// A POSITIVE assertion about this specific view's data failed — e.g. /config's
+// catalog never arrived. Unlike a settle timeout this CANNOT be re-checked
+// generically: settleBeforeShot would find a perfectly quiet page and pass,
+// republishing the zeroed view the assertion exists to catch. So this one is a
+// hard refusal. Reset by each successful go().
+let lastAssertFailed = false;
 
 // Chromium renders its OWN error page ("This page couldn't load", "Aw, Snap!")
 // as a perfectly successful navigation, so checking that go() resolved does not
@@ -91,10 +104,14 @@ async function shoot(page, name, { selector, optional = false } = {}) {
     if (!optional) failures.push(name);
     return;
   }
-  if (!lastSettled) {
-    console.warn(`  ⚠  ${name}.png skipped — the view never finished loading`);
+  if (lastAssertFailed) {
+    console.warn(`  ⚠  ${name}.png skipped — its data never arrived (positive assertion failed)`);
     if (!optional) failures.push(name);
     return;
+  }
+  if (!lastSettled) {
+    // Not fatal on its own — re-ask at the shutter, below.
+    console.warn(`  ⚠  ${name}: had not settled at navigation time — re-checking at capture`);
   }
   if (!(await settleBeforeShot(page))) {
     console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
@@ -144,7 +161,12 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
         || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
-    }).catch(() => false);
+      // Fail toward BUSY. If evaluation throws — a detached frame, a navigation
+      // in flight — we have learned nothing about the view, and "nothing" must
+      // not read as "idle". Treating it as busy makes the loop keep waiting and,
+      // if it never recovers, refuse the shot loudly instead of publishing a
+      // blank one.
+    }).catch(() => true);
     if (!busy) {
       // Hold briefly and re-confirm, so a gap between two loading phases is not
       // mistaken for the end of loading.
@@ -271,6 +293,8 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
   try {
     await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     lastNavOk = true;
+    // Per-view state: a previous route's failed assertion must not refuse this one.
+    lastAssertFailed = false;
   } catch (err) {
     lastNavOk = false;
     console.warn(`  ⚠  navigation to ${route} failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
@@ -447,7 +471,9 @@ async function go(page, route, settle = 800, { stableTimeout = 60000, postSettle
       'Hooks\\s+[1-9]|Plugins\\s+[1-9]|MCP\\s+[1-9]|CI / CD\\s+[1-9]|Keys\\s+[1-9]';
     if (!(await configFetched) && !(await waitForPattern(page, COUNTS_FILLED, 10000))) {
       console.warn('  ⚠  config: no /api/claude-config response seen and no catalog count filled in');
-      lastSettled = false;
+      // Hard refusal, not a settle hint: the page IS quiet here, so a shutter-time
+      // re-check would pass and publish exactly the zeroed view this catches.
+      lastAssertFailed = true;
     }
     await shoot(page, 'config');
   }

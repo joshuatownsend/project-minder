@@ -89,9 +89,12 @@ async function shoot(page, name, { selector } = {}) {
     return;
   }
   if (!lastSettled) {
-    console.warn(`  ⚠  ${name}.png skipped — the view never finished loading`);
-    failures.push(name);
-    return;
+    // A navigation-time hint, not a verdict: a route that finished loading just
+    // after the stability timeout (or during postSettle) is idle by the time the
+    // shutter fires. Refusing here turned a transient delay near the boundary
+    // into a failed capture and left the published image stale. Defer to
+    // settleBeforeShot, which asks at the moment that matters.
+    console.warn(`  ⚠  ${name}: had not settled at navigation time — re-checking at capture`);
   }
   if (!(await settleBeforeShot(page))) {
     console.warn(`  ⚠  ${name}.png skipped — still loading at capture time`);
@@ -139,7 +142,10 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
         || document.querySelectorAll('.animate-pulse, [style*="pulse"]').length > 0;
-    }).catch(() => false);
+      // Fail toward BUSY: an evaluation error (detached frame, navigation in
+      // flight) teaches us nothing about the view, and "nothing" must not read
+      // as "idle". Waiting and then refusing beats publishing a blank.
+    }).catch(() => true);
     if (!busy) {
       // Hold briefly and re-confirm, so a gap between two loading phases is not
       // mistaken for the end of loading.
