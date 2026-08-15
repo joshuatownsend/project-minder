@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { sankey, sankeyJustify, sankeyLinkHorizontal } from "d3-sankey";
 import type { ToolTransition, ToolSelfLoop } from "@/lib/usage/types";
+import { buildSankeyFlow, type FlowEdge } from "@/lib/usage/sankeyFlow";
 
 interface Props {
   transitions: ToolTransition[];
@@ -14,36 +15,8 @@ const NODE_PADDING = 10;
 const HEIGHT = 320;
 const MARGIN = { top: 16, right: 160, bottom: 16, left: 16 };
 
-function buildSankeyData(transitions: ToolTransition[], topN: number) {
-  // Determine top-N nodes by total throughput (sum of counts as source + target)
-  const throughput = new Map<string, number>();
-  for (const t of transitions) {
-    throughput.set(t.from, (throughput.get(t.from) ?? 0) + t.count);
-    throughput.set(t.to, (throughput.get(t.to) ?? 0) + t.count);
-  }
-  const topNodes = new Set(
-    [...throughput.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, topN)
-      .map(([name]) => name)
-  );
-
-  const filteredTransitions = transitions.filter(
-    (t) => topNodes.has(t.from) && topNodes.has(t.to)
-  );
-
-  const nodeNames = [...topNodes];
-  const nodeIndex = new Map(nodeNames.map((name, i) => [name, i]));
-
-  const nodes = nodeNames.map((name) => ({ name }));
-  const links = filteredTransitions.map((t) => ({
-    source: nodeIndex.get(t.from)!,
-    target: nodeIndex.get(t.to)!,
-    value: t.count,
-  }));
-
-  return { nodes, links, nodeIndex };
-}
+// Graph preparation lives in `@/lib/usage/sankeyFlow` — it is pure logic and
+// gets its own tests there. This file is responsible for drawing only.
 
 export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
   const [topN, setTopN] = useState(12);
@@ -62,9 +35,17 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
   const innerWidth = svgWidth - MARGIN.left - MARGIN.right;
   const innerHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
 
-  const { nodes: sankeyNodes, links: sankeyLinks } = useMemo(() => {
-    if (transitions.length === 0) return { nodes: [], links: [] };
-    const { nodes, links } = buildSankeyData(transitions, topN);
+  const {
+    nodes: sankeyNodes,
+    links: sankeyLinks,
+    droppedEdges,
+    failed,
+  } = useMemo(() => {
+    const empty = { nodes: [] as any[], links: [] as any[], droppedEdges: [] as FlowEdge[], failed: false };
+    if (transitions.length === 0) return empty;
+
+    const { nodes, links, droppedEdges } = buildSankeyFlow(transitions, topN);
+    if (links.length === 0) return { ...empty, droppedEdges };
 
     const layout = sankey<{ name: string }, { source: number; target: number; value: number }>()
       .nodeWidth(NODE_WIDTH)
@@ -72,13 +53,39 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
       .nodeAlign(sankeyJustify)
       .extent([[0, 0], [innerWidth, innerHeight]]);
 
-    return layout({ nodes: nodes as any, links: links as any });
+    try {
+      return { ...layout({ nodes: nodes as any, links: links as any }), droppedEdges, failed: false };
+    } catch {
+      // Second line of defence, and the one that matters most. This runs
+      // during render, so anything d3-sankey throws here takes the entire
+      // /usage route down and the browser replaces it with its own error
+      // page — the chart does not simply go blank (#443).
+      //
+      // `buildSankeyFlow` should have made a `circular link` impossible, but
+      // d3-sankey throws on other conditions too (`missing: <node>`), and a
+      // dead page is far too steep a price for a chart that cannot lay out.
+      // Degrade to a message instead.
+      return { ...empty, droppedEdges, failed: true };
+    }
   }, [transitions, topN, innerWidth, innerHeight]);
 
   if (transitions.length === 0) {
     return (
       <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
         No tool transition data yet. Use Claude Code to generate activity.
+      </div>
+    );
+  }
+
+  // Layout refused the graph, or nothing survived the top-N cut. Say so in
+  // the chart's own empty-state styling rather than rendering an empty SVG
+  // that reads as "no activity".
+  if (failed || sankeyLinks.length === 0) {
+    return (
+      <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+        {failed
+          ? "This flow couldn't be laid out. The rest of the page is unaffected."
+          : "No transitions between the top tools at this threshold — try raising it."}
       </div>
     );
   }
@@ -102,6 +109,32 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
             {topN}
           </span>
         </label>
+
+        {/* A Sankey needs an acyclic graph, but tool flows are cyclic by
+            nature (Edit → Bash → Edit). Weakest edges are dropped to make one
+            — disclosed here because a Sankey missing edges silently reads as
+            a complete picture of the flow. */}
+        {droppedEdges.length > 0 && (
+          <span
+            title={
+              `A Sankey diagram cannot show cycles, and tool flows contain them ` +
+              `(Edit → Bash → Edit). The lowest-volume transition in each cycle is ` +
+              `hidden so the rest can be drawn:\n\n` +
+              droppedEdges
+                .map((e) => `${e.from} → ${e.to} (${e.count.toLocaleString()})`)
+                .join("\n")
+            }
+            style={{
+              fontSize: "0.68rem",
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-body)",
+              borderBottom: "1px dotted var(--border-subtle)",
+              cursor: "help",
+            }}
+          >
+            {droppedEdges.length} cyclic {droppedEdges.length === 1 ? "transition" : "transitions"} hidden
+          </span>
+        )}
       </div>
 
       <div style={{ width: "100%", overflowX: "auto" }}>
