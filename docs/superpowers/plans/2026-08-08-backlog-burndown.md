@@ -51,6 +51,21 @@ And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `gr
 
 Open issues: **34 → 22**, of which **4 are `parked`** (#228–#231) and **1 is a standing gate rather than schedulable work** (#432). Real remaining: **17 issues across 5 waves.**
 
+### ⚠️ Standing caveat — this document's causal claims are weaker than its observations
+
+**Treat every "X is caused by Y" / "X is blocked on Y" statement here as unverified until someone opens the relevant file.** Four rounds of review on this plan's own PR (#447) found the same defect four times, and it is worth stating plainly because only the instances a reviewer happened to check got corrected:
+
+| Claimed | What the source said | Caught in |
+|---|---|---|
+| Demo mode leaks the real burn %, MCP health, and skill slugs | All three are fixtures; their routes are guarded (`src/lib/demo/`) | Round 1 |
+| #445 is W12's enabler — *empty* vs *still loading* is externally undetectable | `waitForStableUI` already detects all four idioms (`capture-screenshots.mjs:220-254`) | Round 2 |
+| #296 shares the tracing batch's verification loop | It is a runtime lifecycle defect the packaging loop cannot observe at all | Round 3 |
+| `/analytics` is slow for the same reason as #439 | It is a static `ComingSoon` page that fetches nothing | Round 4 |
+
+The 2026-08-12 route audit and the wave records **observed** accurately — the symptoms are real and reproducible. What was unreliable is the layer above: explanations attached to those symptoms by inference, written from what the behaviour looked like rather than from the code, then propagated into sequencing decisions ("do this first", "check that wave first", "batch these together"). Three of four such claims examined were wrong, and one of them had reordered an entire wave.
+
+**Practical rule for anyone executing a wave from this doc:** the issue numbers, measurements, and file:line references were checked. The *because* clauses were not. Before inheriting a dependency or an ordering, open the file — the cost is one read, and the failure mode is an investigation aimed at the wrong subsystem. This is the same family as the gates recorded elsewhere in this plan that ran, passed, and proved nothing.
+
 ### Wave status
 
 | Wave | State | Notes |
@@ -479,7 +494,9 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
    > **Corrected by Codex on this plan's own PR (#447), second finding of the same round.** This was ranked first and labelled *the enabler*, on the claim that the wave's core measurement — does a screen render fixtures or nothing — was impossible without it because *empty* and *still loading* are externally indistinguishable. **That was already false when written.** `waitForStableUI` in `scripts/capture-screenshots.mjs:220-254` (shipped in PR #446, merged the same morning) detects all four idioms — `.animate-pulse`, "Loading…"/"Connecting…" text, bespoke placeholders via `[style*="pulse"]` with a ≥24px height floor, and Next's Compiling pill — plus a body-text-length stability check, and returns false so `shoot()` skips the capture and records a failure. The measurement works today. Blocking the wave on this would have delayed a hard failure and two verified leaks behind a maintenance task.
    >
    > **Twice in one PR the same way** (see item 3): a claim about demo-mode/capture behaviour was written from what the situation looked like rather than from the code, and both times the source said otherwise. The pattern is asserting a *capability gap* — "you can't tell X from Y", "that value must be real" — without opening the thing that would already close it. For this wave specifically, check `capture-screenshots.mjs` and `src/lib/demo/` before claiming either.
-7. **`/analytics` never finishes loading** (90s hard timeout, the audit's only one) — likely the same session-JSONL parsing cost as **#439**, so **check W13 first**; if #439's fix covers it, this closes for free rather than being investigated twice.
+7. **`/analytics` never finishes loading** (90s hard timeout, the audit's only one) — **cause unknown; do not inherit a hypothesis.** `src/app/analytics/page.tsx` renders a static `ComingSoon` component: no data fetching, no endpoints, nothing that can take 90 seconds on its own. So whatever the audit hit is *not* in this page, and the first step is to reproduce it in isolation — one navigation, no capture run in flight — before attributing anything. Most likely candidates are capture-run or global server contention, or a measurement artifact of the audit harness itself.
+
+   > *Corrected 2026-08-14 (Codex, round 4).* This read "likely the same session-JSONL parsing cost as #439, so check W13 first". `/analytics` never calls the Hot Files or File Coupling endpoints #439 covers — fixing #439 cannot make this page finish loading, so the dependency would have sent the investigation into the wrong subsystem. **The symptom is real; the explanation was invented.**
 8. **Home's `0 projects · 0 active sessions` header** (`TODO.md`) — *not demo-specific*, and the one item here that may not belong: it reproduces on real data too. First establish whether it is simply awaiting the ~130s `/api/projects` scan or is wired to a source that never resolves. If it is the scan, it is a perf item and belongs in W13.
 
 **Exit criterion:** a full capture run under `MINDER_DEMO=1` alone produces a publishable screenshot set — no second pass, no real data in any frame, no blank screens. That is a single testable claim, unlike "demo mode is better".
