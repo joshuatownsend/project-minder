@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchSessions, type SessionSearchScope } from "@/lib/data";
+import {
+  searchSessions,
+  type SessionSearchScope,
+  type SessionSearchFacets,
+} from "@/lib/data";
 import { SessionSearchError } from "@/lib/data/sessionSearch";
 
 // Session search endpoint. Backed by `prompts_fts` (FTS5) for body
@@ -11,10 +15,36 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 //   q      — search text (required, non-empty after trim)
 //   scope  — 'titles' | 'prompts' | 'both' (default: 'both')
 //   limit  — clamp to 1..200 (default: 50)
-//   source — adapter source id (e.g. 'claude'). Client-side filtered in SessionsBrowser.
+//
+// Row-level facets (all optional). These are applied IN SQL, inside every
+// retriever, so `limit` counts faceted rows (#425). Filtering them
+// client-side after the cut silently under-reports: a query matching more
+// than `limit` sessions could report zero for a facet whose matches all
+// ranked below the cutoff. Omit a facet to leave that axis unconstrained.
+//   source      — adapter source id (e.g. 'claude'); rows with no source
+//                 count as 'claude', matching the client's `?? "claude"`.
+//   entrypoint  — bucketed entrypoint (e.g. 'cli', 'sdk-cli', 'unknown');
+//                 null AND empty-string rows both bucket to 'unknown'.
+//
+//   `source` and `entrypoint` accept ANY non-empty value — deliberately no
+//   allowlist. Both are open sets that grow when an adapter or entrypoint
+//   is added, so validating against a fixed list would reject a legitimate
+//   new value, and an unrecognized one already yields an empty result that
+//   is *true* rather than misleading. Only emptiness is rejected. `starred`
+//   is different because it is a closed two-value axis, so an unrecognized
+//   value there IS meaningful and gets a 400.
+//   starred     — '1' / 'true' to restrict to starred sessions. Any other
+//                 value is rejected rather than coerced, because silently
+//                 reading an unrecognized value as "unfiltered" would
+//                 answer a different question than the one asked.
 //
 // Response shape:
-//   { hits: Array<{ sessionId, score, source }>, backend: 'db' | 'file' }
+//   { hits: SessionSearchHit[], backend: 'db' | 'file' }
+//
+// `SessionSearchHit` (src/lib/data/sessionSearch.ts) is the authority —
+// it carries `ranks` and an optional `snippet` beyond the
+// `{sessionId, score, source}` this comment used to list, and naming the
+// type keeps the two from drifting again as fields are added.
 //
 // Notes:
 //   - `backend: 'file'` means MINDER_USE_DB=0 — the SessionsBrowser
@@ -65,8 +95,45 @@ export async function GET(request: NextRequest) {
     limit = Math.min(parsed, MAX_LIMIT);
   }
 
+  // Facets. `null` (absent) leaves the axis unconstrained; an empty
+  // string is rejected rather than treated as absent, since `?source=`
+  // more likely means a client built the URL wrong than that it wanted
+  // every source — and the wrong reading is silent.
+  const facets: SessionSearchFacets = {};
+  for (const key of ["source", "entrypoint"] as const) {
+    const raw = params.get(key);
+    if (raw === null) continue;
+    // Validate and store the SAME value. Checking `raw.trim()` for
+    // emptiness but filtering on `raw` would let `?source=claude%20`
+    // through validation and then match nothing — a silent empty result
+    // from a well-formed-looking request, which is the exact failure
+    // class this endpoint's facets exist to remove.
+    const value = raw.trim();
+    if (value === "") {
+      return NextResponse.json(
+        { error: `${key} must be non-empty when present (omit it to leave unfiltered)` },
+        { status: 400 }
+      );
+    }
+    facets[key] = value;
+  }
+
+  const starredRaw = params.get("starred");
+  if (starredRaw !== null) {
+    // Deliberately not `Boolean(starredRaw)` — that reads "0" and
+    // "false" as true, which is the inverse of what the caller asked
+    // for and produces a confidently wrong result set.
+    if (starredRaw !== "1" && starredRaw !== "true") {
+      return NextResponse.json(
+        { error: `starred must be '1' or 'true' when present (got: ${starredRaw})` },
+        { status: 400 }
+      );
+    }
+    facets.starredOnly = true;
+  }
+
   try {
-    const { hits, meta } = await searchSessions(q, scope, limit);
+    const { hits, meta } = await searchSessions(q, scope, limit, facets);
     return NextResponse.json(
       { hits, backend: meta.backend },
       { headers: { "X-Minder-Backend": meta.backend } }

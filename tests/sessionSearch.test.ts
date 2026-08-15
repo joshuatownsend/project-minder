@@ -621,3 +621,279 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     conn.closeDb();
   });
 });
+
+// ── Facets (#425) ────────────────────────────────────────────────────────────
+//
+// The defect these pin: facets used to be applied client-side, AFTER the
+// retriever's ranked cut. A query matching more sessions than the candidate
+// pool could then report zero results for a facet that genuinely had matches
+// — they simply all ranked below the cutoff. Under-reporting only, and
+// silent, which is what makes it worth a test per retriever branch rather
+// than one test per function.
+//
+// Facet columns are set by direct UPDATE rather than through ingest: they
+// come from transcript metadata orthogonal to what is under test here, and
+// writing them directly keeps each test's geometry explicit.
+describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
+  async function setup() {
+    const reloaded = await reload();
+    await reloaded.mig.initDb();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    return { ...reloaded, projectsDir };
+  }
+
+  function setFacets(
+    db: any,
+    sessionId: string,
+    cols: { entrypoint?: string | null; source?: string | null; starred_at?: string | null }
+  ) {
+    // Column names are interpolated, so they are allowlisted. Test-only
+    // and never fed untrusted input, but a typo would otherwise surface
+    // as an opaque SQLite error at run time instead of naming the key —
+    // and the allowlist doubles as the helper's documentation of what it
+    // can set.
+    const ALLOWED = new Set(["entrypoint", "source", "starred_at"]);
+    for (const [col, val] of Object.entries(cols)) {
+      if (!ALLOWED.has(col)) throw new Error(`setFacets: unsupported column ${col}`);
+      // Skip `undefined` rather than writing it. Every field is optional,
+      // so `{ entrypoint: maybeUndefined }` would otherwise write NULL and
+      // silently change a test's geometry — the caller meant "leave this
+      // alone", not "clear it". `null` is still written, because clearing
+      // a column IS a case these tests exercise.
+      if (val === undefined) continue;
+      db.prepare(`UPDATE sessions SET ${col} = ? WHERE session_id = ?`).run(val, sessionId);
+    }
+  }
+
+  it("surfaces a faceted match that ranks BELOW the candidate cut (the #425 bug)", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    // Seven strong matches — short docs, dense keyword — then one weak
+    // match padded with filler so bm25 ranks it last. With limit=2 the
+    // candidate pool is 2 * CANDIDATE_MULTIPLIER(3) = 6, so the weak one
+    // falls outside it. That is the bug's exact geometry at small scale.
+    for (let i = 0; i < 7; i++) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `strong-${i}.jsonl`), [
+        userTurn(`2026-04-30T10:0${i}:00Z`, "facetword facetword facetword facetword"),
+        assistantTurn(`2026-04-30T10:0${i}:01Z`, "claude-sonnet-4-5", "facetword ok"),
+      ]);
+    }
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "weak-target.jsonl"), [
+      userTurn(
+        "2026-04-30T11:00:00Z",
+        "facetword mentioned once amid a great deal of surrounding prose that dilutes " +
+          "the term frequency considerably so that bm25 ranks this document last of all " +
+          "the candidates in this particular corpus of otherwise dense matches"
+      ),
+      assistantTurn("2026-04-30T11:00:01Z", "claude-sonnet-4-5", "understood"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    setFacets(db, "weak-target", { entrypoint: "sdk-py" });
+
+    // Unfaceted: the target ranks below the cut and is absent. This is the
+    // precondition — without it the test would pass even if facets did
+    // nothing, because the target would be present either way.
+    const unfaceted = search.searchSessionsInDb(db, "facetword", "prompts", 2);
+    expect(unfaceted.find((h: any) => h.sessionId === "weak-target")).toBeUndefined();
+
+    // Faceted: the LIMIT now applies to the faceted population, so the one
+    // matching session surfaces instead of a confident empty result.
+    const faceted = search.searchSessionsInDb(db, "facetword", "prompts", 2, [], {
+      entrypoint: "sdk-py",
+    });
+    expect(faceted.map((h: any) => h.sessionId)).toEqual(["weak-target"]);
+    conn.closeDb();
+  });
+
+  it("applies the facet to EVERY title column, not just the last OR arm", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    // The titles query is a seven-column OR chain. If the facet predicate
+    // is appended without wrapping that chain in parentheses, SQL
+    // precedence binds `AND <facet>` to the final arm (`ai_title`) alone
+    // and the other six columns ignore it entirely — a partial guard that
+    // looks exactly like a working one.
+    //
+    // `slug` is the FIRST arm, so a slug match that fails the facet is
+    // precisely the row that leaks through an unparenthesized chain.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "titlematch.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "unrelated body text"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok", "zzslugmatch"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    setFacets(db, "titlematch", { entrypoint: "cli" });
+
+    // Sanity: it IS findable by slug with no facet applied.
+    const unfaceted = search.searchSessionsInDb(db, "zzslugmatch", "titles");
+    expect(unfaceted.map((h: any) => h.sessionId)).toContain("titlematch");
+
+    // With a non-matching facet it must disappear. Without the parens this
+    // returned the row, because the slug arm was never guarded.
+    const faceted = search.searchSessionsInDb(db, "zzslugmatch", "titles", 50, [], {
+      entrypoint: "sdk-py",
+    });
+    expect(faceted.map((h: any) => h.sessionId)).not.toContain("titlematch");
+    conn.closeDb();
+  });
+
+  it("buckets NULL and empty-string entrypoint together as unknown", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (const id of ["ep-null", "ep-empty", "ep-set"]) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `${id}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", "bucketword here"),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    // The client buckets with `entrypoint ? entrypoint : "unknown"`, which
+    // is FALSY-based — so "" has to bucket WITH null, not against it. A
+    // bare `IS NULL` check would drop `ep-empty` from a filter the UI
+    // shows as matching it.
+    setFacets(db, "ep-null", { entrypoint: null });
+    setFacets(db, "ep-empty", { entrypoint: "" });
+    setFacets(db, "ep-set", { entrypoint: "cli" });
+
+    const unknown = search.searchSessionsInDb(db, "bucketword", "prompts", 50, [], {
+      entrypoint: "unknown",
+    });
+    expect(unknown.map((h: any) => h.sessionId).sort()).toEqual(["ep-empty", "ep-null"]);
+    conn.closeDb();
+  });
+
+  it("filters on source, with the schema default counting as claude", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (const id of ["src-default", "src-other"]) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `${id}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", "sourceword here"),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    // `src-default` is deliberately left alone: the column is
+    // `source TEXT NOT NULL DEFAULT 'claude'` (migrations.ts:327), so an
+    // unset source arrives as the literal 'claude' and a NULL is not
+    // reachable at all. An earlier version of this test tried to write
+    // NULL and hit the NOT NULL constraint — which is how the constraint
+    // was discovered. The COALESCE in the predicate is therefore
+    // belt-and-braces mirroring the client's `?? "claude"`, not a live
+    // branch; it is kept so the two sides stay identical if the
+    // constraint is ever relaxed.
+    setFacets(db, "src-other", { source: "codex" });
+
+    const claude = search.searchSessionsInDb(db, "sourceword", "prompts", 50, [], {
+      source: "claude",
+    });
+    expect(claude.map((h: any) => h.sessionId)).toEqual(["src-default"]);
+
+    const codex = search.searchSessionsInDb(db, "sourceword", "prompts", 50, [], {
+      source: "codex",
+    });
+    expect(codex.map((h: any) => h.sessionId)).toEqual(["src-other"]);
+    conn.closeDb();
+  });
+
+  it("does not count an empty-string starred_at as starred", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (const id of ["star-real", "star-empty", "star-null"]) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `${id}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", "starword here"),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    // The client tests `!!s.starredAt`, so "" is NOT starred. A bare
+    // `starred_at IS NOT NULL` would disagree and surface a row the UI's
+    // own star filter hides — trading one silent wrong answer for another.
+    setFacets(db, "star-real", { starred_at: "2026-04-30T12:00:00Z" });
+    setFacets(db, "star-empty", { starred_at: "" });
+    setFacets(db, "star-null", { starred_at: null });
+
+    const starred = search.searchSessionsInDb(db, "starword", "prompts", 50, [], {
+      starredOnly: true,
+    });
+    expect(starred.map((h: any) => h.sessionId)).toEqual(["star-real"]);
+    conn.closeDb();
+  });
+
+  it("leaves results unchanged when no facets are supplied", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "nofacet.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "plainword here"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    setFacets(db, "nofacet", { entrypoint: "cli", source: "codex" });
+
+    // An empty facet object must behave exactly like `undefined` — every
+    // axis unconstrained. Otherwise the UI's no-filter state would start
+    // filtering.
+    const none = search.searchSessionsInDb(db, "plainword", "both");
+    const empty = search.searchSessionsInDb(db, "plainword", "both", 50, [], {});
+    expect(empty.map((h: any) => h.sessionId)).toEqual(none.map((h: any) => h.sessionId));
+    expect(empty.length).toBe(1);
+    conn.closeDb();
+  });
+
+  // The semantic retriever gets its own two tests because it is the one
+  // branch whose facet filter is NOT in SQL — its ids come from a vector
+  // index that knows nothing about `sessions` columns, so they are
+  // filtered against a survivor query instead. Mutation testing proved
+  // this necessary: disabling the semantic filter left all six other
+  // facet tests green, because none of them passed `semanticKeys`.
+  it("applies facets to semantic hits, which no SQL retriever filters", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (const id of ["sem-keep", "sem-drop"]) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `${id}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", "irrelevant body"),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    setFacets(db, "sem-keep", { entrypoint: "cli" });
+    setFacets(db, "sem-drop", { entrypoint: "sdk-py" });
+
+    // A query that matches nothing textually, so the ONLY contributor is
+    // the injected semantic list — isolating this retriever from FTS and
+    // titles rather than inferring its behaviour from a fused result.
+    const hits = search.searchSessionsInDb(db, "zzznomatchzzz", "both", 50, ["sem-keep", "sem-drop"], {
+      entrypoint: "cli",
+    });
+    expect(hits.map((h: any) => h.sessionId)).toEqual(["sem-keep"]);
+    conn.closeDb();
+  });
+
+  it("preserves semantic ORDER when filtering, since RRF ranks by position", async () => {
+    const { conn, ingest, search, projectsDir } = await setup();
+    for (const id of ["sem-a", "sem-b", "sem-c"]) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `${id}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", "irrelevant body"),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    for (const id of ["sem-a", "sem-b", "sem-c"]) setFacets(db, id, { entrypoint: "cli" });
+
+    // Deliberately NOT insertion order. The survivor query returns rows in
+    // the DB's own order (roughly rowid = a, b, c); building the filtered
+    // list FROM those rows would silently re-rank the retriever, because
+    // RRF consumes ordinal position and nothing else. Filtering the
+    // ORIGINAL array through a survivor set is what preserves intent.
+    const requested = ["sem-c", "sem-a", "sem-b"];
+    const hits = search.searchSessionsInDb(db, "zzznomatchzzz", "both", 50, requested, {
+      entrypoint: "cli",
+    });
+
+    expect(hits.map((h: any) => h.sessionId)).toEqual(requested);
+    // Pin the ranks too: the order above could in principle survive a
+    // re-rank that RRF then undid, and `ranks.semantic` is the retriever's
+    // own 1-based position — the value the fusion actually consumed.
+    expect(hits.map((h: any) => h.ranks.semantic)).toEqual([1, 2, 3]);
+    conn.closeDb();
+  });
+});
