@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchSessions, type SessionSearchScope } from "@/lib/data";
+import {
+  searchSessions,
+  type SessionSearchScope,
+  type SessionSearchFacets,
+} from "@/lib/data";
 import { SessionSearchError } from "@/lib/data/sessionSearch";
 
 // Session search endpoint. Backed by `prompts_fts` (FTS5) for body
@@ -11,7 +15,20 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 //   q      — search text (required, non-empty after trim)
 //   scope  — 'titles' | 'prompts' | 'both' (default: 'both')
 //   limit  — clamp to 1..200 (default: 50)
-//   source — adapter source id (e.g. 'claude'). Client-side filtered in SessionsBrowser.
+//
+// Row-level facets (all optional). These are applied IN SQL, inside every
+// retriever, so `limit` counts faceted rows (#425). Filtering them
+// client-side after the cut silently under-reports: a query matching more
+// than `limit` sessions could report zero for a facet whose matches all
+// ranked below the cutoff. Omit a facet to leave that axis unconstrained.
+//   source      — adapter source id (e.g. 'claude'); rows with no source
+//                 count as 'claude', matching the client's `?? "claude"`.
+//   entrypoint  — bucketed entrypoint (e.g. 'cli', 'sdk-cli', 'unknown');
+//                 null AND empty-string rows both bucket to 'unknown'.
+//   starred     — '1' / 'true' to restrict to starred sessions. Any other
+//                 value is rejected rather than coerced, because silently
+//                 reading an unrecognized value as "unfiltered" would
+//                 answer a different question than the one asked.
 //
 // Response shape:
 //   { hits: Array<{ sessionId, score, source }>, backend: 'db' | 'file' }
@@ -65,8 +82,39 @@ export async function GET(request: NextRequest) {
     limit = Math.min(parsed, MAX_LIMIT);
   }
 
+  // Facets. `null` (absent) leaves the axis unconstrained; an empty
+  // string is rejected rather than treated as absent, since `?source=`
+  // more likely means a client built the URL wrong than that it wanted
+  // every source — and the wrong reading is silent.
+  const facets: SessionSearchFacets = {};
+  for (const key of ["source", "entrypoint"] as const) {
+    const raw = params.get(key);
+    if (raw === null) continue;
+    if (raw.trim() === "") {
+      return NextResponse.json(
+        { error: `${key} must be non-empty when present (omit it to leave unfiltered)` },
+        { status: 400 }
+      );
+    }
+    facets[key] = raw;
+  }
+
+  const starredRaw = params.get("starred");
+  if (starredRaw !== null) {
+    // Deliberately not `Boolean(starredRaw)` — that reads "0" and
+    // "false" as true, which is the inverse of what the caller asked
+    // for and produces a confidently wrong result set.
+    if (starredRaw !== "1" && starredRaw !== "true") {
+      return NextResponse.json(
+        { error: `starred must be '1' or 'true' when present (got: ${starredRaw})` },
+        { status: 400 }
+      );
+    }
+    facets.starredOnly = true;
+  }
+
   try {
-    const { hits, meta } = await searchSessions(q, scope, limit);
+    const { hits, meta } = await searchSessions(q, scope, limit, facets);
     return NextResponse.json(
       { hits, backend: meta.backend },
       { headers: { "X-Minder-Backend": meta.backend } }

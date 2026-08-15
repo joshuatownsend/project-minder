@@ -23,6 +23,7 @@ import { searchSessionsInDb } from "./sessionSearch";
 import type {
   SessionSearchHit,
   SessionSearchScope,
+  SessionSearchFacets,
 } from "./sessionSearch";
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
@@ -1107,7 +1108,12 @@ export interface SessionSearchResult {
 export async function searchSessions(
   query: string,
   scope: SessionSearchScope = "both",
-  limit?: number
+  limit?: number,
+  /**
+   * Row-level facets pushed into every retriever's SQL so the `LIMIT`
+   * applies to the faceted population (#425). Omitted = unfiltered.
+   */
+  facets?: SessionSearchFacets
 ): Promise<SessionSearchResult> {
   // Demo mode has no FTS index; return an empty (valid) result rather than
   // touch the DB. Prompt search over fixtures isn't needed for screenshots.
@@ -1144,7 +1150,7 @@ export async function searchSessions(
     }
   }
 
-  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys);
+  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys, facets);
   return { hits, meta: { backend: "db" } };
 }
 
@@ -1171,4 +1177,4 @@ export async function getSessionCostsInWindow(
   }
 }
 
-export type { SessionSearchHit, SessionSearchScope } from "./sessionSearch";
+export type { SessionSearchHit, SessionSearchScope, SessionSearchFacets } from "./sessionSearch";

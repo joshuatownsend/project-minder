@@ -38,6 +38,81 @@ import { fuseRrf } from "./rrf";
 // search separate from the much-heavier list assembly avoids re-walking
 // the 6 queries that loader does on every keystroke.
 
+/**
+ * Row-level facets applied to every retriever BEFORE its `LIMIT`.
+ *
+ * These exist because filtering after the cut is silently wrong (#425):
+ * each retriever returns a globally ranked candidate pool, so a facet
+ * applied downstream can report "0 sessions" for a facet that genuinely
+ * has matches — they just all ranked below the cutoff. Pushing the
+ * predicate into SQL makes the limit apply to the FACETED population,
+ * which is the only way the count can be trusted.
+ *
+ * An absent field means "no constraint", which is why `starredOnly:
+ * false` and `undefined` behave identically — there is no "only
+ * unstarred" facet in the UI to represent.
+ */
+export interface SessionSearchFacets {
+  /** Bucketed entrypoint (`entrypointBucket`), e.g. `cli` / `unknown`. */
+  entrypoint?: string;
+  /** Adapter source id; absent rows count as `claude`. */
+  source?: string;
+  /** When true, restrict to sessions with a non-empty `starred_at`. */
+  starredOnly?: boolean;
+}
+
+/**
+ * Facet predicate for a `sessions` row, aliased `s`.
+ *
+ * Built once and used at all THREE retriever sites (FTS join, titles
+ * LIKE, semantic id-filter). Hand-copying it per site is how the
+ * normalizations below drift apart, and a drift here is invisible: the
+ * search still returns rows, just the wrong ones.
+ *
+ * Each normalization mirrors the client filter it replaces, and the
+ * mirroring is load-bearing — a row the client would show must not be
+ * dropped here, or the fix trades one silent wrong answer for another:
+ *
+ *   - `source`   — client: `(s.source ?? "claude") === f`. The column is
+ *     `NOT NULL DEFAULT 'claude'` (migrations.ts:327), so the COALESCE
+ *     branch is currently **unreachable** for DB rows — it is kept to
+ *     mirror the client exactly, so the two cannot diverge if that
+ *     constraint is ever relaxed, not because it fires today. `??` and
+ *     `COALESCE` also agree on `""`: neither substitutes it.
+ *   - `entrypoint` — client: `entrypointBucket(s.entrypoint) === f`,
+ *     where the bucket is `entrypoint ? entrypoint : "unknown"`. That is
+ *     FALSY-based, so `null` AND `""` both bucket to `unknown`; the
+ *     `CASE` reproduces both.
+ *   - `starred`  — client: `!!s.starredAt`. A bare `IS NOT NULL` would
+ *     disagree on an empty string (`!!"" === false`, but `"" IS NOT
+ *     NULL` is true), so the emptiness test is required, not defensive
+ *     noise.
+ */
+function buildFacetPredicate(facets: SessionSearchFacets | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (!facets) return { sql: "", params: [] };
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (facets.source !== undefined) {
+    clauses.push("COALESCE(s.source, 'claude') = ?");
+    params.push(facets.source);
+  }
+  if (facets.entrypoint !== undefined) {
+    clauses.push(
+      "CASE WHEN s.entrypoint IS NULL OR s.entrypoint = '' THEN 'unknown' ELSE s.entrypoint END = ?"
+    );
+    params.push(facets.entrypoint);
+  }
+  if (facets.starredOnly) {
+    clauses.push("s.starred_at IS NOT NULL AND s.starred_at != ''");
+  }
+
+  return { sql: clauses.length ? clauses.map((c) => `(${c})`).join(" AND ") : "", params };
+}
+
 export interface SessionSearchHit {
   /** Matching session_id (one entry per session — the loader dedupes). */
   sessionId: string;
@@ -193,10 +268,17 @@ export function searchSessionsInDb(
    * list contributes nothing to the fusion, which is exactly how search
    * degrades to BM25-only when no model is installed.
    */
-  semanticKeys: string[] = []
+  semanticKeys: string[] = [],
+  /**
+   * Row-level facets, applied inside every retriever's query so the
+   * `LIMIT` counts faceted rows. See {@link SessionSearchFacets}.
+   */
+  facets?: SessionSearchFacets
 ): SessionSearchHit[] {
   const q = query.trim();
   if (!q) return [];
+
+  const { sql: facetSql, params: facetParams } = buildFacetPredicate(facets);
 
   if (scope !== "titles" && scope !== "prompts" && scope !== "both") {
     throw new SessionSearchError("invalid-scope", `unknown scope: ${scope}`);
@@ -236,18 +318,25 @@ export function searchSessionsInDb(
         // materializes the subquery and the FTS row context is gone by
         // the time the outer query runs. So snippets CANNOT be folded
         // into this ranking query — they are fetched separately below.
+        // The facet JOIN lives in the OUTER query on purpose. The bm25
+        // row-context restriction described above applies inside the
+        // MATCH subquery; by the outer query `rank` is an ordinary
+        // number, so joining `sessions` there is safe and lets the
+        // LIMIT count FACETED rows (#425).
         rows = prepCached(
           db,
-          `SELECT session_id, MIN(rank) AS rank
+          `SELECT f.session_id, MIN(f.rank) AS rank
              FROM (
                SELECT session_id, rank
                  FROM prompts_fts
                 WHERE prompts_fts MATCH ?
-             )
-            GROUP BY session_id
+             ) f
+             JOIN sessions s ON s.session_id = f.session_id
+            ${facetSql ? `WHERE ${facetSql}` : ""}
+            GROUP BY f.session_id
             ORDER BY rank
             LIMIT ?`
-        ).all(ftsExpr, candidateLimit) as FtsRow[];
+        ).all(ftsExpr, ...facetParams, candidateLimit) as FtsRow[];
 
         // Second pass, purely for excerpts. A plain projection over the
         // MATCH keeps the FTS row context `snippet()` requires — no
@@ -265,14 +354,30 @@ export function searchSessionsInDb(
         // could otherwise crowd out the rest. If it does, the sessions
         // that miss out simply have no snippet and the row falls back to
         // its previous rendering — degraded, never wrong.
+        //
+        // Faceted alongside the ranking query (#425). Without it the
+        // chunk budget is spent on sessions the facet excludes, and the
+        // sessions that DO survive can end up with no snippet —
+        // degraded rather than wrong, but avoidable for one join.
+        // `snippet()` keeps its FTS row context here because the join
+        // adds no aggregate and no window function.
         const snipRows = prepCached(
           db,
-          `SELECT session_id, snippet(prompts_fts, 5, '', '', '…', 18) AS snip
+          // NOTE: `prompts_fts` is NOT aliased here. FTS5 resolves both
+          // the `MATCH` left operand and `snippet()`'s first argument
+          // against the TABLE name; an alias makes SQLite report
+          // "no such column: <alias>" at prepare time. The joined
+          // `sessions` may be aliased freely — only the FTS side is
+          // constrained.
+          `SELECT prompts_fts.session_id,
+                  snippet(prompts_fts, 5, '', '', '…', 18) AS snip
              FROM prompts_fts
+             JOIN sessions s ON s.session_id = prompts_fts.session_id
             WHERE prompts_fts MATCH ?
+              ${facetSql ? `AND ${facetSql}` : ""}
             ORDER BY rank
             LIMIT ?`
-        ).all(ftsExpr, candidateLimit * 2) as Array<{
+        ).all(ftsExpr, ...facetParams, candidateLimit * 2) as Array<{
           session_id: string;
           snip: string | null;
         }>;
@@ -313,17 +418,27 @@ export function searchSessionsInDb(
       // you and getting nothing back is the worst kind of miss — and neither
       // is reachable through `prompts_fts`, which indexes turn text, while an
       // `ai-title` metadata entry is not turn text at all (Codex review, #403).
-      `SELECT session_id FROM sessions
-         WHERE slug IS NOT NULL AND lower(slug) LIKE ?
+      // The column OR-chain is WRAPPED IN PARENTHESES and the facet
+      // predicate ANDed outside it. Without the parens, SQL precedence
+      // binds `AND <facet>` to the LAST OR arm only, so six of these
+      // seven columns would silently ignore the facet — a partial guard
+      // that looks exactly like a working one. This is the same
+      // "identical paths, only one guarded" shape #425 itself warns
+      // about, reproduced inside its own fix if the parens are dropped.
+      `SELECT session_id FROM sessions s
+         WHERE (
+                slug IS NOT NULL AND lower(slug) LIKE ?
             OR initial_prompt IS NOT NULL AND lower(initial_prompt) LIKE ?
             OR last_prompt IS NOT NULL AND lower(last_prompt) LIKE ?
             OR project_dir_name IS NOT NULL AND lower(project_dir_name) LIKE ?
             OR git_branch IS NOT NULL AND lower(git_branch) LIKE ?
             OR generated_title IS NOT NULL AND lower(generated_title) LIKE ?
             OR ai_title IS NOT NULL AND lower(ai_title) LIKE ?
+         )
+           ${facetSql ? `AND ${facetSql}` : ""}
          ORDER BY end_ts DESC
          LIMIT ?`
-    ).all(pat, pat, pat, pat, pat, pat, pat, candidateLimit) as TitleRow[];
+    ).all(pat, pat, pat, pat, pat, pat, pat, ...facetParams, candidateLimit) as TitleRow[];
 
     // `LIKE` yields no relevance score at all, so recency (`end_ts DESC`)
     // is the only ordering signal available. RRF's k=60 damping is what
@@ -331,12 +446,34 @@ export function searchSessionsInDb(
     titleKeys = rows.map((r) => r.session_id);
   }
 
+  // The semantic retriever returns ids from a vector index that knows
+  // nothing about `sessions` columns, so its list is faceted here rather
+  // than in its own query (#425). Two properties matter:
+  //
+  //   - The DB result is used as a SURVIVOR SET and the ORIGINAL array is
+  //     filtered through it. Mapping from the query rows instead would
+  //     reorder the list, and RRF consumes ordinal position — a reorder
+  //     is a silent re-ranking, not a no-op.
+  //   - The list is already bounded (`limit * 3`) by the caller, so the
+  //     `IN (...)` expansion is small and needs no chunking.
+  let facetedSemanticKeys = semanticKeys;
+  if (facetSql && semanticKeys.length > 0) {
+    const placeholders = semanticKeys.map(() => "?").join(",");
+    const survivors = prepCached(
+      db,
+      `SELECT session_id FROM sessions s
+        WHERE s.session_id IN (${placeholders}) AND ${facetSql}`
+    ).all(...semanticKeys, ...facetParams) as TitleRow[];
+    const keep = new Set(survivors.map((r) => r.session_id));
+    facetedSemanticKeys = semanticKeys.filter((k) => keep.has(k));
+  }
+
   // Titles are fused FIRST so they win `topSource` on an exact tie — the
   // documented preference carried over from the previous implementation.
   const fused = fuseRrf([
     { label: "titles", keys: titleKeys, weight: TITLE_WEIGHT },
     { label: "prompts", keys: promptKeys, weight: PROMPT_WEIGHT },
-    { label: "semantic", keys: semanticKeys, weight: SEMANTIC_WEIGHT },
+    { label: "semantic", keys: facetedSemanticKeys, weight: SEMANTIC_WEIGHT },
   ]);
 
   return fused.slice(0, limit).map((f) => ({

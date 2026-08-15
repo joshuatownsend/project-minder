@@ -134,6 +134,14 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
 
   Worth using rather than ignoring, because the two populations barely resemble each other. On the reference index an interactive session costs **$13.43** against an SDK-driven session's **$0.22** — roughly **61×** — and the imbalance runs the other way by volume: **69%** of sessions are SDK-driven but they account for **4%** of the spend. Any figure averaged over the unfiltered list is describing a mixture that no individual session looks like. The same split, with costs, is on the **Entrypoint** panel of the [Usage](/help/usage) page and each project's Costs tab.
 
+### Filters and search combine correctly
+
+Filters (starred, source, entrypoint) are applied **inside the search query**, not to its results. This matters whenever a search matches a lot of sessions: search returns a ranked top slice, so filtering that slice afterwards could report **"no sessions"** for a filter that genuinely had matches — they just ranked below the cut. That is the failure this design avoids, and it is worth knowing about because the wrong answer looked exactly like a right one: an empty list, with no indication anything had been truncated.
+
+The practical consequence is that a filter now changes **which** sessions the search ranks, so switching a filter re-runs the search rather than re-filtering what is already on screen. Counts under a filter can be trusted.
+
+*(One caveat: without the FTS index — `MINDER_USE_DB=0`, or a failed search request — matching falls back to substring filtering over cached previews, which has no ranking and no cut, so the question does not arise.)*
+
 ### Semantic search (optional, off by default)
 
 Keyword search only finds what you can spell. A session that says *"database migration error"* will not surface for the query *"the migration is failing"* unless the words happen to overlap. Semantic search adds a third retriever that matches on **meaning** instead of tokens, and feeds its ranking into the same Reciprocal Rank Fusion as the other two.

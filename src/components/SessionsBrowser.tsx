@@ -824,7 +824,20 @@ export function SessionsBrowser() {
     const timer = setTimeout(async () => {
       setSearchState({ kind: "pending" });
       try {
+        // Facets go to the SERVER, not just to the client-side filter
+        // below. The API applies them inside each retriever's query, so
+        // the 200-row limit counts faceted rows; filtering a globally
+        // ranked top-200 here instead reports "0 sessions" whenever a
+        // facet's matches all rank below the cutoff (#425).
+        //
+        // The client-side filters stay as well, and are not redundant:
+        // they serve the file backend, the no-search path, and the two
+        // non-FTS arms of the search union (title substring and cached
+        // `searchableText`), none of which the server ranked.
         const params = new URLSearchParams({ q: trimmed, scope: "both", limit: "200" });
+        if (starredOnly) params.set("starred", "1");
+        if (sourceFilter !== "all") params.set("source", sourceFilter);
+        if (entrypointFilter !== "all") params.set("entrypoint", entrypointFilter);
         const res = await fetch(`/api/sessions/search?${params.toString()}`, {
           signal: controller.signal,
         });
@@ -856,7 +869,12 @@ export function SessionsBrowser() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [search]);
+    // Facets are dependencies, not just inputs: they are now part of the
+    // REQUEST, so changing one has to re-fire the search. Leaving them
+    // out would re-run only the client-side filter against ids ranked
+    // under the previous facet set — stale in exactly the direction
+    // #425 is about, and invisible because the list still renders.
+  }, [search, starredOnly, sourceFilter, entrypointFilter]);
 
   // Relevance ordering is only meaningful while a search is active, so it
   // becomes the sort when one starts and steps back down when it ends.
