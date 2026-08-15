@@ -98,13 +98,19 @@ export async function GET(request: NextRequest) {
   for (const key of ["source", "entrypoint"] as const) {
     const raw = params.get(key);
     if (raw === null) continue;
-    if (raw.trim() === "") {
+    // Validate and store the SAME value. Checking `raw.trim()` for
+    // emptiness but filtering on `raw` would let `?source=claude%20`
+    // through validation and then match nothing — a silent empty result
+    // from a well-formed-looking request, which is the exact failure
+    // class this endpoint's facets exist to remove.
+    const value = raw.trim();
+    if (value === "") {
       return NextResponse.json(
         { error: `${key} must be non-empty when present (omit it to leave unfiltered)` },
         { status: 400 }
       );
     }
-    facets[key] = raw;
+    facets[key] = value;
   }
 
   const starredRaw = params.get("starred");

@@ -647,7 +647,14 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
     sessionId: string,
     cols: { entrypoint?: string | null; source?: string | null; starred_at?: string | null }
   ) {
+    // Column names are interpolated, so they are allowlisted. Test-only
+    // and never fed untrusted input, but a typo would otherwise surface
+    // as an opaque SQLite error at run time instead of naming the key —
+    // and the allowlist doubles as the helper's documentation of what it
+    // can set.
+    const ALLOWED = new Set(["entrypoint", "source", "starred_at"]);
     for (const [col, val] of Object.entries(cols)) {
+      if (!ALLOWED.has(col)) throw new Error(`setFacets: unsupported column ${col}`);
       db.prepare(`UPDATE sessions SET ${col} = ? WHERE session_id = ?`).run(val, sessionId);
     }
   }
