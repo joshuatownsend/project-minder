@@ -6,7 +6,7 @@
 
 Baseline: `main` @ `0196d9c` (v1.9.1), 4,741 tests passing.
 
-> ⚠️ **The Scope line above, and both ledger tables and the `grep -c` invariant below, are the 2026-08-08 baseline and no longer hold.** Current figures are **22 open issues** and **27 unchecked TODO items** — see [Status reconciliation — 2026-08-14](#status-reconciliation--2026-08-14), which supersedes them and restates the invariant. Do not run the top-of-doc self-check expecting it to pass; it is a historical record, not a live assertion.
+> ⚠️ **The Scope line above, and both ledger tables and the `grep -c` invariant below, are the 2026-08-08 baseline and no longer hold.** For current figures see [Status reconciliation — 2026-08-14](#status-reconciliation--2026-08-14), which supersedes them and restates the invariant. Do not run the top-of-doc self-check expecting it to pass; it is a historical record, not a live assertion.
 
 ---
 
@@ -110,6 +110,9 @@ The baseline dispositioned 34 issues. Ten more were filed between 2026-08-09 and
 W7 therefore reads: **#295, #296, #413, #417, #284, #287.**
 
 ### TODO invariant, restated
+
+> **This section is the only place either count is stated.** The warning at the top of the file used to restate them too, and drifted within a day of being written — the callout whose job is to stop readers trusting a stale figure was itself carrying one (caught by Codex on PR #448, the fourth time in this series a number was fixed in one place and left stale in its mirror). It now points here instead of repeating. Add a count to a third location and this recurs; the tables below plus `grep -c` are the whole contract.
+
 
 The original table asserted `grep -c '^[[:space:]]*- \[ \]' TODO.md` = 22. **It was 27 at reconciliation, and is 22 since W10 was archived on 2026-08-15**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
 
