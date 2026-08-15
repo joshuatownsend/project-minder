@@ -6,6 +6,8 @@
 
 Baseline: `main` @ `0196d9c` (v1.9.1), 4,741 tests passing.
 
+> ⚠️ **The Scope line above, and both ledger tables and the `grep -c` invariant below, are the 2026-08-08 baseline and no longer hold.** Current figures are **22 open issues** and **27 unchecked TODO items** — see [Status reconciliation — 2026-08-14](#status-reconciliation--2026-08-14), which supersedes them and restates the invariant. Do not run the top-of-doc self-check expecting it to pass; it is a historical record, not a live assertion.
+
 ---
 
 ## Coverage ledger
@@ -25,7 +27,7 @@ All 34 open issues appear in exactly one wave below:
 | W7 — Service mode + build hygiene | #295, #296 |
 | **Total** | **34** |
 
-And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `grep -c '^\s*- \[ \]' TODO.md` — the count must equal the total below.
+And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `grep -c '^[[:space:]]*- \[ \]' TODO.md` — the count must equal the total below. *(Pattern corrected 2026-08-14: this originally used `\s`, which is a GNU extension and matches a literal `s` under POSIX grep. It happened to give the right answer only because no checkbox is indented — a self-check that works by luck, which is the failure this doc keeps finding elsewhere.)*
 
 | Wave | TODO items | n |
 |---|---|---|
@@ -40,6 +42,110 @@ And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `gr
 | **Total** | | **22** |
 
 *The session-population caveat is deliberately **not** in this table — Wave 0 converted it from an unchecked checkbox into a reference note, because it was never actionable work. That is why the file's unchecked count is 22 rather than 23.*
+
+---
+
+## Status reconciliation — 2026-08-14
+
+**Both ledgers above are the 2026-08-08 baseline and are now stale.** This section supersedes them; the per-wave outcome blocks below remain the record of *how* each wave went.
+
+Open issues: **34 → 22**, of which **4 are `parked`** (#228–#231) and **1 is a standing gate rather than schedulable work** (#432). Real remaining: **17 issues across 5 waves.**
+
+### ⚠️ Standing caveat — this document's causal claims are weaker than its observations
+
+**Treat every "X is caused by Y" / "X is blocked on Y" statement here as unverified until someone opens the relevant file.** Four rounds of review on this plan's own PR (#447) found the same defect four times, and it is worth stating plainly because only the instances a reviewer happened to check got corrected:
+
+| Claimed | What the source said | Caught in |
+|---|---|---|
+| Demo mode leaks the real burn %, MCP health, and skill slugs | All three are fixtures; their routes are guarded (`src/lib/demo/`) | Round 1 |
+| #445 is W12's enabler — *empty* vs *still loading* is externally undetectable | `waitForStableUI` already detects all four idioms (`capture-screenshots.mjs:220-254`) | Round 2 |
+| #296 shares the tracing batch's verification loop | It is a runtime lifecycle defect the packaging loop cannot observe at all | Round 3 |
+| `/analytics` is slow for the same reason as #439 | It is a static `ComingSoon` page that fetches nothing | Round 4 |
+
+The 2026-08-12 route audit and the wave records **observed** accurately — the symptoms are real and reproducible. What was unreliable is the layer above: explanations attached to those symptoms by inference, written from what the behaviour looked like rather than from the code, then propagated into sequencing decisions ("do this first", "check that wave first", "batch these together"). Three of four such claims examined were wrong, and one of them had reordered an entire wave.
+
+**Practical rule for anyone executing a wave from this doc:** the issue numbers, measurements, and file:line references were checked. The *because* clauses were not. Before inheriting a dependency or an ordering, open the file — the cost is one read, and the failure mode is an investigation aimed at the wrong subsystem. This is the same family as the gates recorded elsewhere in this plan that ran, passed, and proved nothing.
+
+### Wave status
+
+| Wave | State | Notes |
+|---|---|---|
+| W0 — Decisions | ✅ Done 2026-08-08 | 3 closed, 4 parked |
+| W0b — Shipped-never-closed | ✅ Done 2026-08-08 | 6 closed |
+| W1 — Next 16.3 | ⛔ **Shipped then reverted** | v1.10.1 pinned back to `~16.2.12`; see the W1 REVERTED block. #284 retired on its own evidence, #287 survives, #413 found here |
+| W2 — Quick wins | ✅ Done | #186, #188, #190, #236 all closed |
+| W3 — Test infrastructure | ◐ **Mostly done** | #331, #345, #355, #362, #282, #175 closed; **#273, #220 still open**, and #421 + #430 joined the family after the baseline |
+| W4 — Pricing correctness | ✅ Done 2026-08-10 | #393, #394 closed; `DERIVED_VERSION` 18 |
+| W5 — Usage & session surfaces | ✅ Done 2026-08-10 | #395 closed; #426 found and fixed unplanned (v19) |
+| W6 — Accessibility (#391) | ⬜ Not started | |
+| W7 — Service mode + build hygiene | ⬜ Not started | Grew from 2 issues to 6 — see the addendum |
+| W8 — Project Groups P2→P3 | ⬜ Not started | |
+| W9 — Session-tooling deferred halves | ⬜ Not started | |
+| W10 — Cloud session ingest | 🔒 **Still gated** | The spike has never run — blocked by the permission classifier, not by a decision |
+| W11 — Memory Observatory M.2 | 🔒 Gated on upstream research | |
+| **W12 — Demo-mode coverage** | ⬜ **New** | |
+| **W13 — Index-backed reads & aggregation correctness** | ⬜ **New** | |
+
+**One phrasing correction to carry forward:** #396 is *closed*. What re-opened with the v1.10.1 revert are the four **postcss Dependabot alerts** it tracked — the issue itself stays closed, and a future Next bump is what clears the alerts.
+
+### Ledger addendum — the 10 post-baseline issues
+
+The baseline dispositioned 34 issues. Ten more were filed between 2026-08-09 and 2026-08-14 and had no wave. Each gets exactly one, same discipline as the original ledger:
+
+| Issue | Wave | Why there |
+|---|---|---|
+| #441 — demo mode leaks real data on `/workflows` | **W12** | Named in `TODO.md`'s demo-mode section as one of the two already-filed instances of a single coherent gap |
+| #443 — demo mode `/usage` throws "circular link", renders the browser error page | **W12** | Same gap; the only one that fails *hard* rather than leaking |
+| #445 — three loading idioms, none externally detectable | **W12** | Maintenance value within the wave, **not** a prerequisite — the detector that covers all four idioms is a hand-maintained list that has to track them. *Originally filed here as the wave's enabler; corrected 2026-08-14, see W12 item 6.* |
+| #439 — Hot Files / File Coupling parse all session JSONL instead of the index | **W13** | |
+| #425 — session facets applied after the FTS top-200 cut | **W13** | Same shape: the index can answer correctly and the read layer doesn't ask it to |
+| #416 — `byProject` splits a macOS project across two path casings | **W13** | The wave's quick win; the case-folding pattern already exists in the scanner from #249–257 |
+| #421 — tests delete inherited env vars without restoring them | **W3 residue** | Same family as #273/#220 — cross-test interference, not a product defect |
+| #430 — `verify-windows` teardown exceeds the 10s hook timeout | **W3 residue** | |
+| #413 — packaged standalone serves nothing when `MINDER_USE_DB=0` | **W7** | *Found and recorded in the W1 outcome block, never dispositioned* — this is its first scheduling, not a second discovery |
+| #417 — derive tracing/hygiene exclusion lists from `.gitignore` | **W7** | Directly about the `outputFileTracingExcludes` list W1 grew by hand |
+
+**Also re-homed:** #284 and #287 were W1's issues. W1 is void, #284's wave-scale fix is retired (it survives as a `TODO.md` item with one named next experiment), and #287's backfill is still load-bearing. Both are build-tracing shaped, so **both move to W7**, which is now the single place build hygiene lives.
+
+W7 therefore reads: **#295, #296, #413, #417, #284, #287.**
+
+### TODO invariant, restated
+
+The original table asserted `grep -c '^[[:space:]]*- \[ \]' TODO.md` = 22. **It is now 27**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
+
+*Left the file (completed):* W4's `usage.speed` pricing item (1), W5's three items (3), W1's "upgrade to Next ≥16.3" (1, rewritten rather than closed — see below), and the screenshot-without-prose PR check (1, shipped as `.github/workflows/site-screenshots-check.yml`, archived 2026-08-12). **−6.**
+
+*Entered the file:* six demo-mode findings — five from the 2026-08-12 route audit plus the `/stats` cross-check leak added 2026-08-14 during this plan's own review (**W12**), the `DERIVED_VERSION`-needs-the-worker-fix release gate, the #432 re-test-before-un-pinning gate, the `instrumentation` exclusion bypass, the export-filename helper extraction, and the rewritten #284 next-experiment item. **+11.**
+
+Current distribution — this is the table to verify against:
+
+| Wave | TODO items | n |
+|---|---|---|
+| W8 | Project Groups P2 (aggregation); P3 (UI) | 2 |
+| W9 | Widen `SessionAdapter` full text; approval UI + phone view; token-usage rule fields; project-scope config drift; per-task `scheduleAtQuotaReset`; quota threshold in config; embed only semantic queries | 7 |
+| W10 | Endpoint spike; fetcher + disk sync; `claude-cloud` adapter; attribution; distribution stance | 5 |
+| W11 | Memory Observatory M.2 | 1 |
+| **W12** | `RootLayout` leaks `devRoot`; `/stats` cross-check leaks real totals; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 6 |
+| Housekeeping | `DERIVED_VERSION` release gate; #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 6 |
+| **Total** | | **27** |
+
+*The cloud spike moved from W1 to W10 in this table. The 2026-08-08 version counted it under W1 as a parallel side-quest; it never ran there, and it gates only W10, so it is counted where it belongs.*
+
+### Three standing items that are not waves
+
+They block or condition other work and have no home in the wave sequence:
+
+1. **The cloud spike needs you, not a wave.** It reads `~/.claude/.credentials.json` and calls an undocumented endpoint with a bearer token; the permission classifier blocked it during W1 and the script is still written and ready. Until it runs, W10 (5 TODO items) cannot be designed *and* the personal-vs-distributed decision stays correctly unasked. This is the cheapest open question in the backlog and the only one that can delete an entire section.
+2. **No `DERIVED_VERSION` bump ships without the worker-ingest fix (#431 / PR #435).** The fix is on `main` and in no release; a bump without it hands every existing install another multi-hour blackout.
+3. **#432 gates every `next` bump**, including a routine Dependabot PR. The four-cold-boot probe is written up in the W1 REVERTED block.
+
+### Recommended order from here
+
+**W12 → W6 → W7 → W13 → W3 residue**, then W8/W9. Wave numbers are identifiers, not priority — W12 and W13 are new but both outrank the older unstarted waves.
+
+W12 first for three reasons: demo mode is the mode whose entire purpose is being safe to show other people, and it currently fails hard on `/usage` (#443), leaks real project names on four routes (#441 + three), and leaks the real `devRoot` and home path through the unguarded shell; the capture-pipeline context is fresh from PR #446; and it is the only wave that makes the published screenshot set fully shareable.
+
+> **The margin narrowed on 2026-08-14** (see the correction under W12 item 4). The original ranking rested on demo mode publishing burn rate, MCP topology and the real skill inventory — those turned out to be fixtures, so the exposure is `devRoot` + home path, not the inventory of a user's whole setup. W12 is still the recommendation on coherence, fresh context and the shareability criterion, but **W13 is now a defensible first move instead** — #425 is a silent wrong answer (a filtered search reporting zero matches that exist), and a confidently wrong result outranks a smaller leak on some readings. Worth an explicit call rather than inheriting this one.
 
 ---
 
@@ -158,6 +264,10 @@ Small, independent, high-confidence. Several have the fix pattern already establ
 ---
 
 ## Wave 3 — Test infrastructure (8 issues, one enabler)
+
+> **Residue as of 2026-08-14.** Six of the eight closed (#331, #345, #355, #362, #282, #175). **#273 and #220 are still open**, and two post-baseline issues join the same family: **#421** (tests delete inherited env vars without restoring them) and **#430** (`verify-windows` `isolatedState` teardown exceeds the 10s hook timeout removing a temp dir that still holds a SQLite handle). All four are cross-test interference, not product defects.
+>
+> **#421 is the enabler of the residue, on the same argument #331 was for the wave.** An unrestored env var is exactly the mechanism #331 was built to close — global state one test mutates and the next inherits — and both #273 and #220 are backend-selection divergences under full-suite load, which is what an unrestored `MINDER_*` var produces. Do #421 first and re-measure the other three before designing fixes for them; the wave's own record is that three of seven issues proposed timeout changes that measurement made unnecessary.
 
 **#331 is the enabler — do it first.** 23 test files hand-roll the same three-step DB isolation (`spyOn(os.homedir)` → `resetModules()` → dynamic import). `DB_DIR` now checks `MINDER_STATE_DIR` ahead of `os.homedir()`, so running the suite with that env var set **defeats all 23 isolations at once**. Consolidate onto `tests/_helpers/` (extend the existing `mcpIsolation.ts`).
 
@@ -297,8 +407,22 @@ Follow-up to #380/#390. The `.sr-only` + `aria-hidden` pattern reached screen re
 
 ## Wave 7 — Service mode + build hygiene
 
+*Grew from 2 issues to 6 on 2026-08-14: W1 is void, so its two surviving build-tracing issues moved here, and two post-baseline issues joined them. This is now the single place build hygiene lives.*
+
+- **#413 — packaged standalone serves nothing when `MINDER_USE_DB=0`, not even static assets.** Take this **first**: it is the only one of the six that is a user-facing outage rather than DX, and `MINDER_USE_DB=0` is the documented escape hatch for exactly the situation where the DB is the problem — so it fails when it is most needed. Found during W1, never scheduled until now.
 - **#295 — `tauri-build` `rerun-if-changed` over `dist/minder-server` makes `cargo build`/`clippy` ~2 min.** Narrow the watched path set. Pure DX, but it taxes every Tauri iteration.
 - **#296 — `MINDER_BOOTSTRAP=0` shutdown runs ~0 disposers.** Ingest and the dispatcher still start, but disposers are only registered by `runBootstrap`, so the "don't bootstrap" mode leaks. Register disposers independently of the bootstrap flag.
+- **#417 — derive the tracing/hygiene exclusion lists from `.gitignore` instead of maintaining them by hand.** W1 is the argument for this: the list *grew* three times in one wave (`.env.local`, `.mcp.json`, `agentlytics-repo/`), each time after something git-ignored had already been traced into `.next/standalone` and was caught only by `package-standalone`'s prune on the way out. A hand-maintained list is discovered to be incomplete by shipping.
+- **#287 — Next's own `.next/standalone` tracer omits nested deps under `node_modules/next/node_modules/`.** W1 shrank it 9 → 4 missing deps, but that improvement was tracer-version-dependent and the pin back to 16.2.12 may have undone it. **Re-measure before fixing** — the backfill in `scripts/package-standalone.mjs` is still load-bearing either way.
+- **#284 — what flips a route into NFT's whole-project sweep.** Retired as a wave-scale item on its own evidence (bimodal, 124 routes vs 89, three hypotheses falsified); it survives as a `TODO.md` item with one named next experiment — the 2 swept routes carrying no native addon (`/api/claude-config/user`, `/api/mcp-health`) are the smallest instances. Do the experiment only if a W7 branch is already in the tracer.
+
+**Ordering note.** Three of these are tracer-shaped and share one slow verification loop (`pnpm build` + `package:standalone` + an out-of-repo smoke test): **#417, #287, #284**. Batch those rather than paying the loop three times.
+
+The other three each verify differently and should **not** inherit that loop:
+
+- **#413** — a correctness fix; verify by serving the packaged build with `MINDER_USE_DB=0` and requesting a static asset.
+- **#295** — build-time DX; verify by timing `cargo build`/`clippy` before and after.
+- **#296** — a **runtime lifecycle** defect, not a build one. *(Codex, PR #447.)* An earlier draft of this note lumped it in with "the other five are all tracer/build-shaped", which is wrong: the fix touches `instrumentation-node.ts`/`bootstrap.ts`, and it needs an assertion that the disposers actually run at shutdown under `MINDER_BOOTSTRAP=0`. `pnpm build`, `package:standalone` and a route smoke test all pass while the leak is fully intact — the packaging loop cannot see this defect at all, which is precisely the "gate that proves nothing" shape this repo has been bitten by before.
 
 ---
 
@@ -348,19 +472,71 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 
 ---
 
+## Wave 12 — Demo-mode coverage (new, 2026-08-14) — **recommended next**
+
+**Driver:** the route-by-route audit on 2026-08-12 measured what `MINDER_DEMO=1` actually covers and found it is about half of what the flag's description implies. Demo mode exists for first-run, screenshots and demos — a screen that renders empty or leaks real data there fails in precisely the situation it was built for. Three issues (#441, #443, #445) plus the six `TODO.md` findings — five from the 2026-08-12 audit and the `/stats` cross-check leak added 2026-08-14 during this plan's review.
+
+**Recommended order — worst failure first:**
+
+1. **#443 — `/usage` throws "circular link" under demo mode** and renders the browser error page instead of the app. The only demo-mode failure that is hard rather than leaky, so it is also the easiest to verify fixed.
+2. **#441 + `/adapters`, `/config`, `/plans`** — one family, one fix pattern. Only 19 of 165 API routes reference `demoMode` at all; most are covered transitively through the `data/index.ts` façade and these four are not. **Worth an audit rather than four patches**: establish which routes are covered by the façade and which need their own guard, then close the set. Four known instances found by one audit is weak evidence that there are exactly four.
+3. **`/stats` cross-check reads the real Claude stats cache under demo mode** — *added 2026-08-14 by Codex on this PR; it was in neither the audit nor `TODO.md`.* `buildStatsResponse` (`src/lib/server/queries/stats.ts:88-118`) calls `getStatsCache()` unconditionally, which reads `~/.claude/stats-cache.json` (`scanner/claudeStats.ts:26`) with no demo guard, so the cross-check panel compares demo totals against the user's **real** session and message counts. `capture-screenshots-hybrid.mjs:70-72` already documents the visible symptom — a red "-91% / -100%" drift — and refuses to promote that frame.
+
+   **This one is load-bearing for the wave's exit criterion**, not another entry on the pile: `stats-dashboard` is in the capture set (`capture-screenshots.mjs:426-429`), so every other item here could be closed and a single demo pass would still publish real totals. Worth noting the leak was *already known to the tooling* and recorded only as a capture-script comment — the hybrid script's refusal to promote the frame was the system telling us, and nobody had written it down where the plan would see it.
+4. **`RootLayout` leaks `devRoot` on every route** (`TODO.md`). `src/app/layout.tsx:43-48` calls `readConfig()` → `getDevRoots(config)` inline in a server component, so it never passes through the façade or any route where a guard could apply; `/hooks` has the same shape and prints the real home path. Fix at the shell — per-route is how the gap happened.
+
+   > **Scope corrected 2026-08-14 by Codex on this plan's own PR (#447).** This item was written as *"the app shell is never demo-guarded, so every screen leaks real data"* and ranked **first** in the wave on that basis, citing the burn percentage + 7-day cap, MCP health, and the Quick Launch skill slugs alongside `devRoot`. Those three are **fixtures**, and their routes are correctly guarded: `demoQuota()` returns `"7d": { utilization: 0.52 }` — the literal "52%" the audit reported as a real burn rate (`demo/activity.ts:298`); `demoMcpHealth()` deliberately seeds one `status: "down"` server (`:207`); `demoSkills()` contains `changelog` / `gsd-planning` / `pr-review` / `memory` by name (`demo/catalogs.ts:273-325`).
+   >
+   > The mechanism claim survived and the impact claim did not — roughly 4:1 — which is why this dropped from rank 1 to rank 4. **The audit method is what to fix, not just the entry:** a value was recorded as exposure because it looked like the user's real data, when looking like real data is precisely what a good fixture does. A suspected leak has to be checked against the fixture that could have produced it before it counts. Note this is the *inverse* of the standing lesson from #426 — there, a zero was not evidence of absence until the system was shown able to represent a non-zero; here, a plausible value was not evidence of a leak until the fixture was shown unable to produce it.
+5. **~18 empty screens** (`TODO.md`) — the long tail, and the reason `capture-screenshots-hybrid.mjs` needs two passes at all. Fixtures here would let the whole capture run on demo data and make the published screenshot set fully shareable. Scope it by what the capture set actually uses.
+6. **#445 — standardize on one loading idiom.** *Demoted from rank 1 on 2026-08-14 — see the correction below.* Real maintenance value (three idioms, and the detector that covers them is a hand-maintained list that must track all of them — the same shape as #417's hand-maintained exclude list), but **not** a prerequisite for anything else in this wave.
+
+   > **Corrected by Codex on this plan's own PR (#447), second finding of the same round.** This was ranked first and labelled *the enabler*, on the claim that the wave's core measurement — does a screen render fixtures or nothing — was impossible without it because *empty* and *still loading* are externally indistinguishable. **That was already false when written.** `waitForStableUI` in `scripts/capture-screenshots.mjs:220-254` (shipped in PR #446, merged the same morning) detects all four idioms — `.animate-pulse`, "Loading…"/"Connecting…" text, bespoke placeholders via `[style*="pulse"]` with a ≥24px height floor, and Next's Compiling pill — plus a body-text-length stability check, and returns false so `shoot()` skips the capture and records a failure. The measurement works today. Blocking the wave on this would have delayed a hard failure and two verified leaks behind a maintenance task.
+   >
+   > **Twice in one PR the same way** (see item 3): a claim about demo-mode/capture behaviour was written from what the situation looked like rather than from the code, and both times the source said otherwise. The pattern is asserting a *capability gap* — "you can't tell X from Y", "that value must be real" — without opening the thing that would already close it. For this wave specifically, check `capture-screenshots.mjs` and `src/lib/demo/` before claiming either.
+7. **`/analytics` never finishes loading** (90s hard timeout, the audit's only one) — **cause unknown; do not inherit a hypothesis.** `src/app/analytics/page.tsx` renders a static `ComingSoon` component: no data fetching, no endpoints, nothing that can take 90 seconds on its own. So whatever the audit hit is *not* in this page, and the first step is to reproduce it in isolation — one navigation, no capture run in flight — before attributing anything. Most likely candidates are capture-run or global server contention, or a measurement artifact of the audit harness itself.
+
+   > *Corrected 2026-08-14 (Codex, round 4).* This read "likely the same session-JSONL parsing cost as #439, so check W13 first". `/analytics` never calls the Hot Files or File Coupling endpoints #439 covers — fixing #439 cannot make this page finish loading, so the dependency would have sent the investigation into the wrong subsystem. **The symptom is real; the explanation was invented.**
+8. **Home's `0 projects · 0 active sessions` header** (`TODO.md`) — *not demo-specific*, and the one item here that may not belong: it reproduces on real data too. First establish whether it is simply awaiting the ~130s `/api/projects` scan or is wired to a source that never resolves. If it is the scan, it is a perf item and belongs in W13.
+
+**Exit criterion:** a full capture run under `MINDER_DEMO=1` alone produces a publishable screenshot set — no second pass, no real data in any frame, no blank screens. That is a single testable claim, unlike "demo mode is better".
+
+---
+
+## Wave 13 — Index-backed reads & aggregation correctness (new, 2026-08-14)
+
+**The unifying defect:** in all three, the SQLite index can answer the question correctly and the read layer either does not ask it or asks it too late. Same shape as #426 and the W5 `byCategory` finding — and the same standing lesson, that a zero from a system is not evidence of absence until you have checked the system can represent a non-zero.
+
+- **#439 — Hot Files / File Coupling take 30–100 s** because the routes parse all session JSONL instead of using the index. Largest win of the three. *(An earlier draft added "and it may also close `/analytics` in W12" — removed 2026-08-14: `/analytics` is a static `ComingSoon` page that never calls these endpoints. See W12 item 7.)*
+- **#425 — session facets are applied after the FTS top-200 cut**, so a filtered search can confidently report zero matches that exist. *The worst failure mode in this wave*: it is silent and it looks like a correct answer. Push the facet predicate into the query, before the cut.
+- **#416 — `byProject` splits a macOS project recorded under two path casings** (case-insensitive APFS). The wave's quick win; the case-folding pattern already exists in the scanner from #249–257.
+
+**Gate:** each of these changes a number the UI already displays, so verify by probing the index directly before and after — not by whether the page still renders. W5's mutation-testing lesson applies squarely: a function with two implementations of the same contract needs a test per branch.
+
+---
+
 ## Housekeeping (ride-alongs, no dedicated wave)
 
 - **Capture `worktrees.png`.** Mechanism shipped 2026-06-29 — `capture-screenshots.mjs` step 15 self-discovers a project with an active worktree overlay and skips cleanly when none exists. **Needs a live worktree:** with an active `*--claude-worktrees-*` present, run `pnpm capture:docs`, then point `site/index.html` (~line 105) at the new file. It currently honestly shows `todos-tab.png`. **Do this during any wave that creates a worktree** — most of them will.
-- **PR check warning on screenshot-without-prose changes.** Light-touch workflow on PRs touching `site/**`: fail or comment if `site/screenshots/*.png` changed without a `site/index.html` diff. A single grep over `gh pr diff --name-only`.
+- ~~**PR check warning on screenshot-without-prose changes.**~~ ✅ **Shipped** as `.github/workflows/site-screenshots-check.yml`; archived 2026-08-12. Deliberately one-directional (prose-only changes pass) and deliberately not a required status check.
+- **The `DERIVED_VERSION` release gate, the #432 cold-boot gate, and the cloud spike** are recorded in the Status reconciliation above as standing items. They are not ride-alongs — they condition other work and two of them will silently go green while broken if run the obvious way.
 
 ---
 
 ## Recommended first move
 
-**Wave 0 (decisions) + Wave 1 (Next 16.3) + the cloud spike, in that order within a single session.**
+> ### Superseded 2026-08-14 — the original recommendation is below, kept as the record
+>
+> **Wave 12 (demo-mode coverage), starting with #445.**
+>
+> W12 is the open cluster closest to a data-exposure defect rather than DX or latency: demo mode is the mode whose entire purpose is being safe to show other people, and it currently fails hard on `/usage`, leaks real project names on four routes, and leaks the real `devRoot` and home path through an unguarded shell. The capture-pipeline context is fresh from PR #446, and the wave has a single testable exit criterion — one `MINDER_DEMO=1` pass produces a publishable screenshot set. *(Margin narrowed 2026-08-14: three of the claimed leaks were fixtures. See the correction under W12 item 4 — W13 is a defensible alternative first move.)*
+>
+> Start with **#443** — the hard failure — then the leak family. *(#445 was originally named as the starting enabler; corrected 2026-08-14 — the capture pipeline already detects all four loading idioms, so it is maintenance, not a prerequisite. See W12 item 6.)*
+>
+> **Runnable in parallel:** W13 (index-backed reads) touches `src/lib/data` and the FTS query layer; W7's #413 touches the standalone packaging path. Neither collides with W12's shell/fixture work.
+>
+> **Needs you, not a wave:** the cloud spike — blocked by the permission classifier since W1, script written, and the cheapest question in the backlog since a dead endpoint deletes five TODO items outright.
 
-Wave 0 is conversation, not code — it costs one pass and removes 8 issues from the count. Wave 1 is a single focused branch whose verification steps are already written down. The spike runs in the background of Wave 1's slow build and tells us whether an entire backlog section is even real.
-
-Wave 2 (quick wins) can run as a parallel branch — it touches none of the same files.
+**Original (2026-08-08):** Wave 0 (decisions) + Wave 1 (Next 16.3) + the cloud spike, in that order within a single session. Wave 0 is conversation, not code — it costs one pass and removes 8 issues from the count. Wave 1 is a single focused branch whose verification steps are already written down. The spike runs in the background of Wave 1's slow build and tells us whether an entire backlog section is even real. Wave 2 (quick wins) can run as a parallel branch — it touches none of the same files.
 
 **Standing gates for every wave:** `pnpm typecheck` → full test suite → `pnpm build` when `src/` is touched. Never pipe a gate's output through a filter; redirect to a file and check `$?`. Only one `pnpm build` at a time.
