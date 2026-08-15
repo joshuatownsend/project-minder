@@ -39,7 +39,12 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 //                 answer a different question than the one asked.
 //
 // Response shape:
-//   { hits: Array<{ sessionId, score, source }>, backend: 'db' | 'file' }
+//   { hits: SessionSearchHit[], backend: 'db' | 'file' }
+//
+// `SessionSearchHit` (src/lib/data/sessionSearch.ts) is the authority —
+// it carries `ranks` and an optional `snippet` beyond the
+// `{sessionId, score, source}` this comment used to list, and naming the
+// type keeps the two from drifting again as fields are added.
 //
 // Notes:
 //   - `backend: 'file'` means MINDER_USE_DB=0 — the SessionsBrowser

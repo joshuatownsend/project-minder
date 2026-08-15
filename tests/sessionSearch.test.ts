@@ -655,6 +655,12 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
     const ALLOWED = new Set(["entrypoint", "source", "starred_at"]);
     for (const [col, val] of Object.entries(cols)) {
       if (!ALLOWED.has(col)) throw new Error(`setFacets: unsupported column ${col}`);
+      // Skip `undefined` rather than writing it. Every field is optional,
+      // so `{ entrypoint: maybeUndefined }` would otherwise write NULL and
+      // silently change a test's geometry — the caller meant "leave this
+      // alone", not "clear it". `null` is still written, because clearing
+      // a column IS a case these tests exercise.
+      if (val === undefined) continue;
       db.prepare(`UPDATE sessions SET ${col} = ? WHERE session_id = ?`).run(val, sessionId);
     }
   }
