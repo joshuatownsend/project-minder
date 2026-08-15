@@ -434,8 +434,8 @@
 ## Cloud session ingest (Claude Code for web)
 
 > archived 2026-08-15 — **closed as moot: the endpoints no longer exist.** The gating spike ran and
-> returned a controlled negative. With a valid unexpired OAuth token (`sk-ant-oat…`, from
-> `~/.claude/.credentials.json`) and the org UUID header, `GET https://api.anthropic.com/v1/sessions`
+> returned a controlled negative. With a valid, unexpired OAuth token read from
+> `~/.claude/.credentials.json` and the org UUID header, `GET https://api.anthropic.com/v1/sessions`
 > returns **HTTP 404 `not_found_error`** — byte-identical to a deliberately bogus path
 > (`/v1/definitely_not_real`) probed as a control in the same run. The token itself is fine: the same
 > headers return **HTTP 200** from `/v1/models`. So this is a missing route, not an auth failure and

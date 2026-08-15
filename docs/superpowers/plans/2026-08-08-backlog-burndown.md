@@ -455,15 +455,16 @@ Seven TODO items, all deferred halves of shipped work. Roughly ordered by value.
 
 > ### W10 outcome — the spike ran, and the answer was no
 >
-> **The endpoints do not exist.** `GET https://api.anthropic.com/v1/sessions` returns **HTTP 404 `not_found_error`** with a valid, unexpired OAuth token (`sk-ant-oat…`) and the `x-organization-uuid` header. `/api/sessions` was probed as a variant and 404s identically.
+> **The endpoints do not exist.** `GET https://api.anthropic.com/v1/sessions` returns **HTTP 404 `not_found_error`** with a valid, unexpired OAuth token and the `x-organization-uuid` header. `/api/sessions` was probed as a variant and 404s identically.
 >
-> **The control is what makes this conclusive**, and it is the reason the spike is worth more than the upstream report. Two probes ran in the same process with the same headers:
+> **The control is what makes this conclusive**, and it is the reason the spike is worth more than the upstream report. Four probes ran in the same process with the same headers — the target, a known-good route, an invented path, and a URL variant:
 >
 > | Probe | Result |
 > |---|---|
 > | `/v1/models` (control — known-good route) | **HTTP 200** |
 > | `/v1/definitely_not_real` (control — path invented for this run) | HTTP 404 `not_found_error` |
 > | `/v1/sessions` (target) | HTTP 404 `not_found_error` |
+> | `/api/sessions` (target — URL variant) | HTTP 404 `not_found_error` |
 >
 > So the target is **indistinguishable from a path that was made up**, while the credentials demonstrably authenticate against the same host. This is a missing route — not an expired token, not a wrong header, not a network failure. Confirms [simonw/claude-code-transcripts#77](https://github.com/simonw/claude-code-transcripts/issues/77) **against our own account** rather than on trust.
 >
